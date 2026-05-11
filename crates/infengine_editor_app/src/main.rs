@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
+use infengine_blueprint::BlueprintEditor;
 use infengine_core::project::{Project, ProjectError, ProjectScene};
 use infengine_core::scene::{
     AtlasRegion, Entity, EntityId, MeshComponent, Scene, SpriteComponent, Transform2D, Transform3D,
@@ -71,6 +72,10 @@ struct Editor {
     /// while `play_state != Editing`.
     play_snapshot: Option<Scene>,
     play_physics: Option<PhysicsWorld>,
+    /// Visual scripting editor. The graph is in-memory only at the
+    /// scaffold stage; persistence + node-graph execution come later.
+    blueprint: BlueprintEditor,
+    blueprint_open: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -157,6 +162,8 @@ impl Editor {
             play_state: PlayState::Editing,
             play_snapshot: None,
             play_physics: None,
+            blueprint: BlueprintEditor::new(),
+            blueprint_open: false,
         };
         if !me.project.scenes.is_empty() {
             me.open_scene(0);
@@ -818,6 +825,8 @@ impl AppHandler for Editor {
             let selected_ref = &mut self.selected;
             let asset_list = self.asset_listing.clone();
             let play_state = self.play_state;
+            let blueprint = &mut self.blueprint;
+            let blueprint_open = &mut self.blueprint_open;
             // Inspector UI.
             editor_ui.run(window.raw(), |ctx| {
                 egui::TopBottomPanel::top("play_toolbar").show(ctx, |ui| {
@@ -868,8 +877,19 @@ impl AppHandler for Editor {
                                 },
                             );
                         }
+                        ui.separator();
+                        ui.toggle_value(blueprint_open, "Blueprint");
                     });
                 });
+
+                if *blueprint_open {
+                    egui::Window::new("Blueprint editor")
+                        .default_size([720.0, 480.0])
+                        .open(blueprint_open)
+                        .show(ctx, |ui| {
+                            blueprint.show(ui);
+                        });
+                }
 
                 egui::SidePanel::left("inspector")
                     .resizable(true)

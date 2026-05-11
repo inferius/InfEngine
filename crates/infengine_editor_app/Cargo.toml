@@ -22,6 +22,7 @@ infengine_render = { path = "../infengine_render" }
 infengine_editor = { path = "../infengine_editor" }
 infengine_assets = { path = "../infengine_assets" }
 infengine_physics = { path = "../infengine_physics" }
+infengine_blueprint = { path = "../infengine_blueprint" }
 glam = { workspace = true }
 egui = { workspace = true }
 tracing = { workspace = true }
