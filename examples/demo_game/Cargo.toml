@@ -1,0 +1,26 @@
+[package]
+name = "demo_game"
+description = "Phase 11 showcase: simple 3D game with menu, inventory and settings."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "demo_game"
+path = "src/main.rs"
+
+[dependencies]
+infengine_core = { path = "../../crates/infengine_core" }
+infengine_window = { path = "../../crates/infengine_window" }
+infengine_render = { path = "../../crates/infengine_render" }
+infengine_editor = { path = "../../crates/infengine_editor" }
+glam = { workspace = true }
+egui = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -15,6 +15,7 @@ members = [
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",
+    "examples/demo_game",
 ]
 
 [workspace.package]

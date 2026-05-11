@@ -905,6 +905,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
+name = "demo_game"
+version = "0.0.1"
+dependencies = [
+ "egui",
+ "glam 0.30.10",
+ "infengine_core",
+ "infengine_editor",
+ "infengine_render",
+ "infengine_window",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
