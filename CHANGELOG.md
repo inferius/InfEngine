@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_render::Tilemap` and `TileId` (Phase 2.4): grid-based tilemap with a world-space origin, uniform tile size, and a `TileId::EMPTY` sentinel for skipped cells. `Renderer::draw_tilemap` expands each non-empty tile into a `SpriteInstance` and queues it into the existing sprite batch, so a tilemap costs zero extra draw calls. Demo: 24x14 tilemap (336 tiles), 4 decorations, and a player all render in one draw call.
 - `infengine_render::demo_atlas` (Phase 2.3): procedurally generated 256x256 four-quadrant texture atlas (`CHECKER`, `DOTS`, `STRIPES`, `CROSS`) plus matching UV sub-rectangle constants. The atlas replaces the previous single-quadrant checker; the existing `SpriteInstance` UV fields drive the sub-rectangle selection. Marked as temporary - retires when the real asset pipeline arrives in Phase 3.
 - `SpriteInstance::from_region(position, size, region)` and `SpriteInstance::with_color(color)` helpers so callers can pick an atlas region without manipulating UVs directly.
 - `infengine_render::SpriteInstance` and `Renderer::draw_sprite` (Phase 2.2): batched per-instance sprite rendering. Each instance carries a world-space `position`, a `size`, an RGBA color tint, and a UV sub-rectangle (`uv_min` / `uv_max`) so that future atlases work without shader changes. The sprite pipeline now consumes a dynamic instance buffer that grows in power-of-two steps starting from a capacity of 256; one draw call renders every queued instance.

@@ -9,6 +9,7 @@
 
 mod camera;
 mod sprite;
+mod tilemap;
 
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ pub use camera::Camera2D;
 use camera::CameraResource;
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
+pub use tilemap::{TileId, Tilemap};
 
 /// Errors that can occur while creating or running the renderer.
 #[derive(Debug, thiserror::Error)]
@@ -156,7 +158,14 @@ impl Renderer {
         self.sprite_queue.push(instance);
     }
 
-    /// Number of sprites currently queued for the next frame.
+    /// Queue every non-empty tile of `map` as a sprite. Convenience
+    /// wrapper around `Tilemap::build_instances`.
+    pub fn draw_tilemap(&mut self, map: &Tilemap) {
+        map.build_instances(&mut self.sprite_queue);
+    }
+
+    /// Number of sprites currently queued for the next frame (including
+    /// tilemap tiles).
     pub fn queued_sprite_count(&self) -> usize {
         self.sprite_queue.len()
     }

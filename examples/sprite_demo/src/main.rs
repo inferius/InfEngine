@@ -1,22 +1,26 @@
-//! Sprite demo - Phase 2.2 of InfEngine.
+//! Sprite demo - Phase 2.4 of InfEngine.
 //!
-//! Demonstrates instanced sprite rendering: the player sprite plus four
-//! static "decoration" sprites at the screen corners, all drawn in a
-//! single batched draw call. WASD / arrow keys move the player; `R`
-//! recenters; `Escape` (or closing the window) exits.
+//! Renders a 24x14 tilemap (random pattern from the demo atlas) as the
+//! background, four tinted corner decorations, and one movable player
+//! sprite, all batched into a single draw call. WASD or arrow keys
+//! move the player; `R` recenters; `Escape` (or closing the window) exits.
 
-use infengine_render::{Renderer, SpriteInstance, demo_atlas};
+use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
 const PLAYER_SIZE: f32 = 128.0;
 const DECO_SIZE: f32 = 96.0;
 const DECO_MARGIN: f32 = 80.0;
+const TILE_SIZE: f32 = 64.0;
+const TILEMAP_W: u32 = 24;
+const TILEMAP_H: u32 = 14;
 /// Sprite move speed in world units per second (1 unit = 1 logical pixel).
 const MOVE_SPEED: f32 = 400.0;
 
 struct Demo {
     renderer: Option<Renderer>,
+    tilemap: Tilemap,
     pos: [f32; 2],
     viewport: (u32, u32),
     frame: u64,
@@ -24,13 +28,37 @@ struct Demo {
 
 impl Default for Demo {
     fn default() -> Self {
+        let tilemap = build_tilemap();
         Self {
             renderer: None,
+            tilemap,
             pos: [0.0, 0.0],
             viewport: (1, 1),
             frame: 0,
         }
     }
+}
+
+fn build_tilemap() -> Tilemap {
+    // Map origin sits so that the map is centered on the world origin.
+    let origin = [
+        -(TILEMAP_W as f32) * 0.5 * TILE_SIZE,
+        (TILEMAP_H as f32) * 0.5 * TILE_SIZE,
+    ];
+    let mut map = Tilemap::new(TILEMAP_W, TILEMAP_H, TILE_SIZE, origin);
+
+    // Pseudo-random pattern: hash (x, y) into 0..4 deterministically.
+    for y in 0..TILEMAP_H {
+        for x in 0..TILEMAP_W {
+            let mut h = x.wrapping_mul(0x9E37_79B9) ^ y.wrapping_mul(0x85EB_CA77);
+            h ^= h >> 13;
+            h = h.wrapping_mul(0xC2B2_AE35);
+            h ^= h >> 16;
+            let id = TileId((h % 4) as u8);
+            map.set(x, y, id);
+        }
+    }
+    map
 }
 
 impl Demo {
@@ -39,16 +67,12 @@ impl Demo {
         let half_h = self.viewport.1 as f32 * 0.5 - DECO_MARGIN;
         let size = [DECO_SIZE, DECO_SIZE];
         [
-            // Top-left:     checker pattern, red tint.
             SpriteInstance::from_region([-half_w, half_h], size, demo_atlas::CHECKER)
                 .with_color([1.0, 0.6, 0.6, 1.0]),
-            // Top-right:    dot pattern, green tint.
             SpriteInstance::from_region([half_w, half_h], size, demo_atlas::DOTS)
                 .with_color([0.6, 1.0, 0.6, 1.0]),
-            // Bottom-left:  stripes, blue tint.
             SpriteInstance::from_region([-half_w, -half_h], size, demo_atlas::STRIPES)
                 .with_color([0.6, 0.6, 1.0, 1.0]),
-            // Bottom-right: cross, yellow tint.
             SpriteInstance::from_region([half_w, -half_h], size, demo_atlas::CROSS)
                 .with_color([1.0, 1.0, 0.6, 1.0]),
         ]
@@ -108,6 +132,8 @@ impl AppHandler for Demo {
             return;
         };
 
+        // Draw order: tilemap (background), decorations, then player.
+        renderer.draw_tilemap(&self.tilemap);
         for deco in decorations {
             renderer.draw_sprite(deco);
         }
@@ -117,6 +143,7 @@ impl AppHandler for Demo {
             demo_atlas::CHECKER,
         ));
 
+        let queued = renderer.queued_sprite_count();
         if let Err(err) = renderer.render() {
             warn!(error = ?err, "frame render failed");
         }
@@ -128,6 +155,7 @@ impl AppHandler for Demo {
                 x = self.pos[0],
                 y = self.pos[1],
                 dt_ms = ctx.delta_time * 1000.0,
+                sprites = queued,
                 "frame"
             );
         }
@@ -154,7 +182,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.3)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.4)".into(),
         width: 1280,
         height: 720,
         resizable: true,
