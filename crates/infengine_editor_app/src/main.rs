@@ -1213,6 +1213,8 @@ impl AppHandler for Editor {
         let mut action_add_entity_cube = false;
         let mut action_open_blueprint_for: Option<EntityId> = None;
         let mut blueprint_dirty = false;
+        let mut action_new_class = false;
+        let mut action_spawn_from_class: Option<String> = None;
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_play = false;
@@ -1229,6 +1231,7 @@ impl AppHandler for Editor {
         if let Some(editor_ui) = self.editor_ui.as_mut() {
             let project_name = self.project.name.clone();
             let scenes = self.project.scenes.clone();
+            let classes = self.project.classes.clone();
             let current = self.current_scene_index;
             let selected_id = self.selected;
             let status = self.status.clone();
@@ -1429,6 +1432,24 @@ impl AppHandler for Editor {
                             }
                         });
 
+                        ui.collapsing("Classes", |ui| {
+                            if classes.is_empty() {
+                                ui.label("(no classes registered)");
+                            } else {
+                                for c in &classes {
+                                    ui.horizontal(|ui| {
+                                        ui.label(&c.name);
+                                        if ui.small_button("Spawn").clicked() {
+                                            action_spawn_from_class = Some(c.name.clone());
+                                        }
+                                    });
+                                }
+                            }
+                            if ui.button("New class").clicked() {
+                                action_new_class = true;
+                            }
+                        });
+
                         ui.collapsing("Import glTF", |ui| {
                             ui.label("Path to .gltf or .glb");
                             ui.text_edit_singleline(gltf_path);
@@ -1498,6 +1519,38 @@ impl AppHandler for Editor {
         }
         if action_export {
             self.export();
+        }
+        if action_new_class {
+            let suffix = self.project.classes.len() + 1;
+            self.project.classes.push(infengine_core::project::Class {
+                name: format!("Class{suffix}"),
+                blueprint: None,
+                default_components: vec![],
+            });
+            let _ = self.project.save(&self.project_file);
+            self.status = format!("Added class #{suffix}");
+        }
+        if let Some(class_name) = action_spawn_from_class {
+            self.push_snapshot();
+            let i = self
+                .scene
+                .add_entity(format!("{}_{}", class_name, self.scene.next_id));
+            self.scene.entities[i].class = Some(class_name.clone());
+            // Class instances default to 3D entities with a cube mesh
+            // so they appear in the viewport immediately. The class's
+            // `default_components` field will replace this hardcoded
+            // bundle once components are first-class.
+            self.scene.entities[i].transform_3d = Some(Transform3D::default());
+            self.scene.entities[i].mesh = Some(MeshComponent::cube([0.6, 0.7, 0.85, 1.0]));
+            // Inherit the class's shared blueprint reference so all
+            // instances point at the same .ron file.
+            if let Some(class) = self.project.classes.iter().find(|c| c.name == class_name)
+                && let Some(bp) = class.blueprint.clone()
+            {
+                self.scene.entities[i].blueprint = Some(bp);
+            }
+            self.selected = Some(self.scene.entities[i].id);
+            self.status = format!("Spawned instance of class '{class_name}'");
         }
         if let Some(eid) = action_open_blueprint_for {
             self.open_entity_blueprint(eid);
@@ -2035,6 +2088,7 @@ fn load_or_create_project(path: &Path) -> Result<Project, ProjectError> {
             name: "Untitled".to_owned(),
             asset_root: PathBuf::from("assets"),
             scenes: Vec::new(),
+            classes: Vec::new(),
         };
         project.save(path)?;
         info!(path = %path.display(), "created blank project");

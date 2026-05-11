@@ -18,6 +18,26 @@ pub struct ProjectScene {
     pub path: PathBuf,
 }
 
+/// Entity class - a template referenced by multiple entities to share
+/// a blueprint and a default component set. `Class` is intentionally
+/// NOT an OOP base class: there is no inheritance hierarchy. It just
+/// declares "instances tagged with this name reuse this blueprint
+/// file and have these components by default".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Class {
+    pub name: String,
+    /// Optional path (relative to project root) of the shared
+    /// blueprint .ron file. Every entity of this class targets this
+    /// blueprint via `BlueprintTarget::Class(name)`.
+    #[serde(default)]
+    pub blueprint: Option<String>,
+    /// Components every freshly-spawned instance receives. Today only
+    /// "cube" / "sprite" shorthand strings are recognised; later
+    /// versions will carry the full component bundle.
+    #[serde(default)]
+    pub default_components: Vec<String>,
+}
+
 /// Top-level project manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -28,6 +48,9 @@ pub struct Project {
     /// Ordered list of scenes; index 0 is the default.
     #[serde(default)]
     pub scenes: Vec<ProjectScene>,
+    /// Registered entity classes (Unreal-lite templates).
+    #[serde(default)]
+    pub classes: Vec<Class>,
 }
 
 fn default_asset_root() -> PathBuf {
@@ -40,6 +63,7 @@ impl Default for Project {
             name: "Untitled".to_owned(),
             asset_root: default_asset_root(),
             scenes: Vec::new(),
+            classes: Vec::new(),
         }
     }
 }
@@ -117,6 +141,7 @@ mod tests {
                 name: "main".to_owned(),
                 path: "scene.ron".into(),
             }],
+            classes: Vec::new(),
         };
         let text = ron::ser::to_string(&p).unwrap();
         let back: Project = ron::de::from_str(&text).unwrap();
