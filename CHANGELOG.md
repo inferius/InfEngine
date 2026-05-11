@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_core::scene` (Phase 5.1): a small serializable scene model. `Scene` owns an ordered `Vec<Entity>`, a stable `next_id` counter, a name, and a clear color; `Entity` carries an `EntityId`, a name, a `Transform2D`, and an optional `SpriteComponent` with `(size, color, AtlasRegion)`. `AtlasRegion` is an enum (`Full`, `Checker`, `Dots`, `Stripes`, `Cross`) and exposes `uv_rect()` matching the renderer's atlas layout. `Scene::load` / `save` round-trip through RON files with pretty-printing.
 - `sprite_demo` inspector panel (Phase 4.2): a resizable left side panel with collapsing sections for Camera (follow toggle + zoom slider), Player (position sliders clamped to the tilemap, size slider, RGBA color picker), and World (background color picker, debug-overlay toggle). All edits update the running scene in real time and exercise `Renderer::camera_mut`, `set_clear_color`, the sprite tint pipeline, and the debug overlay's toggle path.
 - New crate `infengine_editor` (Phase 4.1): wraps `egui` 0.33, `egui-wgpu`, and `egui-winit` behind an `EditorUi` type. `EditorUi::new`, `handle_window_event`, `run(window, |ctx| ...)`, and `render(...)` are the four-method API engine code uses.
 - `infengine_window` exposes `pub use winit as raw_winit` and a new `AppHandler::on_window_event(&EngineWindow, &WindowEvent)` hook so the editor can forward raw input. Documented as a deliberate ADR-0001 carve-out for editor-level integrations.

@@ -1,9 +1,12 @@
 //! Core types and utilities shared across all InfEngine crates.
 //!
-//! At this stage only a version constant and a `math` re-export of `glam`
-//! are provided. More substantial functionality lands in Phase 1.
+//! Currently exposes:
+//! - `math`: re-export of `glam` for shared 2D/3D math.
+//! - `scene`: serializable 2D scene model with entities and components.
 
 #![forbid(unsafe_code)]
+
+pub mod scene;
 
 /// Crate version, sourced from Cargo.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
