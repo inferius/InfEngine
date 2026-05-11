@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_audio` gains disk-loaded sounds (Phase 5.7): `AudioSystem::load_sound(path)` returns a cloneable `Sound` (wrapping `kira::StaticSoundData`) loaded via kira / symphonia (WAV / OGG / FLAC / MP3). `AudioSystem::play_sound(&Sound)` plays a one-shot. New `AudioError::LoadFile` variant.
+- `sprite_demo` synthesizes `assets/chime.wav` on first run (two-tone PCM with a linear envelope, written via a hand-rolled WAV writer), loads it through `AudioSystem::load_sound`, and plays it on the `C` key alongside the existing synthesized `Space` beep.
 - New crate `infengine_physics` (Phase 5.6): wraps `rapier2d` behind a `PhysicsWorld` that consumes the engine's `Scene` model. `rebuild` re-creates rigid bodies and colliders from every entity that carries a `PhysicsComponent`; `step` advances the simulation (`dt` clamped to 50 ms); `write_back` copies world translations into `Transform2D` for the renderer; `sync_from_scene` pushes editor edits into the active bodies between rebuilds.
 - `infengine_core::scene` gains `BodyKind` (`Dynamic`, `Static`, `Kinematic`), `ColliderShape` (`Box`, `Circle { radius }`), and a `PhysicsComponent { body, shape, linear_damping, restitution, friction }`. `Scene::gravity` is a new persisted field (default `[0, -1200]`).
 - `sprite_demo` default scene gains a ground bar plus physics components on player, orbs (one circle, one box), and the ground. A "Play" / "Stop" button in the inspector enters / leaves simulation mode; entering Play snapshots the scene and rebuilds the world, Stop restores the snapshot.

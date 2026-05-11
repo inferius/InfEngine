@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::Path;
 use std::sync::Arc;
 
 use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
@@ -19,6 +20,15 @@ pub enum AudioError {
     Backend(#[from] kira::backend::cpal::Error),
     #[error("failed to play sound: {0}")]
     Play(#[from] kira::PlaySoundError<()>),
+    #[error("failed to load sound from file: {0}")]
+    LoadFile(#[from] kira::sound::FromFileError),
+}
+
+/// A loaded sound that can be played multiple times. Cloning is cheap
+/// (the underlying frame buffer is `Arc<[Frame]>`).
+#[derive(Debug, Clone)]
+pub struct Sound {
+    data: StaticSoundData,
 }
 
 /// High-level audio system. Wraps a `kira` `AudioManager`.
@@ -72,6 +82,20 @@ impl AudioSystem {
             slice: None,
         };
         self.manager.play(data)?;
+        Ok(())
+    }
+
+    /// Load a sound from disk (wav, ogg, flac, mp3 - whatever the active
+    /// kira features support). The resulting handle can be played as
+    /// many times as needed.
+    pub fn load_sound(&self, path: impl AsRef<Path>) -> Result<Sound, AudioError> {
+        let data = StaticSoundData::from_file(path)?;
+        Ok(Sound { data })
+    }
+
+    /// Play a previously loaded `Sound` once at default volume.
+    pub fn play_sound(&mut self, sound: &Sound) -> Result<(), AudioError> {
+        self.manager.play(sound.data.clone())?;
         Ok(())
     }
 }

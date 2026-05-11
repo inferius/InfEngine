@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
-use infengine_audio::AudioSystem;
+use infengine_audio::{AudioSystem, Sound};
 use infengine_core::scene::{
     AtlasRegion, BodyKind, ColliderShape, Entity, EntityId, PhysicsComponent, Scene,
     SpriteComponent, Transform2D,
@@ -39,6 +39,7 @@ struct Demo {
     asset_listing: Vec<PathBuf>,
     selected_asset: Option<PathBuf>,
     audio: Option<AudioSystem>,
+    audio_sound: Option<Sound>,
     physics: PhysicsWorld,
     play_mode: bool,
     edit_snapshot: Option<Scene>,
@@ -72,6 +73,7 @@ impl Default for Demo {
             asset_listing: Vec::new(),
             selected_asset: None,
             audio: None,
+            audio_sound: None,
             physics: PhysicsWorld::new(),
             play_mode: false,
             edit_snapshot: None,
@@ -163,6 +165,70 @@ fn default_scene() -> Scene {
     });
     scene.entities[i].physics = Some(PhysicsComponent::static_box());
     scene
+}
+
+/// Generate a small chime WAV at `assets/chime.wav` if it does not exist
+/// yet so the demo can demonstrate disk-loaded audio without binary
+/// commits. The chime is a two-note sequence with linear envelopes.
+fn ensure_chime_wav(asset_root: &std::path::Path) -> std::io::Result<()> {
+    if !asset_root.exists() {
+        std::fs::create_dir_all(asset_root)?;
+    }
+    let target = asset_root.join("chime.wav");
+    if target.exists() {
+        return Ok(());
+    }
+    let sample_rate: u32 = 44_100;
+    let duration_secs = 0.4_f32;
+    let total = (sample_rate as f32 * duration_secs) as usize;
+    let tau = std::f32::consts::TAU;
+    let mut samples = Vec::<i16>::with_capacity(total * 2);
+    for i in 0..total {
+        let t = i as f32 / sample_rate as f32;
+        let env = (1.0 - t / duration_secs).clamp(0.0, 1.0);
+        let f1 = 660.0;
+        let f2 = 880.0;
+        let v = ((f1 * tau * t).sin() * 0.5 + (f2 * tau * t).sin() * 0.5) * env * 0.4;
+        let s = (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        samples.push(s); // L
+        samples.push(s); // R
+    }
+    write_wav(&target, sample_rate, 2, &samples)?;
+    Ok(())
+}
+
+fn write_wav(
+    path: &std::path::Path,
+    sample_rate: u32,
+    channels: u16,
+    samples: &[i16],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * channels as u32 * (bits_per_sample / 8) as u32;
+    let block_align = channels * (bits_per_sample / 8);
+    let data_size = (samples.len() * 2) as u32;
+    let riff_size = 36 + data_size;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(b"RIFF")?;
+    f.write_all(&riff_size.to_le_bytes())?;
+    f.write_all(b"WAVE")?;
+    f.write_all(b"fmt ")?;
+    f.write_all(&16u32.to_le_bytes())?;
+    f.write_all(&1u16.to_le_bytes())?; // PCM
+    f.write_all(&channels.to_le_bytes())?;
+    f.write_all(&sample_rate.to_le_bytes())?;
+    f.write_all(&byte_rate.to_le_bytes())?;
+    f.write_all(&block_align.to_le_bytes())?;
+    f.write_all(&bits_per_sample.to_le_bytes())?;
+    f.write_all(b"data")?;
+    f.write_all(&data_size.to_le_bytes())?;
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for s in samples {
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    f.write_all(&bytes)?;
+    Ok(())
 }
 
 fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
@@ -297,7 +363,17 @@ impl AppHandler for Demo {
             Err(err) => warn!(error = %err, "filesystem watcher unavailable"),
         }
         match AudioSystem::new() {
-            Ok(a) => self.audio = Some(a),
+            Ok(a) => {
+                if let Err(err) = ensure_chime_wav(self.assets.root()) {
+                    warn!(error = %err, "failed to write chime.wav");
+                }
+                let chime_path = self.assets.root().join("chime.wav");
+                self.audio_sound = a.load_sound(&chime_path).ok();
+                if self.audio_sound.is_none() {
+                    warn!(path = %chime_path.display(), "failed to load chime.wav");
+                }
+                self.audio = Some(a);
+            }
             Err(err) => warn!(error = %err, "audio system unavailable"),
         }
 
@@ -350,13 +426,23 @@ impl AppHandler for Demo {
     }
 
     fn on_key(&mut self, key: Key, pressed: bool) {
-        if pressed
-            && key == Key::Space
-            && let Some(audio) = self.audio.as_mut()
-        {
-            match audio.play_beep(440.0, 0.10, 0.3) {
-                Ok(()) => self.beep_count += 1,
-                Err(err) => warn!(error = %err, "play_beep failed"),
+        if !pressed {
+            return;
+        }
+        if let Some(audio) = self.audio.as_mut() {
+            match key {
+                Key::Space => match audio.play_beep(440.0, 0.10, 0.3) {
+                    Ok(()) => self.beep_count += 1,
+                    Err(err) => warn!(error = %err, "play_beep failed"),
+                },
+                Key::C => {
+                    if let Some(sound) = self.audio_sound.as_ref()
+                        && let Err(err) = audio.play_sound(sound)
+                    {
+                        warn!(error = %err, "play_sound failed");
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -577,7 +663,7 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.6");
+                        ui.heading("InfEngine - Phase 5.7");
                         ui.horizontal(|ui| {
                             let label = if *play_mode_ref { "Stop" } else { "Play" };
                             if ui.button(label).clicked() {
@@ -665,7 +751,7 @@ impl AppHandler for Demo {
                         ui.label("Controls:");
                         ui.label("WASD / arrows = move selection");
                         ui.label("Q / E = zoom out / in");
-                        ui.label("Space = beep, R = recenter, Esc = quit");
+                        ui.label("Space = beep, C = chime, R = recenter, Esc = quit");
                     });
             });
         }
@@ -847,7 +933,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.6)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.7)".into(),
         width: 1280,
         height: 720,
         resizable: true,
