@@ -294,6 +294,12 @@ pub struct Entity {
     /// anonymous instance.
     #[serde(default)]
     pub class: Option<String>,
+    /// Path (relative to the project root) of this entity's per-
+    /// instance blueprint .ron file. `None` = no script attached.
+    /// Editing the blueprint via the editor's "BP" button or by
+    /// double-clicking the entity binds it to this slot.
+    #[serde(default)]
+    pub blueprint: Option<String>,
 }
 
 impl Entity {
@@ -309,6 +315,7 @@ impl Entity {
             physics_3d: None,
             parent: None,
             class: None,
+            blueprint: None,
         }
     }
 

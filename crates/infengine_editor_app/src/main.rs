@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_blueprint::{
-    BlueprintEditor, NodeKindRegistry,
+    Blueprint, BlueprintEditor, BlueprintTarget, NodeKindRegistry,
     exec::{Program, TracingHost, Trigger, compile, run as run_program},
 };
 use infengine_core::project::{Project, ProjectError, ProjectScene};
@@ -96,6 +96,9 @@ struct Editor {
     /// scaffold stage; persistence + node-graph execution come later.
     blueprint: BlueprintEditor,
     blueprint_open: bool,
+    /// The entity whose blueprint is currently loaded in `blueprint`.
+    /// `None` = an unbound / global blueprint editor session.
+    blueprint_active_entity: Option<EntityId>,
     node_registry: NodeKindRegistry,
     /// Name -> mesh handle map for glTF-imported meshes. Populated by
     /// the "Import glTF" panel; consulted when drawing 3D entities
@@ -201,6 +204,7 @@ impl Editor {
             play_body_map_3d: HashMap::new(),
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
+            blueprint_active_entity: None,
             node_registry: NodeKindRegistry::with_builtins(),
             imported_meshes: HashMap::new(),
             gltf_path_input: String::new(),
@@ -390,6 +394,77 @@ impl Editor {
             self.status = format!("Redo ({} left)", self.redo_stack.len());
         } else {
             self.status = "Nothing to redo".into();
+        }
+    }
+
+    /// Bind the active blueprint editor session to a specific entity.
+    /// If the entity already has a `blueprint` path, load it from
+    /// disk; otherwise create a fresh blueprint, assign a default
+    /// path under `blueprints/`, and persist it so the next session
+    /// reopens the same file.
+    fn open_entity_blueprint(&mut self, eid: EntityId) {
+        // Save whatever was being edited before swapping.
+        self.save_active_blueprint();
+        let (rel_path, entity_name) = {
+            let Some(entity) = self.scene.get(eid) else {
+                return;
+            };
+            let rel = entity
+                .blueprint
+                .clone()
+                .unwrap_or_else(|| format!("blueprints/entity_{}.ron", eid.0));
+            (rel, entity.name.clone())
+        };
+        let full = self.project_root.join(&rel_path);
+        let blueprint = match Blueprint::load(&full) {
+            Ok(mut b) => {
+                // Refresh target so a renamed entity shows current
+                // name in the blueprint header.
+                b.target = BlueprintTarget::Entity {
+                    entity_id: eid.0,
+                    entity_name: entity_name.clone(),
+                };
+                b
+            }
+            Err(_) => Blueprint {
+                name: format!("Blueprint for {entity_name}"),
+                target: BlueprintTarget::Entity {
+                    entity_id: eid.0,
+                    entity_name: entity_name.clone(),
+                },
+                graph: infengine_blueprint::Graph::default(),
+            },
+        };
+        // Ensure the blueprints/ dir exists so first-save succeeds.
+        if let Some(parent) = full.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Write the new blueprint (or re-save loaded one) immediately
+        // so the entity binding survives across closes.
+        if let Err(err) = blueprint.save(&full) {
+            self.status = format!("Blueprint save failed: {err}");
+        }
+        if let Some(entity) = self.scene.get_mut(eid) {
+            entity.blueprint = Some(rel_path);
+        }
+        self.blueprint.blueprint = blueprint;
+        self.blueprint_active_entity = Some(eid);
+        self.blueprint_open = true;
+    }
+
+    /// Save the currently-bound entity blueprint to its `.ron` file.
+    /// No-op when the active blueprint isn't entity-bound or the
+    /// referenced entity is gone.
+    fn save_active_blueprint(&mut self) {
+        let Some(eid) = self.blueprint_active_entity else {
+            return;
+        };
+        let Some(rel_path) = self.scene.get(eid).and_then(|e| e.blueprint.clone()) else {
+            return;
+        };
+        let full = self.project_root.join(&rel_path);
+        if let Err(err) = self.blueprint.blueprint.save(&full) {
+            self.status = format!("Blueprint save failed: {err}");
         }
     }
 
@@ -612,6 +687,34 @@ fn transform_3d_to_matrix(t: &Transform3D) -> Mat4 {
         ),
         Vec3::from_array(t.position),
     )
+}
+
+/// World-space model matrix for a 3D entity: walks up the parent
+/// chain so each entity inherits its ancestors' transforms (Unity-
+/// style scene-graph composition). Entities without a `transform_3d`
+/// contribute an identity matrix so a 2D-only ancestor doesn't break
+/// the chain.
+fn entity_world_matrix_3d(scene: &Scene, entity: &Entity) -> Mat4 {
+    let local = entity
+        .transform_3d
+        .as_ref()
+        .map(transform_3d_to_matrix)
+        .unwrap_or(Mat4::IDENTITY);
+    match entity.parent.and_then(|p| scene.get(p)) {
+        Some(parent) => entity_world_matrix_3d(scene, parent) * local,
+        None => local,
+    }
+}
+
+/// Helper that returns the world-space position of an entity's 3D
+/// transform, including parent chain. Convenience for the camera
+/// target / 3D gizmo paths.
+fn entity_world_position_3d(scene: &Scene, entity: &Entity) -> Option<Vec3> {
+    if entity.transform_3d.is_none() && entity.parent.is_none() {
+        return None;
+    }
+    let m = entity_world_matrix_3d(scene, entity);
+    Some(m.w_axis.truncate())
 }
 
 /// Draw the 3D translate gizmo as screen-space debug lines projected
@@ -1109,6 +1212,7 @@ impl AppHandler for Editor {
         let mut action_add_entity_empty = false;
         let mut action_add_entity_cube = false;
         let mut action_open_blueprint_for: Option<EntityId> = None;
+        let mut blueprint_dirty = false;
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_play = false;
@@ -1205,7 +1309,9 @@ impl AppHandler for Editor {
                         .default_size([720.0, 480.0])
                         .open(blueprint_open)
                         .show(ctx, |ui| {
-                            blueprint.show(ui, node_registry);
+                            if blueprint.show(ui, node_registry) {
+                                blueprint_dirty = true;
+                            }
                         });
                 }
 
@@ -1394,21 +1500,10 @@ impl AppHandler for Editor {
             self.export();
         }
         if let Some(eid) = action_open_blueprint_for {
-            // Bind the editor's blueprint to that entity and pop the
-            // window. Future iterations will persist per-entity
-            // blueprints in the scene file; for now there's one
-            // active blueprint in flight and double-clicking another
-            // entity reassigns the target.
-            let name = self
-                .scene
-                .get(eid)
-                .map(|e| e.name.clone())
-                .unwrap_or_default();
-            self.blueprint.blueprint.target = infengine_blueprint::BlueprintTarget::Entity {
-                entity_id: eid.0,
-                entity_name: name,
-            };
-            self.blueprint_open = true;
+            self.open_entity_blueprint(eid);
+        }
+        if blueprint_dirty {
+            self.save_active_blueprint();
         }
         if let Some(path) = action_import_gltf
             && let Some(r) = self.renderer.as_mut()
@@ -1505,9 +1600,8 @@ impl AppHandler for Editor {
         if (selection_changed || f_just)
             && let Some(id) = self.selected
             && let Some(e) = self.scene.get(id)
-            && let Some(t) = e.transform_3d.as_ref()
+            && let Some(target) = entity_world_position_3d(&self.scene, e)
         {
-            let target = Vec3::from_array(t.position);
             let offset = cam.position - cam.target;
             cam.target = target;
             cam.position = target + offset;
@@ -1551,6 +1645,7 @@ impl AppHandler for Editor {
             1.0,
         );
         let imported_meshes = &imported_meshes_snapshot;
+        let scene_ref_for_draw = &self.scene;
         for entity in &self.scene.entities {
             if let Some(sprite) = &entity.sprite {
                 let size = [
@@ -1566,23 +1661,33 @@ impl AppHandler for Editor {
                     uv_max,
                 });
             }
-            if let (Some(t), Some(mesh)) = (&entity.transform_3d, &entity.mesh) {
+            if entity.transform_3d.is_some()
+                && let Some(mesh) = &entity.mesh
+            {
                 // Resolve the mesh slot: imported glTF mesh by name,
-                // else the built-in unit cube.
+                // else the built-in unit cube. World matrix walks the
+                // parent chain so children inherit their parent's
+                // transform.
                 let handle = imported_meshes
                     .get(&mesh.mesh)
                     .copied()
                     .unwrap_or_else(|| renderer.cube_handle());
-                let model = transform_3d_to_matrix(t).to_cols_array();
-                renderer.draw_mesh_pbr(handle, model, mesh.color, mesh.metallic, mesh.roughness);
+                let world = entity_world_matrix_3d(scene_ref_for_draw, entity);
+                renderer.draw_mesh_pbr(
+                    handle,
+                    world.to_cols_array(),
+                    mesh.color,
+                    mesh.metallic,
+                    mesh.roughness,
+                );
             }
         }
         if let Some(id) = self.selected
             && let Some(entity) = self.scene.get(id)
         {
             if entity.is_3d() {
-                if let Some(t) = entity.transform_3d.as_ref() {
-                    draw_gizmo_3d(renderer, viewport, Vec3::from_array(t.position));
+                if let Some(pos) = entity_world_position_3d(scene_ref_for_draw, entity) {
+                    draw_gizmo_3d(renderer, viewport, pos);
                 }
             } else {
                 let p = entity.transform.position;
@@ -1633,11 +1738,37 @@ impl AppHandler for Editor {
     }
 }
 
+/// Returns `true` if `candidate` sits anywhere in the parent chain
+/// of `of`. Used to filter the parent picker so the user cannot make
+/// the scene tree cyclic.
+fn is_descendant_of(scene: &Scene, candidate: EntityId, of: EntityId) -> bool {
+    if candidate == of {
+        return false;
+    }
+    let mut cur = scene.get(candidate).and_then(|e| e.parent);
+    while let Some(c) = cur {
+        if c == of {
+            return true;
+        }
+        cur = scene.get(c).and_then(|e| e.parent);
+    }
+    false
+}
+
 fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut Option<EntityId>) {
     let Some(id) = *selected else {
         ui.label("(no entity selected)");
         return;
     };
+    // Snapshot candidate parents up front so we can show the picker
+    // without holding a mutable borrow over the scene.
+    let candidates: Vec<(EntityId, String)> = scene
+        .entities
+        .iter()
+        .filter(|e| e.id != id && !is_descendant_of(scene, e.id, id))
+        .map(|e| (e.id, e.name.clone()))
+        .collect();
+
     let Some(entity) = scene.get_mut(id) else {
         ui.label("(selection lost)");
         return;
@@ -1647,6 +1778,41 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
         ui.text_edit_singleline(&mut entity.name);
     });
     ui.label(format!("Id: {}", id.0));
+
+    // Parent picker (Unity-style scene tree reparent).
+    let current_parent_label = match entity.parent {
+        Some(p) => candidates
+            .iter()
+            .find(|(c, _)| *c == p)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| format!("#{}", p.0)),
+        None => "(root)".into(),
+    };
+    ui.horizontal(|ui| {
+        ui.label("Parent");
+        egui::ComboBox::from_id_salt("parent_picker")
+            .selected_text(current_parent_label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut entity.parent, None, "(root)");
+                for (cid, cname) in &candidates {
+                    ui.selectable_value(&mut entity.parent, Some(*cid), cname);
+                }
+            });
+    });
+
+    // Class field (free-form tag for shared blueprint membership).
+    let mut class_str = entity.class.clone().unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label("Class");
+        if ui.text_edit_singleline(&mut class_str).changed() {
+            entity.class = if class_str.is_empty() {
+                None
+            } else {
+                Some(class_str)
+            };
+        }
+    });
+
     if entity.is_3d() {
         if let Some(t) = entity.transform_3d.as_mut() {
             transform_3d_editor(ui, t);

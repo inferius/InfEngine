@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use glam::{Mat4, Quat, Vec3};
 use infengine_core::project::Project;
-use infengine_core::scene::{Scene, Transform3D};
+use infengine_core::scene::{Entity, Scene, Transform3D};
 use infengine_render::{Renderer, SpriteInstance};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -100,10 +100,18 @@ impl AppHandler for Runtime {
                     uv_max,
                 });
             }
-            if let (Some(t), Some(mesh)) = (&entity.transform_3d, &entity.mesh) {
+            if entity.transform_3d.is_some()
+                && let Some(mesh) = &entity.mesh
+            {
                 let handle = renderer.cube_handle();
-                let model = transform_3d_to_matrix(t).to_cols_array();
-                renderer.draw_mesh_pbr(handle, model, mesh.color, mesh.metallic, mesh.roughness);
+                let world = entity_world_matrix_3d(&self.scene, entity);
+                renderer.draw_mesh_pbr(
+                    handle,
+                    world.to_cols_array(),
+                    mesh.color,
+                    mesh.metallic,
+                    mesh.roughness,
+                );
             }
         }
         if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
@@ -115,6 +123,18 @@ impl AppHandler for Runtime {
         if let Some(r) = self.renderer.as_mut() {
             r.resize(w, h);
         }
+    }
+}
+
+fn entity_world_matrix_3d(scene: &Scene, entity: &Entity) -> Mat4 {
+    let local = entity
+        .transform_3d
+        .as_ref()
+        .map(transform_3d_to_matrix)
+        .unwrap_or(Mat4::IDENTITY);
+    match entity.parent.and_then(|p| scene.get(p)) {
+        Some(parent) => entity_world_matrix_3d(scene, parent) * local,
+        None => local,
     }
 }
 
