@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use infengine_assets::{AssetHandle, AssetServer, ImageAsset};
+use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -28,7 +28,9 @@ struct Demo {
     renderer: Option<Renderer>,
     tilemap: Tilemap,
     assets: AssetServer,
+    asset_watcher: Option<AssetWatcher>,
     sample_image: Option<AssetHandle<ImageAsset>>,
+    reload_count: u32,
     pos: [f32; 2],
     zoom: f32,
     viewport: (u32, u32),
@@ -43,7 +45,9 @@ impl Default for Demo {
             renderer: None,
             tilemap: build_tilemap(),
             assets: AssetServer::new(assets_root),
+            asset_watcher: None,
             sample_image: None,
+            reload_count: 0,
             pos: [0.0, 0.0],
             zoom: 1.0,
             viewport: (1, 1),
@@ -132,12 +136,40 @@ impl AppHandler for Demo {
             }
             Err(err) => warn!(error = %err, "failed to load sample.png"),
         }
+
+        match self.assets.watch() {
+            Ok(w) => self.asset_watcher = Some(w),
+            Err(err) => warn!(error = %err, "filesystem watcher unavailable"),
+        }
     }
 
     fn on_update(&mut self, _window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.max(1e-4);
         let instant_fps = 1.0 / dt;
         self.fps_ema = self.fps_ema * 0.9 + instant_fps * 0.1;
+
+        // Drain hot-reload events; reload the sample image when it changes.
+        if let Some(w) = self.asset_watcher.as_ref() {
+            while let Ok(event) = w.receiver.try_recv() {
+                match event {
+                    AssetEvent::Modified(path) => {
+                        info!(path = %path.display(), "asset modified");
+                        if let Some(handle) = self.sample_image
+                            && let Some(known) = self.assets.handle_path(handle)
+                            && known == path
+                        {
+                            match self.assets.reload_image(handle) {
+                                Ok(_) => self.reload_count += 1,
+                                Err(err) => warn!(error = %err, "reload_image failed"),
+                            }
+                        }
+                    }
+                    AssetEvent::Removed(path) => {
+                        warn!(path = %path.display(), "asset removed");
+                    }
+                }
+            }
+        }
 
         let mut dx = 0.0_f32;
         let mut dy = 0.0_f32;
@@ -222,10 +254,10 @@ impl AppHandler for Demo {
         let top_left_y = self.pos[1] + half_h_world - margin;
         let line_step = text_world_size * 1.25;
 
-        let line1 = format!("INFENGINE PHASE 2.7  FPS {:.0}", self.fps_ema);
+        let line1 = format!("INFENGINE PHASE 3.2  FPS {:.0}", self.fps_ema);
         let line2 = format!(
-            "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}",
-            self.pos[0], self.pos[1], self.zoom
+            "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}  RELOADS {}",
+            self.pos[0], self.pos[1], self.zoom, self.reload_count
         );
         renderer.draw_text(
             &line1,
@@ -280,7 +312,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.7)".into(),
+        title: "InfEngine - sprite_demo (Phase 3.2)".into(),
         width: 1280,
         height: 720,
         resizable: true,

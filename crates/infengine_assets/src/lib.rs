@@ -81,6 +81,31 @@ pub enum AssetError {
         path: PathBuf,
         source: image::ImageError,
     },
+    #[error("failed to set up filesystem watcher: {0}")]
+    Watch(#[from] notify::Error),
+}
+
+/// Filesystem change event emitted by the hot-reload watcher. Paths are
+/// reported relative to the asset root whenever possible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetEvent {
+    Modified(PathBuf),
+    Removed(PathBuf),
+}
+
+/// Live filesystem watcher tied to the asset root.
+///
+/// The struct holds the underlying `notify` watcher alive; drop it to
+/// stop receiving events. Poll `receiver.try_recv()` from the main loop.
+pub struct AssetWatcher {
+    _watcher: notify::RecommendedWatcher,
+    pub receiver: std::sync::mpsc::Receiver<AssetEvent>,
+}
+
+impl std::fmt::Debug for AssetWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssetWatcher").finish()
+    }
 }
 
 /// Cache + loader for engine assets, rooted at a single content directory.
@@ -195,6 +220,63 @@ impl AssetServer {
             id,
             _marker: PhantomData,
         })
+    }
+
+    /// Start watching the asset root for filesystem changes. Returns an
+    /// [`AssetWatcher`] whose `receiver` yields [`AssetEvent`]s. The
+    /// watcher continues running until the returned value is dropped.
+    ///
+    /// The root must exist on disk at the time of the call.
+    pub fn watch(&self) -> Result<AssetWatcher, AssetError> {
+        use notify::{EventKind, RecursiveMode, Watcher};
+
+        let root_abs =
+            std::fs::canonicalize(&self.root).map_err(|source| AssetError::NotFound {
+                path: self.root.clone(),
+                source,
+            })?;
+        let root_for_closure = root_abs.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<AssetEvent>();
+
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                let Ok(ev) = res else {
+                    return;
+                };
+                let is_modified = matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_));
+                let is_removed = matches!(ev.kind, EventKind::Remove(_));
+                if !is_modified && !is_removed {
+                    return;
+                }
+                for path in ev.paths {
+                    let rel = path
+                        .strip_prefix(&root_for_closure)
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|_| path.clone());
+                    let event = if is_modified {
+                        AssetEvent::Modified(rel)
+                    } else {
+                        AssetEvent::Removed(rel)
+                    };
+                    let _ = tx.send(event);
+                }
+            })?;
+        watcher.watch(&root_abs, RecursiveMode::Recursive)?;
+        info!(root = %root_abs.display(), "filesystem watcher started");
+
+        Ok(AssetWatcher {
+            _watcher: watcher,
+            receiver: rx,
+        })
+    }
+
+    /// Look up the relative path that owns `handle`, if any.
+    pub fn handle_path(&self, handle: AssetHandle<ImageAsset>) -> Option<PathBuf> {
+        let inner = self.inner.read();
+        inner
+            .by_path
+            .iter()
+            .find_map(|(p, id)| (*id == handle.id).then(|| p.clone()))
     }
 
     /// Replace the cached image at `handle` with a freshly decoded copy.

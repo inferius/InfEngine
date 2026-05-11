@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_assets` hot reload (Phase 3.2): `AssetServer::watch()` returns an `AssetWatcher` whose `receiver` yields `AssetEvent::Modified(path)` and `Removed(path)` over a `std::sync::mpsc::Receiver`. Paths are emitted relative to the asset root. `AssetServer::handle_path(handle)` reverse-resolves a handle back to its source path so callers can decide when to call `reload_image`. The underlying watcher uses `notify::RecommendedWatcher` and stops when the `AssetWatcher` is dropped.
+- `sprite_demo` polls hot-reload events each frame, reloads `sample.png` when modified, and shows the running reload count on the HUD.
 - `infengine_assets::AssetServer`, `AssetHandle<T>`, and `ImageAsset` (Phase 3.1): typed handles backed by a numeric `AssetId`, a `RwLock`-guarded cache, and PNG/JPG/WebP decoding via the `image` crate. `AssetServer::load_image` returns a cached `Arc<ImageAsset>` and rejects paths that try to escape the asset root.
 - `AssetServer::reload_image` re-decodes a previously loaded image from disk; used by Phase 3.2 hot reload.
 - `sprite_demo` auto-generates `assets/sample.png` on first run and loads it through the `AssetServer` to exercise the load path end-to-end.
