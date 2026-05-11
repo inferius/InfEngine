@@ -12,10 +12,12 @@ members = [
     "crates/infengine_editor_app",
     "crates/infengine_runtime",
     "crates/infengine_blueprint",
+    "crates/infengine_voxel",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",
     "examples/demo_game",
+    "examples/voxel_demo",
 ]
 
 [workspace.package]
