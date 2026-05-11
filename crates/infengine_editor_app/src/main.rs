@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 
 use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
-use infengine_blueprint::BlueprintEditor;
+use infengine_blueprint::{
+    BlueprintEditor,
+    exec::{Program, TracingHost, Trigger, compile, run as run_program},
+};
 use infengine_core::project::{Project, ProjectError, ProjectScene};
 use std::collections::HashMap;
 
@@ -93,6 +96,9 @@ struct Editor {
     /// scaffold stage; persistence + node-graph execution come later.
     blueprint: BlueprintEditor,
     blueprint_open: bool,
+    /// Compiled bytecode for the blueprint's `OnTick` trigger; populated
+    /// when Play starts.
+    play_blueprint_tick: Option<Program>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -189,6 +195,7 @@ impl Editor {
             play_body_map_3d: HashMap::new(),
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
+            play_blueprint_tick: None,
         };
         if me.project.scenes.is_empty() {
             // A fresh project ships with an empty scenes list and
@@ -433,6 +440,17 @@ impl Editor {
         }
         self.play_physics_3d = Some(world_3d);
         self.play_body_map_3d = map_3d;
+        // Compile blueprint bytecode and fire its OnStart once.
+        match compile(&self.blueprint.graph, Trigger::OnStart) {
+            Ok(prog) => {
+                let mut host = TracingHost;
+                run_program(&prog, &mut host);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "blueprint OnStart compile failed");
+            }
+        }
+        self.play_blueprint_tick = compile(&self.blueprint.graph, Trigger::OnTick).ok();
         self.play_state = PlayState::Playing;
         self.status = "Play mode".into();
     }
@@ -457,6 +475,7 @@ impl Editor {
         self.play_physics = None;
         self.play_physics_3d = None;
         self.play_body_map_3d.clear();
+        self.play_blueprint_tick = None;
         self.play_state = PlayState::Editing;
         self.status = "Stopped".into();
     }
@@ -479,6 +498,10 @@ impl Editor {
                     t.position = pos.to_array();
                 }
             }
+        }
+        if let Some(prog) = self.play_blueprint_tick.as_ref() {
+            let mut host = TracingHost;
+            run_program(prog, &mut host);
         }
     }
 

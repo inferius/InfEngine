@@ -16,3 +16,4 @@ egui = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

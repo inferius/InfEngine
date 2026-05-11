@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod exec;
+
 /// Stable numeric id of a node inside a graph.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
@@ -64,8 +66,10 @@ impl NodeKind {
         match self {
             NodeKind::OnStart | NodeKind::OnTick | NodeKind::ConstFloat => &[],
             NodeKind::Add => &["a", "b"],
-            NodeKind::Print => &["value"],
-            NodeKind::SetPosition => &["x", "y", "z"],
+            // First pin "in" is the execution-flow input; the rest are
+            // data inputs the VM evaluates before firing the node.
+            NodeKind::Print => &["in", "value"],
+            NodeKind::SetPosition => &["in", "x", "y", "z"],
         }
     }
 
