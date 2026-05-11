@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New crate `infengine_scripting` (Phase 8.1-8.2): wraps the `netcorehost` 0.18 crate to bootstrap an in-process .NET 10 runtime via `hostfxr`. `ScriptHost::new(runtime_config)` loads `hostfxr`, initializes a runtime, and exposes `load_assembly(path) -> ScriptAssembly`. `ScriptAssembly::get_fn_void` / `get_fn_int` resolve C# methods marked `[UnmanagedCallersOnly]` to callable function pointers.
+- Sample C# project `scripts/InfEngine.Scripts` (TFM `net10.0`, latest LangVersion) with `Hello.HelloFromCSharp()` and `Hello.LifeUniverseEverything()` entry points.
+- New example `examples/csharp_demo`: builds `InfEngine.Scripts.dll`, loads it, invokes both entry points, prints `Hello from C# 10.0.7!` and the returned `42`. End-to-end verified with `dotnet build -c Release` + `cargo run -p csharp_demo`.
+- Workspace pin `netcorehost = "0.18"` and a new workspace member entry.
+- `.gitignore`: exclude `/scripts/**/bin/` and `/scripts/**/obj/` from git.
 - `infengine_physics::three` + `PhysicsWorld3D` (Phase 7.1): rapier3d wrapper exposing a handle-based API (`create_body(BodyDesc)`, `step(dt)`, `translation(id)`, `rotation(id)`, `set_translation`). `BodyKind3D` covers Dynamic / Static / Kinematic; `ColliderShape3D` covers Box / Sphere / Capsule. Gravity defaults to `(0, -9.81, 0)` and is settable. Scene-driven integration arrives once the engine's `Scene` model gains 3D entities.
 - `cube_demo` spawns a 6-cube stack + 4 bouncing balls on a static ground bar to the right of the rotating ring. `R` rebuilds the world. Cubes and balls inherit per-instance PBR materials so they show on-impact behaviour with varying metallic / roughness.
 - PBR baseline shading (Phase 6.4): `MeshInstance` now carries `(metallic, roughness)` material parameters; the mesh shader replaces the simple Lambert with a Cook-Torrance specular (GGX distribution, Schlick Fresnel, smith-GGX geometry) plus a Lambert diffuse term and a hemispheric ambient. F0 lerps from 0.04 dielectric to the albedo for metals. New `Renderer::draw_mesh_pbr(handle, model, color, metallic, roughness)` and `MeshInstance::with_material` helpers.

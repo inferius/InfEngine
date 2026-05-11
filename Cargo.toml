@@ -8,8 +8,10 @@ members = [
     "crates/infengine_audio",
     "crates/infengine_editor",
     "crates/infengine_physics",
+    "crates/infengine_scripting",
     "examples/sprite_demo",
     "examples/cube_demo",
+    "examples/csharp_demo",
 ]
 
 [workspace.package]
@@ -69,6 +71,7 @@ egui-winit = "0.33"
 rapier2d = "0.28"
 rapier3d = "0.28"
 gltf = "1"
+netcorehost = "0.18"
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,18 @@
+[package]
+name = "csharp_demo"
+description = "Phase 8 proof of concept: bootstrap CoreCLR and call into C#."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../../crates/infengine_core" }
+infengine_scripting = { path = "../../crates/infengine_scripting" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

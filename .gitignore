@@ -42,6 +42,10 @@ secrets.toml
 # Demo-generated assets (regenerated on first run if missing)
 /assets/
 
+# C# build output
+/scripts/**/bin/
+/scripts/**/obj/
+
 # Build artifacts not under target/
 *.exe
 *.dll
