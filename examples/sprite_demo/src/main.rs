@@ -6,6 +6,9 @@
 //! line from origin to player). WASD / arrows move, Q / E zoom out /
 //! in, R resets, Escape exits.
 
+use std::path::PathBuf;
+
+use infengine_assets::{AssetHandle, AssetServer, ImageAsset};
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -24,6 +27,8 @@ const HUD_MARGIN: f32 = 12.0;
 struct Demo {
     renderer: Option<Renderer>,
     tilemap: Tilemap,
+    assets: AssetServer,
+    sample_image: Option<AssetHandle<ImageAsset>>,
     pos: [f32; 2],
     zoom: f32,
     viewport: (u32, u32),
@@ -33,9 +38,12 @@ struct Demo {
 
 impl Default for Demo {
     fn default() -> Self {
+        let assets_root = PathBuf::from("assets");
         Self {
             renderer: None,
             tilemap: build_tilemap(),
+            assets: AssetServer::new(assets_root),
+            sample_image: None,
             pos: [0.0, 0.0],
             zoom: 1.0,
             viewport: (1, 1),
@@ -43,6 +51,31 @@ impl Default for Demo {
             frame: 0,
         }
     }
+}
+
+/// Generate a small "InfEngine" gradient PNG into `assets/sample.png`
+/// if it does not exist, so the demo always has something to load.
+fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
+    if !asset_root.exists() {
+        std::fs::create_dir_all(asset_root)?;
+    }
+    let target = asset_root.join("sample.png");
+    if target.exists() {
+        return Ok(());
+    }
+    let (w, h) = (128u32, 128u32);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let r = ((x as f32 / w as f32) * 255.0) as u8;
+            let g = ((y as f32 / h as f32) * 255.0) as u8;
+            let b = 0x60;
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    image::save_buffer(&target, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(())
 }
 
 fn build_tilemap() -> Tilemap {
@@ -80,6 +113,24 @@ impl AppHandler for Demo {
                 error!(error = %err, "failed to initialize renderer");
                 std::process::exit(2);
             }
+        }
+
+        if let Err(err) = ensure_sample_image(self.assets.root()) {
+            warn!(error = %err, "failed to write sample.png");
+        }
+        match self.assets.load_image("sample.png") {
+            Ok(handle) => {
+                if let Some(img) = self.assets.get_image(handle) {
+                    info!(
+                        width = img.width,
+                        height = img.height,
+                        bytes = img.rgba.len(),
+                        "sample asset loaded"
+                    );
+                }
+                self.sample_image = Some(handle);
+            }
+            Err(err) => warn!(error = %err, "failed to load sample.png"),
         }
     }
 

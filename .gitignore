@@ -39,6 +39,9 @@ perf.data*
 .env.local
 secrets.toml
 
+# Demo-generated assets (regenerated on first run if missing)
+/assets/
+
 # Build artifacts not under target/
 *.exe
 *.dll

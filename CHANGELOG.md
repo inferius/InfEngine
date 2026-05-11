@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_assets::AssetServer`, `AssetHandle<T>`, and `ImageAsset` (Phase 3.1): typed handles backed by a numeric `AssetId`, a `RwLock`-guarded cache, and PNG/JPG/WebP decoding via the `image` crate. `AssetServer::load_image` returns a cached `Arc<ImageAsset>` and rejects paths that try to escape the asset root.
+- `AssetServer::reload_image` re-decodes a previously loaded image from disk; used by Phase 3.2 hot reload.
+- `sprite_demo` auto-generates `assets/sample.png` on first run and loads it through the `AssetServer` to exercise the load path end-to-end.
 - Debug-line overlay (Phase 2.7): a second `wgpu` pipeline with `LineList` topology renders colored line segments in world space on top of the sprite pass. Vertex format is `position (vec2) + color (vec4)` and the GPU buffer grows dynamically just like the sprite instance buffer. `Renderer::debug_line`, `debug_rect`, and `debug_circle(center, radius, color, segments)` queue diagnostics that auto-clear at the end of each `render()`.
 - Bitmap text rendering (Phase 2.6): a hand-rolled 5x7 ASCII bitmap font is packed into the bottom strip of the sprite atlas (16x6 8x8 cells). `Renderer::draw_text(text, position, pixel_size, color)` queues one `SpriteInstance` per character, sharing the existing batched sprite pipeline so HUD text costs no extra draw calls. Supports digits, uppercase A-Z, and common punctuation; unsupported codepoints render blank. Decision recorded for future replacement by `cosmic-text` once the asset pipeline lands.
 - Phase 2.5: `sprite_demo` now drives the camera each frame. The player walks across a 40x30 tilemap, the camera follows the player's world position, and `Q` / `E` zoom out / in via an exponential rate (clamped to `[0.25, 4.0]`). Demonstrates `Camera2D::position` / `zoom` mutation through `Renderer::camera_mut`.
