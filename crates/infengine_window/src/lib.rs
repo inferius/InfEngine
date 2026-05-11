@@ -13,7 +13,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -117,6 +117,13 @@ pub trait AppHandler {
     /// input (egui-winit, etc.); most code should use `on_key`,
     /// `on_resize`, and `on_update` instead.
     fn on_window_event(&mut self, _window: &EngineWindow, _event: &WindowEvent) {}
+
+    /// Called for every winit device event. The only event consumers
+    /// typically care about is `DeviceEvent::MouseMotion`, which
+    /// reports raw relative mouse deltas that are independent of the
+    /// cursor position - essential for FPS-style yaw control when the
+    /// cursor is grabbed or hidden.
+    fn on_device_event(&mut self, _event: &DeviceEvent) {}
 
     /// Called when a key transitions between pressed and released.
     fn on_key(&mut self, _key: Key, _pressed: bool) {}
@@ -243,6 +250,17 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
                 handler.on_update(window, &ctx);
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let Some(handler) = self.handler.as_mut() {
+            handler.on_device_event(&event);
         }
     }
 

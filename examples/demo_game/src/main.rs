@@ -300,17 +300,25 @@ impl DemoGame {
         use infengine_window::raw_winit::window::CursorGrabMode;
         let playing = matches!(self.state, AppState::Playing);
         let raw = window.raw();
-        if playing && self.settings.lock_cursor {
-            // Confined keeps the cursor inside the window bounds while
-            // still letting it move freely (Windows + X11). Locked is
-            // only used as a fallback on platforms that lack Confined
-            // (Wayland) - it pins the cursor to a single point, which
-            // is usually only desirable in combination with hide.
-            if raw.set_cursor_grab(CursorGrabMode::Confined).is_err() {
-                let _ = raw.set_cursor_grab(CursorGrabMode::Locked);
+        // Three modes:
+        //  - Playing + lock + hide: Locked grab (cursor pinned to one
+        //    point) + invisible. Yaw is driven by raw DeviceEvent
+        //    deltas, so the cursor staying put is desirable.
+        //  - Playing + lock only:   Confined grab (visible cursor that
+        //    cannot leave the window).
+        //  - everything else:       no grab.
+        let grab = if playing && self.settings.lock_cursor {
+            if self.settings.hide_cursor {
+                CursorGrabMode::Locked
+            } else {
+                CursorGrabMode::Confined
             }
         } else {
-            let _ = raw.set_cursor_grab(CursorGrabMode::None);
+            CursorGrabMode::None
+        };
+        if raw.set_cursor_grab(grab).is_err() && grab == CursorGrabMode::Locked {
+            // Wayland / X11 prefer the opposite mode; fall back.
+            let _ = raw.set_cursor_grab(CursorGrabMode::Confined);
         }
         raw.set_cursor_visible(!(playing && self.settings.hide_cursor));
     }
@@ -608,41 +616,35 @@ impl AppHandler for DemoGame {
         window: &EngineWindow,
         event: &infengine_window::raw_winit::event::WindowEvent,
     ) {
-        use infengine_window::raw_winit::event::WindowEvent;
         if let Some(ui) = self.ui.as_mut() {
             ui.handle_engine_event(window, event);
         }
-        // Track mouse motion for FPS-style yaw control. Only meaningful
-        // while the game is in Play state; in menu states the cursor
-        // belongs to egui.
-        if let WindowEvent::CursorMoved { position, .. } = event {
+        // CursorMoved is only used as a fallback when the cursor is
+        // free (neither locked nor hidden); the FPS path consumes raw
+        // mouse deltas via on_device_event instead.
+        use infengine_window::raw_winit::event::WindowEvent;
+        if let WindowEvent::CursorMoved { position, .. } = event
+            && matches!(self.state, AppState::Playing)
+            && !(self.settings.lock_cursor || self.settings.hide_cursor)
+        {
             let now = [position.x as f32, position.y as f32];
-            if matches!(self.state, AppState::Playing) {
-                if let Some(prev) = self.last_mouse {
-                    self.mouse_dx_accum += now[0] - prev[0];
-                }
-                // FPS-style virtual cursor: when the user opts into
-                // "lock + hide" we warp the cursor back to the centre
-                // each frame so the yaw delta is never capped by a
-                // window edge. With only Confined the cursor stays
-                // visible and movable; with neither it roams freely.
-                if self.settings.lock_cursor && self.settings.hide_cursor {
-                    use infengine_window::raw_winit::dpi::PhysicalPosition;
-                    let cx = self.viewport.0 as f64 * 0.5;
-                    let cy = self.viewport.1 as f64 * 0.5;
-                    let _ = window
-                        .raw()
-                        .set_cursor_position(PhysicalPosition::new(cx, cy));
-                    self.last_mouse = Some([cx as f32, cy as f32]);
-                } else {
-                    self.last_mouse = Some(now);
-                }
-            } else {
-                // Drop the cache outside Play so re-entry seeds from the
-                // current cursor and yaw does not snap.
-                self.last_mouse = Some(now);
-                self.mouse_dx_accum = 0.0;
+            if let Some(prev) = self.last_mouse {
+                self.mouse_dx_accum += now[0] - prev[0];
             }
+            self.last_mouse = Some(now);
+        }
+    }
+
+    fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
+        use infengine_window::raw_winit::event::DeviceEvent;
+        if !matches!(self.state, AppState::Playing) {
+            return;
+        }
+        if !(self.settings.lock_cursor || self.settings.hide_cursor) {
+            return;
+        }
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.mouse_dx_accum += delta.0 as f32;
         }
     }
 
