@@ -13,6 +13,10 @@ workspace = true
 
 [dependencies]
 infengine_core = { path = "../infengine_core" }
+infengine_window = { path = "../infengine_window" }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 bytemuck = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+winit = { workspace = true }
