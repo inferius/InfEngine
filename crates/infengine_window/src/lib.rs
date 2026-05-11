@@ -15,7 +15,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 mod input;
@@ -220,11 +220,6 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state.is_pressed();
-                    if code == KeyCode::Escape && pressed {
-                        info!("escape pressed -> exit");
-                        event_loop.exit();
-                        return;
-                    }
                     if let Some(key) = Key::from_winit(code) {
                         self.input.set(key, pressed);
                         handler.on_key(key, pressed);

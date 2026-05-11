@@ -93,6 +93,10 @@ struct Settings {
     master_volume: f32,
     mouse_sensitivity: f32,
     show_fps: bool,
+    /// Confine + lock the mouse to the window while in Play state.
+    lock_cursor: bool,
+    /// Hide the OS cursor while in Play state.
+    hide_cursor: bool,
 }
 
 impl Default for Settings {
@@ -101,6 +105,8 @@ impl Default for Settings {
             master_volume: 0.75,
             mouse_sensitivity: 0.6,
             show_fps: true,
+            lock_cursor: true,
+            hide_cursor: true,
         }
     }
 }
@@ -288,6 +294,22 @@ impl DemoGame {
         if matches!(self.pickup_message, Some((_, t)) if t <= 0.0) {
             self.pickup_message = None;
         }
+    }
+
+    fn apply_cursor_settings(&self, window: &EngineWindow) {
+        use infengine_window::raw_winit::window::CursorGrabMode;
+        let playing = matches!(self.state, AppState::Playing);
+        let raw = window.raw();
+        if playing && self.settings.lock_cursor {
+            // Locked is best-effort: works on Wayland / macOS, falls
+            // back to Confined on Windows / X11.
+            if raw.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = raw.set_cursor_grab(CursorGrabMode::Confined);
+            }
+        } else {
+            let _ = raw.set_cursor_grab(CursorGrabMode::None);
+        }
+        raw.set_cursor_visible(!(playing && self.settings.hide_cursor));
     }
 
     fn render_world(&mut self) {
@@ -512,6 +534,11 @@ impl DemoGame {
                             .text("Mouse sensitivity"),
                     );
                     ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
+                    ui.checkbox(
+                        &mut settings_edit.lock_cursor,
+                        "Lock cursor in window (Play)",
+                    );
+                    ui.checkbox(&mut settings_edit.hide_cursor, "Hide cursor (Play)");
                     ui.separator();
                     if ui.button("Back").clicked() {
                         action_back_settings = true;
@@ -634,6 +661,7 @@ impl AppHandler for DemoGame {
         if matches!(self.state, AppState::Playing) {
             self.update_play(ctx, dt);
         }
+        self.apply_cursor_settings(window);
         self.render_world();
         self.render_ui(window);
 
