@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Rust <-> C# bindings (Phase 8.3): a `#[repr(C)]` `EngineApi` struct of `extern "C"` function pointers (`log_info`, `time_secs`) plus a `default_engine_api()` builder. Managed side mirrors the struct as `EngineApiPtrs` and exposes a `Engine` static facade (`Engine.Log(string)`, `Engine.TimeSeconds()`). `ScriptAssembly::get_fn_register_api` resolves `Engine.RegisterApi(EngineApiPtrs*)` so the host can push the table into C# at startup.
+- `Hello.EngineRoundTrip()` C# method logs back through Rust's tracing pipeline using `Engine.Log`, proving the bidirectional FFI works.
 - New crate `infengine_scripting` (Phase 8.1-8.2): wraps the `netcorehost` 0.18 crate to bootstrap an in-process .NET 10 runtime via `hostfxr`. `ScriptHost::new(runtime_config)` loads `hostfxr`, initializes a runtime, and exposes `load_assembly(path) -> ScriptAssembly`. `ScriptAssembly::get_fn_void` / `get_fn_int` resolve C# methods marked `[UnmanagedCallersOnly]` to callable function pointers.
 - Sample C# project `scripts/InfEngine.Scripts` (TFM `net10.0`, latest LangVersion) with `Hello.HelloFromCSharp()` and `Hello.LifeUniverseEverything()` entry points.
 - New example `examples/csharp_demo`: builds `InfEngine.Scripts.dll`, loads it, invokes both entry points, prints `Hello from C# 10.0.7!` and the returned `42`. End-to-end verified with `dotnet build -c Release` + `cargo run -p csharp_demo`.

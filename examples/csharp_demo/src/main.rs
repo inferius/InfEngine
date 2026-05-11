@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use infengine_scripting::ScriptHost;
+use infengine_scripting::{ScriptHost, default_engine_api};
 use tracing::{error, info};
 
 const SCRIPT_DIR: &str = "scripts/InfEngine.Scripts/bin/Release/net10.0";
@@ -60,6 +60,20 @@ fn main() -> ExitCode {
         }
     };
 
+    // Push the engine API table into the managed side.
+    let engine_type = "InfEngine.Scripts.Engine, InfEngine.Scripts";
+    match scripts.get_fn_register_api(engine_type, "RegisterApi") {
+        Ok(register) => {
+            let api = default_engine_api();
+            info!("registering engine API with C# side...");
+            register(&api as *const _);
+        }
+        Err(err) => {
+            error!(error = %err, "resolve Engine.RegisterApi failed");
+            return ExitCode::from(5);
+        }
+    }
+
     let type_name = "InfEngine.Scripts.Hello, InfEngine.Scripts";
     match scripts.get_fn_void(type_name, "HelloFromCSharp") {
         Ok(f) => {
@@ -69,6 +83,17 @@ fn main() -> ExitCode {
         Err(err) => {
             error!(error = %err, "resolve HelloFromCSharp failed");
             return ExitCode::from(5);
+        }
+    }
+
+    match scripts.get_fn_void(type_name, "EngineRoundTrip") {
+        Ok(f) => {
+            info!("calling EngineRoundTrip...");
+            f();
+        }
+        Err(err) => {
+            error!(error = %err, "resolve EngineRoundTrip failed");
+            return ExitCode::from(8);
         }
     }
 

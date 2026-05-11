@@ -13,7 +13,8 @@
 //!   The provided `scripts/InfEngine.Scripts` project emits one next
 //!   to its assembly during `dotnet publish`.
 
-#![forbid(unsafe_code)]
+// FFI boundary requires `unsafe`. Other crates retain `forbid(unsafe_code)`.
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +31,56 @@ pub type FnVoid = ManagedFunction<extern "system" fn()>;
 /// Re-export: a callable `extern "system"` function pointer with no
 /// arguments returning `i32`.
 pub type FnInt = ManagedFunction<extern "system" fn() -> i32>;
+/// Re-export: a callable function used to register the engine API
+/// struct with the managed side.
+pub type FnRegisterApi = ManagedFunction<extern "system" fn(*const EngineApi)>;
+
+/// Engine functions exposed to C# code. Layout is FFI-stable so that
+/// the same `#[repr(C)]` struct can be marshalled on the managed side.
+///
+/// Every function pointer uses the C calling convention; on the C#
+/// side they are declared `delegate* unmanaged[Cdecl]<...>`.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct EngineApi {
+    pub log_info: extern "C" fn(msg: *const u8, len: usize),
+    pub time_secs: extern "C" fn() -> f32,
+}
+
+impl std::fmt::Debug for EngineApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineApi").finish_non_exhaustive()
+    }
+}
+
+/// Build the default engine-API struct with implementations rooted in
+/// `infengine_scripting`. Callers can override individual functions to
+/// hook into game-specific behavior.
+pub fn default_engine_api() -> EngineApi {
+    EngineApi {
+        log_info: rust_log_info,
+        time_secs: rust_time_secs,
+    }
+}
+
+extern "C" fn rust_log_info(msg: *const u8, len: usize) {
+    if msg.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: caller passes a buffer at least `len` bytes valid for the
+    // duration of the call. We immediately copy into a Rust string.
+    let bytes = unsafe { std::slice::from_raw_parts(msg, len) };
+    let text = String::from_utf8_lossy(bytes);
+    tracing::info!(target: "csharp", "{}", text);
+}
+
+extern "C" fn rust_time_secs() -> f32 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    start.elapsed().as_secs_f32()
+}
 
 /// Errors raised while bootstrapping or driving the CoreCLR host.
 #[derive(Debug, thiserror::Error)]
@@ -160,6 +211,24 @@ impl ScriptAssembly {
         let m = pdc_from_str(method_name)?;
         self.loader
             .get_function_with_unmanaged_callers_only::<fn()>(&t, &m)
+            .map_err(|source| ScriptError::ResolveFunction {
+                type_name: type_name.to_owned(),
+                method_name: method_name.to_owned(),
+                source,
+            })
+    }
+
+    /// Resolve a `[UnmanagedCallersOnly] static void method(EngineApi*)`
+    /// entry point used to push the engine API into the managed side.
+    pub fn get_fn_register_api(
+        &self,
+        type_name: &str,
+        method_name: &str,
+    ) -> Result<FnRegisterApi, ScriptError> {
+        let t = pdc_from_str(type_name)?;
+        let m = pdc_from_str(method_name)?;
+        self.loader
+            .get_function_with_unmanaged_callers_only::<fn(*const EngineApi)>(&t, &m)
             .map_err(|source| ScriptError::ResolveFunction {
                 type_name: type_name.to_owned(),
                 method_name: method_name.to_owned(),
