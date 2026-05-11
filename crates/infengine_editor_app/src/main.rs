@@ -817,6 +817,7 @@ fn draw_hierarchy(
     selected_ref: &mut Option<EntityId>,
     delete_entity: &mut Option<EntityId>,
     open_blueprint: &mut Option<EntityId>,
+    reparent_request: &mut Option<(EntityId, Option<EntityId>)>,
 ) {
     let Some(indices) = children.get(&parent) else {
         return;
@@ -836,28 +837,44 @@ fn draw_hierarchy(
             None => String::new(),
         };
         let label = format!("{glyph}{}{} (#{})", entity.name, class_suffix, entity.id.0);
-        ui.horizontal(|ui| {
-            ui.add_space(depth as f32 * 12.0);
-            let resp = ui.selectable_label(is_sel, label);
-            if resp.clicked() {
-                *selected_ref = Some(entity.id);
-            }
-            if resp.double_clicked() {
-                *open_blueprint = Some(entity.id);
-                *selected_ref = Some(entity.id);
-            }
-            if ui
-                .small_button("BP")
-                .on_hover_text("Open blueprint")
-                .clicked()
-            {
-                *open_blueprint = Some(entity.id);
-                *selected_ref = Some(entity.id);
-            }
-            if ui.small_button("X").clicked() {
-                *delete_entity = Some(entity.id);
-            }
+        // Wrap each row in a drop zone so other rows can be dragged
+        // onto it; the row itself is the drag source. egui's
+        // `dnd_*` API does the visual feedback for us.
+        let drop_id = egui::Id::new(("hierarchy_drop", entity.id.0));
+        let drop = ui.dnd_drop_zone::<EntityId, _>(egui::Frame::default(), |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(depth as f32 * 12.0);
+                let src_id = egui::Id::new(("hierarchy_drag", entity.id.0));
+                let resp = ui
+                    .dnd_drag_source(src_id, entity.id, |ui| ui.selectable_label(is_sel, label))
+                    .response;
+                if resp.clicked() {
+                    *selected_ref = Some(entity.id);
+                }
+                if resp.double_clicked() {
+                    *open_blueprint = Some(entity.id);
+                    *selected_ref = Some(entity.id);
+                }
+                if ui
+                    .small_button("BP")
+                    .on_hover_text("Open blueprint")
+                    .clicked()
+                {
+                    *open_blueprint = Some(entity.id);
+                    *selected_ref = Some(entity.id);
+                }
+                if ui.small_button("X").clicked() {
+                    *delete_entity = Some(entity.id);
+                }
+            });
         });
+        let _ = drop_id;
+        if let Some(payload) = drop.1
+            && *payload != entity.id
+            && !is_descendant_of(scene, entity.id, *payload)
+        {
+            *reparent_request = Some((*payload, Some(entity.id)));
+        }
         // Recurse into children.
         draw_hierarchy(
             ui,
@@ -869,6 +886,7 @@ fn draw_hierarchy(
             selected_ref,
             delete_entity,
             open_blueprint,
+            reparent_request,
         );
     }
 }
@@ -1239,6 +1257,7 @@ impl AppHandler for Editor {
         let mut blueprint_dirty = false;
         let mut action_new_class = false;
         let mut action_spawn_from_class: Option<String> = None;
+        let mut reparent_request: Option<(EntityId, Option<EntityId>)> = None;
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_play = false;
@@ -1414,6 +1433,17 @@ impl AppHandler for Editor {
                                     for (i, e) in scene_ref.entities.iter().enumerate() {
                                         children.entry(e.parent).or_default().push(i);
                                     }
+                                    // Top-level drop zone -> drop here to
+                                    // promote an entity to root.
+                                    let root_drop = ui.dnd_drop_zone::<EntityId, _>(
+                                        egui::Frame::default(),
+                                        |ui| {
+                                            ui.small("(drop here to make root)");
+                                        },
+                                    );
+                                    if let Some(payload) = root_drop.1 {
+                                        reparent_request = Some((*payload, None));
+                                    }
                                     draw_hierarchy(
                                         ui,
                                         scene_ref,
@@ -1424,6 +1454,7 @@ impl AppHandler for Editor {
                                         selected_ref,
                                         &mut delete_entity,
                                         &mut action_open_blueprint_for,
+                                        &mut reparent_request,
                                     );
                                 });
                             ui.horizontal(|ui| {
@@ -1543,6 +1574,11 @@ impl AppHandler for Editor {
         }
         if action_export {
             self.export();
+        }
+        if let Some((child, new_parent)) = reparent_request
+            && let Some(entity) = self.scene.get_mut(child)
+        {
+            entity.parent = new_parent;
         }
         if action_new_class {
             let suffix = self.project.classes.len() + 1;
