@@ -126,6 +126,13 @@ struct DemoGame {
     e_prev: bool,
     i_prev: bool,
     space_prev: bool,
+    /// Last reported cursor position; `None` after a state change so the
+    /// next CursorMoved event seeds the previous-position cache without
+    /// producing a huge yaw spike.
+    last_mouse: Option<[f32; 2]>,
+    /// Accumulated horizontal mouse delta in physical pixels collected
+    /// since the previous `update_play` call.
+    mouse_dx_accum: f32,
 }
 
 const ITEM_PICKUP_RADIUS: f32 = 1.2;
@@ -157,6 +164,8 @@ impl DemoGame {
             e_prev: false,
             i_prev: false,
             space_prev: false,
+            last_mouse: None,
+            mouse_dx_accum: 0.0,
         };
         me.reset_world();
         me
@@ -196,17 +205,15 @@ impl DemoGame {
     }
 
     fn update_play(&mut self, ctx: &FrameContext<'_>, dt: f32) {
-        // Movement: turn with A/D, move forward/back with W/S so the
-        // player can roam in any direction without a camera.
-        let mut turn = 0.0;
-        if ctx.input.is_pressed(Key::A) {
-            turn += 1.0;
-        }
-        if ctx.input.is_pressed(Key::D) {
-            turn -= 1.0;
-        }
-        self.player_yaw += turn * 1.8 * dt;
+        // Yaw is mouse-driven: consume the horizontal pixel delta
+        // collected in on_window_event since the previous update and
+        // scale by the settings sensitivity. Negative dx -> turn left
+        // (counter-clockwise in our y-up world).
+        let dx = std::mem::take(&mut self.mouse_dx_accum);
+        let sensitivity = self.settings.mouse_sensitivity * 0.0035;
+        self.player_yaw -= dx * sensitivity;
         let forward = Vec3::new(self.player_yaw.cos(), 0.0, -self.player_yaw.sin());
+        // W/S = forward/back, A/D = strafe.
         let mut move_axis = 0.0;
         if ctx.input.is_pressed(Key::W) {
             move_axis += 1.0;
@@ -215,13 +222,10 @@ impl DemoGame {
             move_axis -= 1.0;
         }
         let mut strafe = 0.0;
-        if ctx.input.is_pressed(Key::Q) {
+        if ctx.input.is_pressed(Key::A) {
             strafe -= 1.0;
         }
-        if ctx.input.is_pressed(Key::E) {
-            // Reused below for "pick up" via edge detection - the held
-            // key also strafes so movement keeps working when the user
-            // walks into an item.
+        if ctx.input.is_pressed(Key::D) {
             strafe += 1.0;
         }
         let right = Vec3::new(forward.z, 0.0, -forward.x);
@@ -419,7 +423,9 @@ impl DemoGame {
                             inventory.get(&ItemKind::Key).copied().unwrap_or(0),
                         ));
                         ui.separator();
-                        ui.label("WASD move, Space jump, E pick up, I inventory, Esc menu");
+                        ui.label(
+                            "Mouse aim, WASD move, Space jump, E pick up, I inventory, Esc menu",
+                        );
                         if show_fps {
                             ui.separator();
                             ui.label(format!("FPS: {fps:.0}"));
@@ -572,8 +578,26 @@ impl AppHandler for DemoGame {
         window: &EngineWindow,
         event: &infengine_window::raw_winit::event::WindowEvent,
     ) {
+        use infengine_window::raw_winit::event::WindowEvent;
         if let Some(ui) = self.ui.as_mut() {
             ui.handle_engine_event(window, event);
+        }
+        // Track mouse motion for FPS-style yaw control. Only meaningful
+        // while the game is in Play state; in menu states the cursor
+        // belongs to egui.
+        if let WindowEvent::CursorMoved { position, .. } = event {
+            let now = [position.x as f32, position.y as f32];
+            if matches!(self.state, AppState::Playing) {
+                if let Some(prev) = self.last_mouse {
+                    self.mouse_dx_accum += now[0] - prev[0];
+                }
+                self.last_mouse = Some(now);
+            } else {
+                // Drop the cache outside Play so re-entry seeds from the
+                // current cursor and yaw does not snap.
+                self.last_mouse = Some(now);
+                self.mouse_dx_accum = 0.0;
+            }
         }
     }
 
@@ -596,8 +620,15 @@ impl AppHandler for DemoGame {
                         BackTo::Pause => AppState::Paused,
                     };
                 }
-                AppState::MainMenu => self.requested_quit = true,
+                // From the menu Esc is a no-op; the user must use the
+                // Quit button to leave.
+                AppState::MainMenu => {}
             }
+        }
+        // Reset the mouse delta cache whenever the player leaves Play
+        // mode so re-entry doesn't apply a stale jump.
+        if !matches!(self.state, AppState::Playing) {
+            self.mouse_dx_accum = 0.0;
         }
 
         if matches!(self.state, AppState::Playing) {
