@@ -11,7 +11,7 @@ use infengine_audio::AudioSystem;
 use infengine_core::scene::{AtlasRegion, Entity, EntityId, Scene, SpriteComponent, Transform2D};
 use infengine_editor::EditorUi;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap};
-use infengine_window::raw_winit::event::WindowEvent;
+use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
@@ -44,6 +44,11 @@ struct Demo {
     show_debug_overlay: bool,
     follow_camera: bool,
     viewport: (u32, u32),
+    cursor_pos: [f32; 2],
+    left_button: bool,
+    left_button_prev: bool,
+    dragging: Option<EntityId>,
+    drag_offset: [f32; 2],
     fps_ema: f32,
     frame: u64,
 }
@@ -69,6 +74,11 @@ impl Default for Demo {
             show_debug_overlay: true,
             follow_camera: true,
             viewport: (1, 1),
+            cursor_pos: [0.0, 0.0],
+            left_button: false,
+            left_button_prev: false,
+            dragging: None,
+            drag_offset: [0.0, 0.0],
             fps_ema: 60.0,
             frame: 0,
         }
@@ -158,6 +168,59 @@ impl Demo {
             Err(err) => warn!(error = %err, "failed to list assets"),
         }
     }
+
+    /// World-space position the camera will use this frame, matching
+    /// the render-side `follow_camera` logic.
+    fn camera_pos(&self) -> [f32; 2] {
+        if self.follow_camera
+            && let Some(id) = self.selected
+            && let Some(e) = self.scene.get(id)
+        {
+            e.transform.position
+        } else {
+            [0.0, 0.0]
+        }
+    }
+}
+
+/// Convert a cursor position (logical pixels, top-left origin) to a
+/// world-space point given the current camera.
+fn cursor_to_world(
+    cursor: [f32; 2],
+    viewport: (u32, u32),
+    camera_pos: [f32; 2],
+    zoom: f32,
+) -> [f32; 2] {
+    let half_w = viewport.0 as f32 * 0.5;
+    let half_h = viewport.1 as f32 * 0.5;
+    [
+        camera_pos[0] + (cursor[0] - half_w) / zoom,
+        camera_pos[1] - (cursor[1] - half_h) / zoom,
+    ]
+}
+
+/// Find the topmost sprite entity whose AABB contains `world_point`.
+/// Returns the entity id and the world-space offset from the entity
+/// center to the click - keep this as a constant drag offset so the
+/// sprite does not snap to the cursor center.
+fn pick_entity(scene: &Scene, world_point: [f32; 2]) -> Option<(EntityId, [f32; 2])> {
+    let mut hit = None;
+    for entity in &scene.entities {
+        let Some(sprite) = &entity.sprite else {
+            continue;
+        };
+        let half_x = sprite.size[0] * entity.transform.scale[0] * 0.5;
+        let half_y = sprite.size[1] * entity.transform.scale[1] * 0.5;
+        let p = entity.transform.position;
+        if world_point[0] >= p[0] - half_x
+            && world_point[0] <= p[0] + half_x
+            && world_point[1] >= p[1] - half_y
+            && world_point[1] <= p[1] + half_y
+        {
+            hit = Some((entity.id, [world_point[0] - p[0], world_point[1] - p[1]]));
+        }
+    }
+    hit
 }
 
 fn first_sprite_entity(scene: &Scene) -> Option<EntityId> {
@@ -235,6 +298,26 @@ impl AppHandler for Demo {
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
         if let Some(editor) = self.editor.as_mut() {
             editor.handle_engine_event(window, event);
+        }
+        let egui_wants = self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.wants_pointer_input());
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_pos = [position.x as f32, position.y as f32];
+            }
+            WindowEvent::MouseInput { state, button, .. } if *button == MouseButton::Left => {
+                if !egui_wants {
+                    self.left_button = matches!(state, ElementState::Pressed);
+                } else if matches!(state, ElementState::Released) {
+                    // Always release so we don't get stuck in drag if the
+                    // press started in the viewport but the release fell
+                    // on an egui widget.
+                    self.left_button = false;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -342,6 +425,37 @@ impl AppHandler for Demo {
                 entity.transform.position[1].clamp(-(half_h - pad_y), half_h - pad_y);
         }
 
+        // Convert cursor pixels -> world. Camera position is taken before
+        // we mutate the renderer for the frame.
+        let cursor_world =
+            cursor_to_world(self.cursor_pos, self.viewport, self.camera_pos(), self.zoom);
+        let left_just_pressed = self.left_button && !self.left_button_prev;
+        let left_just_released = !self.left_button && self.left_button_prev;
+        self.left_button_prev = self.left_button;
+        let egui_pointer = self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.wants_pointer_input());
+
+        if left_just_pressed
+            && !egui_pointer
+            && let Some((id, ofs)) = pick_entity(&self.scene, cursor_world)
+        {
+            self.selected = Some(id);
+            self.dragging = Some(id);
+            self.drag_offset = ofs;
+        }
+        if left_just_released {
+            self.dragging = None;
+        }
+        if self.left_button
+            && let Some(id) = self.dragging
+            && let Some(entity) = self.scene.get_mut(id)
+        {
+            entity.transform.position[0] = cursor_world[0] - self.drag_offset[0];
+            entity.transform.position[1] = cursor_world[1] - self.drag_offset[1];
+        }
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -423,7 +537,7 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.4");
+                        ui.heading("InfEngine - Phase 5.5");
                         ui.label(format!("FPS: {fps:.0}   Sprites: {queued}"));
                         ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
@@ -675,7 +789,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.4)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.5)".into(),
         width: 1280,
         height: 720,
         resizable: true,

@@ -105,6 +105,19 @@ impl EditorUi {
         &self.context
     }
 
+    /// Whether egui currently wants pointer input (mouse over an egui
+    /// widget). When `true`, the application should skip viewport
+    /// picking / drag so input does not double-fire.
+    pub fn wants_pointer_input(&self) -> bool {
+        self.context.wants_pointer_input()
+    }
+
+    /// Whether egui currently wants keyboard input (e.g. a text field
+    /// is focused).
+    pub fn wants_keyboard_input(&self) -> bool {
+        self.context.wants_keyboard_input()
+    }
+
     /// Render the most recently built egui frame into the supplied
     /// surface view.
     pub fn render(
