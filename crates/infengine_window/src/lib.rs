@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tracing::{debug, info};
 use winit::application::ApplicationHandler;
@@ -17,8 +18,19 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+mod input;
 mod key;
+pub use input::InputState;
 pub use key::Key;
+
+/// Context passed to `AppHandler::on_update` once per frame.
+#[derive(Debug)]
+pub struct FrameContext<'a> {
+    /// Seconds elapsed since the previous frame.
+    pub delta_time: f32,
+    /// Snapshot of currently held keys.
+    pub input: &'a InputState,
+}
 
 /// Configuration used to create the main window.
 #[derive(Debug, Clone)]
@@ -93,7 +105,7 @@ pub trait AppHandler {
     fn on_start(&mut self, _window: &EngineWindow) {}
 
     /// Called every time the event loop is about to redraw a frame.
-    fn on_update(&mut self, _window: &EngineWindow) {}
+    fn on_update(&mut self, _window: &EngineWindow, _ctx: &FrameContext<'_>) {}
 
     /// Called when a key transitions between pressed and released.
     fn on_key(&mut self, _key: Key, _pressed: bool) {}
@@ -126,6 +138,8 @@ pub fn run<A: AppHandler + 'static>(config: WindowConfig, app: A) -> Result<(), 
         config,
         window: None,
         handler: Some(app),
+        input: InputState::default(),
+        last_frame: None,
     };
 
     event_loop.run_app(&mut state)?;
@@ -136,6 +150,8 @@ struct EngineApp<A: AppHandler> {
     config: WindowConfig,
     window: Option<EngineWindow>,
     handler: Option<A>,
+    input: InputState,
+    last_frame: Option<Instant>,
 }
 
 impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
@@ -197,12 +213,26 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
                         return;
                     }
                     if let Some(key) = Key::from_winit(code) {
+                        self.input.set(key, pressed);
                         handler.on_key(key, pressed);
                     }
                 }
             }
+            WindowEvent::Focused(false) => {
+                // Lose focus -> clear pressed keys to avoid stuck input.
+                self.input.clear();
+            }
             WindowEvent::RedrawRequested => {
-                handler.on_update(window);
+                let now = Instant::now();
+                let dt = match self.last_frame.replace(now) {
+                    Some(prev) => (now - prev).as_secs_f32(),
+                    None => 0.0,
+                };
+                let ctx = FrameContext {
+                    delta_time: dt,
+                    input: &self.input,
+                };
+                handler.on_update(window, &ctx);
             }
             _ => {}
         }
