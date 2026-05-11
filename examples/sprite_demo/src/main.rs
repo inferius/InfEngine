@@ -402,7 +402,7 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.2");
+                        ui.heading("InfEngine - Phase 5.3");
                         ui.label(format!("FPS: {fps:.0}   Sprites: {queued}"));
                         ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
@@ -456,6 +456,10 @@ impl AppHandler for Demo {
                             ui.checkbox(show_debug_ref, "Debug overlay");
                         });
 
+                        ui.collapsing("Hierarchy", |ui| {
+                            hierarchy_panel(ui, scene_ref, selected_ref);
+                        });
+
                         ui.collapsing("Selection", |ui| {
                             entity_inspector(ui, scene_ref, selected_ref, map_half_w, map_half_h);
                         });
@@ -501,6 +505,46 @@ impl AppHandler for Demo {
     fn on_exit(&mut self) {
         info!("sprite_demo exiting");
     }
+}
+
+fn hierarchy_panel(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut Option<EntityId>) {
+    let mut to_remove: Option<EntityId> = None;
+    egui::ScrollArea::vertical()
+        .max_height(200.0)
+        .show(ui, |ui| {
+            for entity in &scene.entities {
+                let is_selected = *selected == Some(entity.id);
+                let glyph = if entity.sprite.is_some() { "S " } else { "  " };
+                let label = format!("{glyph}{} (#{})", entity.name, entity.id.0);
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(is_selected, label).clicked() {
+                        *selected = Some(entity.id);
+                    }
+                    if ui.small_button("X").clicked() {
+                        to_remove = Some(entity.id);
+                    }
+                });
+            }
+        });
+    if let Some(id) = to_remove {
+        scene.remove(id);
+        if *selected == Some(id) {
+            *selected = first_sprite_entity(scene);
+        }
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Add sprite entity").clicked() {
+            let i = scene.add_entity(format!("entity_{}", scene.next_id));
+            scene.entities[i].sprite =
+                Some(SpriteComponent::new([64.0, 64.0], AtlasRegion::Checker));
+            *selected = Some(scene.entities[i].id);
+        }
+        if ui.button("Add empty entity").clicked() {
+            let i = scene.add_entity(format!("entity_{}", scene.next_id));
+            *selected = Some(scene.entities[i].id);
+        }
+    });
 }
 
 fn entity_inspector(
@@ -584,7 +628,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.2)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.3)".into(),
         width: 1280,
         height: 720,
         resizable: true,
