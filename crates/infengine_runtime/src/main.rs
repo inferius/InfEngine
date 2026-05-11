@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use glam::{Mat4, Quat, Vec3};
 use infengine_core::project::Project;
-use infengine_core::scene::{Entity, Scene, Transform3D};
+use infengine_core::scene::{Entity, Scene, Transform2D, Transform3D};
 use infengine_render::{Renderer, SpriteInstance};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -87,13 +87,14 @@ impl AppHandler for Runtime {
         );
         for entity in &self.scene.entities {
             if let Some(sprite) = &entity.sprite {
+                let world_t = entity_world_transform_2d(&self.scene, entity);
                 let size = [
-                    sprite.size[0] * entity.transform.scale[0],
-                    sprite.size[1] * entity.transform.scale[1],
+                    sprite.size[0] * world_t.scale[0],
+                    sprite.size[1] * world_t.scale[1],
                 ];
                 let (uv_min, uv_max) = sprite.region.uv_rect();
                 renderer.draw_sprite(SpriteInstance {
-                    position: entity.transform.position,
+                    position: world_t.position,
                     size,
                     color: sprite.color,
                     uv_min,
@@ -123,6 +124,23 @@ impl AppHandler for Runtime {
         if let Some(r) = self.renderer.as_mut() {
             r.resize(w, h);
         }
+    }
+}
+
+fn entity_world_transform_2d(scene: &Scene, entity: &Entity) -> Transform2D {
+    let local = entity.transform;
+    match entity.parent.and_then(|p| scene.get(p)) {
+        Some(parent) => {
+            let p = entity_world_transform_2d(scene, parent);
+            Transform2D {
+                position: [
+                    p.position[0] + local.position[0] * p.scale[0],
+                    p.position[1] + local.position[1] * p.scale[1],
+                ],
+                scale: [p.scale[0] * local.scale[0], p.scale[1] * local.scale[1]],
+            }
+        }
+        None => local,
     }
 }
 

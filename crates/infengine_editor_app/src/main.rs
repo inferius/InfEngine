@@ -689,6 +689,26 @@ fn transform_3d_to_matrix(t: &Transform3D) -> Mat4 {
     )
 }
 
+/// Composed world-space 2D transform: walks the parent chain
+/// multiplying scale and offsetting position. Rotation is omitted
+/// because Transform2D doesn't carry one yet.
+fn entity_world_transform_2d(scene: &Scene, entity: &Entity) -> Transform2D {
+    let local = entity.transform;
+    match entity.parent.and_then(|p| scene.get(p)) {
+        Some(parent) => {
+            let p = entity_world_transform_2d(scene, parent);
+            Transform2D {
+                position: [
+                    p.position[0] + local.position[0] * p.scale[0],
+                    p.position[1] + local.position[1] * p.scale[1],
+                ],
+                scale: [p.scale[0] * local.scale[0], p.scale[1] * local.scale[1]],
+            }
+        }
+        None => local,
+    }
+}
+
 /// World-space model matrix for a 3D entity: walks up the parent
 /// chain so each entity inherits its ancestors' transforms (Unity-
 /// style scene-graph composition). Entities without a `transform_3d`
@@ -1701,13 +1721,14 @@ impl AppHandler for Editor {
         let scene_ref_for_draw = &self.scene;
         for entity in &self.scene.entities {
             if let Some(sprite) = &entity.sprite {
+                let world_t = entity_world_transform_2d(scene_ref_for_draw, entity);
                 let size = [
-                    sprite.size[0] * entity.transform.scale[0],
-                    sprite.size[1] * entity.transform.scale[1],
+                    sprite.size[0] * world_t.scale[0],
+                    sprite.size[1] * world_t.scale[1],
                 ];
                 let (uv_min, uv_max) = sprite.region.uv_rect();
                 renderer.draw_sprite(SpriteInstance {
-                    position: entity.transform.position,
+                    position: world_t.position,
                     size,
                     color: sprite.color,
                     uv_min,
