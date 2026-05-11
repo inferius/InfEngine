@@ -326,13 +326,10 @@ impl Editor {
         let scene_path = PathBuf::from(&file);
         let full = self.project_root.join(&scene_path);
 
-        let mut new_scene = Scene {
+        let new_scene = Scene {
             name: name.clone(),
             ..Scene::default()
         };
-        let i = new_scene.add_entity("entity_1");
-        new_scene.entities[i].sprite =
-            Some(SpriteComponent::new([64.0, 64.0], AtlasRegion::Checker));
         if let Err(err) = new_scene.save(&full) {
             self.status = format!("Failed to write {name}: {err}");
             return;
