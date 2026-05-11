@@ -6,12 +6,13 @@
 //! Esc exits.
 
 use glam::{Mat4, Quat, Vec3};
-use infengine_render::Renderer;
+use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
 struct Demo {
     renderer: Option<Renderer>,
+    sphere: Option<MeshHandle>,
     orbit_radius: f32,
     orbit_angle: f32,
     orbit_height: f32,
@@ -23,6 +24,7 @@ impl Default for Demo {
     fn default() -> Self {
         Self {
             renderer: None,
+            sphere: None,
             orbit_radius: 8.0,
             orbit_angle: 0.0,
             orbit_height: 4.0,
@@ -30,6 +32,34 @@ impl Default for Demo {
             frame: 0,
         }
     }
+}
+
+/// Build a UV sphere with smooth normals (radius 0.5).
+fn uv_sphere(latitudes: u32, longitudes: u32) -> (Vec<MeshVertex>, Vec<u32>) {
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    for lat in 0..=latitudes {
+        let theta = lat as f32 * std::f32::consts::PI / latitudes as f32;
+        let sin_t = theta.sin();
+        let cos_t = theta.cos();
+        for lon in 0..=longitudes {
+            let phi = lon as f32 * std::f32::consts::TAU / longitudes as f32;
+            let sin_p = phi.sin();
+            let cos_p = phi.cos();
+            let n = [sin_t * cos_p, cos_t, sin_t * sin_p];
+            let p = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5];
+            verts.push(MeshVertex::new(p, n));
+        }
+    }
+    let row = longitudes + 1;
+    for lat in 0..latitudes {
+        for lon in 0..longitudes {
+            let a = lat * row + lon;
+            let b = a + row;
+            indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    (verts, indices)
 }
 
 fn cube_model(position: Vec3, rotation: Quat, scale: Vec3) -> [f32; 16] {
@@ -41,7 +71,11 @@ impl AppHandler for Demo {
         let (w, h) = window.size();
         info!(width = w, height = h, "cube_demo started");
         match Renderer::new(window) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(mut r) => {
+                let (verts, idx) = uv_sphere(24, 32);
+                self.sphere = Some(r.create_mesh("sphere", &verts, &idx));
+                self.renderer = Some(r);
+            }
             Err(err) => {
                 error!(error = %err, "failed to initialize renderer");
                 std::process::exit(2);
@@ -126,6 +160,43 @@ impl AppHandler for Demo {
             [0.95, 0.85, 0.55, 1.0],
         );
 
+        // Bouncing sphere above the pillar.
+        if let Some(sphere) = self.sphere {
+            let bounce = 4.0 + (self.time * 2.0).sin() * 0.6;
+            renderer.draw_mesh(
+                sphere,
+                cube_model(
+                    Vec3::new(0.0, bounce, 0.0),
+                    Quat::from_rotation_y(self.time * 1.5),
+                    Vec3::splat(1.4),
+                ),
+                [0.95, 0.55, 0.85, 1.0],
+            );
+        }
+
+        // Three sphere ornaments orbiting the column.
+        if let Some(sphere) = self.sphere {
+            for i in 0..3 {
+                let theta = self.time * 0.6 + i as f32 * std::f32::consts::TAU / 3.0;
+                let pos = Vec3::new(
+                    theta.cos() * 1.6,
+                    3.0 + theta.sin() * 0.3,
+                    theta.sin() * 1.6,
+                );
+                let color = [
+                    0.6 + 0.4 * ((i as f32) * 1.7).sin(),
+                    0.6 + 0.4 * ((i as f32) * 2.3 + 1.0).sin(),
+                    0.6 + 0.4 * ((i as f32) * 3.1 + 2.0).sin(),
+                    1.0,
+                ];
+                renderer.draw_mesh(
+                    sphere,
+                    cube_model(pos, Quat::IDENTITY, Vec3::splat(0.5)),
+                    color,
+                );
+            }
+        }
+
         if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
             warn!(error = ?err, "frame render failed");
         }
@@ -161,7 +232,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - cube_demo (Phase 6.1)".into(),
+        title: "InfEngine - cube_demo (Phase 6.2)".into(),
         width: 1280,
         height: 720,
         resizable: true,

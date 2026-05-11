@@ -31,8 +31,8 @@ use camera::CameraResource;
 pub use camera_3d::Camera3D;
 use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
-use mesh3d::Mesh3DPass;
-pub use mesh3d::MeshInstance;
+use mesh3d::{Mesh3DPass, Mesh3DRegistry};
+pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
 pub use tilemap::{TileId, Tilemap};
@@ -72,7 +72,9 @@ pub struct Renderer {
     debug: DebugPass,
     debug_vertices: Vec<DebugVertex>,
     mesh3d: Mesh3DPass,
-    mesh3d_queue: Vec<MeshInstance>,
+    mesh3d_queue: Vec<(MeshHandle, MeshInstance)>,
+    meshes: Mesh3DRegistry,
+    cube_handle: MeshHandle,
     depth_view: wgpu::TextureView,
 }
 
@@ -165,6 +167,9 @@ impl Renderer {
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
         );
+        let mut meshes = Mesh3DRegistry::default();
+        let (cube_v, cube_i) = mesh3d::cube_geometry_public();
+        let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
         let depth_view = create_depth_view(&device, config.width, config.height);
 
         Ok(Self {
@@ -183,6 +188,8 @@ impl Renderer {
             debug_vertices: Vec::new(),
             mesh3d,
             mesh3d_queue: Vec::new(),
+            meshes,
+            cube_handle,
             depth_view,
         })
     }
@@ -229,7 +236,29 @@ impl Renderer {
     /// Queue a 3D cube draw for the next frame. `model` is a column-major
     /// 4x4 transform (use `glam::Mat4::to_cols_array`).
     pub fn draw_cube(&mut self, model: [f32; 16], color: [f32; 4]) {
-        self.mesh3d_queue.push(MeshInstance::new(model, color));
+        self.draw_mesh(self.cube_handle, model, color);
+    }
+
+    /// Queue an arbitrary registered mesh for the next frame.
+    pub fn draw_mesh(&mut self, handle: MeshHandle, model: [f32; 16], color: [f32; 4]) {
+        self.mesh3d_queue
+            .push((handle, MeshInstance::new(model, color)));
+    }
+
+    /// Register a new mesh and return its handle. The caller can then
+    /// reference the mesh via [`Renderer::draw_mesh`].
+    pub fn create_mesh(
+        &mut self,
+        name: &str,
+        vertices: &[MeshVertex],
+        indices: &[u32],
+    ) -> MeshHandle {
+        self.meshes.insert(&self.device, name, vertices, indices)
+    }
+
+    /// Handle of the built-in unit cube.
+    pub fn cube_handle(&self) -> MeshHandle {
+        self.cube_handle
     }
 
     /// Mutable access to the 3D camera. Edits take effect on the next
@@ -358,7 +387,8 @@ impl Renderer {
             .upload(&self.device, &self.queue, &self.sprite_queue);
         self.debug
             .upload(&self.device, &self.queue, &self.debug_vertices);
-        self.mesh3d
+        let mesh_batches = self
+            .mesh3d
             .upload(&self.device, &self.queue, &self.mesh3d_queue);
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
@@ -397,7 +427,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             rpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
-            self.mesh3d.draw(&mut rpass, mesh3d_count);
+            self.mesh3d.draw(&mut rpass, &self.meshes, &mesh_batches);
         }
 
         {
