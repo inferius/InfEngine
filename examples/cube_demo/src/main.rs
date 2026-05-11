@@ -9,15 +9,38 @@ use std::path::PathBuf;
 
 use glam::{Mat4, Quat, Vec3};
 use infengine_assets::AssetServer;
+use infengine_physics::{BodyDesc, BodyId, BodyKind3D, ColliderShape3D, PhysicsWorld3D};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
+
+struct PhysicsCube {
+    body: BodyId,
+    color: [f32; 4],
+    metallic: f32,
+    roughness: f32,
+    half_extents: [f32; 3],
+}
+
+struct PhysicsBall {
+    body: BodyId,
+    color: [f32; 4],
+    metallic: f32,
+    roughness: f32,
+    radius: f32,
+}
 
 struct Demo {
     renderer: Option<Renderer>,
     sphere: Option<MeshHandle>,
     gltf_meshes: Vec<MeshHandle>,
     assets: AssetServer,
+    physics: PhysicsWorld3D,
+    falling_cubes: Vec<PhysicsCube>,
+    falling_balls: Vec<PhysicsBall>,
+    ground: Option<BodyId>,
+    physics_enabled: bool,
+    reset_pressed_prev: bool,
     orbit_radius: f32,
     orbit_angle: f32,
     orbit_height: f32,
@@ -32,11 +55,93 @@ impl Default for Demo {
             sphere: None,
             gltf_meshes: Vec::new(),
             assets: AssetServer::new(PathBuf::from("assets")),
-            orbit_radius: 8.0,
+            physics: PhysicsWorld3D::new(),
+            falling_cubes: Vec::new(),
+            falling_balls: Vec::new(),
+            ground: None,
+            physics_enabled: true,
+            reset_pressed_prev: false,
+            orbit_radius: 10.0,
             orbit_angle: 0.0,
-            orbit_height: 4.0,
+            orbit_height: 5.0,
             time: 0.0,
             frame: 0,
+        }
+    }
+}
+
+impl Demo {
+    fn spawn_physics_objects(&mut self) {
+        self.falling_cubes.clear();
+        self.falling_balls.clear();
+        // Ground.
+        if self.ground.is_none() {
+            self.ground = Some(self.physics.create_body(BodyDesc {
+                kind: BodyKind3D::Static,
+                shape: ColliderShape3D::Box {
+                    half_extents: [10.0, 0.1, 10.0],
+                },
+                position: Vec3::new(0.0, -0.1, 0.0),
+                friction: 0.7,
+                restitution: 0.0,
+                ..BodyDesc::default()
+            }));
+        }
+        // Stack of dynamic cubes.
+        for i in 0..6 {
+            let body = self.physics.create_body(BodyDesc {
+                kind: BodyKind3D::Dynamic,
+                shape: ColliderShape3D::Box {
+                    half_extents: [0.5, 0.5, 0.5],
+                },
+                position: Vec3::new(
+                    ((i as f32 * 17.0).sin()) * 0.6,
+                    1.0 + i as f32 * 1.4,
+                    ((i as f32 * 23.0).cos()) * 0.6,
+                ),
+                rotation: Quat::from_rotation_y(i as f32 * 0.5),
+                friction: 0.4,
+                restitution: 0.25,
+                ..BodyDesc::default()
+            });
+            let hue = i as f32 / 6.0;
+            self.falling_cubes.push(PhysicsCube {
+                body,
+                color: [
+                    0.4 + 0.5 * (hue * 6.0).sin().abs(),
+                    0.4 + 0.5 * ((hue + 0.33) * 6.0).sin().abs(),
+                    0.4 + 0.5 * ((hue + 0.66) * 6.0).sin().abs(),
+                    1.0,
+                ],
+                metallic: if i % 2 == 0 { 1.0 } else { 0.0 },
+                roughness: 0.15 + 0.15 * i as f32,
+                half_extents: [0.5, 0.5, 0.5],
+            });
+        }
+        // A few bouncing balls.
+        for i in 0..4 {
+            let radius = 0.4 + 0.1 * i as f32;
+            let body = self.physics.create_body(BodyDesc {
+                kind: BodyKind3D::Dynamic,
+                shape: ColliderShape3D::Sphere { radius },
+                position: Vec3::new(-3.0 + i as f32 * 1.6, 6.0 + i as f32 * 0.3, 0.0),
+                friction: 0.3,
+                restitution: 0.8,
+                linear_damping: 0.1,
+                ..BodyDesc::default()
+            });
+            self.falling_balls.push(PhysicsBall {
+                body,
+                color: [
+                    0.6 + 0.4 * (i as f32 * 1.9).sin(),
+                    0.4 + 0.5 * (i as f32 * 2.4 + 1.0).sin(),
+                    0.7 + 0.3 * (i as f32 * 3.1 + 2.0).sin(),
+                    1.0,
+                ],
+                metallic: if i == 0 { 1.0 } else { 0.0 },
+                roughness: 0.2 + 0.2 * i as f32,
+                radius,
+            });
         }
     }
 }
@@ -117,11 +222,25 @@ impl AppHandler for Demo {
                 std::process::exit(2);
             }
         }
+        self.spawn_physics_objects();
     }
 
     fn on_update(&mut self, _window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.max(1e-4);
         self.time += dt;
+
+        // Toggle simulation with Space (edge-triggered).
+        let reset_now = ctx.input.is_pressed(Key::R);
+        if reset_now && !self.reset_pressed_prev {
+            self.physics = PhysicsWorld3D::new();
+            self.ground = None;
+            self.spawn_physics_objects();
+        }
+        self.reset_pressed_prev = reset_now;
+
+        if self.physics_enabled {
+            self.physics.step(dt);
+        }
 
         let mut orbit_step = 0.0_f32;
         if ctx.input.any_pressed(&[Key::A, Key::ArrowLeft]) {
@@ -263,6 +382,57 @@ impl AppHandler for Demo {
             );
         }
 
+        // Physics-driven cubes and balls (off to the side of the pillar).
+        let cube_handle = renderer.cube_handle();
+        let world_offset = Vec3::new(6.0, 0.0, 0.0);
+        for cube in &self.falling_cubes {
+            let pos = self.physics.translation(cube.body).unwrap_or(Vec3::ZERO);
+            let rot = self.physics.rotation(cube.body).unwrap_or(Quat::IDENTITY);
+            renderer.draw_mesh_pbr(
+                cube_handle,
+                cube_model(
+                    pos + world_offset,
+                    rot,
+                    Vec3::new(
+                        cube.half_extents[0] * 2.0,
+                        cube.half_extents[1] * 2.0,
+                        cube.half_extents[2] * 2.0,
+                    ),
+                ),
+                cube.color,
+                cube.metallic,
+                cube.roughness,
+            );
+        }
+        if let Some(sphere_mesh) = self.sphere {
+            for ball in &self.falling_balls {
+                let pos = self.physics.translation(ball.body).unwrap_or(Vec3::ZERO);
+                let rot = self.physics.rotation(ball.body).unwrap_or(Quat::IDENTITY);
+                renderer.draw_mesh_pbr(
+                    sphere_mesh,
+                    cube_model(pos + world_offset, rot, Vec3::splat(ball.radius * 2.0)),
+                    ball.color,
+                    ball.metallic,
+                    ball.roughness,
+                );
+            }
+        }
+        // Static ground bar from the physics world.
+        if let Some(ground) = self.ground {
+            let pos = self.physics.translation(ground).unwrap_or(Vec3::ZERO);
+            renderer.draw_mesh_pbr(
+                cube_handle,
+                cube_model(
+                    pos + world_offset,
+                    Quat::IDENTITY,
+                    Vec3::new(20.0, 0.2, 20.0),
+                ),
+                [0.30, 0.40, 0.32, 1.0],
+                0.0,
+                0.8,
+            );
+        }
+
         if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
             warn!(error = ?err, "frame render failed");
         }
@@ -298,7 +468,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - cube_demo (Phase 6.4)".into(),
+        title: "InfEngine - cube_demo (Phase 7.1)".into(),
         width: 1280,
         height: 720,
         resizable: true,

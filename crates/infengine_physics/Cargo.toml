@@ -16,3 +16,5 @@ infengine_core = { path = "../infengine_core" }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 rapier2d = { workspace = true }
+rapier3d = { workspace = true }
+glam = { workspace = true }

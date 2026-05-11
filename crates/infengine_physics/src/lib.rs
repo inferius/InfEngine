@@ -1,12 +1,13 @@
-//! 2D physics integration for InfEngine.
+//! 2D + 3D physics integration for InfEngine.
 //!
 //! Phase 5.6 wraps `rapier2d` behind a `PhysicsWorld` that consumes the
-//! engine's `Scene` model. Entities with a `PhysicsComponent` get a
-//! matching rigid body and collider; calling `step` advances the
-//! simulation, and `write_back` copies the updated positions into the
-//! scene's `Transform2D` for the renderer to pick up.
+//! engine's `Scene` model. Phase 7.1 adds a `PhysicsWorld3D` (built on
+//! `rapier3d`) with a handle-based API independent of the scene model.
 
 #![forbid(unsafe_code)]
+
+mod three;
+pub use three::{BodyDesc, BodyId, BodyKind3D, ColliderShape3D, PhysicsWorld3D};
 
 use std::collections::HashMap;
 
