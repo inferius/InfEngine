@@ -1,88 +1,71 @@
-//! Sprite demo - Phase 2.4 of InfEngine.
+//! Sprite demo - Phase 2.5 of InfEngine.
 //!
-//! Renders a 24x14 tilemap (random pattern from the demo atlas) as the
-//! background, four tinted corner decorations, and one movable player
-//! sprite, all batched into a single draw call. WASD or arrow keys
-//! move the player; `R` recenters; `Escape` (or closing the window) exits.
+//! A 40x30 tilemap forms an explorable world. The camera follows the
+//! player (WASD or arrow keys) and Q / E zoom out / in. `R` recenters
+//! the player and resets the zoom. `Escape` exits.
 
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const PLAYER_SIZE: f32 = 128.0;
-const DECO_SIZE: f32 = 96.0;
-const DECO_MARGIN: f32 = 80.0;
+const PLAYER_SIZE: f32 = 64.0;
 const TILE_SIZE: f32 = 64.0;
-const TILEMAP_W: u32 = 24;
-const TILEMAP_H: u32 = 14;
-/// Sprite move speed in world units per second (1 unit = 1 logical pixel).
+const TILEMAP_W: u32 = 40;
+const TILEMAP_H: u32 = 30;
+/// Sprite move speed in world units per second.
 const MOVE_SPEED: f32 = 400.0;
+const ZOOM_RATE: f32 = 1.6; // per second exponent change
+const ZOOM_MIN: f32 = 0.25;
+const ZOOM_MAX: f32 = 4.0;
 
 struct Demo {
     renderer: Option<Renderer>,
     tilemap: Tilemap,
     pos: [f32; 2],
-    viewport: (u32, u32),
+    zoom: f32,
     frame: u64,
 }
 
 impl Default for Demo {
     fn default() -> Self {
-        let tilemap = build_tilemap();
         Self {
             renderer: None,
-            tilemap,
+            tilemap: build_tilemap(),
             pos: [0.0, 0.0],
-            viewport: (1, 1),
+            zoom: 1.0,
             frame: 0,
         }
     }
 }
 
 fn build_tilemap() -> Tilemap {
-    // Map origin sits so that the map is centered on the world origin.
     let origin = [
         -(TILEMAP_W as f32) * 0.5 * TILE_SIZE,
         (TILEMAP_H as f32) * 0.5 * TILE_SIZE,
     ];
     let mut map = Tilemap::new(TILEMAP_W, TILEMAP_H, TILE_SIZE, origin);
 
-    // Pseudo-random pattern: hash (x, y) into 0..4 deterministically.
     for y in 0..TILEMAP_H {
         for x in 0..TILEMAP_W {
             let mut h = x.wrapping_mul(0x9E37_79B9) ^ y.wrapping_mul(0x85EB_CA77);
             h ^= h >> 13;
             h = h.wrapping_mul(0xC2B2_AE35);
             h ^= h >> 16;
-            let id = TileId((h % 4) as u8);
-            map.set(x, y, id);
+            map.set(x, y, TileId((h % 4) as u8));
         }
     }
     map
 }
 
-impl Demo {
-    fn corner_decorations(&self) -> [SpriteInstance; 4] {
-        let half_w = self.viewport.0 as f32 * 0.5 - DECO_MARGIN;
-        let half_h = self.viewport.1 as f32 * 0.5 - DECO_MARGIN;
-        let size = [DECO_SIZE, DECO_SIZE];
-        [
-            SpriteInstance::from_region([-half_w, half_h], size, demo_atlas::CHECKER)
-                .with_color([1.0, 0.6, 0.6, 1.0]),
-            SpriteInstance::from_region([half_w, half_h], size, demo_atlas::DOTS)
-                .with_color([0.6, 1.0, 0.6, 1.0]),
-            SpriteInstance::from_region([-half_w, -half_h], size, demo_atlas::STRIPES)
-                .with_color([0.6, 0.6, 1.0, 1.0]),
-            SpriteInstance::from_region([half_w, -half_h], size, demo_atlas::CROSS)
-                .with_color([1.0, 1.0, 0.6, 1.0]),
-        ]
-    }
+fn map_half_extent() -> (f32, f32) {
+    let half_w = TILEMAP_W as f32 * 0.5 * TILE_SIZE;
+    let half_h = TILEMAP_H as f32 * 0.5 * TILE_SIZE;
+    (half_w, half_h)
 }
 
 impl AppHandler for Demo {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
-        self.viewport = (w, h);
         info!(width = w, height = h, "sprite_demo started");
         match Renderer::new(window) {
             Ok(r) => self.renderer = Some(r),
@@ -117,31 +100,46 @@ impl AppHandler for Demo {
             self.pos[1] += dy * MOVE_SPEED * ctx.delta_time;
         }
 
-        if ctx.input.is_pressed(Key::R) {
-            self.pos = [0.0, 0.0];
+        // Zoom via exponential: Q out, E in.
+        let mut zoom_step = 0.0_f32;
+        if ctx.input.is_pressed(Key::Q) {
+            zoom_step -= 1.0;
+        }
+        if ctx.input.is_pressed(Key::E) {
+            zoom_step += 1.0;
+        }
+        if zoom_step != 0.0 {
+            let factor = (zoom_step * ZOOM_RATE * ctx.delta_time).exp();
+            self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         }
 
-        let half_w = self.viewport.0 as f32 * 0.5 - PLAYER_SIZE * 0.5;
-        let half_h = self.viewport.1 as f32 * 0.5 - PLAYER_SIZE * 0.5;
-        self.pos[0] = self.pos[0].clamp(-half_w, half_w);
-        self.pos[1] = self.pos[1].clamp(-half_h, half_h);
+        if ctx.input.is_pressed(Key::R) {
+            self.pos = [0.0, 0.0];
+            self.zoom = 1.0;
+        }
 
-        let decorations = self.corner_decorations();
+        // Clamp player to the playable map area, leaving room for the sprite.
+        let (half_w, half_h) = map_half_extent();
+        let pad = PLAYER_SIZE * 0.5;
+        self.pos[0] = self.pos[0].clamp(-(half_w - pad), half_w - pad);
+        self.pos[1] = self.pos[1].clamp(-(half_h - pad), half_h - pad);
 
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
 
-        // Draw order: tilemap (background), decorations, then player.
-        renderer.draw_tilemap(&self.tilemap);
-        for deco in decorations {
-            renderer.draw_sprite(deco);
+        // Drive the camera: follow the player and apply current zoom.
+        {
+            let camera = renderer.camera_mut();
+            camera.position = self.pos;
+            camera.zoom = self.zoom;
         }
-        renderer.draw_sprite(SpriteInstance::from_region(
-            self.pos,
-            [PLAYER_SIZE, PLAYER_SIZE],
-            demo_atlas::CHECKER,
-        ));
+
+        renderer.draw_tilemap(&self.tilemap);
+        renderer.draw_sprite(
+            SpriteInstance::from_region(self.pos, [PLAYER_SIZE, PLAYER_SIZE], demo_atlas::CHECKER)
+                .with_color([1.0, 0.85, 0.4, 1.0]),
+        );
 
         let queued = renderer.queued_sprite_count();
         if let Err(err) = renderer.render() {
@@ -154,6 +152,7 @@ impl AppHandler for Demo {
                 frame = self.frame,
                 x = self.pos[0],
                 y = self.pos[1],
+                zoom = self.zoom,
                 dt_ms = ctx.delta_time * 1000.0,
                 sprites = queued,
                 "frame"
@@ -163,7 +162,6 @@ impl AppHandler for Demo {
 
     fn on_resize(&mut self, width: u32, height: u32) {
         info!(width, height, "window resized");
-        self.viewport = (width, height);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resize(width, height);
         }
@@ -182,7 +180,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.4)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.5)".into(),
         width: 1280,
         height: 720,
         resizable: true,

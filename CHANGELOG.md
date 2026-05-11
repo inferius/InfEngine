@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Phase 2.5: `sprite_demo` now drives the camera each frame. The player walks across a 40x30 tilemap, the camera follows the player's world position, and `Q` / `E` zoom out / in via an exponential rate (clamped to `[0.25, 4.0]`). Demonstrates `Camera2D::position` / `zoom` mutation through `Renderer::camera_mut`.
 - `infengine_render::Tilemap` and `TileId` (Phase 2.4): grid-based tilemap with a world-space origin, uniform tile size, and a `TileId::EMPTY` sentinel for skipped cells. `Renderer::draw_tilemap` expands each non-empty tile into a `SpriteInstance` and queues it into the existing sprite batch, so a tilemap costs zero extra draw calls. Demo: 24x14 tilemap (336 tiles), 4 decorations, and a player all render in one draw call.
 - `infengine_render::demo_atlas` (Phase 2.3): procedurally generated 256x256 four-quadrant texture atlas (`CHECKER`, `DOTS`, `STRIPES`, `CROSS`) plus matching UV sub-rectangle constants. The atlas replaces the previous single-quadrant checker; the existing `SpriteInstance` UV fields drive the sub-rectangle selection. Marked as temporary - retires when the real asset pipeline arrives in Phase 3.
 - `SpriteInstance::from_region(position, size, region)` and `SpriteInstance::with_color(color)` helpers so callers can pick an atlas region without manipulating UVs directly.
