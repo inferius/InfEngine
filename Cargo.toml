@@ -67,6 +67,7 @@ egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
 rapier2d = "0.28"
+gltf = "1"
 
 [profile.release]
 opt-level = 3

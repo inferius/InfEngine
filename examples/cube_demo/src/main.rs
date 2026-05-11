@@ -5,7 +5,10 @@
 //! camera horizontally on the orbit plane; Q / E zoom the orbit radius;
 //! Esc exits.
 
+use std::path::PathBuf;
+
 use glam::{Mat4, Quat, Vec3};
+use infengine_assets::AssetServer;
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -13,6 +16,8 @@ use tracing::{error, info, warn};
 struct Demo {
     renderer: Option<Renderer>,
     sphere: Option<MeshHandle>,
+    gltf_meshes: Vec<MeshHandle>,
+    assets: AssetServer,
     orbit_radius: f32,
     orbit_angle: f32,
     orbit_height: f32,
@@ -25,6 +30,8 @@ impl Default for Demo {
         Self {
             renderer: None,
             sphere: None,
+            gltf_meshes: Vec::new(),
+            assets: AssetServer::new(PathBuf::from("assets")),
             orbit_radius: 8.0,
             orbit_angle: 0.0,
             orbit_height: 4.0,
@@ -74,6 +81,35 @@ impl AppHandler for Demo {
             Ok(mut r) => {
                 let (verts, idx) = uv_sphere(24, 32);
                 self.sphere = Some(r.create_mesh("sphere", &verts, &idx));
+
+                // Optional: load assets/model.glb if the user dropped one
+                // into the asset directory. Skip cleanly if missing.
+                let glb_path = self.assets.root().join("model.glb");
+                if glb_path.exists() {
+                    match self.assets.load_gltf("model.glb") {
+                        Ok(asset) => {
+                            for (i, prim) in asset.primitives.iter().enumerate() {
+                                let verts: Vec<MeshVertex> = prim
+                                    .positions
+                                    .iter()
+                                    .zip(prim.normals.iter())
+                                    .map(|(p, n)| MeshVertex::new(*p, *n))
+                                    .collect();
+                                let handle =
+                                    r.create_mesh(&format!("glb_prim_{i}"), &verts, &prim.indices);
+                                self.gltf_meshes.push(handle);
+                            }
+                            info!(
+                                primitives = self.gltf_meshes.len(),
+                                "glTF meshes registered"
+                            );
+                        }
+                        Err(err) => warn!(error = %err, "load_gltf failed"),
+                    }
+                } else {
+                    info!("drop a model.glb into assets/ to render it (skipping glTF this run)");
+                }
+
                 self.renderer = Some(r);
             }
             Err(err) => {
@@ -197,6 +233,20 @@ impl AppHandler for Demo {
             }
         }
 
+        // If a glTF model was loaded, draw it rotating on a pedestal.
+        for (i, handle) in self.gltf_meshes.iter().enumerate() {
+            let offset = i as f32 * 2.5 - (self.gltf_meshes.len() as f32 - 1.0) * 1.25;
+            renderer.draw_mesh(
+                *handle,
+                cube_model(
+                    Vec3::new(offset, 1.0, -4.0),
+                    Quat::from_rotation_y(self.time * 0.5),
+                    Vec3::splat(1.0),
+                ),
+                [0.85, 0.85, 0.95, 1.0],
+            );
+        }
+
         if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
             warn!(error = ?err, "frame render failed");
         }
@@ -232,7 +282,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - cube_demo (Phase 6.2)".into(),
+        title: "InfEngine - cube_demo (Phase 6.3)".into(),
         width: 1280,
         height: 720,
         resizable: true,

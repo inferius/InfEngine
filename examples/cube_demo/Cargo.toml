@@ -15,6 +15,7 @@ workspace = true
 infengine_core = { path = "../../crates/infengine_core" }
 infengine_window = { path = "../../crates/infengine_window" }
 infengine_render = { path = "../../crates/infengine_render" }
+infengine_assets = { path = "../../crates/infengine_assets" }
 glam = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

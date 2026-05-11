@@ -83,6 +83,26 @@ pub enum AssetError {
     },
     #[error("failed to set up filesystem watcher: {0}")]
     Watch(#[from] notify::Error),
+    #[error("failed to load glTF {path}: {source}")]
+    Gltf { path: PathBuf, source: gltf::Error },
+}
+
+/// One primitive (i.e. one vertex stream + index buffer) extracted from
+/// a glTF mesh. Each primitive becomes a separate mesh handle on the
+/// renderer side.
+#[derive(Debug, Clone)]
+pub struct GltfPrimitive {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+}
+
+/// All primitives parsed from a single glTF / GLB file.
+#[derive(Debug, Clone)]
+pub struct GltfAsset {
+    pub primitives: Vec<GltfPrimitive>,
+    pub source: PathBuf,
 }
 
 /// Filesystem change event emitted by the hot-reload watcher. Paths are
@@ -267,6 +287,60 @@ impl AssetServer {
         Ok(AssetWatcher {
             _watcher: watcher,
             receiver: rx,
+        })
+    }
+
+    /// Load a glTF / GLB file and extract every primitive's positions,
+    /// normals (defaulting to `[0, 1, 0]` for primitives without normals),
+    /// UVs (defaulting to `[0, 0]`), and indices (synthesized
+    /// 0..vertex_count for non-indexed primitives). Materials, textures,
+    /// and skeletons are not surfaced yet - Phase 6.4 handles those.
+    pub fn load_gltf(&self, relative: impl AsRef<Path>) -> Result<GltfAsset, AssetError> {
+        let rel = relative.as_ref().to_path_buf();
+        let abs = self.resolve(&rel)?;
+        let (document, buffers, _images) =
+            gltf::import(&abs).map_err(|source| AssetError::Gltf {
+                path: abs.clone(),
+                source,
+            })?;
+
+        let mut primitives = Vec::new();
+        for mesh in document.meshes() {
+            for prim in mesh.primitives() {
+                let reader = prim.reader(|b| Some(&buffers[b.index()]));
+                let positions: Vec<[f32; 3]> = reader
+                    .read_positions()
+                    .map(|i| i.collect())
+                    .unwrap_or_default();
+                let normals: Vec<[f32; 3]> = match reader.read_normals() {
+                    Some(iter) => iter.collect(),
+                    None => vec![[0.0, 1.0, 0.0]; positions.len()],
+                };
+                let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
+                    Some(iter) => iter.into_f32().collect(),
+                    None => vec![[0.0, 0.0]; positions.len()],
+                };
+                let indices: Vec<u32> = match reader.read_indices() {
+                    Some(iter) => iter.into_u32().collect(),
+                    None => (0..positions.len() as u32).collect(),
+                };
+                primitives.push(GltfPrimitive {
+                    positions,
+                    normals,
+                    uvs,
+                    indices,
+                });
+            }
+        }
+
+        info!(
+            path = %rel.display(),
+            primitives = primitives.len(),
+            "loaded glTF asset"
+        );
+        Ok(GltfAsset {
+            primitives,
+            source: abs,
         })
     }
 
