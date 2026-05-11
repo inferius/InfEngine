@@ -372,6 +372,12 @@ impl World {
         self.chunks.get_mut(&coord)
     }
 
+    /// Drop the chunk at `coord` from the world. Returns the removed
+    /// chunk if it was present.
+    pub fn remove_chunk(&mut self, coord: ChunkCoord) -> Option<Chunk> {
+        self.chunks.remove(&coord)
+    }
+
     pub fn iter_chunks(&self) -> impl Iterator<Item = (&ChunkCoord, &Chunk)> {
         self.chunks.iter()
     }

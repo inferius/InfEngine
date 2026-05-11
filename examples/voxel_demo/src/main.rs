@@ -7,6 +7,7 @@
 //! player can toggle cursor lock, hide, and mouse sensitivity at
 //! runtime - matching the polish level of `demo_game`.
 
+use std::collections::{HashSet, VecDeque};
 use std::process::ExitCode;
 
 use glam::{Mat4, Vec3};
@@ -20,8 +21,20 @@ use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent}
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const CHUNKS: i32 = 5;
-const WORLD_HALF: f32 = (CHUNKS as f32 * CHUNK_SIZE as f32) * 0.5;
+/// Initial chunk grid loaded eagerly before the player drops in. The
+/// world streams more chunks in as the player walks beyond this
+/// footprint.
+const INITIAL_CHUNKS: i32 = 3;
+/// Chunks within this Chebyshev distance of the player chunk are
+/// kept loaded; new ones get queued for generation.
+const VIEW_DISTANCE_CHUNKS: i32 = 4;
+/// Chunks beyond this distance are unloaded (slightly larger than
+/// `VIEW_DISTANCE_CHUNKS` so the player jiggling on the boundary
+/// doesn't churn chunks every step).
+const UNLOAD_DISTANCE_CHUNKS: i32 = 6;
+/// Maximum number of new chunks generated per frame so the stream-in
+/// doesn't stall the renderer on long walks.
+const CHUNKS_PER_FRAME: usize = 2;
 const PLAYER_SPEED: f32 = 6.0;
 const JUMP_VELOCITY: f32 = 6.0;
 const GRAVITY: f32 = -18.0;
@@ -75,10 +88,14 @@ struct Voxel {
     registry: BlockRegistry,
     world: World,
     /// Mesh handles grouped by the chunk that produced them. Lets the
-    /// editor rebuild only the affected chunk after a block edit
-    /// (registry leaks the old handles; a future change will add a
-    /// remove API on the renderer).
+    /// streaming code rebuild / unload only the chunks that change.
     chunk_meshes: Vec<(ChunkCoord, BlockId, MeshHandle)>,
+    /// Chunks queued for generation. Streaming pops up to
+    /// `CHUNKS_PER_FRAME` entries per frame so big movements don't
+    /// freeze the renderer.
+    pending_chunks: VecDeque<ChunkCoord>,
+    /// Set form of `pending_chunks` for O(1) duplicate suppression.
+    pending_set: HashSet<ChunkCoord>,
     /// Most recent ray hit while looking around in Play. Drives the
     /// crosshair / wireframe overlay and the click-to-edit step.
     target: Option<RayHit>,
@@ -126,6 +143,8 @@ impl Voxel {
             registry,
             world: World::new(),
             chunk_meshes: Vec::new(),
+            pending_chunks: VecDeque::new(),
+            pending_set: HashSet::new(),
             target: None,
             player_pos: Vec3::new(0.0, 32.0, 0.0),
             player_vel: Vec3::ZERO,
@@ -153,7 +172,11 @@ impl Voxel {
         }
     }
 
-    fn build_world(&mut self) {
+    /// Generate the chunk at `coord` procedurally from a height
+    /// function. Each chunk is independent so streaming can run on
+    /// any subset.
+    fn generate_chunk(coord: ChunkCoord) -> Chunk {
+        let origin = World::chunk_world_origin(coord);
         let height_at = |wx: f32, wz: f32| -> i32 {
             let h = 8.0
                 + (wx * 0.13).sin() * 2.5
@@ -161,43 +184,114 @@ impl Voxel {
                 + ((wx + wz) * 0.07).sin() * 1.5;
             h.round() as i32
         };
+        let mut chunk = Chunk::empty();
+        chunk.fill_with(|x, y, z| {
+            let wx = origin.x + x as f32;
+            let wz = origin.z + z as f32;
+            let h = height_at(wx, wz);
+            let wy = origin.y as i32 + y as i32;
+            if wy > h {
+                return BlockId::AIR;
+            }
+            if wy == h {
+                BlockId(3)
+            } else if wy >= h - 3 {
+                BlockId(2)
+            } else {
+                BlockId(1)
+            }
+        });
+        chunk
+    }
 
-        let mut produced_voxels = 0usize;
-        for cz in 0..CHUNKS {
-            for cx in 0..CHUNKS {
-                let cc: ChunkCoord = [cx - CHUNKS / 2, 0, cz - CHUNKS / 2];
-                let origin = World::chunk_world_origin(cc);
-                let mut chunk = Chunk::empty();
-                chunk.fill_with(|x, y, z| {
-                    let wx = origin.x + x as f32;
-                    let wz = origin.z + z as f32;
-                    let h = height_at(wx, wz);
-                    let wy = origin.y as i32 + y as i32;
-                    if wy > h {
-                        return BlockId::AIR;
-                    }
-                    if wx.abs() > WORLD_HALF - 2.0 || wz.abs() > WORLD_HALF - 2.0 {
-                        return BlockId(4);
-                    }
-                    if wy == h {
-                        BlockId(3)
-                    } else if wy >= h - 3 {
-                        BlockId(2)
-                    } else {
-                        BlockId(1)
-                    }
-                });
-                produced_voxels += chunk.raw().iter().filter(|b| !b.is_air()).count();
-                self.world.insert_chunk(cc, chunk);
+    /// Synchronously generate the initial chunk grid so the player
+    /// drops into a non-empty world.
+    fn build_world(&mut self) {
+        for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
+            for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
+                let cc: ChunkCoord = [cx, 0, cz];
+                self.world.insert_chunk(cc, Self::generate_chunk(cc));
             }
         }
         self.rebuild_all_meshes();
         info!(
-            chunks = CHUNKS * CHUNKS,
-            voxels = produced_voxels,
+            chunks = self.world.iter_chunks().count(),
             submeshes = self.chunk_meshes.len(),
-            "world built"
+            "initial world built"
         );
+    }
+
+    /// Streaming step: queue missing chunks within `VIEW_DISTANCE`
+    /// of the player, unload chunks beyond `UNLOAD_DISTANCE`, then
+    /// process up to `CHUNKS_PER_FRAME` queued chunks this frame.
+    fn stream_chunks(&mut self) {
+        let cs = CHUNK_SIZE as i32;
+        let player_chunk = [
+            (self.player_pos.x.floor() as i32).div_euclid(cs),
+            0,
+            (self.player_pos.z.floor() as i32).div_euclid(cs),
+        ];
+
+        // Queue missing chunks inside the view radius.
+        for dz in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
+            for dx in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
+                let cc = [player_chunk[0] + dx, player_chunk[1], player_chunk[2] + dz];
+                if self.world.chunk(cc).is_none() && self.pending_set.insert(cc) {
+                    self.pending_chunks.push_back(cc);
+                }
+            }
+        }
+
+        // Unload chunks beyond the keep radius. Collect first to
+        // avoid borrowing `self.world` immutably while mutating.
+        let to_unload: Vec<ChunkCoord> = self
+            .world
+            .iter_chunks()
+            .map(|(c, _)| *c)
+            .filter(|c| {
+                let dx = (c[0] - player_chunk[0]).abs();
+                let dz = (c[2] - player_chunk[2]).abs();
+                dx > UNLOAD_DISTANCE_CHUNKS || dz > UNLOAD_DISTANCE_CHUNKS
+            })
+            .collect();
+        if !to_unload.is_empty() {
+            let renderer = self.renderer.as_mut().expect("renderer ready");
+            let mut keep = Vec::with_capacity(self.chunk_meshes.len());
+            for entry in self.chunk_meshes.drain(..) {
+                if to_unload.contains(&entry.0) {
+                    renderer.remove_mesh(entry.2);
+                } else {
+                    keep.push(entry);
+                }
+            }
+            self.chunk_meshes = keep;
+            for cc in &to_unload {
+                self.world.remove_chunk(*cc);
+            }
+        }
+
+        // Generate a few queued chunks this frame.
+        let mut processed = 0usize;
+        while processed < CHUNKS_PER_FRAME
+            && let Some(cc) = self.pending_chunks.pop_front()
+        {
+            self.pending_set.remove(&cc);
+            if self.world.chunk(cc).is_some() {
+                continue;
+            }
+            self.world.insert_chunk(cc, Self::generate_chunk(cc));
+            // Rebuild this chunk and its four horizontal neighbours
+            // so face culling at boundaries is correct.
+            let neighbours = [
+                cc,
+                [cc[0] - 1, cc[1], cc[2]],
+                [cc[0] + 1, cc[1], cc[2]],
+                [cc[0], cc[1], cc[2] - 1],
+                [cc[0], cc[1], cc[2] + 1],
+            ];
+            self.rebuild_chunks(&neighbours);
+            processed += 1;
+        }
     }
 
     fn affected_chunks(world_voxel: [i32; 3]) -> Vec<ChunkCoord> {
@@ -376,10 +470,6 @@ impl Voxel {
             self.player_vel.y = 0.0;
         }
 
-        // World bounds: keep the player inside the generated chunk
-        // footprint so the camera doesn't fly off into the void.
-        self.player_pos.x = self.player_pos.x.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
-        self.player_pos.z = self.player_pos.z.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
         if self.player_pos.y < -20.0 {
             // Fell through the world - respawn above origin.
             self.player_pos = Vec3::new(0.0, 32.0, 0.0);
@@ -702,6 +792,7 @@ impl AppHandler for Voxel {
 
         if matches!(self.state, AppState::Playing) {
             self.update_play(ctx, dt);
+            self.stream_chunks();
         } else {
             self.mouse_dx = 0.0;
             self.mouse_dy = 0.0;
