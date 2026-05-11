@@ -105,6 +105,9 @@ struct Editor {
     /// whose `MeshComponent::mesh` doesn't match a built-in name.
     imported_meshes: HashMap<String, MeshHandle>,
     gltf_path_input: String,
+    /// Mesh-name -> last applied texture path. Used to skip re-loading
+    /// the same texture frame after frame.
+    loaded_mesh_textures: HashMap<String, String>,
     /// Compiled bytecode for the blueprint's `OnTick` trigger; populated
     /// when Play starts.
     play_blueprint_tick: Option<Program>,
@@ -208,6 +211,7 @@ impl Editor {
             node_registry: NodeKindRegistry::with_builtins(),
             imported_meshes: HashMap::new(),
             gltf_path_input: String::new(),
+            loaded_mesh_textures: HashMap::new(),
             play_blueprint_tick: None,
         };
         if me.project.scenes.is_empty() {
@@ -1625,6 +1629,44 @@ impl AppHandler for Editor {
 
         // 3. Render the world now that scene state is final.
         let imported_meshes_snapshot = self.imported_meshes.clone();
+        // Apply any pending mesh-texture loads. We compare against
+        // `loaded_mesh_textures` so paths that haven't changed don't
+        // re-decode the file every frame.
+        let texture_requests: Vec<(String, String)> = self
+            .scene
+            .entities
+            .iter()
+            .filter_map(|e| {
+                let m = e.mesh.as_ref()?;
+                let t = m.texture.as_ref()?;
+                if self.loaded_mesh_textures.get(&m.mesh) == Some(t) {
+                    None
+                } else {
+                    Some((m.mesh.clone(), t.clone()))
+                }
+            })
+            .collect();
+        for (mesh_name, tex_path) in texture_requests {
+            let handle = if mesh_name == "cube" {
+                self.renderer.as_ref().map(|r| r.cube_handle())
+            } else {
+                imported_meshes_snapshot.get(&mesh_name).copied()
+            };
+            let Some(handle) = handle else {
+                continue;
+            };
+            let full = self.project_root.join(&tex_path);
+            if let Some(r) = self.renderer.as_mut() {
+                match r.load_mesh_albedo_for(handle, &full) {
+                    Ok(()) => {
+                        self.loaded_mesh_textures.insert(mesh_name, tex_path);
+                    }
+                    Err(err) => {
+                        self.status = format!("Texture load failed: {err}");
+                    }
+                }
+            }
+        }
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -1976,6 +2018,17 @@ fn mesh_editor(ui: &mut egui::Ui, entity: &mut Entity) {
     });
     ui.add(egui::Slider::new(&mut mesh.metallic, 0.0..=1.0).text("Metallic"));
     ui.add(egui::Slider::new(&mut mesh.roughness, 0.04..=1.0).text("Roughness"));
+    let mut texture_str = mesh.texture.clone().unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label("Texture");
+        if ui.text_edit_singleline(&mut texture_str).changed() {
+            mesh.texture = if texture_str.is_empty() {
+                None
+            } else {
+                Some(texture_str)
+            };
+        }
+    });
 }
 
 fn physics_3d_editor(ui: &mut egui::Ui, entity: &mut Entity) {

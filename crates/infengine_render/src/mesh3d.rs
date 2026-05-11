@@ -487,6 +487,61 @@ impl Mesh3DPass {
         }
     }
 
+    /// Build an albedo bind group from an in-memory RGBA buffer. The
+    /// caller owns the returned bind group (typically stored in a
+    /// `HashMap<MeshHandle, BindGroup>` by `Renderer`).
+    pub fn make_albedo_bind_group(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> wgpu::BindGroup {
+        assert!(
+            rgba.len() as u32 >= width * height * 4,
+            "albedo buffer too small for {width}x{height}"
+        );
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("infengine_render::mesh3d_per_mesh_albedo"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Leak the texture into the bind group's resource handle by
+        // keeping it alive inside the BG itself (wgpu retains the
+        // texture as long as the bind group lives).
+        create_albedo_bind_group(device, &self.texture_bgl, &view, &self.sampler)
+    }
+
     /// Replace the albedo texture used by all 3D meshes. `rgba` must be
     /// `width * height * 4` bytes in `Rgba8UnormSrgb` order.
     pub fn set_albedo(
@@ -603,18 +658,25 @@ impl Mesh3DPass {
         registry: &'a Mesh3DRegistry,
         batches: &[MeshBatch],
         shadow_bg: &'a wgpu::BindGroup,
+        mesh_textures: &'a std::collections::HashMap<MeshHandle, wgpu::BindGroup>,
     ) {
         if batches.is_empty() {
             return;
         }
         rpass.set_pipeline(&self.pipeline);
-        rpass.set_bind_group(1, &self.texture_bind_group, &[]);
         rpass.set_bind_group(2, shadow_bg, &[]);
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         for batch in batches {
             let Some(entry) = registry.get(batch.handle) else {
                 continue;
             };
+            // Pick a per-mesh albedo bind group if one was registered
+            // via `Renderer::set_mesh_albedo_for`, else fall back to
+            // the global default (1x1 white).
+            let bg = mesh_textures
+                .get(&batch.handle)
+                .unwrap_or(&self.texture_bind_group);
+            rpass.set_bind_group(1, bg, &[]);
             rpass.set_vertex_buffer(0, entry.vertex_buffer.slice(..));
             rpass.set_index_buffer(entry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             rpass.draw_indexed(

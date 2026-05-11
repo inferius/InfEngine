@@ -95,6 +95,12 @@ pub struct MeshComponent {
     pub metallic: f32,
     #[serde(default = "default_roughness")]
     pub roughness: f32,
+    /// Optional albedo texture path (relative to the project root).
+    /// The texture is bound to the mesh handle that backs this slot,
+    /// so all entities referencing the same `mesh` name share the
+    /// last-loaded texture for that handle.
+    #[serde(default)]
+    pub texture: Option<String>,
 }
 
 fn default_metallic() -> f32 {
@@ -112,6 +118,7 @@ impl MeshComponent {
             color,
             metallic: 0.0,
             roughness: 0.5,
+            texture: None,
         }
     }
 }

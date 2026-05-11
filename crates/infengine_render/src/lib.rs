@@ -89,6 +89,10 @@ pub struct Renderer {
     show_grid: bool,
     debug3d: Debug3DPass,
     debug3d_vertices: Vec<Debug3DVertex>,
+    /// Per-mesh albedo bind groups. When a mesh handle has an entry
+    /// here, the mesh pipeline binds it for that mesh's draw call;
+    /// otherwise it falls back to the global default (1x1 white).
+    mesh_albedos: std::collections::HashMap<MeshHandle, wgpu::BindGroup>,
 }
 
 impl Renderer {
@@ -224,6 +228,7 @@ impl Renderer {
             show_grid: true,
             debug3d,
             debug3d_vertices: Vec::new(),
+            mesh_albedos: std::collections::HashMap::new(),
         })
     }
 
@@ -313,6 +318,7 @@ impl Renderer {
     /// for this handle remains in the current frame's queue (a safe
     /// bet is to remove between frames or before any draw call).
     pub fn remove_mesh(&mut self, handle: MeshHandle) -> bool {
+        self.mesh_albedos.remove(&handle);
         self.meshes.remove(handle)
     }
 
@@ -340,6 +346,41 @@ impl Renderer {
     pub fn set_mesh_albedo(&mut self, width: u32, height: u32, rgba: &[u8]) {
         self.mesh3d
             .set_albedo(&self.device, &self.queue, width, height, rgba);
+    }
+
+    /// Attach a per-mesh albedo texture to one specific `MeshHandle`.
+    /// The pipeline binds this texture only for draws of that handle,
+    /// falling back to the global default for every other handle.
+    pub fn set_mesh_albedo_for(
+        &mut self,
+        handle: MeshHandle,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        let bg = self
+            .mesh3d
+            .make_albedo_bind_group(&self.device, &self.queue, width, height, rgba);
+        self.mesh_albedos.insert(handle, bg);
+    }
+
+    /// Load an albedo texture from a file (PNG / JPG / WEBP / etc. -
+    /// anything the `image` crate handles) and bind it to `handle`.
+    pub fn load_mesh_albedo_for(
+        &mut self,
+        handle: MeshHandle,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), image::ImageError> {
+        let img = image::open(path)?.to_rgba8();
+        let (w, h) = img.dimensions();
+        self.set_mesh_albedo_for(handle, w, h, img.as_raw());
+        Ok(())
+    }
+
+    /// Drop the per-mesh albedo binding for `handle` (reverts to the
+    /// global default).
+    pub fn clear_mesh_albedo_for(&mut self, handle: MeshHandle) {
+        self.mesh_albedos.remove(&handle);
     }
 
     /// Mutable access to the 3D camera. Edits take effect on the next
@@ -601,6 +642,7 @@ impl Renderer {
                     &self.meshes,
                     &mesh_batches,
                     &self.shadow.sample_bg,
+                    &self.mesh_albedos,
                 );
             }
             if self.show_grid {
