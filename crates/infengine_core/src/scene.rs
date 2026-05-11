@@ -301,12 +301,18 @@ pub struct Entity {
     /// anonymous instance.
     #[serde(default)]
     pub class: Option<String>,
-    /// Path (relative to the project root) of this entity's per-
-    /// instance blueprint .ron file. `None` = no script attached.
-    /// Editing the blueprint via the editor's "BP" button or by
-    /// double-clicking the entity binds it to this slot.
+    /// Path (relative to the project root) of this entity's primary
+    /// per-instance blueprint .ron file. Kept for back-compat with
+    /// older scenes; new content uses `blueprints` (multi-script).
+    /// Removed entirely once all examples migrate.
     #[serde(default)]
     pub blueprint: Option<String>,
+    /// Unity-style component scripts list. Each entry is the path
+    /// (relative to project root) of a blueprint .ron file the
+    /// entity owns. The runtime runs all of them every frame in the
+    /// order they appear.
+    #[serde(default)]
+    pub blueprints: Vec<String>,
 }
 
 impl Entity {
@@ -323,6 +329,7 @@ impl Entity {
             parent: None,
             class: None,
             blueprint: None,
+            blueprints: Vec::new(),
         }
     }
 

@@ -470,10 +470,15 @@ impl Editor {
             let Some(entity) = self.scene.get(eid) else {
                 return;
             };
+            // Prefer the first script slot; fall back to the legacy
+            // single-blueprint field; otherwise pick a fresh default
+            // path under blueprints/.
             let rel = entity
-                .blueprint
-                .clone()
-                .unwrap_or_else(|| format!("blueprints/entity_{}.ron", eid.0));
+                .blueprints
+                .first()
+                .cloned()
+                .or_else(|| entity.blueprint.clone())
+                .unwrap_or_else(|| format!("blueprints/entity_{}_script_0.ron", eid.0));
             (rel, entity.name.clone())
         };
         let full = self.project_root.join(&rel_path);
@@ -509,6 +514,12 @@ impl Editor {
             self.status = format!("Blueprint save failed: {err}");
         }
         if let Some(entity) = self.scene.get_mut(eid) {
+            // Ensure the path appears in the scripts list. The legacy
+            // `blueprint` slot is left in place for back-compat with
+            // older scenes; new content drives off `blueprints`.
+            if !entity.blueprints.contains(&rel_path) {
+                entity.blueprints.push(rel_path.clone());
+            }
             entity.blueprint = Some(rel_path);
         }
         self.blueprint.open(blueprint, Some(full));
@@ -2047,6 +2058,31 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
     } else {
         transform_editor(ui, &mut entity.transform);
         sprite_editor(ui, entity);
+    }
+    scripts_editor(ui, entity, id);
+}
+
+fn scripts_editor(ui: &mut egui::Ui, entity: &mut Entity, eid: EntityId) {
+    ui.separator();
+    ui.label("Scripts");
+    let mut remove: Option<usize> = None;
+    for (i, path) in entity.blueprints.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.small(format!("[{i}]"));
+            ui.text_edit_singleline(path);
+            if ui.small_button("X").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        entity.blueprints.remove(i);
+    }
+    if ui.button("Add script").clicked() {
+        let idx = entity.blueprints.len();
+        entity
+            .blueprints
+            .push(format!("blueprints/entity_{}_script_{idx}.ron", eid.0));
     }
 }
 
