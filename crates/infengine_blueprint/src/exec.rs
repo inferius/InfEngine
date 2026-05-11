@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{BlueprintTarget, BlueprintVariable, Graph, Node, NodeId};
+use crate::{BlueprintTarget, BlueprintVariable, Graph, NamedGraph, Node, NodeId};
 
 /// Runtime value the stack carries between ops.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -196,6 +196,8 @@ fn compile_sink(
     node_id: NodeId,
     ops: &mut Vec<Op>,
     target: &BlueprintTarget,
+    functions: &[NamedGraph],
+    calling: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     let node = find_node(graph, node_id).ok_or(CompileError::MissingInput {
         node: node_id,
@@ -244,6 +246,45 @@ fn compile_sink(
                 }
             }
         }
+        "call_function" => {
+            let name = node.params.get("name").cloned().unwrap_or_default();
+            if name.is_empty() {
+                return Ok(());
+            }
+            if calling.contains(&name) {
+                // Recursive call - skip to prevent infinite expansion.
+                tracing::warn!(name = %name, "blueprint call_function recursion skipped");
+                return Ok(());
+            }
+            let Some(func) = functions.iter().find(|f| f.name == name) else {
+                return Ok(());
+            };
+            calling.insert(name.clone());
+            // Inline the function body: walk every on_start entry's
+            // exec chain. Functions have no on_tick - they're called
+            // explicitly, so OnStart is the conventional root.
+            let entries: Vec<NodeId> = func
+                .graph
+                .nodes
+                .iter()
+                .filter(|n| n.kind == "on_start")
+                .map(|n| n.id)
+                .collect();
+            let mut inner_visited = HashSet::new();
+            for entry in entries {
+                compile_exec_from(
+                    &func.graph,
+                    entry,
+                    "exec",
+                    ops,
+                    target,
+                    &mut inner_visited,
+                    functions,
+                    calling,
+                )?;
+            }
+            calling.remove(&name);
+        }
         other => {
             return Err(CompileError::UnsupportedData {
                 kind: other.to_string(),
@@ -257,6 +298,7 @@ fn compile_sink(
 /// `(node_id, pin)` whose `to_pin == "in"`. Recursive so branches
 /// emit jumps inline; the `visited` set prevents infinite loops on
 /// cycles or revisits.
+#[allow(clippy::too_many_arguments)]
 fn compile_exec_from(
     graph: &Graph,
     node_id: NodeId,
@@ -264,6 +306,8 @@ fn compile_exec_from(
     ops: &mut Vec<Op>,
     target: &BlueprintTarget,
     visited: &mut HashSet<NodeId>,
+    functions: &[NamedGraph],
+    calling: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     let next_sinks: Vec<NodeId> = graph
         .edges
@@ -295,30 +339,52 @@ fn compile_exec_from(
                 let jif_idx = ops.len();
                 ops.push(Op::JumpIfFalse(0));
                 // True branch.
-                compile_exec_from(graph, sink_id, "true", ops, target, visited)?;
+                compile_exec_from(
+                    graph, sink_id, "true", ops, target, visited, functions, calling,
+                )?;
                 let jmp_idx = ops.len();
                 ops.push(Op::Jump(0));
                 let false_start = ops.len() as u32;
                 // False branch.
-                compile_exec_from(graph, sink_id, "false", ops, target, visited)?;
+                compile_exec_from(
+                    graph, sink_id, "false", ops, target, visited, functions, calling,
+                )?;
                 let end_addr = ops.len() as u32;
                 ops[jif_idx] = Op::JumpIfFalse(false_start);
                 ops[jmp_idx] = Op::Jump(end_addr);
             }
             _ => {
-                compile_sink(graph, sink_id, ops, target)?;
+                compile_sink(graph, sink_id, ops, target, functions, calling)?;
                 // A regular sink may have its own `exec` output (rare
                 // for the current node set); follow it so chains of
                 // Prints / SetPositions all run.
-                compile_exec_from(graph, sink_id, "exec", ops, target, visited)?;
+                compile_exec_from(
+                    graph, sink_id, "exec", ops, target, visited, functions, calling,
+                )?;
             }
         }
     }
     Ok(())
 }
 
+/// Compile the event graph alone with no user-defined functions.
+/// Convenience for tests + back-compat callers; use
+/// `compile_with_functions` for blueprints that may call functions.
 pub fn compile(
     graph: &Graph,
+    trigger: Trigger,
+    target: &BlueprintTarget,
+) -> Result<Program, CompileError> {
+    compile_with_functions(graph, &[], trigger, target)
+}
+
+/// Compile an event graph that may contain `call_function` nodes
+/// referencing entries in `functions`. Each call is inlined into the
+/// bytecode; recursion through a name already on the call stack is
+/// skipped to keep the program finite.
+pub fn compile_with_functions(
+    graph: &Graph,
+    functions: &[NamedGraph],
     trigger: Trigger,
     target: &BlueprintTarget,
 ) -> Result<Program, CompileError> {
@@ -329,9 +395,19 @@ pub fn compile(
         .filter(|n| trigger.matches(&n.kind))
         .map(|n| n.id)
         .collect();
+    let mut calling: HashSet<String> = HashSet::new();
     for entry in entries {
         let mut visited = HashSet::new();
-        compile_exec_from(graph, entry, "exec", &mut ops, target, &mut visited)?;
+        compile_exec_from(
+            graph,
+            entry,
+            "exec",
+            &mut ops,
+            target,
+            &mut visited,
+            functions,
+            &mut calling,
+        )?;
     }
     Ok(Program { ops })
 }
@@ -620,6 +696,84 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(99.0)]);
+    }
+
+    #[test]
+    fn call_function_inlines_body() {
+        let reg = NodeKindRegistry::with_builtins();
+        // Function: OnStart -> Print(7).
+        let mut func_graph = Graph::default();
+        let start = func_graph.add_node("on_start", [0.0, 0.0]);
+        let c = func_graph.add_node("const_float", [0.0, 0.0]);
+        func_graph
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == c)
+            .unwrap()
+            .params
+            .insert("value".into(), "7".into());
+        let p = func_graph.add_node("print", [0.0, 0.0]);
+        assert!(func_graph.connect(&reg, start, "exec", p, "in").unwrap());
+        assert!(func_graph.connect(&reg, c, "value", p, "value").unwrap());
+        let func = NamedGraph {
+            name: "shout_seven".into(),
+            graph: func_graph,
+        };
+        // Caller graph: OnTick -> CallFunction("shout_seven").
+        let mut caller = Graph::default();
+        let tick = caller.add_node("on_tick", [0.0, 0.0]);
+        let call = caller.add_node("call_function", [0.0, 0.0]);
+        caller
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == call)
+            .unwrap()
+            .params
+            .insert("name".into(), "shout_seven".into());
+        assert!(caller.connect(&reg, tick, "exec", call, "in").unwrap());
+        let prog = compile_with_functions(
+            &caller,
+            std::slice::from_ref(&func),
+            Trigger::OnTick,
+            &BlueprintTarget::Global,
+        )
+        .unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(7.0)]);
+    }
+
+    #[test]
+    fn call_function_recursion_skipped() {
+        let reg = NodeKindRegistry::with_builtins();
+        // Function `a` calls itself: should compile (skip recursion)
+        // and produce an empty program rather than blow up.
+        let mut g = Graph::default();
+        let start = g.add_node("on_start", [0.0, 0.0]);
+        let call = g.add_node("call_function", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == call)
+            .unwrap()
+            .params
+            .insert("name".into(), "a".into());
+        assert!(g.connect(&reg, start, "exec", call, "in").unwrap());
+        let func = NamedGraph {
+            name: "a".into(),
+            graph: g.clone(),
+        };
+        let prog = compile_with_functions(
+            &g,
+            std::slice::from_ref(&func),
+            Trigger::OnStart,
+            &BlueprintTarget::Global,
+        )
+        .unwrap();
+        // First-level expansion runs the body once; the inner
+        // self-call is skipped. Body has no Print, so ops are empty.
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert!(cap.0.is_empty());
     }
 
     #[test]

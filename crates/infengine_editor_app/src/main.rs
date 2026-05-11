@@ -17,7 +17,7 @@ use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_blueprint::{
     Blueprint, BlueprintTarget, BlueprintWorkspace, NodeKindRegistry,
-    exec::{Program, TracingHost, Trigger, compile, run as run_program},
+    exec::{Program, TracingHost, Trigger, run as run_program},
 };
 use infengine_core::project::{Project, ProjectError, ProjectScene};
 use std::collections::HashMap;
@@ -631,7 +631,12 @@ impl Editor {
             ));
         }
         for (bp, _path) in &scripts_to_run {
-            match compile(&bp.graph, Trigger::OnStart, &bp.target) {
+            match infengine_blueprint::exec::compile_with_functions(
+                &bp.graph,
+                &bp.functions,
+                Trigger::OnStart,
+                &bp.target,
+            ) {
                 Ok(prog) => {
                     let mut host = TracingHost;
                     run_program(&prog, &mut host);
@@ -640,7 +645,12 @@ impl Editor {
                     tracing::warn!(error = %err, "blueprint OnStart compile failed");
                 }
             }
-            if let Ok(prog) = compile(&bp.graph, Trigger::OnTick, &bp.target) {
+            if let Ok(prog) = infengine_blueprint::exec::compile_with_functions(
+                &bp.graph,
+                &bp.functions,
+                Trigger::OnTick,
+                &bp.target,
+            ) {
                 self.play_blueprint_ticks.push(prog);
             }
         }

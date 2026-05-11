@@ -284,6 +284,18 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         // Entity-only - rejects in a Global blueprint.
         contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
     },
+    NodeKindDef {
+        // The function name is stored in `params["name"]`; the
+        // compiler inlines the named function's body (matched against
+        // `Blueprint::functions`) and skips recursion to keep the
+        // emitted program finite.
+        id: "call_function",
+        label: "Call Function",
+        category: "Functions",
+        inputs: &[PinSpec::new("in", PinType::Exec)],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
+    },
 ];
 
 /// One node in the graph. `kind` references a `NodeKindDef::id` in
@@ -852,6 +864,13 @@ impl BlueprintEditor {
                 dirty = true;
             }
         });
+        // Inspector for the currently selected node. Lives here on
+        // the side panel so the canvas stays clean.
+        ui.collapsing("Selected node", |ui| {
+            if self.render_node_inspector(ui) {
+                dirty = true;
+            }
+        });
         // Macros (scaffold).
         ui.collapsing("Macros", |ui| {
             let mut remove: Option<usize> = None;
@@ -877,6 +896,158 @@ impl BlueprintEditor {
                 dirty = true;
             }
         });
+        dirty
+    }
+
+    /// Show editor fields for `params` on the currently selected node
+    /// in the currently visible sub-graph. Specialises a handful of
+    /// known node kinds (constants, variable get/set, set_position,
+    /// call_function) and falls back to a generic key/value list for
+    /// everything else so user-registered nodes still expose their
+    /// params.
+    fn render_node_inspector(&mut self, ui: &mut egui::Ui) -> bool {
+        let Some(sel) = self.selected else {
+            ui.label("(none)");
+            return false;
+        };
+        // Function-name candidate list (read before borrowing the
+        // active graph mutably, since we may need to render a
+        // ComboBox of them while editing the node's `name` param).
+        let function_names: Vec<String> = self
+            .blueprint
+            .functions
+            .iter()
+            .map(|f| f.name.clone())
+            .collect();
+        // Resolve the visible graph based on the active sub-graph.
+        let graph: &mut Graph = match self.active_sub_graph {
+            SubGraphRef::Event => &mut self.blueprint.graph,
+            SubGraphRef::Function(i) => match self.blueprint.functions.get_mut(i) {
+                Some(f) => &mut f.graph,
+                None => return false,
+            },
+            SubGraphRef::Macro(i) => match self.blueprint.macros.get_mut(i) {
+                Some(m) => &mut m.graph,
+                None => return false,
+            },
+        };
+        let Some(node) = graph.nodes.iter_mut().find(|n| n.id == sel) else {
+            ui.label("(stale selection)");
+            return false;
+        };
+        ui.label(format!("Kind: {}", node.kind));
+        let mut dirty = false;
+        match node.kind.as_str() {
+            "const_float" => {
+                let mut v = node
+                    .params
+                    .get("value")
+                    .cloned()
+                    .unwrap_or_else(|| "0".into());
+                ui.horizontal(|ui| {
+                    ui.label("value");
+                    if ui.text_edit_singleline(&mut v).changed() {
+                        node.params.insert("value".into(), v);
+                        dirty = true;
+                    }
+                });
+            }
+            "const_bool" => {
+                let cur = node
+                    .params
+                    .get("value")
+                    .map(|s| s == "true" || s == "1")
+                    .unwrap_or(false);
+                let mut next = cur;
+                if ui.checkbox(&mut next, "value").changed() {
+                    node.params.insert(
+                        "value".into(),
+                        if next { "true".into() } else { "false".into() },
+                    );
+                    dirty = true;
+                }
+            }
+            "const_vec3" | "make_vec3" => {
+                for axis in ["x", "y", "z"] {
+                    let mut s = node
+                        .params
+                        .get(axis)
+                        .cloned()
+                        .unwrap_or_else(|| "0".into());
+                    ui.horizontal(|ui| {
+                        ui.label(axis);
+                        if ui.text_edit_singleline(&mut s).changed() {
+                            node.params.insert(axis.into(), s);
+                            dirty = true;
+                        }
+                    });
+                }
+            }
+            "get_float_var" | "set_float_var" => {
+                let mut name = node
+                    .params
+                    .get("name")
+                    .cloned()
+                    .unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("variable");
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        node.params.insert("name".into(), name);
+                        dirty = true;
+                    }
+                });
+            }
+            "call_function" => {
+                let mut name = node
+                    .params
+                    .get("name")
+                    .cloned()
+                    .unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("function");
+                    let display = if name.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        name.clone()
+                    };
+                    egui::ComboBox::from_id_salt(format!("call_fn_{}", node.id.0))
+                        .selected_text(display)
+                        .show_ui(ui, |ui| {
+                            for fname in &function_names {
+                                if ui
+                                    .selectable_label(fname == &name, fname)
+                                    .clicked()
+                                {
+                                    name = fname.clone();
+                                    node.params.insert("name".into(), name.clone());
+                                    dirty = true;
+                                }
+                            }
+                        });
+                });
+            }
+            _ => {
+                // Generic fallback: list whatever params already exist
+                // so user-registered node kinds can be tweaked. New
+                // keys can't be added here - those come from a custom
+                // inspector the host registers later.
+                if node.params.is_empty() {
+                    ui.label("(no params)");
+                } else {
+                    let keys: Vec<String> = node.params.keys().cloned().collect();
+                    for k in keys {
+                        let mut v = node.params.get(&k).cloned().unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.label(&k);
+                            if ui.text_edit_singleline(&mut v).changed() {
+                                node.params.insert(k.clone(), v);
+                                dirty = true;
+                            }
+                        });
+                    }
+                }
+            }
+        }
         dirty
     }
 
