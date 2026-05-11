@@ -1,0 +1,17 @@
+[package]
+name = "infengine_window"
+description = "Window and input abstraction layer for InfEngine, wrapping winit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+tracing = { workspace = true }
+thiserror = { workspace = true }

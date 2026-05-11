@@ -1,0 +1,37 @@
+# Default: normalize text files to LF in the repo, convert to native on checkout.
+* text=auto eol=lf
+
+# Source code: always LF.
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.wgsl     text eol=lf
+*.glsl     text eol=lf
+*.hlsl     text eol=lf
+*.sh       text eol=lf
+
+# Windows-specific scripts: keep CRLF.
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+*.ps1      text eol=crlf
+
+# Binary assets.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.webp     binary
+*.ktx2     binary
+*.basis    binary
+*.bin      binary
+*.fbx      binary
+*.glb      binary
+*.gltf     binary
+*.wav      binary
+*.ogg      binary
+*.mp3      binary
+*.ttf      binary
+*.otf      binary

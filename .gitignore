@@ -1,0 +1,48 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# IDE / editor
+/.vscode/
+/.idea/
+*.iml
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+.fleet/
+.zed/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / temp
+*.log
+/logs/
+/tmp/
+
+# Profiling
+flamegraph.svg
+perf.data*
+*.profraw
+
+# Local secrets / env
+.env
+.env.local
+secrets.toml
+
+# Build artifacts not under target/
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
