@@ -65,6 +65,15 @@ struct Editor {
     dragging: Option<EntityId>,
     drag_offset: [f32; 2],
     drag_axis: DragAxis,
+    middle_button: bool,
+    middle_button_prev: bool,
+    scroll_accum: f32,
+    prev_cursor_for_camera: [f32; 2],
+    /// Previously selected entity. When the selection changes the 3D
+    /// camera snaps its target to the new entity; otherwise the user's
+    /// orbit / pan edits are preserved.
+    prev_selected: Option<EntityId>,
+    f_key_prev: bool,
     /// In-progress 3D translate-gizmo drag. Stores the original entity
     /// position + cursor pixel at drag start so the drag delta is
     /// computed against a stable origin each frame.
@@ -166,6 +175,12 @@ impl Editor {
             dragging: None,
             drag_offset: [0.0, 0.0],
             drag_axis: DragAxis::Free,
+            middle_button: false,
+            middle_button_prev: false,
+            scroll_accum: 0.0,
+            prev_cursor_for_camera: [0.0, 0.0],
+            prev_selected: None,
+            f_key_prev: false,
             drag_3d: None,
             play_state: PlayState::Editing,
             play_snapshot: None,
@@ -715,6 +730,21 @@ impl AppHandler for Editor {
                     self.left_button = false;
                 }
             }
+            WindowEvent::MouseInput { state, button, .. } if *button == MouseButton::Middle => {
+                if !egui_wants {
+                    self.middle_button = matches!(state, ElementState::Pressed);
+                } else if matches!(state, ElementState::Released) {
+                    self.middle_button = false;
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } if !egui_wants => {
+                use infengine_window::raw_winit::event::MouseScrollDelta;
+                let amount = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y,
+                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 50.0,
+                };
+                self.scroll_accum += amount;
+            }
             _ => {}
         }
     }
@@ -1190,18 +1220,69 @@ impl AppHandler for Editor {
                 camera.zoom = self.zoom;
             }
         }
-        if let Some(id) = self.selected
+        // Blender-style 3D camera:
+        //   middle drag           orbit around target
+        //   shift + middle drag   pan target + position
+        //   scroll                zoom (move along view dir)
+        //   F                     focus target on selection
+        // Selection changes also snap the target.
+        let selection_changed = self.selected != self.prev_selected;
+        self.prev_selected = self.selected;
+        let f_now = ctx.input.is_pressed(Key::F);
+        let f_just = f_now && !self.f_key_prev;
+        self.f_key_prev = f_now;
+        let middle_just_pressed = self.middle_button && !self.middle_button_prev;
+        self.middle_button_prev = self.middle_button;
+        if middle_just_pressed {
+            self.prev_cursor_for_camera = self.cursor_pos;
+        }
+        let cursor_dx = self.cursor_pos[0] - self.prev_cursor_for_camera[0];
+        let cursor_dy = self.cursor_pos[1] - self.prev_cursor_for_camera[1];
+        self.prev_cursor_for_camera = self.cursor_pos;
+
+        let cam = renderer.camera_3d_mut();
+
+        if (selection_changed || f_just)
+            && let Some(id) = self.selected
             && let Some(e) = self.scene.get(id)
             && let Some(t) = e.transform_3d.as_ref()
         {
-            let cam = renderer.camera_3d_mut();
             let target = Vec3::from_array(t.position);
-            // Keep the current camera-to-target offset to allow future
-            // orbit controls without snapping when the user picks a
-            // new entity.
             let offset = cam.position - cam.target;
             cam.target = target;
             cam.position = target + offset;
+        }
+
+        if self.middle_button && (cursor_dx.abs() > 0.0 || cursor_dy.abs() > 0.0) {
+            let offset = cam.position - cam.target;
+            let dist = offset.length().max(0.01);
+            if self.shift_held {
+                let forward = (cam.target - cam.position).normalize_or_zero();
+                let right = forward.cross(Vec3::Y).normalize_or_zero();
+                let up_axis = right.cross(forward).normalize_or_zero();
+                let pan_speed = dist * 0.0015;
+                let delta = right * (-cursor_dx) * pan_speed + up_axis * cursor_dy * pan_speed;
+                cam.target += delta;
+                cam.position += delta;
+            } else {
+                let yaw = -cursor_dx * 0.005;
+                let pitch = -cursor_dy * 0.005;
+                let yaw_q = Quat::from_rotation_y(yaw);
+                let forward = (cam.target - cam.position).normalize_or_zero();
+                let right = forward.cross(Vec3::Y).normalize_or_zero();
+                let pitch_q = Quat::from_axis_angle(right, pitch);
+                let new_offset = pitch_q * yaw_q * offset;
+                cam.position = cam.target + new_offset;
+            }
+        }
+
+        if self.scroll_accum.abs() > 0.0 {
+            let offset = cam.position - cam.target;
+            let dist = offset.length().max(0.01);
+            let factor = (1.0 - self.scroll_accum * 0.1).clamp(0.1, 10.0);
+            let new_dist = (dist * factor).clamp(0.1, 1000.0);
+            cam.position = cam.target + offset.normalize_or_zero() * new_dist;
+            self.scroll_accum = 0.0;
         }
         renderer.set_clear_color(
             self.scene.clear_color[0] as f64,
