@@ -163,6 +163,7 @@ impl Renderer {
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
         let mesh3d = Mesh3DPass::new(
             &device,
+            &queue,
             config.format,
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
@@ -273,6 +274,15 @@ impl Renderer {
     /// Handle of the built-in unit cube.
     pub fn cube_handle(&self) -> MeshHandle {
         self.cube_handle
+    }
+
+    /// Replace the global albedo texture used by all 3D mesh draws.
+    /// `rgba` must be `width * height * 4` bytes in `Rgba8UnormSrgb`
+    /// order. Phase 10.2 keeps this engine-wide (one texture shared by
+    /// every mesh); per-material slots come later.
+    pub fn set_mesh_albedo(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.mesh3d
+            .set_albedo(&self.device, &self.queue, width, height, rgba);
     }
 
     /// Mutable access to the 3D camera. Edits take effect on the next

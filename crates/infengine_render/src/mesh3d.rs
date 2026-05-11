@@ -12,17 +12,28 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-/// Vertex format used by `Mesh3DPass`.
+/// Vertex format used by `Mesh3DPass`. Includes UV coordinates so the
+/// mesh shader can sample an albedo texture.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct MeshVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl MeshVertex {
     pub fn new(position: [f32; 3], normal: [f32; 3]) -> Self {
-        Self { position, normal }
+        Self {
+            position,
+            normal,
+            uv: [0.0, 0.0],
+        }
+    }
+
+    pub fn with_uv(mut self, uv: [f32; 2]) -> Self {
+        self.uv = uv;
+        self
     }
 }
 
@@ -185,14 +196,19 @@ fn cube_geometry() -> (Vec<MeshVertex>, Vec<u16>) {
         ),
     ];
 
+    // Standard quad UVs: bl, br, tr, tl. Each face's corners are listed in
+    // that order in the faces table.
+    const FACE_UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
     let mut vertices = Vec::with_capacity(24);
     let mut indices = Vec::with_capacity(36);
     for (normal, corners) in faces {
         let base = vertices.len() as u16;
-        for c in corners {
+        for (i, c) in corners.iter().enumerate() {
             vertices.push(MeshVertex {
-                position: c,
+                position: *c,
                 normal,
+                uv: FACE_UVS[i],
             });
         }
         // Two triangles per face: 0-1-2, 0-2-3.
@@ -210,16 +226,44 @@ pub(crate) struct MeshBatch {
     pub count: u32,
 }
 
-/// Pipeline + shared instance buffer for batched mesh draws.
+/// Pipeline + shared instance buffer + albedo texture for batched mesh draws.
 pub(crate) struct Mesh3DPass {
     pipeline: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
+    albedo_texture: wgpu::Texture,
+    albedo_view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    texture_bgl: wgpu::BindGroupLayout,
+    texture_bind_group: wgpu::BindGroup,
+}
+
+fn create_albedo_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("infengine_render::mesh3d_albedo_bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }
 
 impl Mesh3DPass {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
@@ -236,9 +280,79 @@ impl Mesh3DPass {
             source: wgpu::ShaderSource::Wgsl(include_str!("mesh3d.wgsl").into()),
         });
 
+        // Default 1x1 white albedo texture. Replaced on demand via
+        // Renderer::set_albedo_texture.
+        let albedo_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("infengine_render::mesh3d_default_albedo"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &albedo_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let albedo_view = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("infengine_render::mesh3d_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("infengine_render::mesh3d_texture_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let texture_bind_group =
+            create_albedo_bind_group(device, &texture_bgl, &albedo_view, &sampler);
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("infengine_render::mesh3d_pipeline_layout"),
-            bind_group_layouts: &[camera_layout],
+            bind_group_layouts: &[camera_layout, &texture_bgl],
             push_constant_ranges: &[],
         });
 
@@ -253,37 +367,42 @@ impl Mesh3DPass {
                 shader_location: 1,
                 format: wgpu::VertexFormat::Float32x3,
             },
+            wgpu::VertexAttribute {
+                offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            },
         ];
 
         let instance_attrs = [
             wgpu::VertexAttribute {
                 offset: 0,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32x4,
-            },
-            wgpu::VertexAttribute {
-                offset: 16,
                 shader_location: 3,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 32,
+                offset: 16,
                 shader_location: 4,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 48,
+                offset: 32,
                 shader_location: 5,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 64,
+                offset: 48,
                 shader_location: 6,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 80,
+                offset: 64,
                 shader_location: 7,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: 80,
+                shader_location: 8,
                 format: wgpu::VertexFormat::Float32x4,
             },
         ];
@@ -343,7 +462,66 @@ impl Mesh3DPass {
             pipeline,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
+            albedo_texture,
+            albedo_view,
+            sampler,
+            texture_bgl,
+            texture_bind_group,
         }
+    }
+
+    /// Replace the albedo texture used by all 3D meshes. `rgba` must be
+    /// `width * height * 4` bytes in `Rgba8UnormSrgb` order.
+    pub fn set_albedo(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        assert!(
+            rgba.len() as u32 >= width * height * 4,
+            "albedo buffer too small for {width}x{height}"
+        );
+        self.albedo_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("infengine_render::mesh3d_albedo"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.albedo_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.albedo_view = self
+            .albedo_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.texture_bind_group =
+            create_albedo_bind_group(device, &self.texture_bgl, &self.albedo_view, &self.sampler);
     }
 
     /// Group `pairs` by mesh handle, upload all instances back-to-back
@@ -412,6 +590,7 @@ impl Mesh3DPass {
             return;
         }
         rpass.set_pipeline(&self.pipeline);
+        rpass.set_bind_group(1, &self.texture_bind_group, &[]);
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         for batch in batches {
             let Some(entry) = registry.get(batch.handle) else {

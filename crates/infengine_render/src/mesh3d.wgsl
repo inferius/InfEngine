@@ -3,8 +3,8 @@
 // One directional sun + a tiny ambient term. Diffuse uses Lambert;
 // specular uses Cook-Torrance with GGX distribution and a Schlick
 // Fresnel. F0 lerps from 0.04 (dielectric) to the albedo for metals.
-// No textures yet; per-instance albedo + (metallic, roughness) drive
-// the look.
+// Albedo is the per-instance color modulated by a sampled texture
+// (defaults to 1x1 white so untextured meshes look unchanged).
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -13,15 +13,19 @@ struct CameraUniform {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
+@group(1) @binding(0) var albedo_tex: texture_2d<f32>;
+@group(1) @binding(1) var albedo_smp: sampler;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) inst_row0: vec4<f32>,
-    @location(3) inst_row1: vec4<f32>,
-    @location(4) inst_row2: vec4<f32>,
-    @location(5) inst_row3: vec4<f32>,
-    @location(6) inst_color: vec4<f32>,
-    @location(7) inst_material: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) inst_row0: vec4<f32>,
+    @location(4) inst_row1: vec4<f32>,
+    @location(5) inst_row2: vec4<f32>,
+    @location(6) inst_row3: vec4<f32>,
+    @location(7) inst_color: vec4<f32>,
+    @location(8) inst_material: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -30,6 +34,7 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) material: vec4<f32>,
+    @location(4) uv: vec2<f32>,
 };
 
 @vertex
@@ -44,6 +49,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_normal = normalize(normal_mat * in.normal);
     out.color = in.inst_color;
     out.material = in.inst_material;
+    out.uv = in.uv;
     return out;
 }
 
@@ -73,7 +79,9 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let metallic = clamp(in.material.x, 0.0, 1.0);
     let roughness = clamp(in.material.y, 0.04, 1.0);
-    let albedo = in.color.rgb;
+    let tex = textureSample(albedo_tex, albedo_smp, in.uv);
+    let albedo = in.color.rgb * tex.rgb;
+    let alpha = in.color.a * tex.a;
 
     let n = normalize(in.world_normal);
     let v = normalize(camera.camera_pos.xyz - in.world_pos);
@@ -106,5 +114,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let amb_t = (n.y * 0.5) + 0.5;
     let ambient = mix(ambient_down, ambient_up, amb_t) * albedo;
 
-    return vec4<f32>(direct + ambient, in.color.a);
+    return vec4<f32>(direct + ambient, alpha);
 }
