@@ -5,7 +5,7 @@
 //! single batched draw call. WASD / arrow keys move the player; `R`
 //! recenters; `Escape` (or closing the window) exits.
 
-use infengine_render::{Renderer, SpriteInstance};
+use infengine_render::{Renderer, SpriteInstance, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
@@ -37,18 +37,20 @@ impl Demo {
     fn corner_decorations(&self) -> [SpriteInstance; 4] {
         let half_w = self.viewport.0 as f32 * 0.5 - DECO_MARGIN;
         let half_h = self.viewport.1 as f32 * 0.5 - DECO_MARGIN;
-        let mk = |x: f32, y: f32, tint: [f32; 4]| SpriteInstance {
-            position: [x, y],
-            size: [DECO_SIZE, DECO_SIZE],
-            color: tint,
-            uv_min: [0.0, 0.0],
-            uv_max: [1.0, 1.0],
-        };
+        let size = [DECO_SIZE, DECO_SIZE];
         [
-            mk(-half_w, half_h, [1.0, 0.5, 0.5, 1.0]), // top-left, red tint
-            mk(half_w, half_h, [0.5, 1.0, 0.5, 1.0]),  // top-right, green tint
-            mk(-half_w, -half_h, [0.5, 0.5, 1.0, 1.0]), // bottom-left, blue tint
-            mk(half_w, -half_h, [1.0, 1.0, 0.5, 1.0]), // bottom-right, yellow tint
+            // Top-left:     checker pattern, red tint.
+            SpriteInstance::from_region([-half_w, half_h], size, demo_atlas::CHECKER)
+                .with_color([1.0, 0.6, 0.6, 1.0]),
+            // Top-right:    dot pattern, green tint.
+            SpriteInstance::from_region([half_w, half_h], size, demo_atlas::DOTS)
+                .with_color([0.6, 1.0, 0.6, 1.0]),
+            // Bottom-left:  stripes, blue tint.
+            SpriteInstance::from_region([-half_w, -half_h], size, demo_atlas::STRIPES)
+                .with_color([0.6, 0.6, 1.0, 1.0]),
+            // Bottom-right: cross, yellow tint.
+            SpriteInstance::from_region([half_w, -half_h], size, demo_atlas::CROSS)
+                .with_color([1.0, 1.0, 0.6, 1.0]),
         ]
     }
 }
@@ -109,7 +111,11 @@ impl AppHandler for Demo {
         for deco in decorations {
             renderer.draw_sprite(deco);
         }
-        renderer.draw_sprite(SpriteInstance::new(self.pos, [PLAYER_SIZE, PLAYER_SIZE]));
+        renderer.draw_sprite(SpriteInstance::from_region(
+            self.pos,
+            [PLAYER_SIZE, PLAYER_SIZE],
+            demo_atlas::CHECKER,
+        ));
 
         if let Err(err) = renderer.render() {
             warn!(error = ?err, "frame render failed");
@@ -148,7 +154,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.2)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.3)".into(),
         width: 1280,
         height: 720,
         resizable: true,

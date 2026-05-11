@@ -63,26 +63,108 @@ impl SpriteInstance {
             uv_max: [1.0, 1.0],
         }
     }
+
+    /// Convenience constructor that samples a sub-rectangle of the
+    /// sprite texture. Use with the constants in `demo_atlas` or with
+    /// any other `(uv_min, uv_max)` pair from an atlas region.
+    pub fn from_region(position: [f32; 2], size: [f32; 2], region: ([f32; 2], [f32; 2])) -> Self {
+        Self {
+            position,
+            size,
+            color: [1.0, 1.0, 1.0, 1.0],
+            uv_min: region.0,
+            uv_max: region.1,
+        }
+    }
+
+    /// Builder-style tint mutator.
+    pub fn with_color(mut self, color: [f32; 4]) -> Self {
+        self.color = color;
+        self
+    }
 }
 
-/// Side length, in pixels, of the procedural checker texture.
-const CHECKER_SIZE: u32 = 128;
-/// Side length of each individual checker cell.
-const CHECKER_TILE: u32 = 16;
+/// Side length, in pixels, of the procedurally generated sprite atlas.
+/// The atlas is laid out as a 2x2 grid of 128x128 quadrants.
+const ATLAS_SIZE: u32 = 256;
+const QUADRANT_SIZE: u32 = ATLAS_SIZE / 2;
 
-fn generate_checker_rgba(size: u32, tile: u32) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let on = ((x / tile) + (y / tile)).is_multiple_of(2);
-            if on {
-                bytes.extend_from_slice(&[235, 200, 90, 255]);
-            } else {
-                bytes.extend_from_slice(&[40, 50, 70, 255]);
-            }
+/// Generate the four-quadrant demo atlas:
+/// - top-left:     checkerboard
+/// - top-right:    dot grid
+/// - bottom-left:  horizontal stripes
+/// - bottom-right: diagonal cross
+fn generate_atlas_rgba() -> Vec<u8> {
+    let size = ATLAS_SIZE as usize;
+    let mut bytes = vec![0u8; size * size * 4];
+
+    let put = |bytes: &mut [u8], x: u32, y: u32, rgba: [u8; 4]| {
+        let i = ((y as usize) * size + x as usize) * 4;
+        bytes[i..i + 4].copy_from_slice(&rgba);
+    };
+
+    let warm = [235, 200, 90, 255];
+    let dark = [40, 50, 70, 255];
+    let mid = [120, 130, 150, 255];
+
+    for y in 0..ATLAS_SIZE {
+        for x in 0..ATLAS_SIZE {
+            let qx = x % QUADRANT_SIZE;
+            let qy = y % QUADRANT_SIZE;
+            let quadrant_x = x / QUADRANT_SIZE;
+            let quadrant_y = y / QUADRANT_SIZE;
+
+            let rgba = match (quadrant_x, quadrant_y) {
+                // top-left: checker (note: top-left in UV space is y == 0)
+                (0, 0) => {
+                    let on = ((qx / 16) + (qy / 16)).is_multiple_of(2);
+                    if on { warm } else { dark }
+                }
+                // top-right: dot grid (16-pixel cells, dot of radius 5)
+                (1, 0) => {
+                    let cx = (qx % 16) as i32 - 8;
+                    let cy = (qy % 16) as i32 - 8;
+                    if cx * cx + cy * cy <= 5 * 5 {
+                        warm
+                    } else {
+                        dark
+                    }
+                }
+                // bottom-left: horizontal stripes (every 8 pixels)
+                (0, 1) => {
+                    if (qy / 8).is_multiple_of(2) {
+                        warm
+                    } else {
+                        dark
+                    }
+                }
+                // bottom-right: diagonal cross (X) on a mid background
+                (1, 1) => {
+                    let d1 = (qx as i32 - qy as i32).abs();
+                    let d2 = (qx as i32 + qy as i32 - QUADRANT_SIZE as i32 + 1).abs();
+                    if d1 < 6 || d2 < 6 { warm } else { mid }
+                }
+                _ => dark,
+            };
+            put(&mut bytes, x, y, rgba);
         }
     }
     bytes
+}
+
+/// Pre-defined UV sub-rectangles for the four quadrants of the demo
+/// atlas. Exposed so `sprite_demo` (and similar tests) can pick a
+/// region without hard-coding magic numbers. These are temporary - they
+/// disappear once the real asset pipeline arrives in Phase 3.
+pub mod demo_atlas {
+    /// Checkerboard quadrant.
+    pub const CHECKER: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [0.5, 0.5]);
+    /// Dot-grid quadrant.
+    pub const DOTS: ([f32; 2], [f32; 2]) = ([0.5, 0.0], [1.0, 0.5]);
+    /// Horizontal-stripes quadrant.
+    pub const STRIPES: ([f32; 2], [f32; 2]) = ([0.0, 0.5], [0.5, 1.0]);
+    /// Diagonal cross quadrant.
+    pub const CROSS: ([f32; 2], [f32; 2]) = ([0.5, 0.5], [1.0, 1.0]);
 }
 
 /// Initial GPU instance buffer capacity (in sprite instances).
@@ -104,14 +186,14 @@ impl SpritePass {
         surface_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        // Procedural checker texture (Phase 2 still has no asset loader).
+        // Procedural 256x256 demo atlas (Phase 2 still has no asset loader).
         let texture_size = wgpu::Extent3d {
-            width: CHECKER_SIZE,
-            height: CHECKER_SIZE,
+            width: ATLAS_SIZE,
+            height: ATLAS_SIZE,
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("infengine_render::sprite_texture"),
+            label: Some("infengine_render::sprite_atlas"),
             size: texture_size,
             mip_level_count: 1,
             sample_count: 1,
@@ -121,7 +203,7 @@ impl SpritePass {
             view_formats: &[],
         });
 
-        let pixels = generate_checker_rgba(CHECKER_SIZE, CHECKER_TILE);
+        let pixels = generate_atlas_rgba();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -132,8 +214,8 @@ impl SpritePass {
             &pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * CHECKER_SIZE),
-                rows_per_image: Some(CHECKER_SIZE),
+                bytes_per_row: Some(4 * ATLAS_SIZE),
+                rows_per_image: Some(ATLAS_SIZE),
             },
             texture_size,
         );

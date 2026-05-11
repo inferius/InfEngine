@@ -23,8 +23,8 @@ use wgpu::{
 
 pub use camera::Camera2D;
 use camera::CameraResource;
-pub use sprite::SpriteInstance;
 use sprite::SpritePass;
+pub use sprite::{SpriteInstance, demo_atlas};
 
 /// Errors that can occur while creating or running the renderer.
 #[derive(Debug, thiserror::Error)]
