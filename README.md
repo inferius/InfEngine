@@ -1,7 +1,9 @@
 # InfEngine
 
-> **Status:** Phase 5 complete - a usable 2D toolchain with editor,
-> physics, and audio. 3D rendering begins in Phase 6.
+> **Status:** Phase 9 complete - standalone scene editor with undo/redo,
+> 2D translate gizmos, project export, and a runtime player binary.
+> 3D rendering, 3D physics, and C# scripting are wired in earlier
+> phases.
 
 An open-source 2D + 3D game engine written in Rust, with an integrated
 editor and (eventually) C# scripting. Aiming to be a long-term
@@ -118,11 +120,17 @@ InfEngine/
   editor MVP.
 - **Phase 5 (done):** scene serialization, hierarchy, asset browser,
   mouse picking, 2D physics, disk-loaded audio.
-- **Phase 6 (in progress):** 3D rendering (perspective camera, mesh +
-  material pipeline, lighting, glTF loader).
-- **Phase 7:** 3D physics (rapier3d).
-- **Phase 8:** C# scripting / plugin layer via embedded .NET.
-- **Phase 9+:** networking, particles, terrain, AI navigation.
+- **Phase 6 (done):** 3D rendering (perspective camera, mesh +
+  material pipeline, PBR baseline, glTF 2.0 loader).
+- **Phase 7 (done):** 3D physics via rapier3d.
+- **Phase 8 (done):** C# scripting via embedded .NET 10 (hot reload
+  through collectible ALC is deferred).
+- **Phase 9 (done):** standalone scene editor, project format,
+  undo / redo, 2D translate gizmo, runtime player + export pipeline.
+  See [`docs/editor-guide.md`](docs/editor-guide.md).
+- **Phase 10+:** Blueprint-style visual scripting, networking,
+  particles, terrain, AI navigation, 3D editor viewport with rotation
+  / scale gizmos.
 
 ## Contributing
 

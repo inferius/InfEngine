@@ -43,8 +43,8 @@ struct Editor {
 
     renderer: Option<Renderer>,
     editor_ui: Option<EditorUi>,
-    #[allow(dead_code)]
     assets: AssetServer,
+    asset_listing: Vec<PathBuf>,
     viewport: (u32, u32),
     zoom: f32,
     fps_ema: f32,
@@ -88,6 +88,7 @@ impl Editor {
             renderer: None,
             editor_ui: None,
             assets,
+            asset_listing: Vec::new(),
             viewport: (1, 1),
             zoom: 1.0,
             fps_ema: 60.0,
@@ -101,7 +102,15 @@ impl Editor {
         if !me.project.scenes.is_empty() {
             me.open_scene(0);
         }
+        me.refresh_assets();
         me
+    }
+
+    fn refresh_assets(&mut self) {
+        match self.assets.list_files() {
+            Ok(list) => self.asset_listing = list,
+            Err(err) => warn!(error = %err, "asset listing failed"),
+        }
     }
 
     fn open_scene(&mut self, index: usize) {
@@ -505,6 +514,7 @@ impl AppHandler for Editor {
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_export = false;
+        let mut action_refresh_assets = false;
         let mut switch_to: Option<usize> = None;
         let mut delete_entity: Option<EntityId> = None;
         let undo_count = self.undo_stack.len();
@@ -518,6 +528,7 @@ impl AppHandler for Editor {
             let status = self.status.clone();
             let scene_ref = &mut self.scene;
             let selected_ref = &mut self.selected;
+            let asset_list = self.asset_listing.clone();
             // Inspector UI.
             editor_ui.run(window.raw(), |ctx| {
                 egui::SidePanel::left("inspector")
@@ -610,6 +621,23 @@ impl AppHandler for Editor {
                             });
                         });
 
+                        ui.collapsing("Assets", |ui| {
+                            if asset_list.is_empty() {
+                                ui.label("(no files under assets/)");
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .max_height(180.0)
+                                    .show(ui, |ui| {
+                                        for entry in &asset_list {
+                                            ui.label(entry.display().to_string());
+                                        }
+                                    });
+                            }
+                            if ui.button("Refresh").clicked() {
+                                action_refresh_assets = true;
+                            }
+                        });
+
                         ui.collapsing("Selection", |ui| {
                             inspector_for_selection(ui, scene_ref, selected_ref);
                         });
@@ -654,6 +682,9 @@ impl AppHandler for Editor {
         }
         if action_export {
             self.export();
+        }
+        if action_refresh_assets {
+            self.refresh_assets();
         }
         if action_add_entity_sprite {
             self.push_snapshot();

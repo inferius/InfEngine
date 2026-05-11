@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Editor asset browser (Phase 9.5): a new collapsing "Assets" section lists every file under the project's asset root, recursive + sorted, with a Refresh button to rescan.
+- `docs/editor-guide.md` covering quickstart, project model, inspector sections, viewport controls, the undo/redo behaviour, and the Export flow. Linked from README's roadmap entry.
 - New crate `infengine_runtime` + Export pipeline (Phase 9.4): `infengine_runtime` is a standalone bin that loads `project.ron`, opens the first scene, and renders it with WASD/QE camera controls. The editor's new "Export -> dist/" button copies the project manifest, every scene file, and the asset directory into a `dist/` folder next to `project.ron` and writes a `README.txt` with build instructions for the runtime binary. End-state for a shipped game: `cargo build --release -p infengine_runtime` + copy the binary next to `dist/`.
 - Editor 2D translate gizmo (Phase 9.3): axis-locked translate handles render via the debug overlay around the selected entity. Red arm = X axis, green arm = Y axis, yellow center square = free drag. Picking respects gizmo priority over body pick. Once a handle is grabbed, drag only modifies the chosen axis (Free / X / Y). 3D translate gizmos arrive once the editor renders 3D scenes.
 - Editor undo / redo (Phase 9.2): snapshot-based history of the whole `Scene`, ring-buffered at 64 entries. Snapshots are pushed before any structural change (drag-start, add entity, remove entity). Keyboard: `Ctrl+Z` undo, `Ctrl+Y` or `Ctrl+Shift+Z` redo. Toolbar buttons in the inspector show the current stack depths.
