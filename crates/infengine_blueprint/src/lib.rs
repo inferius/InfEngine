@@ -856,18 +856,58 @@ impl BlueprintEditor {
         });
         ui.separator();
 
-        // Editing the function / macro body needs the canvas to swap
-        // its working graph, which collides with the existing
-        // borrow layout. Until that refactor lands, render a stub
-        // when a non-event sub-tab is active so the data round-trip
-        // (rename, add/remove) still flows through normally.
-        if !matches!(self.active_sub_graph, SubGraphRef::Event) {
-            ui.label(
-                "(canvas editing for functions / macros is wired in the next phase - data \
-                 round-trips via the side panel for now)",
-            );
-            return dirty;
+        // Editing a function / macro body reuses the same canvas
+        // code, which is hard-coded to talk to `self.blueprint.graph`.
+        // The cleanest local workaround is to temporarily swap the
+        // active sub-graph into the event slot for the duration of
+        // the render, then swap the edited graph back when we're
+        // done. The swap is a no-op for the Event sub-graph.
+        let active_sub = self.active_sub_graph;
+        let swapped: Option<Graph> = match active_sub {
+            SubGraphRef::Event => None,
+            SubGraphRef::Function(i) => self
+                .blueprint
+                .functions
+                .get_mut(i)
+                .map(|f| std::mem::take(&mut f.graph)),
+            SubGraphRef::Macro(i) => self
+                .blueprint
+                .macros
+                .get_mut(i)
+                .map(|m| std::mem::take(&mut m.graph)),
+        };
+        let saved_event = swapped.map(|g| std::mem::replace(&mut self.blueprint.graph, g));
+
+        let inner_dirty = self.show_canvas_body(ui, registry);
+        dirty |= inner_dirty;
+
+        // Restore: put the (possibly edited) sub-graph back where it
+        // came from and reinstate the original event graph.
+        if let Some(orig_event) = saved_event {
+            let edited_sub = std::mem::replace(&mut self.blueprint.graph, orig_event);
+            match active_sub {
+                SubGraphRef::Function(i) => {
+                    if let Some(f) = self.blueprint.functions.get_mut(i) {
+                        f.graph = edited_sub;
+                    }
+                }
+                SubGraphRef::Macro(i) => {
+                    if let Some(m) = self.blueprint.macros.get_mut(i) {
+                        m.graph = edited_sub;
+                    }
+                }
+                SubGraphRef::Event => {}
+            }
         }
+        dirty
+    }
+
+    /// Canvas body. Always reads + writes `self.blueprint.graph`; the
+    /// caller in `show_canvas` is responsible for swapping the active
+    /// sub-graph into that slot before invoking this and restoring it
+    /// afterwards. Returns `true` when the active graph mutated.
+    fn show_canvas_body(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
+        let mut dirty = false;
 
         // Header: blueprint name + target + nodes/edges counts.
         ui.horizontal(|ui| {
