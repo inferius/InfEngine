@@ -141,6 +141,37 @@ pub enum ColliderShape3D {
     Capsule { half_height: f32, radius: f32 },
 }
 
+/// Per-entity audio slot. The runtime / editor Play state plays
+/// `sound_path` (relative to project root) at the entity's
+/// position. `autoplay` fires the sound once when Play starts;
+/// `looping` keeps it going. Audio source is the engine's `kira`
+/// backend via `infengine_audio`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioComponent {
+    pub sound_path: String,
+    #[serde(default = "default_audio_volume")]
+    pub volume: f32,
+    #[serde(default)]
+    pub autoplay: bool,
+    #[serde(default)]
+    pub looping: bool,
+}
+
+fn default_audio_volume() -> f32 {
+    1.0
+}
+
+impl AudioComponent {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            sound_path: path.into(),
+            volume: 1.0,
+            autoplay: false,
+            looping: false,
+        }
+    }
+}
+
 /// 3D physics component: body kind + collider + material properties.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Physics3DComponent {
@@ -313,6 +344,8 @@ pub struct Entity {
     /// order they appear.
     #[serde(default)]
     pub blueprints: Vec<String>,
+    #[serde(default)]
+    pub audio: Option<AudioComponent>,
 }
 
 impl Entity {
@@ -330,6 +363,7 @@ impl Entity {
             class: None,
             blueprint: None,
             blueprints: Vec::new(),
+            audio: None,
         }
     }
 

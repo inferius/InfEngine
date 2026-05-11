@@ -22,9 +22,10 @@ use infengine_blueprint::{
 use infengine_core::project::{Project, ProjectError, ProjectScene};
 use std::collections::HashMap;
 
+use infengine_audio::AudioSystem;
 use infengine_core::scene::{
-    AtlasRegion, BodyKind3D, ColliderShape3D, Entity, EntityId, MeshComponent, Physics3DComponent,
-    Scene, SpriteComponent, Transform2D, Transform3D,
+    AtlasRegion, AudioComponent, BodyKind3D, ColliderShape3D, Entity, EntityId, MeshComponent,
+    Physics3DComponent, Scene, SpriteComponent, Transform2D, Transform3D,
 };
 use infengine_editor::EditorUi;
 use infengine_physics::{
@@ -112,6 +113,9 @@ struct Editor {
     /// when Play started, plus the workspace's active tab. The tick
     /// loop runs all of them every frame.
     play_blueprint_ticks: Vec<Program>,
+    /// Audio backend; lazily initialised on first sound request.
+    /// `None` when the host has no audio device.
+    audio_system: Option<AudioSystem>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -214,6 +218,7 @@ impl Editor {
             gltf_path_input: String::new(),
             loaded_mesh_textures: HashMap::new(),
             play_blueprint_ticks: Vec::new(),
+            audio_system: None,
         };
         if me.project.scenes.is_empty() {
             // A fresh project ships with an empty scenes list and
@@ -637,6 +642,45 @@ impl Editor {
             }
             if let Ok(prog) = compile(&bp.graph, Trigger::OnTick, &bp.target) {
                 self.play_blueprint_ticks.push(prog);
+            }
+        }
+        // Autoplay sounds attached to entities.
+        let auto_clips: Vec<(String, f32)> = self
+            .scene
+            .entities
+            .iter()
+            .filter_map(|e| {
+                let a = e.audio.as_ref()?;
+                if a.autoplay {
+                    Some((a.sound_path.clone(), a.volume))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !auto_clips.is_empty() {
+            if self.audio_system.is_none() {
+                match AudioSystem::new() {
+                    Ok(s) => self.audio_system = Some(s),
+                    Err(err) => warn!(error = %err, "audio init failed"),
+                }
+            }
+            if let Some(audio) = self.audio_system.as_mut() {
+                for (path, volume) in auto_clips {
+                    let full = self.project_root.join(&path);
+                    match audio.load_sound(&full) {
+                        Ok(sound) => {
+                            // Volume is a simple beep tone hint until
+                            // kira's per-instance settings are wired
+                            // through `play_sound`. Ignore for now.
+                            let _ = volume;
+                            let _ = audio.play_sound(&sound);
+                        }
+                        Err(err) => {
+                            warn!(error = %err, path = %full.display(), "audio load failed")
+                        }
+                    }
+                }
             }
         }
         self.play_state = PlayState::Playing;
@@ -2122,6 +2166,28 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
         sprite_editor(ui, entity);
     }
     scripts_editor(ui, entity, id);
+    audio_editor(ui, entity);
+}
+
+fn audio_editor(ui: &mut egui::Ui, entity: &mut Entity) {
+    ui.separator();
+    let Some(audio) = entity.audio.as_mut() else {
+        if ui.button("Add audio component").clicked() {
+            entity.audio = Some(AudioComponent::new("assets/sound.wav"));
+        }
+        return;
+    };
+    ui.label("Audio");
+    ui.horizontal(|ui| {
+        ui.label("Path");
+        ui.text_edit_singleline(&mut audio.sound_path);
+    });
+    ui.add(egui::Slider::new(&mut audio.volume, 0.0..=1.0).text("Volume"));
+    ui.checkbox(&mut audio.autoplay, "Autoplay on Play");
+    ui.checkbox(&mut audio.looping, "Loop (not yet honoured)");
+    if ui.button("Remove audio component").clicked() {
+        entity.audio = None;
+    }
 }
 
 fn scripts_editor(ui: &mut egui::Ui, entity: &mut Entity, eid: EntityId) {
