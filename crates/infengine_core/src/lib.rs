@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod project;
 pub mod scene;
 
 /// Crate version, sourced from Cargo.

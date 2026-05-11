@@ -2044,6 +2044,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "infengine_editor_app"
+version = "0.0.1"
+dependencies = [
+ "egui",
+ "infengine_assets",
+ "infengine_core",
+ "infengine_editor",
+ "infengine_render",
+ "infengine_window",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "infengine_physics"
 version = "0.0.1"
 dependencies = [

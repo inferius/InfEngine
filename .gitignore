@@ -46,6 +46,9 @@ secrets.toml
 /scripts/**/bin/
 /scripts/**/obj/
 
+# Editor scratch files at workspace root
+/project.ron
+
 # Build artifacts not under target/
 *.exe
 *.dll

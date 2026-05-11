@@ -1,0 +1,26 @@
+[package]
+name = "infengine_editor_app"
+description = "Standalone scene editor for InfEngine projects."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "editor_app"
+path = "src/main.rs"
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+infengine_window = { path = "../infengine_window" }
+infengine_render = { path = "../infengine_render" }
+infengine_editor = { path = "../infengine_editor" }
+infengine_assets = { path = "../infengine_assets" }
+egui = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
