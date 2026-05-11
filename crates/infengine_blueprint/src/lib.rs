@@ -394,6 +394,19 @@ impl BlueprintTarget {
     }
 }
 
+/// User-defined typed variable that lives on a blueprint. Backs the
+/// side-panel Variables list (Unreal-style). Get/Set nodes for these
+/// variables are added by the runtime once execution catches up; the
+/// data is stored so the variable persists across editor sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintVariable {
+    pub name: String,
+    pub ty: PinType,
+    /// Stringly-typed default value. Parsed at runtime based on `ty`.
+    #[serde(default)]
+    pub default: String,
+}
+
 /// Blueprint = named graph + the thing it targets. Saved files store
 /// this whole struct so the target context travels with the script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,6 +414,25 @@ pub struct Blueprint {
     pub name: String,
     #[serde(default)]
     pub target: BlueprintTarget,
+    pub graph: Graph,
+    /// Variables defined on the blueprint. Lives in the side panel
+    /// next to the canvas.
+    #[serde(default)]
+    pub variables: Vec<BlueprintVariable>,
+    /// Named function sub-graphs the user authored on the side panel.
+    /// Functions are full mini-graphs with their own entry node.
+    #[serde(default)]
+    pub functions: Vec<NamedGraph>,
+    /// Macros - inline-expanded sub-graphs. Same shape as a function
+    /// but the compiler splices them into the call site rather than
+    /// emitting a CALL op.
+    #[serde(default)]
+    pub macros: Vec<NamedGraph>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedGraph {
+    pub name: String,
     pub graph: Graph,
 }
 
@@ -410,6 +442,9 @@ impl Default for Blueprint {
             name: "Untitled".into(),
             target: BlueprintTarget::Global,
             graph: Graph::default(),
+            variables: Vec::new(),
+            functions: Vec::new(),
+            macros: Vec::new(),
         }
     }
 }
@@ -469,6 +504,10 @@ struct PendingEdge {
 #[derive(Debug, Default)]
 pub struct BlueprintEditor {
     pub blueprint: Blueprint,
+    /// Filesystem source for this blueprint, used by the workspace to
+    /// save dirty changes and to focus an already-open tab when the
+    /// user double-clicks the same entity twice.
+    pub path: Option<PathBuf>,
     view_offset: egui::Vec2,
     dragging: Option<NodeId>,
     drag_node_offset: egui::Vec2,
@@ -590,6 +629,139 @@ impl BlueprintEditor {
     /// Render the editor. Returns `true` whenever the graph mutated
     /// this frame so the host can persist it.
     pub fn show(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
+        let mut dirty = false;
+        ui.horizontal_top(|ui| {
+            // Left side panel: blueprint metadata + variables /
+            // functions / macros lists (Unreal-style).
+            let side_w = 240.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(side_w, ui.available_height()),
+                egui::Layout::top_down_justified(egui::Align::LEFT),
+                |ui| {
+                    if self.render_side_panel(ui) {
+                        dirty = true;
+                    }
+                },
+            );
+            ui.separator();
+            // Right column: the existing canvas surface.
+            ui.vertical(|ui| {
+                if self.show_canvas(ui, registry) {
+                    dirty = true;
+                }
+            });
+        });
+        dirty
+    }
+
+    fn render_side_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut dirty = false;
+        ui.heading("Blueprint");
+        ui.label(format!("Name: {}", self.blueprint.name));
+        ui.label(format!("Target: {}", self.blueprint.target.label()));
+        ui.separator();
+        // Variables.
+        ui.collapsing("Variables", |ui| {
+            let mut remove: Option<usize> = None;
+            for (i, var) in self.blueprint.variables.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.text_edit_singleline(&mut var.name).changed() {
+                        dirty = true;
+                    }
+                    egui::ComboBox::from_id_salt(format!("var_ty_{i}"))
+                        .selected_text(var.ty.label())
+                        .show_ui(ui, |ui| {
+                            for ty in [
+                                PinType::Float,
+                                PinType::Bool,
+                                PinType::Vec3,
+                                PinType::Text,
+                                PinType::EntityRef,
+                            ] {
+                                if ui.selectable_label(var.ty == ty, ty.label()).clicked() {
+                                    var.ty = ty;
+                                    dirty = true;
+                                }
+                            }
+                        });
+                    if ui.small_button("X").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Default");
+                    if ui.text_edit_singleline(&mut var.default).changed() {
+                        dirty = true;
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                self.blueprint.variables.remove(i);
+                dirty = true;
+            }
+            if ui.button("Add variable").clicked() {
+                self.blueprint.variables.push(BlueprintVariable {
+                    name: format!("Var{}", self.blueprint.variables.len() + 1),
+                    ty: PinType::Float,
+                    default: "0".into(),
+                });
+                dirty = true;
+            }
+        });
+        // Functions (scaffold - graph editing comes later).
+        ui.collapsing("Functions", |ui| {
+            let mut remove: Option<usize> = None;
+            for (i, f) in self.blueprint.functions.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.text_edit_singleline(&mut f.name).changed() {
+                        dirty = true;
+                    }
+                    if ui.small_button("X").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                self.blueprint.functions.remove(i);
+                dirty = true;
+            }
+            if ui.button("Add function").clicked() {
+                self.blueprint.functions.push(NamedGraph {
+                    name: format!("Function{}", self.blueprint.functions.len() + 1),
+                    graph: Graph::default(),
+                });
+                dirty = true;
+            }
+        });
+        // Macros (scaffold).
+        ui.collapsing("Macros", |ui| {
+            let mut remove: Option<usize> = None;
+            for (i, m) in self.blueprint.macros.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.text_edit_singleline(&mut m.name).changed() {
+                        dirty = true;
+                    }
+                    if ui.small_button("X").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                self.blueprint.macros.remove(i);
+                dirty = true;
+            }
+            if ui.button("Add macro").clicked() {
+                self.blueprint.macros.push(NamedGraph {
+                    name: format!("Macro{}", self.blueprint.macros.len() + 1),
+                    graph: Graph::default(),
+                });
+                dirty = true;
+            }
+        });
+        dirty
+    }
+
+    fn show_canvas(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
 
         // Header: blueprint name + target + nodes/edges counts.
@@ -996,6 +1168,104 @@ impl BlueprintEditor {
     }
 }
 
+/// Multi-tab blueprint workspace. Each tab is a full
+/// `BlueprintEditor` instance (with its own canvas pan / drag /
+/// selection state); the workspace renders a tab strip at the top
+/// and delegates the canvas to the active tab. Mirrors Unreal's BP
+/// Editor where every opened object lives in its own tab.
+#[derive(Debug, Default)]
+pub struct BlueprintWorkspace {
+    pub tabs: Vec<BlueprintEditor>,
+    pub active: usize,
+}
+
+impl BlueprintWorkspace {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Open a blueprint in a fresh tab. If a tab already exists for
+    /// the same `path`, focus it instead of opening a duplicate.
+    pub fn open(&mut self, blueprint: Blueprint, path: Option<PathBuf>) -> usize {
+        if let Some(p) = &path
+            && let Some(i) = self.tabs.iter().position(|t| t.path.as_ref() == Some(p))
+        {
+            self.active = i;
+            return i;
+        }
+        self.tabs.push(BlueprintEditor {
+            blueprint,
+            path,
+            ..Default::default()
+        });
+        self.active = self.tabs.len() - 1;
+        self.active
+    }
+
+    pub fn active(&self) -> Option<&BlueprintEditor> {
+        self.tabs.get(self.active)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut BlueprintEditor> {
+        self.tabs.get_mut(self.active)
+    }
+
+    pub fn close(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(idx);
+        if self.tabs.is_empty() {
+            self.active = 0;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        }
+    }
+
+    /// Render the tab strip + active blueprint. Returns `true` when
+    /// the active blueprint mutated this frame.
+    pub fn show(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
+        let mut dirty = false;
+        let mut close_idx: Option<usize> = None;
+        ui.horizontal_wrapped(|ui| {
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let label = match &tab.blueprint.target {
+                    BlueprintTarget::Entity { entity_name, .. } => {
+                        format!("{} [{}]", tab.blueprint.name, entity_name)
+                    }
+                    BlueprintTarget::Class(c) => {
+                        format!("{} (class {})", tab.blueprint.name, c)
+                    }
+                    BlueprintTarget::Global => tab.blueprint.name.clone(),
+                };
+                if ui.selectable_label(i == self.active, label).clicked() {
+                    self.active = i;
+                }
+                if ui.small_button("x").clicked() {
+                    close_idx = Some(i);
+                }
+                ui.separator();
+            }
+        });
+        if let Some(i) = close_idx {
+            self.close(i);
+        }
+        ui.separator();
+        if self.tabs.is_empty() {
+            ui.label(
+                "(no blueprint open - double-click an entity in the scene hierarchy to start)",
+            );
+            return dirty;
+        }
+        if let Some(tab) = self.tabs.get_mut(self.active)
+            && tab.show(ui, registry)
+        {
+            dirty = true;
+        }
+        dirty
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,6 +1313,9 @@ mod tests {
                 entity_name: "cube".into(),
             },
             graph: Graph::default(),
+            variables: Vec::new(),
+            functions: Vec::new(),
+            macros: Vec::new(),
         };
         let s = ron::ser::to_string(&bp).unwrap();
         let back: Blueprint = ron::de::from_str(&s).unwrap();

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_blueprint::{
-    Blueprint, BlueprintEditor, BlueprintTarget, NodeKindRegistry,
+    Blueprint, BlueprintTarget, BlueprintWorkspace, NodeKindRegistry,
     exec::{Program, TracingHost, Trigger, compile, run as run_program},
 };
 use infengine_core::project::{Project, ProjectError, ProjectScene};
@@ -94,7 +94,7 @@ struct Editor {
     play_body_map_3d: HashMap<EntityId, PhysicsBodyId>,
     /// Visual scripting editor. The graph is in-memory only at the
     /// scaffold stage; persistence + node-graph execution come later.
-    blueprint: BlueprintEditor,
+    blueprint: BlueprintWorkspace,
     blueprint_open: bool,
     /// The entity whose blueprint is currently loaded in `blueprint`.
     /// `None` = an unbound / global blueprint editor session.
@@ -205,7 +205,7 @@ impl Editor {
             play_physics: None,
             play_physics_3d: None,
             play_body_map_3d: HashMap::new(),
-            blueprint: BlueprintEditor::new(),
+            blueprint: BlueprintWorkspace::new(),
             blueprint_open: false,
             blueprint_active_entity: None,
             node_registry: NodeKindRegistry::with_builtins(),
@@ -494,6 +494,9 @@ impl Editor {
                     entity_name: entity_name.clone(),
                 },
                 graph: infengine_blueprint::Graph::default(),
+                variables: Vec::new(),
+                functions: Vec::new(),
+                macros: Vec::new(),
             },
         };
         // Ensure the blueprints/ dir exists so first-save succeeds.
@@ -508,23 +511,21 @@ impl Editor {
         if let Some(entity) = self.scene.get_mut(eid) {
             entity.blueprint = Some(rel_path);
         }
-        self.blueprint.blueprint = blueprint;
+        self.blueprint.open(blueprint, Some(full));
         self.blueprint_active_entity = Some(eid);
         self.blueprint_open = true;
     }
 
-    /// Save the currently-bound entity blueprint to its `.ron` file.
-    /// No-op when the active blueprint isn't entity-bound or the
-    /// referenced entity is gone.
+    /// Save the currently-active tab's blueprint to disk.
     fn save_active_blueprint(&mut self) {
-        let Some(eid) = self.blueprint_active_entity else {
+        let Some(tab) = self.blueprint.active() else {
             return;
         };
-        let Some(rel_path) = self.scene.get(eid).and_then(|e| e.blueprint.clone()) else {
+        let Some(path) = tab.path.clone() else {
             return;
         };
-        let full = self.project_root.join(&rel_path);
-        if let Err(err) = self.blueprint.blueprint.save(&full) {
+        let bp = tab.blueprint.clone();
+        if let Err(err) = bp.save(&path) {
             self.status = format!("Blueprint save failed: {err}");
         }
     }
@@ -583,7 +584,12 @@ impl Editor {
         self.play_physics_3d = Some(world_3d);
         self.play_body_map_3d = map_3d;
         // Compile blueprint bytecode and fire its OnStart once.
-        match compile(&self.blueprint.blueprint.graph, Trigger::OnStart) {
+        match self
+            .blueprint
+            .active()
+            .map(|t| compile(&t.blueprint.graph, Trigger::OnStart))
+            .unwrap_or_else(|| Ok(Default::default()))
+        {
             Ok(prog) => {
                 let mut host = TracingHost;
                 run_program(&prog, &mut host);
@@ -592,7 +598,10 @@ impl Editor {
                 tracing::warn!(error = %err, "blueprint OnStart compile failed");
             }
         }
-        self.play_blueprint_tick = compile(&self.blueprint.blueprint.graph, Trigger::OnTick).ok();
+        self.play_blueprint_tick = self
+            .blueprint
+            .active()
+            .and_then(|t| compile(&t.blueprint.graph, Trigger::OnTick).ok());
         self.play_state = PlayState::Playing;
         self.status = "Play mode".into();
     }
