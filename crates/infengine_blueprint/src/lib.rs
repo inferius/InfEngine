@@ -68,6 +68,18 @@ impl PinType {
     }
 }
 
+/// Where a node is meaningful. The editor filters its "Add node"
+/// catalogue by the active blueprint's target so a global blueprint
+/// doesn't offer entity-only ops like SetPosition. An empty `contexts`
+/// list on the def means "available everywhere".
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintContext {
+    Global,
+    Entity,
+    Class,
+}
+
 /// Pin metadata: pin name + type. Stored on node-kind definitions, not
 /// per-node, because every node of a kind has the same pin layout.
 #[derive(Debug, Clone)]
@@ -93,6 +105,8 @@ pub struct NodeKindDef {
     pub category: &'static str,
     pub inputs: &'static [PinSpec],
     pub outputs: &'static [PinSpec],
+    /// Contexts in which the editor offers this node. Empty = any.
+    pub contexts: &'static [BlueprintContext],
 }
 
 impl NodeKindDef {
@@ -102,6 +116,12 @@ impl NodeKindDef {
 
     pub fn output(&self, name: &str) -> Option<&'static PinSpec> {
         self.outputs.iter().find(|p| p.name == name)
+    }
+
+    /// True when this node is available in `ctx`. Empty contexts list
+    /// = "available everywhere".
+    pub fn available_in(&self, ctx: BlueprintContext) -> bool {
+        self.contexts.is_empty() || self.contexts.contains(&ctx)
     }
 }
 
@@ -149,6 +169,7 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         category: "Events",
         inputs: &[],
         outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
     },
     NodeKindDef {
         id: "on_tick",
@@ -156,6 +177,7 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         category: "Events",
         inputs: &[],
         outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
     },
     NodeKindDef {
         id: "const_float",
@@ -163,6 +185,7 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         category: "Values",
         inputs: &[],
         outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
     },
     NodeKindDef {
         id: "add",
@@ -173,6 +196,7 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
             PinSpec::new("b", PinType::Float),
         ],
         outputs: &[PinSpec::new("sum", PinType::Float)],
+        contexts: &[],
     },
     NodeKindDef {
         id: "print",
@@ -183,6 +207,7 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
             PinSpec::new("value", PinType::Float),
         ],
         outputs: &[],
+        contexts: &[],
     },
     NodeKindDef {
         id: "set_position",
@@ -195,6 +220,8 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
             PinSpec::new("z", PinType::Float),
         ],
         outputs: &[],
+        // Entity-only - rejects in a Global blueprint.
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
     },
 ];
 
@@ -381,6 +408,16 @@ pub enum BlueprintTarget {
     Class(String),
 }
 
+/// Map a `BlueprintTarget` to the equivalent `BlueprintContext` used
+/// for node-catalogue filtering.
+pub fn blueprint_context(target: &BlueprintTarget) -> BlueprintContext {
+    match target {
+        BlueprintTarget::Global => BlueprintContext::Global,
+        BlueprintTarget::Entity { .. } => BlueprintContext::Entity,
+        BlueprintTarget::Class(_) => BlueprintContext::Class,
+    }
+}
+
 impl BlueprintTarget {
     pub fn label(&self) -> String {
         match self {
@@ -498,6 +535,20 @@ struct PendingEdge {
     ty: PinType,
 }
 
+/// Which sub-graph the editor's canvas is currently rendering. The
+/// blueprint always owns an `EventGraph` (the default trigger graph)
+/// plus user-defined functions and macros; the sub-tab strip switches
+/// between them. Function / macro body editing lives behind a stub
+/// for the moment - the data is persisted, but the canvas only edits
+/// the event graph until the full multi-graph refactor lands.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum SubGraphRef {
+    #[default]
+    Event,
+    Function(usize),
+    Macro(usize),
+}
+
 /// Egui canvas. Owns its own pan / drag / connect state. Renders into
 /// any `egui::Ui` via `show`, mutates the supplied blueprint, and
 /// validates connections through the registry it was given.
@@ -508,6 +559,8 @@ pub struct BlueprintEditor {
     /// save dirty changes and to focus an already-open tab when the
     /// user double-clicks the same entity twice.
     pub path: Option<PathBuf>,
+    /// Which sub-graph is currently active in the canvas.
+    pub active_sub_graph: SubGraphRef,
     view_offset: egui::Vec2,
     dragging: Option<NodeId>,
     drag_node_offset: egui::Vec2,
@@ -764,6 +817,58 @@ impl BlueprintEditor {
     fn show_canvas(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
 
+        // Clamp active sub-graph index if the user deleted the
+        // function / macro it was pointing at.
+        let valid = match self.active_sub_graph {
+            SubGraphRef::Event => true,
+            SubGraphRef::Function(i) => i < self.blueprint.functions.len(),
+            SubGraphRef::Macro(i) => i < self.blueprint.macros.len(),
+        };
+        if !valid {
+            self.active_sub_graph = SubGraphRef::Event;
+        }
+
+        // Sub-tab strip: EventGraph + every function + every macro.
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .selectable_label(
+                    matches!(self.active_sub_graph, SubGraphRef::Event),
+                    "EventGraph",
+                )
+                .clicked()
+            {
+                self.active_sub_graph = SubGraphRef::Event;
+            }
+            for (i, f) in self.blueprint.functions.iter().enumerate() {
+                let active = matches!(self.active_sub_graph, SubGraphRef::Function(j) if j == i);
+                let label = format!("fn {}", f.name);
+                if ui.selectable_label(active, label).clicked() {
+                    self.active_sub_graph = SubGraphRef::Function(i);
+                }
+            }
+            for (i, m) in self.blueprint.macros.iter().enumerate() {
+                let active = matches!(self.active_sub_graph, SubGraphRef::Macro(j) if j == i);
+                let label = format!("macro {}", m.name);
+                if ui.selectable_label(active, label).clicked() {
+                    self.active_sub_graph = SubGraphRef::Macro(i);
+                }
+            }
+        });
+        ui.separator();
+
+        // Editing the function / macro body needs the canvas to swap
+        // its working graph, which collides with the existing
+        // borrow layout. Until that refactor lands, render a stub
+        // when a non-event sub-tab is active so the data round-trip
+        // (rename, add/remove) still flows through normally.
+        if !matches!(self.active_sub_graph, SubGraphRef::Event) {
+            ui.label(
+                "(canvas editing for functions / macros is wired in the next phase - data \
+                 round-trips via the side panel for now)",
+            );
+            return dirty;
+        }
+
         // Header: blueprint name + target + nodes/edges counts.
         ui.horizontal(|ui| {
             ui.label(format!("Blueprint: {}", self.blueprint.name));
@@ -773,9 +878,15 @@ impl BlueprintEditor {
             ui.label(format!("Nodes: {}", self.blueprint.graph.nodes.len()));
             ui.label(format!("Edges: {}", self.blueprint.graph.edges.len()));
             ui.menu_button("Add node", |ui| {
-                // Group nodes by category for readability.
+                let ctx = blueprint_context(&self.blueprint.target);
+                // Group nodes by category, filtered by the active
+                // target's context so e.g. a Global blueprint never
+                // offers SetPosition.
                 let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
                 for def in registry.iter() {
+                    if !def.available_in(ctx) {
+                        continue;
+                    }
                     by_cat.entry(def.category).or_default().push(def);
                 }
                 let mut cats: Vec<_> = by_cat.keys().copied().collect();
@@ -1128,8 +1239,12 @@ impl BlueprintEditor {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(140.0);
                         ui.label("Add node");
+                        let ctx = blueprint_context(&self.blueprint.target);
                         let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
                         for def in registry.iter() {
+                            if !def.available_in(ctx) {
+                                continue;
+                            }
                             by_cat.entry(def.category).or_default().push(def);
                         }
                         let mut cats: Vec<_> = by_cat.keys().copied().collect();
@@ -1342,6 +1457,7 @@ mod tests {
             category: "Custom",
             inputs: PINS,
             outputs: &[],
+            contexts: &[],
         });
         assert!(reg.get("test_custom").is_some());
     }
