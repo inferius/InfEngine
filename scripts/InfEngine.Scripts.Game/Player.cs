@@ -1,27 +1,27 @@
 using System;
-using System.Runtime.InteropServices;
+using InfEngine.Scripts.Host;
 
-namespace InfEngine.Scripts;
+namespace InfEngine.Scripts.Game;
 
 /// <summary>
-/// Sample game logic driving the player entity. The host calls
-/// <see cref="OnTick"/> every frame; this script ignores any keyboard
-/// input the host already applied and instead drives the player on a
-/// gentle figure-eight using the host clock.
+/// Hot-reloadable game logic. The host loads this assembly into a
+/// collectible <see cref="System.Runtime.Loader.AssemblyLoadContext"/>
+/// and resolves <see cref="OnTick"/> via reflection - so the method
+/// must stay a plain `public static void method(float)`. Editing this
+/// file, rebuilding, and calling the host's reload entry point swaps
+/// the implementation without restarting the runtime.
 /// </summary>
 public static class Player
 {
     private static float _accumulated;
     private static int _frame;
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static void OnTick(float dt)
     {
         _accumulated += dt;
         _frame++;
 
-        // Figure-eight in world units. World axes match the renderer's
-        // 1 unit = 1 logical pixel mapping, so 200 px radius is fine.
+        // Figure-eight in world units.
         var t = _accumulated;
         float x = MathF.Sin(t) * 200f;
         float y = MathF.Sin(t * 2f) * 120f;

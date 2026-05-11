@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace InfEngine.Scripts;
+namespace InfEngine.Scripts.Host;
 
 /// <summary>
 /// FFI-stable struct mirroring <c>infengine_scripting::EngineApi</c>.
@@ -18,15 +18,13 @@ public unsafe struct EngineApiPtrs
 }
 
 /// <summary>
-/// Static facade that managed code uses to talk back to the host.
-/// Call <see cref="RegisterApi"/> once at startup before invoking any
-/// other helper - it stores the function-pointer table.
+/// Static facade game scripts call into. Lives in the host assembly
+/// (default ALC) so reloading the game assembly does not lose the API.
 /// </summary>
 public static unsafe class Engine
 {
     private static EngineApiPtrs _api;
 
-    /// <summary>Host bootstrap: copy the API table into the managed side.</summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static void RegisterApi(EngineApiPtrs* api)
     {
@@ -34,12 +32,11 @@ public static unsafe class Engine
         Log("[CS] engine API registered");
     }
 
-    /// <summary>Send a UTF-8 log line back to the host's tracing pipeline.</summary>
     public static void Log(string message)
     {
         if (_api.LogInfo == null)
         {
-            Console.Error.WriteLine("[CS] Engine API not registered; falling back to stdout: " + message);
+            Console.Error.WriteLine("[CS] Engine API not registered: " + message);
             return;
         }
         var bytes = Encoding.UTF8.GetBytes(message);
@@ -49,14 +46,12 @@ public static unsafe class Engine
         }
     }
 
-    /// <summary>Seconds since the host's scripting subsystem started.</summary>
     public static float TimeSeconds()
     {
         if (_api.TimeSecs == null) return 0f;
         return _api.TimeSecs();
     }
 
-    /// <summary>Read the player's current world-space position.</summary>
     public static (float X, float Y) GetPlayerPos()
     {
         if (_api.GetPlayerPos == null) return (0f, 0f);
@@ -65,7 +60,6 @@ public static unsafe class Engine
         return (x, y);
     }
 
-    /// <summary>Override the player's world-space position.</summary>
     public static void SetPlayerPos(float x, float y)
     {
         if (_api.SetPlayerPos == null) return;

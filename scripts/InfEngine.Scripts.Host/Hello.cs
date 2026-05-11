@@ -1,31 +1,22 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace InfEngine.Scripts;
+namespace InfEngine.Scripts.Host;
 
 /// <summary>
-/// Entry-point demos for the Phase 8 C# scripting host.
+/// Smoke-test entry points kept from Phase 8.1 - host-side.
 /// </summary>
 public static class Hello
 {
-    /// <summary>Prints a greeting and exits.</summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static void HelloFromCSharp()
     {
         Console.WriteLine($"[InfEngine] Hello from C# {Environment.Version}!");
     }
 
-    /// <summary>Returns 42 to the caller so the marshalling path is verified.</summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    public static int LifeUniverseEverything()
-    {
-        return 42;
-    }
+    public static int LifeUniverseEverything() => 42;
 
-    /// <summary>
-    /// Uses the host-provided Engine API: logs back through Rust's tracing
-    /// pipeline and reads the host clock.
-    /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static void EngineRoundTrip()
     {

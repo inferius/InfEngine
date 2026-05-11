@@ -37,6 +37,9 @@ pub type FnRegisterApi = ManagedFunction<extern "system" fn(*const EngineApi)>;
 /// Re-export: per-frame tick callback. The host passes the frame's
 /// delta-time in seconds.
 pub type FnTick = ManagedFunction<extern "system" fn(f32)>;
+/// Re-export: load a game assembly into the collectible ALC. Returns
+/// `1` on success, `0` on failure (the managed side logs the reason).
+pub type FnLoadGame = ManagedFunction<extern "system" fn(*const u8, usize) -> u8>;
 
 /// Engine functions exposed to C# code. Layout is FFI-stable so that
 /// the same `#[repr(C)]` struct can be marshalled on the managed side.
@@ -285,6 +288,23 @@ impl ScriptAssembly {
         let m = pdc_from_str(method_name)?;
         self.loader
             .get_function_with_unmanaged_callers_only::<fn(*const EngineApi)>(&t, &m)
+            .map_err(|source| ScriptError::ResolveFunction {
+                type_name: type_name.to_owned(),
+                method_name: method_name.to_owned(),
+                source,
+            })
+    }
+
+    /// Resolve `byte HotLoader.LoadGame(byte*, nuint)`.
+    pub fn get_fn_load_game(
+        &self,
+        type_name: &str,
+        method_name: &str,
+    ) -> Result<FnLoadGame, ScriptError> {
+        let t = pdc_from_str(type_name)?;
+        let m = pdc_from_str(method_name)?;
+        self.loader
+            .get_function_with_unmanaged_callers_only::<fn(*const u8, usize) -> u8>(&t, &m)
             .map_err(|source| ScriptError::ResolveFunction {
                 type_name: type_name.to_owned(),
                 method_name: method_name.to_owned(),

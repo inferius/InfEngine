@@ -19,9 +19,9 @@ use std::process::ExitCode;
 use infengine_scripting::{ScriptHost, default_engine_api};
 use tracing::{error, info};
 
-const SCRIPT_DIR: &str = "scripts/InfEngine.Scripts/bin/Release/net10.0";
-const RUNTIME_CONFIG: &str = "InfEngine.Scripts.runtimeconfig.json";
-const ASSEMBLY: &str = "InfEngine.Scripts.dll";
+const SCRIPT_DIR: &str = "scripts/InfEngine.Scripts.Host/bin/Release/net10.0";
+const RUNTIME_CONFIG: &str = "InfEngine.Scripts.Host.runtimeconfig.json";
+const ASSEMBLY: &str = "InfEngine.Scripts.Host.dll";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
     };
 
     // Push the engine API table into the managed side.
-    let engine_type = "InfEngine.Scripts.Engine, InfEngine.Scripts";
+    let engine_type = "InfEngine.Scripts.Host.Engine, InfEngine.Scripts.Host";
     match scripts.get_fn_register_api(engine_type, "RegisterApi") {
         Ok(register) => {
             let api = default_engine_api();
@@ -74,7 +74,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let type_name = "InfEngine.Scripts.Hello, InfEngine.Scripts";
+    let type_name = "InfEngine.Scripts.Host.Hello, InfEngine.Scripts.Host";
     match scripts.get_fn_void(type_name, "HelloFromCSharp") {
         Ok(f) => {
             info!("calling HelloFromCSharp...");

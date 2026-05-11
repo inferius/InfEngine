@@ -5,12 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <RootNamespace>InfEngine.Scripts</RootNamespace>
-    <AssemblyName>InfEngine.Scripts</AssemblyName>
-    <!--
-      We embed the runtime through hostfxr, so emit a library
-      runtimeconfig.json next to the assembly when building.
-    -->
+    <RootNamespace>InfEngine.Scripts.Host</RootNamespace>
+    <AssemblyName>InfEngine.Scripts.Host</AssemblyName>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <Optimize>true</Optimize>
     <InvariantGlobalization>true</InvariantGlobalization>

@@ -16,7 +16,8 @@ use infengine_editor::EditorUi;
 use infengine_physics::PhysicsWorld;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap};
 use infengine_scripting::{
-    FnTick, FrameContext as ScriptFrameContext, ScriptAssembly, ScriptHost, default_engine_api,
+    FnLoadGame, FnTick, FnVoid, FrameContext as ScriptFrameContext, ScriptAssembly, ScriptHost,
+    default_engine_api,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -46,7 +47,11 @@ struct Demo {
     script_host: Option<ScriptHost>,
     script_assembly: Option<ScriptAssembly>,
     script_tick: Option<FnTick>,
+    script_load_game: Option<FnLoadGame>,
+    script_unload_game: Option<FnVoid>,
+    script_game_path: Option<PathBuf>,
     scripting_enabled: bool,
+    pending_script_reload: bool,
     physics: PhysicsWorld,
     play_mode: bool,
     edit_snapshot: Option<Scene>,
@@ -84,7 +89,11 @@ impl Default for Demo {
             script_host: None,
             script_assembly: None,
             script_tick: None,
+            script_load_game: None,
+            script_unload_game: None,
+            script_game_path: None,
             scripting_enabled: false,
+            pending_script_reload: false,
             physics: PhysicsWorld::new(),
             play_mode: false,
             edit_snapshot: None,
@@ -267,11 +276,13 @@ fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
 
 impl Demo {
     fn try_start_scripting(&mut self) {
-        let script_dir = PathBuf::from("scripts/InfEngine.Scripts/bin/Release/net10.0");
-        let runtime_cfg = script_dir.join("InfEngine.Scripts.runtimeconfig.json");
-        let assembly = script_dir.join("InfEngine.Scripts.dll");
-        if !runtime_cfg.exists() || !assembly.exists() {
-            info!("C# scripting skipped (build scripts/InfEngine.Scripts to enable)");
+        let host_dir = PathBuf::from("scripts/InfEngine.Scripts.Host/bin/Release/net10.0");
+        let game_dir = PathBuf::from("scripts/InfEngine.Scripts.Game/bin/Release/net10.0");
+        let runtime_cfg = host_dir.join("InfEngine.Scripts.Host.runtimeconfig.json");
+        let host_dll = host_dir.join("InfEngine.Scripts.Host.dll");
+        let game_dll = game_dir.join("InfEngine.Scripts.Game.dll");
+        if !runtime_cfg.exists() || !host_dll.exists() {
+            info!("C# scripting skipped (build scripts/InfEngine.Scripts.Host + .Game to enable)");
             return;
         }
         let host = match ScriptHost::new(&runtime_cfg) {
@@ -281,31 +292,74 @@ impl Demo {
                 return;
             }
         };
-        let asm = match host.load_assembly(&assembly) {
+        let asm = match host.load_assembly(&host_dll) {
             Ok(a) => a,
             Err(err) => {
-                warn!(error = %err, "C# assembly load failed");
+                warn!(error = %err, "C# host assembly load failed");
                 return;
             }
         };
-        let engine_type = "InfEngine.Scripts.Engine, InfEngine.Scripts";
-        let player_type = "InfEngine.Scripts.Player, InfEngine.Scripts";
+        let engine_type = "InfEngine.Scripts.Host.Engine, InfEngine.Scripts.Host";
+        let hot_type = "InfEngine.Scripts.Host.HotLoader, InfEngine.Scripts.Host";
         if let Ok(register) = asm.get_fn_register_api(engine_type, "RegisterApi") {
             let api = default_engine_api();
             register(&api as *const _);
         } else {
             warn!("Engine.RegisterApi missing; C# Engine helpers will be inactive");
         }
-        match asm.get_fn_tick(player_type, "OnTick") {
-            Ok(tick) => {
-                self.script_tick = Some(tick);
-                self.scripting_enabled = true;
-                info!("C# Player.OnTick wired");
+        match asm.get_fn_tick(hot_type, "Tick") {
+            Ok(tick) => self.script_tick = Some(tick),
+            Err(err) => warn!(error = %err, "HotLoader.Tick missing"),
+        }
+        match asm.get_fn_load_game(hot_type, "LoadGame") {
+            Ok(load) => self.script_load_game = Some(load),
+            Err(err) => warn!(error = %err, "HotLoader.LoadGame missing"),
+        }
+        match asm.get_fn_void(hot_type, "UnloadGame") {
+            Ok(unload) => self.script_unload_game = Some(unload),
+            Err(err) => warn!(error = %err, "HotLoader.UnloadGame missing"),
+        }
+        if game_dll.exists() {
+            self.script_game_path = Some(game_dll.clone());
+            if let Some(load) = self.script_load_game.as_ref() {
+                let bytes = game_dll.to_string_lossy().into_owned();
+                let result = load(bytes.as_ptr(), bytes.len());
+                if result != 0 {
+                    self.scripting_enabled = true;
+                    info!(path = %game_dll.display(), "C# game assembly loaded");
+                } else {
+                    warn!(path = %game_dll.display(), "LoadGame returned failure");
+                }
             }
-            Err(err) => warn!(error = %err, "Player.OnTick missing"),
+        } else {
+            warn!(path = %game_dll.display(), "game assembly missing");
         }
         self.script_assembly = Some(asm);
         self.script_host = Some(host);
+    }
+
+    fn reload_game_script(&mut self) {
+        let Some(load) = self.script_load_game.as_ref() else {
+            return;
+        };
+        let Some(unload) = self.script_unload_game.as_ref() else {
+            return;
+        };
+        let Some(path) = self.script_game_path.clone() else {
+            return;
+        };
+        unload();
+        let bytes = path.to_string_lossy().into_owned();
+        let result = load(bytes.as_ptr(), bytes.len());
+        if result != 0 {
+            self.scripting_enabled = true;
+            self.save_status = "C# game reloaded".to_owned();
+            info!("C# game reloaded");
+        } else {
+            self.scripting_enabled = false;
+            self.save_status = "C# game reload failed".to_owned();
+            warn!("C# game reload failed");
+        }
     }
 
     fn refresh_asset_listing(&mut self) {
@@ -506,6 +560,12 @@ impl AppHandler for Demo {
         let dt = ctx.delta_time.max(1e-4);
         let instant_fps = 1.0 / dt;
         self.fps_ema = self.fps_ema * 0.9 + instant_fps * 0.1;
+
+        // Service deferred actions queued from the previous frame.
+        if self.pending_script_reload {
+            self.pending_script_reload = false;
+            self.reload_game_script();
+        }
 
         let mut any_event = false;
         if let Some(w) = self.asset_watcher.as_ref() {
@@ -724,6 +784,8 @@ impl AppHandler for Demo {
         let follow_camera_ref = &mut self.follow_camera;
         let scripting_enabled_ref = &mut self.scripting_enabled;
         let script_tick_present = self.script_tick.is_some();
+        let script_hot_present = self.script_load_game.is_some();
+        let mut action_reload_script = false;
         let scene_ref = &mut self.scene;
         let selected_ref = &mut self.selected;
         let save_status_ref = &mut self.save_status;
@@ -815,10 +877,21 @@ impl AppHandler for Demo {
                         ui.collapsing("Scripting (C#)", |ui| {
                             if script_tick_present {
                                 ui.checkbox(scripting_enabled_ref, "Run Player.OnTick");
-                                ui.small("Build scripts/InfEngine.Scripts and restart to reload.");
+                                if ui
+                                    .add_enabled(
+                                        script_hot_present,
+                                        egui::Button::new("Reload game assembly"),
+                                    )
+                                    .clicked()
+                                {
+                                    action_reload_script = true;
+                                }
+                                ui.small("Build .Game project then click reload.");
                             } else {
-                                ui.label("C# Player.OnTick not loaded");
-                                ui.small("Build scripts/InfEngine.Scripts with `dotnet build -c Release`.");
+                                ui.label("C# scripting not loaded");
+                                ui.small(
+                                    "Build scripts/InfEngine.Scripts.Host + .Game with `dotnet build -c Release`.",
+                                );
                             }
                         });
 
@@ -841,6 +914,10 @@ impl AppHandler for Demo {
                         ui.label("Space = beep, C = chime, R = recenter, Esc = quit");
                     });
             });
+        }
+
+        if action_reload_script {
+            self.pending_script_reload = true;
         }
 
         let render_result = if let Some(editor) = self.editor.as_mut() {
