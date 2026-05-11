@@ -165,7 +165,22 @@ impl Editor {
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
         };
-        if !me.project.scenes.is_empty() {
+        if me.project.scenes.is_empty() {
+            // A fresh project ships with an empty scenes list and
+            // would otherwise present a blank viewport with no hint
+            // about what to do next. Seed a starter scene so the user
+            // sees the demo cube + sprite the moment the window opens.
+            me.add_scene();
+            if let Some(idx) = me.current_scene_index {
+                let s = &mut me.scene;
+                let i = s.add_entity("cube_demo");
+                s.entities[i].transform_3d = Some(Transform3D::default());
+                s.entities[i].mesh = Some(MeshComponent::cube([0.85, 0.65, 0.4, 1.0]));
+                me.selected = Some(me.scene.entities[i].id);
+                me.save_current();
+                me.status = format!("Created starter scene #{}", idx + 1);
+            }
+        } else {
             me.open_scene(0);
         }
         me.refresh_assets();

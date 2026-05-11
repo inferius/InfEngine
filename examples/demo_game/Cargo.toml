@@ -20,6 +20,7 @@ infengine_core = { path = "../../crates/infengine_core" }
 infengine_window = { path = "../../crates/infengine_window" }
 infengine_render = { path = "../../crates/infengine_render" }
 infengine_editor = { path = "../../crates/infengine_editor" }
+infengine_audio = { path = "../../crates/infengine_audio" }
 glam = { workspace = true }
 egui = { workspace = true }
 tracing = { workspace = true }

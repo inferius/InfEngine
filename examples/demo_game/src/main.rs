@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 
 use glam::{Mat4, Quat, Vec3};
+use infengine_audio::AudioSystem;
 use infengine_editor::EditorUi;
 use infengine_render::Renderer;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -49,6 +50,16 @@ enum ItemKind {
 }
 
 impl ItemKind {
+    /// Pickup chime frequency. Distinct tones so the player can tell
+    /// the three item kinds apart without looking at the HUD.
+    fn pickup_freq(self) -> f32 {
+        match self {
+            ItemKind::Coin => 880.0,
+            ItemKind::Gem => 1175.0,
+            ItemKind::Key => 660.0,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             ItemKind::Coin => "Coin",
@@ -127,6 +138,7 @@ struct DemoGame {
 
     renderer: Option<Renderer>,
     ui: Option<EditorUi>,
+    audio: Option<AudioSystem>,
     viewport: (u32, u32),
     esc_prev: bool,
     e_prev: bool,
@@ -165,6 +177,7 @@ impl DemoGame {
             requested_quit: false,
             renderer: None,
             ui: None,
+            audio: None,
             viewport: (1, 1),
             esc_prev: false,
             e_prev: false,
@@ -275,6 +288,10 @@ impl DemoGame {
         for item in picked {
             *self.inventory.entry(item.kind).or_insert(0) += 1;
             self.pickup_message = Some((format!("Picked up {}", item.kind.label()), 2.0));
+            if let Some(audio) = self.audio.as_mut() {
+                let vol = (self.settings.master_volume * 0.5).clamp(0.0, 1.0);
+                let _ = audio.play_beep(item.kind.pickup_freq(), 0.15, vol);
+            }
         }
         // Keep e_prev tracked in case future code wants explicit E
         // pickups again; today the key is unused in update_play.
@@ -612,6 +629,12 @@ impl AppHandler for DemoGame {
                 error!(error = %err, "renderer init failed");
                 std::process::exit(2);
             }
+        }
+        // Audio is optional: a missing output device is not fatal, the
+        // game just runs silent.
+        match AudioSystem::new() {
+            Ok(a) => self.audio = Some(a),
+            Err(err) => warn!(error = %err, "audio init failed - running silent"),
         }
     }
 
