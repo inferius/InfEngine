@@ -80,6 +80,70 @@ impl SpriteComponent {
     }
 }
 
+/// Body kind for a physics-enabled entity. Mirrors rapier's
+/// `RigidBodyType` minus options the engine does not need yet.
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyKind {
+    /// Affected by gravity and forces.
+    Dynamic,
+    /// Immovable; collides with dynamic bodies.
+    Static,
+    /// Position is driven by the user; collides with dynamic bodies.
+    Kinematic,
+}
+
+/// Simple collider shape. Box uses the sprite size; circle uses radius
+/// directly. More shapes (capsule, polygon, edge) land later.
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderShape {
+    Box,
+    Circle { radius: f32 },
+}
+
+/// Physics component: body kind + collider shape + mass-related params.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicsComponent {
+    pub body: BodyKind,
+    pub shape: ColliderShape,
+    /// Linear damping; 0 means no resistance.
+    #[serde(default)]
+    pub linear_damping: f32,
+    /// Restitution (bounciness) in `[0, 1]`.
+    #[serde(default)]
+    pub restitution: f32,
+    /// Friction coefficient.
+    #[serde(default = "default_friction")]
+    pub friction: f32,
+}
+
+fn default_friction() -> f32 {
+    0.5
+}
+
+impl PhysicsComponent {
+    pub fn dynamic_box() -> Self {
+        Self {
+            body: BodyKind::Dynamic,
+            shape: ColliderShape::Box,
+            linear_damping: 0.0,
+            restitution: 0.3,
+            friction: 0.5,
+        }
+    }
+
+    pub fn static_box() -> Self {
+        Self {
+            body: BodyKind::Static,
+            shape: ColliderShape::Box,
+            linear_damping: 0.0,
+            restitution: 0.0,
+            friction: 0.7,
+        }
+    }
+}
+
 /// One scene entity. Components live as `Option`al fields; if growth
 /// becomes painful, migrate to a real ECS (bevy_ecs) without changing
 /// the saved-file shape.
@@ -89,6 +153,8 @@ pub struct Entity {
     pub name: String,
     pub transform: Transform2D,
     pub sprite: Option<SpriteComponent>,
+    #[serde(default)]
+    pub physics: Option<PhysicsComponent>,
 }
 
 impl Entity {
@@ -98,6 +164,7 @@ impl Entity {
             name: name.into(),
             transform: Transform2D::default(),
             sprite: None,
+            physics: None,
         }
     }
 
@@ -127,6 +194,15 @@ pub struct Scene {
     pub next_id: u32,
     /// Background color (linear RGB) for the renderer to clear with.
     pub clear_color: [f32; 3],
+    /// Gravity used by the physics simulator. World units per second^2;
+    /// y is positive downward in world space (visible as -y when drawn
+    /// because the camera uses y-up).
+    #[serde(default = "default_gravity")]
+    pub gravity: [f32; 2],
+}
+
+fn default_gravity() -> [f32; 2] {
+    [0.0, -1200.0]
 }
 
 impl Default for Scene {
@@ -136,6 +212,7 @@ impl Default for Scene {
             entities: Vec::new(),
             next_id: 1,
             clear_color: [0.05, 0.10, 0.18],
+            gravity: default_gravity(),
         }
     }
 }

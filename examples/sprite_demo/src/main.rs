@@ -8,8 +8,12 @@ use std::path::PathBuf;
 
 use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
 use infengine_audio::AudioSystem;
-use infengine_core::scene::{AtlasRegion, Entity, EntityId, Scene, SpriteComponent, Transform2D};
+use infengine_core::scene::{
+    AtlasRegion, BodyKind, ColliderShape, Entity, EntityId, PhysicsComponent, Scene,
+    SpriteComponent, Transform2D,
+};
 use infengine_editor::EditorUi;
+use infengine_physics::PhysicsWorld;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -35,6 +39,9 @@ struct Demo {
     asset_listing: Vec<PathBuf>,
     selected_asset: Option<PathBuf>,
     audio: Option<AudioSystem>,
+    physics: PhysicsWorld,
+    play_mode: bool,
+    edit_snapshot: Option<Scene>,
     reload_count: u32,
     beep_count: u32,
     scene: Scene,
@@ -65,6 +72,9 @@ impl Default for Demo {
             asset_listing: Vec::new(),
             selected_asset: None,
             audio: None,
+            physics: PhysicsWorld::new(),
+            play_mode: false,
+            edit_snapshot: None,
             reload_count: 0,
             beep_count: 0,
             scene: Scene::default(),
@@ -115,26 +125,43 @@ fn default_scene() -> Scene {
         ..Scene::default()
     };
     let i = scene.add_entity("player");
-    scene.entities[i].transform = Transform2D::default();
+    scene.entities[i].transform.position = [0.0, 300.0];
     scene.entities[i].sprite = Some(SpriteComponent {
         size: [64.0, 64.0],
         color: [1.0, 0.85, 0.4, 1.0],
         region: AtlasRegion::Checker,
     });
+    scene.entities[i].physics = Some(PhysicsComponent::dynamic_box());
     let i = scene.add_entity("orb_a");
-    scene.entities[i].transform.position = [-300.0, 200.0];
+    scene.entities[i].transform.position = [-200.0, 400.0];
     scene.entities[i].sprite = Some(SpriteComponent {
-        size: [80.0, 80.0],
+        size: [64.0, 64.0],
         color: [0.4, 0.9, 1.0, 1.0],
         region: AtlasRegion::Dots,
     });
+    scene.entities[i].physics = Some(PhysicsComponent {
+        body: BodyKind::Dynamic,
+        shape: ColliderShape::Circle { radius: 32.0 },
+        linear_damping: 0.0,
+        restitution: 0.7,
+        friction: 0.3,
+    });
     let i = scene.add_entity("orb_b");
-    scene.entities[i].transform.position = [300.0, -200.0];
+    scene.entities[i].transform.position = [200.0, 500.0];
     scene.entities[i].sprite = Some(SpriteComponent {
-        size: [80.0, 80.0],
+        size: [64.0, 64.0],
         color: [1.0, 0.6, 0.6, 1.0],
         region: AtlasRegion::Cross,
     });
+    scene.entities[i].physics = Some(PhysicsComponent::dynamic_box());
+    let i = scene.add_entity("ground");
+    scene.entities[i].transform.position = [0.0, -340.0];
+    scene.entities[i].sprite = Some(SpriteComponent {
+        size: [1600.0, 64.0],
+        color: [0.4, 0.7, 0.4, 1.0],
+        region: AtlasRegion::Stripes,
+    });
+    scene.entities[i].physics = Some(PhysicsComponent::static_box());
     scene
 }
 
@@ -293,6 +320,7 @@ impl AppHandler for Demo {
         };
         self.selected = first_sprite_entity(&self.scene);
         self.refresh_asset_listing();
+        self.physics.rebuild(&self.scene);
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
@@ -456,6 +484,14 @@ impl AppHandler for Demo {
             entity.transform.position[1] = cursor_world[1] - self.drag_offset[1];
         }
 
+        // Physics step happens only in Play mode. Edits (movement, drag,
+        // inspector sliders) propagate to bodies through sync_from_scene.
+        if self.play_mode {
+            self.physics.sync_from_scene(&self.scene);
+            self.physics.step(dt);
+            self.physics.write_back(&mut self.scene);
+        }
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -530,6 +566,10 @@ impl AppHandler for Demo {
         let save_status_ref = &mut self.save_status;
         let asset_listing_ref = &self.asset_listing;
         let selected_asset_ref = &mut self.selected_asset;
+        let play_mode_ref = &mut self.play_mode;
+        let edit_snapshot_ref = &mut self.edit_snapshot;
+        let physics_ref = &mut self.physics;
+        let physics_bodies = physics_ref.body_count();
 
         if let Some(editor) = self.editor.as_mut() {
             editor.run(window.raw(), |ctx| {
@@ -537,7 +577,25 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.5");
+                        ui.heading("InfEngine - Phase 5.6");
+                        ui.horizontal(|ui| {
+                            let label = if *play_mode_ref { "Stop" } else { "Play" };
+                            if ui.button(label).clicked() {
+                                if *play_mode_ref {
+                                    if let Some(snap) = edit_snapshot_ref.take() {
+                                        *scene_ref = snap;
+                                        *selected_ref = first_sprite_entity(scene_ref);
+                                    }
+                                    physics_ref.rebuild(scene_ref);
+                                    *play_mode_ref = false;
+                                } else {
+                                    *edit_snapshot_ref = Some(scene_ref.clone());
+                                    physics_ref.rebuild(scene_ref);
+                                    *play_mode_ref = true;
+                                }
+                            }
+                            ui.label(format!("Bodies: {physics_bodies}"));
+                        });
                         ui.label(format!("FPS: {fps:.0}   Sprites: {queued}"));
                         ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
@@ -789,7 +847,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.5)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.6)".into(),
         width: 1280,
         height: 720,
         resizable: true,

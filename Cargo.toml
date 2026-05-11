@@ -7,6 +7,7 @@ members = [
     "crates/infengine_assets",
     "crates/infengine_audio",
     "crates/infengine_editor",
+    "crates/infengine_physics",
     "examples/sprite_demo",
 ]
 
@@ -64,6 +65,7 @@ kira = "0.10"
 egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
+rapier2d = "0.28"
 
 [profile.release]
 opt-level = 3
