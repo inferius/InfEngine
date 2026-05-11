@@ -341,6 +341,211 @@ pub fn submesh_instance(def: &BlockDef) -> MeshInstance {
     .with_material(def.metallic, def.roughness)
 }
 
+/// Integer chunk coordinate in the world's chunk grid. Each unit is
+/// one `CHUNK_SIZE`-step in world space.
+pub type ChunkCoord = [i32; 3];
+
+/// Container that owns multiple chunks indexed by chunk coordinate.
+/// World-space voxel queries go through `get` / `set`; the world
+/// resolves the chunk + local index automatically.
+#[derive(Debug, Default)]
+pub struct World {
+    chunks: HashMap<ChunkCoord, Chunk>,
+}
+
+impl World {
+    pub fn new() -> Self {
+        Self {
+            chunks: HashMap::new(),
+        }
+    }
+
+    pub fn insert_chunk(&mut self, coord: ChunkCoord, chunk: Chunk) {
+        self.chunks.insert(coord, chunk);
+    }
+
+    pub fn chunk(&self, coord: ChunkCoord) -> Option<&Chunk> {
+        self.chunks.get(&coord)
+    }
+
+    pub fn chunk_mut(&mut self, coord: ChunkCoord) -> Option<&mut Chunk> {
+        self.chunks.get_mut(&coord)
+    }
+
+    pub fn iter_chunks(&self) -> impl Iterator<Item = (&ChunkCoord, &Chunk)> {
+        self.chunks.iter()
+    }
+
+    /// Lookup the voxel at a world-space integer coordinate. Returns
+    /// `BlockId::AIR` for coordinates outside any registered chunk.
+    pub fn get(&self, world: [i32; 3]) -> BlockId {
+        let (cc, lc) = split_coord(world);
+        match self.chunks.get(&cc) {
+            Some(chunk) => chunk.get(lc[0], lc[1], lc[2]),
+            None => BlockId::AIR,
+        }
+    }
+
+    /// Write a voxel at a world-space integer coordinate. Returns the
+    /// chunk coordinate that was modified so callers can rebuild its
+    /// mesh. No-op when the chunk does not exist (the world doesn't
+    /// auto-create chunks - the caller decides).
+    pub fn set(&mut self, world: [i32; 3], block: BlockId) -> Option<ChunkCoord> {
+        let (cc, lc) = split_coord(world);
+        let chunk = self.chunks.get_mut(&cc)?;
+        chunk.set(lc[0], lc[1], lc[2], block);
+        Some(cc)
+    }
+
+    pub fn chunk_world_origin(coord: ChunkCoord) -> Vec3 {
+        Vec3::new(
+            (coord[0] as f32) * CHUNK_SIZE as f32,
+            (coord[1] as f32) * CHUNK_SIZE as f32,
+            (coord[2] as f32) * CHUNK_SIZE as f32,
+        )
+    }
+}
+
+fn split_coord(world: [i32; 3]) -> (ChunkCoord, [usize; 3]) {
+    let cs = CHUNK_SIZE as i32;
+    let cc = [
+        world[0].div_euclid(cs),
+        world[1].div_euclid(cs),
+        world[2].div_euclid(cs),
+    ];
+    let lc = [
+        world[0].rem_euclid(cs) as usize,
+        world[1].rem_euclid(cs) as usize,
+        world[2].rem_euclid(cs) as usize,
+    ];
+    (cc, lc)
+}
+
+/// Result of a ray cast through the voxel world. `voxel` is the
+/// solid voxel the ray hit, `normal` is the integer face normal the
+/// ray entered through (e.g. `[0, 1, 0]` for the top face), and
+/// `place_at` is the empty voxel coord just outside that face -
+/// where a player click would place a new block.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct RayHit {
+    pub voxel: [i32; 3],
+    pub normal: [i32; 3],
+    pub place_at: [i32; 3],
+}
+
+/// Cast `dir` from `origin` through the voxel grid using the
+/// Amanatides + Woo algorithm. Returns the first solid voxel within
+/// `max_dist` or `None` if the ray exits the world / runs out of
+/// distance.
+pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
+    let dir = dir.normalize_or_zero();
+    if dir == Vec3::ZERO {
+        return None;
+    }
+
+    let mut voxel = [
+        origin.x.floor() as i32,
+        origin.y.floor() as i32,
+        origin.z.floor() as i32,
+    ];
+    let step = [
+        if dir.x > 0.0 {
+            1
+        } else if dir.x < 0.0 {
+            -1
+        } else {
+            0
+        },
+        if dir.y > 0.0 {
+            1
+        } else if dir.y < 0.0 {
+            -1
+        } else {
+            0
+        },
+        if dir.z > 0.0 {
+            1
+        } else if dir.z < 0.0 {
+            -1
+        } else {
+            0
+        },
+    ];
+
+    fn boundary(coord: f32, d: f32) -> f32 {
+        if d > 0.0 {
+            (coord.floor() + 1.0 - coord) / d
+        } else if d < 0.0 {
+            (coord - coord.floor()) / -d
+        } else {
+            f32::INFINITY
+        }
+    }
+    let mut t_max = [
+        boundary(origin.x, dir.x),
+        boundary(origin.y, dir.y),
+        boundary(origin.z, dir.z),
+    ];
+    let t_delta = [
+        if step[0] != 0 {
+            (1.0 / dir.x).abs()
+        } else {
+            f32::INFINITY
+        },
+        if step[1] != 0 {
+            (1.0 / dir.y).abs()
+        } else {
+            f32::INFINITY
+        },
+        if step[2] != 0 {
+            (1.0 / dir.z).abs()
+        } else {
+            f32::INFINITY
+        },
+    ];
+
+    let mut last_axis: i32 = -1;
+    let mut last_step = 0;
+
+    // Cap iterations defensively in case of numerical edge cases.
+    for _ in 0..1024 {
+        if !world.get(voxel).is_air() {
+            let normal = if last_axis < 0 {
+                [0, 0, 0]
+            } else {
+                let mut n = [0, 0, 0];
+                n[last_axis as usize] = -last_step;
+                n
+            };
+            let mut place_at = voxel;
+            if last_axis >= 0 {
+                place_at[last_axis as usize] -= last_step;
+            }
+            return Some(RayHit {
+                voxel,
+                normal,
+                place_at,
+            });
+        }
+        // Step into the neighbour with the smallest t_max.
+        let axis = if t_max[0] < t_max[1] && t_max[0] <= t_max[2] {
+            0
+        } else if t_max[1] <= t_max[2] {
+            1
+        } else {
+            2
+        };
+        if t_max[axis] > max_dist {
+            return None;
+        }
+        voxel[axis] += step[axis];
+        t_max[axis] += t_delta[axis];
+        last_axis = axis as i32;
+        last_step = step[axis];
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +578,43 @@ mod tests {
         reg.insert(BlockId(1), BlockDef::solid("stone", [0.5, 0.5, 0.55]));
         assert_eq!(reg.get(BlockId(1)).unwrap().name, "stone");
         assert!(reg.get(BlockId(2)).is_none());
+    }
+
+    #[test]
+    fn world_chunk_split() {
+        let (cc, lc) = split_coord([17, 0, -1]);
+        assert_eq!(cc, [1, 0, -1]);
+        assert_eq!(lc, [1, 0, CHUNK_SIZE - 1]);
+    }
+
+    #[test]
+    fn world_get_set() {
+        let mut w = World::new();
+        w.insert_chunk([0, 0, 0], Chunk::empty());
+        assert!(w.get([5, 5, 5]).is_air());
+        let modified = w.set([5, 5, 5], BlockId(1));
+        assert_eq!(modified, Some([0, 0, 0]));
+        assert_eq!(w.get([5, 5, 5]), BlockId(1));
+    }
+
+    #[test]
+    fn raycast_hits_first_solid() {
+        let mut w = World::new();
+        w.insert_chunk([0, 0, 0], Chunk::empty());
+        w.set([5, 5, 5], BlockId(1));
+        // Cast from (5, 5, 0) toward +Z so the ray walks (5,5,1),
+        // (5,5,2)... until (5,5,5).
+        let hit = raycast(&w, Vec3::new(5.5, 5.5, 0.0), Vec3::Z, 20.0).expect("ray should hit");
+        assert_eq!(hit.voxel, [5, 5, 5]);
+        // Entered through the -Z face (block normal pointing -Z).
+        assert_eq!(hit.normal, [0, 0, -1]);
+        assert_eq!(hit.place_at, [5, 5, 4]);
+    }
+
+    #[test]
+    fn raycast_misses_into_air() {
+        let w = World::new();
+        let hit = raycast(&w, Vec3::ZERO, Vec3::X, 100.0);
+        assert!(hit.is_none());
     }
 }

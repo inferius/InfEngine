@@ -12,7 +12,10 @@ use std::process::ExitCode;
 use glam::{Mat4, Vec3};
 use infengine_editor::EditorUi;
 use infengine_render::{MeshHandle, Renderer};
-use infengine_voxel::{BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, chunk_mesh};
+use infengine_voxel::{
+    BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World, chunk_mesh,
+    raycast,
+};
 use infengine_window::raw_winit::event::WindowEvent;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -65,7 +68,15 @@ struct Voxel {
     renderer: Option<Renderer>,
     ui: Option<EditorUi>,
     registry: BlockRegistry,
-    submeshes: Vec<(BlockId, MeshHandle)>,
+    world: World,
+    /// Mesh handles grouped by the chunk that produced them. Lets the
+    /// editor rebuild only the affected chunk after a block edit
+    /// (registry leaks the old handles; a future change will add a
+    /// remove API on the renderer).
+    chunk_meshes: Vec<(ChunkCoord, BlockId, MeshHandle)>,
+    /// Most recent ray hit while looking around in Play. Drives the
+    /// crosshair / wireframe overlay and the click-to-edit step.
+    target: Option<RayHit>,
 
     player_pos: Vec3,
     player_vel: Vec3,
@@ -96,7 +107,9 @@ impl Voxel {
             renderer: None,
             ui: None,
             registry,
-            submeshes: Vec::new(),
+            world: World::new(),
+            chunk_meshes: Vec::new(),
+            target: None,
             player_pos: Vec3::new(0.0, 32.0, 0.0),
             player_vel: Vec3::ZERO,
             player_yaw: 0.0,
@@ -119,16 +132,11 @@ impl Voxel {
             h.round() as i32
         };
 
-        let renderer = self.renderer.as_mut().expect("renderer initialised");
         let mut produced_voxels = 0usize;
-
         for cz in 0..CHUNKS {
             for cx in 0..CHUNKS {
-                let origin = Vec3::new(
-                    (cx as f32 - CHUNKS as f32 * 0.5) * CHUNK_SIZE as f32,
-                    0.0,
-                    (cz as f32 - CHUNKS as f32 * 0.5) * CHUNK_SIZE as f32,
-                );
+                let cc: ChunkCoord = [cx - CHUNKS / 2, 0, cz - CHUNKS / 2];
+                let origin = World::chunk_world_origin(cc);
                 let mut chunk = Chunk::empty();
                 chunk.fill_with(|x, y, z| {
                     let wx = origin.x + x as f32;
@@ -150,24 +158,41 @@ impl Voxel {
                     }
                 });
                 produced_voxels += chunk.raw().iter().filter(|b| !b.is_air()).count();
-
-                let submeshes = chunk_mesh(&chunk, origin);
-                for sub in submeshes {
-                    let handle = renderer.create_mesh(
-                        &format!("voxel_chunk_{cx}_{cz}_b{}", sub.block.0),
-                        &sub.vertices,
-                        &sub.indices,
-                    );
-                    self.submeshes.push((sub.block, handle));
-                }
+                self.world.insert_chunk(cc, chunk);
             }
         }
+        self.rebuild_all_meshes();
         info!(
             chunks = CHUNKS * CHUNKS,
             voxels = produced_voxels,
-            submeshes = self.submeshes.len(),
+            submeshes = self.chunk_meshes.len(),
             "world built"
         );
+    }
+
+    /// Walk every chunk in the world and register its mesh handles.
+    /// Used at startup. Edits use `rebuild_chunk` for the affected
+    /// chunk + its solid neighbours so the cost stays local.
+    fn rebuild_all_meshes(&mut self) {
+        self.chunk_meshes.clear();
+        let renderer = self.renderer.as_mut().expect("renderer ready");
+        let coords: Vec<ChunkCoord> = self.world.iter_chunks().map(|(c, _)| *c).collect();
+        for coord in coords {
+            let chunk = self.world.chunk(coord).expect("chunk present");
+            let origin = World::chunk_world_origin(coord);
+            let subs = chunk_mesh(chunk, origin);
+            for sub in subs {
+                let handle = renderer.create_mesh(
+                    &format!(
+                        "voxel_chunk_{}_{}_{}_b{}",
+                        coord[0], coord[1], coord[2], sub.block.0
+                    ),
+                    &sub.vertices,
+                    &sub.indices,
+                );
+                self.chunk_meshes.push((coord, sub.block, handle));
+            }
+        }
     }
 
     fn apply_cursor_settings(&self, window: &EngineWindow) {
@@ -451,8 +476,18 @@ impl AppHandler for Voxel {
             self.player_pitch.sin(),
             -self.player_yaw.sin() * self.player_pitch.cos(),
         );
+
+        // Cast a ray from the eye along the look direction so the
+        // crosshair / wireframe / edit code in later steps can target
+        // the voxel the player is currently aiming at.
+        self.target = if matches!(self.state, AppState::Playing) {
+            raycast(&self.world, self.player_pos, forward, 6.0)
+        } else {
+            None
+        };
+
         let player_pos = self.player_pos;
-        let submeshes = self.submeshes.clone();
+        let chunk_meshes = self.chunk_meshes.clone();
         let registry = &self.registry;
         let ui = self.ui.as_mut();
         let Some(renderer) = self.renderer.as_mut() else {
@@ -465,7 +500,7 @@ impl AppHandler for Voxel {
         }
         renderer.set_clear_color(0.50, 0.70, 0.92, 1.0);
         let model = Mat4::IDENTITY.to_cols_array();
-        for (block, handle) in &submeshes {
+        for (_coord, block, handle) in &chunk_meshes {
             if let Some(def) = registry.get(*block) {
                 renderer.draw_mesh_pbr(
                     *handle,
