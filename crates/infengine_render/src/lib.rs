@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+mod sprite;
+
 use std::sync::Arc;
 
 use infengine_window::EngineWindow;
@@ -16,6 +18,8 @@ use wgpu::{
     RenderPassColorAttachment, RenderPassDescriptor, RequestAdapterOptions, StoreOp, Surface,
     SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, Trace,
 };
+
+use sprite::SpritePass;
 
 /// Errors that can occur while creating or running the renderer.
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +45,7 @@ pub struct Renderer {
     queue: Queue,
     config: SurfaceConfiguration,
     clear_color: Color,
+    sprite: SpritePass,
 }
 
 impl Renderer {
@@ -119,13 +124,24 @@ impl Renderer {
             a: 1.0,
         };
 
+        let sprite = SpritePass::new(&device, &queue, config.format);
+
         Ok(Self {
             surface,
             device,
             queue,
             config,
             clear_color,
+            sprite,
         })
+    }
+
+    /// Update the sprite's transform (offset and scale in NDC).
+    ///
+    /// In NDC the visible region spans `[-1, 1]` on both axes; `scale` of
+    /// `[1, 1]` covers the whole window.
+    pub fn set_sprite_transform(&self, offset: [f32; 2], scale: [f32; 2]) {
+        self.sprite.set_transform(&self.queue, offset, scale);
     }
 
     /// Resize the swapchain to match a new window size in physical pixels.
@@ -168,8 +184,8 @@ impl Renderer {
             });
 
         {
-            let _rpass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("infengine_render::clear_pass"),
+            let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("infengine_render::main_pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -183,6 +199,8 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            self.sprite.draw(&mut rpass);
         }
 
         self.queue.submit(Some(encoder.finish()));

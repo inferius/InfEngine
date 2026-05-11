@@ -65,7 +65,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 1.2)".into(),
+        title: "InfEngine - sprite_demo (Phase 1.3)".into(),
         width: 1280,
         height: 720,
         resizable: true,
