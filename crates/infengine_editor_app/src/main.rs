@@ -669,6 +669,90 @@ fn pick_gizmo(scene: &Scene, selected: Option<EntityId>, world: [f32; 2]) -> Opt
     None
 }
 
+/// Slab-method ray vs. axis-aligned box. Returns the entry distance
+/// (clamped at 0 so rays starting inside the box still pick it).
+fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
+    let inv = Vec3::new(
+        if dir.x != 0.0 {
+            1.0 / dir.x
+        } else {
+            f32::INFINITY
+        },
+        if dir.y != 0.0 {
+            1.0 / dir.y
+        } else {
+            f32::INFINITY
+        },
+        if dir.z != 0.0 {
+            1.0 / dir.z
+        } else {
+            f32::INFINITY
+        },
+    );
+    let t1 = (min - origin) * inv;
+    let t2 = (max - origin) * inv;
+    let tmin = t1.min(t2);
+    let tmax = t1.max(t2);
+    let t_near = tmin.x.max(tmin.y).max(tmin.z);
+    let t_far = tmax.x.min(tmax.y).min(tmax.z);
+    if t_near <= t_far && t_far >= 0.0 {
+        Some(t_near.max(0.0))
+    } else {
+        None
+    }
+}
+
+/// Cast a ray from the camera through the cursor and pick the nearest
+/// 3D entity whose AABB the ray intersects. The AABB is built from
+/// the entity's `transform_3d` (scale + position); rotation is
+/// ignored, so heavily rotated meshes pick imprecisely - acceptable
+/// for the current cube-only mesh catalogue.
+fn pick_3d_entity(
+    scene: &Scene,
+    camera: &Camera3D,
+    viewport: (u32, u32),
+    cursor: [f32; 2],
+) -> Option<EntityId> {
+    let w = viewport.0.max(1) as f32;
+    let h = viewport.1.max(1) as f32;
+    let ndc_x = (cursor[0] / w) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (cursor[1] / h) * 2.0;
+    let inv = camera.view_projection().inverse();
+    let near = inv * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+    let far = inv * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+    if near.w.abs() < 1e-6 || far.w.abs() < 1e-6 {
+        return None;
+    }
+    let near = near.truncate() / near.w;
+    let far = far.truncate() / far.w;
+    let dir = (far - near).normalize_or_zero();
+    if dir == Vec3::ZERO {
+        return None;
+    }
+    let origin = camera.position;
+
+    let mut best: Option<(f32, EntityId)> = None;
+    for entity in &scene.entities {
+        let Some(t) = entity.transform_3d.as_ref() else {
+            continue;
+        };
+        let half = Vec3::new(
+            t.scale[0].abs() * 0.5,
+            t.scale[1].abs() * 0.5,
+            t.scale[2].abs() * 0.5,
+        );
+        let center = Vec3::from_array(t.position);
+        let min = center - half;
+        let max = center + half;
+        if let Some(t_hit) = ray_aabb(origin, dir, min, max)
+            && best.is_none_or(|(b, _)| t_hit < b)
+        {
+            best = Some((t_hit, entity.id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 fn pick_entity(scene: &Scene, world_point: [f32; 2]) -> Option<(EntityId, [f32; 2])> {
     let mut hit = None;
     for entity in &scene.entities {
@@ -871,6 +955,16 @@ impl AppHandler for Editor {
                     self.dragging = Some(id);
                     self.drag_axis = DragAxis::Free;
                     self.drag_offset = ofs;
+                } else if let Some(cam) = camera_3d_snapshot.as_ref()
+                    && let Some(id) =
+                        pick_3d_entity(&self.scene, cam, self.viewport, self.cursor_pos)
+                {
+                    // 3D viewport pick: aim a ray from the camera
+                    // through the cursor and select the nearest 3D
+                    // entity its AABB hits. Doesn't start a drag -
+                    // the 3D translate gizmo is responsible for that
+                    // on the next click.
+                    self.selected = Some(id);
                 }
             }
         }
