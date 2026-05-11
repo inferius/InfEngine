@@ -270,6 +270,20 @@ impl AssetServer {
         })
     }
 
+    /// List every file under the asset root recursively. Returned paths
+    /// are relative to the root, sorted lexicographically. Directories
+    /// are not included. Missing root returns an empty `Vec` rather than
+    /// an error.
+    pub fn list_files(&self) -> std::io::Result<Vec<PathBuf>> {
+        let mut out = Vec::new();
+        if !self.root.exists() {
+            return Ok(out);
+        }
+        walk_dir(&self.root, &self.root, &mut out)?;
+        out.sort();
+        Ok(out)
+    }
+
     /// Look up the relative path that owns `handle`, if any.
     pub fn handle_path(&self, handle: AssetHandle<ImageAsset>) -> Option<PathBuf> {
         let inner = self.inner.read();
@@ -315,6 +329,20 @@ impl AssetServer {
         warn!(id = handle.id.0, width, height, "image asset reloaded");
         Ok(asset)
     }
+}
+
+fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            walk_dir(root, &path, out)?;
+        } else {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            out.push(rel);
+        }
+    }
+    Ok(())
 }
 
 /// Strip leading `./` and `/` so the path joins cleanly with `root`.

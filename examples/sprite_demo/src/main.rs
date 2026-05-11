@@ -32,6 +32,8 @@ struct Demo {
     assets: AssetServer,
     asset_watcher: Option<AssetWatcher>,
     sample_image: Option<AssetHandle<ImageAsset>>,
+    asset_listing: Vec<PathBuf>,
+    selected_asset: Option<PathBuf>,
     audio: Option<AudioSystem>,
     reload_count: u32,
     beep_count: u32,
@@ -55,6 +57,8 @@ impl Default for Demo {
             assets: AssetServer::new(PathBuf::from("assets")),
             asset_watcher: None,
             sample_image: None,
+            asset_listing: Vec::new(),
+            selected_asset: None,
             audio: None,
             reload_count: 0,
             beep_count: 0,
@@ -147,6 +151,15 @@ fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+impl Demo {
+    fn refresh_asset_listing(&mut self) {
+        match self.assets.list_files() {
+            Ok(list) => self.asset_listing = list,
+            Err(err) => warn!(error = %err, "failed to list assets"),
+        }
+    }
+}
+
 fn first_sprite_entity(scene: &Scene) -> Option<EntityId> {
     scene
         .entities
@@ -216,6 +229,7 @@ impl AppHandler for Demo {
             }
         };
         self.selected = first_sprite_entity(&self.scene);
+        self.refresh_asset_listing();
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
@@ -241,8 +255,10 @@ impl AppHandler for Demo {
         let instant_fps = 1.0 / dt;
         self.fps_ema = self.fps_ema * 0.9 + instant_fps * 0.1;
 
+        let mut any_event = false;
         if let Some(w) = self.asset_watcher.as_ref() {
             while let Ok(event) = w.receiver.try_recv() {
+                any_event = true;
                 match event {
                     AssetEvent::Modified(path) => {
                         info!(path = %path.display(), "asset modified");
@@ -261,6 +277,9 @@ impl AppHandler for Demo {
                     }
                 }
             }
+        }
+        if any_event {
+            self.refresh_asset_listing();
         }
 
         // Movement input drives the selected entity.
@@ -395,6 +414,8 @@ impl AppHandler for Demo {
         let scene_ref = &mut self.scene;
         let selected_ref = &mut self.selected;
         let save_status_ref = &mut self.save_status;
+        let asset_listing_ref = &self.asset_listing;
+        let selected_asset_ref = &mut self.selected_asset;
 
         if let Some(editor) = self.editor.as_mut() {
             editor.run(window.raw(), |ctx| {
@@ -402,7 +423,7 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.3");
+                        ui.heading("InfEngine - Phase 5.4");
                         ui.label(format!("FPS: {fps:.0}   Sprites: {queued}"));
                         ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
@@ -460,6 +481,10 @@ impl AppHandler for Demo {
                             hierarchy_panel(ui, scene_ref, selected_ref);
                         });
 
+                        ui.collapsing("Assets", |ui| {
+                            asset_browser(ui, asset_listing_ref, selected_asset_ref);
+                        });
+
                         ui.collapsing("Selection", |ui| {
                             entity_inspector(ui, scene_ref, selected_ref, map_half_w, map_half_h);
                         });
@@ -504,6 +529,28 @@ impl AppHandler for Demo {
 
     fn on_exit(&mut self) {
         info!("sprite_demo exiting");
+    }
+}
+
+fn asset_browser(ui: &mut egui::Ui, entries: &[PathBuf], selected: &mut Option<PathBuf>) {
+    if entries.is_empty() {
+        ui.label("(no files under assets/)");
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(200.0)
+        .show(ui, |ui| {
+            for entry in entries {
+                let label = entry.display().to_string();
+                let is_selected = selected.as_ref() == Some(entry);
+                if ui.selectable_label(is_selected, label).clicked() {
+                    *selected = Some(entry.clone());
+                }
+            }
+        });
+    if let Some(path) = selected {
+        ui.separator();
+        ui.label(format!("Selected: {}", path.display()));
     }
 }
 
@@ -628,7 +675,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.3)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.4)".into(),
         width: 1280,
         height: 720,
         resizable: true,
