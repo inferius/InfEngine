@@ -7,6 +7,8 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use crate::font;
+
 /// Vertex format used by the unit-quad mesh: position in `[-0.5, 0.5]`
 /// and UV in `[0, 1]`.
 #[repr(C)]
@@ -84,22 +86,29 @@ impl SpriteInstance {
     }
 }
 
-/// Side length, in pixels, of the procedurally generated sprite atlas.
-/// The atlas is laid out as a 2x2 grid of 128x128 quadrants.
-const ATLAS_SIZE: u32 = 256;
-const QUADRANT_SIZE: u32 = ATLAS_SIZE / 2;
+/// Width of the procedurally generated sprite atlas, in pixels.
+const ATLAS_W: u32 = 256;
+/// Height of the atlas. The top `SPRITE_REGION_H` rows hold the 2x2
+/// sprite quadrants; the remaining rows are reserved for the bitmap
+/// font region used by text rendering.
+const ATLAS_H: u32 = 304;
+const SPRITE_REGION_H: u32 = 256;
+const QUADRANT_SIZE: u32 = SPRITE_REGION_H / 2;
+const FONT_BASE_Y: u32 = SPRITE_REGION_H;
 
-/// Generate the four-quadrant demo atlas:
+/// Generate the demo atlas:
 /// - top-left:     checkerboard
 /// - top-right:    dot grid
 /// - bottom-left:  horizontal stripes
 /// - bottom-right: diagonal cross
+/// - bottom strip: bitmap font glyphs (16 cols x 6 rows, 8x8 each).
 fn generate_atlas_rgba() -> Vec<u8> {
-    let size = ATLAS_SIZE as usize;
-    let mut bytes = vec![0u8; size * size * 4];
+    let w = ATLAS_W as usize;
+    let h = ATLAS_H as usize;
+    let mut bytes = vec![0u8; w * h * 4];
 
     let put = |bytes: &mut [u8], x: u32, y: u32, rgba: [u8; 4]| {
-        let i = ((y as usize) * size + x as usize) * 4;
+        let i = ((y as usize) * w + x as usize) * 4;
         bytes[i..i + 4].copy_from_slice(&rgba);
     };
 
@@ -107,20 +116,19 @@ fn generate_atlas_rgba() -> Vec<u8> {
     let dark = [40, 50, 70, 255];
     let mid = [120, 130, 150, 255];
 
-    for y in 0..ATLAS_SIZE {
-        for x in 0..ATLAS_SIZE {
+    // Sprite region: 2x2 quadrants in the top SPRITE_REGION_H rows.
+    for y in 0..SPRITE_REGION_H {
+        for x in 0..ATLAS_W {
             let qx = x % QUADRANT_SIZE;
             let qy = y % QUADRANT_SIZE;
             let quadrant_x = x / QUADRANT_SIZE;
             let quadrant_y = y / QUADRANT_SIZE;
 
             let rgba = match (quadrant_x, quadrant_y) {
-                // top-left: checker (note: top-left in UV space is y == 0)
                 (0, 0) => {
                     let on = ((qx / 16) + (qy / 16)).is_multiple_of(2);
                     if on { warm } else { dark }
                 }
-                // top-right: dot grid (16-pixel cells, dot of radius 5)
                 (1, 0) => {
                     let cx = (qx % 16) as i32 - 8;
                     let cy = (qy % 16) as i32 - 8;
@@ -130,7 +138,6 @@ fn generate_atlas_rgba() -> Vec<u8> {
                         dark
                     }
                 }
-                // bottom-left: horizontal stripes (every 8 pixels)
                 (0, 1) => {
                     if (qy / 8).is_multiple_of(2) {
                         warm
@@ -138,7 +145,6 @@ fn generate_atlas_rgba() -> Vec<u8> {
                         dark
                     }
                 }
-                // bottom-right: diagonal cross (X) on a mid background
                 (1, 1) => {
                     let d1 = (qx as i32 - qy as i32).abs();
                     let d2 = (qx as i32 + qy as i32 - QUADRANT_SIZE as i32 + 1).abs();
@@ -149,7 +155,39 @@ fn generate_atlas_rgba() -> Vec<u8> {
             put(&mut bytes, x, y, rgba);
         }
     }
+
+    // Font region: glyphs are white on transparent so the tint color
+    // controls the final ink color.
+    let white = [255, 255, 255, 255];
+    let transparent = [0, 0, 0, 0];
+    for ascii in 32u8..128 {
+        let bm = font::glyph_bitmap(ascii);
+        let (gx, gy) = font::glyph_cell(ascii);
+        let atlas_x = gx;
+        let atlas_y = FONT_BASE_Y + gy;
+        for py in 0..font::GLYPH_PIXELS {
+            let row = bm[py as usize];
+            for px in 0..font::GLYPH_PIXELS {
+                let on = (row >> (7 - px)) & 1 != 0;
+                let color = if on { white } else { transparent };
+                if atlas_x + px < ATLAS_W && atlas_y + py < ATLAS_H {
+                    put(&mut bytes, atlas_x + px, atlas_y + py, color);
+                }
+            }
+        }
+    }
+
     bytes
+}
+
+/// Atlas-space UV rectangle for the bitmap-font glyph at `ascii`.
+pub fn glyph_uv(ascii: u8) -> ([f32; 2], [f32; 2]) {
+    let (cx, cy) = font::glyph_cell(ascii);
+    let x0 = cx as f32 / ATLAS_W as f32;
+    let y0 = (FONT_BASE_Y + cy) as f32 / ATLAS_H as f32;
+    let x1 = (cx + font::GLYPH_PIXELS) as f32 / ATLAS_W as f32;
+    let y1 = (FONT_BASE_Y + cy + font::GLYPH_PIXELS) as f32 / ATLAS_H as f32;
+    ([x0, y0], [x1, y1])
 }
 
 /// Pre-defined UV sub-rectangles for the four quadrants of the demo
@@ -157,14 +195,18 @@ fn generate_atlas_rgba() -> Vec<u8> {
 /// region without hard-coding magic numbers. These are temporary - they
 /// disappear once the real asset pipeline arrives in Phase 3.
 pub mod demo_atlas {
+    use super::{ATLAS_H, SPRITE_REGION_H};
+    const HALF_V: f32 = (SPRITE_REGION_H as f32) * 0.5 / (ATLAS_H as f32);
+    const FULL_V: f32 = (SPRITE_REGION_H as f32) / (ATLAS_H as f32);
+
     /// Checkerboard quadrant.
-    pub const CHECKER: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [0.5, 0.5]);
+    pub const CHECKER: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [0.5, HALF_V]);
     /// Dot-grid quadrant.
-    pub const DOTS: ([f32; 2], [f32; 2]) = ([0.5, 0.0], [1.0, 0.5]);
+    pub const DOTS: ([f32; 2], [f32; 2]) = ([0.5, 0.0], [1.0, HALF_V]);
     /// Horizontal-stripes quadrant.
-    pub const STRIPES: ([f32; 2], [f32; 2]) = ([0.0, 0.5], [0.5, 1.0]);
+    pub const STRIPES: ([f32; 2], [f32; 2]) = ([0.0, HALF_V], [0.5, FULL_V]);
     /// Diagonal cross quadrant.
-    pub const CROSS: ([f32; 2], [f32; 2]) = ([0.5, 0.5], [1.0, 1.0]);
+    pub const CROSS: ([f32; 2], [f32; 2]) = ([0.5, HALF_V], [1.0, FULL_V]);
 }
 
 /// Initial GPU instance buffer capacity (in sprite instances).
@@ -186,10 +228,10 @@ impl SpritePass {
         surface_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        // Procedural 256x256 demo atlas (Phase 2 still has no asset loader).
+        // Procedural demo atlas with a font region in the bottom strip.
         let texture_size = wgpu::Extent3d {
-            width: ATLAS_SIZE,
-            height: ATLAS_SIZE,
+            width: ATLAS_W,
+            height: ATLAS_H,
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -214,8 +256,8 @@ impl SpritePass {
             &pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * ATLAS_SIZE),
-                rows_per_image: Some(ATLAS_SIZE),
+                bytes_per_row: Some(4 * ATLAS_W),
+                rows_per_image: Some(ATLAS_H),
             },
             texture_size,
         );

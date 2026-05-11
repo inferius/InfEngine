@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod camera;
+mod font;
 mod sprite;
 mod tilemap;
 
@@ -162,6 +163,33 @@ impl Renderer {
     /// wrapper around `Tilemap::build_instances`.
     pub fn draw_tilemap(&mut self, map: &Tilemap) {
         map.build_instances(&mut self.sprite_queue);
+    }
+
+    /// Queue ASCII text for rendering. `position` is the world-space
+    /// top-left of the first glyph; `pixel_size` is the world-unit
+    /// height of one glyph cell (8 pixels in the font); `color` tints
+    /// the glyphs. Characters outside ASCII 32..127 render as blanks.
+    pub fn draw_text(&mut self, text: &str, position: [f32; 2], pixel_size: f32, color: [f32; 4]) {
+        let glyph_w = pixel_size;
+        let glyph_h = pixel_size;
+        // Glyphs are 5px wide inside an 8px cell. Advance by 6px so
+        // letters do not crowd each other.
+        let advance = pixel_size * 6.0 / 8.0;
+        let mut cursor_x = position[0];
+        let cursor_y_center = position[1] - glyph_h * 0.5;
+        for ch in text.chars() {
+            let ascii = if ch.is_ascii() { ch as u8 } else { b' ' };
+            let region = sprite::glyph_uv(ascii);
+            let inst = SpriteInstance {
+                position: [cursor_x + glyph_w * 0.5, cursor_y_center],
+                size: [glyph_w, glyph_h],
+                color,
+                uv_min: region.0,
+                uv_max: region.1,
+            };
+            self.sprite_queue.push(inst);
+            cursor_x += advance;
+        }
     }
 
     /// Number of sprites currently queued for the next frame (including
