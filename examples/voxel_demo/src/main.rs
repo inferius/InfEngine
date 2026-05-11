@@ -1,44 +1,82 @@
 //! Phase 14 voxel showcase.
 //!
-//! Generates a 3x3 grid of 16^3 chunks with a simple hill-height
+//! Generates a grid of 16^3 chunks with a simple hill-height
 //! function, builds per-block submeshes with `infengine_voxel`, and
-//! lets the player walk around the world with WASD + mouse-look.
-//! Demonstrates the full path: voxel data -> mesh builder -> engine
-//! renderer -> PBR + shadow + grid.
+//! lets the player walk around the world with WASD + mouse-look. A
+//! main menu / settings / pause flow built on egui sits on top so the
+//! player can toggle cursor lock, hide, and mouse sensitivity at
+//! runtime - matching the polish level of `demo_game`.
 
 use std::process::ExitCode;
 
 use glam::{Mat4, Vec3};
+use infengine_editor::EditorUi;
 use infengine_render::{MeshHandle, Renderer};
-use infengine_voxel::{
-    BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, chunk_mesh, submesh_instance,
-};
-use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
+use infengine_voxel::{BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, chunk_mesh};
+use infengine_window::raw_winit::event::WindowEvent;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const CHUNKS: i32 = 3;
+const CHUNKS: i32 = 5;
 const WORLD_HALF: f32 = (CHUNKS as f32 * CHUNK_SIZE as f32) * 0.5;
 const PLAYER_SPEED: f32 = 6.0;
 const JUMP_VELOCITY: f32 = 6.0;
 const GRAVITY: f32 = -18.0;
 const PLAYER_HEIGHT: f32 = 1.7;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum AppState {
+    MainMenu,
+    Playing,
+    Paused,
+    Settings { back_to: BackTo },
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum BackTo {
+    MainMenu,
+    Pause,
+}
+
+#[derive(Debug, Clone)]
+struct Settings {
+    mouse_sensitivity: f32,
+    lock_cursor: bool,
+    hide_cursor: bool,
+    show_fps: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            mouse_sensitivity: 0.6,
+            lock_cursor: true,
+            hide_cursor: true,
+            show_fps: true,
+        }
+    }
+}
+
 struct Voxel {
+    state: AppState,
+    settings: Settings,
+    requested_quit: bool,
+
     renderer: Option<Renderer>,
+    ui: Option<EditorUi>,
     registry: BlockRegistry,
-    /// Per-chunk: list of (block id, mesh handle) - one entry per
-    /// unique block kind present in the chunk.
     submeshes: Vec<(BlockId, MeshHandle)>,
+
     player_pos: Vec3,
     player_vel: Vec3,
     player_yaw: f32,
     player_pitch: f32,
+
     last_mouse: Option<[f32; 2]>,
     mouse_dx: f32,
     mouse_dy: f32,
-    middle_button: bool,
-    requested_quit: bool,
+    esc_prev: bool,
+
     viewport: (u32, u32),
     fps_ema: f32,
 }
@@ -52,7 +90,11 @@ impl Voxel {
         registry.insert(BlockId(4), BlockDef::solid("sand", [0.92, 0.86, 0.62]));
         registry.insert(BlockId(5), BlockDef::solid("wood", [0.55, 0.38, 0.22]));
         Self {
+            state: AppState::MainMenu,
+            settings: Settings::default(),
+            requested_quit: false,
             renderer: None,
+            ui: None,
             registry,
             submeshes: Vec::new(),
             player_pos: Vec3::new(0.0, 32.0, 0.0),
@@ -62,18 +104,13 @@ impl Voxel {
             last_mouse: None,
             mouse_dx: 0.0,
             mouse_dy: 0.0,
-            middle_button: false,
-            requested_quit: false,
+            esc_prev: false,
             viewport: (1, 1),
             fps_ema: 60.0,
         }
     }
 
     fn build_world(&mut self) {
-        // Procedural terrain: low-frequency hills via two sine waves.
-        // Surface gets grass, three layers below dirt, the rest stone.
-        // Sand patches at the world boundary so the demo shows multiple
-        // materials without needing a noise generator.
         let height_at = |wx: f32, wz: f32| -> i32 {
             let h = 8.0
                 + (wx * 0.13).sin() * 2.5
@@ -83,7 +120,6 @@ impl Voxel {
         };
 
         let renderer = self.renderer.as_mut().expect("renderer initialised");
-        let total_chunks = CHUNKS * CHUNKS;
         let mut produced_voxels = 0usize;
 
         for cz in 0..CHUNKS {
@@ -102,25 +138,23 @@ impl Voxel {
                     if wy > h {
                         return BlockId::AIR;
                     }
-                    // Boundary -> sand strip.
                     if wx.abs() > WORLD_HALF - 2.0 || wz.abs() > WORLD_HALF - 2.0 {
                         return BlockId(4);
                     }
                     if wy == h {
-                        BlockId(3) // grass
+                        BlockId(3)
                     } else if wy >= h - 3 {
-                        BlockId(2) // dirt
+                        BlockId(2)
                     } else {
-                        BlockId(1) // stone
+                        BlockId(1)
                     }
                 });
                 produced_voxels += chunk.raw().iter().filter(|b| !b.is_air()).count();
 
                 let submeshes = chunk_mesh(&chunk, origin);
-                let label_prefix = format!("voxel_chunk_{cx}_{cz}");
                 for sub in submeshes {
                     let handle = renderer.create_mesh(
-                        &format!("{}_b{}", label_prefix, sub.block.0),
+                        &format!("voxel_chunk_{cx}_{cz}_b{}", sub.block.0),
                         &sub.vertices,
                         &sub.indices,
                     );
@@ -129,77 +163,41 @@ impl Voxel {
             }
         }
         info!(
-            chunks = total_chunks,
+            chunks = CHUNKS * CHUNKS,
             voxels = produced_voxels,
             submeshes = self.submeshes.len(),
             "world built"
         );
     }
-}
 
-impl AppHandler for Voxel {
-    fn on_start(&mut self, window: &EngineWindow) {
-        let (w, h) = window.size();
-        self.viewport = (w, h);
-        info!(width = w, height = h, "voxel_demo started");
-        match Renderer::new(window) {
-            Ok(r) => self.renderer = Some(r),
-            Err(err) => {
-                error!(error = %err, "renderer init failed");
-                std::process::exit(2);
+    fn apply_cursor_settings(&self, window: &EngineWindow) {
+        use infengine_window::raw_winit::window::CursorGrabMode;
+        let playing = matches!(self.state, AppState::Playing);
+        let raw = window.raw();
+        let grab = if playing && self.settings.lock_cursor {
+            if self.settings.hide_cursor {
+                CursorGrabMode::Locked
+            } else {
+                CursorGrabMode::Confined
             }
+        } else {
+            CursorGrabMode::None
+        };
+        if raw.set_cursor_grab(grab).is_err() && grab == CursorGrabMode::Locked {
+            let _ = raw.set_cursor_grab(CursorGrabMode::Confined);
         }
-        self.build_world();
+        raw.set_cursor_visible(!(playing && self.settings.hide_cursor));
     }
 
-    fn on_window_event(&mut self, _window: &EngineWindow, event: &WindowEvent) {
-        match event {
-            WindowEvent::MouseInput { state, button, .. } if *button == MouseButton::Middle => {
-                self.middle_button = matches!(state, ElementState::Pressed);
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let now = [position.x as f32, position.y as f32];
-                if let Some(prev) = self.last_mouse {
-                    self.mouse_dx += now[0] - prev[0];
-                    self.mouse_dy += now[1] - prev[1];
-                }
-                self.last_mouse = Some(now);
-            }
-            _ => {}
-        }
-    }
-
-    fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
-        use infengine_window::raw_winit::event::DeviceEvent;
-        if let DeviceEvent::MouseMotion { delta } = event {
-            // Prefer raw device delta when the OS grabs the cursor.
-            self.mouse_dx += delta.0 as f32;
-            self.mouse_dy += delta.1 as f32;
-        }
-    }
-
-    fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
-        let dt = ctx.delta_time.clamp(1e-4, 0.1);
-        self.fps_ema = self.fps_ema * 0.9 + (1.0 / dt) * 0.1;
-
-        if ctx.input.is_pressed(Key::Escape) {
-            self.requested_quit = true;
-        }
-
-        // Mouse look.
+    fn update_play(&mut self, ctx: &FrameContext<'_>, dt: f32) {
         let dx = std::mem::take(&mut self.mouse_dx);
         let dy = std::mem::take(&mut self.mouse_dy);
-        self.player_yaw -= dx * 0.0025;
-        self.player_pitch -= dy * 0.0025;
-        // Clamp pitch so the camera doesn't somersault.
+        let sens = self.settings.mouse_sensitivity * 0.0035;
+        self.player_yaw -= dx * sens;
+        self.player_pitch -= dy * sens;
         let limit = std::f32::consts::FRAC_PI_2 - 0.05;
         self.player_pitch = self.player_pitch.clamp(-limit, limit);
 
-        let forward = Vec3::new(
-            self.player_yaw.cos() * self.player_pitch.cos(),
-            self.player_pitch.sin(),
-            -self.player_yaw.sin() * self.player_pitch.cos(),
-        );
         let forward_horizontal =
             Vec3::new(self.player_yaw.cos(), 0.0, -self.player_yaw.sin()).normalize();
         let right = Vec3::new(forward_horizontal.z, 0.0, -forward_horizontal.x);
@@ -229,34 +227,246 @@ impl AppHandler for Voxel {
         self.player_vel.y += GRAVITY * dt;
         self.player_pos += self.player_vel * dt;
 
-        // Crude ground clamp: the world hill height varies, so just
-        // stop the player from falling forever and let them walk on a
-        // virtual floor at y = 12 (above the tallest hill). Proper
-        // voxel collision is future work.
         let floor = 12.0 + PLAYER_HEIGHT;
         if self.player_pos.y < floor {
             self.player_pos.y = floor;
             self.player_vel.y = 0.0;
         }
-
-        // Clamp inside the world bounds.
         self.player_pos.x = self.player_pos.x.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
         self.player_pos.z = self.player_pos.z.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
+    }
 
+    fn render_ui(&mut self, window: &EngineWindow) {
+        let state = self.state;
+        let fps = self.fps_ema;
+        let show_fps = self.settings.show_fps;
+        let settings_edit = &mut self.settings;
+        let mut action_start = false;
+        let mut action_resume = false;
+        let mut action_quit = false;
+        let mut action_menu_to_settings = false;
+        let mut action_pause_to_settings = false;
+        let mut action_back_settings = false;
+        let mut action_main_menu = false;
+
+        let Some(ui) = self.ui.as_mut() else {
+            return;
+        };
+        ui.run(window.raw(), |ctx| match state {
+            AppState::MainMenu => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(80.0);
+                        ui.heading("InfEngine - Voxel Demo");
+                        ui.add_space(20.0);
+                        if ui.button("Play").clicked() {
+                            action_start = true;
+                        }
+                        if ui.button("Settings").clicked() {
+                            action_menu_to_settings = true;
+                        }
+                        if ui.button("Quit").clicked() {
+                            action_quit = true;
+                        }
+                    });
+                });
+            }
+            AppState::Paused => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(80.0);
+                        ui.heading("Paused");
+                        ui.add_space(20.0);
+                        if ui.button("Resume").clicked() {
+                            action_resume = true;
+                        }
+                        if ui.button("Settings").clicked() {
+                            action_pause_to_settings = true;
+                        }
+                        if ui.button("Main Menu").clicked() {
+                            action_main_menu = true;
+                        }
+                    });
+                });
+            }
+            AppState::Settings { .. } => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading("Settings");
+                    ui.add(
+                        egui::Slider::new(&mut settings_edit.mouse_sensitivity, 0.1..=2.0)
+                            .text("Mouse sensitivity"),
+                    );
+                    ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
+                    ui.checkbox(
+                        &mut settings_edit.lock_cursor,
+                        "Lock cursor in window (Play)",
+                    );
+                    ui.checkbox(&mut settings_edit.hide_cursor, "Hide cursor (Play)");
+                    ui.separator();
+                    if ui.button("Back").clicked() {
+                        action_back_settings = true;
+                    }
+                });
+            }
+            AppState::Playing => {
+                egui::Area::new(egui::Id::new("voxel_hud"))
+                    .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label("Mouse aim, WASD, Space jump, Esc menu");
+                            if show_fps {
+                                ui.separator();
+                                ui.label(format!("FPS: {fps:.0}"));
+                            }
+                        });
+                    });
+            }
+        });
+
+        if action_start {
+            self.state = AppState::Playing;
+            self.mouse_dx = 0.0;
+            self.mouse_dy = 0.0;
+        }
+        if action_resume {
+            self.state = AppState::Playing;
+            self.mouse_dx = 0.0;
+            self.mouse_dy = 0.0;
+        }
+        if action_quit {
+            self.requested_quit = true;
+        }
+        if action_menu_to_settings {
+            self.state = AppState::Settings {
+                back_to: BackTo::MainMenu,
+            };
+        }
+        if action_pause_to_settings {
+            self.state = AppState::Settings {
+                back_to: BackTo::Pause,
+            };
+        }
+        if action_back_settings && let AppState::Settings { back_to } = self.state {
+            self.state = match back_to {
+                BackTo::MainMenu => AppState::MainMenu,
+                BackTo::Pause => AppState::Paused,
+            };
+        }
+        if action_main_menu {
+            self.state = AppState::MainMenu;
+        }
+    }
+}
+
+impl AppHandler for Voxel {
+    fn on_start(&mut self, window: &EngineWindow) {
+        let (w, h) = window.size();
+        self.viewport = (w, h);
+        info!(width = w, height = h, "voxel_demo started");
+        match Renderer::new(window) {
+            Ok(r) => {
+                let ui = EditorUi::new(r.wgpu_device(), r.surface_format(), window.raw(), 1);
+                self.ui = Some(ui);
+                self.renderer = Some(r);
+            }
+            Err(err) => {
+                error!(error = %err, "renderer init failed");
+                std::process::exit(2);
+            }
+        }
+        self.build_world();
+    }
+
+    fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
+        if let Some(ui) = self.ui.as_mut() {
+            ui.handle_engine_event(window, event);
+        }
+        // Track cursor moved deltas only when no grab is active (i.e. in
+        // menus this is the only source; in Play raw DeviceEvent
+        // supplies the deltas).
+        if let WindowEvent::CursorMoved { position, .. } = event
+            && matches!(self.state, AppState::Playing)
+            && !(self.settings.lock_cursor || self.settings.hide_cursor)
+        {
+            let now = [position.x as f32, position.y as f32];
+            if let Some(prev) = self.last_mouse {
+                self.mouse_dx += now[0] - prev[0];
+                self.mouse_dy += now[1] - prev[1];
+            }
+            self.last_mouse = Some(now);
+        }
+    }
+
+    fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
+        use infengine_window::raw_winit::event::DeviceEvent;
+        if !matches!(self.state, AppState::Playing) {
+            return;
+        }
+        if !(self.settings.lock_cursor || self.settings.hide_cursor) {
+            return;
+        }
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.mouse_dx += delta.0 as f32;
+            self.mouse_dy += delta.1 as f32;
+        }
+    }
+
+    fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
+        let dt = ctx.delta_time.clamp(1e-4, 0.1);
+        self.fps_ema = self.fps_ema * 0.9 + (1.0 / dt) * 0.1;
+
+        // Esc cycles Play <-> Paused and Settings -> back. Never quits.
+        let esc_now = ctx.input.is_pressed(Key::Escape);
+        let esc_just = esc_now && !self.esc_prev;
+        self.esc_prev = esc_now;
+        if esc_just {
+            match self.state {
+                AppState::Playing => self.state = AppState::Paused,
+                AppState::Paused => self.state = AppState::Playing,
+                AppState::Settings { back_to } => {
+                    self.state = match back_to {
+                        BackTo::MainMenu => AppState::MainMenu,
+                        BackTo::Pause => AppState::Paused,
+                    };
+                }
+                AppState::MainMenu => {}
+            }
+        }
+
+        if matches!(self.state, AppState::Playing) {
+            self.update_play(ctx, dt);
+        } else {
+            self.mouse_dx = 0.0;
+            self.mouse_dy = 0.0;
+        }
+        self.apply_cursor_settings(window);
+
+        // Build UI state first so the immediate-mode pass mutates self
+        // freely. The renderer is borrowed afterwards once UI state has
+        // settled.
+        self.render_ui(window);
+
+        let forward = Vec3::new(
+            self.player_yaw.cos() * self.player_pitch.cos(),
+            self.player_pitch.sin(),
+            -self.player_yaw.sin() * self.player_pitch.cos(),
+        );
+        let player_pos = self.player_pos;
+        let submeshes = self.submeshes.clone();
+        let registry = &self.registry;
+        let ui = self.ui.as_mut();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
         {
             let cam = renderer.camera_3d_mut();
-            cam.position = self.player_pos;
-            cam.target = self.player_pos + forward;
+            cam.position = player_pos;
+            cam.target = player_pos + forward;
         }
         renderer.set_clear_color(0.50, 0.70, 0.92, 1.0);
-
-        // Submit every chunk submesh with its block's PBR material.
         let model = Mat4::IDENTITY.to_cols_array();
-        for (block, handle) in &self.submeshes {
-            if let Some(def) = self.registry.get(*block) {
+        for (block, handle) in &submeshes {
+            if let Some(def) = registry.get(*block) {
                 renderer.draw_mesh_pbr(
                     *handle,
                     model,
@@ -266,17 +476,18 @@ impl AppHandler for Voxel {
                 );
             }
         }
-
-        let _ = submesh_instance; // keep helper alive for future per-instance path.
-
-        if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
+        let render_result = if let Some(ui) = ui {
+            renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
+        } else {
+            renderer.render(|_, _, _, _, _| {})
+        };
+        if let Err(err) = render_result {
             warn!(error = ?err, "frame render failed");
         }
 
         if self.requested_quit {
             std::process::exit(0);
         }
-        let _ = window;
     }
 
     fn on_resize(&mut self, w: u32, h: u32) {
