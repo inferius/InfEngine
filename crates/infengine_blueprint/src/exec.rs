@@ -72,6 +72,18 @@ pub enum Op {
     /// position. Compiler bakes the entity id from `BlueprintTarget`
     /// at compile time; a Global blueprint never emits this op.
     SetEntityPosition(u32),
+    /// Pop one Vec3, treat it as euler XYZ radians and store as the
+    /// target entity's 3D rotation.
+    SetEntityRotation(u32),
+    /// Pop one Vec3 and store as the target entity's 3D scale.
+    SetEntityScale(u32),
+    /// Ask the host to play the sound at `path` (an asset-relative
+    /// path baked at compile time from the node's `path` param).
+    PlaySound(String),
+    /// Push the current frame's delta time as a Float.
+    PushDeltaTime,
+    /// Push the host's wall-clock time as a Float.
+    PushTimeSeconds,
     /// Pop a bool; if false jump to absolute op index. True falls
     /// through. Used by Branch nodes.
     JumpIfFalse(u32),
@@ -172,6 +184,12 @@ fn compile_data(
         "get_float_var" => {
             let name = node.params.get("name").cloned().unwrap_or_default();
             ops.push(Op::PushVar(name));
+        }
+        "delta_time" => {
+            ops.push(Op::PushDeltaTime);
+        }
+        "time_seconds" => {
+            ops.push(Op::PushTimeSeconds);
         }
         "add" | "subtract" | "multiply" | "divide" => {
             for input in ["a", "b"] {
@@ -284,7 +302,7 @@ fn compile_sink(
             }
             ops.push(Op::SetVar(name));
         }
-        "set_position" => {
+        "set_position" | "set_rotation" | "set_scale" => {
             for input in ["x", "y", "z"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src, src_pin)) => {
@@ -297,13 +315,23 @@ fn compile_sink(
             ops.push(Op::MakeVec3);
             match target {
                 BlueprintTarget::Entity { entity_id, .. } => {
-                    ops.push(Op::SetEntityPosition(*entity_id));
+                    let eid = *entity_id;
+                    let op = match node.kind.as_str() {
+                        "set_position" => Op::SetEntityPosition(eid),
+                        "set_rotation" => Op::SetEntityRotation(eid),
+                        _ => Op::SetEntityScale(eid),
+                    };
+                    ops.push(op);
                 }
                 _ => {
                     // Non-entity target: discard the vec3 by printing.
                     ops.push(Op::Print);
                 }
             }
+        }
+        "play_sound" => {
+            let path = node.params.get("path").cloned().unwrap_or_default();
+            ops.push(Op::PlaySound(path));
         }
         "call_function" => {
             let name = node.params.get("name").cloned().unwrap_or_default();
@@ -489,6 +517,21 @@ pub trait Host {
     /// noop so a host that only cares about Print doesn't have to
     /// implement transform mutation.
     fn set_entity_position(&mut self, _entity_id: u32, _position: [f32; 3]) {}
+    /// Write a 3D rotation (XYZ euler radians) to the given entity.
+    fn set_entity_rotation(&mut self, _entity_id: u32, _rotation: [f32; 3]) {}
+    /// Write a 3D scale to the given entity.
+    fn set_entity_scale(&mut self, _entity_id: u32, _scale: [f32; 3]) {}
+    /// Start playback of the sound at the given asset-relative path.
+    fn play_sound(&mut self, _path: &str) {}
+    /// Last frame's delta time in seconds. Default returns 0 so
+    /// non-runtime hosts (tests) don't need a clock.
+    fn delta_time(&self) -> f32 {
+        0.0
+    }
+    /// Wall-clock seconds since the host started.
+    fn time_seconds(&self) -> f32 {
+        0.0
+    }
 }
 
 #[derive(Debug, Default)]
@@ -602,6 +645,27 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
                 };
                 host.set_entity_position(*eid, pos);
             }
+            Op::SetEntityRotation(eid) => {
+                let rot = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, 0.0, 0.0],
+                    _ => [0.0; 3],
+                };
+                host.set_entity_rotation(*eid, rot);
+            }
+            Op::SetEntityScale(eid) => {
+                let scl = match stack.pop().unwrap_or(Value::Vec3([1.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, f, f],
+                    _ => [1.0; 3],
+                };
+                host.set_entity_scale(*eid, scl);
+            }
+            Op::PlaySound(path) => {
+                host.play_sound(path);
+            }
+            Op::PushDeltaTime => stack.push(Value::Float(host.delta_time())),
+            Op::PushTimeSeconds => stack.push(Value::Float(host.time_seconds())),
             Op::JumpIfFalse(addr) => {
                 let cond = matches!(stack.pop(), Some(Value::Bool(true)));
                 if !cond {

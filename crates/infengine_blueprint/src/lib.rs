@@ -397,6 +397,59 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
     },
     NodeKindDef {
+        id: "set_rotation",
+        label: "Set Rotation",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        id: "set_scale",
+        label: "Set Scale",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        // `params["path"]` carries the asset path; the host resolves
+        // it against the project root and feeds it to the audio
+        // backend.
+        id: "play_sound",
+        label: "Play Sound",
+        category: "Audio",
+        inputs: &[PinSpec::new("in", PinType::Exec)],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "delta_time",
+        label: "Delta Time",
+        category: "Time",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "time_seconds",
+        label: "Time Seconds",
+        category: "Time",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
         // The function name is stored in `params["name"]`; the
         // compiler inlines the named function's body (matched against
         // `Blueprint::functions`) and skips recursion to keep the
@@ -1176,6 +1229,16 @@ impl BlueprintEditor {
                     ui.label("variable");
                     if ui.text_edit_singleline(&mut name).changed() {
                         node.params.insert("name".into(), name);
+                        dirty = true;
+                    }
+                });
+            }
+            "play_sound" => {
+                let mut path = node.params.get("path").cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("path");
+                    if ui.text_edit_singleline(&mut path).changed() {
+                        node.params.insert("path".into(), path);
                         dirty = true;
                     }
                 });

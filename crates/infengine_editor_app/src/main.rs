@@ -113,6 +113,10 @@ struct Editor {
     /// when Play started, plus the workspace's active tab. The tick
     /// loop runs all of them every frame.
     play_blueprint_ticks: Vec<Program>,
+    /// Seconds accumulated since the last Play start. Fed into the
+    /// blueprint VM's `time_seconds` op so scripts can drive
+    /// animations off wall-clock time.
+    play_total_seconds: f32,
     // Wall-clock timestamp of the previous viewport left-mouse press
     // plus the screen-space pixel position at that time. Used to
     // spot double-clicks in the 3D viewport, which winit's raw mouse
@@ -224,6 +228,7 @@ impl Editor {
             gltf_path_input: String::new(),
             loaded_mesh_textures: HashMap::new(),
             play_blueprint_ticks: Vec::new(),
+            play_total_seconds: 0.0,
             audio_system: None,
             last_left_click_time: None,
             last_left_click_pos: [0.0, 0.0],
@@ -696,6 +701,7 @@ impl Editor {
         // are previewable), compile their OnStart + OnTick programs,
         // fire OnStart once, cache OnTick for the tick loop.
         self.play_blueprint_ticks.clear();
+        self.play_total_seconds = 0.0;
         let mut scripts_to_run: Vec<(infengine_blueprint::Blueprint, std::path::PathBuf)> =
             Vec::new();
         for entity in &self.scene.entities {
@@ -836,7 +842,12 @@ impl Editor {
         // them to the scene afterwards without holding a self.scene
         // borrow during the VM loop.
         if !self.play_blueprint_ticks.is_empty() {
-            let mut host = PlayHost::default();
+            self.play_total_seconds += dt;
+            let mut host = PlayHost {
+                delta_time: dt,
+                time_seconds: self.play_total_seconds,
+                ..Default::default()
+            };
             for prog in &self.play_blueprint_ticks {
                 run_program(prog, &mut host);
             }
@@ -845,6 +856,43 @@ impl Editor {
                     && let Some(t) = entity.transform_3d.as_mut()
                 {
                     t.position = pos;
+                }
+            }
+            for (eid, rot) in host.pending_rotation_writes {
+                if let Some(entity) = self.scene.get_mut(EntityId(eid))
+                    && let Some(t) = entity.transform_3d.as_mut()
+                {
+                    t.rotation = rot;
+                }
+            }
+            for (eid, scl) in host.pending_scale_writes {
+                if let Some(entity) = self.scene.get_mut(EntityId(eid))
+                    && let Some(t) = entity.transform_3d.as_mut()
+                {
+                    t.scale = scl;
+                }
+            }
+            // Play any sound paths the blueprint requested. Lazy-init
+            // the audio system if it wasn't spun up at Play start.
+            if !host.pending_sound_plays.is_empty() {
+                if self.audio_system.is_none() {
+                    match AudioSystem::new() {
+                        Ok(s) => self.audio_system = Some(s),
+                        Err(err) => warn!(error = %err, "audio init failed"),
+                    }
+                }
+                if let Some(audio) = self.audio_system.as_mut() {
+                    for rel in host.pending_sound_plays {
+                        let full = self.project_root.join(&rel);
+                        match audio.load_sound(&full) {
+                            Ok(sound) => {
+                                let _ = audio.play_sound(&sound);
+                            }
+                            Err(err) => {
+                                warn!(error = %err, path = %full.display(), "play_sound failed");
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -946,6 +994,11 @@ fn pick_gizmo_3d(
 #[derive(Debug, Default)]
 struct PlayHost {
     pending_position_writes: Vec<(u32, [f32; 3])>,
+    pending_rotation_writes: Vec<(u32, [f32; 3])>,
+    pending_scale_writes: Vec<(u32, [f32; 3])>,
+    pending_sound_plays: Vec<String>,
+    delta_time: f32,
+    time_seconds: f32,
 }
 
 impl infengine_blueprint::exec::Host for PlayHost {
@@ -960,6 +1013,21 @@ impl infengine_blueprint::exec::Host for PlayHost {
     }
     fn set_entity_position(&mut self, entity_id: u32, position: [f32; 3]) {
         self.pending_position_writes.push((entity_id, position));
+    }
+    fn set_entity_rotation(&mut self, entity_id: u32, rotation: [f32; 3]) {
+        self.pending_rotation_writes.push((entity_id, rotation));
+    }
+    fn set_entity_scale(&mut self, entity_id: u32, scale: [f32; 3]) {
+        self.pending_scale_writes.push((entity_id, scale));
+    }
+    fn play_sound(&mut self, path: &str) {
+        self.pending_sound_plays.push(path.to_string());
+    }
+    fn delta_time(&self) -> f32 {
+        self.delta_time
+    }
+    fn time_seconds(&self) -> f32 {
+        self.time_seconds
     }
 }
 
