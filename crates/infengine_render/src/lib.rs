@@ -12,6 +12,7 @@ mod camera_3d;
 mod debug;
 mod font;
 mod mesh3d;
+mod shadow;
 mod sprite;
 mod tilemap;
 
@@ -33,6 +34,7 @@ use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
+use shadow::ShadowPass;
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
 pub use tilemap::{TileId, Tilemap};
@@ -76,6 +78,7 @@ pub struct Renderer {
     meshes: Mesh3DRegistry,
     cube_handle: MeshHandle,
     depth_view: wgpu::TextureView,
+    shadow: ShadowPass,
 }
 
 impl Renderer {
@@ -161,12 +164,14 @@ impl Renderer {
         let camera_3d_resource = Camera3DResource::new(&device, &camera_3d);
         let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
+        let shadow = ShadowPass::new(&device);
         let mesh3d = Mesh3DPass::new(
             &device,
             &queue,
             config.format,
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
+            &shadow.sample_bgl,
         );
         let mut meshes = Mesh3DRegistry::default();
         let (cube_v, cube_i) = mesh3d::cube_geometry_public();
@@ -192,6 +197,7 @@ impl Renderer {
             meshes,
             cube_handle,
             depth_view,
+            shadow,
         })
     }
 
@@ -407,6 +413,12 @@ impl Renderer {
         // Upload camera matrices and queued instance data.
         self.camera_resource.upload(&self.queue, &self.camera);
         self.camera_3d_resource.upload(&self.queue, &self.camera_3d);
+        // Anchor the sun frustum on the 3D camera's look-at target so
+        // the shadow map follows what the user is looking at.
+        let target = self.camera_3d.target;
+        let light_dir = glam::Vec3::new(0.4, 0.9, 0.5);
+        self.shadow
+            .upload_light(&self.queue, target, light_dir, 20.0, 40.0);
         self.sprite
             .upload(&self.device, &self.queue, &self.sprite_queue);
         self.debug
@@ -426,7 +438,32 @@ impl Renderer {
                 label: Some("infengine_render::frame_encoder"),
             });
 
-        // 3D pass first (with depth), then 2D pass on top (no depth).
+        // Shadow depth pass first - writes the sun-perspective depth
+        // map that the mesh fragment shader samples for occlusion.
+        if mesh3d_count > 0 {
+            let mut spass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("infengine_render::shadow_pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.shadow.draw(
+                &mut spass,
+                &self.meshes,
+                &mesh_batches,
+                self.mesh3d.instance_buffer(),
+            );
+        }
+
+        // 3D pass next (with depth), then 2D pass on top (no depth).
         if mesh3d_count > 0 {
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::mesh3d_pass"),
@@ -451,7 +488,12 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             rpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
-            self.mesh3d.draw(&mut rpass, &self.meshes, &mesh_batches);
+            self.mesh3d.draw(
+                &mut rpass,
+                &self.meshes,
+                &mesh_batches,
+                &self.shadow.sample_bg,
+            );
         }
 
         {

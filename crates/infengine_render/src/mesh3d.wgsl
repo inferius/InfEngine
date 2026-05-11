@@ -16,6 +16,15 @@ struct CameraUniform {
 @group(1) @binding(0) var albedo_tex: texture_2d<f32>;
 @group(1) @binding(1) var albedo_smp: sampler;
 
+struct ShadowUniform {
+    view_proj: mat4x4<f32>,
+    light_dir: vec4<f32>,
+};
+
+@group(2) @binding(0) var<uniform> shadow: ShadowUniform;
+@group(2) @binding(1) var shadow_map: texture_depth_2d;
+@group(2) @binding(2) var shadow_smp: sampler_comparison;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -75,6 +84,33 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(one_minus, 5.0);
 }
 
+fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
+    let clip = shadow.view_proj * vec4<f32>(world_pos, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let proj = clip.xyz / clip.w;
+    // wgpu NDC: x,y in [-1,1] with y up; depth z in [0,1]. Sample uv has
+    // y down.
+    let uv = vec2<f32>(proj.x * 0.5 + 0.5, -proj.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z > 1.0 || proj.z < 0.0) {
+        return 1.0;
+    }
+    // Slope-scaled bias on top of the pipeline depth bias.
+    let bias = max(0.0008 * (1.0 - n_dot_l), 0.0002);
+    let depth = proj.z - bias;
+    // PCF 3x3.
+    let texel = 1.0 / 2048.0;
+    var sum = 0.0;
+    for (var x = -1; x <= 1; x = x + 1) {
+        for (var y = -1; y <= 1; y = y + 1) {
+            let off = vec2<f32>(f32(x), f32(y)) * texel;
+            sum = sum + textureSampleCompare(shadow_map, shadow_smp, uv + off, depth);
+        }
+    }
+    return sum / 9.0;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let metallic = clamp(in.material.x, 0.0, 1.0);
@@ -85,7 +121,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let n = normalize(in.world_normal);
     let v = normalize(camera.camera_pos.xyz - in.world_pos);
-    let light_dir = normalize(vec3<f32>(0.4, 0.9, 0.5));
+    let light_dir = normalize(shadow.light_dir.xyz);
     let l = light_dir;
     let h = normalize(v + l);
 
@@ -105,8 +141,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let k_d = (vec3<f32>(1.0) - f) * (1.0 - metallic);
     let diffuse = k_d * albedo / PI;
 
+    let shadow_factor = sample_shadow(in.world_pos, n_dot_l);
     let sun_intensity = 3.0;
-    let direct = (diffuse + specular) * n_dot_l * sun_intensity;
+    let direct = (diffuse + specular) * n_dot_l * sun_intensity * shadow_factor;
 
     // Hemispheric ambient: a small sky + ground term.
     let ambient_up = vec3<f32>(0.20, 0.22, 0.28);

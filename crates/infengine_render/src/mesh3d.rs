@@ -261,12 +261,17 @@ fn create_albedo_bind_group(
 }
 
 impl Mesh3DPass {
+    pub fn instance_buffer(&self) -> &wgpu::Buffer {
+        &self.instance_buffer
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
+        shadow_sample_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::mesh_instance_buf"),
@@ -352,7 +357,7 @@ impl Mesh3DPass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("infengine_render::mesh3d_pipeline_layout"),
-            bind_group_layouts: &[camera_layout, &texture_bgl],
+            bind_group_layouts: &[camera_layout, &texture_bgl, shadow_sample_layout],
             push_constant_ranges: &[],
         });
 
@@ -585,12 +590,14 @@ impl Mesh3DPass {
         rpass: &mut wgpu::RenderPass<'a>,
         registry: &'a Mesh3DRegistry,
         batches: &[MeshBatch],
+        shadow_bg: &'a wgpu::BindGroup,
     ) {
         if batches.is_empty() {
             return;
         }
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(1, &self.texture_bind_group, &[]);
+        rpass.set_bind_group(2, shadow_bg, &[]);
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         for batch in batches {
             let Some(entry) = registry.get(batch.handle) else {
