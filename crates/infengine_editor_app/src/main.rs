@@ -108,9 +108,10 @@ struct Editor {
     /// Mesh-name -> last applied texture path. Used to skip re-loading
     /// the same texture frame after frame.
     loaded_mesh_textures: HashMap<String, String>,
-    /// Compiled bytecode for the blueprint's `OnTick` trigger; populated
-    /// when Play starts.
-    play_blueprint_tick: Option<Program>,
+    /// Compiled OnTick programs - one per entity script discovered
+    /// when Play started, plus the workspace's active tab. The tick
+    /// loop runs all of them every frame.
+    play_blueprint_ticks: Vec<Program>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -212,7 +213,7 @@ impl Editor {
             imported_meshes: HashMap::new(),
             gltf_path_input: String::new(),
             loaded_mesh_textures: HashMap::new(),
-            play_blueprint_tick: None,
+            play_blueprint_ticks: Vec::new(),
         };
         if me.project.scenes.is_empty() {
             // A fresh project ships with an empty scenes list and
@@ -594,25 +595,50 @@ impl Editor {
         }
         self.play_physics_3d = Some(world_3d);
         self.play_body_map_3d = map_3d;
-        // Compile blueprint bytecode and fire its OnStart once.
-        match self
-            .blueprint
-            .active()
-            .map(|t| compile(&t.blueprint.graph, Trigger::OnStart))
-            .unwrap_or_else(|| Ok(Default::default()))
-        {
-            Ok(prog) => {
-                let mut host = TracingHost;
-                run_program(&prog, &mut host);
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "blueprint OnStart compile failed");
+
+        // Multi-blueprint runtime: gather every script attached to
+        // every entity (plus the workspace's active tab so live edits
+        // are previewable), compile their OnStart + OnTick programs,
+        // fire OnStart once, cache OnTick for the tick loop.
+        self.play_blueprint_ticks.clear();
+        let mut scripts_to_run: Vec<(infengine_blueprint::Blueprint, std::path::PathBuf)> =
+            Vec::new();
+        for entity in &self.scene.entities {
+            for rel in &entity.blueprints {
+                let full = self.project_root.join(rel);
+                if let Ok(mut bp) = infengine_blueprint::Blueprint::load(&full) {
+                    // Refresh target so the right entity_id is used
+                    // by compile_sink for SetEntityPosition.
+                    bp.target = infengine_blueprint::BlueprintTarget::Entity {
+                        entity_id: entity.id.0,
+                        entity_name: entity.name.clone(),
+                    };
+                    scripts_to_run.push((bp, full));
+                }
             }
         }
-        self.play_blueprint_tick = self
-            .blueprint
-            .active()
-            .and_then(|t| compile(&t.blueprint.graph, Trigger::OnTick).ok());
+        // Also include the active workspace tab so live-edited
+        // blueprints (without a script-list binding) preview in Play.
+        if let Some(active) = self.blueprint.active() {
+            scripts_to_run.push((
+                active.blueprint.clone(),
+                active.path.clone().unwrap_or_default(),
+            ));
+        }
+        for (bp, _path) in &scripts_to_run {
+            match compile(&bp.graph, Trigger::OnStart, &bp.target) {
+                Ok(prog) => {
+                    let mut host = TracingHost;
+                    run_program(&prog, &mut host);
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "blueprint OnStart compile failed");
+                }
+            }
+            if let Ok(prog) = compile(&bp.graph, Trigger::OnTick, &bp.target) {
+                self.play_blueprint_ticks.push(prog);
+            }
+        }
         self.play_state = PlayState::Playing;
         self.status = "Play mode".into();
     }
@@ -637,7 +663,7 @@ impl Editor {
         self.play_physics = None;
         self.play_physics_3d = None;
         self.play_body_map_3d.clear();
-        self.play_blueprint_tick = None;
+        self.play_blueprint_ticks.clear();
         self.play_state = PlayState::Editing;
         self.status = "Stopped".into();
     }
@@ -661,9 +687,22 @@ impl Editor {
                 }
             }
         }
-        if let Some(prog) = self.play_blueprint_tick.as_ref() {
-            let mut host = TracingHost;
-            run_program(prog, &mut host);
+        // Run every cached blueprint tick. A custom Host captures any
+        // SetEntityPosition writes (and Print logs) so we can apply
+        // them to the scene afterwards without holding a self.scene
+        // borrow during the VM loop.
+        if !self.play_blueprint_ticks.is_empty() {
+            let mut host = PlayHost::default();
+            for prog in &self.play_blueprint_ticks {
+                run_program(prog, &mut host);
+            }
+            for (eid, pos) in host.pending_position_writes {
+                if let Some(entity) = self.scene.get_mut(EntityId(eid))
+                    && let Some(t) = entity.transform_3d.as_mut()
+                {
+                    t.position = pos;
+                }
+            }
         }
     }
 
@@ -754,6 +793,29 @@ fn pick_gizmo_3d(
         Some(best.1)
     } else {
         None
+    }
+}
+
+/// Blueprint VM host the editor uses during Play. Captures
+/// SetEntityPosition writes so the editor can apply them after the
+/// VM relinquishes its &mut borrow on the host.
+#[derive(Debug, Default)]
+struct PlayHost {
+    pending_position_writes: Vec<(u32, [f32; 3])>,
+}
+
+impl infengine_blueprint::exec::Host for PlayHost {
+    fn print(&mut self, value: infengine_blueprint::exec::Value) {
+        use infengine_blueprint::exec::Value;
+        match value {
+            Value::Float(v) => tracing::info!(value = v, "blueprint print"),
+            Value::Bool(b) => tracing::info!(value = b, "blueprint print"),
+            Value::Vec3(v) => tracing::info!(?v, "blueprint print"),
+            Value::EntityRef(e) => tracing::info!(entity = e, "blueprint print"),
+        }
+    }
+    fn set_entity_position(&mut self, entity_id: u32, position: [f32; 3]) {
+        self.pending_position_writes.push((entity_id, position));
     }
 }
 

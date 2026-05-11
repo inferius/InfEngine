@@ -17,7 +17,7 @@
 
 use std::collections::HashSet;
 
-use crate::{Graph, Node, NodeId};
+use crate::{BlueprintTarget, Graph, Node, NodeId};
 
 /// Runtime value the stack carries between ops.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -53,6 +53,10 @@ pub enum Op {
     Add,
     MakeVec3,
     Print,
+    /// Pop one Vec3 and write it as the target entity's world
+    /// position. Compiler bakes the entity id from `BlueprintTarget`
+    /// at compile time; a Global blueprint never emits this op.
+    SetEntityPosition(u32),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -174,7 +178,12 @@ fn compile_data(
     Ok(())
 }
 
-fn compile_sink(graph: &Graph, node_id: NodeId, ops: &mut Vec<Op>) -> Result<(), CompileError> {
+fn compile_sink(
+    graph: &Graph,
+    node_id: NodeId,
+    ops: &mut Vec<Op>,
+    target: &BlueprintTarget,
+) -> Result<(), CompileError> {
     let node = find_node(graph, node_id).ok_or(CompileError::MissingInput {
         node: node_id,
         pin: "(sink)".to_string(),
@@ -191,8 +200,6 @@ fn compile_sink(graph: &Graph, node_id: NodeId, ops: &mut Vec<Op>) -> Result<(),
             ops.push(Op::Print);
         }
         "set_position" => {
-            // Stub: evaluate x/y/z + pack to vec3 + Print until a
-            // host hook arrives.
             for input in ["x", "y", "z"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src, src_pin)) => {
@@ -203,7 +210,15 @@ fn compile_sink(graph: &Graph, node_id: NodeId, ops: &mut Vec<Op>) -> Result<(),
                 }
             }
             ops.push(Op::MakeVec3);
-            ops.push(Op::Print);
+            match target {
+                BlueprintTarget::Entity { entity_id, .. } => {
+                    ops.push(Op::SetEntityPosition(*entity_id));
+                }
+                _ => {
+                    // Non-entity target: discard the vec3 by printing.
+                    ops.push(Op::Print);
+                }
+            }
         }
         other => {
             return Err(CompileError::UnsupportedData {
@@ -214,7 +229,11 @@ fn compile_sink(graph: &Graph, node_id: NodeId, ops: &mut Vec<Op>) -> Result<(),
     Ok(())
 }
 
-pub fn compile(graph: &Graph, trigger: Trigger) -> Result<Program, CompileError> {
+pub fn compile(
+    graph: &Graph,
+    trigger: Trigger,
+    target: &BlueprintTarget,
+) -> Result<Program, CompileError> {
     let mut ops = Vec::new();
     let entries: Vec<NodeId> = graph
         .nodes
@@ -234,7 +253,7 @@ pub fn compile(graph: &Graph, trigger: Trigger) -> Result<Program, CompileError>
             if !visited_sinks.insert(sink_id) {
                 continue;
             }
-            compile_sink(graph, sink_id, &mut ops)?;
+            compile_sink(graph, sink_id, &mut ops, target)?;
             for edge in &graph.edges {
                 if edge.from_node == sink_id && edge.from_pin == "exec" && edge.to_pin == "in" {
                     frontier.push(edge.to_node);
@@ -249,6 +268,10 @@ pub trait Host {
     /// Forward a `Value` to the editor / runtime sink. The
     /// implementation usually pretty-prints it; tests capture it.
     fn print(&mut self, value: Value);
+    /// Write a 3D position to the given entity. Default impl is a
+    /// noop so a host that only cares about Print doesn't have to
+    /// implement transform mutation.
+    fn set_entity_position(&mut self, _entity_id: u32, _position: [f32; 3]) {}
 }
 
 #[derive(Debug, Default)]
@@ -262,6 +285,9 @@ impl Host for TracingHost {
             Value::Vec3(v) => tracing::info!(?v, "blueprint print"),
             Value::EntityRef(e) => tracing::info!(entity = e, "blueprint print"),
         }
+    }
+    fn set_entity_position(&mut self, entity_id: u32, position: [f32; 3]) {
+        tracing::info!(entity_id, ?position, "set_entity_position");
     }
 }
 
@@ -286,6 +312,14 @@ pub fn run(program: &Program, host: &mut dyn Host) {
             Op::Print => {
                 let v = stack.pop().unwrap_or(Value::Float(0.0));
                 host.print(v);
+            }
+            Op::SetEntityPosition(eid) => {
+                let pos = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, 0.0, 0.0],
+                    _ => [0.0; 3],
+                };
+                host.set_entity_position(*eid, pos);
             }
         }
     }
@@ -318,7 +352,7 @@ mod tests {
         let p = g.add_node("print", [0.0, 0.0]);
         assert!(g.connect(&reg, tick, "exec", p, "in").unwrap());
         assert!(g.connect(&reg, c, "value", p, "value").unwrap());
-        let prog = compile(&g, Trigger::OnTick).unwrap();
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(42.0)]);
@@ -349,7 +383,7 @@ mod tests {
         assert!(g.connect(&reg, ca, "value", add, "a").unwrap());
         assert!(g.connect(&reg, cb, "value", add, "b").unwrap());
         assert!(g.connect(&reg, add, "sum", p, "value").unwrap());
-        let prog = compile(&g, Trigger::OnTick).unwrap();
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(7.0)]);
@@ -377,7 +411,7 @@ mod tests {
         // Wire through make_vec3 -> print as a stub by directly
         // pushing the ops via compile, instead, just verify the
         // const_vec3 + Print path emits PushVec3 + Print when wired.
-        let _ = compile(&g, Trigger::OnTick);
+        let _ = compile(&g, Trigger::OnTick, &BlueprintTarget::Global);
         let mut cap = Capture(Vec::new());
         run(
             &Program {
