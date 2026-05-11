@@ -238,6 +238,20 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "branch",
+        label: "Branch",
+        category: "Control",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("condition", PinType::Bool),
+        ],
+        outputs: &[
+            PinSpec::new("true", PinType::Exec),
+            PinSpec::new("false", PinType::Exec),
+        ],
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "set_position",
         label: "Set Position",
         category: "Transform",

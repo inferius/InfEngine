@@ -57,6 +57,11 @@ pub enum Op {
     /// position. Compiler bakes the entity id from `BlueprintTarget`
     /// at compile time; a Global blueprint never emits this op.
     SetEntityPosition(u32),
+    /// Pop a bool; if false jump to absolute op index. True falls
+    /// through. Used by Branch nodes.
+    JumpIfFalse(u32),
+    /// Unconditional jump to absolute op index.
+    Jump(u32),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -229,6 +234,70 @@ fn compile_sink(
     Ok(())
 }
 
+/// Walk the execution chain starting at the edges from
+/// `(node_id, pin)` whose `to_pin == "in"`. Recursive so branches
+/// emit jumps inline; the `visited` set prevents infinite loops on
+/// cycles or revisits.
+fn compile_exec_from(
+    graph: &Graph,
+    node_id: NodeId,
+    pin: &str,
+    ops: &mut Vec<Op>,
+    target: &BlueprintTarget,
+    visited: &mut HashSet<NodeId>,
+) -> Result<(), CompileError> {
+    let next_sinks: Vec<NodeId> = graph
+        .edges
+        .iter()
+        .filter(|e| e.from_node == node_id && e.from_pin == pin && e.to_pin == "in")
+        .map(|e| e.to_node)
+        .collect();
+    for sink_id in next_sinks {
+        if !visited.insert(sink_id) {
+            continue;
+        }
+        let sink_node = find_node(graph, sink_id).ok_or(CompileError::MissingInput {
+            node: sink_id,
+            pin: "(sink)".to_string(),
+        })?;
+        match sink_node.kind.as_str() {
+            "branch" => {
+                // Evaluate the bool condition then emit the
+                // standard JumpIfFalse + true-body + Jump-to-end +
+                // false-body pattern, patching the jump targets
+                // once each body's length is known.
+                match find_data_source(graph, sink_id, "condition") {
+                    Some((src, src_pin)) => {
+                        let mut local = HashSet::new();
+                        compile_data(graph, src, src_pin, &mut local, ops)?;
+                    }
+                    None => ops.push(Op::PushBool(false)),
+                }
+                let jif_idx = ops.len();
+                ops.push(Op::JumpIfFalse(0));
+                // True branch.
+                compile_exec_from(graph, sink_id, "true", ops, target, visited)?;
+                let jmp_idx = ops.len();
+                ops.push(Op::Jump(0));
+                let false_start = ops.len() as u32;
+                // False branch.
+                compile_exec_from(graph, sink_id, "false", ops, target, visited)?;
+                let end_addr = ops.len() as u32;
+                ops[jif_idx] = Op::JumpIfFalse(false_start);
+                ops[jmp_idx] = Op::Jump(end_addr);
+            }
+            _ => {
+                compile_sink(graph, sink_id, ops, target)?;
+                // A regular sink may have its own `exec` output (rare
+                // for the current node set); follow it so chains of
+                // Prints / SetPositions all run.
+                compile_exec_from(graph, sink_id, "exec", ops, target, visited)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn compile(
     graph: &Graph,
     trigger: Trigger,
@@ -242,24 +311,8 @@ pub fn compile(
         .map(|n| n.id)
         .collect();
     for entry in entries {
-        let mut visited_sinks = HashSet::new();
-        let mut frontier: Vec<NodeId> = graph
-            .edges
-            .iter()
-            .filter(|e| e.from_node == entry && e.from_pin == "exec" && e.to_pin == "in")
-            .map(|e| e.to_node)
-            .collect();
-        while let Some(sink_id) = frontier.pop() {
-            if !visited_sinks.insert(sink_id) {
-                continue;
-            }
-            compile_sink(graph, sink_id, &mut ops, target)?;
-            for edge in &graph.edges {
-                if edge.from_node == sink_id && edge.from_pin == "exec" && edge.to_pin == "in" {
-                    frontier.push(edge.to_node);
-                }
-            }
-        }
+        let mut visited = HashSet::new();
+        compile_exec_from(graph, entry, "exec", &mut ops, target, &mut visited)?;
     }
     Ok(Program { ops })
 }
@@ -293,8 +346,16 @@ impl Host for TracingHost {
 
 pub fn run(program: &Program, host: &mut dyn Host) {
     let mut stack: Vec<Value> = Vec::new();
-    for op in &program.ops {
-        match op {
+    let mut pc: usize = 0;
+    let mut guard: usize = 0;
+    let guard_limit = program.ops.len().saturating_mul(64).max(1024);
+    while pc < program.ops.len() {
+        guard += 1;
+        if guard > guard_limit {
+            tracing::warn!("blueprint VM op-count guard tripped; aborting program");
+            break;
+        }
+        match &program.ops[pc] {
             Op::PushFloat(v) => stack.push(Value::Float(*v)),
             Op::PushBool(b) => stack.push(Value::Bool(*b)),
             Op::PushVec3(v) => stack.push(Value::Vec3(*v)),
@@ -321,7 +382,19 @@ pub fn run(program: &Program, host: &mut dyn Host) {
                 };
                 host.set_entity_position(*eid, pos);
             }
+            Op::JumpIfFalse(addr) => {
+                let cond = matches!(stack.pop(), Some(Value::Bool(true)));
+                if !cond {
+                    pc = *addr as usize;
+                    continue;
+                }
+            }
+            Op::Jump(addr) => {
+                pc = *addr as usize;
+                continue;
+            }
         }
+        pc += 1;
     }
 }
 
@@ -387,6 +460,94 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(7.0)]);
+    }
+
+    #[test]
+    fn branch_picks_true_arm() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let branch = g.add_node("branch", [0.0, 0.0]);
+        let cond = g.add_node("const_bool", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == cond)
+            .unwrap()
+            .params
+            .insert("value".into(), "true".into());
+        let true_arm = g.add_node("print", [0.0, 0.0]);
+        let false_arm = g.add_node("print", [0.0, 0.0]);
+        let true_v = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == true_v)
+            .unwrap()
+            .params
+            .insert("value".into(), "10".into());
+        let false_v = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == false_v)
+            .unwrap()
+            .params
+            .insert("value".into(), "99".into());
+        assert!(g.connect(&reg, tick, "exec", branch, "in").unwrap());
+        assert!(g.connect(&reg, cond, "value", branch, "condition").unwrap());
+        assert!(g.connect(&reg, branch, "true", true_arm, "in").unwrap());
+        assert!(g.connect(&reg, branch, "false", false_arm, "in").unwrap());
+        assert!(g.connect(&reg, true_v, "value", true_arm, "value").unwrap());
+        assert!(
+            g.connect(&reg, false_v, "value", false_arm, "value")
+                .unwrap()
+        );
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(10.0)]);
+    }
+
+    #[test]
+    fn branch_picks_false_arm() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let branch = g.add_node("branch", [0.0, 0.0]);
+        let cond = g.add_node("const_bool", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == cond)
+            .unwrap()
+            .params
+            .insert("value".into(), "false".into());
+        let true_arm = g.add_node("print", [0.0, 0.0]);
+        let false_arm = g.add_node("print", [0.0, 0.0]);
+        let true_v = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == true_v)
+            .unwrap()
+            .params
+            .insert("value".into(), "10".into());
+        let false_v = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == false_v)
+            .unwrap()
+            .params
+            .insert("value".into(), "99".into());
+        assert!(g.connect(&reg, tick, "exec", branch, "in").unwrap());
+        assert!(g.connect(&reg, cond, "value", branch, "condition").unwrap());
+        assert!(g.connect(&reg, branch, "true", true_arm, "in").unwrap());
+        assert!(g.connect(&reg, branch, "false", false_arm, "in").unwrap());
+        assert!(g.connect(&reg, true_v, "value", true_arm, "value").unwrap());
+        assert!(
+            g.connect(&reg, false_v, "value", false_arm, "value")
+                .unwrap()
+        );
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(99.0)]);
     }
 
     #[test]
