@@ -171,7 +171,9 @@ impl AppHandler for Demo {
             [0.25, 0.32, 0.38, 1.0],
         );
 
-        // Five rotating cubes arranged on a ring.
+        // Five rotating cubes arranged on a ring, each with a different
+        // (metallic, roughness) combination so the PBR shader has work.
+        let cube_handle = renderer.cube_handle();
         for i in 0..5 {
             let theta = i as f32 * std::f32::consts::TAU / 5.0;
             let pos = Vec3::new(theta.cos() * 3.0, 1.0, theta.sin() * 3.0);
@@ -183,7 +185,19 @@ impl AppHandler for Demo {
                 0.5 + 0.5 * (i as f32 * 2.1 + 2.0).sin(),
                 1.0,
             ];
-            renderer.draw_cube(cube_model(pos, rot, Vec3::splat(1.0)), color);
+            let metallic = if (i as u32).is_multiple_of(2) {
+                1.0
+            } else {
+                0.0
+            };
+            let roughness = 0.1 + 0.2 * i as f32;
+            renderer.draw_mesh_pbr(
+                cube_handle,
+                cube_model(pos, rot, Vec3::splat(1.0)),
+                color,
+                metallic,
+                roughness,
+            );
         }
 
         // Tall pillar at the center.
@@ -196,10 +210,10 @@ impl AppHandler for Demo {
             [0.95, 0.85, 0.55, 1.0],
         );
 
-        // Bouncing sphere above the pillar.
+        // Bouncing chrome-ish sphere above the pillar.
         if let Some(sphere) = self.sphere {
             let bounce = 4.0 + (self.time * 2.0).sin() * 0.6;
-            renderer.draw_mesh(
+            renderer.draw_mesh_pbr(
                 sphere,
                 cube_model(
                     Vec3::new(0.0, bounce, 0.0),
@@ -207,6 +221,8 @@ impl AppHandler for Demo {
                     Vec3::splat(1.4),
                 ),
                 [0.95, 0.55, 0.85, 1.0],
+                1.0,
+                0.15,
             );
         }
 
@@ -282,7 +298,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - cube_demo (Phase 6.3)".into(),
+        title: "InfEngine - cube_demo (Phase 6.4)".into(),
         width: 1280,
         height: 720,
         resizable: true,

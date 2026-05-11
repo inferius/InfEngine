@@ -85,11 +85,30 @@ pub struct MeshInstance {
     /// Column-major 4x4 model matrix (matches `glam::Mat4::to_cols_array`).
     pub model: [f32; 16],
     pub color: [f32; 4],
+    /// PBR-ish material parameters: `(metallic, roughness, _pad, _pad)`.
+    /// Both values are clamped to `[0, 1]` in the shader.
+    pub material: [f32; 4],
 }
 
 impl MeshInstance {
+    /// Default material: fully dielectric (metallic = 0), middling
+    /// roughness (0.5).
     pub fn new(model: [f32; 16], color: [f32; 4]) -> Self {
-        Self { model, color }
+        Self {
+            model,
+            color,
+            material: [0.0, 0.5, 0.0, 0.0],
+        }
+    }
+
+    pub fn with_material(mut self, metallic: f32, roughness: f32) -> Self {
+        self.material = [
+            metallic.clamp(0.0, 1.0),
+            roughness.clamp(0.04, 1.0),
+            0.0,
+            0.0,
+        ];
+        self
     }
 }
 
@@ -260,6 +279,11 @@ impl Mesh3DPass {
             wgpu::VertexAttribute {
                 offset: 64,
                 shader_location: 6,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: 80,
+                shader_location: 7,
                 format: wgpu::VertexFormat::Float32x4,
             },
         ];

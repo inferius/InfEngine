@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- PBR baseline shading (Phase 6.4): `MeshInstance` now carries `(metallic, roughness)` material parameters; the mesh shader replaces the simple Lambert with a Cook-Torrance specular (GGX distribution, Schlick Fresnel, smith-GGX geometry) plus a Lambert diffuse term and a hemispheric ambient. F0 lerps from 0.04 dielectric to the albedo for metals. New `Renderer::draw_mesh_pbr(handle, model, color, metallic, roughness)` and `MeshInstance::with_material` helpers.
+- `cube_demo` cycles metallic + roughness across the ring cubes and renders the bouncing sphere as chrome (metallic 1.0, roughness 0.15) to exercise the new shading path.
 - glTF 2.0 loader (Phase 6.3): `AssetServer::load_gltf(path)` parses .gltf / .glb files via the `gltf` crate and returns a `GltfAsset` with one `GltfPrimitive` per primitive (positions, normals defaulted to `[0, 1, 0]`, UVs defaulted to `[0, 0]`, indices synthesized for non-indexed primitives). New `AssetError::Gltf` variant. Workspace pins `gltf = "1"`.
 - `cube_demo` loads `assets/model.glb` if present; each primitive becomes a registered renderer mesh and draws next to the cubes / spheres. Without a file the demo logs a hint and runs unchanged.
 - Mesh registry (Phase 6.2): `MeshVertex`, `MeshHandle`, and a `Mesh3DRegistry` keyed by handle. `Renderer::create_mesh(name, vertices, indices)` registers an arbitrary mesh; `Renderer::draw_mesh(handle, model, color)` queues an instance. The pipeline groups the per-frame queue by handle and emits one batched indexed draw per mesh. The built-in cube is now just one registered mesh; its handle is available via `Renderer::cube_handle()`.

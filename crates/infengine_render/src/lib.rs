@@ -245,6 +245,20 @@ impl Renderer {
             .push((handle, MeshInstance::new(model, color)));
     }
 
+    /// Queue an arbitrary registered mesh with PBR material parameters
+    /// (metallic in `[0, 1]`, roughness in `[0.04, 1]`).
+    pub fn draw_mesh_pbr(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+    ) {
+        let instance = MeshInstance::new(model, color).with_material(metallic, roughness);
+        self.mesh3d_queue.push((handle, instance));
+    }
+
     /// Register a new mesh and return its handle. The caller can then
     /// reference the mesh via [`Renderer::draw_mesh`].
     pub fn create_mesh(
