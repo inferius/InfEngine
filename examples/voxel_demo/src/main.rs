@@ -240,10 +240,17 @@ impl Voxel {
 
     fn rebuild_chunks(&mut self, coords: &[ChunkCoord]) {
         let renderer = self.renderer.as_mut().expect("renderer ready");
-        // Drop existing mesh handles for the affected chunks. The
-        // mesh registry leaks the old buffer slots until the renderer
-        // gains a remove API; for an editor-scale demo this is fine.
-        self.chunk_meshes.retain(|(c, _, _)| !coords.contains(c));
+        // Release old mesh handles for the affected chunks so the
+        // mesh registry doesn't accumulate stale buffers across edits.
+        let mut keep = Vec::with_capacity(self.chunk_meshes.len());
+        for entry in self.chunk_meshes.drain(..) {
+            if coords.contains(&entry.0) {
+                renderer.remove_mesh(entry.2);
+            } else {
+                keep.push(entry);
+            }
+        }
+        self.chunk_meshes = keep;
         for coord in coords {
             let Some(chunk) = self.world.chunk(*coord) else {
                 continue;

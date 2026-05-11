@@ -87,6 +87,13 @@ impl Mesh3DRegistry {
     pub fn get(&self, handle: MeshHandle) -> Option<&MeshEntry> {
         self.entries.get(&handle)
     }
+
+    /// Drop the GPU buffers backing `handle`. Returns true if the
+    /// handle was registered. Caller must guarantee no draw call
+    /// references the handle in the current frame.
+    pub fn remove(&mut self, handle: MeshHandle) -> bool {
+        self.entries.remove(&handle).is_some()
+    }
 }
 
 /// One mesh draw instance.

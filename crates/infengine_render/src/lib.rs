@@ -306,6 +306,14 @@ impl Renderer {
         self.cube_handle
     }
 
+    /// Release a previously-registered mesh. Returns `true` when the
+    /// handle was active. Caller must guarantee no `draw_mesh_pbr`
+    /// for this handle remains in the current frame's queue (a safe
+    /// bet is to remove between frames or before any draw call).
+    pub fn remove_mesh(&mut self, handle: MeshHandle) -> bool {
+        self.meshes.remove(handle)
+    }
+
     /// Replace the global albedo texture used by all 3D mesh draws.
     /// `rgba` must be `width * height * 4` bytes in `Rgba8UnormSrgb`
     /// order. Phase 10.2 keeps this engine-wide (one texture shared by
