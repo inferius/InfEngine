@@ -23,6 +23,7 @@ use wgpu::{
 
 pub use camera::Camera2D;
 use camera::CameraResource;
+pub use sprite::SpriteInstance;
 use sprite::SpritePass;
 
 /// Errors that can occur while creating or running the renderer.
@@ -52,6 +53,7 @@ pub struct Renderer {
     camera: Camera2D,
     camera_resource: CameraResource,
     sprite: SpritePass,
+    sprite_queue: Vec<SpriteInstance>,
 }
 
 impl Renderer {
@@ -143,13 +145,20 @@ impl Renderer {
             camera,
             camera_resource,
             sprite,
+            sprite_queue: Vec::new(),
         })
     }
 
-    /// Update the sprite's world-space transform (center position and
-    /// size in world units, i.e. logical pixels at zoom 1.0).
-    pub fn set_sprite_transform(&self, position: [f32; 2], size: [f32; 2]) {
-        self.sprite.set_transform(&self.queue, position, size);
+    /// Queue a sprite to be drawn during the next `render()` call. The
+    /// queue is cleared after each frame, so call this every frame for
+    /// every sprite that should appear.
+    pub fn draw_sprite(&mut self, instance: SpriteInstance) {
+        self.sprite_queue.push(instance);
+    }
+
+    /// Number of sprites currently queued for the next frame.
+    pub fn queued_sprite_count(&self) -> usize {
+        self.sprite_queue.len()
     }
 
     /// Mutable access to the 2D camera. Changes take effect on the next
@@ -190,8 +199,11 @@ impl Renderer {
             Err(err) => return Err(err),
         };
 
-        // Upload current camera matrix.
+        // Upload current camera matrix and sprite instances.
         self.camera_resource.upload(&self.queue, &self.camera);
+        self.sprite
+            .upload(&self.device, &self.queue, &self.sprite_queue);
+        let sprite_count = self.sprite_queue.len() as u32;
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
@@ -219,11 +231,12 @@ impl Renderer {
             });
 
             rpass.set_bind_group(0, &self.camera_resource.bind_group, &[]);
-            self.sprite.draw(&mut rpass);
+            self.sprite.draw(&mut rpass, sprite_count);
         }
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        self.sprite_queue.clear();
         Ok(())
     }
 

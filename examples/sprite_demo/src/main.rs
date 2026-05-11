@@ -1,14 +1,17 @@
-//! Sprite demo - Phase 2.1 of InfEngine.
+//! Sprite demo - Phase 2.2 of InfEngine.
 //!
-//! World-space coordinates (1 unit = 1 logical pixel) drive a 256x256
-//! sprite that moves at a fixed pixels-per-second speed. WASD / arrow
-//! keys move; `R` recenters; `Escape` (or closing the window) exits.
+//! Demonstrates instanced sprite rendering: the player sprite plus four
+//! static "decoration" sprites at the screen corners, all drawn in a
+//! single batched draw call. WASD / arrow keys move the player; `R`
+//! recenters; `Escape` (or closing the window) exits.
 
-use infengine_render::Renderer;
+use infengine_render::{Renderer, SpriteInstance};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const SPRITE_SIZE: f32 = 256.0;
+const PLAYER_SIZE: f32 = 128.0;
+const DECO_SIZE: f32 = 96.0;
+const DECO_MARGIN: f32 = 80.0;
 /// Sprite move speed in world units per second (1 unit = 1 logical pixel).
 const MOVE_SPEED: f32 = 400.0;
 
@@ -30,16 +33,33 @@ impl Default for Demo {
     }
 }
 
+impl Demo {
+    fn corner_decorations(&self) -> [SpriteInstance; 4] {
+        let half_w = self.viewport.0 as f32 * 0.5 - DECO_MARGIN;
+        let half_h = self.viewport.1 as f32 * 0.5 - DECO_MARGIN;
+        let mk = |x: f32, y: f32, tint: [f32; 4]| SpriteInstance {
+            position: [x, y],
+            size: [DECO_SIZE, DECO_SIZE],
+            color: tint,
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+        };
+        [
+            mk(-half_w, half_h, [1.0, 0.5, 0.5, 1.0]), // top-left, red tint
+            mk(half_w, half_h, [0.5, 1.0, 0.5, 1.0]),  // top-right, green tint
+            mk(-half_w, -half_h, [0.5, 0.5, 1.0, 1.0]), // bottom-left, blue tint
+            mk(half_w, -half_h, [1.0, 1.0, 0.5, 1.0]), // bottom-right, yellow tint
+        ]
+    }
+}
+
 impl AppHandler for Demo {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
         self.viewport = (w, h);
         info!(width = w, height = h, "sprite_demo started");
         match Renderer::new(window) {
-            Ok(r) => {
-                r.set_sprite_transform(self.pos, [SPRITE_SIZE, SPRITE_SIZE]);
-                self.renderer = Some(r);
-            }
+            Ok(r) => self.renderer = Some(r),
             Err(err) => {
                 error!(error = %err, "failed to initialize renderer");
                 std::process::exit(2);
@@ -48,10 +68,6 @@ impl AppHandler for Demo {
     }
 
     fn on_update(&mut self, _window: &EngineWindow, ctx: &FrameContext<'_>) {
-        let Some(renderer) = self.renderer.as_mut() else {
-            return;
-        };
-
         let mut dx = 0.0_f32;
         let mut dy = 0.0_f32;
         if ctx.input.any_pressed(&[Key::A, Key::ArrowLeft]) {
@@ -79,13 +95,21 @@ impl AppHandler for Demo {
             self.pos = [0.0, 0.0];
         }
 
-        // Clamp to the visible viewport (half-extents in world units).
-        let half_w = self.viewport.0 as f32 * 0.5 - SPRITE_SIZE * 0.5;
-        let half_h = self.viewport.1 as f32 * 0.5 - SPRITE_SIZE * 0.5;
+        let half_w = self.viewport.0 as f32 * 0.5 - PLAYER_SIZE * 0.5;
+        let half_h = self.viewport.1 as f32 * 0.5 - PLAYER_SIZE * 0.5;
         self.pos[0] = self.pos[0].clamp(-half_w, half_w);
         self.pos[1] = self.pos[1].clamp(-half_h, half_h);
 
-        renderer.set_sprite_transform(self.pos, [SPRITE_SIZE, SPRITE_SIZE]);
+        let decorations = self.corner_decorations();
+
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+
+        for deco in decorations {
+            renderer.draw_sprite(deco);
+        }
+        renderer.draw_sprite(SpriteInstance::new(self.pos, [PLAYER_SIZE, PLAYER_SIZE]));
 
         if let Err(err) = renderer.render() {
             warn!(error = ?err, "frame render failed");
@@ -124,7 +148,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.1)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.2)".into(),
         width: 1280,
         height: 720,
         resizable: true,

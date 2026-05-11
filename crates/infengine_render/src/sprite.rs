@@ -1,14 +1,14 @@
-//! Single-sprite pipeline for Phase 1.3.
+//! Batched 2D sprite pipeline.
 //!
-//! Renders one textured quad whose position and scale are driven by a
-//! tiny uniform. The texture is generated procedurally (a checkerboard)
-//! so the renderer crate has no asset-loading dependency yet.
+//! A single draw call renders many sprites that share a texture. Per
+//! instance, the caller supplies world position, size, color tint, and a
+//! UV sub-rectangle (so a texture atlas can be used in later steps).
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-/// Vertex format used by the sprite pipeline: position in NDC and UV in
-/// `[0, 1]`. Kept tightly packed so it can be uploaded directly.
+/// Vertex format used by the unit-quad mesh: position in `[-0.5, 0.5]`
+/// and UV in `[0, 1]`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub(crate) struct SpriteVertex {
@@ -16,8 +16,6 @@ pub(crate) struct SpriteVertex {
     pub uv: [f32; 2],
 }
 
-// Unit quad centered on the origin; size in world units is supplied via
-// the per-sprite uniform.
 const SPRITE_VERTICES: [SpriteVertex; 4] = [
     SpriteVertex {
         position: [-0.5, -0.5],
@@ -37,18 +35,32 @@ const SPRITE_VERTICES: [SpriteVertex; 4] = [
     },
 ];
 
-/// Uniform pushed to the sprite shader each frame: (offset_xy, size_xy)
-/// in world units.
+/// One sprite submitted to the batcher.
+///
+/// `position` is the world-space center of the quad. `size` is the quad
+/// extent in world units. `color` multiplies the sampled texel (use
+/// `[1, 1, 1, 1]` for an untinted sprite). `uv_min` / `uv_max` define
+/// the sampled sub-rectangle of the sprite texture; for a full-texture
+/// sprite use `[0, 0]` and `[1, 1]`.
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable, Debug)]
-pub(crate) struct SpriteUniform {
-    pub transform: [f32; 4],
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SpriteInstance {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub uv_min: [f32; 2],
+    pub uv_max: [f32; 2],
 }
 
-impl SpriteUniform {
+impl SpriteInstance {
+    /// Convenience constructor: untinted full-texture sprite.
     pub fn new(position: [f32; 2], size: [f32; 2]) -> Self {
         Self {
-            transform: [position[0], position[1], size[0], size[1]],
+            position,
+            size,
+            color: [1.0, 1.0, 1.0, 1.0],
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
         }
     }
 }
@@ -73,12 +85,16 @@ fn generate_checker_rgba(size: u32, tile: u32) -> Vec<u8> {
     bytes
 }
 
-/// All GPU resources required to draw the single demo sprite.
+/// Initial GPU instance buffer capacity (in sprite instances).
+const INITIAL_INSTANCE_CAPACITY: u64 = 256;
+
+/// Batched sprite pipeline + its texture, sampler, and instance buffer.
 pub(crate) struct SpritePass {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: u64,
+    texture_bind_group: wgpu::BindGroup,
 }
 
 impl SpritePass {
@@ -88,7 +104,7 @@ impl SpritePass {
         surface_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        // Texture: procedural checker, uploaded once at startup.
+        // Procedural checker texture (Phase 2 still has no asset loader).
         let texture_size = wgpu::Extent3d {
             width: CHECKER_SIZE,
             height: CHECKER_SIZE,
@@ -134,29 +150,11 @@ impl SpritePass {
             ..Default::default()
         });
 
-        // Default: 256x256 sprite centered at the world origin.
-        let initial_uniform = SpriteUniform::new([0.0, 0.0], [256.0, 256.0]);
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("infengine_render::sprite_uniform"),
-            contents: bytemuck::bytes_of(&initial_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("infengine_render::sprite_bgl"),
+        let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("infengine_render::sprite_texture_bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
@@ -166,7 +164,7 @@ impl SpritePass {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -174,31 +172,32 @@ impl SpritePass {
             ],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("infengine_render::sprite_bind_group"),
-            layout: &bind_group_layout,
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("infengine_render::sprite_texture_bg"),
+            layout: &texture_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
                     resource: wgpu::BindingResource::TextureView(&texture_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
         });
 
-        // Vertex buffer for the unit quad. Static for the lifetime of the
-        // pipeline; transforms come from the uniform.
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("infengine_render::sprite_vbuf"),
             contents: bytemuck::cast_slice(&SPRITE_VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("infengine_render::sprite_instance_buf"),
+            size: INITIAL_INSTANCE_CAPACITY * std::mem::size_of::<SpriteInstance>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -208,7 +207,7 @@ impl SpritePass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("infengine_render::sprite_pipeline_layout"),
-            bind_group_layouts: &[camera_layout, &bind_group_layout],
+            bind_group_layouts: &[camera_layout, &texture_bgl],
             push_constant_ranges: &[],
         });
 
@@ -225,17 +224,57 @@ impl SpritePass {
             },
         ];
 
+        let instance_attrs = [
+            // position (vec2)
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            // size (vec2)
+            wgpu::VertexAttribute {
+                offset: 8,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            // color (vec4)
+            wgpu::VertexAttribute {
+                offset: 16,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            // uv_min (vec2)
+            wgpu::VertexAttribute {
+                offset: 32,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            // uv_max (vec2)
+            wgpu::VertexAttribute {
+                offset: 40,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+        ];
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("infengine_render::sprite_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SpriteVertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &vertex_attrs,
-                }],
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<SpriteVertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &vertex_attrs,
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<SpriteInstance>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance_attrs,
+                    },
+                ],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -266,24 +305,48 @@ impl SpritePass {
         Self {
             pipeline,
             vertex_buffer,
-            uniform_buffer,
-            bind_group,
+            instance_buffer,
+            instance_capacity: INITIAL_INSTANCE_CAPACITY,
+            texture_bind_group,
         }
     }
 
-    /// Update the sprite's world-space transform (position of center,
-    /// size in world units).
-    pub fn set_transform(&self, queue: &wgpu::Queue, position: [f32; 2], size: [f32; 2]) {
-        let uniform = SpriteUniform::new(position, size);
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
+    /// Upload `instances` into the GPU buffer, growing it if necessary.
+    pub fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: &[SpriteInstance],
+    ) {
+        let needed = instances.len() as u64;
+        if needed > self.instance_capacity {
+            let mut new_cap = self.instance_capacity.max(1);
+            while new_cap < needed {
+                new_cap *= 2;
+            }
+            self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("infengine_render::sprite_instance_buf"),
+                size: new_cap * std::mem::size_of::<SpriteInstance>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.instance_capacity = new_cap;
+        }
+        if !instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
+        }
     }
 
-    /// Record draw commands into an existing render pass. Assumes the
-    /// caller has already bound the camera at `@group(0)`.
-    pub fn draw<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>) {
+    /// Record draw commands for `count` previously-uploaded instances.
+    /// Assumes the caller has already bound the camera at `@group(0)`.
+    pub fn draw<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>, count: u32) {
+        if count == 0 {
+            return;
+        }
         rpass.set_pipeline(&self.pipeline);
-        rpass.set_bind_group(1, &self.bind_group, &[]);
+        rpass.set_bind_group(1, &self.texture_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        rpass.draw(0..SPRITE_VERTICES.len() as u32, 0..1);
+        rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        rpass.draw(0..SPRITE_VERTICES.len() as u32, 0..count);
     }
 }
