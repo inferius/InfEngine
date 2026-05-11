@@ -8,8 +8,10 @@
 #![forbid(unsafe_code)]
 
 mod camera;
+mod camera_3d;
 mod debug;
 mod font;
+mod mesh3d;
 mod sprite;
 mod tilemap;
 
@@ -26,10 +28,16 @@ use wgpu::{
 
 pub use camera::Camera2D;
 use camera::CameraResource;
+pub use camera_3d::Camera3D;
+use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
+use mesh3d::Mesh3DPass;
+pub use mesh3d::MeshInstance;
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
 pub use tilemap::{TileId, Tilemap};
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Errors that can occur while creating or running the renderer.
 #[derive(Debug, thiserror::Error)]
@@ -57,10 +65,15 @@ pub struct Renderer {
     clear_color: Color,
     camera: Camera2D,
     camera_resource: CameraResource,
+    camera_3d: Camera3D,
+    camera_3d_resource: Camera3DResource,
     sprite: SpritePass,
     sprite_queue: Vec<SpriteInstance>,
     debug: DebugPass,
     debug_vertices: Vec<DebugVertex>,
+    mesh3d: Mesh3DPass,
+    mesh3d_queue: Vec<MeshInstance>,
+    depth_view: wgpu::TextureView,
 }
 
 impl Renderer {
@@ -142,8 +155,17 @@ impl Renderer {
 
         let camera = Camera2D::new(config.width, config.height);
         let camera_resource = CameraResource::new(&device, &camera);
+        let camera_3d = Camera3D::new(config.width, config.height);
+        let camera_3d_resource = Camera3DResource::new(&device, &camera_3d);
         let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
+        let mesh3d = Mesh3DPass::new(
+            &device,
+            config.format,
+            DEPTH_FORMAT,
+            &camera_3d_resource.layout,
+        );
+        let depth_view = create_depth_view(&device, config.width, config.height);
 
         Ok(Self {
             surface,
@@ -153,10 +175,15 @@ impl Renderer {
             clear_color,
             camera,
             camera_resource,
+            camera_3d,
+            camera_3d_resource,
             sprite,
             sprite_queue: Vec::new(),
             debug,
             debug_vertices: Vec::new(),
+            mesh3d,
+            mesh3d_queue: Vec::new(),
+            depth_view,
         })
     }
 
@@ -197,6 +224,18 @@ impl Renderer {
     /// every sprite that should appear.
     pub fn draw_sprite(&mut self, instance: SpriteInstance) {
         self.sprite_queue.push(instance);
+    }
+
+    /// Queue a 3D cube draw for the next frame. `model` is a column-major
+    /// 4x4 transform (use `glam::Mat4::to_cols_array`).
+    pub fn draw_cube(&mut self, model: [f32; 16], color: [f32; 4]) {
+        self.mesh3d_queue.push(MeshInstance::new(model, color));
+    }
+
+    /// Mutable access to the 3D camera. Edits take effect on the next
+    /// `render()` call.
+    pub fn camera_3d_mut(&mut self) -> &mut Camera3D {
+        &mut self.camera_3d
     }
 
     /// Queue every non-empty tile of `map` as a sprite. Convenience
@@ -272,6 +311,8 @@ impl Renderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.camera.set_viewport(width, height);
+        self.camera_3d.set_viewport(width, height);
+        self.depth_view = create_depth_view(&self.device, width, height);
         debug!(width, height, "surface reconfigured");
     }
 
@@ -310,14 +351,18 @@ impl Renderer {
             Err(err) => return Err(err),
         };
 
-        // Upload current camera matrix and sprite/debug data.
+        // Upload camera matrices and queued instance data.
         self.camera_resource.upload(&self.queue, &self.camera);
+        self.camera_3d_resource.upload(&self.queue, &self.camera_3d);
         self.sprite
             .upload(&self.device, &self.queue, &self.sprite_queue);
         self.debug
             .upload(&self.device, &self.queue, &self.debug_vertices);
+        self.mesh3d
+            .upload(&self.device, &self.queue, &self.mesh3d_queue);
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
+        let mesh3d_count = self.mesh3d_queue.len() as u32;
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
@@ -327,7 +372,43 @@ impl Renderer {
                 label: Some("infengine_render::frame_encoder"),
             });
 
+        // 3D pass first (with depth), then 2D pass on top (no depth).
+        if mesh3d_count > 0 {
+            let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("infengine_render::mesh3d_pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(self.clear_color),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
+            self.mesh3d.draw(&mut rpass, mesh3d_count);
+        }
+
         {
+            // Clear-or-load the color attachment: if the 3D pass ran it
+            // already cleared and populated the surface, otherwise this
+            // pass owns the clear.
+            let load = if mesh3d_count > 0 {
+                LoadOp::Load
+            } else {
+                LoadOp::Clear(self.clear_color)
+            };
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::main_pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -335,7 +416,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(self.clear_color),
+                        load,
                         store: StoreOp::Store,
                     },
                 })],
@@ -362,6 +443,7 @@ impl Renderer {
         frame.present();
         self.sprite_queue.clear();
         self.debug_vertices.clear();
+        self.mesh3d_queue.clear();
         Ok(())
     }
 
@@ -379,4 +461,22 @@ impl std::fmt::Debug for Renderer {
             .field("present_mode", &self.config.present_mode)
             .finish()
     }
+}
+
+fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("infengine_render::depth_texture"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }

@@ -1,0 +1,20 @@
+[package]
+name = "cube_demo"
+description = "Phase 6.1 proof of concept: 3D camera and batched cube draws."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../../crates/infengine_core" }
+infengine_window = { path = "../../crates/infengine_window" }
+infengine_render = { path = "../../crates/infengine_render" }
+glam = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
