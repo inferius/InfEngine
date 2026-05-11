@@ -1,0 +1,6 @@
+(
+    name: "csharp_demo",
+    asset_root: "assets",
+    scenes: [],
+    classes: [],
+)

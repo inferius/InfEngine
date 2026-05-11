@@ -293,6 +293,10 @@ impl Editor {
     /// Copy the project, every referenced scene file, and the asset
     /// directory into a `dist/` folder next to the project file. The
     /// resulting layout is what `infengine_runtime` expects.
+    /// Copy the project manifest, every scene, the asset directory,
+    /// and the per-entity blueprint files into `dist/`. The runtime
+    /// binary is added by `build_standalone`; `export` only ships the
+    /// data.
     fn export(&mut self) {
         let dist = self.project_root.join("dist");
         if let Err(err) = std::fs::create_dir_all(&dist) {
@@ -322,6 +326,16 @@ impl Editor {
                 return;
             }
         }
+        // Blueprints dir (per-entity .ron files written by the
+        // editor). Optional - skip silently when it doesn't exist.
+        let blueprints_src = self.project_root.join("blueprints");
+        if blueprints_src.exists() {
+            let blueprints_dst = dist.join("blueprints");
+            if let Err(err) = copy_dir_all(&blueprints_src, &blueprints_dst) {
+                self.status = format!("Export failed (blueprints): {err}");
+                return;
+            }
+        }
         let readme = dist.join("README.txt");
         let _ = std::fs::write(
             &readme,
@@ -329,11 +343,54 @@ impl Editor {
              Drop a built `infengine_runtime` (or `infengine_runtime.exe` on Windows)\n\
              next to this file, then run it. The runtime opens `project.ron` and\n\
              plays the first scene.\n\n\
-             Build the runtime with: `cargo build --release -p infengine_runtime`\n\
+             Use the editor's 'Build standalone' button to do this in one step,\n\
+             or build the runtime with `cargo build --release -p infengine_runtime`\n\
              and copy the binary from `target/release/`.\n",
         );
         self.status = format!("Export OK -> {}", dist.display());
         info!(dist = %dist.display(), "project exported");
+    }
+
+    /// Run a release build of `infengine_runtime`, copy the resulting
+    /// binary next to `dist/project.ron`, and ensure all the data is
+    /// already there via `export`. The result is a self-contained
+    /// folder that double-clicks into a playable build.
+    fn build_standalone(&mut self) {
+        self.export();
+        if self.status.starts_with("Export failed") {
+            return;
+        }
+        self.status = "Building runtime (release) ...".into();
+        let output = std::process::Command::new("cargo")
+            .args(["build", "--release", "-p", "infengine_runtime"])
+            .current_dir(workspace_root())
+            .output();
+        let dist = self.project_root.join("dist");
+        match output {
+            Ok(out) if out.status.success() => {
+                let exe = if cfg!(windows) {
+                    "infengine_runtime.exe"
+                } else {
+                    "infengine_runtime"
+                };
+                let src = workspace_root().join("target").join("release").join(exe);
+                let dst = dist.join(exe);
+                if let Err(err) = std::fs::copy(&src, &dst) {
+                    self.status = format!("Standalone build copy failed: {err}");
+                    return;
+                }
+                self.status = format!("Standalone build OK -> {}", dst.display());
+                info!(out = %dst.display(), "standalone build complete");
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let snippet = stderr.lines().rev().take(3).collect::<Vec<_>>().join(" | ");
+                self.status = format!("cargo build failed: {snippet}");
+            }
+            Err(err) => {
+                self.status = format!("Failed to launch cargo: {err}");
+            }
+        }
     }
 
     fn add_scene(&mut self) {
@@ -1264,6 +1321,7 @@ impl AppHandler for Editor {
         let mut action_pause = false;
         let mut action_stop = false;
         let mut action_export = false;
+        let mut action_build_standalone = false;
         let mut action_refresh_assets = false;
         let mut action_import_gltf: Option<String> = None;
         let mut switch_to: Option<usize> = None;
@@ -1413,6 +1471,9 @@ impl AppHandler for Editor {
                             ui.horizontal(|ui| {
                                 if ui.button("Export -> dist/").clicked() {
                                     action_export = true;
+                                }
+                                if ui.button("Build standalone").clicked() {
+                                    action_build_standalone = true;
                                 }
                             });
                             ui.horizontal(|ui| {
@@ -1574,6 +1635,9 @@ impl AppHandler for Editor {
         }
         if action_export {
             self.export();
+        }
+        if action_build_standalone {
+            self.build_standalone();
         }
         if let Some((child, new_parent)) = reparent_request
             && let Some(entity) = self.scene.get_mut(child)
@@ -2188,6 +2252,28 @@ fn sprite_editor(ui: &mut egui::Ui, entity: &mut Entity) {
                 }
             }
         });
+}
+
+/// Best-effort workspace-root lookup. We walk upwards from the
+/// running editor binary looking for a `Cargo.toml` that contains a
+/// `[workspace]` table. Falls back to `.` so the cargo invocation
+/// still runs (and fails informatively) when launched outside the
+/// dev tree.
+fn workspace_root() -> PathBuf {
+    let mut cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    loop {
+        let candidate = cur.join("Cargo.toml");
+        if candidate.exists()
+            && let Ok(text) = std::fs::read_to_string(&candidate)
+            && text.contains("[workspace]")
+        {
+            return cur;
+        }
+        match cur.parent() {
+            Some(p) => cur = p.to_path_buf(),
+            None => return PathBuf::from("."),
+        }
+    }
 }
 
 fn load_or_create_project(path: &Path) -> Result<Project, ProjectError> {

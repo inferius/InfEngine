@@ -1,0 +1,17 @@
+(
+    name: "demo_game",
+    asset_root: "assets",
+    scenes: [],
+    classes: [
+        (
+            name: "Player",
+            blueprint: None,
+            default_components: [],
+        ),
+        (
+            name: "Pickup",
+            blueprint: None,
+            default_components: [],
+        ),
+    ],
+)

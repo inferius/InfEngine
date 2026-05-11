@@ -1,0 +1,6 @@
+(
+    name: "cube_demo",
+    asset_root: "assets",
+    scenes: [],
+    classes: [],
+)
