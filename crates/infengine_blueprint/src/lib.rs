@@ -227,6 +227,118 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "subtract",
+        label: "Subtract",
+        category: "Math",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("diff", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "multiply",
+        label: "Multiply",
+        category: "Math",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("product", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "divide",
+        label: "Divide",
+        category: "Math",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("quotient", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "equal_float",
+        label: "Equal (float)",
+        category: "Comparison",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "less_than",
+        label: "Less Than (float)",
+        category: "Comparison",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "greater_than",
+        label: "Greater Than (float)",
+        category: "Comparison",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "and",
+        label: "AND",
+        category: "Logic",
+        inputs: &[
+            PinSpec::new("a", PinType::Bool),
+            PinSpec::new("b", PinType::Bool),
+        ],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "or",
+        label: "OR",
+        category: "Logic",
+        inputs: &[
+            PinSpec::new("a", PinType::Bool),
+            PinSpec::new("b", PinType::Bool),
+        ],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "not",
+        label: "NOT",
+        category: "Logic",
+        inputs: &[PinSpec::new("value", PinType::Bool)],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        // Multi-output exec node. The compiler walks `then_0` through
+        // `then_3` in order so chained sinks run top-to-bottom from a
+        // single trigger.
+        id: "sequence",
+        label: "Sequence",
+        category: "Control",
+        inputs: &[PinSpec::new("in", PinType::Exec)],
+        outputs: &[
+            PinSpec::new("then_0", PinType::Exec),
+            PinSpec::new("then_1", PinType::Exec),
+            PinSpec::new("then_2", PinType::Exec),
+            PinSpec::new("then_3", PinType::Exec),
+        ],
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "print",
         label: "Print",
         category: "Debug",
@@ -608,6 +720,21 @@ struct PendingEdge {
     ty: PinType,
 }
 
+/// Payload for the side-panel -> canvas drag-and-drop flow. The side
+/// panel wraps each variable / function row in a `dnd_drag_source`
+/// carrying one of these; the canvas registers a matching drop zone
+/// and translates the drop into either a Get/Set variable node or a
+/// CallFunction node.
+#[derive(Debug, Clone)]
+pub enum BpDragPayload {
+    /// Drag a named variable. The drop site asks Set vs Get (or, if
+    /// the user held Ctrl/Alt, applies the modifier rule directly).
+    Variable(String, PinType),
+    /// Drag a function. The drop creates a `call_function` node with
+    /// the `name` param pre-filled.
+    Function(String),
+}
+
 /// Which sub-graph the editor's canvas is currently rendering. The
 /// blueprint always owns an `EventGraph` (the default trigger graph)
 /// plus user-defined functions and macros; the sub-tab strip switches
@@ -645,6 +772,15 @@ pub struct BlueprintEditor {
     /// and auto-connects whatever node the user picks. This stores the
     /// originating pin until the menu closes.
     context_menu_from_pin: Option<PendingEdge>,
+    /// Live search query for the context menu. Unreal-style: typing
+    /// filters the flat list of node kinds by case-insensitive
+    /// substring match against label + category.
+    context_menu_search: String,
+    /// Pending variable drop awaiting Set/Get disambiguation. Stores
+    /// the variable name + the canvas-local drop position; the
+    /// canvas renders a small popup that resolves into either a
+    /// `get_*_var` or `set_*_var` node.
+    pending_var_drop: Option<(String, PinType, egui::Pos2)>,
     status: String,
 }
 
@@ -795,7 +931,18 @@ impl BlueprintEditor {
         ui.collapsing("Variables", |ui| {
             let mut remove: Option<usize> = None;
             for (i, var) in self.blueprint.variables.iter_mut().enumerate() {
+                // The drag handle (left column) carries the variable
+                // name as payload. The rest of the row stays as a
+                // regular edit surface so renaming / changing type
+                // still works without triggering a drag.
                 ui.horizontal(|ui| {
+                    let drag_id = egui::Id::new(("bp_var_drag", i));
+                    let payload = BpDragPayload::Variable(var.name.clone(), var.ty);
+                    ui.dnd_drag_source(drag_id, payload, |ui| {
+                        ui.label("::");
+                    })
+                    .response
+                    .on_hover_text("Drag onto canvas to add Get/Set");
                     if ui.text_edit_singleline(&mut var.name).changed() {
                         dirty = true;
                     }
@@ -839,11 +986,18 @@ impl BlueprintEditor {
                 dirty = true;
             }
         });
-        // Functions (scaffold - graph editing comes later).
+        // Functions (drag-droppable: drop onto canvas -> CallFunction).
         ui.collapsing("Functions", |ui| {
             let mut remove: Option<usize> = None;
             for (i, f) in self.blueprint.functions.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
+                    let drag_id = egui::Id::new(("bp_fn_drag", i));
+                    let payload = BpDragPayload::Function(f.name.clone());
+                    ui.dnd_drag_source(drag_id, payload, |ui| {
+                        ui.label("::");
+                    })
+                    .response
+                    .on_hover_text("Drag onto canvas to add Call Function");
                     if ui.text_edit_singleline(&mut f.name).changed() {
                         dirty = true;
                     }
@@ -897,6 +1051,35 @@ impl BlueprintEditor {
             }
         });
         dirty
+    }
+
+    /// Spawn a variable Get / Set node at the given canvas-local
+    /// position with the variable name + type baked into the node's
+    /// params. Only Float vars have a typed Get/Set node today; other
+    /// types fall back to `get_float_var` / `set_float_var` until the
+    /// generalised variable ops land (the value still flows through
+    /// the VM, just narrowed to float at the boundary).
+    fn spawn_var_node(
+        &mut self,
+        name: &str,
+        _ty: PinType,
+        is_setter: bool,
+        canvas_pos: egui::Vec2,
+    ) -> NodeId {
+        let kind = if is_setter {
+            "set_float_var"
+        } else {
+            "get_float_var"
+        };
+        let id = self
+            .blueprint
+            .graph
+            .add_node(kind, [canvas_pos.x, canvas_pos.y]);
+        if let Some(n) = self.blueprint.graph.nodes.iter_mut().find(|n| n.id == id) {
+            n.params.insert("name".into(), name.to_string());
+        }
+        self.selected = Some(id);
+        id
     }
 
     /// Show editor fields for `params` on the currently selected node
@@ -1274,6 +1457,55 @@ impl BlueprintEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
 
+        // Side-panel -> canvas drop: if the user releases a var /
+        // function payload over the canvas, materialise it into a
+        // node at the drop position.
+        let drop_payload = response.dnd_release_payload::<BpDragPayload>();
+        if let Some(payload) = drop_payload {
+            // Hover position is the cursor when the release happened;
+            // fall back to canvas top-left if egui didn't capture one.
+            let drop_pos = response.hover_pos().unwrap_or(rect.min);
+            let canvas_pos = drop_pos - rect.min - self.view_offset;
+            match payload.as_ref() {
+                BpDragPayload::Function(name) => {
+                    let new_id = self
+                        .blueprint
+                        .graph
+                        .add_node("call_function", [canvas_pos.x, canvas_pos.y]);
+                    if let Some(n) = self
+                        .blueprint
+                        .graph
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.id == new_id)
+                    {
+                        n.params.insert("name".into(), name.clone());
+                    }
+                    self.selected = Some(new_id);
+                    dirty = true;
+                }
+                BpDragPayload::Variable(name, ty) => {
+                    // Unreal-style modifiers: Alt = Get, Ctrl = Set,
+                    // otherwise ask via a small popup so the user
+                    // explicitly picks Set vs Get.
+                    let mods = ui.input(|i| i.modifiers);
+                    if mods.alt {
+                        self.spawn_var_node(name, *ty, false, canvas_pos);
+                        dirty = true;
+                    } else if mods.ctrl {
+                        self.spawn_var_node(name, *ty, true, canvas_pos);
+                        dirty = true;
+                    } else {
+                        // Defer until the user picks via the popup
+                        // (rendered further down once the borrow
+                        // checker is happy).
+                        self.pending_var_drop =
+                            Some((name.clone(), *ty, egui::pos2(canvas_pos.x, canvas_pos.y)));
+                    }
+                }
+            }
+        }
+
         // Grid backdrop.
         let grid_step = 40.0;
         let grid_color = egui::Color32::from_gray(40);
@@ -1514,7 +1746,8 @@ impl BlueprintEditor {
             }
         }
 
-        // Context menu popup.
+        // Context menu popup (Unreal-style: search field + flat
+        // results when typing, categorised tree otherwise).
         if let Some(anchor) = self.context_menu_at {
             let mut close = false;
             let mut add_kind: Option<&'static str> = None;
@@ -1524,7 +1757,8 @@ impl BlueprintEditor {
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(160.0);
+                        ui.set_min_width(260.0);
+                        ui.set_max_height(420.0);
                         if let Some(p) = &pin_filter {
                             let [r, g, b] = p.ty.rgb();
                             ui.colored_label(
@@ -1533,17 +1767,25 @@ impl BlueprintEditor {
                             );
                             ui.separator();
                         }
-                        ui.label("Add node");
+                        // Search field + clear button.
+                        ui.horizontal(|ui| {
+                            ui.label("Search:");
+                            let resp = ui.text_edit_singleline(&mut self.context_menu_search);
+                            resp.request_focus();
+                            if ui.small_button("X").clicked() {
+                                self.context_menu_search.clear();
+                            }
+                        });
+                        ui.separator();
                         let ctx = blueprint_context(&self.blueprint.target);
-                        let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
+                        let query = self.context_menu_search.to_lowercase();
+                        // Collect candidates pre-filtered by pin
+                        // compatibility + context.
+                        let mut candidates: Vec<&NodeKindDef> = Vec::new();
                         for def in registry.iter() {
                             if !def.available_in(ctx) {
                                 continue;
                             }
-                            // Pin-aware filter: when the menu came
-                            // from a pin drag, only show nodes that
-                            // have an opposite-side pin of the same
-                            // type so the auto-connect can succeed.
                             if let Some(p) = &pin_filter {
                                 let target_pins =
                                     if p.is_output { def.inputs } else { def.outputs };
@@ -1551,22 +1793,66 @@ impl BlueprintEditor {
                                     continue;
                                 }
                             }
-                            by_cat.entry(def.category).or_default().push(def);
+                            candidates.push(def);
                         }
-                        let mut cats: Vec<_> = by_cat.keys().copied().collect();
-                        cats.sort_unstable();
-                        for cat in cats {
-                            ui.menu_button(cat, |ui| {
-                                let mut defs = by_cat[cat].clone();
-                                defs.sort_by_key(|d| d.label);
-                                for def in defs {
-                                    if ui.button(def.label).clicked() {
-                                        add_kind = Some(def.id);
-                                        close = true;
+                        // Scoring + filter pass for the query.
+                        let matches: Vec<&NodeKindDef> = if query.is_empty() {
+                            candidates.clone()
+                        } else {
+                            candidates
+                                .iter()
+                                .copied()
+                                .filter(|d| {
+                                    d.label.to_lowercase().contains(&query)
+                                        || d.category.to_lowercase().contains(&query)
+                                        || d.id.to_lowercase().contains(&query)
+                                })
+                                .collect()
+                        };
+                        egui::ScrollArea::vertical()
+                            .max_height(340.0)
+                            .show(ui, |ui| {
+                                if query.is_empty() {
+                                    // Tree view by category.
+                                    let mut by_cat: HashMap<
+                                        &'static str,
+                                        Vec<&NodeKindDef>,
+                                    > = HashMap::new();
+                                    for def in &matches {
+                                        by_cat.entry(def.category).or_default().push(def);
+                                    }
+                                    let mut cats: Vec<_> = by_cat.keys().copied().collect();
+                                    cats.sort_unstable();
+                                    for cat in cats {
+                                        ui.collapsing(cat, |ui| {
+                                            let mut defs = by_cat[cat].clone();
+                                            defs.sort_by_key(|d| d.label);
+                                            for def in defs {
+                                                if ui
+                                                    .button(def.label)
+                                                    .on_hover_text(def.id)
+                                                    .clicked()
+                                                {
+                                                    add_kind = Some(def.id);
+                                                    close = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                } else {
+                                    // Flat ranked list while searching.
+                                    if matches.is_empty() {
+                                        ui.label("(no matches)");
+                                    }
+                                    for def in &matches {
+                                        let label = format!("{} - {}", def.category, def.label);
+                                        if ui.button(label).on_hover_text(def.id).clicked() {
+                                            add_kind = Some(def.id);
+                                            close = true;
+                                        }
                                     }
                                 }
                             });
-                        }
                         ui.separator();
                         if ui.button("Cancel").clicked() {
                             close = true;
@@ -1601,6 +1887,49 @@ impl BlueprintEditor {
             if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.context_menu_at = None;
                 self.context_menu_from_pin = None;
+                self.context_menu_search.clear();
+            }
+        }
+
+        // Pending variable drop -> Set / Get picker popup.
+        if let Some((name, ty, canvas_pos)) = self.pending_var_drop.clone() {
+            let screen_anchor = rect.min + self.view_offset + canvas_pos.to_vec2();
+            let mut consumed = false;
+            egui::Area::new(egui::Id::new(("bp_var_drop_popup", name.clone())))
+                .fixed_pos(screen_anchor)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(140.0);
+                        ui.label(format!("{name} : {}", ty.label()));
+                        ui.separator();
+                        if ui.button("Get").clicked() {
+                            self.spawn_var_node(
+                                &name,
+                                ty,
+                                false,
+                                egui::vec2(canvas_pos.x, canvas_pos.y),
+                            );
+                            dirty = true;
+                            consumed = true;
+                        }
+                        if ui.button("Set").clicked() {
+                            self.spawn_var_node(
+                                &name,
+                                ty,
+                                true,
+                                egui::vec2(canvas_pos.x, canvas_pos.y),
+                            );
+                            dirty = true;
+                            consumed = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            consumed = true;
+                        }
+                    });
+                });
+            if consumed || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.pending_var_drop = None;
             }
         }
 

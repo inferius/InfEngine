@@ -51,6 +51,21 @@ pub enum Op {
     PushBool(bool),
     PushVec3([f32; 3]),
     Add,
+    Sub,
+    Mul,
+    Div,
+    /// Pop two floats, push `Bool(a == b)` (with a small epsilon).
+    EqFloat,
+    /// Pop two floats, push `Bool(a < b)`.
+    LtFloat,
+    /// Pop two floats, push `Bool(a > b)`.
+    GtFloat,
+    /// Pop two bools, push `Bool(a && b)`.
+    AndBool,
+    /// Pop two bools, push `Bool(a || b)`.
+    OrBool,
+    /// Pop one bool, push its negation.
+    NotBool,
     MakeVec3,
     Print,
     /// Pop one Vec3 and write it as the target entity's world
@@ -158,7 +173,7 @@ fn compile_data(
             let name = node.params.get("name").cloned().unwrap_or_default();
             ops.push(Op::PushVar(name));
         }
-        "add" => {
+        "add" | "subtract" | "multiply" | "divide" => {
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
@@ -167,7 +182,51 @@ fn compile_data(
                     None => ops.push(Op::PushFloat(0.0)),
                 }
             }
-            ops.push(Op::Add);
+            ops.push(match node.kind.as_str() {
+                "add" => Op::Add,
+                "subtract" => Op::Sub,
+                "multiply" => Op::Mul,
+                _ => Op::Div,
+            });
+        }
+        "equal_float" | "less_than" | "greater_than" => {
+            for input in ["a", "b"] {
+                match find_data_source(graph, node_id, input) {
+                    Some((src_node, src_pin)) => {
+                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                    }
+                    None => ops.push(Op::PushFloat(0.0)),
+                }
+            }
+            ops.push(match node.kind.as_str() {
+                "equal_float" => Op::EqFloat,
+                "less_than" => Op::LtFloat,
+                _ => Op::GtFloat,
+            });
+        }
+        "and" | "or" => {
+            for input in ["a", "b"] {
+                match find_data_source(graph, node_id, input) {
+                    Some((src_node, src_pin)) => {
+                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                    }
+                    None => ops.push(Op::PushBool(false)),
+                }
+            }
+            ops.push(if node.kind == "and" {
+                Op::AndBool
+            } else {
+                Op::OrBool
+            });
+        }
+        "not" => {
+            match find_data_source(graph, node_id, "value") {
+                Some((src_node, src_pin)) => {
+                    compile_data(graph, src_node, src_pin, visiting, ops)?;
+                }
+                None => ops.push(Op::PushBool(false)),
+            }
+            ops.push(Op::NotBool);
         }
         "make_vec3" => {
             for input in ["x", "y", "z"] {
@@ -324,6 +383,16 @@ fn compile_exec_from(
             pin: "(sink)".to_string(),
         })?;
         match sink_node.kind.as_str() {
+            "sequence" => {
+                // Walk each `then_N` exec output in order. No VM op
+                // needed - we just concatenate the chains so they run
+                // top-to-bottom.
+                for pin_name in ["then_0", "then_1", "then_2", "then_3"] {
+                    compile_exec_from(
+                        graph, sink_id, pin_name, ops, target, visited, functions, calling,
+                    )?;
+                }
+            }
             "branch" => {
                 // Evaluate the bool condition then emit the
                 // standard JumpIfFalse + true-body + Jump-to-end +
@@ -469,6 +538,51 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
                 let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
                 let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
                 stack.push(Value::Float(a + b));
+            }
+            Op::Sub => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                stack.push(Value::Float(a - b));
+            }
+            Op::Mul => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                stack.push(Value::Float(a * b));
+            }
+            Op::Div => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let r = if b.abs() < 1e-12 { 0.0 } else { a / b };
+                stack.push(Value::Float(r));
+            }
+            Op::EqFloat => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                stack.push(Value::Bool((a - b).abs() < 1e-6));
+            }
+            Op::LtFloat => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                stack.push(Value::Bool(a < b));
+            }
+            Op::GtFloat => {
+                let b = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                let a = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                stack.push(Value::Bool(a > b));
+            }
+            Op::AndBool => {
+                let b = matches!(stack.pop(), Some(Value::Bool(true)));
+                let a = matches!(stack.pop(), Some(Value::Bool(true)));
+                stack.push(Value::Bool(a && b));
+            }
+            Op::OrBool => {
+                let b = matches!(stack.pop(), Some(Value::Bool(true)));
+                let a = matches!(stack.pop(), Some(Value::Bool(true)));
+                stack.push(Value::Bool(a || b));
+            }
+            Op::NotBool => {
+                let a = matches!(stack.pop(), Some(Value::Bool(true)));
+                stack.push(Value::Bool(!a));
             }
             Op::MakeVec3 => {
                 let z = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
@@ -696,6 +810,70 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(99.0)]);
+    }
+
+    #[test]
+    fn sequence_runs_all_outputs_in_order() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let seq = g.add_node("sequence", [0.0, 0.0]);
+        let p0 = g.add_node("print", [0.0, 0.0]);
+        let p1 = g.add_node("print", [0.0, 0.0]);
+        let v0 = g.add_node("const_float", [0.0, 0.0]);
+        let v1 = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == v0)
+            .unwrap()
+            .params
+            .insert("value".into(), "1".into());
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == v1)
+            .unwrap()
+            .params
+            .insert("value".into(), "2".into());
+        assert!(g.connect(&reg, tick, "exec", seq, "in").unwrap());
+        assert!(g.connect(&reg, seq, "then_0", p0, "in").unwrap());
+        assert!(g.connect(&reg, seq, "then_1", p1, "in").unwrap());
+        assert!(g.connect(&reg, v0, "value", p0, "value").unwrap());
+        assert!(g.connect(&reg, v1, "value", p1, "value").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(1.0), Value::Float(2.0)]);
+    }
+
+    #[test]
+    fn math_and_comparison_ops() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let a = g.add_node("const_float", [0.0, 0.0]);
+        let b = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == a)
+            .unwrap()
+            .params
+            .insert("value".into(), "10".into());
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == b)
+            .unwrap()
+            .params
+            .insert("value".into(), "3".into());
+        let sub = g.add_node("subtract", [0.0, 0.0]);
+        let p_sub = g.add_node("print", [0.0, 0.0]);
+        assert!(g.connect(&reg, tick, "exec", p_sub, "in").unwrap());
+        assert!(g.connect(&reg, a, "value", sub, "a").unwrap());
+        assert!(g.connect(&reg, b, "value", sub, "b").unwrap());
+        assert!(g.connect(&reg, sub, "diff", p_sub, "value").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(7.0)]);
     }
 
     #[test]
