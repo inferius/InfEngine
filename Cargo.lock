@@ -2085,6 +2085,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "infengine_runtime"
+version = "0.0.1"
+dependencies = [
+ "infengine_core",
+ "infengine_render",
+ "infengine_window",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "infengine_scripting"
 version = "0.0.1"
 dependencies = [

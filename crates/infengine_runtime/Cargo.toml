@@ -1,0 +1,23 @@
+[package]
+name = "infengine_runtime"
+description = "Standalone runtime player for InfEngine projects."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "infengine_runtime"
+path = "src/main.rs"
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+infengine_window = { path = "../infengine_window" }
+infengine_render = { path = "../infengine_render" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

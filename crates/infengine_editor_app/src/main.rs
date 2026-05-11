@@ -151,6 +151,52 @@ impl Editor {
         }
     }
 
+    /// Copy the project, every referenced scene file, and the asset
+    /// directory into a `dist/` folder next to the project file. The
+    /// resulting layout is what `infengine_runtime` expects.
+    fn export(&mut self) {
+        let dist = self.project_root.join("dist");
+        if let Err(err) = std::fs::create_dir_all(&dist) {
+            self.status = format!("Export failed (create dist): {err}");
+            return;
+        }
+        if let Err(err) = std::fs::copy(&self.project_file, dist.join("project.ron")) {
+            self.status = format!("Export failed (project.ron): {err}");
+            return;
+        }
+        for entry in &self.project.scenes {
+            let src = self.project.scene_full_path(&self.project_root, entry);
+            let dst = dist.join(&entry.path);
+            if let Some(parent) = dst.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(err) = std::fs::copy(&src, &dst) {
+                self.status = format!("Export failed (scene {}): {err}", entry.name);
+                return;
+            }
+        }
+        let asset_src = self.project.asset_root_full(&self.project_root);
+        if asset_src.exists() {
+            let asset_dst = dist.join(&self.project.asset_root);
+            if let Err(err) = copy_dir_all(&asset_src, &asset_dst) {
+                self.status = format!("Export failed (assets): {err}");
+                return;
+            }
+        }
+        let readme = dist.join("README.txt");
+        let _ = std::fs::write(
+            &readme,
+            "InfEngine runtime export.\n\n\
+             Drop a built `infengine_runtime` (or `infengine_runtime.exe` on Windows)\n\
+             next to this file, then run it. The runtime opens `project.ron` and\n\
+             plays the first scene.\n\n\
+             Build the runtime with: `cargo build --release -p infengine_runtime`\n\
+             and copy the binary from `target/release/`.\n",
+        );
+        self.status = format!("Export OK -> {}", dist.display());
+        info!(dist = %dist.display(), "project exported");
+    }
+
     fn add_scene(&mut self) {
         let suffix = self.project.scenes.len() + 1;
         let name = format!("scene_{suffix}");
@@ -287,6 +333,22 @@ fn pick_entity(scene: &Scene, world_point: [f32; 2]) -> Option<(EntityId, [f32; 
         }
     }
     hit
+}
+
+/// Recursively copy `src` into `dst`. Used by the editor's Export step.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if ty.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn region_label(r: &AtlasRegion) -> &'static str {
@@ -442,6 +504,7 @@ impl AppHandler for Editor {
         let mut action_add_entity_empty = false;
         let mut action_undo = false;
         let mut action_redo = false;
+        let mut action_export = false;
         let mut switch_to: Option<usize> = None;
         let mut delete_entity: Option<EntityId> = None;
         let undo_count = self.undo_stack.len();
@@ -504,6 +567,11 @@ impl AppHandler for Editor {
                                 }
                                 if ui.button("New scene").clicked() {
                                     action_add_scene = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Export -> dist/").clicked() {
+                                    action_export = true;
                                 }
                             });
                             ui.horizontal(|ui| {
@@ -583,6 +651,9 @@ impl AppHandler for Editor {
         }
         if action_add_scene {
             self.add_scene();
+        }
+        if action_export {
+            self.export();
         }
         if action_add_entity_sprite {
             self.push_snapshot();

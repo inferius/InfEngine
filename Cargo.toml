@@ -10,6 +10,7 @@ members = [
     "crates/infengine_physics",
     "crates/infengine_scripting",
     "crates/infengine_editor_app",
+    "crates/infengine_runtime",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",
