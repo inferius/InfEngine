@@ -48,6 +48,8 @@ secrets.toml
 
 # Editor scratch files at workspace root
 /project.ron
+/blueprints/
+/scenes/
 
 # Build artifacts not under target/
 *.exe
