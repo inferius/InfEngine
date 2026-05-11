@@ -301,10 +301,13 @@ impl DemoGame {
         let playing = matches!(self.state, AppState::Playing);
         let raw = window.raw();
         if playing && self.settings.lock_cursor {
-            // Locked is best-effort: works on Wayland / macOS, falls
-            // back to Confined on Windows / X11.
-            if raw.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                let _ = raw.set_cursor_grab(CursorGrabMode::Confined);
+            // Confined keeps the cursor inside the window bounds while
+            // still letting it move freely (Windows + X11). Locked is
+            // only used as a fallback on platforms that lack Confined
+            // (Wayland) - it pins the cursor to a single point, which
+            // is usually only desirable in combination with hide.
+            if raw.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+                let _ = raw.set_cursor_grab(CursorGrabMode::Locked);
             }
         } else {
             let _ = raw.set_cursor_grab(CursorGrabMode::None);
@@ -618,7 +621,22 @@ impl AppHandler for DemoGame {
                 if let Some(prev) = self.last_mouse {
                     self.mouse_dx_accum += now[0] - prev[0];
                 }
-                self.last_mouse = Some(now);
+                // FPS-style virtual cursor: when the user opts into
+                // "lock + hide" we warp the cursor back to the centre
+                // each frame so the yaw delta is never capped by a
+                // window edge. With only Confined the cursor stays
+                // visible and movable; with neither it roams freely.
+                if self.settings.lock_cursor && self.settings.hide_cursor {
+                    use infengine_window::raw_winit::dpi::PhysicalPosition;
+                    let cx = self.viewport.0 as f64 * 0.5;
+                    let cy = self.viewport.1 as f64 * 0.5;
+                    let _ = window
+                        .raw()
+                        .set_cursor_position(PhysicalPosition::new(cx, cy));
+                    self.last_mouse = Some([cx as f32, cy as f32]);
+                } else {
+                    self.last_mouse = Some(now);
+                }
             } else {
                 // Drop the cache outside Play so re-entry seeds from the
                 // current cursor and yaw does not snap.
