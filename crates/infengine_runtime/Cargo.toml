@@ -19,5 +19,6 @@ path = "src/main.rs"
 infengine_core = { path = "../infengine_core" }
 infengine_window = { path = "../infengine_window" }
 infengine_render = { path = "../infengine_render" }
+glam = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

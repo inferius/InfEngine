@@ -297,6 +297,10 @@ impl Renderer {
         &mut self.camera_3d
     }
 
+    pub fn camera_3d(&self) -> &Camera3D {
+        &self.camera_3d
+    }
+
     /// Queue every non-empty tile of `map` as a sprite. Convenience
     /// wrapper around `Tilemap::build_instances`.
     pub fn draw_tilemap(&mut self, map: &Tilemap) {

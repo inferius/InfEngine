@@ -2048,6 +2048,7 @@ name = "infengine_editor_app"
 version = "0.0.1"
 dependencies = [
  "egui",
+ "glam 0.30.10",
  "infengine_assets",
  "infengine_core",
  "infengine_editor",
@@ -2088,6 +2089,7 @@ dependencies = [
 name = "infengine_runtime"
 version = "0.0.1"
 dependencies = [
+ "glam 0.30.10",
  "infengine_core",
  "infengine_render",
  "infengine_window",

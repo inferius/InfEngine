@@ -61,6 +61,61 @@ impl Default for Transform2D {
     }
 }
 
+/// 3D transform: position, Euler rotation (radians, XYZ order), and
+/// per-axis scale. Rotations apply as Rz * Ry * Rx when building the
+/// model matrix - matches the convention used by `glam::Mat4::from_euler`
+/// with `EulerRot::XYZ`.
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct Transform3D {
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: [f32; 3],
+}
+
+impl Default for Transform3D {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// Mesh component for a 3D entity. `mesh` names a mesh handle registered
+/// at runtime (`"cube"` is built into the renderer). `color` is the base
+/// albedo tint multiplied with the sampled albedo texture in the
+/// fragment shader. `metallic`/`roughness` are clamped to `[0, 1]` /
+/// `[0.04, 1]` respectively.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshComponent {
+    pub mesh: String,
+    pub color: [f32; 4],
+    #[serde(default = "default_metallic")]
+    pub metallic: f32,
+    #[serde(default = "default_roughness")]
+    pub roughness: f32,
+}
+
+fn default_metallic() -> f32 {
+    0.0
+}
+
+fn default_roughness() -> f32 {
+    0.5
+}
+
+impl MeshComponent {
+    pub fn cube(color: [f32; 4]) -> Self {
+        Self {
+            mesh: "cube".to_owned(),
+            color,
+            metallic: 0.0,
+            roughness: 0.5,
+        }
+    }
+}
+
 /// Visual data for a sprite entity. `size` is in world units; the final
 /// rendered size is `size * transform.scale`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +210,13 @@ pub struct Entity {
     pub sprite: Option<SpriteComponent>,
     #[serde(default)]
     pub physics: Option<PhysicsComponent>,
+    /// Optional 3D transform. Entities with this field set are treated
+    /// as 3D objects and drawn via the mesh pipeline; the 2D `transform`
+    /// is ignored for them.
+    #[serde(default)]
+    pub transform_3d: Option<Transform3D>,
+    #[serde(default)]
+    pub mesh: Option<MeshComponent>,
 }
 
 impl Entity {
@@ -165,7 +227,13 @@ impl Entity {
             transform: Transform2D::default(),
             sprite: None,
             physics: None,
+            transform_3d: None,
+            mesh: None,
         }
+    }
+
+    pub fn is_3d(&self) -> bool {
+        self.transform_3d.is_some()
     }
 
     /// World-space center after applying the transform.

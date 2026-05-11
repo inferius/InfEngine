@@ -13,11 +13,14 @@
 
 use std::path::{Path, PathBuf};
 
+use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_core::project::{Project, ProjectError, ProjectScene};
-use infengine_core::scene::{AtlasRegion, Entity, EntityId, Scene, SpriteComponent, Transform2D};
+use infengine_core::scene::{
+    AtlasRegion, Entity, EntityId, MeshComponent, Scene, SpriteComponent, Transform2D, Transform3D,
+};
 use infengine_editor::EditorUi;
-use infengine_render::{Renderer, SpriteInstance};
+use infengine_render::{Camera3D, Renderer, SpriteInstance};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -54,6 +57,10 @@ struct Editor {
     dragging: Option<EntityId>,
     drag_offset: [f32; 2],
     drag_axis: DragAxis,
+    /// In-progress 3D translate-gizmo drag. Stores the original entity
+    /// position + cursor pixel at drag start so the drag delta is
+    /// computed against a stable origin each frame.
+    drag_3d: Option<Drag3DState>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -63,9 +70,40 @@ enum DragAxis {
     Y,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Drag3DState {
+    entity: EntityId,
+    axis: Axis3,
+    start_pos: [f32; 3],
+    start_cursor: [f32; 2],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Axis3 {
+    X,
+    Y,
+    Z,
+}
+
+impl Axis3 {
+    fn unit(self) -> Vec3 {
+        match self {
+            Axis3::X => Vec3::X,
+            Axis3::Y => Vec3::Y,
+            Axis3::Z => Vec3::Z,
+        }
+    }
+}
+
 const GIZMO_AXIS_LEN: f32 = 80.0;
 const GIZMO_HANDLE_HALF: f32 = 8.0;
 const GIZMO_PICK_THICKNESS: f32 = 14.0;
+
+/// World-space length of one 3D gizmo arm. Drawn at the selected
+/// entity's position pointing along +X/+Y/+Z.
+const GIZMO_3D_AXIS_LEN: f32 = 1.5;
+/// Screen-pixel half-thickness used when hit-testing a 3D gizmo arm.
+const GIZMO_3D_PICK_PIXELS: f32 = 10.0;
 
 impl Editor {
     fn new(project_root: PathBuf, project_file: PathBuf, project: Project) -> Self {
@@ -98,6 +136,7 @@ impl Editor {
             dragging: None,
             drag_offset: [0.0, 0.0],
             drag_axis: DragAxis::Free,
+            drag_3d: None,
         };
         if !me.project.scenes.is_empty() {
             me.open_scene(0);
@@ -299,6 +338,121 @@ fn cursor_to_world(
     ]
 }
 
+/// Project a 3D world point through the camera's view-projection matrix
+/// to a physical-pixel position on the screen. Returns `None` for
+/// points behind the camera or outside `[0, 1]` clip depth.
+fn project_3d_to_screen(camera: &Camera3D, viewport: (u32, u32), world: Vec3) -> Option<[f32; 2]> {
+    let clip = camera.view_projection() * Vec4::new(world.x, world.y, world.z, 1.0);
+    if clip.w <= 1e-4 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if ndc.z < 0.0 || ndc.z > 1.0 {
+        return None;
+    }
+    Some([
+        (ndc.x * 0.5 + 0.5) * viewport.0 as f32,
+        (-ndc.y * 0.5 + 0.5) * viewport.1 as f32,
+    ])
+}
+
+/// Distance from `p` to segment `a..b`, all in 2D pixels.
+fn dist_point_to_segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let len_sq = ab[0] * ab[0] + ab[1] * ab[1];
+    if len_sq < 1e-6 {
+        return (ap[0] * ap[0] + ap[1] * ap[1]).sqrt();
+    }
+    let t = ((ap[0] * ab[0] + ap[1] * ab[1]) / len_sq).clamp(0.0, 1.0);
+    let proj = [a[0] + ab[0] * t, a[1] + ab[1] * t];
+    let d = [p[0] - proj[0], p[1] - proj[1]];
+    (d[0] * d[0] + d[1] * d[1]).sqrt()
+}
+
+/// Hit-test the 3D translate gizmo of the selected 3D entity. Returns
+/// the axis the cursor is closest to (within the pick threshold), or
+/// `None` if no arm was hit.
+fn pick_gizmo_3d(
+    scene: &Scene,
+    selected: Option<EntityId>,
+    camera_3d: &Camera3D,
+    viewport: (u32, u32),
+    cursor: [f32; 2],
+) -> Option<Axis3> {
+    let id = selected?;
+    let entity = scene.get(id)?;
+    let t = entity.transform_3d.as_ref()?;
+    let origin = Vec3::from_array(t.position);
+    let s_origin = project_3d_to_screen(camera_3d, viewport, origin)?;
+    let mut best = (f32::INFINITY, Axis3::X);
+    for axis in [Axis3::X, Axis3::Y, Axis3::Z] {
+        let end = origin + axis.unit() * GIZMO_3D_AXIS_LEN;
+        let Some(s_end) = project_3d_to_screen(camera_3d, viewport, end) else {
+            continue;
+        };
+        let d = dist_point_to_segment(cursor, s_origin, s_end);
+        if d < best.0 {
+            best = (d, axis);
+        }
+    }
+    if best.0 <= GIZMO_3D_PICK_PIXELS {
+        Some(best.1)
+    } else {
+        None
+    }
+}
+
+fn transform_3d_to_matrix(t: &Transform3D) -> Mat4 {
+    Mat4::from_scale_rotation_translation(
+        Vec3::from_array(t.scale),
+        Quat::from_euler(
+            glam::EulerRot::XYZ,
+            t.rotation[0],
+            t.rotation[1],
+            t.rotation[2],
+        ),
+        Vec3::from_array(t.position),
+    )
+}
+
+/// Draw the 3D translate gizmo as screen-space debug lines projected
+/// through the renderer's current 3D camera. Assumes the 2D camera has
+/// been pinned at (0,0) zoom=1 so 2D world coords match screen pixels
+/// minus the viewport center.
+fn draw_gizmo_3d(renderer: &mut Renderer, viewport: (u32, u32), origin: Vec3) {
+    let cam = renderer.camera_3d().clone();
+    let Some(s_origin) = project_3d_to_screen(&cam, viewport, origin) else {
+        return;
+    };
+    let origin_world = cursor_to_world(s_origin, viewport, [0.0, 0.0], 1.0);
+    let colors = [
+        (Axis3::X, [1.0, 0.3, 0.3, 1.0]),
+        (Axis3::Y, [0.3, 1.0, 0.3, 1.0]),
+        (Axis3::Z, [0.4, 0.5, 1.0, 1.0]),
+    ];
+    for (axis, color) in colors {
+        let end = origin + axis.unit() * GIZMO_3D_AXIS_LEN;
+        let Some(s_end) = project_3d_to_screen(&cam, viewport, end) else {
+            continue;
+        };
+        let end_world = cursor_to_world(s_end, viewport, [0.0, 0.0], 1.0);
+        renderer.debug_line(origin_world, end_world, color);
+    }
+    let yellow = [1.0, 1.0, 0.3, 1.0];
+    renderer.debug_rect(
+        [
+            origin_world[0] - GIZMO_HANDLE_HALF,
+            origin_world[1] - GIZMO_HANDLE_HALF,
+        ],
+        [
+            origin_world[0] + GIZMO_HANDLE_HALF,
+            origin_world[1] + GIZMO_HANDLE_HALF,
+        ],
+        yellow,
+    );
+}
+
 /// Hit-test the translate gizmo of the currently-selected entity.
 /// Returns the axis the user clicked on, if any. The gizmo is drawn
 /// in world units, so test against world-space coordinates.
@@ -458,32 +612,65 @@ impl AppHandler for Editor {
             .editor_ui
             .as_ref()
             .is_some_and(|e| e.wants_pointer_input());
+        let selected_is_3d = self
+            .selected
+            .and_then(|id| self.scene.get(id))
+            .is_some_and(|e| e.is_3d());
+        let camera_3d_snapshot = self.renderer.as_ref().map(|r| r.camera_3d().clone());
 
         if left_just_pressed && !egui_pointer {
-            // Gizmo on the selected entity takes priority over body pick.
-            let gizmo_hit = pick_gizmo(&self.scene, self.selected, cursor_world);
-            if let Some(axis) = gizmo_hit
+            let mut handled_3d = false;
+            if selected_is_3d
+                && let Some(cam) = camera_3d_snapshot.as_ref()
+                && let Some(axis) = pick_gizmo_3d(
+                    &self.scene,
+                    self.selected,
+                    cam,
+                    self.viewport,
+                    self.cursor_pos,
+                )
                 && let Some(id) = self.selected
-            {
-                let p = self
+                && let Some(start_pos) = self
                     .scene
                     .get(id)
-                    .map(|e| e.transform.position)
-                    .unwrap_or([0.0, 0.0]);
+                    .and_then(|e| e.transform_3d.as_ref().map(|t| t.position))
+            {
                 self.push_snapshot();
-                self.dragging = Some(id);
-                self.drag_axis = axis;
-                self.drag_offset = [cursor_world[0] - p[0], cursor_world[1] - p[1]];
-            } else if let Some((id, ofs)) = pick_entity(&self.scene, cursor_world) {
-                self.push_snapshot();
-                self.selected = Some(id);
-                self.dragging = Some(id);
-                self.drag_axis = DragAxis::Free;
-                self.drag_offset = ofs;
+                self.drag_3d = Some(Drag3DState {
+                    entity: id,
+                    axis,
+                    start_pos,
+                    start_cursor: self.cursor_pos,
+                });
+                handled_3d = true;
+            }
+            if !handled_3d {
+                // Gizmo on the selected entity takes priority over body pick.
+                let gizmo_hit = pick_gizmo(&self.scene, self.selected, cursor_world);
+                if let Some(axis) = gizmo_hit
+                    && let Some(id) = self.selected
+                {
+                    let p = self
+                        .scene
+                        .get(id)
+                        .map(|e| e.transform.position)
+                        .unwrap_or([0.0, 0.0]);
+                    self.push_snapshot();
+                    self.dragging = Some(id);
+                    self.drag_axis = axis;
+                    self.drag_offset = [cursor_world[0] - p[0], cursor_world[1] - p[1]];
+                } else if let Some((id, ofs)) = pick_entity(&self.scene, cursor_world) {
+                    self.push_snapshot();
+                    self.selected = Some(id);
+                    self.dragging = Some(id);
+                    self.drag_axis = DragAxis::Free;
+                    self.drag_offset = ofs;
+                }
             }
         }
         if left_just_released {
             self.dragging = None;
+            self.drag_3d = None;
         }
         if self.left_button
             && let Some(id) = self.dragging
@@ -504,6 +691,36 @@ impl AppHandler for Editor {
                 }
             }
         }
+        // 3D translate-gizmo drag: convert the mouse pixel delta into a
+        // world-space delta along the projected axis line.
+        if self.left_button
+            && let Some(state) = self.drag_3d
+            && let Some(cam) = camera_3d_snapshot.as_ref()
+        {
+            let origin = Vec3::from_array(state.start_pos);
+            let unit_end = origin + state.axis.unit();
+            if let (Some(s_origin), Some(s_unit_end)) = (
+                project_3d_to_screen(cam, self.viewport, origin),
+                project_3d_to_screen(cam, self.viewport, unit_end),
+            ) {
+                let screen_axis = [s_unit_end[0] - s_origin[0], s_unit_end[1] - s_origin[1]];
+                let len_sq = screen_axis[0] * screen_axis[0] + screen_axis[1] * screen_axis[1];
+                if len_sq > 1e-4 {
+                    let mouse_delta = [
+                        self.cursor_pos[0] - state.start_cursor[0],
+                        self.cursor_pos[1] - state.start_cursor[1],
+                    ];
+                    let dot = mouse_delta[0] * screen_axis[0] + mouse_delta[1] * screen_axis[1];
+                    let delta_world = dot / len_sq;
+                    let new_pos = origin + state.axis.unit() * delta_world;
+                    if let Some(entity) = self.scene.get_mut(state.entity)
+                        && let Some(t) = entity.transform_3d.as_mut()
+                    {
+                        t.position = new_pos.to_array();
+                    }
+                }
+            }
+        }
 
         let fps = self.fps_ema;
         let mut action_save = false;
@@ -511,6 +728,7 @@ impl AppHandler for Editor {
         let mut action_add_scene = false;
         let mut action_add_entity_sprite = false;
         let mut action_add_entity_empty = false;
+        let mut action_add_entity_cube = false;
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_export = false;
@@ -618,6 +836,9 @@ impl AppHandler for Editor {
                                 if ui.button("Add empty").clicked() {
                                     action_add_entity_empty = true;
                                 }
+                                if ui.button("Add 3D cube").clicked() {
+                                    action_add_entity_cube = true;
+                                }
                             });
                         });
 
@@ -702,21 +923,52 @@ impl AppHandler for Editor {
                 .add_entity(format!("entity_{}", self.scene.next_id));
             self.selected = Some(self.scene.entities[i].id);
         }
+        if action_add_entity_cube {
+            self.push_snapshot();
+            let i = self
+                .scene
+                .add_entity(format!("cube_{}", self.scene.next_id));
+            self.scene.entities[i].transform_3d = Some(Transform3D::default());
+            self.scene.entities[i].mesh = Some(MeshComponent::cube([0.8, 0.8, 0.85, 1.0]));
+            self.selected = Some(self.scene.entities[i].id);
+        }
 
         // 3. Render the world now that scene state is final.
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        let viewport = self.viewport;
+        // Set up cameras. When a 3D entity is selected the 2D camera is
+        // pinned at (0,0) so the screen-space gizmo overlay maps 1:1
+        // with viewport pixels; otherwise the 2D camera follows the
+        // selected sprite as before.
         {
             let camera = renderer.camera_mut();
-            if let Some(id) = self.selected
+            if selected_is_3d {
+                camera.position = [0.0, 0.0];
+                camera.zoom = 1.0;
+            } else if let Some(id) = self.selected
                 && let Some(e) = self.scene.get(id)
             {
                 camera.position = e.transform.position;
+                camera.zoom = self.zoom;
             } else {
                 camera.position = [0.0, 0.0];
+                camera.zoom = self.zoom;
             }
-            camera.zoom = self.zoom;
+        }
+        if let Some(id) = self.selected
+            && let Some(e) = self.scene.get(id)
+            && let Some(t) = e.transform_3d.as_ref()
+        {
+            let cam = renderer.camera_3d_mut();
+            let target = Vec3::from_array(t.position);
+            // Keep the current camera-to-target offset to allow future
+            // orbit controls without snapping when the user picks a
+            // new entity.
+            let offset = cam.position - cam.target;
+            cam.target = target;
+            cam.position = target + offset;
         }
         renderer.set_clear_color(
             self.scene.clear_color[0] as f64,
@@ -739,39 +991,51 @@ impl AppHandler for Editor {
                     uv_max,
                 });
             }
+            if let (Some(t), Some(mesh)) = (&entity.transform_3d, &entity.mesh) {
+                // Only the built-in "cube" mesh is recognised today;
+                // unknown names fall back to it so a malformed scene
+                // still renders something visible.
+                let handle = renderer.cube_handle();
+                let model = transform_3d_to_matrix(t).to_cols_array();
+                renderer.draw_mesh_pbr(handle, model, mesh.color, mesh.metallic, mesh.roughness);
+            }
         }
         if let Some(id) = self.selected
             && let Some(entity) = self.scene.get(id)
         {
-            let p = entity.transform.position;
-            if let Some(sprite) = &entity.sprite {
-                let hx = sprite.size[0] * entity.transform.scale[0] * 0.5;
-                let hy = sprite.size[1] * entity.transform.scale[1] * 0.5;
+            if entity.is_3d() {
+                if let Some(t) = entity.transform_3d.as_ref() {
+                    draw_gizmo_3d(renderer, viewport, Vec3::from_array(t.position));
+                }
+            } else {
+                let p = entity.transform.position;
+                if let Some(sprite) = &entity.sprite {
+                    let hx = sprite.size[0] * entity.transform.scale[0] * 0.5;
+                    let hy = sprite.size[1] * entity.transform.scale[1] * 0.5;
+                    renderer.debug_rect(
+                        [p[0] - hx, p[1] - hy],
+                        [p[0] + hx, p[1] + hy],
+                        [1.0, 0.9, 0.2, 1.0],
+                    );
+                }
+                // Translate gizmo arms.
+                let red = [1.0, 0.3, 0.3, 1.0];
+                let green = [0.3, 1.0, 0.3, 1.0];
+                let yellow = [1.0, 1.0, 0.3, 1.0];
+                renderer.debug_line(p, [p[0] + GIZMO_AXIS_LEN, p[1]], red);
+                renderer.debug_line(p, [p[0], p[1] + GIZMO_AXIS_LEN], green);
+                let tip_x = [p[0] + GIZMO_AXIS_LEN, p[1]];
+                renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] + 6.0], red);
+                renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] - 6.0], red);
+                let tip_y = [p[0], p[1] + GIZMO_AXIS_LEN];
+                renderer.debug_line(tip_y, [tip_y[0] - 6.0, tip_y[1] - 10.0], green);
+                renderer.debug_line(tip_y, [tip_y[0] + 6.0, tip_y[1] - 10.0], green);
                 renderer.debug_rect(
-                    [p[0] - hx, p[1] - hy],
-                    [p[0] + hx, p[1] + hy],
-                    [1.0, 0.9, 0.2, 1.0],
+                    [p[0] - GIZMO_HANDLE_HALF, p[1] - GIZMO_HANDLE_HALF],
+                    [p[0] + GIZMO_HANDLE_HALF, p[1] + GIZMO_HANDLE_HALF],
+                    yellow,
                 );
             }
-            // Translate gizmo arms.
-            let red = [1.0, 0.3, 0.3, 1.0];
-            let green = [0.3, 1.0, 0.3, 1.0];
-            let yellow = [1.0, 1.0, 0.3, 1.0];
-            renderer.debug_line(p, [p[0] + GIZMO_AXIS_LEN, p[1]], red);
-            renderer.debug_line(p, [p[0], p[1] + GIZMO_AXIS_LEN], green);
-            // Tip arrows (small chevrons).
-            let tip_x = [p[0] + GIZMO_AXIS_LEN, p[1]];
-            renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] + 6.0], red);
-            renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] - 6.0], red);
-            let tip_y = [p[0], p[1] + GIZMO_AXIS_LEN];
-            renderer.debug_line(tip_y, [tip_y[0] - 6.0, tip_y[1] - 10.0], green);
-            renderer.debug_line(tip_y, [tip_y[0] + 6.0, tip_y[1] - 10.0], green);
-            // Center handle.
-            renderer.debug_rect(
-                [p[0] - GIZMO_HANDLE_HALF, p[1] - GIZMO_HANDLE_HALF],
-                [p[0] + GIZMO_HANDLE_HALF, p[1] + GIZMO_HANDLE_HALF],
-                yellow,
-            );
         }
 
         let render_result = if let Some(editor_ui) = self.editor_ui.as_mut() {
@@ -806,8 +1070,94 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
         ui.text_edit_singleline(&mut entity.name);
     });
     ui.label(format!("Id: {}", id.0));
-    transform_editor(ui, &mut entity.transform);
-    sprite_editor(ui, entity);
+    if entity.is_3d() {
+        if let Some(t) = entity.transform_3d.as_mut() {
+            transform_3d_editor(ui, t);
+        }
+        mesh_editor(ui, entity);
+    } else {
+        transform_editor(ui, &mut entity.transform);
+        sprite_editor(ui, entity);
+    }
+}
+
+fn transform_3d_editor(ui: &mut egui::Ui, t: &mut Transform3D) {
+    ui.label("Position");
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut t.position[0])
+                .prefix("X: ")
+                .speed(0.05),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.position[1])
+                .prefix("Y: ")
+                .speed(0.05),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.position[2])
+                .prefix("Z: ")
+                .speed(0.05),
+        );
+    });
+    ui.label("Rotation (rad)");
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut t.rotation[0])
+                .prefix("X: ")
+                .speed(0.02),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.rotation[1])
+                .prefix("Y: ")
+                .speed(0.02),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.rotation[2])
+                .prefix("Z: ")
+                .speed(0.02),
+        );
+    });
+    ui.label("Scale");
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut t.scale[0])
+                .prefix("X: ")
+                .speed(0.05)
+                .range(0.01..=100.0),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.scale[1])
+                .prefix("Y: ")
+                .speed(0.05)
+                .range(0.01..=100.0),
+        );
+        ui.add(
+            egui::DragValue::new(&mut t.scale[2])
+                .prefix("Z: ")
+                .speed(0.05)
+                .range(0.01..=100.0),
+        );
+    });
+}
+
+fn mesh_editor(ui: &mut egui::Ui, entity: &mut Entity) {
+    let Some(mesh) = entity.mesh.as_mut() else {
+        if ui.button("Add mesh component").clicked() {
+            entity.mesh = Some(MeshComponent::cube([0.8, 0.8, 0.85, 1.0]));
+        }
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label("Mesh");
+        ui.text_edit_singleline(&mut mesh.mesh);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Albedo");
+        ui.color_edit_button_rgba_unmultiplied(&mut mesh.color);
+    });
+    ui.add(egui::Slider::new(&mut mesh.metallic, 0.0..=1.0).text("Metallic"));
+    ui.add(egui::Slider::new(&mut mesh.roughness, 0.04..=1.0).text("Roughness"));
 }
 
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform2D) {
