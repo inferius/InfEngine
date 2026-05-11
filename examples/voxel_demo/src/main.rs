@@ -16,7 +16,7 @@ use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World, chunk_mesh,
     raycast,
 };
-use infengine_window::raw_winit::event::WindowEvent;
+use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
@@ -87,6 +87,12 @@ struct Voxel {
     mouse_dx: f32,
     mouse_dy: f32,
     esc_prev: bool,
+    lmb_pending: bool,
+    rmb_pending: bool,
+    /// Block id placed by a right-click. Future versions of the demo
+    /// will let the player cycle through this; today it's fixed to
+    /// the stone block id.
+    place_block: BlockId,
 
     viewport: (u32, u32),
     fps_ema: f32,
@@ -118,6 +124,9 @@ impl Voxel {
             mouse_dx: 0.0,
             mouse_dy: 0.0,
             esc_prev: false,
+            lmb_pending: false,
+            rmb_pending: false,
+            place_block: BlockId(1),
             viewport: (1, 1),
             fps_ema: 60.0,
         }
@@ -170,8 +179,71 @@ impl Voxel {
         );
     }
 
+    fn affected_chunks(world_voxel: [i32; 3]) -> Vec<ChunkCoord> {
+        // The edited voxel always belongs to one chunk. If it sits on
+        // a chunk boundary (local 0 or CHUNK_SIZE-1 on any axis) the
+        // neighbour chunk's faces facing it become visible/hidden too,
+        // so we rebuild that chunk as well.
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            world_voxel[0].div_euclid(cs),
+            world_voxel[1].div_euclid(cs),
+            world_voxel[2].div_euclid(cs),
+        ];
+        let lc = [
+            world_voxel[0].rem_euclid(cs),
+            world_voxel[1].rem_euclid(cs),
+            world_voxel[2].rem_euclid(cs),
+        ];
+        let mut out = vec![cc];
+        if lc[0] == 0 {
+            out.push([cc[0] - 1, cc[1], cc[2]]);
+        }
+        if lc[0] == cs - 1 {
+            out.push([cc[0] + 1, cc[1], cc[2]]);
+        }
+        if lc[1] == 0 {
+            out.push([cc[0], cc[1] - 1, cc[2]]);
+        }
+        if lc[1] == cs - 1 {
+            out.push([cc[0], cc[1] + 1, cc[2]]);
+        }
+        if lc[2] == 0 {
+            out.push([cc[0], cc[1], cc[2] - 1]);
+        }
+        if lc[2] == cs - 1 {
+            out.push([cc[0], cc[1], cc[2] + 1]);
+        }
+        out
+    }
+
+    fn rebuild_chunks(&mut self, coords: &[ChunkCoord]) {
+        let renderer = self.renderer.as_mut().expect("renderer ready");
+        // Drop existing mesh handles for the affected chunks. The
+        // mesh registry leaks the old buffer slots until the renderer
+        // gains a remove API; for an editor-scale demo this is fine.
+        self.chunk_meshes.retain(|(c, _, _)| !coords.contains(c));
+        for coord in coords {
+            let Some(chunk) = self.world.chunk(*coord) else {
+                continue;
+            };
+            let origin = World::chunk_world_origin(*coord);
+            for sub in chunk_mesh(chunk, origin) {
+                let handle = renderer.create_mesh(
+                    &format!(
+                        "voxel_chunk_{}_{}_{}_b{}",
+                        coord[0], coord[1], coord[2], sub.block.0
+                    ),
+                    &sub.vertices,
+                    &sub.indices,
+                );
+                self.chunk_meshes.push((*coord, sub.block, handle));
+            }
+        }
+    }
+
     /// Walk every chunk in the world and register its mesh handles.
-    /// Used at startup. Edits use `rebuild_chunk` for the affected
+    /// Used at startup. Edits use `rebuild_chunks` for the affected
     /// chunk + its solid neighbours so the cost stays local.
     fn rebuild_all_meshes(&mut self) {
         self.chunk_meshes.clear();
@@ -445,6 +517,18 @@ impl AppHandler for Voxel {
             }
             self.last_mouse = Some(now);
         }
+        // Edge-triggered LMB / RMB while in Play state. Both flags are
+        // consumed in `on_update` next frame.
+        if matches!(self.state, AppState::Playing)
+            && let WindowEvent::MouseInput { state, button, .. } = event
+            && matches!(state, ElementState::Pressed)
+        {
+            match button {
+                MouseButton::Left => self.lmb_pending = true,
+                MouseButton::Right => self.rmb_pending = true,
+                _ => {}
+            }
+        }
     }
 
     fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
@@ -503,13 +587,43 @@ impl AppHandler for Voxel {
         );
 
         // Cast a ray from the eye along the look direction so the
-        // crosshair / wireframe / edit code in later steps can target
-        // the voxel the player is currently aiming at.
+        // crosshair / wireframe / edit code can target the voxel the
+        // player is currently aiming at.
         self.target = if matches!(self.state, AppState::Playing) {
             raycast(&self.world, self.player_pos, forward, 6.0)
         } else {
             None
         };
+
+        // Apply pending mouse-button edits before rendering.
+        let lmb = self.lmb_pending;
+        let rmb = self.rmb_pending;
+        self.lmb_pending = false;
+        self.rmb_pending = false;
+        if let Some(hit) = self.target {
+            if lmb {
+                self.world.set(hit.voxel, BlockId::AIR);
+                let coords = Self::affected_chunks(hit.voxel);
+                self.rebuild_chunks(&coords);
+            } else if rmb {
+                // Don't place a block on top of the player's head /
+                // body - skip if the destination overlaps the player's
+                // bounding column.
+                let p = self.player_pos;
+                let pvx = p.x.floor() as i32;
+                let pvz = p.z.floor() as i32;
+                let player_feet = (p.y - PLAYER_HEIGHT).floor() as i32;
+                let player_head = p.y.floor() as i32;
+                let overlaps_player = hit.place_at[0] == pvx
+                    && hit.place_at[2] == pvz
+                    && (player_feet..=player_head).contains(&hit.place_at[1]);
+                if !overlaps_player {
+                    self.world.set(hit.place_at, self.place_block);
+                    let coords = Self::affected_chunks(hit.place_at);
+                    self.rebuild_chunks(&coords);
+                }
+            }
+        }
 
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
