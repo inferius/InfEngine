@@ -2104,6 +2104,8 @@ version = "0.0.1"
 dependencies = [
  "bytemuck",
  "glam 0.30.10",
+ "gltf",
+ "image",
  "infengine_core",
  "infengine_window",
  "pollster",

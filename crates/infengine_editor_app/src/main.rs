@@ -31,7 +31,7 @@ use infengine_physics::{
     BodyDesc, BodyId as PhysicsBodyId, BodyKind3D as PhysicsBodyKind3D,
     ColliderShape3D as PhysicsColliderShape3D, PhysicsWorld, PhysicsWorld3D,
 };
-use infengine_render::{Camera3D, Renderer, SpriteInstance};
+use infengine_render::{Camera3D, MeshHandle, Renderer, SpriteInstance};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -97,6 +97,11 @@ struct Editor {
     blueprint: BlueprintEditor,
     blueprint_open: bool,
     node_registry: NodeKindRegistry,
+    /// Name -> mesh handle map for glTF-imported meshes. Populated by
+    /// the "Import glTF" panel; consulted when drawing 3D entities
+    /// whose `MeshComponent::mesh` doesn't match a built-in name.
+    imported_meshes: HashMap<String, MeshHandle>,
+    gltf_path_input: String,
     /// Compiled bytecode for the blueprint's `OnTick` trigger; populated
     /// when Play starts.
     play_blueprint_tick: Option<Program>,
@@ -197,6 +202,8 @@ impl Editor {
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
             node_registry: NodeKindRegistry::with_builtins(),
+            imported_meshes: HashMap::new(),
+            gltf_path_input: String::new(),
             play_blueprint_tick: None,
         };
         if me.project.scenes.is_empty() {
@@ -1038,6 +1045,7 @@ impl AppHandler for Editor {
         let mut action_stop = false;
         let mut action_export = false;
         let mut action_refresh_assets = false;
+        let mut action_import_gltf: Option<String> = None;
         let mut switch_to: Option<usize> = None;
         let mut delete_entity: Option<EntityId> = None;
         let undo_count = self.undo_stack.len();
@@ -1055,7 +1063,10 @@ impl AppHandler for Editor {
             let play_state = self.play_state;
             let blueprint = &mut self.blueprint;
             let blueprint_open = &mut self.blueprint_open;
+
             let node_registry = &self.node_registry;
+            let gltf_path = &mut self.gltf_path_input;
+            let imported_mesh_names: Vec<String> = self.imported_meshes.keys().cloned().collect();
             let mut grid_visible = self
                 .renderer
                 .as_ref()
@@ -1237,6 +1248,19 @@ impl AppHandler for Editor {
                             }
                         });
 
+                        ui.collapsing("Import glTF", |ui| {
+                            ui.label("Path to .gltf or .glb");
+                            ui.text_edit_singleline(gltf_path);
+                            if ui.button("Import").clicked() && !gltf_path.is_empty() {
+                                action_import_gltf = Some(gltf_path.clone());
+                            }
+                            ui.separator();
+                            ui.label(format!("{} imported mesh(es)", imported_mesh_names.len()));
+                            for name in &imported_mesh_names {
+                                ui.small(name);
+                            }
+                        });
+
                         ui.collapsing("Selection", |ui| {
                             inspector_for_selection(ui, scene_ref, selected_ref);
                         });
@@ -1294,6 +1318,22 @@ impl AppHandler for Editor {
         if action_export {
             self.export();
         }
+        if let Some(path) = action_import_gltf
+            && let Some(r) = self.renderer.as_mut()
+        {
+            match r.import_gltf_meshes(&path) {
+                Ok(out) => {
+                    let count = out.len();
+                    for (name, handle) in out {
+                        self.imported_meshes.insert(name, handle);
+                    }
+                    self.status = format!("Imported {count} mesh(es) from {path}");
+                }
+                Err(err) => {
+                    self.status = format!("glTF import failed: {err}");
+                }
+            }
+        }
         if action_refresh_assets {
             self.refresh_assets();
         }
@@ -1324,6 +1364,7 @@ impl AppHandler for Editor {
         }
 
         // 3. Render the world now that scene state is final.
+        let imported_meshes_snapshot = self.imported_meshes.clone();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -1417,6 +1458,7 @@ impl AppHandler for Editor {
             self.scene.clear_color[2] as f64,
             1.0,
         );
+        let imported_meshes = &imported_meshes_snapshot;
         for entity in &self.scene.entities {
             if let Some(sprite) = &entity.sprite {
                 let size = [
@@ -1433,10 +1475,12 @@ impl AppHandler for Editor {
                 });
             }
             if let (Some(t), Some(mesh)) = (&entity.transform_3d, &entity.mesh) {
-                // Only the built-in "cube" mesh is recognised today;
-                // unknown names fall back to it so a malformed scene
-                // still renders something visible.
-                let handle = renderer.cube_handle();
+                // Resolve the mesh slot: imported glTF mesh by name,
+                // else the built-in unit cube.
+                let handle = imported_meshes
+                    .get(&mesh.mesh)
+                    .copied()
+                    .unwrap_or_else(|| renderer.cube_handle());
                 let model = transform_3d_to_matrix(t).to_cols_array();
                 renderer.draw_mesh_pbr(handle, model, mesh.color, mesh.metallic, mesh.roughness);
             }

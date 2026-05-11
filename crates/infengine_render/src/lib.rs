@@ -12,6 +12,7 @@ mod camera_3d;
 mod debug;
 mod debug3d;
 mod font;
+mod gltf_load;
 mod grid;
 mod mesh3d;
 mod shadow;
@@ -35,6 +36,7 @@ pub use camera_3d::Camera3D;
 use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
 use debug3d::{Debug3DPass, Debug3DVertex};
+pub use gltf_load::{GltfError, LoadedPrimitive, load_gltf};
 use grid::GridPass;
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
@@ -312,6 +314,23 @@ impl Renderer {
     /// bet is to remove between frames or before any draw call).
     pub fn remove_mesh(&mut self, handle: MeshHandle) -> bool {
         self.meshes.remove(handle)
+    }
+
+    /// Load every primitive in a glTF / glb file and register each as
+    /// its own `MeshHandle`. Returns the list of `(primitive name,
+    /// handle)` pairs so the caller can resolve names back to handles
+    /// when drawing.
+    pub fn import_gltf_meshes(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Vec<(String, MeshHandle)>, GltfError> {
+        let prims = load_gltf(path)?;
+        let mut out = Vec::with_capacity(prims.len());
+        for prim in prims {
+            let handle = self.create_mesh(&prim.name, &prim.vertices, &prim.indices);
+            out.push((prim.name, handle));
+        }
+        Ok(out)
     }
 
     /// Replace the global albedo texture used by all 3D mesh draws.
