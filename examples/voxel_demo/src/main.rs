@@ -455,7 +455,10 @@ impl Voxel {
 
         let forward_horizontal =
             Vec3::new(self.player_yaw.cos(), 0.0, -self.player_yaw.sin()).normalize();
-        let right = Vec3::new(forward_horizontal.z, 0.0, -forward_horizontal.x);
+        // Right vector via the standard 90-deg horizontal rotation of
+        // forward. For yaw=0 (forward = +X), right = +Z which matches
+        // a player facing east strafing south.
+        let right = Vec3::new(-forward_horizontal.z, 0.0, forward_horizontal.x);
 
         let mut move_axis = 0.0;
         if ctx.input.is_pressed(Key::W) {
