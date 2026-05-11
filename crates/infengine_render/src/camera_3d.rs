@@ -44,13 +44,16 @@ impl Camera3D {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub(crate) struct Camera3DUniform {
     view_proj: [[f32; 4]; 4],
+    view_proj_inv: [[f32; 4]; 4],
     camera_pos: [f32; 4],
 }
 
 impl Camera3DUniform {
     fn from_camera(c: &Camera3D) -> Self {
+        let vp = c.view_projection();
         Self {
-            view_proj: c.view_projection().to_cols_array_2d(),
+            view_proj: vp.to_cols_array_2d(),
+            view_proj_inv: vp.inverse().to_cols_array_2d(),
             camera_pos: [c.position.x, c.position.y, c.position.z, 1.0],
         }
     }

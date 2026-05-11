@@ -11,6 +11,7 @@ mod camera;
 mod camera_3d;
 mod debug;
 mod font;
+mod grid;
 mod mesh3d;
 mod shadow;
 mod sprite;
@@ -32,6 +33,7 @@ use camera::CameraResource;
 pub use camera_3d::Camera3D;
 use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
+use grid::GridPass;
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
 use shadow::ShadowPass;
@@ -79,6 +81,8 @@ pub struct Renderer {
     cube_handle: MeshHandle,
     depth_view: wgpu::TextureView,
     shadow: ShadowPass,
+    grid: GridPass,
+    show_grid: bool,
 }
 
 impl Renderer {
@@ -173,6 +177,12 @@ impl Renderer {
             &camera_3d_resource.layout,
             &shadow.sample_bgl,
         );
+        let grid = GridPass::new(
+            &device,
+            config.format,
+            DEPTH_FORMAT,
+            &camera_3d_resource.layout,
+        );
         let mut meshes = Mesh3DRegistry::default();
         let (cube_v, cube_i) = mesh3d::cube_geometry_public();
         let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
@@ -198,6 +208,8 @@ impl Renderer {
             cube_handle,
             depth_view,
             shadow,
+            grid,
+            show_grid: true,
         })
     }
 
@@ -299,6 +311,14 @@ impl Renderer {
 
     pub fn camera_3d(&self) -> &Camera3D {
         &self.camera_3d
+    }
+
+    pub fn show_grid(&self) -> bool {
+        self.show_grid
+    }
+
+    pub fn set_show_grid(&mut self, show: bool) {
+        self.show_grid = show;
     }
 
     /// Queue every non-empty tile of `map` as a sprite. Convenience
@@ -468,7 +488,10 @@ impl Renderer {
         }
 
         // 3D pass next (with depth), then 2D pass on top (no depth).
-        if mesh3d_count > 0 {
+        // Always run when meshes OR grid are present so the depth/color
+        // attachments get cleared.
+        let run_scene3d = mesh3d_count > 0 || self.show_grid;
+        if run_scene3d {
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::mesh3d_pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -492,19 +515,27 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             rpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
-            self.mesh3d.draw(
-                &mut rpass,
-                &self.meshes,
-                &mesh_batches,
-                &self.shadow.sample_bg,
-            );
+            if mesh3d_count > 0 {
+                self.mesh3d.draw(
+                    &mut rpass,
+                    &self.meshes,
+                    &mesh_batches,
+                    &self.shadow.sample_bg,
+                );
+            }
+            if self.show_grid {
+                // Grid renders after meshes so opaque geometry occludes
+                // it via the depth test; the grid binds the same camera
+                // group at slot 0.
+                self.grid.draw(&mut rpass);
+            }
         }
 
         {
             // Clear-or-load the color attachment: if the 3D pass ran it
             // already cleared and populated the surface, otherwise this
             // pass owns the clear.
-            let load = if mesh3d_count > 0 {
+            let load = if run_scene3d {
                 LoadOp::Load
             } else {
                 LoadOp::Clear(self.clear_color)

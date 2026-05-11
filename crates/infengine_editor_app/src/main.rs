@@ -962,6 +962,11 @@ impl AppHandler for Editor {
             let play_state = self.play_state;
             let blueprint = &mut self.blueprint;
             let blueprint_open = &mut self.blueprint_open;
+            let mut grid_visible = self
+                .renderer
+                .as_ref()
+                .map(|r| r.show_grid())
+                .unwrap_or(true);
             // Inspector UI.
             editor_ui.run(window.raw(), |ctx| {
                 egui::TopBottomPanel::top("play_toolbar").show(ctx, |ui| {
@@ -1014,6 +1019,8 @@ impl AppHandler for Editor {
                         }
                         ui.separator();
                         ui.toggle_value(blueprint_open, "Blueprint");
+                        ui.separator();
+                        ui.checkbox(&mut grid_visible, "Grid");
                     });
                 });
 
@@ -1145,6 +1152,9 @@ impl AppHandler for Editor {
                         ui.label("Ctrl+Z = undo; Ctrl+Y or Ctrl+Shift+Z = redo");
                     });
             });
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_show_grid(grid_visible);
+            }
         }
 
         if action_undo {
