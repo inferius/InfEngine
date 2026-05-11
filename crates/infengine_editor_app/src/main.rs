@@ -20,6 +20,7 @@ use infengine_core::scene::{
     AtlasRegion, Entity, EntityId, MeshComponent, Scene, SpriteComponent, Transform2D, Transform3D,
 };
 use infengine_editor::EditorUi;
+use infengine_physics::PhysicsWorld;
 use infengine_render::{Camera3D, Renderer, SpriteInstance};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -61,6 +62,22 @@ struct Editor {
     /// position + cursor pixel at drag start so the drag delta is
     /// computed against a stable origin each frame.
     drag_3d: Option<Drag3DState>,
+    /// Play-mode lifecycle. Editing is the authoritative state; entering
+    /// Playing snapshots the scene and starts ticking physics on the
+    /// live copy, Paused freezes the live copy, Stopping reverts to the
+    /// snapshot.
+    play_state: PlayState,
+    /// Authoritative scene preserved across Play -> Stop. Populated only
+    /// while `play_state != Editing`.
+    play_snapshot: Option<Scene>,
+    play_physics: Option<PhysicsWorld>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum PlayState {
+    Editing,
+    Playing,
+    Paused,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -137,6 +154,9 @@ impl Editor {
             drag_offset: [0.0, 0.0],
             drag_axis: DragAxis::Free,
             drag_3d: None,
+            play_state: PlayState::Editing,
+            play_snapshot: None,
+            play_physics: None,
         };
         if !me.project.scenes.is_empty() {
             me.open_scene(0);
@@ -311,6 +331,51 @@ impl Editor {
         } else {
             self.status = "Nothing to redo".into();
         }
+    }
+
+    fn start_play(&mut self) {
+        if self.play_state != PlayState::Editing {
+            return;
+        }
+        self.play_snapshot = Some(self.scene.clone());
+        let mut world = PhysicsWorld::new();
+        world.rebuild(&self.scene);
+        self.play_physics = Some(world);
+        self.play_state = PlayState::Playing;
+        self.status = "Play mode".into();
+    }
+
+    fn pause_play(&mut self) {
+        if self.play_state == PlayState::Playing {
+            self.play_state = PlayState::Paused;
+            self.status = "Paused".into();
+        } else if self.play_state == PlayState::Paused {
+            self.play_state = PlayState::Playing;
+            self.status = "Resumed".into();
+        }
+    }
+
+    fn stop_play(&mut self) {
+        if self.play_state == PlayState::Editing {
+            return;
+        }
+        if let Some(snap) = self.play_snapshot.take() {
+            self.scene = snap;
+        }
+        self.play_physics = None;
+        self.play_state = PlayState::Editing;
+        self.status = "Stopped".into();
+    }
+
+    fn tick_play(&mut self, dt: f32) {
+        if self.play_state != PlayState::Playing {
+            return;
+        }
+        let Some(world) = self.play_physics.as_mut() else {
+            return;
+        };
+        world.step(dt);
+        world.write_back(&mut self.scene);
     }
 
     fn camera_pos(&self) -> [f32; 2] {
@@ -722,6 +787,8 @@ impl AppHandler for Editor {
             }
         }
 
+        self.tick_play(dt);
+
         let fps = self.fps_ema;
         let mut action_save = false;
         let mut action_save_all = false;
@@ -731,6 +798,9 @@ impl AppHandler for Editor {
         let mut action_add_entity_cube = false;
         let mut action_undo = false;
         let mut action_redo = false;
+        let mut action_play = false;
+        let mut action_pause = false;
+        let mut action_stop = false;
         let mut action_export = false;
         let mut action_refresh_assets = false;
         let mut switch_to: Option<usize> = None;
@@ -747,8 +817,60 @@ impl AppHandler for Editor {
             let scene_ref = &mut self.scene;
             let selected_ref = &mut self.selected;
             let asset_list = self.asset_listing.clone();
+            let play_state = self.play_state;
             // Inspector UI.
             editor_ui.run(window.raw(), |ctx| {
+                egui::TopBottomPanel::top("play_toolbar").show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let play_label = match play_state {
+                            PlayState::Editing => "Play",
+                            PlayState::Playing => "Playing...",
+                            PlayState::Paused => "Resume",
+                        };
+                        if ui
+                            .add_enabled(
+                                play_state != PlayState::Playing,
+                                egui::Button::new(play_label),
+                            )
+                            .clicked()
+                        {
+                            match play_state {
+                                PlayState::Editing => action_play = true,
+                                PlayState::Paused => action_pause = true,
+                                PlayState::Playing => {}
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                play_state == PlayState::Playing,
+                                egui::Button::new("Pause"),
+                            )
+                            .clicked()
+                        {
+                            action_pause = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                play_state != PlayState::Editing,
+                                egui::Button::new("Stop"),
+                            )
+                            .clicked()
+                        {
+                            action_stop = true;
+                        }
+                        if play_state != PlayState::Editing {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 96, 96),
+                                match play_state {
+                                    PlayState::Playing => "[PLAY]",
+                                    PlayState::Paused => "[PAUSED]",
+                                    PlayState::Editing => "",
+                                },
+                            );
+                        }
+                    });
+                });
+
                 egui::SidePanel::left("inspector")
                     .resizable(true)
                     .default_width(320.0)
@@ -875,6 +997,15 @@ impl AppHandler for Editor {
         }
         if action_redo {
             self.redo();
+        }
+        if action_play {
+            self.start_play();
+        }
+        if action_pause {
+            self.pause_play();
+        }
+        if action_stop {
+            self.stop_play();
         }
         // Apply deferred actions outside the immutable closure context.
         if let Some(id) = delete_entity {

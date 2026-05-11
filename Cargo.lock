@@ -2052,6 +2052,7 @@ dependencies = [
  "infengine_assets",
  "infengine_core",
  "infengine_editor",
+ "infengine_physics",
  "infengine_render",
  "infengine_window",
  "tracing",
