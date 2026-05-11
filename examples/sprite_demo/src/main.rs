@@ -16,7 +16,6 @@ use infengine_window::raw_winit::event::WindowEvent;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const PLAYER_SIZE: f32 = 64.0;
 const TILE_SIZE: f32 = 64.0;
 const TILEMAP_W: u32 = 40;
 const TILEMAP_H: u32 = 30;
@@ -37,6 +36,11 @@ struct Demo {
     beep_count: u32,
     pos: [f32; 2],
     zoom: f32,
+    player_size: f32,
+    player_color: [f32; 4],
+    clear_color: [f32; 3],
+    show_debug_overlay: bool,
+    follow_camera: bool,
     viewport: (u32, u32),
     fps_ema: f32,
     frame: u64,
@@ -57,6 +61,11 @@ impl Default for Demo {
             beep_count: 0,
             pos: [0.0, 0.0],
             zoom: 1.0,
+            player_size: 64.0,
+            player_color: [1.0, 0.85, 0.4, 1.0],
+            clear_color: [0.05, 0.10, 0.18],
+            show_debug_overlay: true,
+            follow_camera: true,
             viewport: (1, 1),
             fps_ema: 60.0,
             frame: 0,
@@ -245,7 +254,7 @@ impl AppHandler for Demo {
         }
 
         let (half_w, half_h) = map_half_extent();
-        let pad = PLAYER_SIZE * 0.5;
+        let pad = self.player_size * 0.5;
         self.pos[0] = self.pos[0].clamp(-(half_w - pad), half_w - pad);
         self.pos[1] = self.pos[1].clamp(-(half_h - pad), half_h - pad);
 
@@ -255,51 +264,104 @@ impl AppHandler for Demo {
 
         {
             let camera = renderer.camera_mut();
-            camera.position = self.pos;
+            if self.follow_camera {
+                camera.position = self.pos;
+            } else {
+                camera.position = [0.0, 0.0];
+            }
             camera.zoom = self.zoom;
         }
+        renderer.set_clear_color(
+            self.clear_color[0] as f64,
+            self.clear_color[1] as f64,
+            self.clear_color[2] as f64,
+            1.0,
+        );
 
         renderer.draw_tilemap(&self.tilemap);
         renderer.draw_sprite(
-            SpriteInstance::from_region(self.pos, [PLAYER_SIZE, PLAYER_SIZE], demo_atlas::CHECKER)
-                .with_color([1.0, 0.85, 0.4, 1.0]),
+            SpriteInstance::from_region(
+                self.pos,
+                [self.player_size, self.player_size],
+                demo_atlas::CHECKER,
+            )
+            .with_color(self.player_color),
         );
 
-        // Debug overlay: world origin marker, player bounding box and a
-        // visibility circle, plus a leader line from origin to player.
-        renderer.debug_line([-24.0, 0.0], [24.0, 0.0], [1.0, 0.4, 0.4, 1.0]);
-        renderer.debug_line([0.0, -24.0], [0.0, 24.0], [0.4, 1.0, 0.4, 1.0]);
-        let half = PLAYER_SIZE * 0.5;
-        renderer.debug_rect(
-            [self.pos[0] - half, self.pos[1] - half],
-            [self.pos[0] + half, self.pos[1] + half],
-            [1.0, 1.0, 0.0, 1.0],
-        );
-        renderer.debug_circle(self.pos, PLAYER_SIZE, [0.6, 0.9, 1.0, 0.9], 48);
-        renderer.debug_line([0.0, 0.0], self.pos, [1.0, 1.0, 1.0, 0.4]);
+        if self.show_debug_overlay {
+            renderer.debug_line([-24.0, 0.0], [24.0, 0.0], [1.0, 0.4, 0.4, 1.0]);
+            renderer.debug_line([0.0, -24.0], [0.0, 24.0], [0.4, 1.0, 0.4, 1.0]);
+            let half = self.player_size * 0.5;
+            renderer.debug_rect(
+                [self.pos[0] - half, self.pos[1] - half],
+                [self.pos[0] + half, self.pos[1] + half],
+                [1.0, 1.0, 0.0, 1.0],
+            );
+            renderer.debug_circle(self.pos, self.player_size, [0.6, 0.9, 1.0, 0.9], 48);
+            renderer.debug_line([0.0, 0.0], self.pos, [1.0, 1.0, 1.0, 0.4]);
+        }
 
         let queued = renderer.queued_sprite_count();
         let fps = self.fps_ema;
-        let pos = self.pos;
-        let zoom = self.zoom;
         let reloads = self.reload_count;
         let beeps = self.beep_count;
+        let (map_half_w, map_half_h) = map_half_extent();
 
-        // Build the egui frame for this tick.
+        // Mutable references to state the inspector can edit.
+        let pos = &mut self.pos;
+        let zoom = &mut self.zoom;
+        let player_size = &mut self.player_size;
+        let player_color = &mut self.player_color;
+        let clear_color = &mut self.clear_color;
+        let show_debug = &mut self.show_debug_overlay;
+        let follow_camera = &mut self.follow_camera;
+
         if let Some(editor) = self.editor.as_mut() {
             editor.run(window.raw(), |ctx| {
-                egui::Window::new("InfEngine - Phase 4.1")
-                    .default_pos(egui::pos2(12.0, 12.0))
+                egui::SidePanel::left("inspector")
+                    .resizable(true)
+                    .default_width(280.0)
                     .show(ctx, |ui| {
-                        ui.label(format!("FPS: {:.0}", fps));
-                        ui.label(format!("Pos: {:.0}, {:.0}", pos[0], pos[1]));
-                        ui.label(format!("Zoom: {:.2}", zoom));
-                        ui.label(format!("Sprites/frame: {}", queued));
+                        ui.heading("InfEngine - Phase 4.2");
+                        ui.label(format!("FPS: {fps:.0}"));
+                        ui.label(format!("Sprites/frame: {queued}"));
+                        ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
-                        ui.label(format!("Asset reloads: {}", reloads));
-                        ui.label(format!("Beeps played: {}", beeps));
+
+                        ui.collapsing("Camera", |ui| {
+                            ui.checkbox(follow_camera, "Follow player");
+                            ui.add(
+                                egui::Slider::new(zoom, 0.25..=4.0)
+                                    .text("Zoom")
+                                    .logarithmic(true),
+                            );
+                        });
+
+                        ui.collapsing("Player", |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut pos[0], -map_half_w..=map_half_w).text("X"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut pos[1], -map_half_h..=map_half_h).text("Y"),
+                            );
+                            ui.add(egui::Slider::new(player_size, 16.0..=256.0).text("Size"));
+                            ui.horizontal(|ui| {
+                                ui.label("Tint");
+                                ui.color_edit_button_rgba_unmultiplied(player_color);
+                            });
+                        });
+
+                        ui.collapsing("World", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Background");
+                                ui.color_edit_button_rgb(clear_color);
+                            });
+                            ui.checkbox(show_debug, "Debug overlay");
+                        });
+
                         ui.separator();
-                        ui.label("Controls: WASD / arrows = move");
+                        ui.label("Controls:");
+                        ui.label("WASD / arrows = move");
                         ui.label("Q / E = zoom out / in");
                         ui.label("Space = beep, R = reset, Esc = quit");
                     });
@@ -350,7 +412,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 4.1)".into(),
+        title: "InfEngine - sprite_demo (Phase 4.2)".into(),
         width: 1280,
         height: 720,
         resizable: true,

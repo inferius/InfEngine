@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `sprite_demo` inspector panel (Phase 4.2): a resizable left side panel with collapsing sections for Camera (follow toggle + zoom slider), Player (position sliders clamped to the tilemap, size slider, RGBA color picker), and World (background color picker, debug-overlay toggle). All edits update the running scene in real time and exercise `Renderer::camera_mut`, `set_clear_color`, the sprite tint pipeline, and the debug overlay's toggle path.
 - New crate `infengine_editor` (Phase 4.1): wraps `egui` 0.33, `egui-wgpu`, and `egui-winit` behind an `EditorUi` type. `EditorUi::new`, `handle_window_event`, `run(window, |ctx| ...)`, and `render(...)` are the four-method API engine code uses.
 - `infengine_window` exposes `pub use winit as raw_winit` and a new `AppHandler::on_window_event(&EngineWindow, &WindowEvent)` hook so the editor can forward raw input. Documented as a deliberate ADR-0001 carve-out for editor-level integrations.
 - `infengine_render::Renderer` exposes `wgpu_device`, `wgpu_queue`, and `surface_format` accessors so workspace-internal crates can build extra pipelines against the same logical device.
