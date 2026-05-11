@@ -113,6 +113,12 @@ struct Editor {
     /// when Play started, plus the workspace's active tab. The tick
     /// loop runs all of them every frame.
     play_blueprint_ticks: Vec<Program>,
+    // Wall-clock timestamp of the previous viewport left-mouse press
+    // plus the screen-space pixel position at that time. Used to
+    // spot double-clicks in the 3D viewport, which winit's raw mouse
+    // events don't surface on their own.
+    last_left_click_time: Option<std::time::Instant>,
+    last_left_click_pos: [f32; 2],
     /// Audio backend; lazily initialised on first sound request.
     /// `None` when the host has no audio device.
     audio_system: Option<AudioSystem>,
@@ -219,6 +225,8 @@ impl Editor {
             loaded_mesh_textures: HashMap::new(),
             play_blueprint_ticks: Vec::new(),
             audio_system: None,
+            last_left_click_time: None,
+            last_left_click_pos: [0.0, 0.0],
         };
         if me.project.scenes.is_empty() {
             // A fresh project ships with an empty scenes list and
@@ -469,6 +477,88 @@ impl Editor {
     /// disk; otherwise create a fresh blueprint, assign a default
     /// path under `blueprints/`, and persist it so the next session
     /// reopens the same file.
+    /// Open (or create) a scene-level "global" blueprint. Lives at
+    /// `blueprints/scene_<name>.ron` so each scene has its own; the
+    /// target is `Global` so set_position and other entity-scoped
+    /// nodes are filtered out of the Add menu. Used for one-shot
+    /// scene setup (autoplay clips, initial spawns, debug toggles).
+    fn open_scene_blueprint(&mut self) {
+        self.save_active_blueprint();
+        let scene_slug = self
+            .current_scene_index
+            .and_then(|i| self.project.scenes.get(i))
+            .map(|s| {
+                s.name
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| "default".into());
+        let rel = format!("blueprints/scene_{scene_slug}.ron");
+        let full = self.project_root.join(&rel);
+        let blueprint = match Blueprint::load(&full) {
+            Ok(mut b) => {
+                b.target = BlueprintTarget::Global;
+                b
+            }
+            Err(_) => Blueprint {
+                name: format!("Scene: {scene_slug}"),
+                target: BlueprintTarget::Global,
+                graph: infengine_blueprint::Graph::default(),
+                variables: Vec::new(),
+                functions: Vec::new(),
+                macros: Vec::new(),
+            },
+        };
+        if let Some(parent) = full.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(err) = blueprint.save(&full) {
+            self.status = format!("Blueprint save failed: {err}");
+        }
+        self.blueprint.open(blueprint, Some(full));
+        self.blueprint_active_entity = None;
+        self.blueprint_open = true;
+    }
+
+    /// Open (or create) a project-wide global blueprint. Independent
+    /// of the active scene; persists at `blueprints/global.ron` so it
+    /// stays the same across scene switches.
+    fn open_global_blueprint(&mut self) {
+        self.save_active_blueprint();
+        let rel = "blueprints/global.ron";
+        let full = self.project_root.join(rel);
+        let blueprint = match Blueprint::load(&full) {
+            Ok(mut b) => {
+                b.target = BlueprintTarget::Global;
+                b
+            }
+            Err(_) => Blueprint {
+                name: "Global".into(),
+                target: BlueprintTarget::Global,
+                graph: infengine_blueprint::Graph::default(),
+                variables: Vec::new(),
+                functions: Vec::new(),
+                macros: Vec::new(),
+            },
+        };
+        if let Some(parent) = full.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(err) = blueprint.save(&full) {
+            self.status = format!("Blueprint save failed: {err}");
+        }
+        self.blueprint.open(blueprint, Some(full));
+        self.blueprint_active_entity = None;
+        self.blueprint_open = true;
+    }
+
     fn open_entity_blueprint(&mut self, eid: EntityId) {
         // Save whatever was being edited before swapping.
         self.save_active_blueprint();
@@ -1323,6 +1413,27 @@ impl AppHandler for Editor {
             .is_some_and(|e| e.is_3d());
         let camera_3d_snapshot = self.renderer.as_ref().map(|r| r.camera_3d().clone());
 
+        // Detect viewport double-clicks ourselves: winit doesn't
+        // expose a click-count, so compare against the previous press
+        // (time + position). 400 ms / 8 px is the standard threshold.
+        let mut viewport_double_click = false;
+        if left_just_pressed && !egui_pointer {
+            let now = std::time::Instant::now();
+            if let Some(prev) = self.last_left_click_time {
+                let dt_ms = now.duration_since(prev).as_millis();
+                let dx = self.cursor_pos[0] - self.last_left_click_pos[0];
+                let dy = self.cursor_pos[1] - self.last_left_click_pos[1];
+                if dt_ms < 400 && (dx * dx + dy * dy) < 64.0 {
+                    viewport_double_click = true;
+                }
+            }
+            self.last_left_click_time = Some(now);
+            self.last_left_click_pos = self.cursor_pos;
+        }
+        // Entity to open in the blueprint editor once viewport pick
+        // resolves. Filled in below; deferred so the call doesn't
+        // overlap with the outstanding `&mut self.scene` borrow.
+        let mut open_bp_after_pick: Option<EntityId> = None;
         if left_just_pressed && !egui_pointer {
             let mut handled_3d = false;
             if selected_is_3d
@@ -1370,6 +1481,9 @@ impl AppHandler for Editor {
                     self.dragging = Some(id);
                     self.drag_axis = DragAxis::Free;
                     self.drag_offset = ofs;
+                    if viewport_double_click {
+                        open_bp_after_pick = Some(id);
+                    }
                 } else if let Some(cam) = camera_3d_snapshot.as_ref()
                     && let Some(id) =
                         pick_3d_entity(&self.scene, cam, self.viewport, self.cursor_pos)
@@ -1380,8 +1494,18 @@ impl AppHandler for Editor {
                     // the 3D translate gizmo is responsible for that
                     // on the next click.
                     self.selected = Some(id);
+                    if viewport_double_click {
+                        open_bp_after_pick = Some(id);
+                    }
+                } else if viewport_double_click && let Some(sel) = self.selected {
+                    // Double-click on the 2D body that was already
+                    // selected this frame also opens the blueprint.
+                    open_bp_after_pick = Some(sel);
                 }
             }
+        }
+        if let Some(eid) = open_bp_after_pick {
+            self.open_entity_blueprint(eid);
         }
         if left_just_released {
             self.dragging = None;
@@ -1447,6 +1571,8 @@ impl AppHandler for Editor {
         let mut action_add_entity_empty = false;
         let mut action_add_entity_cube = false;
         let mut action_open_blueprint_for: Option<EntityId> = None;
+        let mut action_open_scene_blueprint = false;
+        let mut action_open_global_blueprint = false;
         let mut blueprint_dirty = false;
         let mut action_new_class = false;
         let mut action_spawn_from_class: Option<String> = None;
@@ -1545,10 +1671,24 @@ impl AppHandler for Editor {
                 });
 
                 if *blueprint_open {
+                    let action_scene = &mut action_open_scene_blueprint;
+                    let action_global = &mut action_open_global_blueprint;
                     egui::Window::new("Blueprint editor")
                         .default_size([720.0, 480.0])
                         .open(blueprint_open)
                         .show(ctx, |ui| {
+                            // Quick access bar so the user can spin up
+                            // a Scene / Global blueprint without
+                            // having to double-click any entity.
+                            ui.horizontal(|ui| {
+                                if ui.button("Open Scene Blueprint").clicked() {
+                                    *action_scene = true;
+                                }
+                                if ui.button("Open Global Blueprint").clicked() {
+                                    *action_global = true;
+                                }
+                            });
+                            ui.separator();
                             if blueprint.show(ui, node_registry) {
                                 blueprint_dirty = true;
                             }
@@ -1814,6 +1954,12 @@ impl AppHandler for Editor {
         }
         if let Some(eid) = action_open_blueprint_for {
             self.open_entity_blueprint(eid);
+        }
+        if action_open_scene_blueprint {
+            self.open_scene_blueprint();
+        }
+        if action_open_global_blueprint {
+            self.open_global_blueprint();
         }
         if blueprint_dirty {
             self.save_active_blueprint();
