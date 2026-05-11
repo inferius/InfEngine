@@ -1,8 +1,10 @@
-//! Sprite demo - Phase 2.6 of InfEngine.
+//! Sprite demo - Phase 2.7 of InfEngine.
 //!
-//! Adds a HUD: bitmap-font text rendered in screen-space (anchored to
-//! the camera) on top of the tilemap. Controls: WASD / arrows to move,
-//! Q / E to zoom out / in, R to reset, Escape to exit.
+//! Combines every Phase-2 feature: tilemap background, batched sprite
+//! player, screen-space HUD text, and a debug-line overlay (origin
+//! cross, player bounding box and visibility circle, plus a leader
+//! line from origin to player). WASD / arrows move, Q / E zoom out /
+//! in, R resets, Escape exits.
 
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -146,6 +148,19 @@ impl AppHandler for Demo {
                 .with_color([1.0, 0.85, 0.4, 1.0]),
         );
 
+        // Debug overlay: world origin marker, player bounding box and a
+        // visibility circle, plus a leader line from origin to player.
+        renderer.debug_line([-24.0, 0.0], [24.0, 0.0], [1.0, 0.4, 0.4, 1.0]);
+        renderer.debug_line([0.0, -24.0], [0.0, 24.0], [0.4, 1.0, 0.4, 1.0]);
+        let half = PLAYER_SIZE * 0.5;
+        renderer.debug_rect(
+            [self.pos[0] - half, self.pos[1] - half],
+            [self.pos[0] + half, self.pos[1] + half],
+            [1.0, 1.0, 0.0, 1.0],
+        );
+        renderer.debug_circle(self.pos, PLAYER_SIZE, [0.6, 0.9, 1.0, 0.9], 48);
+        renderer.debug_line([0.0, 0.0], self.pos, [1.0, 1.0, 1.0, 0.4]);
+
         // HUD: render text in screen-space relative to the camera. Convert
         // pixel coordinates to world coordinates using the current zoom.
         let half_w_world = self.viewport.0 as f32 * 0.5 / self.zoom;
@@ -156,7 +171,7 @@ impl AppHandler for Demo {
         let top_left_y = self.pos[1] + half_h_world - margin;
         let line_step = text_world_size * 1.25;
 
-        let line1 = format!("INFENGINE PHASE 2.6  FPS {:.0}", self.fps_ema);
+        let line1 = format!("INFENGINE PHASE 2.7  FPS {:.0}", self.fps_ema);
         let line2 = format!(
             "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}",
             self.pos[0], self.pos[1], self.zoom
@@ -214,7 +229,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 2.6)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.7)".into(),
         width: 1280,
         height: 720,
         resizable: true,

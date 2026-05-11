@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod camera;
+mod debug;
 mod font;
 mod sprite;
 mod tilemap;
@@ -25,6 +26,7 @@ use wgpu::{
 
 pub use camera::Camera2D;
 use camera::CameraResource;
+use debug::{DebugPass, DebugVertex};
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
 pub use tilemap::{TileId, Tilemap};
@@ -57,6 +59,8 @@ pub struct Renderer {
     camera_resource: CameraResource,
     sprite: SpritePass,
     sprite_queue: Vec<SpriteInstance>,
+    debug: DebugPass,
+    debug_vertices: Vec<DebugVertex>,
 }
 
 impl Renderer {
@@ -138,6 +142,7 @@ impl Renderer {
         let camera = Camera2D::new(config.width, config.height);
         let camera_resource = CameraResource::new(&device, &camera);
         let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
+        let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
 
         Ok(Self {
             surface,
@@ -149,7 +154,41 @@ impl Renderer {
             camera_resource,
             sprite,
             sprite_queue: Vec::new(),
+            debug,
+            debug_vertices: Vec::new(),
         })
+    }
+
+    /// Queue a debug line in world space. `color` is RGBA in linear range.
+    pub fn debug_line(&mut self, a: [f32; 2], b: [f32; 2], color: [f32; 4]) {
+        self.debug_vertices.push(DebugVertex { position: a, color });
+        self.debug_vertices.push(DebugVertex { position: b, color });
+    }
+
+    /// Queue a debug axis-aligned rectangle outline.
+    pub fn debug_rect(&mut self, min: [f32; 2], max: [f32; 2], color: [f32; 4]) {
+        let tl = [min[0], max[1]];
+        let tr = [max[0], max[1]];
+        let br = [max[0], min[1]];
+        let bl = [min[0], min[1]];
+        self.debug_line(tl, tr, color);
+        self.debug_line(tr, br, color);
+        self.debug_line(br, bl, color);
+        self.debug_line(bl, tl, color);
+    }
+
+    /// Queue a debug circle approximated by `segments` line segments.
+    /// `segments` is clamped to at least 3.
+    pub fn debug_circle(&mut self, center: [f32; 2], radius: f32, color: [f32; 4], segments: u32) {
+        let segments = segments.max(3);
+        let step = std::f32::consts::TAU / segments as f32;
+        let mut prev = [center[0] + radius, center[1]];
+        for i in 1..=segments {
+            let a = step * i as f32;
+            let cur = [center[0] + radius * a.cos(), center[1] + radius * a.sin()];
+            self.debug_line(prev, cur, color);
+            prev = cur;
+        }
     }
 
     /// Queue a sprite to be drawn during the next `render()` call. The
@@ -236,11 +275,14 @@ impl Renderer {
             Err(err) => return Err(err),
         };
 
-        // Upload current camera matrix and sprite instances.
+        // Upload current camera matrix and sprite/debug data.
         self.camera_resource.upload(&self.queue, &self.camera);
         self.sprite
             .upload(&self.device, &self.queue, &self.sprite_queue);
+        self.debug
+            .upload(&self.device, &self.queue, &self.debug_vertices);
         let sprite_count = self.sprite_queue.len() as u32;
+        let debug_vertex_count = self.debug_vertices.len() as u32;
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
@@ -269,11 +311,13 @@ impl Renderer {
 
             rpass.set_bind_group(0, &self.camera_resource.bind_group, &[]);
             self.sprite.draw(&mut rpass, sprite_count);
+            self.debug.draw(&mut rpass, debug_vertex_count);
         }
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.sprite_queue.clear();
+        self.debug_vertices.clear();
         Ok(())
     }
 
