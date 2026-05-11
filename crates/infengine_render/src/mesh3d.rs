@@ -211,8 +211,13 @@ fn cube_geometry() -> (Vec<MeshVertex>, Vec<u16>) {
                 uv: FACE_UVS[i],
             });
         }
-        // Two triangles per face: 0-1-2, 0-2-3.
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        // Two triangles per face wound CCW when viewed from the
+        // outside (the `normal` direction). With `FrontFace::Ccw` and
+        // `cull_mode: Back` this keeps the outward faces visible while
+        // hiding the interior - the previous winding had the cube's
+        // outward faces culled, so the renderer was painting the back
+        // of the opposite face instead and lighting flipped.
+        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     }
     (vertices, indices)
 }
