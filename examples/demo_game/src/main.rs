@@ -257,24 +257,28 @@ impl DemoGame {
         self.player_pos.x = self.player_pos.x.clamp(-half, half);
         self.player_pos.z = self.player_pos.z.clamp(-half, half);
 
-        // Pickup: edge-trigger E to grab the nearest item within radius.
-        let e_now = ctx.input.is_pressed(Key::E);
-        let e_just = e_now && !self.e_prev;
-        self.e_prev = e_now;
-        if e_just {
-            let mut nearest: Option<(usize, f32)> = None;
-            for (i, item) in self.items.iter().enumerate() {
-                let d = (item.position - self.player_pos).length();
-                if d < ITEM_PICKUP_RADIUS && nearest.is_none_or(|(_, best)| d < best) {
-                    nearest = Some((i, d));
-                }
+        // Pickup: auto-collect every item the player is currently
+        // standing on. Compares horizontal distance only so the floaty
+        // vertical bob does not lift items out of range.
+        let mut picked: Vec<Item> = Vec::new();
+        self.items.retain(|item| {
+            let dx = item.position.x - self.player_pos.x;
+            let dz = item.position.z - self.player_pos.z;
+            let horizontal = (dx * dx + dz * dz).sqrt();
+            if horizontal < ITEM_PICKUP_RADIUS {
+                picked.push(item.clone());
+                false
+            } else {
+                true
             }
-            if let Some((i, _)) = nearest {
-                let item = self.items.remove(i);
-                *self.inventory.entry(item.kind).or_insert(0) += 1;
-                self.pickup_message = Some((format!("Picked up {}", item.kind.label()), 2.0));
-            }
+        });
+        for item in picked {
+            *self.inventory.entry(item.kind).or_insert(0) += 1;
+            self.pickup_message = Some((format!("Picked up {}", item.kind.label()), 2.0));
         }
+        // Keep e_prev tracked in case future code wants explicit E
+        // pickups again; today the key is unused in update_play.
+        self.e_prev = ctx.input.is_pressed(Key::E);
 
         // Inventory toggle (I).
         let i_now = ctx.input.is_pressed(Key::I);
@@ -457,7 +461,7 @@ impl DemoGame {
                         ));
                         ui.separator();
                         ui.label(
-                            "Mouse aim, WASD move, Space jump, E pick up, I inventory, Esc menu",
+                            "Mouse aim, WASD move, Space jump, walk over items to pick up, I inventory, Esc menu",
                         );
                         if show_fps {
                             ui.separator();
