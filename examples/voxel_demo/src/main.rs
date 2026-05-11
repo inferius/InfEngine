@@ -26,6 +26,11 @@ const PLAYER_SPEED: f32 = 6.0;
 const JUMP_VELOCITY: f32 = 6.0;
 const GRAVITY: f32 = -18.0;
 const PLAYER_HEIGHT: f32 = 1.7;
+const PLAYER_RADIUS: f32 = 0.3;
+const COLLISION_EPSILON: f32 = 1e-4;
+/// Hotbar slots: index 0 is the "break" slot (empty hand), the rest
+/// hold the block ids in `Self::HOTBAR_BLOCKS`.
+const HOTBAR_SLOTS: usize = 6;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum AppState {
@@ -89,10 +94,16 @@ struct Voxel {
     esc_prev: bool,
     lmb_pending: bool,
     rmb_pending: bool,
-    /// Block id placed by a right-click. Future versions of the demo
-    /// will let the player cycle through this; today it's fixed to
-    /// the stone block id.
-    place_block: BlockId,
+    /// `None` = break slot (empty hand). `Some(block)` = place that
+    /// block. Indexed by `selected_slot`.
+    hotbar: [Option<BlockId>; HOTBAR_SLOTS],
+    selected_slot: usize,
+    /// Accumulated mouse-wheel ticks since the last tick consume; the
+    /// sign drives slot selection.
+    wheel_accum: f32,
+    /// `true` when the player's feet sit on a solid voxel; resets
+    /// every frame after collision resolution.
+    grounded: bool,
 
     viewport: (u32, u32),
     fps_ema: f32,
@@ -126,7 +137,17 @@ impl Voxel {
             esc_prev: false,
             lmb_pending: false,
             rmb_pending: false,
-            place_block: BlockId(1),
+            hotbar: [
+                None,
+                Some(BlockId(1)),
+                Some(BlockId(2)),
+                Some(BlockId(3)),
+                Some(BlockId(4)),
+                Some(BlockId(5)),
+            ],
+            selected_slot: 0,
+            wheel_accum: 0.0,
+            grounded: false,
             viewport: (1, 1),
             fps_ema: 60.0,
         }
@@ -295,6 +316,16 @@ impl Voxel {
         let limit = std::f32::consts::FRAC_PI_2 - 0.05;
         self.player_pitch = self.player_pitch.clamp(-limit, limit);
 
+        // Consume mouse wheel ticks - cycle hotbar slots (wheel up =
+        // previous slot, matches Minecraft convention).
+        let wheel = std::mem::take(&mut self.wheel_accum);
+        let ticks = wheel.round() as i32;
+        if ticks != 0 {
+            let mut slot = self.selected_slot as i32 - ticks;
+            slot = slot.rem_euclid(HOTBAR_SLOTS as i32);
+            self.selected_slot = slot as usize;
+        }
+
         let forward_horizontal =
             Vec3::new(self.player_yaw.cos(), 0.0, -self.player_yaw.sin()).normalize();
         let right = Vec3::new(forward_horizontal.z, 0.0, -forward_horizontal.x);
@@ -318,19 +349,35 @@ impl Voxel {
         self.player_vel.x = horizontal.x;
         self.player_vel.z = horizontal.z;
 
-        if ctx.input.is_pressed(Key::Space) && self.player_vel.y.abs() < 0.01 {
+        if ctx.input.is_pressed(Key::Space) && self.grounded {
             self.player_vel.y = JUMP_VELOCITY;
+            self.grounded = false;
         }
         self.player_vel.y += GRAVITY * dt;
-        self.player_pos += self.player_vel * dt;
 
-        let floor = 12.0 + PLAYER_HEIGHT;
-        if self.player_pos.y < floor {
-            self.player_pos.y = floor;
+        // Axis-resolved voxel AABB collision.
+        let delta = self.player_vel * dt;
+        let (new_pos, hit_floor, hit_ceiling) = sweep_aabb(&self.world, self.player_pos, delta);
+        self.player_pos = new_pos;
+        if hit_floor {
+            self.player_vel.y = 0.0;
+            self.grounded = true;
+        } else {
+            self.grounded = false;
+        }
+        if hit_ceiling {
             self.player_vel.y = 0.0;
         }
+
+        // World bounds: keep the player inside the generated chunk
+        // footprint so the camera doesn't fly off into the void.
         self.player_pos.x = self.player_pos.x.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
         self.player_pos.z = self.player_pos.z.clamp(-WORLD_HALF + 1.0, WORLD_HALF - 1.0);
+        if self.player_pos.y < -20.0 {
+            // Fell through the world - respawn above origin.
+            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+            self.player_vel = Vec3::ZERO;
+        }
     }
 
     fn render_ui(&mut self, window: &EngineWindow) {
@@ -338,6 +385,12 @@ impl Voxel {
         let fps = self.fps_ema;
         let show_fps = self.settings.show_fps;
         let settings_edit = &mut self.settings;
+        let hotbar_snapshot: Vec<Option<[f32; 3]>> = self
+            .hotbar
+            .iter()
+            .map(|slot| slot.and_then(|b| self.registry.get(b).map(|d| d.color)))
+            .collect();
+        let selected_slot = self.selected_slot;
         let mut action_start = false;
         let mut action_resume = false;
         let mut action_quit = false;
@@ -418,6 +471,68 @@ impl Voxel {
                             }
                         });
                     });
+                // Bottom hotbar - empty slot (= break) + one slot per
+                // registered block. Highlighted slot is the active
+                // selection (driven by mouse wheel).
+                egui::Area::new(egui::Id::new("voxel_hotbar"))
+                    .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (i, slot) in hotbar_snapshot.iter().enumerate() {
+                                    let size = egui::vec2(40.0, 40.0);
+                                    let (rect, _resp) =
+                                        ui.allocate_exact_size(size, egui::Sense::hover());
+                                    let painter = ui.painter_at(rect);
+                                    let fill = match slot {
+                                        None => egui::Color32::from_gray(24),
+                                        Some(c) => egui::Color32::from_rgb(
+                                            (c[0] * 255.0) as u8,
+                                            (c[1] * 255.0) as u8,
+                                            (c[2] * 255.0) as u8,
+                                        ),
+                                    };
+                                    painter.rect_filled(rect, 4.0, fill);
+                                    let outline = if i == selected_slot {
+                                        egui::Stroke::new(
+                                            3.0,
+                                            egui::Color32::from_rgb(255, 220, 80),
+                                        )
+                                    } else {
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(120))
+                                    };
+                                    painter.rect_stroke(
+                                        rect,
+                                        4.0,
+                                        outline,
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    if slot.is_none() {
+                                        // Draw an "X" to mark the
+                                        // break (empty hand) slot.
+                                        let pad = 10.0;
+                                        let stroke =
+                                            egui::Stroke::new(2.0, egui::Color32::from_gray(190));
+                                        painter.line_segment(
+                                            [
+                                                egui::pos2(rect.min.x + pad, rect.min.y + pad),
+                                                egui::pos2(rect.max.x - pad, rect.max.y - pad),
+                                            ],
+                                            stroke,
+                                        );
+                                        painter.line_segment(
+                                            [
+                                                egui::pos2(rect.max.x - pad, rect.min.y + pad),
+                                                egui::pos2(rect.min.x + pad, rect.max.y - pad),
+                                            ],
+                                            stroke,
+                                        );
+                                    }
+                                }
+                            });
+                        });
+                    });
+
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
                 let screen = ctx.content_rect();
@@ -529,6 +644,17 @@ impl AppHandler for Voxel {
                 _ => {}
             }
         }
+        // Mouse wheel cycles through hotbar slots.
+        if matches!(self.state, AppState::Playing)
+            && let WindowEvent::MouseWheel { delta, .. } = event
+        {
+            use infengine_window::raw_winit::event::MouseScrollDelta;
+            let y = match delta {
+                MouseScrollDelta::LineDelta(_, y) => *y,
+                MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 50.0,
+            };
+            self.wheel_accum += y;
+        }
     }
 
     fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
@@ -595,30 +721,38 @@ impl AppHandler for Voxel {
             None
         };
 
-        // Apply pending mouse-button edits before rendering.
+        // Apply pending mouse-button edits before rendering. LMB
+        // always breaks the targeted voxel. RMB places the selected
+        // hotbar block at the adjacent empty cell, but is ignored
+        // when the empty (break) slot is selected.
         let lmb = self.lmb_pending;
         let rmb = self.rmb_pending;
         self.lmb_pending = false;
         self.rmb_pending = false;
+        let selected_block = self.hotbar[self.selected_slot];
         if let Some(hit) = self.target {
             if lmb {
                 self.world.set(hit.voxel, BlockId::AIR);
                 let coords = Self::affected_chunks(hit.voxel);
                 self.rebuild_chunks(&coords);
-            } else if rmb {
-                // Don't place a block on top of the player's head /
-                // body - skip if the destination overlaps the player's
-                // bounding column.
-                let p = self.player_pos;
-                let pvx = p.x.floor() as i32;
-                let pvz = p.z.floor() as i32;
-                let player_feet = (p.y - PLAYER_HEIGHT).floor() as i32;
-                let player_head = p.y.floor() as i32;
-                let overlaps_player = hit.place_at[0] == pvx
-                    && hit.place_at[2] == pvz
-                    && (player_feet..=player_head).contains(&hit.place_at[1]);
-                if !overlaps_player {
-                    self.world.set(hit.place_at, self.place_block);
+            } else if rmb && let Some(block) = selected_block {
+                // Reject placement when it would intersect the player
+                // capsule - otherwise the player gets stuck inside
+                // the freshly placed block.
+                let candidate = self.player_pos; // current eye pos
+                let test_pos = candidate;
+                let (min, max) = body_aabb(test_pos);
+                let p = hit.place_at;
+                let voxel_min = [p[0] as f32, p[1] as f32, p[2] as f32];
+                let voxel_max = [p[0] as f32 + 1.0, p[1] as f32 + 1.0, p[2] as f32 + 1.0];
+                let overlaps = max.x > voxel_min[0]
+                    && min.x < voxel_max[0]
+                    && max.y > voxel_min[1]
+                    && min.y < voxel_max[1]
+                    && max.z > voxel_min[2]
+                    && min.z < voxel_max[2];
+                if !overlaps {
+                    self.world.set(hit.place_at, block);
                     let coords = Self::affected_chunks(hit.place_at);
                     self.rebuild_chunks(&coords);
                 }
@@ -651,22 +785,41 @@ impl AppHandler for Voxel {
                 );
             }
         }
-        // Wire outline around the voxel the player is currently aiming
-        // at. The outline is slightly inflated (0.005 unit margin) so
-        // the lines are not z-fighting with the surface they hug.
+        // Wire outline previewing the next action.
+        //   Empty slot     -> wire around the voxel that will be
+        //                     broken (target.voxel, black stroke).
+        //   Block slot     -> wire around the cell where the block
+        //                     will be placed (target.place_at,
+        //                     tinted with the block's albedo).
         if let Some(hit) = target {
-            let v = hit.voxel;
+            let (cell, color) = match selected_block {
+                None => (hit.voxel, [0.0, 0.0, 0.0, 0.95]),
+                Some(block) => {
+                    let c = registry
+                        .get(block)
+                        .map(|d| {
+                            [
+                                (d.color[0] * 1.4).min(1.0),
+                                (d.color[1] * 1.4).min(1.0),
+                                (d.color[2] * 1.4).min(1.0),
+                                0.95,
+                            ]
+                        })
+                        .unwrap_or([1.0, 1.0, 1.0, 0.95]);
+                    (hit.place_at, c)
+                }
+            };
             let min = [
-                v[0] as f32 - 0.005,
-                v[1] as f32 - 0.005,
-                v[2] as f32 - 0.005,
+                cell[0] as f32 - 0.005,
+                cell[1] as f32 - 0.005,
+                cell[2] as f32 - 0.005,
             ];
             let max = [
-                v[0] as f32 + 1.005,
-                v[1] as f32 + 1.005,
-                v[2] as f32 + 1.005,
+                cell[0] as f32 + 1.005,
+                cell[1] as f32 + 1.005,
+                cell[2] as f32 + 1.005,
             ];
-            renderer.debug_box_3d(min, max, [0.0, 0.0, 0.0, 0.9]);
+            renderer.debug_box_3d(min, max, color);
         }
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
@@ -688,6 +841,95 @@ impl AppHandler for Voxel {
             r.resize(w, h);
         }
     }
+}
+
+/// Player AABB at `pos`, where `pos.y` is the eye (head) height.
+fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
+    (
+        Vec3::new(
+            pos.x - PLAYER_RADIUS,
+            pos.y - PLAYER_HEIGHT,
+            pos.z - PLAYER_RADIUS,
+        ),
+        Vec3::new(pos.x + PLAYER_RADIUS, pos.y, pos.z + PLAYER_RADIUS),
+    )
+}
+
+/// Returns true if `pos`'s AABB overlaps any solid voxel.
+fn aabb_intersects_solid(world: &World, pos: Vec3) -> bool {
+    let (min, max) = body_aabb(pos);
+    let x0 = min.x.floor() as i32;
+    let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
+    let y0 = min.y.floor() as i32;
+    let y1 = (max.y - COLLISION_EPSILON).floor() as i32;
+    let z0 = min.z.floor() as i32;
+    let z1 = (max.z - COLLISION_EPSILON).floor() as i32;
+    for y in y0..=y1 {
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                if !world.get([x, y, z]).is_air() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Move the player AABB by `delta`, resolving collision with solid
+/// voxels along each axis separately. Returns the new position, plus
+/// flags indicating whether the player landed on a floor (negative
+/// Y resolve) or bonked their head (positive Y resolve).
+fn sweep_aabb(world: &World, pos: Vec3, delta: Vec3) -> (Vec3, bool, bool) {
+    let mut new_pos = pos;
+    let mut hit_floor = false;
+    let mut hit_ceiling = false;
+
+    // X axis.
+    let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
+    if aabb_intersects_solid(world, candidate) {
+        if delta.x > 0.0 {
+            let wall = (candidate.x + PLAYER_RADIUS).floor();
+            new_pos.x = wall - PLAYER_RADIUS - COLLISION_EPSILON;
+        } else if delta.x < 0.0 {
+            let wall = (candidate.x - PLAYER_RADIUS).ceil();
+            new_pos.x = wall + PLAYER_RADIUS + COLLISION_EPSILON;
+        }
+    } else {
+        new_pos.x = candidate.x;
+    }
+
+    // Y axis.
+    let candidate = Vec3::new(new_pos.x, new_pos.y + delta.y, new_pos.z);
+    if aabb_intersects_solid(world, candidate) {
+        if delta.y > 0.0 {
+            let wall = candidate.y.floor();
+            new_pos.y = wall - COLLISION_EPSILON;
+            hit_ceiling = true;
+        } else if delta.y < 0.0 {
+            let wall = (candidate.y - PLAYER_HEIGHT).ceil();
+            new_pos.y = wall + PLAYER_HEIGHT + COLLISION_EPSILON;
+            hit_floor = true;
+        }
+    } else {
+        new_pos.y = candidate.y;
+    }
+
+    // Z axis.
+    let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
+    if aabb_intersects_solid(world, candidate) {
+        if delta.z > 0.0 {
+            let wall = (candidate.z + PLAYER_RADIUS).floor();
+            new_pos.z = wall - PLAYER_RADIUS - COLLISION_EPSILON;
+        } else if delta.z < 0.0 {
+            let wall = (candidate.z - PLAYER_RADIUS).ceil();
+            new_pos.z = wall + PLAYER_RADIUS + COLLISION_EPSILON;
+        }
+    } else {
+        new_pos.z = candidate.z;
+    }
+
+    (new_pos, hit_floor, hit_ceiling)
 }
 
 fn main() -> ExitCode {
