@@ -16,7 +16,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -763,6 +763,26 @@ const PIN_HIT_RADIUS: f32 = 10.0;
 fn node_height_def(def: &NodeKindDef) -> f32 {
     let rows = def.inputs.len().max(def.outputs.len()) as f32;
     NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
+}
+
+/// Header tint for a node, keyed off its declared category. Mirrors
+/// Unreal's coloured-header convention so the user can spot events,
+/// math, control flow and variable nodes at a glance.
+fn category_header_color(category: &str) -> [u8; 3] {
+    match category {
+        "Events" => [180, 60, 60],
+        "Math" => [60, 140, 80],
+        "Control" => [200, 140, 50],
+        "Comparison" => [110, 150, 90],
+        "Logic" => [140, 120, 60],
+        "Variables" => [180, 160, 60],
+        "Transform" => [80, 110, 180],
+        "Audio" => [150, 90, 170],
+        "Time" => [80, 140, 170],
+        "Functions" => [130, 80, 170],
+        "Debug" | "Values" => [110, 110, 110],
+        _ => [72, 84, 108],
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1743,25 +1763,47 @@ impl BlueprintEditor {
             Self::draw_edge(&painter, a, b, egui::Color32::from_rgb(r, g, b_col), 2.0);
         }
 
-        // Nodes.
-        for node in &self.blueprint.graph.nodes {
+        // Nodes. Snapshot view + selection state so we can borrow
+        // the graph nodes mutably (needed for inline pin defaults).
+        let view_offset = self.view_offset;
+        let selected_id = self.selected;
+        // Build a set of pins that have an incoming edge so inline
+        // editors can hide themselves while a wire is connected.
+        let connected_in_pins: HashSet<(NodeId, String)> = self
+            .blueprint
+            .graph
+            .edges
+            .iter()
+            .map(|e| (e.to_node, e.to_pin.clone()))
+            .collect();
+        for node in &mut self.blueprint.graph.nodes {
             let Some(def) = registry.get(&node.kind) else {
                 continue;
             };
-            let origin = self.node_origin(rect.min, node);
+            let origin = rect.min
+                + view_offset
+                + egui::vec2(node.position[0], node.position[1]);
             let rect_node =
                 egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
             painter.rect_filled(rect_node, 4.0, egui::Color32::from_rgb(48, 56, 72));
-            let selected = self.selected == Some(node.id);
+            let selected = selected_id == Some(node.id);
             let border = if selected {
                 egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80))
             } else {
                 egui::Stroke::new(1.0, egui::Color32::from_gray(120))
             };
             painter.rect_stroke(rect_node, 4.0, border, egui::StrokeKind::Inside);
+            // Header colour keyed off the node's category so the user
+            // can tell Events / Math / Control / Variables apart at
+            // a glance, Unreal-style.
+            let header_rgb = category_header_color(def.category);
             let header_rect =
                 egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, NODE_HEADER_HEIGHT));
-            painter.rect_filled(header_rect, 4.0, egui::Color32::from_rgb(72, 84, 108));
+            painter.rect_filled(
+                header_rect,
+                4.0,
+                egui::Color32::from_rgb(header_rgb[0], header_rgb[1], header_rgb[2]),
+            );
             painter.text(
                 origin + egui::vec2(8.0, 6.0),
                 egui::Align2::LEFT_TOP,
@@ -1787,6 +1829,56 @@ impl BlueprintEditor {
                     egui::FontId::proportional(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
+                // Inline pin-default editor: only for non-exec inputs
+                // that have no incoming edge. Stored under
+                // `params["pin_<name>"]`.
+                if pin.ty != PinType::Exec
+                    && !connected_in_pins.contains(&(node.id, pin.name.to_string()))
+                {
+                    let label_w = (pin.name.len() as f32) * 6.5;
+                    let edit_x = origin.x + 14.0 + label_w + 4.0;
+                    let edit_w = (origin.x + NODE_WIDTH - 8.0) - edit_x;
+                    if edit_w > 24.0 {
+                        let key = format!("pin_{}", pin.name);
+                        let edit_rect = egui::Rect::from_min_size(
+                            egui::pos2(edit_x, y - 9.0),
+                            egui::vec2(edit_w, 16.0),
+                        );
+                        match pin.ty {
+                            PinType::Bool => {
+                                let mut cur = node
+                                    .params
+                                    .get(&key)
+                                    .map(|s| s == "true" || s == "1")
+                                    .unwrap_or(false);
+                                let resp =
+                                    ui.put(edit_rect, egui::Checkbox::new(&mut cur, ""));
+                                if resp.changed() {
+                                    node.params.insert(
+                                        key,
+                                        if cur { "true".into() } else { "false".into() },
+                                    );
+                                    dirty = true;
+                                }
+                            }
+                            _ => {
+                                let mut buf =
+                                    node.params.get(&key).cloned().unwrap_or_default();
+                                let resp = ui.put(
+                                    edit_rect,
+                                    egui::TextEdit::singleline(&mut buf)
+                                        .desired_width(edit_w)
+                                        .font(egui::TextStyle::Monospace)
+                                        .hint_text("0"),
+                                );
+                                if resp.changed() {
+                                    node.params.insert(key, buf);
+                                    dirty = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             for (i, pin) in def.outputs.iter().enumerate() {
                 let y = origin.y

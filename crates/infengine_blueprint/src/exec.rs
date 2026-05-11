@@ -129,6 +129,24 @@ fn find_node(graph: &Graph, id: NodeId) -> Option<&Node> {
     graph.nodes.iter().find(|n| n.id == id)
 }
 
+/// Read an inline pin default off a node. The key is
+/// `params["pin_<pin>"]`. Used when no edge feeds the input so the
+/// user can type a literal value directly on the pin instead of
+/// wiring a `const_*` node.
+fn pin_default_float(node: &Node, pin: &str) -> f32 {
+    node.params
+        .get(&format!("pin_{pin}"))
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0)
+}
+
+fn pin_default_bool(node: &Node, pin: &str) -> bool {
+    node.params
+        .get(&format!("pin_{pin}"))
+        .map(|s| s == "true" || s == "1")
+        .unwrap_or(false)
+}
+
 fn find_data_source<'a>(
     graph: &'a Graph,
     to_node: NodeId,
@@ -197,7 +215,7 @@ fn compile_data(
                     Some((src_node, src_pin)) => {
                         compile_data(graph, src_node, src_pin, visiting, ops)?;
                     }
-                    None => ops.push(Op::PushFloat(0.0)),
+                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
             }
             ops.push(match node.kind.as_str() {
@@ -213,7 +231,7 @@ fn compile_data(
                     Some((src_node, src_pin)) => {
                         compile_data(graph, src_node, src_pin, visiting, ops)?;
                     }
-                    None => ops.push(Op::PushFloat(0.0)),
+                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
             }
             ops.push(match node.kind.as_str() {
@@ -228,7 +246,7 @@ fn compile_data(
                     Some((src_node, src_pin)) => {
                         compile_data(graph, src_node, src_pin, visiting, ops)?;
                     }
-                    None => ops.push(Op::PushBool(false)),
+                    None => ops.push(Op::PushBool(pin_default_bool(node, input))),
                 }
             }
             ops.push(if node.kind == "and" {
@@ -242,7 +260,7 @@ fn compile_data(
                 Some((src_node, src_pin)) => {
                     compile_data(graph, src_node, src_pin, visiting, ops)?;
                 }
-                None => ops.push(Op::PushBool(false)),
+                None => ops.push(Op::PushBool(pin_default_bool(node, "value"))),
             }
             ops.push(Op::NotBool);
         }
@@ -252,7 +270,7 @@ fn compile_data(
                     Some((src_node, src_pin)) => {
                         compile_data(graph, src_node, src_pin, visiting, ops)?;
                     }
-                    None => ops.push(Op::PushFloat(0.0)),
+                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
             }
             ops.push(Op::MakeVec3);
@@ -287,7 +305,7 @@ fn compile_sink(
                     let mut visiting = HashSet::new();
                     compile_data(graph, src, src_pin, &mut visiting, ops)?;
                 }
-                None => ops.push(Op::PushFloat(0.0)),
+                None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
             ops.push(Op::Print);
         }
@@ -298,7 +316,7 @@ fn compile_sink(
                     let mut visiting = HashSet::new();
                     compile_data(graph, src, src_pin, &mut visiting, ops)?;
                 }
-                None => ops.push(Op::PushFloat(0.0)),
+                None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
             ops.push(Op::SetVar(name));
         }
@@ -309,7 +327,7 @@ fn compile_sink(
                         let mut visiting = HashSet::new();
                         compile_data(graph, src, src_pin, &mut visiting, ops)?;
                     }
-                    None => ops.push(Op::PushFloat(0.0)),
+                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
             }
             ops.push(Op::MakeVec3);
@@ -431,7 +449,15 @@ fn compile_exec_from(
                         let mut local = HashSet::new();
                         compile_data(graph, src, src_pin, &mut local, ops)?;
                     }
-                    None => ops.push(Op::PushBool(false)),
+                    None => {
+                        let sink_node = find_node(graph, sink_id).ok_or(
+                            CompileError::MissingInput {
+                                node: sink_id,
+                                pin: "condition".to_string(),
+                            },
+                        )?;
+                        ops.push(Op::PushBool(pin_default_bool(sink_node, "condition")));
+                    }
                 }
                 let jif_idx = ops.len();
                 ops.push(Op::JumpIfFalse(0));
@@ -874,6 +900,38 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(99.0)]);
+    }
+
+    #[test]
+    fn inline_pin_default_used_when_unconnected() {
+        // Add node with `b` left unconnected but a `pin_b` default
+        // of 5 in the params. The compile path should emit
+        // PushFloat(5) instead of PushFloat(0).
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let a = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == a)
+            .unwrap()
+            .params
+            .insert("value".into(), "3".into());
+        let add = g.add_node("add", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == add)
+            .unwrap()
+            .params
+            .insert("pin_b".into(), "5".into());
+        let p = g.add_node("print", [0.0, 0.0]);
+        assert!(g.connect(&reg, tick, "exec", p, "in").unwrap());
+        assert!(g.connect(&reg, a, "value", add, "a").unwrap());
+        assert!(g.connect(&reg, add, "sum", p, "value").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(8.0)]);
     }
 
     #[test]
