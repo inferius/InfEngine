@@ -16,26 +16,29 @@ pub(crate) struct SpriteVertex {
     pub uv: [f32; 2],
 }
 
+// Unit quad centered on the origin; size in world units is supplied via
+// the per-sprite uniform.
 const SPRITE_VERTICES: [SpriteVertex; 4] = [
     SpriteVertex {
-        position: [-1.0, -1.0],
+        position: [-0.5, -0.5],
         uv: [0.0, 1.0],
     },
     SpriteVertex {
-        position: [1.0, -1.0],
+        position: [0.5, -0.5],
         uv: [1.0, 1.0],
     },
     SpriteVertex {
-        position: [-1.0, 1.0],
+        position: [-0.5, 0.5],
         uv: [0.0, 0.0],
     },
     SpriteVertex {
-        position: [1.0, 1.0],
+        position: [0.5, 0.5],
         uv: [1.0, 0.0],
     },
 ];
 
-/// Uniform pushed to the sprite shader each frame: (offset_xy, scale_xy).
+/// Uniform pushed to the sprite shader each frame: (offset_xy, size_xy)
+/// in world units.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub(crate) struct SpriteUniform {
@@ -43,9 +46,9 @@ pub(crate) struct SpriteUniform {
 }
 
 impl SpriteUniform {
-    pub fn new(offset: [f32; 2], scale: [f32; 2]) -> Self {
+    pub fn new(position: [f32; 2], size: [f32; 2]) -> Self {
         Self {
-            transform: [offset[0], offset[1], scale[0], scale[1]],
+            transform: [position[0], position[1], size[0], size[1]],
         }
     }
 }
@@ -83,6 +86,7 @@ impl SpritePass {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
+        camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         // Texture: procedural checker, uploaded once at startup.
         let texture_size = wgpu::Extent3d {
@@ -130,8 +134,8 @@ impl SpritePass {
             ..Default::default()
         });
 
-        // Default to a centered, half-size sprite.
-        let initial_uniform = SpriteUniform::new([0.0, 0.0], [0.5, 0.5]);
+        // Default: 256x256 sprite centered at the world origin.
+        let initial_uniform = SpriteUniform::new([0.0, 0.0], [256.0, 256.0]);
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("infengine_render::sprite_uniform"),
             contents: bytemuck::bytes_of(&initial_uniform),
@@ -204,7 +208,7 @@ impl SpritePass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("infengine_render::sprite_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[camera_layout, &bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -267,16 +271,18 @@ impl SpritePass {
         }
     }
 
-    /// Update the sprite's transform uniform (offset and scale in NDC).
-    pub fn set_transform(&self, queue: &wgpu::Queue, offset: [f32; 2], scale: [f32; 2]) {
-        let uniform = SpriteUniform::new(offset, scale);
+    /// Update the sprite's world-space transform (position of center,
+    /// size in world units).
+    pub fn set_transform(&self, queue: &wgpu::Queue, position: [f32; 2], size: [f32; 2]) {
+        let uniform = SpriteUniform::new(position, size);
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
-    /// Record draw commands into an existing render pass.
+    /// Record draw commands into an existing render pass. Assumes the
+    /// caller has already bound the camera at `@group(0)`.
     pub fn draw<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>) {
         rpass.set_pipeline(&self.pipeline);
-        rpass.set_bind_group(0, &self.bind_group, &[]);
+        rpass.set_bind_group(1, &self.bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.draw(0..SPRITE_VERTICES.len() as u32, 0..1);
     }

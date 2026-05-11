@@ -1,11 +1,13 @@
 //! GPU renderer for InfEngine.
 //!
-//! Phase 1.2: minimal `Renderer` that owns a `wgpu` instance, surface,
-//! device, and queue, and can clear the framebuffer to a solid color.
-//! Texture / mesh / pipeline support lands in later steps of Phase 1.
+//! Owns a wgpu surface, device, queue, a 2D orthographic camera, and a
+//! sprite pipeline. Phase 2.1 introduces world-space coordinates (1 unit
+//! = 1 logical pixel at zoom 1.0); higher steps will add sprite batching,
+//! texture atlases, tilemaps, and text.
 
 #![forbid(unsafe_code)]
 
+mod camera;
 mod sprite;
 
 use std::sync::Arc;
@@ -19,6 +21,8 @@ use wgpu::{
     SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, Trace,
 };
 
+pub use camera::Camera2D;
+use camera::CameraResource;
 use sprite::SpritePass;
 
 /// Errors that can occur while creating or running the renderer.
@@ -45,6 +49,8 @@ pub struct Renderer {
     queue: Queue,
     config: SurfaceConfiguration,
     clear_color: Color,
+    camera: Camera2D,
+    camera_resource: CameraResource,
     sprite: SpritePass,
 }
 
@@ -124,7 +130,9 @@ impl Renderer {
             a: 1.0,
         };
 
-        let sprite = SpritePass::new(&device, &queue, config.format);
+        let camera = Camera2D::new(config.width, config.height);
+        let camera_resource = CameraResource::new(&device, &camera);
+        let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
 
         Ok(Self {
             surface,
@@ -132,16 +140,22 @@ impl Renderer {
             queue,
             config,
             clear_color,
+            camera,
+            camera_resource,
             sprite,
         })
     }
 
-    /// Update the sprite's transform (offset and scale in NDC).
-    ///
-    /// In NDC the visible region spans `[-1, 1]` on both axes; `scale` of
-    /// `[1, 1]` covers the whole window.
-    pub fn set_sprite_transform(&self, offset: [f32; 2], scale: [f32; 2]) {
-        self.sprite.set_transform(&self.queue, offset, scale);
+    /// Update the sprite's world-space transform (center position and
+    /// size in world units, i.e. logical pixels at zoom 1.0).
+    pub fn set_sprite_transform(&self, position: [f32; 2], size: [f32; 2]) {
+        self.sprite.set_transform(&self.queue, position, size);
+    }
+
+    /// Mutable access to the 2D camera. Changes take effect on the next
+    /// `render()` call (the matrix is re-uploaded then).
+    pub fn camera_mut(&mut self) -> &mut Camera2D {
+        &mut self.camera
     }
 
     /// Resize the swapchain to match a new window size in physical pixels.
@@ -153,6 +167,7 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        self.camera.set_viewport(width, height);
         debug!(width, height, "surface reconfigured");
     }
 
@@ -174,6 +189,9 @@ impl Renderer {
             }
             Err(err) => return Err(err),
         };
+
+        // Upload current camera matrix.
+        self.camera_resource.upload(&self.queue, &self.camera);
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
@@ -200,6 +218,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
+            rpass.set_bind_group(0, &self.camera_resource.bind_group, &[]);
             self.sprite.draw(&mut rpass);
         }
 

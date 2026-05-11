@@ -17,6 +17,7 @@ infengine_window = { path = "../infengine_window" }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 bytemuck = { workspace = true }
+glam = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 winit = { workspace = true }

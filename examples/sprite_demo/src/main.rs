@@ -1,18 +1,21 @@
-//! Sprite demo - Phase 1 proof of concept for InfEngine.
+//! Sprite demo - Phase 2.1 of InfEngine.
 //!
-//! Step 1.4: the checker sprite can be moved with `WASD` or the arrow
-//! keys. `R` resets position. `Escape` (or closing the window) exits.
+//! World-space coordinates (1 unit = 1 logical pixel) drive a 256x256
+//! sprite that moves at a fixed pixels-per-second speed. WASD / arrow
+//! keys move; `R` recenters; `Escape` (or closing the window) exits.
 
 use infengine_render::Renderer;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
-const SPRITE_HALF_SIZE: f32 = 0.25;
-const MOVE_SPEED_NDC: f32 = 1.4;
+const SPRITE_SIZE: f32 = 256.0;
+/// Sprite move speed in world units per second (1 unit = 1 logical pixel).
+const MOVE_SPEED: f32 = 400.0;
 
 struct Demo {
     renderer: Option<Renderer>,
     pos: [f32; 2],
+    viewport: (u32, u32),
     frame: u64,
 }
 
@@ -21,6 +24,7 @@ impl Default for Demo {
         Self {
             renderer: None,
             pos: [0.0, 0.0],
+            viewport: (1, 1),
             frame: 0,
         }
     }
@@ -29,10 +33,11 @@ impl Default for Demo {
 impl AppHandler for Demo {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
+        self.viewport = (w, h);
         info!(width = w, height = h, "sprite_demo started");
         match Renderer::new(window) {
             Ok(r) => {
-                r.set_sprite_transform(self.pos, [SPRITE_HALF_SIZE, SPRITE_HALF_SIZE]);
+                r.set_sprite_transform(self.pos, [SPRITE_SIZE, SPRITE_SIZE]);
                 self.renderer = Some(r);
             }
             Err(err) => {
@@ -66,19 +71,21 @@ impl AppHandler for Demo {
             let len = (dx * dx + dy * dy).sqrt();
             dx /= len;
             dy /= len;
-            self.pos[0] += dx * MOVE_SPEED_NDC * ctx.delta_time;
-            self.pos[1] += dy * MOVE_SPEED_NDC * ctx.delta_time;
+            self.pos[0] += dx * MOVE_SPEED * ctx.delta_time;
+            self.pos[1] += dy * MOVE_SPEED * ctx.delta_time;
         }
 
         if ctx.input.is_pressed(Key::R) {
             self.pos = [0.0, 0.0];
         }
 
-        let limit = 1.0 - SPRITE_HALF_SIZE;
-        self.pos[0] = self.pos[0].clamp(-limit, limit);
-        self.pos[1] = self.pos[1].clamp(-limit, limit);
+        // Clamp to the visible viewport (half-extents in world units).
+        let half_w = self.viewport.0 as f32 * 0.5 - SPRITE_SIZE * 0.5;
+        let half_h = self.viewport.1 as f32 * 0.5 - SPRITE_SIZE * 0.5;
+        self.pos[0] = self.pos[0].clamp(-half_w, half_w);
+        self.pos[1] = self.pos[1].clamp(-half_h, half_h);
 
-        renderer.set_sprite_transform(self.pos, [SPRITE_HALF_SIZE, SPRITE_HALF_SIZE]);
+        renderer.set_sprite_transform(self.pos, [SPRITE_SIZE, SPRITE_SIZE]);
 
         if let Err(err) = renderer.render() {
             warn!(error = ?err, "frame render failed");
@@ -98,6 +105,7 @@ impl AppHandler for Demo {
 
     fn on_resize(&mut self, width: u32, height: u32) {
         info!(width, height, "window resized");
+        self.viewport = (width, height);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resize(width, height);
         }
@@ -116,7 +124,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 1.4)".into(),
+        title: "InfEngine - sprite_demo (Phase 2.1)".into(),
         width: 1280,
         height: 720,
         resizable: true,

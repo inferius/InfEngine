@@ -8,11 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `infengine_render::Camera2D` (Phase 2.1): orthographic 2D camera with `position`, `zoom`, and viewport size. World-space coordinates use 1 unit = 1 logical pixel at zoom 1.0; `Renderer::camera_mut` exposes it for pan/zoom in later steps.
+- `infengine_render::camera::CameraResource` (internal): camera uniform buffer + bind group, bound at `@group(0)` and uploaded once per frame inside `Renderer::render`.
 - `infengine_window::InputState` and `FrameContext` (Phase 1.4): the engine tracks pressed keys via the `Key` enum and exposes a per-frame snapshot plus a `delta_time` (seconds) to `AppHandler::on_update`. Focus loss clears the input state to avoid stuck keys.
 - `sprite_demo` (Phase 1.4): WASD or arrow keys move the sprite at 1.4 NDC units/sec (frame-rate independent), `R` recenters, motion clamps to the screen. Diagonal motion is normalized so it isn't faster than axis-aligned motion.
 - `infengine_render::sprite` (Phase 1.3): textured-quad pipeline with a packed `position + uv` vertex format, a `vec4` transform UBO (offset_xy + scale_xy), bind group covering uniform + texture + sampler, and a procedurally generated 128x128 checkerboard sRGB texture uploaded via `queue.write_texture`. Pipeline uses `TriangleStrip` with `ALPHA_BLENDING` so transparent sprites remain composable later. Exposed through `Renderer::set_sprite_transform`.
 
 ### Changed
+- `infengine_render::sprite` (Phase 2.1): the sprite pipeline now uses two bind groups - camera at `@group(0)` and sprite-local data at `@group(1)`. The local quad geometry is a `[-0.5, 0.5]` unit quad, so the per-sprite uniform `(position, size)` directly maps to world-space center and extent.
+- `Renderer::set_sprite_transform` now takes `(position, size)` in world units (logical pixels) rather than NDC offsets.
 - `AppHandler::on_update` now takes `&FrameContext<'_>` in addition to the `EngineWindow`, surfacing `delta_time` and the current `InputState` to application code.
 - `infengine_render`: minimal wgpu-backed `Renderer` (Phase 1.2) that owns an `Instance`, `Surface`, `Device`, and `Queue`, configures an sRGB swapchain with `AutoVsync` present mode, and clears the framebuffer to a solid color every frame. Recovers from `Lost` / `Outdated` surface errors by reconfiguring.
 - `infengine_window`: minimal winit-based event loop wrapping `EngineWindow`, `AppHandler` trait, and an engine-side `Key` enum that does not leak winit types.
