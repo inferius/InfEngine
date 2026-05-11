@@ -19,6 +19,7 @@ infengine_assets = { path = "../../crates/infengine_assets" }
 infengine_audio = { path = "../../crates/infengine_audio" }
 infengine_editor = { path = "../../crates/infengine_editor" }
 infengine_physics = { path = "../../crates/infengine_physics" }
+infengine_scripting = { path = "../../crates/infengine_scripting" }
 egui = { workspace = true }
 image = { workspace = true }
 tracing = { workspace = true }

@@ -15,6 +15,9 @@ use infengine_core::scene::{
 use infengine_editor::EditorUi;
 use infengine_physics::PhysicsWorld;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap};
+use infengine_scripting::{
+    FnTick, FrameContext as ScriptFrameContext, ScriptAssembly, ScriptHost, default_engine_api,
+};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -40,6 +43,10 @@ struct Demo {
     selected_asset: Option<PathBuf>,
     audio: Option<AudioSystem>,
     audio_sound: Option<Sound>,
+    script_host: Option<ScriptHost>,
+    script_assembly: Option<ScriptAssembly>,
+    script_tick: Option<FnTick>,
+    scripting_enabled: bool,
     physics: PhysicsWorld,
     play_mode: bool,
     edit_snapshot: Option<Scene>,
@@ -74,6 +81,10 @@ impl Default for Demo {
             selected_asset: None,
             audio: None,
             audio_sound: None,
+            script_host: None,
+            script_assembly: None,
+            script_tick: None,
+            scripting_enabled: false,
             physics: PhysicsWorld::new(),
             play_mode: false,
             edit_snapshot: None,
@@ -255,6 +266,48 @@ fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
 }
 
 impl Demo {
+    fn try_start_scripting(&mut self) {
+        let script_dir = PathBuf::from("scripts/InfEngine.Scripts/bin/Release/net10.0");
+        let runtime_cfg = script_dir.join("InfEngine.Scripts.runtimeconfig.json");
+        let assembly = script_dir.join("InfEngine.Scripts.dll");
+        if !runtime_cfg.exists() || !assembly.exists() {
+            info!("C# scripting skipped (build scripts/InfEngine.Scripts to enable)");
+            return;
+        }
+        let host = match ScriptHost::new(&runtime_cfg) {
+            Ok(h) => h,
+            Err(err) => {
+                warn!(error = %err, "C# script host bootstrap failed");
+                return;
+            }
+        };
+        let asm = match host.load_assembly(&assembly) {
+            Ok(a) => a,
+            Err(err) => {
+                warn!(error = %err, "C# assembly load failed");
+                return;
+            }
+        };
+        let engine_type = "InfEngine.Scripts.Engine, InfEngine.Scripts";
+        let player_type = "InfEngine.Scripts.Player, InfEngine.Scripts";
+        if let Ok(register) = asm.get_fn_register_api(engine_type, "RegisterApi") {
+            let api = default_engine_api();
+            register(&api as *const _);
+        } else {
+            warn!("Engine.RegisterApi missing; C# Engine helpers will be inactive");
+        }
+        match asm.get_fn_tick(player_type, "OnTick") {
+            Ok(tick) => {
+                self.script_tick = Some(tick);
+                self.scripting_enabled = true;
+                info!("C# Player.OnTick wired");
+            }
+            Err(err) => warn!(error = %err, "Player.OnTick missing"),
+        }
+        self.script_assembly = Some(asm);
+        self.script_host = Some(host);
+    }
+
     fn refresh_asset_listing(&mut self) {
         match self.assets.list_files() {
             Ok(list) => self.asset_listing = list,
@@ -397,6 +450,8 @@ impl AppHandler for Demo {
         self.selected = first_sprite_entity(&self.scene);
         self.refresh_asset_listing();
         self.physics.rebuild(&self.scene);
+
+        self.try_start_scripting();
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
@@ -570,6 +625,26 @@ impl AppHandler for Demo {
             entity.transform.position[1] = cursor_world[1] - self.drag_offset[1];
         }
 
+        // Optional C# Tick. Push the selected entity's position into the
+        // frame context, let the script mutate it, then read it back.
+        if self.scripting_enabled
+            && let Some(tick) = self.script_tick.as_ref()
+            && let Some(id) = self.selected
+            && let Some(entity) = self.scene.get(id)
+        {
+            let starting = entity.transform.position;
+            infengine_scripting::set_frame_context(ScriptFrameContext {
+                player_pos: starting,
+            });
+            tick(dt);
+            let ctx = infengine_scripting::take_frame_context();
+            if ctx.player_pos != starting
+                && let Some(entity) = self.scene.get_mut(id)
+            {
+                entity.transform.position = ctx.player_pos;
+            }
+        }
+
         // Physics step happens only in Play mode. Edits (movement, drag,
         // inspector sliders) propagate to bodies through sync_from_scene.
         if self.play_mode {
@@ -647,6 +722,8 @@ impl AppHandler for Demo {
         let zoom_ref = &mut self.zoom;
         let show_debug_ref = &mut self.show_debug_overlay;
         let follow_camera_ref = &mut self.follow_camera;
+        let scripting_enabled_ref = &mut self.scripting_enabled;
+        let script_tick_present = self.script_tick.is_some();
         let scene_ref = &mut self.scene;
         let selected_ref = &mut self.selected;
         let save_status_ref = &mut self.save_status;
@@ -663,7 +740,7 @@ impl AppHandler for Demo {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 5.7");
+                        ui.heading("InfEngine - Phase 8.4");
                         ui.horizontal(|ui| {
                             let label = if *play_mode_ref { "Stop" } else { "Play" };
                             if ui.button(label).clicked() {
@@ -733,6 +810,16 @@ impl AppHandler for Demo {
                                     .logarithmic(true),
                             );
                             ui.checkbox(show_debug_ref, "Debug overlay");
+                        });
+
+                        ui.collapsing("Scripting (C#)", |ui| {
+                            if script_tick_present {
+                                ui.checkbox(scripting_enabled_ref, "Run Player.OnTick");
+                                ui.small("Build scripts/InfEngine.Scripts and restart to reload.");
+                            } else {
+                                ui.label("C# Player.OnTick not loaded");
+                                ui.small("Build scripts/InfEngine.Scripts with `dotnet build -c Release`.");
+                            }
                         });
 
                         ui.collapsing("Hierarchy", |ui| {
@@ -933,7 +1020,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 5.7)".into(),
+        title: "InfEngine - sprite_demo (Phase 8.4)".into(),
         width: 1280,
         height: 720,
         resizable: true,

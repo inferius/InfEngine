@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- C# OnTick + scripted player (Phase 8.4 / 8.6): `EngineApi` grows `get_player_pos` / `set_player_pos`; a thread-local `FrameContext` carries player position across the FFI boundary. Managed `Engine.GetPlayerPos` / `SetPlayerPos` + a new `Player.OnTick(float dt)` script drives the selected entity on a figure-eight. `sprite_demo` auto-loads the assembly when present, registers the API, calls `Player.OnTick` every frame, and surfaces a toggle in a new "Scripting (C#)" inspector section.
 - Rust <-> C# bindings (Phase 8.3): a `#[repr(C)]` `EngineApi` struct of `extern "C"` function pointers (`log_info`, `time_secs`) plus a `default_engine_api()` builder. Managed side mirrors the struct as `EngineApiPtrs` and exposes a `Engine` static facade (`Engine.Log(string)`, `Engine.TimeSeconds()`). `ScriptAssembly::get_fn_register_api` resolves `Engine.RegisterApi(EngineApiPtrs*)` so the host can push the table into C# at startup.
 - `Hello.EngineRoundTrip()` C# method logs back through Rust's tracing pipeline using `Engine.Log`, proving the bidirectional FFI works.
 - New crate `infengine_scripting` (Phase 8.1-8.2): wraps the `netcorehost` 0.18 crate to bootstrap an in-process .NET 10 runtime via `hostfxr`. `ScriptHost::new(runtime_config)` loads `hostfxr`, initializes a runtime, and exposes `load_assembly(path) -> ScriptAssembly`. `ScriptAssembly::get_fn_void` / `get_fn_int` resolve C# methods marked `[UnmanagedCallersOnly]` to callable function pointers.

@@ -34,6 +34,9 @@ pub type FnInt = ManagedFunction<extern "system" fn() -> i32>;
 /// Re-export: a callable function used to register the engine API
 /// struct with the managed side.
 pub type FnRegisterApi = ManagedFunction<extern "system" fn(*const EngineApi)>;
+/// Re-export: per-frame tick callback. The host passes the frame's
+/// delta-time in seconds.
+pub type FnTick = ManagedFunction<extern "system" fn(f32)>;
 
 /// Engine functions exposed to C# code. Layout is FFI-stable so that
 /// the same `#[repr(C)]` struct can be marshalled on the managed side.
@@ -45,6 +48,10 @@ pub type FnRegisterApi = ManagedFunction<extern "system" fn(*const EngineApi)>;
 pub struct EngineApi {
     pub log_info: extern "C" fn(msg: *const u8, len: usize),
     pub time_secs: extern "C" fn() -> f32,
+    /// Read the current player position. Writes `(x, y)` into the caller's outputs.
+    pub get_player_pos: extern "C" fn(out_x: *mut f32, out_y: *mut f32),
+    /// Set the player position for the next renderer pass.
+    pub set_player_pos: extern "C" fn(x: f32, y: f32),
 }
 
 impl std::fmt::Debug for EngineApi {
@@ -60,7 +67,35 @@ pub fn default_engine_api() -> EngineApi {
     EngineApi {
         log_info: rust_log_info,
         time_secs: rust_time_secs,
+        get_player_pos: rust_get_player_pos,
+        set_player_pos: rust_set_player_pos,
     }
+}
+
+/// Per-frame context that the host updates before invoking C# tick
+/// callbacks. Stored as a thread-local because `[UnmanagedCallersOnly]`
+/// extern functions cannot accept a host context pointer.
+#[derive(Debug, Default)]
+pub struct FrameContext {
+    pub player_pos: [f32; 2],
+}
+
+thread_local! {
+    static FRAME_CTX: std::cell::RefCell<FrameContext> = const {
+        std::cell::RefCell::new(FrameContext { player_pos: [0.0, 0.0] })
+    };
+}
+
+/// Write the current frame's context. Call **before** invoking a C#
+/// tick callback.
+pub fn set_frame_context(ctx: FrameContext) {
+    FRAME_CTX.with(|c| *c.borrow_mut() = ctx);
+}
+
+/// Read the current frame's context. Call **after** a C# tick callback
+/// to pull any state the script mutated back into the host.
+pub fn take_frame_context() -> FrameContext {
+    FRAME_CTX.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 extern "C" fn rust_log_info(msg: *const u8, len: usize) {
@@ -80,6 +115,27 @@ extern "C" fn rust_time_secs() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     let start = START.get_or_init(Instant::now);
     start.elapsed().as_secs_f32()
+}
+
+extern "C" fn rust_get_player_pos(out_x: *mut f32, out_y: *mut f32) {
+    if out_x.is_null() || out_y.is_null() {
+        return;
+    }
+    FRAME_CTX.with(|c| {
+        let c = c.borrow();
+        // SAFETY: caller guarantees both output pointers are valid for
+        // the lifetime of the call.
+        unsafe {
+            *out_x = c.player_pos[0];
+            *out_y = c.player_pos[1];
+        }
+    });
+}
+
+extern "C" fn rust_set_player_pos(x: f32, y: f32) {
+    FRAME_CTX.with(|c| {
+        c.borrow_mut().player_pos = [x, y];
+    });
 }
 
 /// Errors raised while bootstrapping or driving the CoreCLR host.
@@ -229,6 +285,19 @@ impl ScriptAssembly {
         let m = pdc_from_str(method_name)?;
         self.loader
             .get_function_with_unmanaged_callers_only::<fn(*const EngineApi)>(&t, &m)
+            .map_err(|source| ScriptError::ResolveFunction {
+                type_name: type_name.to_owned(),
+                method_name: method_name.to_owned(),
+                source,
+            })
+    }
+
+    /// Resolve a per-frame tick callback: `void method(float dt)`.
+    pub fn get_fn_tick(&self, type_name: &str, method_name: &str) -> Result<FnTick, ScriptError> {
+        let t = pdc_from_str(type_name)?;
+        let m = pdc_from_str(method_name)?;
+        self.loader
+            .get_function_with_unmanaged_callers_only::<fn(f32)>(&t, &m)
             .map_err(|source| ScriptError::ResolveFunction {
                 type_name: type_name.to_owned(),
                 method_name: method_name.to_owned(),

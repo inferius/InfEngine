@@ -13,6 +13,8 @@ public unsafe struct EngineApiPtrs
 {
     public delegate* unmanaged[Cdecl]<byte*, nuint, void> LogInfo;
     public delegate* unmanaged[Cdecl]<float> TimeSecs;
+    public delegate* unmanaged[Cdecl]<float*, float*, void> GetPlayerPos;
+    public delegate* unmanaged[Cdecl]<float, float, void> SetPlayerPos;
 }
 
 /// <summary>
@@ -52,5 +54,21 @@ public static unsafe class Engine
     {
         if (_api.TimeSecs == null) return 0f;
         return _api.TimeSecs();
+    }
+
+    /// <summary>Read the player's current world-space position.</summary>
+    public static (float X, float Y) GetPlayerPos()
+    {
+        if (_api.GetPlayerPos == null) return (0f, 0f);
+        float x = 0f, y = 0f;
+        _api.GetPlayerPos(&x, &y);
+        return (x, y);
+    }
+
+    /// <summary>Override the player's world-space position.</summary>
+    public static void SetPlayerPos(float x, float y)
+    {
+        if (_api.SetPlayerPos == null) return;
+        _api.SetPlayerPos(x, y);
     }
 }
