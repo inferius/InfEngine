@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_blueprint::{
-    BlueprintEditor,
+    BlueprintEditor, NodeKindRegistry,
     exec::{Program, TracingHost, Trigger, compile, run as run_program},
 };
 use infengine_core::project::{Project, ProjectError, ProjectScene};
@@ -96,6 +96,7 @@ struct Editor {
     /// scaffold stage; persistence + node-graph execution come later.
     blueprint: BlueprintEditor,
     blueprint_open: bool,
+    node_registry: NodeKindRegistry,
     /// Compiled bytecode for the blueprint's `OnTick` trigger; populated
     /// when Play starts.
     play_blueprint_tick: Option<Program>,
@@ -195,6 +196,7 @@ impl Editor {
             play_body_map_3d: HashMap::new(),
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
+            node_registry: NodeKindRegistry::with_builtins(),
             play_blueprint_tick: None,
         };
         if me.project.scenes.is_empty() {
@@ -438,7 +440,7 @@ impl Editor {
         self.play_physics_3d = Some(world_3d);
         self.play_body_map_3d = map_3d;
         // Compile blueprint bytecode and fire its OnStart once.
-        match compile(&self.blueprint.graph, Trigger::OnStart) {
+        match compile(&self.blueprint.blueprint.graph, Trigger::OnStart) {
             Ok(prog) => {
                 let mut host = TracingHost;
                 run_program(&prog, &mut host);
@@ -447,7 +449,7 @@ impl Editor {
                 tracing::warn!(error = %err, "blueprint OnStart compile failed");
             }
         }
-        self.play_blueprint_tick = compile(&self.blueprint.graph, Trigger::OnTick).ok();
+        self.play_blueprint_tick = compile(&self.blueprint.blueprint.graph, Trigger::OnTick).ok();
         self.play_state = PlayState::Playing;
         self.status = "Play mode".into();
     }
@@ -959,6 +961,7 @@ impl AppHandler for Editor {
             let play_state = self.play_state;
             let blueprint = &mut self.blueprint;
             let blueprint_open = &mut self.blueprint_open;
+            let node_registry = &self.node_registry;
             let mut grid_visible = self
                 .renderer
                 .as_ref()
@@ -1026,7 +1029,7 @@ impl AppHandler for Editor {
                         .default_size([720.0, 480.0])
                         .open(blueprint_open)
                         .show(ctx, |ui| {
-                            blueprint.show(ui);
+                            blueprint.show(ui, node_registry);
                         });
                 }
 

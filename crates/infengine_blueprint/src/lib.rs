@@ -1,10 +1,18 @@
-//! Blueprint (visual scripting) graph scaffold.
+//! Blueprint (visual scripting) graph for InfEngine.
 //!
-//! Phase 10.6 introduced the data model + a minimal egui canvas. Phase
-//! 13B grows the editor into a usable surface: canvas panning,
-//! drag-pin-to-pin edge creation, bezier-spline rendering, right-click
-//! context menus, and Delete-key cleanup. Execution (bytecode VM)
-//! lands in 13C.
+//! Phase 15 reworks the original enum-based node kinds into a runtime
+//! registry of typed node definitions. Each pin carries a `PinType`
+//! that the graph validates at edge-create time, so the editor
+//! visually distinguishes execution flow from data and refuses to
+//! plug a Float into an Exec slot. Node kinds are addressed by
+//! string ids registered in a `NodeKindRegistry`, which the host
+//! application can extend at startup to add domain-specific nodes
+//! without touching this crate.
+//!
+//! `Blueprint` wraps a `Graph` together with metadata describing what
+//! the script applies to (`BlueprintTarget`) so the editor can show
+//! "Editing: Entity 'cube_demo'" instead of presenting an anonymous
+//! canvas.
 
 #![forbid(unsafe_code)]
 
@@ -19,97 +27,204 @@ pub mod exec;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
-/// Built-in node catalogue. Each variant carries the data needed at
-/// edit time; runtime parameters live on the node's `params` map so
-/// future kinds can grow without breaking saved graphs.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Kind of value flowing through a pin. Two pins may be connected only
+/// when their types match exactly. `Exec` is the special "execution
+/// flow" type that drives node firing (Unreal-style white wires).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NodeKind {
-    /// Fires once when the owning entity enters Play mode.
-    OnStart,
-    /// Fires every frame while the entity is alive.
-    OnTick,
-    /// Constant float value exposed on the `value` output pin.
-    ConstFloat,
-    /// Two-input addition (`a`, `b`) producing one output (`sum`).
-    Add,
-    /// Sink: writes its input to the engine log.
-    Print,
-    /// Moves the owning entity by the input vector each tick.
-    SetPosition,
+pub enum PinType {
+    Exec,
+    Float,
+    Bool,
+    Vec3,
+    /// Reference to a scene entity by stable id - resolved at runtime.
+    EntityRef,
+    /// Plain UTF-8 string.
+    Text,
 }
 
-impl NodeKind {
+impl PinType {
+    /// Rough RGB used by the editor to colour-code pins / edges.
+    pub fn rgb(self) -> [u8; 3] {
+        match self {
+            PinType::Exec => [240, 240, 240],
+            PinType::Float => [120, 220, 120],
+            PinType::Bool => [220, 60, 60],
+            PinType::Vec3 => [240, 200, 80],
+            PinType::EntityRef => [80, 160, 255],
+            PinType::Text => [200, 130, 255],
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
-            NodeKind::OnStart => "On Start",
-            NodeKind::OnTick => "On Tick",
-            NodeKind::ConstFloat => "Const Float",
-            NodeKind::Add => "Add",
-            NodeKind::Print => "Print",
-            NodeKind::SetPosition => "Set Position",
-        }
-    }
-
-    pub fn all() -> &'static [NodeKind] {
-        &[
-            NodeKind::OnStart,
-            NodeKind::OnTick,
-            NodeKind::ConstFloat,
-            NodeKind::Add,
-            NodeKind::Print,
-            NodeKind::SetPosition,
-        ]
-    }
-
-    pub fn input_pins(self) -> &'static [&'static str] {
-        match self {
-            NodeKind::OnStart | NodeKind::OnTick | NodeKind::ConstFloat => &[],
-            NodeKind::Add => &["a", "b"],
-            // First pin "in" is the execution-flow input; the rest are
-            // data inputs the VM evaluates before firing the node.
-            NodeKind::Print => &["in", "value"],
-            NodeKind::SetPosition => &["in", "x", "y", "z"],
-        }
-    }
-
-    pub fn output_pins(self) -> &'static [&'static str] {
-        match self {
-            NodeKind::OnStart | NodeKind::OnTick => &["exec"],
-            NodeKind::ConstFloat => &["value"],
-            NodeKind::Add => &["sum"],
-            NodeKind::Print | NodeKind::SetPosition => &[],
+            PinType::Exec => "exec",
+            PinType::Float => "float",
+            PinType::Bool => "bool",
+            PinType::Vec3 => "vec3",
+            PinType::EntityRef => "entity",
+            PinType::Text => "text",
         }
     }
 }
 
-/// One node in the graph. `position` keeps the edit-time canvas layout
-/// stable across saves.
+/// Pin metadata: pin name + type. Stored on node-kind definitions, not
+/// per-node, because every node of a kind has the same pin layout.
+#[derive(Debug, Clone)]
+pub struct PinSpec {
+    pub name: &'static str,
+    pub ty: PinType,
+}
+
+impl PinSpec {
+    pub const fn new(name: &'static str, ty: PinType) -> Self {
+        Self { name, ty }
+    }
+}
+
+/// Definition of one node kind. `id` is the stable string key serialised
+/// in saved graphs (e.g. `"on_start"`). `inputs` / `outputs` describe
+/// the pins in display order. `category` is the menu label the editor
+/// uses to group related nodes.
+#[derive(Debug, Clone)]
+pub struct NodeKindDef {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub category: &'static str,
+    pub inputs: &'static [PinSpec],
+    pub outputs: &'static [PinSpec],
+}
+
+impl NodeKindDef {
+    pub fn input(&self, name: &str) -> Option<&'static PinSpec> {
+        self.inputs.iter().find(|p| p.name == name)
+    }
+
+    pub fn output(&self, name: &str) -> Option<&'static PinSpec> {
+        self.outputs.iter().find(|p| p.name == name)
+    }
+}
+
+/// Registry mapping string kind ids to definitions. The host
+/// application can register custom node kinds at startup; built-in
+/// engine nodes are pre-registered via `with_builtins`.
+#[derive(Debug, Default)]
+pub struct NodeKindRegistry {
+    defs: HashMap<&'static str, NodeKindDef>,
+}
+
+impl NodeKindRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Pre-populated registry with the engine's built-in node kinds.
+    pub fn with_builtins() -> Self {
+        let mut r = Self::new();
+        for def in BUILTIN_NODES.iter() {
+            r.register(def.clone());
+        }
+        r
+    }
+
+    pub fn register(&mut self, def: NodeKindDef) {
+        self.defs.insert(def.id, def);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&NodeKindDef> {
+        self.defs.get(id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NodeKindDef> {
+        self.defs.values()
+    }
+}
+
+/// Built-in node catalogue. Static so the registry can pre-populate
+/// itself in `with_builtins` without runtime allocation.
+const BUILTIN_NODES: &[NodeKindDef] = &[
+    NodeKindDef {
+        id: "on_start",
+        label: "On Start",
+        category: "Events",
+        inputs: &[],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+    },
+    NodeKindDef {
+        id: "on_tick",
+        label: "On Tick",
+        category: "Events",
+        inputs: &[],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+    },
+    NodeKindDef {
+        id: "const_float",
+        label: "Const Float",
+        category: "Values",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+    },
+    NodeKindDef {
+        id: "add",
+        label: "Add",
+        category: "Math",
+        inputs: &[
+            PinSpec::new("a", PinType::Float),
+            PinSpec::new("b", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("sum", PinType::Float)],
+    },
+    NodeKindDef {
+        id: "print",
+        label: "Print",
+        category: "Debug",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("value", PinType::Float),
+        ],
+        outputs: &[],
+    },
+    NodeKindDef {
+        id: "set_position",
+        label: "Set Position",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+    },
+];
+
+/// One node in the graph. `kind` references a `NodeKindDef::id` in
+/// the registry, so saved graphs survive across renames / refactors
+/// of the static enum used by old phases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
-    pub kind: NodeKind,
+    pub kind: String,
     pub position: [f32; 2],
     /// Stringly-typed parameter slots so node kinds can carry literal
-    /// values (e.g. the constant for `ConstFloat`) without per-kind
+    /// values (e.g. the constant for `const_float`) without per-kind
     /// fields in the saved file.
     #[serde(default)]
     pub params: HashMap<String, String>,
 }
 
 impl Node {
-    pub fn new(id: NodeId, kind: NodeKind, position: [f32; 2]) -> Self {
+    pub fn new(id: NodeId, kind: impl Into<String>, position: [f32; 2]) -> Self {
         Self {
             id,
-            kind,
+            kind: kind.into(),
             position,
             params: HashMap::new(),
         }
     }
 }
 
-/// Edge from `(from_node, from_pin)` to `(to_node, to_pin)`. Pin names
-/// must match the entries in `NodeKind::input_pins`/`output_pins`.
+/// Edge from `(from_node, from_pin)` to `(to_node, to_pin)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
     pub from_node: NodeId,
@@ -118,6 +233,8 @@ pub struct Edge {
     pub to_pin: String,
 }
 
+/// Container of nodes + edges + the running next-id counter. Pure
+/// data; connection validation lives in `Graph::connect`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Graph {
     pub nodes: Vec<Node>,
@@ -125,6 +242,7 @@ pub struct Graph {
     pub next_id: u32,
 }
 
+/// Errors raised by graph mutation / IO.
 #[derive(Debug, thiserror::Error)]
 pub enum GraphError {
     #[error("graph file {path} not found: {source}")]
@@ -144,8 +262,26 @@ pub enum GraphError {
     },
 }
 
+/// Result of `Graph::connect`. `Ok(true)` = edge added; `Ok(false)` =
+/// edge rejected for benign reasons (duplicate, self-loop).
+/// `Err(ConnectError)` = type mismatch or unknown pin.
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum ConnectError {
+    #[error("unknown node {node:?}")]
+    UnknownNode { node: NodeId },
+    #[error("unknown node kind '{kind}'")]
+    UnknownKind { kind: String },
+    #[error("unknown pin '{pin}' on node {node:?}")]
+    UnknownPin { node: NodeId, pin: String },
+    #[error("pin type mismatch: {from_ty} -> {to_ty}")]
+    TypeMismatch {
+        from_ty: &'static str,
+        to_ty: &'static str,
+    },
+}
+
 impl Graph {
-    pub fn add_node(&mut self, kind: NodeKind, position: [f32; 2]) -> NodeId {
+    pub fn add_node(&mut self, kind: impl Into<String>, position: [f32; 2]) -> NodeId {
         let id = NodeId(self.next_id);
         self.next_id += 1;
         self.nodes.push(Node::new(id, kind, position));
@@ -157,21 +293,58 @@ impl Graph {
         self.edges.retain(|e| e.from_node != id && e.to_node != id);
     }
 
+    fn node(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
+
+    /// Attempt to add an edge. Returns `Ok(true)` on success,
+    /// `Ok(false)` for benign rejections (duplicate, self-loop), or
+    /// `Err(ConnectError)` when the registry-validated pin types do
+    /// not match.
     pub fn connect(
         &mut self,
+        registry: &NodeKindRegistry,
         from_node: NodeId,
         from_pin: &str,
         to_node: NodeId,
         to_pin: &str,
-    ) -> bool {
+    ) -> Result<bool, ConnectError> {
         if from_node == to_node {
-            return false;
+            return Ok(false);
         }
-        if !self.nodes.iter().any(|n| n.id == from_node) {
-            return false;
-        }
-        if !self.nodes.iter().any(|n| n.id == to_node) {
-            return false;
+        let from = self
+            .node(from_node)
+            .ok_or(ConnectError::UnknownNode { node: from_node })?;
+        let to = self
+            .node(to_node)
+            .ok_or(ConnectError::UnknownNode { node: to_node })?;
+        let from_def = registry
+            .get(&from.kind)
+            .ok_or_else(|| ConnectError::UnknownKind {
+                kind: from.kind.clone(),
+            })?;
+        let to_def = registry
+            .get(&to.kind)
+            .ok_or_else(|| ConnectError::UnknownKind {
+                kind: to.kind.clone(),
+            })?;
+        let from_spec = from_def
+            .output(from_pin)
+            .ok_or_else(|| ConnectError::UnknownPin {
+                node: from_node,
+                pin: from_pin.to_string(),
+            })?;
+        let to_spec = to_def
+            .input(to_pin)
+            .ok_or_else(|| ConnectError::UnknownPin {
+                node: to_node,
+                pin: to_pin.to_string(),
+            })?;
+        if from_spec.ty != to_spec.ty {
+            return Err(ConnectError::TypeMismatch {
+                from_ty: from_spec.ty.label(),
+                to_ty: to_spec.ty.label(),
+            });
         }
         // Prevent duplicate edges on the same source/target pin pair.
         if self.edges.iter().any(|e| {
@@ -180,7 +353,7 @@ impl Graph {
                 && e.to_node == to_node
                 && e.to_pin == to_pin
         }) {
-            return false;
+            return Ok(false);
         }
         self.edges.push(Edge {
             from_node,
@@ -188,9 +361,60 @@ impl Graph {
             to_node,
             to_pin: to_pin.to_owned(),
         });
-        true
+        Ok(true)
     }
+}
 
+/// What a blueprint applies to. Drives the editor's header label and
+/// runtime resolution of references like `SetPosition` ("position of
+/// what?").
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintTarget {
+    /// Global script - lives outside the scene, runs in the host loop.
+    #[default]
+    Global,
+    /// Bound to a specific scene entity by stable id.
+    Entity { entity_id: u32, entity_name: String },
+    /// Bound to a named class / archetype - resolved per-instance at
+    /// runtime.
+    Class(String),
+}
+
+impl BlueprintTarget {
+    pub fn label(&self) -> String {
+        match self {
+            BlueprintTarget::Global => "Global".into(),
+            BlueprintTarget::Entity {
+                entity_id,
+                entity_name,
+            } => format!("Entity '{entity_name}' (#{entity_id})"),
+            BlueprintTarget::Class(c) => format!("Class '{c}'"),
+        }
+    }
+}
+
+/// Blueprint = named graph + the thing it targets. Saved files store
+/// this whole struct so the target context travels with the script.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Blueprint {
+    pub name: String,
+    #[serde(default)]
+    pub target: BlueprintTarget,
+    pub graph: Graph,
+}
+
+impl Default for Blueprint {
+    fn default() -> Self {
+        Self {
+            name: "Untitled".into(),
+            target: BlueprintTarget::Global,
+            graph: Graph::default(),
+        }
+    }
+}
+
+impl Blueprint {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, GraphError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| GraphError::Io {
@@ -218,49 +442,40 @@ impl Graph {
     }
 }
 
-const NODE_WIDTH: f32 = 160.0;
-const NODE_HEADER_HEIGHT: f32 = 26.0;
-const PIN_ROW_HEIGHT: f32 = 16.0;
-const PIN_RADIUS: f32 = 5.0;
-const PIN_HIT_RADIUS: f32 = 9.0;
+// ---------- Editor canvas ---------------------------------------------
 
-fn node_height(node: &Node) -> f32 {
-    let rows = node
-        .kind
-        .input_pins()
-        .len()
-        .max(node.kind.output_pins().len()) as f32;
+const NODE_WIDTH: f32 = 170.0;
+const NODE_HEADER_HEIGHT: f32 = 28.0;
+const PIN_ROW_HEIGHT: f32 = 18.0;
+const PIN_RADIUS: f32 = 5.0;
+const PIN_HIT_RADIUS: f32 = 10.0;
+
+fn node_height_def(def: &NodeKindDef) -> f32 {
+    let rows = def.inputs.len().max(def.outputs.len()) as f32;
     NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
 }
 
-/// Drag of a pin in progress. `is_output` distinguishes the side the
-/// drag started on so we know whether to look for an input pin (when
-/// `is_output == true`) or an output pin (when false) on release.
 #[derive(Debug, Clone)]
 struct PendingEdge {
     node: NodeId,
     pin: String,
     is_output: bool,
+    ty: PinType,
 }
 
-/// Egui-based blueprint editor. Phase 13B adds pan + drag-connect +
-/// context menu + bezier edge rendering on top of the original
-/// scaffold.
+/// Egui canvas. Owns its own pan / drag / connect state. Renders into
+/// any `egui::Ui` via `show`, mutates the supplied blueprint, and
+/// validates connections through the registry it was given.
 #[derive(Debug, Default)]
 pub struct BlueprintEditor {
-    pub graph: Graph,
-    /// Canvas pan offset in screen pixels.
+    pub blueprint: Blueprint,
     view_offset: egui::Vec2,
-    /// Currently-dragged node (left mouse on node body).
     dragging: Option<NodeId>,
     drag_node_offset: egui::Vec2,
-    /// In-flight pin connection drag.
     pending_edge: Option<PendingEdge>,
-    /// Currently-selected node for Delete-key removal.
     selected: Option<NodeId>,
-    /// Right-click context menu spawn position (canvas-space) or `None`
-    /// when no menu is open.
     context_menu_at: Option<egui::Pos2>,
+    status: String,
 }
 
 impl BlueprintEditor {
@@ -268,9 +483,9 @@ impl BlueprintEditor {
         Self::default()
     }
 
-    pub fn with_graph(graph: Graph) -> Self {
+    pub fn with_blueprint(blueprint: Blueprint) -> Self {
         Self {
-            graph,
+            blueprint,
             ..Self::default()
         }
     }
@@ -279,25 +494,18 @@ impl BlueprintEditor {
         canvas_min + self.view_offset + egui::vec2(node.position[0], node.position[1])
     }
 
-    fn node_rect(&self, canvas_min: egui::Pos2, node: &Node) -> egui::Rect {
-        let origin = self.node_origin(canvas_min, node);
-        egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height(node)))
-    }
-
     fn pin_position(
         &self,
+        registry: &NodeKindRegistry,
         canvas_min: egui::Pos2,
         node: &Node,
         pin: &str,
         is_output: bool,
     ) -> Option<egui::Pos2> {
+        let def = registry.get(&node.kind)?;
+        let pins = if is_output { def.outputs } else { def.inputs };
+        let idx = pins.iter().position(|p| p.name == pin)?;
         let origin = self.node_origin(canvas_min, node);
-        let pins = if is_output {
-            node.kind.output_pins()
-        } else {
-            node.kind.input_pins()
-        };
-        let idx = pins.iter().position(|p| *p == pin)?;
         let y = origin.y + NODE_HEADER_HEIGHT + idx as f32 * PIN_ROW_HEIGHT + PIN_ROW_HEIGHT * 0.5;
         let x = if is_output {
             origin.x + NODE_WIDTH
@@ -307,19 +515,23 @@ impl BlueprintEditor {
         Some(egui::pos2(x, y))
     }
 
-    fn hit_pin(&self, canvas_min: egui::Pos2, pos: egui::Pos2) -> Option<(NodeId, String, bool)> {
-        for node in self.graph.nodes.iter().rev() {
-            for is_output in [true, false] {
-                let pins = if is_output {
-                    node.kind.output_pins()
-                } else {
-                    node.kind.input_pins()
-                };
+    fn hit_pin(
+        &self,
+        registry: &NodeKindRegistry,
+        canvas_min: egui::Pos2,
+        pos: egui::Pos2,
+    ) -> Option<(NodeId, String, bool, PinType)> {
+        for node in self.blueprint.graph.nodes.iter().rev() {
+            let Some(def) = registry.get(&node.kind) else {
+                continue;
+            };
+            for (is_output, pins) in [(true, def.outputs), (false, def.inputs)] {
                 for pin in pins {
-                    if let Some(p) = self.pin_position(canvas_min, node, pin, is_output)
+                    if let Some(p) =
+                        self.pin_position(registry, canvas_min, node, pin.name, is_output)
                         && pos.distance(p) <= PIN_HIT_RADIUS
                     {
-                        return Some((node.id, (*pin).to_string(), is_output));
+                        return Some((node.id, pin.name.to_string(), is_output, pin.ty));
                     }
                 }
             }
@@ -327,9 +539,20 @@ impl BlueprintEditor {
         None
     }
 
-    fn hit_node(&self, canvas_min: egui::Pos2, pos: egui::Pos2) -> Option<NodeId> {
-        for node in self.graph.nodes.iter().rev() {
-            if self.node_rect(canvas_min, node).contains(pos) {
+    fn hit_node(
+        &self,
+        registry: &NodeKindRegistry,
+        canvas_min: egui::Pos2,
+        pos: egui::Pos2,
+    ) -> Option<NodeId> {
+        for node in self.blueprint.graph.nodes.iter().rev() {
+            let Some(def) = registry.get(&node.kind) else {
+                continue;
+            };
+            let origin = self.node_origin(canvas_min, node);
+            let rect =
+                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
+            if rect.contains(pos) {
                 return Some(node.id);
             }
         }
@@ -341,18 +564,14 @@ impl BlueprintEditor {
         a: egui::Pos2,
         b: egui::Pos2,
         color: egui::Color32,
-        stroke_width: f32,
+        stroke: f32,
     ) {
-        // Cubic bezier with horizontal tangents - mimics Unreal /
-        // Blender node graph cosmetics. Sample 16 segments for a smooth
-        // curve without burning the painter.
         let dx = (b.x - a.x).abs().max(40.0) * 0.5;
         let c1 = egui::pos2(a.x + dx, a.y);
         let c2 = egui::pos2(b.x - dx, b.y);
         let mut prev = a;
-        let steps = 24;
-        for i in 1..=steps {
-            let t = i as f32 / steps as f32;
+        for i in 1..=24 {
+            let t = i as f32 / 24.0;
             let one = 1.0 - t;
             let x = one * one * one * a.x
                 + 3.0 * one * one * t * c1.x
@@ -363,35 +582,130 @@ impl BlueprintEditor {
                 + 3.0 * one * t * t * c2.y
                 + t * t * t * b.y;
             let p = egui::pos2(x, y);
-            painter.line_segment([prev, p], egui::Stroke::new(stroke_width, color));
+            painter.line_segment([prev, p], egui::Stroke::new(stroke, color));
             prev = p;
         }
     }
 
-    /// Render the editor into the given `ui`. Returns `true` when the
-    /// graph changed this frame so the caller can persist.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Render the editor. Returns `true` whenever the graph mutated
+    /// this frame so the host can persist it.
+    pub fn show(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
 
-        // Top bar: stats + "Add node" menu (kept for accessibility, the
-        // canvas right-click menu duplicates it).
+        // Header: blueprint name + target + nodes/edges counts.
         ui.horizontal(|ui| {
-            ui.label(format!("Nodes: {}", self.graph.nodes.len()));
-            ui.label(format!("Edges: {}", self.graph.edges.len()));
+            ui.label(format!("Blueprint: {}", self.blueprint.name));
+            ui.separator();
+            ui.label(format!("Target: {}", self.blueprint.target.label()));
+            ui.separator();
+            ui.label(format!("Nodes: {}", self.blueprint.graph.nodes.len()));
+            ui.label(format!("Edges: {}", self.blueprint.graph.edges.len()));
             ui.menu_button("Add node", |ui| {
-                for kind in NodeKind::all() {
-                    if ui.button(kind.label()).clicked() {
-                        let canvas_pos = -self.view_offset + egui::vec2(40.0, 40.0);
-                        self.graph.add_node(*kind, [canvas_pos.x, canvas_pos.y]);
-                        dirty = true;
-                        ui.close();
-                    }
+                // Group nodes by category for readability.
+                let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
+                for def in registry.iter() {
+                    by_cat.entry(def.category).or_default().push(def);
+                }
+                let mut cats: Vec<_> = by_cat.keys().copied().collect();
+                cats.sort_unstable();
+                for cat in cats {
+                    ui.menu_button(cat, |ui| {
+                        let mut defs = by_cat[cat].clone();
+                        defs.sort_by_key(|d| d.label);
+                        for def in defs {
+                            if ui.button(def.label).clicked() {
+                                let pos = -self.view_offset + egui::vec2(40.0, 40.0);
+                                self.blueprint.graph.add_node(def.id, [pos.x, pos.y]);
+                                dirty = true;
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             });
             if ui.button("Reset view").clicked() {
                 self.view_offset = egui::Vec2::ZERO;
             }
-            ui.label("LMB drag pin -> create edge. MMB / RMB drag = pan. Delete to remove.");
+        });
+        if !self.status.is_empty() {
+            ui.colored_label(egui::Color32::from_rgb(255, 200, 80), &self.status);
+        }
+
+        // Blueprint settings: name + target picker.
+        ui.collapsing("Blueprint settings", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                if ui.text_edit_singleline(&mut self.blueprint.name).changed() {
+                    dirty = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Target");
+                let current = self.blueprint.target.label();
+                egui::ComboBox::from_id_salt("blueprint_target")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Global),
+                                "Global",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Global;
+                            dirty = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Entity { .. }),
+                                "Entity",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Entity {
+                                entity_id: 0,
+                                entity_name: "unnamed".into(),
+                            };
+                            dirty = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Class(_)),
+                                "Class",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Class("Player".into());
+                            dirty = true;
+                        }
+                    });
+            });
+            match &mut self.blueprint.target {
+                BlueprintTarget::Global => {}
+                BlueprintTarget::Entity {
+                    entity_id,
+                    entity_name,
+                } => {
+                    ui.horizontal(|ui| {
+                        ui.label("Entity id");
+                        if ui.add(egui::DragValue::new(entity_id)).changed() {
+                            dirty = true;
+                        }
+                        ui.label("Name");
+                        if ui.text_edit_singleline(entity_name).changed() {
+                            dirty = true;
+                        }
+                    });
+                }
+                BlueprintTarget::Class(name) => {
+                    ui.horizontal(|ui| {
+                        ui.label("Class");
+                        if ui.text_edit_singleline(name).changed() {
+                            dirty = true;
+                        }
+                    });
+                }
+            }
         });
         ui.separator();
 
@@ -400,7 +714,7 @@ impl BlueprintEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
 
-        // Grid lines for visual feedback when panning.
+        // Grid backdrop.
         let grid_step = 40.0;
         let grid_color = egui::Color32::from_gray(40);
         let ox = self.view_offset.x.rem_euclid(grid_step);
@@ -430,26 +744,26 @@ impl BlueprintEditor {
         let primary_released = response.drag_stopped_by(egui::PointerButton::Primary)
             || response.clicked_by(egui::PointerButton::Primary);
 
-        // Pan with middle or secondary mouse button drag.
+        // Pan with middle / right drag.
         if response.dragged_by(egui::PointerButton::Middle)
             || response.dragged_by(egui::PointerButton::Secondary)
         {
             self.view_offset += response.drag_delta();
         }
 
-        // Start interaction on left-click: prefer pin > node body.
         if primary_just_pressed && let Some(pos) = pointer {
-            if let Some((node_id, pin, is_output)) = self.hit_pin(rect.min, pos) {
+            if let Some((node_id, pin, is_output, ty)) = self.hit_pin(registry, rect.min, pos) {
                 self.pending_edge = Some(PendingEdge {
                     node: node_id,
                     pin,
                     is_output,
+                    ty,
                 });
                 self.dragging = None;
-            } else if let Some(node_id) = self.hit_node(rect.min, pos) {
+            } else if let Some(node_id) = self.hit_node(registry, rect.min, pos) {
                 self.dragging = Some(node_id);
                 self.selected = Some(node_id);
-                if let Some(node) = self.graph.nodes.iter().find(|n| n.id == node_id) {
+                if let Some(node) = self.blueprint.graph.nodes.iter().find(|n| n.id == node_id) {
                     let origin = self.node_origin(rect.min, node);
                     self.drag_node_offset = pos - origin;
                 }
@@ -458,11 +772,10 @@ impl BlueprintEditor {
             }
         }
 
-        // Drag node body.
         if primary_down
             && let Some(id) = self.dragging
             && let Some(pos) = pointer
-            && let Some(node) = self.graph.nodes.iter_mut().find(|n| n.id == id)
+            && let Some(node) = self.blueprint.graph.nodes.iter_mut().find(|n| n.id == id)
         {
             let local = pos - rect.min - self.view_offset - self.drag_node_offset;
             node.position[0] = local.x;
@@ -470,12 +783,11 @@ impl BlueprintEditor {
             dirty = true;
         }
 
-        // Drop pin -> attempt to create edge.
         if primary_released {
             self.dragging = None;
             if let (Some(pending), Some(pos)) = (self.pending_edge.take(), pointer)
-                && let Some((target_node, target_pin, target_is_output)) =
-                    self.hit_pin(rect.min, pos)
+                && let Some((target_node, target_pin, target_is_output, _target_ty)) =
+                    self.hit_pin(registry, rect.min, pos)
                 && target_is_output != pending.is_output
             {
                 let (from_node, from_pin, to_node, to_pin) = if pending.is_output {
@@ -483,62 +795,98 @@ impl BlueprintEditor {
                 } else {
                     (target_node, target_pin, pending.node, pending.pin.clone())
                 };
-                if self.graph.connect(from_node, &from_pin, to_node, &to_pin) {
-                    dirty = true;
+                match self
+                    .blueprint
+                    .graph
+                    .connect(registry, from_node, &from_pin, to_node, &to_pin)
+                {
+                    Ok(true) => {
+                        dirty = true;
+                        self.status.clear();
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        self.status = format!("Connect: {err}");
+                    }
                 }
             }
         }
 
-        // Context menu (right-click on empty canvas only - right-drag is
-        // pan above, so this only fires when the user releases without
-        // dragging).
         if response.clicked_by(egui::PointerButton::Secondary)
             && let Some(pos) = hover
-            && self.hit_pin(rect.min, pos).is_none()
-            && self.hit_node(rect.min, pos).is_none()
+            && self.hit_pin(registry, rect.min, pos).is_none()
+            && self.hit_node(registry, rect.min, pos).is_none()
         {
             self.context_menu_at = Some(pos);
         }
 
-        // Delete key removes the selection.
         let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
         if delete_pressed && let Some(id) = self.selected.take() {
-            self.graph.remove_node(id);
+            self.blueprint.graph.remove_node(id);
             dirty = true;
         }
 
-        // Draw edges first so nodes paint on top.
-        for edge in &self.graph.edges {
-            let from = self.graph.nodes.iter().find(|n| n.id == edge.from_node);
-            let to = self.graph.nodes.iter().find(|n| n.id == edge.to_node);
+        // Edges first.
+        for edge in &self.blueprint.graph.edges {
+            let from = self
+                .blueprint
+                .graph
+                .nodes
+                .iter()
+                .find(|n| n.id == edge.from_node);
+            let to = self
+                .blueprint
+                .graph
+                .nodes
+                .iter()
+                .find(|n| n.id == edge.to_node);
             if let (Some(f), Some(t)) = (from, to)
                 && let (Some(a), Some(b)) = (
-                    self.pin_position(rect.min, f, &edge.from_pin, true),
-                    self.pin_position(rect.min, t, &edge.to_pin, false),
+                    self.pin_position(registry, rect.min, f, &edge.from_pin, true),
+                    self.pin_position(registry, rect.min, t, &edge.to_pin, false),
                 )
             {
-                Self::draw_edge(&painter, a, b, egui::Color32::from_rgb(200, 200, 200), 2.0);
+                // Colour edges by the source pin type.
+                let color = registry
+                    .get(&f.kind)
+                    .and_then(|d| d.output(&edge.from_pin))
+                    .map(|p| {
+                        let [r, g, b] = p.ty.rgb();
+                        egui::Color32::from_rgb(r, g, b)
+                    })
+                    .unwrap_or(egui::Color32::from_gray(200));
+                Self::draw_edge(&painter, a, b, color, 2.0);
             }
         }
 
-        // Draw the in-progress pin drag as a ghost edge.
+        // In-flight pin drag preview.
         if let (Some(pending), Some(pos)) = (self.pending_edge.as_ref(), hover)
-            && let Some(node) = self.graph.nodes.iter().find(|n| n.id == pending.node)
-            && let Some(anchor) = self.pin_position(rect.min, node, &pending.pin, pending.is_output)
+            && let Some(node) = self
+                .blueprint
+                .graph
+                .nodes
+                .iter()
+                .find(|n| n.id == pending.node)
+            && let Some(anchor) =
+                self.pin_position(registry, rect.min, node, &pending.pin, pending.is_output)
         {
             let (a, b) = if pending.is_output {
                 (anchor, pos)
             } else {
                 (pos, anchor)
             };
-            Self::draw_edge(&painter, a, b, egui::Color32::from_rgb(255, 220, 80), 2.0);
+            let [r, g, b_col] = pending.ty.rgb();
+            Self::draw_edge(&painter, a, b, egui::Color32::from_rgb(r, g, b_col), 2.0);
         }
 
-        // Draw nodes.
-        for node in &self.graph.nodes {
+        // Nodes.
+        for node in &self.blueprint.graph.nodes {
+            let Some(def) = registry.get(&node.kind) else {
+                continue;
+            };
             let origin = self.node_origin(rect.min, node);
             let rect_node =
-                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height(node)));
+                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
             painter.rect_filled(rect_node, 4.0, egui::Color32::from_rgb(48, 56, 72));
             let selected = self.selected == Some(node.id);
             let border = if selected {
@@ -547,60 +895,60 @@ impl BlueprintEditor {
                 egui::Stroke::new(1.0, egui::Color32::from_gray(120))
             };
             painter.rect_stroke(rect_node, 4.0, border, egui::StrokeKind::Inside);
-            // Header strip.
             let header_rect =
                 egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, NODE_HEADER_HEIGHT));
             painter.rect_filled(header_rect, 4.0, egui::Color32::from_rgb(72, 84, 108));
             painter.text(
                 origin + egui::vec2(8.0, 6.0),
                 egui::Align2::LEFT_TOP,
-                node.kind.label(),
+                def.label,
                 egui::FontId::proportional(13.0),
                 egui::Color32::WHITE,
             );
-            for (i, pin) in node.kind.input_pins().iter().enumerate() {
+            for (i, pin) in def.inputs.iter().enumerate() {
                 let y = origin.y
                     + NODE_HEADER_HEIGHT
                     + i as f32 * PIN_ROW_HEIGHT
                     + PIN_ROW_HEIGHT * 0.5;
+                let [r, g, b] = pin.ty.rgb();
                 painter.circle_filled(
                     egui::pos2(origin.x, y),
                     PIN_RADIUS,
-                    egui::Color32::from_rgb(120, 200, 255),
+                    egui::Color32::from_rgb(r, g, b),
                 );
                 painter.text(
                     egui::pos2(origin.x + 10.0, y - 7.0),
                     egui::Align2::LEFT_TOP,
-                    *pin,
+                    pin.name,
                     egui::FontId::proportional(11.0),
-                    egui::Color32::LIGHT_BLUE,
+                    egui::Color32::LIGHT_GRAY,
                 );
             }
-            for (i, pin) in node.kind.output_pins().iter().enumerate() {
+            for (i, pin) in def.outputs.iter().enumerate() {
                 let y = origin.y
                     + NODE_HEADER_HEIGHT
                     + i as f32 * PIN_ROW_HEIGHT
                     + PIN_ROW_HEIGHT * 0.5;
+                let [r, g, b] = pin.ty.rgb();
                 painter.circle_filled(
                     egui::pos2(origin.x + NODE_WIDTH, y),
                     PIN_RADIUS,
-                    egui::Color32::from_rgb(255, 200, 120),
+                    egui::Color32::from_rgb(r, g, b),
                 );
                 painter.text(
                     egui::pos2(origin.x + NODE_WIDTH - 10.0, y - 7.0),
                     egui::Align2::RIGHT_TOP,
-                    *pin,
+                    pin.name,
                     egui::FontId::proportional(11.0),
-                    egui::Color32::LIGHT_YELLOW,
+                    egui::Color32::LIGHT_GRAY,
                 );
             }
         }
 
-        // Context-menu popup. egui's `Area` lets us float a small
-        // chooser above the canvas at the click position.
+        // Context menu popup.
         if let Some(anchor) = self.context_menu_at {
             let mut close = false;
-            let mut add_kind: Option<NodeKind> = None;
+            let mut add_kind: Option<&'static str> = None;
             egui::Area::new(egui::Id::new("blueprint_context_menu"))
                 .fixed_pos(anchor)
                 .order(egui::Order::Foreground)
@@ -608,11 +956,23 @@ impl BlueprintEditor {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(140.0);
                         ui.label("Add node");
-                        for kind in NodeKind::all() {
-                            if ui.button(kind.label()).clicked() {
-                                add_kind = Some(*kind);
-                                close = true;
-                            }
+                        let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
+                        for def in registry.iter() {
+                            by_cat.entry(def.category).or_default().push(def);
+                        }
+                        let mut cats: Vec<_> = by_cat.keys().copied().collect();
+                        cats.sort_unstable();
+                        for cat in cats {
+                            ui.menu_button(cat, |ui| {
+                                let mut defs = by_cat[cat].clone();
+                                defs.sort_by_key(|d| d.label);
+                                for def in defs {
+                                    if ui.button(def.label).clicked() {
+                                        add_kind = Some(def.id);
+                                        close = true;
+                                    }
+                                }
+                            });
                         }
                         ui.separator();
                         if ui.button("Cancel").clicked() {
@@ -622,15 +982,12 @@ impl BlueprintEditor {
                 });
             if let Some(kind) = add_kind {
                 let canvas_pos = anchor - rect.min - self.view_offset;
-                self.graph.add_node(kind, [canvas_pos.x, canvas_pos.y]);
+                self.blueprint
+                    .graph
+                    .add_node(kind, [canvas_pos.x, canvas_pos.y]);
                 dirty = true;
             }
-            if close
-                || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                || (response.clicked_by(egui::PointerButton::Primary)
-                    && response.hovered()
-                    && self.context_menu_at.is_some())
-            {
+            if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.context_menu_at = None;
             }
         }
@@ -644,31 +1001,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_serde() {
+    fn typed_connect_accepts_matching() {
+        let reg = NodeKindRegistry::with_builtins();
         let mut g = Graph::default();
-        let a = g.add_node(NodeKind::OnTick, [10.0, 10.0]);
-        let b = g.add_node(NodeKind::Print, [200.0, 10.0]);
-        assert!(g.connect(a, "exec", b, "value"));
-        let s = ron::ser::to_string(&g).unwrap();
-        let back: Graph = ron::de::from_str(&s).unwrap();
-        assert_eq!(back.nodes.len(), 2);
-        assert_eq!(back.edges.len(), 1);
-    }
-
-    #[test]
-    fn duplicate_connect_rejected() {
-        let mut g = Graph::default();
-        let a = g.add_node(NodeKind::OnTick, [0.0, 0.0]);
-        let b = g.add_node(NodeKind::Print, [0.0, 0.0]);
-        assert!(g.connect(a, "exec", b, "value"));
-        assert!(!g.connect(a, "exec", b, "value"));
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let p = g.add_node("print", [0.0, 0.0]);
+        let ok = g.connect(&reg, tick, "exec", p, "in").unwrap();
+        assert!(ok);
         assert_eq!(g.edges.len(), 1);
     }
 
     #[test]
-    fn self_connect_rejected() {
+    fn typed_connect_rejects_mismatch() {
+        let reg = NodeKindRegistry::with_builtins();
         let mut g = Graph::default();
-        let a = g.add_node(NodeKind::Add, [0.0, 0.0]);
-        assert!(!g.connect(a, "sum", a, "a"));
+        let c = g.add_node("const_float", [0.0, 0.0]);
+        let p = g.add_node("print", [0.0, 0.0]);
+        // Float -> Exec is a type mismatch.
+        let res = g.connect(&reg, c, "value", p, "in");
+        assert!(matches!(res, Err(ConnectError::TypeMismatch { .. })));
+        assert_eq!(g.edges.len(), 0);
+    }
+
+    #[test]
+    fn duplicate_connect_rejected() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let a = g.add_node("on_tick", [0.0, 0.0]);
+        let b = g.add_node("print", [0.0, 0.0]);
+        assert!(g.connect(&reg, a, "exec", b, "in").unwrap());
+        assert!(!g.connect(&reg, a, "exec", b, "in").unwrap());
+        assert_eq!(g.edges.len(), 1);
+    }
+
+    #[test]
+    fn blueprint_round_trip() {
+        let bp = Blueprint {
+            name: "TestBP".into(),
+            target: BlueprintTarget::Entity {
+                entity_id: 7,
+                entity_name: "cube".into(),
+            },
+            graph: Graph::default(),
+        };
+        let s = ron::ser::to_string(&bp).unwrap();
+        let back: Blueprint = ron::de::from_str(&s).unwrap();
+        assert_eq!(back.name, "TestBP");
+        match back.target {
+            BlueprintTarget::Entity {
+                entity_id,
+                entity_name,
+            } => {
+                assert_eq!(entity_id, 7);
+                assert_eq!(entity_name, "cube");
+            }
+            _ => panic!("wrong target"),
+        }
+    }
+
+    #[test]
+    fn registry_register_and_get() {
+        let mut reg = NodeKindRegistry::new();
+        const PINS: &[PinSpec] = &[PinSpec::new("v", PinType::Float)];
+        reg.register(NodeKindDef {
+            id: "test_custom",
+            label: "Test Custom",
+            category: "Custom",
+            inputs: PINS,
+            outputs: &[],
+        });
+        assert!(reg.get("test_custom").is_some());
     }
 }
