@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New crate `infengine_editor` (Phase 4.1): wraps `egui` 0.33, `egui-wgpu`, and `egui-winit` behind an `EditorUi` type. `EditorUi::new`, `handle_window_event`, `run(window, |ctx| ...)`, and `render(...)` are the four-method API engine code uses.
+- `infengine_window` exposes `pub use winit as raw_winit` and a new `AppHandler::on_window_event(&EngineWindow, &WindowEvent)` hook so the editor can forward raw input. Documented as a deliberate ADR-0001 carve-out for editor-level integrations.
+- `infengine_render::Renderer` exposes `wgpu_device`, `wgpu_queue`, and `surface_format` accessors so workspace-internal crates can build extra pipelines against the same logical device.
+- `Renderer::render` now takes an `overlay` closure that receives `(device, queue, encoder, view, physical_size)` after the world pass; the demo passes `editor.render(...)` to draw the egui UI on top of the world.
+- `sprite_demo` replaces the bitmap HUD with an egui window showing FPS, position, zoom, queued sprite count, asset reloads, beep count, and controls. Bumped `wgpu` to 27 to match `egui-wgpu` 0.33.
 - New crate `infengine_audio` (Phase 3.3): wraps `kira` 0.10 with an `AudioSystem` that initializes the default backend and exposes `play_beep(freq_hz, duration_secs, volume)`. Synthesizes a sine-wave tone with 5 ms fade in / out and submits it to `kira` as a `StaticSoundData`. `AudioError` covers backend init and play failures.
 - `sprite_demo` initializes the audio system at startup and plays a 440 Hz, 100 ms beep on each Space-key press; the HUD shows a running `BEEPS` counter alongside `RELOADS`.
 - `infengine_assets` hot reload (Phase 3.2): `AssetServer::watch()` returns an `AssetWatcher` whose `receiver` yields `AssetEvent::Modified(path)` and `Removed(path)` over a `std::sync::mpsc::Receiver`. Paths are emitted relative to the asset root. `AssetServer::handle_path(handle)` reverse-resolves a handle back to its source path so callers can decide when to call `reload_image`. The underlying watcher uses `notify::RecommendedWatcher` and stops when the `AssetWatcher` is dropped.

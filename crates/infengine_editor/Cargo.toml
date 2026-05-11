@@ -1,0 +1,23 @@
+[package]
+name = "infengine_editor"
+description = "egui-based editor / debug UI integration for InfEngine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+infengine_window = { path = "../infengine_window" }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }

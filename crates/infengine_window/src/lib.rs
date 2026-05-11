@@ -23,6 +23,11 @@ mod key;
 pub use input::InputState;
 pub use key::Key;
 
+/// Re-export of the `winit` crate for editor-level integrations that need
+/// raw window events (e.g. `egui-winit`). Most engine code should keep
+/// going through the wrapper types in this crate.
+pub use winit as raw_winit;
+
 /// Context passed to `AppHandler::on_update` once per frame.
 #[derive(Debug)]
 pub struct FrameContext<'a> {
@@ -106,6 +111,12 @@ pub trait AppHandler {
 
     /// Called every time the event loop is about to redraw a frame.
     fn on_update(&mut self, _window: &EngineWindow, _ctx: &FrameContext<'_>) {}
+
+    /// Called for every winit window event before the engine's own
+    /// dispatch. Intended for editor / GUI integrations that need raw
+    /// input (egui-winit, etc.); most code should use `on_key`,
+    /// `on_resize`, and `on_update` instead.
+    fn on_window_event(&mut self, _window: &EngineWindow, _event: &WindowEvent) {}
 
     /// Called when a key transitions between pressed and released.
     fn on_key(&mut self, _key: Key, _pressed: bool) {}
@@ -195,6 +206,8 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
         let Some(window) = self.window.as_ref() else {
             return;
         };
+
+        handler.on_window_event(window, &event);
 
         match event {
             WindowEvent::CloseRequested => {

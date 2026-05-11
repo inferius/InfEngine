@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
 use infengine_audio::AudioSystem;
+use infengine_editor::EditorUi;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
+use infengine_window::raw_winit::event::WindowEvent;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
 
@@ -22,11 +24,10 @@ const MOVE_SPEED: f32 = 400.0;
 const ZOOM_RATE: f32 = 1.6;
 const ZOOM_MIN: f32 = 0.25;
 const ZOOM_MAX: f32 = 4.0;
-const HUD_PIXEL_SIZE: f32 = 24.0;
-const HUD_MARGIN: f32 = 12.0;
 
 struct Demo {
     renderer: Option<Renderer>,
+    editor: Option<EditorUi>,
     tilemap: Tilemap,
     assets: AssetServer,
     asset_watcher: Option<AssetWatcher>,
@@ -46,6 +47,7 @@ impl Default for Demo {
         let assets_root = PathBuf::from("assets");
         Self {
             renderer: None,
+            editor: None,
             tilemap: build_tilemap(),
             assets: AssetServer::new(assets_root),
             asset_watcher: None,
@@ -117,7 +119,11 @@ impl AppHandler for Demo {
         self.viewport = (w, h);
         info!(width = w, height = h, "sprite_demo started");
         match Renderer::new(window) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(r) => {
+                let editor = EditorUi::new(r.wgpu_device(), r.surface_format(), window.raw(), 1);
+                self.editor = Some(editor);
+                self.renderer = Some(r);
+            }
             Err(err) => {
                 error!(error = %err, "failed to initialize renderer");
                 std::process::exit(2);
@@ -153,6 +159,12 @@ impl AppHandler for Demo {
         }
     }
 
+    fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.handle_engine_event(window, event);
+        }
+    }
+
     fn on_key(&mut self, key: Key, pressed: bool) {
         if pressed
             && key == Key::Space
@@ -165,7 +177,7 @@ impl AppHandler for Demo {
         }
     }
 
-    fn on_update(&mut self, _window: &EngineWindow, ctx: &FrameContext<'_>) {
+    fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.max(1e-4);
         let instant_fps = 1.0 / dt;
         self.fps_ema = self.fps_ema * 0.9 + instant_fps * 0.1;
@@ -266,36 +278,40 @@ impl AppHandler for Demo {
         renderer.debug_circle(self.pos, PLAYER_SIZE, [0.6, 0.9, 1.0, 0.9], 48);
         renderer.debug_line([0.0, 0.0], self.pos, [1.0, 1.0, 1.0, 0.4]);
 
-        // HUD: render text in screen-space relative to the camera. Convert
-        // pixel coordinates to world coordinates using the current zoom.
-        let half_w_world = self.viewport.0 as f32 * 0.5 / self.zoom;
-        let half_h_world = self.viewport.1 as f32 * 0.5 / self.zoom;
-        let text_world_size = HUD_PIXEL_SIZE / self.zoom;
-        let margin = HUD_MARGIN / self.zoom;
-        let top_left_x = self.pos[0] - half_w_world + margin;
-        let top_left_y = self.pos[1] + half_h_world - margin;
-        let line_step = text_world_size * 1.25;
-
-        let line1 = format!("INFENGINE PHASE 3.3  FPS {:.0}", self.fps_ema);
-        let line2 = format!(
-            "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}  RELOADS {}  BEEPS {}",
-            self.pos[0], self.pos[1], self.zoom, self.reload_count, self.beep_count
-        );
-        renderer.draw_text(
-            &line1,
-            [top_left_x, top_left_y],
-            text_world_size,
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        renderer.draw_text(
-            &line2,
-            [top_left_x, top_left_y - line_step],
-            text_world_size,
-            [0.8, 0.9, 1.0, 1.0],
-        );
-
         let queued = renderer.queued_sprite_count();
-        if let Err(err) = renderer.render() {
+        let fps = self.fps_ema;
+        let pos = self.pos;
+        let zoom = self.zoom;
+        let reloads = self.reload_count;
+        let beeps = self.beep_count;
+
+        // Build the egui frame for this tick.
+        if let Some(editor) = self.editor.as_mut() {
+            editor.run(window.raw(), |ctx| {
+                egui::Window::new("InfEngine - Phase 4.1")
+                    .default_pos(egui::pos2(12.0, 12.0))
+                    .show(ctx, |ui| {
+                        ui.label(format!("FPS: {:.0}", fps));
+                        ui.label(format!("Pos: {:.0}, {:.0}", pos[0], pos[1]));
+                        ui.label(format!("Zoom: {:.2}", zoom));
+                        ui.label(format!("Sprites/frame: {}", queued));
+                        ui.separator();
+                        ui.label(format!("Asset reloads: {}", reloads));
+                        ui.label(format!("Beeps played: {}", beeps));
+                        ui.separator();
+                        ui.label("Controls: WASD / arrows = move");
+                        ui.label("Q / E = zoom out / in");
+                        ui.label("Space = beep, R = reset, Esc = quit");
+                    });
+            });
+        }
+
+        let render_result = if let Some(editor) = self.editor.as_mut() {
+            renderer.render(|d, q, e, v, s| editor.render(d, q, e, v, s))
+        } else {
+            renderer.render(|_, _, _, _, _| {})
+        };
+        if let Err(err) = render_result {
             warn!(error = ?err, "frame render failed");
         }
 
@@ -334,7 +350,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 3.3)".into(),
+        title: "InfEngine - sprite_demo (Phase 4.1)".into(),
         width: 1280,
         height: 720,
         resizable: true,

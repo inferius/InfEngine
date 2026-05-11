@@ -100,6 +100,7 @@ impl Renderer {
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             memory_hints: MemoryHints::Performance,
             trace: Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::default(),
         }))?;
 
         let caps = surface.get_capabilities(&adapter);
@@ -243,6 +244,24 @@ impl Renderer {
         &mut self.camera
     }
 
+    /// Access to the underlying wgpu device. Reserved for engine-internal
+    /// crates (e.g. `infengine_editor`) that need to create their own
+    /// GPU resources sharing the renderer's logical device.
+    pub fn wgpu_device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Access to the underlying wgpu queue.
+    pub fn wgpu_queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Current swapchain format. Use this when building auxiliary
+    /// pipelines that render into the same surface.
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
     /// Resize the swapchain to match a new window size in physical pixels.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -261,10 +280,26 @@ impl Renderer {
         self.clear_color = Color { r, g, b, a };
     }
 
-    /// Render one frame: acquire the next swapchain image, clear it, and
-    /// submit. Returns `Ok(())` on success; surface errors that can be
-    /// recovered from (lost, outdated) are handled by reconfiguring.
-    pub fn render(&mut self) -> Result<(), SurfaceError> {
+    /// Render one frame, with an optional overlay callback.
+    ///
+    /// The closure runs after the engine's main pass with its own
+    /// encoder; it receives the wgpu device, queue, a mutable encoder
+    /// borrowed from this frame, the swapchain `TextureView`, and the
+    /// physical surface size. Use this to layer UI (e.g. egui) on top
+    /// of the world.
+    ///
+    /// Recoverable surface errors (`Lost`, `Outdated`) trigger a
+    /// reconfigure and return `Ok(())`.
+    pub fn render<F>(&mut self, mut overlay: F) -> Result<(), SurfaceError>
+    where
+        F: FnMut(
+            &wgpu::Device,
+            &wgpu::Queue,
+            &mut wgpu::CommandEncoder,
+            &wgpu::TextureView,
+            [u32; 2],
+        ),
+    {
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(SurfaceError::Lost | SurfaceError::Outdated) => {
@@ -313,6 +348,15 @@ impl Renderer {
             self.sprite.draw(&mut rpass, sprite_count);
             self.debug.draw(&mut rpass, debug_vertex_count);
         }
+
+        let physical_size = [self.config.width, self.config.height];
+        overlay(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            physical_size,
+        );
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();

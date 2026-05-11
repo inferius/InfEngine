@@ -6,6 +6,7 @@ members = [
     "crates/infengine_render",
     "crates/infengine_assets",
     "crates/infengine_audio",
+    "crates/infengine_editor",
     "examples/sprite_demo",
 ]
 
@@ -49,7 +50,7 @@ bytemuck = { version = "1", features = ["derive"] }
 parking_lot = "0.12"
 
 # Renderer / window (added when crates start using them)
-wgpu = "26"
+wgpu = "27"
 winit = "0.30"
 pollster = "0.4"
 
@@ -60,6 +61,9 @@ bevy_ecs = "0.17"
 notify = "8"
 image = "0.25"
 kira = "0.10"
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-winit = "0.33"
 
 [profile.release]
 opt-level = 3
