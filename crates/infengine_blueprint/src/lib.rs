@@ -567,6 +567,11 @@ pub struct BlueprintEditor {
     pending_edge: Option<PendingEdge>,
     selected: Option<NodeId>,
     context_menu_at: Option<egui::Pos2>,
+    /// When a pin drag releases on empty canvas the editor pops the
+    /// "Add node" context menu pre-filtered by the source pin's type
+    /// and auto-connects whatever node the user picks. This stores the
+    /// originating pin until the menu closes.
+    context_menu_from_pin: Option<PendingEdge>,
     status: String,
 }
 
@@ -1108,29 +1113,38 @@ impl BlueprintEditor {
 
         if primary_released {
             self.dragging = None;
-            if let (Some(pending), Some(pos)) = (self.pending_edge.take(), pointer)
-                && let Some((target_node, target_pin, target_is_output, _target_ty)) =
+            if let (Some(pending), Some(pos)) = (self.pending_edge.take(), pointer) {
+                if let Some((target_node, target_pin, target_is_output, _target_ty)) =
                     self.hit_pin(registry, rect.min, pos)
-                && target_is_output != pending.is_output
-            {
-                let (from_node, from_pin, to_node, to_pin) = if pending.is_output {
-                    (pending.node, pending.pin.clone(), target_node, target_pin)
-                } else {
-                    (target_node, target_pin, pending.node, pending.pin.clone())
-                };
-                match self
-                    .blueprint
-                    .graph
-                    .connect(registry, from_node, &from_pin, to_node, &to_pin)
                 {
-                    Ok(true) => {
-                        dirty = true;
-                        self.status.clear();
+                    if target_is_output != pending.is_output {
+                        let (from_node, from_pin, to_node, to_pin) = if pending.is_output {
+                            (pending.node, pending.pin.clone(), target_node, target_pin)
+                        } else {
+                            (target_node, target_pin, pending.node, pending.pin.clone())
+                        };
+                        match self
+                            .blueprint
+                            .graph
+                            .connect(registry, from_node, &from_pin, to_node, &to_pin)
+                        {
+                            Ok(true) => {
+                                dirty = true;
+                                self.status.clear();
+                            }
+                            Ok(false) => {}
+                            Err(err) => {
+                                self.status = format!("Connect: {err}");
+                            }
+                        }
                     }
-                    Ok(false) => {}
-                    Err(err) => {
-                        self.status = format!("Connect: {err}");
-                    }
+                } else {
+                    // Dropped on empty canvas - open the contextual
+                    // "Add node" menu pre-filtered by the source pin's
+                    // type so the user can spawn + auto-connect a
+                    // compatible node in one stroke.
+                    self.context_menu_at = Some(pos);
+                    self.context_menu_from_pin = Some(pending);
                 }
             }
         }
@@ -1272,18 +1286,38 @@ impl BlueprintEditor {
         if let Some(anchor) = self.context_menu_at {
             let mut close = false;
             let mut add_kind: Option<&'static str> = None;
+            let pin_filter = self.context_menu_from_pin.clone();
             egui::Area::new(egui::Id::new("blueprint_context_menu"))
                 .fixed_pos(anchor)
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(140.0);
+                        ui.set_min_width(160.0);
+                        if let Some(p) = &pin_filter {
+                            let [r, g, b] = p.ty.rgb();
+                            ui.colored_label(
+                                egui::Color32::from_rgb(r, g, b),
+                                format!("Connecting {} ({})", p.pin, p.ty.label()),
+                            );
+                            ui.separator();
+                        }
                         ui.label("Add node");
                         let ctx = blueprint_context(&self.blueprint.target);
                         let mut by_cat: HashMap<&'static str, Vec<&NodeKindDef>> = HashMap::new();
                         for def in registry.iter() {
                             if !def.available_in(ctx) {
                                 continue;
+                            }
+                            // Pin-aware filter: when the menu came
+                            // from a pin drag, only show nodes that
+                            // have an opposite-side pin of the same
+                            // type so the auto-connect can succeed.
+                            if let Some(p) = &pin_filter {
+                                let target_pins =
+                                    if p.is_output { def.inputs } else { def.outputs };
+                                if !target_pins.iter().any(|tp| tp.ty == p.ty) {
+                                    continue;
+                                }
                             }
                             by_cat.entry(def.category).or_default().push(def);
                         }
@@ -1309,13 +1343,32 @@ impl BlueprintEditor {
                 });
             if let Some(kind) = add_kind {
                 let canvas_pos = anchor - rect.min - self.view_offset;
-                self.blueprint
+                let new_id = self
+                    .blueprint
                     .graph
                     .add_node(kind, [canvas_pos.x, canvas_pos.y]);
                 dirty = true;
+                // Auto-connect when the menu came from a pin drag.
+                if let Some(p) = self.context_menu_from_pin.take()
+                    && let Some(def) = registry.get(kind)
+                {
+                    let target_pins = if p.is_output { def.inputs } else { def.outputs };
+                    if let Some(target_pin) = target_pins.iter().find(|tp| tp.ty == p.ty) {
+                        let (from_node, from_pin, to_node, to_pin) = if p.is_output {
+                            (p.node, p.pin.clone(), new_id, target_pin.name.to_string())
+                        } else {
+                            (new_id, target_pin.name.to_string(), p.node, p.pin.clone())
+                        };
+                        let _ = self
+                            .blueprint
+                            .graph
+                            .connect(registry, from_node, &from_pin, to_node, &to_pin);
+                    }
+                }
             }
             if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.context_menu_at = None;
+                self.context_menu_from_pin = None;
             }
         }
 
