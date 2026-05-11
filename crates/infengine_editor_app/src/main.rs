@@ -24,6 +24,8 @@ use tracing::{error, info, warn};
 
 const DEFAULT_PROJECT_FILE: &str = "project.ron";
 
+const UNDO_LIMIT: usize = 64;
+
 struct Editor {
     project_root: PathBuf,
     project_file: PathBuf,
@@ -32,6 +34,12 @@ struct Editor {
     scene: Scene,
     selected: Option<EntityId>,
     status: String,
+    undo_stack: Vec<Scene>,
+    redo_stack: Vec<Scene>,
+    ctrl_held: bool,
+    shift_held: bool,
+    z_key_prev: bool,
+    y_key_prev: bool,
 
     renderer: Option<Renderer>,
     editor_ui: Option<EditorUi>,
@@ -59,6 +67,12 @@ impl Editor {
             scene: Scene::default(),
             selected: None,
             status: String::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            ctrl_held: false,
+            shift_held: false,
+            z_key_prev: false,
+            y_key_prev: false,
             renderer: None,
             editor_ui: None,
             assets,
@@ -92,6 +106,8 @@ impl Editor {
                     .find(|e| e.sprite.is_some())
                     .map(|e| e.id);
                 self.current_scene_index = Some(index);
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.status = format!("Loaded {}", entry.name);
                 info!(scene = entry.name, "scene opened");
             }
@@ -148,6 +164,46 @@ impl Editor {
         let _ = self.project.save(&self.project_file);
         self.open_scene(idx);
         self.status = format!("Created {name}");
+    }
+
+    fn push_snapshot(&mut self) {
+        if self.undo_stack.len() >= UNDO_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(self.scene.clone());
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack
+                .push(std::mem::replace(&mut self.scene, prev));
+            self.selected = self
+                .scene
+                .entities
+                .iter()
+                .find(|e| e.sprite.is_some())
+                .map(|e| e.id);
+            self.status = format!("Undo ({} left)", self.undo_stack.len());
+        } else {
+            self.status = "Nothing to undo".into();
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack
+                .push(std::mem::replace(&mut self.scene, next));
+            self.selected = self
+                .scene
+                .entities
+                .iter()
+                .find(|e| e.sprite.is_some())
+                .map(|e| e.id);
+            self.status = format!("Redo ({} left)", self.redo_stack.len());
+        } else {
+            self.status = "Nothing to redo".into();
+        }
     }
 
     fn camera_pos(&self) -> [f32; 2] {
@@ -250,6 +306,28 @@ impl AppHandler for Editor {
         let dt = ctx.delta_time.max(1e-4);
         self.fps_ema = self.fps_ema * 0.9 + (1.0 / dt) * 0.1;
 
+        // Modifier + Z / Y edge-triggered undo / redo.
+        self.ctrl_held = ctx
+            .input
+            .any_pressed(&[Key::ControlLeft, Key::ControlRight]);
+        self.shift_held = ctx.input.any_pressed(&[Key::ShiftLeft, Key::ShiftRight]);
+        let z_now = ctx.input.is_pressed(Key::Z);
+        let y_now = ctx.input.is_pressed(Key::Y);
+        let z_just = z_now && !self.z_key_prev;
+        let y_just = y_now && !self.y_key_prev;
+        self.z_key_prev = z_now;
+        self.y_key_prev = y_now;
+        if self.ctrl_held && z_just {
+            if self.shift_held {
+                self.redo();
+            } else {
+                self.undo();
+            }
+        }
+        if self.ctrl_held && y_just {
+            self.redo();
+        }
+
         let mut zoom_step = 0.0_f32;
         if ctx.input.is_pressed(Key::Q) {
             zoom_step -= 1.0;
@@ -276,6 +354,7 @@ impl AppHandler for Editor {
             && !egui_pointer
             && let Some((id, ofs)) = pick_entity(&self.scene, cursor_world)
         {
+            self.push_snapshot();
             self.selected = Some(id);
             self.dragging = Some(id);
             self.drag_offset = ofs;
@@ -297,8 +376,12 @@ impl AppHandler for Editor {
         let mut action_add_scene = false;
         let mut action_add_entity_sprite = false;
         let mut action_add_entity_empty = false;
+        let mut action_undo = false;
+        let mut action_redo = false;
         let mut switch_to: Option<usize> = None;
         let mut delete_entity: Option<EntityId> = None;
+        let undo_count = self.undo_stack.len();
+        let redo_count = self.redo_stack.len();
 
         if let Some(editor_ui) = self.editor_ui.as_mut() {
             let project_name = self.project.name.clone();
@@ -316,6 +399,26 @@ impl AppHandler for Editor {
                     .show(ctx, |ui| {
                         ui.heading(format!("Project: {project_name}"));
                         ui.label(format!("FPS: {fps:.0}"));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    undo_count > 0,
+                                    egui::Button::new(format!("Undo ({undo_count})")),
+                                )
+                                .clicked()
+                            {
+                                action_undo = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    redo_count > 0,
+                                    egui::Button::new(format!("Redo ({redo_count})")),
+                                )
+                                .clicked()
+                            {
+                                action_redo = true;
+                            }
+                        });
                         if !status.is_empty() {
                             ui.small(status.clone());
                         }
@@ -381,12 +484,20 @@ impl AppHandler for Editor {
 
                         ui.separator();
                         ui.label("Q / E = zoom; click = pick + drag; Esc = quit");
+                        ui.label("Ctrl+Z = undo; Ctrl+Y or Ctrl+Shift+Z = redo");
                     });
             });
         }
 
+        if action_undo {
+            self.undo();
+        }
+        if action_redo {
+            self.redo();
+        }
         // Apply deferred actions outside the immutable closure context.
         if let Some(id) = delete_entity {
+            self.push_snapshot();
             self.scene.remove(id);
             if self.selected == Some(id) {
                 self.selected = self
@@ -410,6 +521,7 @@ impl AppHandler for Editor {
             self.add_scene();
         }
         if action_add_entity_sprite {
+            self.push_snapshot();
             let i = self
                 .scene
                 .add_entity(format!("entity_{}", self.scene.next_id));
@@ -418,6 +530,7 @@ impl AppHandler for Editor {
             self.selected = Some(self.scene.entities[i].id);
         }
         if action_add_entity_empty {
+            self.push_snapshot();
             let i = self
                 .scene
                 .add_entity(format!("entity_{}", self.scene.next_id));
