@@ -5,6 +5,7 @@ members = [
     "crates/infengine_window",
     "crates/infengine_render",
     "crates/infengine_assets",
+    "examples/sprite_demo",
 ]
 
 [workspace.package]
