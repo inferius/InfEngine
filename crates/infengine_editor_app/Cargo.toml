@@ -1,5 +1,5 @@
 [package]
-name = "infengine_editor_app"
+name = "editor_app"
 description = "Standalone scene editor for InfEngine projects."
 version.workspace = true
 edition.workspace = true
