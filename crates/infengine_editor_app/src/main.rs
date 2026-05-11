@@ -676,6 +676,76 @@ fn pick_gizmo(scene: &Scene, selected: Option<EntityId>, world: [f32; 2]) -> Opt
     None
 }
 
+/// Recursive scene-tree row renderer. Walks `children` starting at
+/// `parent`, indents each row by `depth`, lets the user select / open
+/// the blueprint / delete each entity.
+#[allow(clippy::too_many_arguments)]
+fn draw_hierarchy(
+    ui: &mut egui::Ui,
+    scene: &Scene,
+    children: &HashMap<Option<EntityId>, Vec<usize>>,
+    parent: Option<EntityId>,
+    depth: usize,
+    selected_id: Option<EntityId>,
+    selected_ref: &mut Option<EntityId>,
+    delete_entity: &mut Option<EntityId>,
+    open_blueprint: &mut Option<EntityId>,
+) {
+    let Some(indices) = children.get(&parent) else {
+        return;
+    };
+    for &i in indices {
+        let entity = &scene.entities[i];
+        let is_sel = Some(entity.id) == selected_id;
+        let glyph = if entity.is_3d() {
+            "3D "
+        } else if entity.sprite.is_some() {
+            "S  "
+        } else {
+            "   "
+        };
+        let class_suffix = match &entity.class {
+            Some(c) => format!(" [{c}]"),
+            None => String::new(),
+        };
+        let label = format!("{glyph}{}{} (#{})", entity.name, class_suffix, entity.id.0);
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 12.0);
+            let resp = ui.selectable_label(is_sel, label);
+            if resp.clicked() {
+                *selected_ref = Some(entity.id);
+            }
+            if resp.double_clicked() {
+                *open_blueprint = Some(entity.id);
+                *selected_ref = Some(entity.id);
+            }
+            if ui
+                .small_button("BP")
+                .on_hover_text("Open blueprint")
+                .clicked()
+            {
+                *open_blueprint = Some(entity.id);
+                *selected_ref = Some(entity.id);
+            }
+            if ui.small_button("X").clicked() {
+                *delete_entity = Some(entity.id);
+            }
+        });
+        // Recurse into children.
+        draw_hierarchy(
+            ui,
+            scene,
+            children,
+            Some(entity.id),
+            depth + 1,
+            selected_id,
+            selected_ref,
+            delete_entity,
+            open_blueprint,
+        );
+    }
+}
+
 /// Slab-method ray vs. axis-aligned box. Returns the entry distance
 /// (clamped at 0 so rays starting inside the box still pick it).
 fn ray_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
@@ -1038,6 +1108,7 @@ impl AppHandler for Editor {
         let mut action_add_entity_sprite = false;
         let mut action_add_entity_empty = false;
         let mut action_add_entity_cube = false;
+        let mut action_open_blueprint_for: Option<EntityId> = None;
         let mut action_undo = false;
         let mut action_redo = false;
         let mut action_play = false;
@@ -1200,23 +1271,27 @@ impl AppHandler for Editor {
 
                         ui.collapsing("Hierarchy", |ui| {
                             egui::ScrollArea::vertical()
-                                .max_height(200.0)
+                                .max_height(240.0)
                                 .show(ui, |ui| {
-                                    for entity in &scene_ref.entities {
-                                        let is_sel = Some(entity.id) == selected_id;
-                                        let glyph =
-                                            if entity.sprite.is_some() { "S " } else { "  " };
-                                        let label =
-                                            format!("{glyph}{} (#{})", entity.name, entity.id.0);
-                                        ui.horizontal(|ui| {
-                                            if ui.selectable_label(is_sel, label).clicked() {
-                                                *selected_ref = Some(entity.id);
-                                            }
-                                            if ui.small_button("X").clicked() {
-                                                delete_entity = Some(entity.id);
-                                            }
-                                        });
+                                    // Pre-compute the parent -> children
+                                    // index map so the tree walk doesn't
+                                    // re-scan all entities per node.
+                                    let mut children: HashMap<Option<EntityId>, Vec<usize>> =
+                                        HashMap::new();
+                                    for (i, e) in scene_ref.entities.iter().enumerate() {
+                                        children.entry(e.parent).or_default().push(i);
                                     }
+                                    draw_hierarchy(
+                                        ui,
+                                        scene_ref,
+                                        &children,
+                                        None,
+                                        0,
+                                        selected_id,
+                                        selected_ref,
+                                        &mut delete_entity,
+                                        &mut action_open_blueprint_for,
+                                    );
                                 });
                             ui.horizontal(|ui| {
                                 if ui.button("Add sprite").clicked() {
@@ -1317,6 +1392,23 @@ impl AppHandler for Editor {
         }
         if action_export {
             self.export();
+        }
+        if let Some(eid) = action_open_blueprint_for {
+            // Bind the editor's blueprint to that entity and pop the
+            // window. Future iterations will persist per-entity
+            // blueprints in the scene file; for now there's one
+            // active blueprint in flight and double-clicking another
+            // entity reassigns the target.
+            let name = self
+                .scene
+                .get(eid)
+                .map(|e| e.name.clone())
+                .unwrap_or_default();
+            self.blueprint.blueprint.target = infengine_blueprint::BlueprintTarget::Entity {
+                entity_id: eid.0,
+                entity_name: name,
+            };
+            self.blueprint_open = true;
         }
         if let Some(path) = action_import_gltf
             && let Some(r) = self.renderer.as_mut()

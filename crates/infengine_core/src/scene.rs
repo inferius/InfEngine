@@ -284,6 +284,16 @@ pub struct Entity {
     pub mesh: Option<MeshComponent>,
     #[serde(default)]
     pub physics_3d: Option<Physics3DComponent>,
+    /// Parent entity in the scene tree. `None` = top-level. Local
+    /// transforms compose multiplicatively from root to leaf at draw
+    /// time; the engine doesn't enforce a single root.
+    #[serde(default)]
+    pub parent: Option<EntityId>,
+    /// Optional class membership (Unreal-style). Multiple entities can
+    /// share a class to reuse the same blueprint logic. `None` = an
+    /// anonymous instance.
+    #[serde(default)]
+    pub class: Option<String>,
 }
 
 impl Entity {
@@ -297,6 +307,8 @@ impl Entity {
             transform_3d: None,
             mesh: None,
             physics_3d: None,
+            parent: None,
+            class: None,
         }
     }
 
@@ -397,7 +409,25 @@ impl Scene {
 
     pub fn remove(&mut self, id: EntityId) -> Option<Entity> {
         let i = self.find_index(id)?;
+        // Reparent any children up to the removed entity's parent so
+        // the tree stays connected.
+        let removed_parent = self.entities[i].parent;
+        for e in self.entities.iter_mut() {
+            if e.parent == Some(id) {
+                e.parent = removed_parent;
+            }
+        }
         Some(self.entities.remove(i))
+    }
+
+    /// Iterate ids of entities whose parent is `parent` (None = top-
+    /// level roots).
+    pub fn children_of(&self, parent: Option<EntityId>) -> Vec<EntityId> {
+        self.entities
+            .iter()
+            .filter(|e| e.parent == parent)
+            .map(|e| e.id)
+            .collect()
     }
 
     /// Load a scene from a RON file.
