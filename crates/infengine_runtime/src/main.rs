@@ -114,6 +114,18 @@ impl AppHandler for Runtime {
                     mesh.roughness,
                 );
             }
+            if entity.transform_3d.is_some()
+                && let Some(light) = entity.light.as_ref()
+            {
+                let w = entity_world_matrix_3d(&self.scene, entity);
+                let pos = w.w_axis.truncate();
+                renderer.queue_point_light(
+                    pos.to_array(),
+                    light.color,
+                    light.intensity,
+                    light.range,
+                );
+            }
         }
         if let Err(err) = renderer.render(|_, _, _, _, _| {}) {
             warn!(error = ?err, "frame render failed");

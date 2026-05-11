@@ -26,6 +26,21 @@ struct ShadowUniform {
 @group(2) @binding(1) var shadow_map: texture_depth_2d;
 @group(2) @binding(2) var shadow_smp: sampler_comparison;
 
+const MAX_LIGHTS: u32 = 8u;
+
+struct PointLight {
+    position: vec4<f32>,
+    color: vec4<f32>,
+    params: vec4<f32>,
+};
+
+struct LightsUniform {
+    count: vec4<u32>,
+    lights: array<PointLight, 8>,
+};
+
+@group(3) @binding(0) var<uniform> point_lights: LightsUniform;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -144,7 +159,40 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let shadow_factor = sample_shadow(in.world_pos, n_dot_l);
     let sun_intensity = 3.0;
-    let direct = (diffuse + specular) * n_dot_l * sun_intensity * shadow_factor;
+    var direct = (diffuse + specular) * n_dot_l * sun_intensity * shadow_factor;
+
+    // Accumulate point-light contributions. Range-based smooth
+    // falloff: attenuation = clamp(1 - (d/range)^2, 0, 1)^2 (a
+    // cheap-but-decent Frostbite-style window).
+    let count = point_lights.count.x;
+    for (var i: u32 = 0u; i < count; i = i + 1u) {
+        if (i >= MAX_LIGHTS) {
+            break;
+        }
+        let pl = point_lights.lights[i];
+        let lp = pl.position.xyz - in.world_pos;
+        let dist = length(lp);
+        let range = max(pl.params.x, 1e-3);
+        let t = clamp(1.0 - (dist / range) * (dist / range), 0.0, 1.0);
+        let attenuation = t * t;
+        if (attenuation <= 0.001) {
+            continue;
+        }
+        let ldir = normalize(lp);
+        let hp = normalize(v + ldir);
+        let n_dot_lp = max(dot(n, ldir), 0.0);
+        let n_dot_hp = max(dot(n, hp), 0.0);
+        let v_dot_hp = max(dot(v, hp), 0.0);
+        let fp = fresnel_schlick(v_dot_hp, f0);
+        let dp = distribution_ggx(n_dot_hp, roughness);
+        let gp = geometry_smith_ggx(n_dot_v, n_dot_lp, roughness);
+        let spec_p = (dp * gp * fp) / (4.0 * n_dot_v * n_dot_lp + 1e-4);
+        let k_dp = (vec3<f32>(1.0) - fp) * (1.0 - metallic);
+        let diff_p = k_dp * albedo / PI;
+        let intensity = pl.color.w;
+        direct = direct
+            + (diff_p + spec_p) * n_dot_lp * pl.color.rgb * intensity * attenuation;
+    }
 
     // Hemispheric ambient: a small sky + ground term.
     let ambient_up = vec3<f32>(0.20, 0.22, 0.28);

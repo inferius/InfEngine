@@ -14,6 +14,7 @@ mod debug3d;
 mod font;
 mod gltf_load;
 mod grid;
+mod lights;
 mod mesh3d;
 mod shadow;
 mod sprite;
@@ -38,6 +39,7 @@ use debug::{DebugPass, DebugVertex};
 use debug3d::{Debug3DPass, Debug3DVertex};
 pub use gltf_load::{GltfError, LoadedPrimitive, load_gltf};
 use grid::GridPass;
+use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
 use shadow::ShadowPass;
@@ -93,6 +95,8 @@ pub struct Renderer {
     /// here, the mesh pipeline binds it for that mesh's draw call;
     /// otherwise it falls back to the global default (1x1 white).
     mesh_albedos: std::collections::HashMap<MeshHandle, wgpu::BindGroup>,
+    lights: LightsResource,
+    light_queue: Vec<PointLight>,
 }
 
 impl Renderer {
@@ -179,6 +183,7 @@ impl Renderer {
         let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
         let shadow = ShadowPass::new(&device);
+        let lights_res = LightsResource::new(&device);
         let mesh3d = Mesh3DPass::new(
             &device,
             &queue,
@@ -186,6 +191,7 @@ impl Renderer {
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
             &shadow.sample_bgl,
+            &lights_res.layout,
         );
         let grid = GridPass::new(
             &device,
@@ -229,6 +235,8 @@ impl Renderer {
             debug3d,
             debug3d_vertices: Vec::new(),
             mesh_albedos: std::collections::HashMap::new(),
+            lights: lights_res,
+            light_queue: Vec::new(),
         })
     }
 
@@ -381,6 +389,28 @@ impl Renderer {
     /// global default).
     pub fn clear_mesh_albedo_for(&mut self, handle: MeshHandle) {
         self.mesh_albedos.remove(&handle);
+    }
+
+    /// Queue a point light for this frame's lighting pass. The
+    /// renderer caps the live lights at the internal MAX_LIGHTS;
+    /// extra entries are silently dropped. `color` is linear RGB,
+    /// `intensity` scales the colour, `range` is the spherical cut-
+    /// off (smooth attenuation falls to zero at `range`).
+    pub fn queue_point_light(
+        &mut self,
+        position: [f32; 3],
+        color: [f32; 3],
+        intensity: f32,
+        range: f32,
+    ) {
+        if self.light_queue.len() >= lights::MAX_LIGHTS {
+            return;
+        }
+        self.light_queue.push(PointLight {
+            position: [position[0], position[1], position[2], 1.0],
+            color: [color[0], color[1], color[2], intensity.max(0.0)],
+            params: [range.max(0.01), 0.0, 0.0, 0.0],
+        });
     }
 
     /// Mutable access to the 3D camera. Edits take effect on the next
@@ -570,6 +600,10 @@ impl Renderer {
             .upload(&self.device, &self.queue, &self.mesh3d_queue);
         self.debug3d
             .upload(&self.device, &self.queue, &self.debug3d_vertices);
+        // Upload the per-frame point-light array.
+        let light_count = self.light_queue.len();
+        self.lights
+            .upload(&self.queue, &self.light_queue, light_count);
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
         let mesh3d_count = self.mesh3d_queue.len() as u32;
@@ -642,6 +676,7 @@ impl Renderer {
                     &self.meshes,
                     &mesh_batches,
                     &self.shadow.sample_bg,
+                    &self.lights.bind_group,
                     &self.mesh_albedos,
                 );
             }
@@ -702,6 +737,7 @@ impl Renderer {
         self.debug_vertices.clear();
         self.mesh3d_queue.clear();
         self.debug3d_vertices.clear();
+        self.light_queue.clear();
         Ok(())
     }
 

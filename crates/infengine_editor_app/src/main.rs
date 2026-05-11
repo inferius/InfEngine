@@ -2023,6 +2023,19 @@ impl AppHandler for Editor {
                     mesh.roughness,
                 );
             }
+            // Push entity's LightComponent into the renderer's per-
+            // frame light queue. Uses the composed world position so
+            // parented lights move with their parent.
+            if let Some(light) = entity.light.as_ref()
+                && let Some(pos) = entity_world_position_3d(scene_ref_for_draw, entity)
+            {
+                renderer.queue_point_light(
+                    pos.to_array(),
+                    light.color,
+                    light.intensity,
+                    light.range,
+                );
+            }
         }
         if let Some(id) = self.selected
             && let Some(entity) = self.scene.get(id)
@@ -2167,6 +2180,31 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
     }
     scripts_editor(ui, entity, id);
     audio_editor(ui, entity);
+    light_editor(ui, entity);
+}
+
+fn light_editor(ui: &mut egui::Ui, entity: &mut Entity) {
+    ui.separator();
+    let Some(light) = entity.light.as_mut() else {
+        if ui.button("Add point light").clicked() {
+            entity.light = Some(infengine_core::scene::LightComponent::point(
+                [1.0, 0.95, 0.85],
+                3.0,
+                10.0,
+            ));
+        }
+        return;
+    };
+    ui.label("Point light");
+    ui.horizontal(|ui| {
+        ui.label("Color");
+        ui.color_edit_button_rgb(&mut light.color);
+    });
+    ui.add(egui::Slider::new(&mut light.intensity, 0.0..=20.0).text("Intensity"));
+    ui.add(egui::Slider::new(&mut light.range, 0.1..=100.0).text("Range"));
+    if ui.button("Remove light").clicked() {
+        entity.light = None;
+    }
 }
 
 fn audio_editor(ui: &mut egui::Ui, entity: &mut Entity) {

@@ -141,6 +141,36 @@ pub enum ColliderShape3D {
     Capsule { half_height: f32, radius: f32 },
 }
 
+/// Per-entity point light. World position comes from the entity's
+/// `transform_3d`. The renderer aggregates every entity's light into
+/// a shared uniform each frame (cap: `MAX_LIGHTS` in the renderer).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LightComponent {
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+}
+
+impl LightComponent {
+    pub fn point(color: [f32; 3], intensity: f32, range: f32) -> Self {
+        Self {
+            color,
+            intensity,
+            range,
+        }
+    }
+}
+
+impl Default for LightComponent {
+    fn default() -> Self {
+        Self {
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            range: 10.0,
+        }
+    }
+}
+
 /// Per-entity audio slot. The runtime / editor Play state plays
 /// `sound_path` (relative to project root) at the entity's
 /// position. `autoplay` fires the sound once when Play starts;
@@ -346,6 +376,8 @@ pub struct Entity {
     pub blueprints: Vec<String>,
     #[serde(default)]
     pub audio: Option<AudioComponent>,
+    #[serde(default)]
+    pub light: Option<LightComponent>,
 }
 
 impl Entity {
@@ -364,6 +396,7 @@ impl Entity {
             blueprint: None,
             blueprints: Vec::new(),
             audio: None,
+            light: None,
         }
     }
 
