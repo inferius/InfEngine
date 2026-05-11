@@ -238,6 +238,25 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "get_float_var",
+        label: "Get Float Variable",
+        category: "Variables",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "set_float_var",
+        label: "Set Float Variable",
+        category: "Variables",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("value", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "branch",
         label: "Branch",
         category: "Control",

@@ -15,9 +15,9 @@
 //! `make_vec3` nodes. `set_position` still stubs its three inputs
 //! via Print until a per-entity host hook lands.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::{BlueprintTarget, Graph, Node, NodeId};
+use crate::{BlueprintTarget, BlueprintVariable, Graph, Node, NodeId};
 
 /// Runtime value the stack carries between ops.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -45,7 +45,7 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     PushFloat(f32),
     PushBool(bool),
@@ -62,6 +62,10 @@ pub enum Op {
     JumpIfFalse(u32),
     /// Unconditional jump to absolute op index.
     Jump(u32),
+    /// Look up a named variable's current value and push it.
+    PushVar(String),
+    /// Pop the top value and store it under the variable name.
+    SetVar(String),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -150,6 +154,10 @@ fn compile_data(
             };
             ops.push(Op::PushVec3([parse("x"), parse("y"), parse("z")]));
         }
+        "get_float_var" => {
+            let name = node.params.get("name").cloned().unwrap_or_default();
+            ops.push(Op::PushVar(name));
+        }
         "add" => {
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
@@ -203,6 +211,17 @@ fn compile_sink(
                 None => ops.push(Op::PushFloat(0.0)),
             }
             ops.push(Op::Print);
+        }
+        "set_float_var" => {
+            let name = node.params.get("name").cloned().unwrap_or_default();
+            match find_data_source(graph, node_id, "value") {
+                Some((src, src_pin)) => {
+                    let mut visiting = HashSet::new();
+                    compile_data(graph, src, src_pin, &mut visiting, ops)?;
+                }
+                None => ops.push(Op::PushFloat(0.0)),
+            }
+            ops.push(Op::SetVar(name));
         }
         "set_position" => {
             for input in ["x", "y", "z"] {
@@ -344,7 +363,18 @@ impl Host for TracingHost {
     }
 }
 
+/// Run a program against a host. Convenience wrapper that uses a
+/// throwaway variable map; for persistent variables across ticks
+/// pass `vars` directly via `run_with_vars`.
 pub fn run(program: &Program, host: &mut dyn Host) {
+    let mut vars: HashMap<String, Value> = HashMap::new();
+    run_with_vars(program, host, &mut vars);
+}
+
+/// Run a program reading + writing the caller-owned `vars` map.
+/// Lets the editor persist variable values across OnTick frames by
+/// keeping one map per blueprint instance.
+pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<String, Value>) {
     let mut stack: Vec<Value> = Vec::new();
     let mut pc: usize = 0;
     let mut guard: usize = 0;
@@ -393,9 +423,51 @@ pub fn run(program: &Program, host: &mut dyn Host) {
                 pc = *addr as usize;
                 continue;
             }
+            Op::PushVar(name) => {
+                let v = vars.get(name).copied().unwrap_or(Value::Float(0.0));
+                stack.push(v);
+            }
+            Op::SetVar(name) => {
+                let v = stack.pop().unwrap_or(Value::Float(0.0));
+                vars.insert(name.clone(), v);
+            }
         }
         pc += 1;
     }
+}
+
+/// Initialise a `vars` map with the blueprint's variable defaults.
+/// Call once when the host enters Play; subsequent ticks share the
+/// map so values persist across frames.
+pub fn init_vars(variables: &[BlueprintVariable]) -> HashMap<String, Value> {
+    let mut map = HashMap::new();
+    for v in variables {
+        let parsed = match v.ty {
+            crate::PinType::Float => v
+                .default
+                .parse::<f32>()
+                .map(Value::Float)
+                .unwrap_or(Value::Float(0.0)),
+            crate::PinType::Bool => Value::Bool(v.default == "true" || v.default == "1"),
+            crate::PinType::Vec3 => {
+                // Accept "x,y,z" literal default; everything else
+                // falls back to zero.
+                let mut it = v.default.split(',').map(|s| s.trim().parse::<f32>().ok());
+                let x = it.next().flatten().unwrap_or(0.0);
+                let y = it.next().flatten().unwrap_or(0.0);
+                let z = it.next().flatten().unwrap_or(0.0);
+                Value::Vec3([x, y, z])
+            }
+            crate::PinType::EntityRef => v
+                .default
+                .parse::<u32>()
+                .map(Value::EntityRef)
+                .unwrap_or(Value::EntityRef(0)),
+            _ => Value::Float(0.0),
+        };
+        map.insert(v.name.clone(), parsed);
+    }
+    map
 }
 
 #[cfg(test)]
