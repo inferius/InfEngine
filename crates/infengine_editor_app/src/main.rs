@@ -53,7 +53,19 @@ struct Editor {
     left_button_prev: bool,
     dragging: Option<EntityId>,
     drag_offset: [f32; 2],
+    drag_axis: DragAxis,
 }
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum DragAxis {
+    Free,
+    X,
+    Y,
+}
+
+const GIZMO_AXIS_LEN: f32 = 80.0;
+const GIZMO_HANDLE_HALF: f32 = 8.0;
+const GIZMO_PICK_THICKNESS: f32 = 14.0;
 
 impl Editor {
     fn new(project_root: PathBuf, project_file: PathBuf, project: Project) -> Self {
@@ -84,6 +96,7 @@ impl Editor {
             left_button_prev: false,
             dragging: None,
             drag_offset: [0.0, 0.0],
+            drag_axis: DragAxis::Free,
         };
         if !me.project.scenes.is_empty() {
             me.open_scene(0);
@@ -231,6 +244,31 @@ fn cursor_to_world(
     ]
 }
 
+/// Hit-test the translate gizmo of the currently-selected entity.
+/// Returns the axis the user clicked on, if any. The gizmo is drawn
+/// in world units, so test against world-space coordinates.
+fn pick_gizmo(scene: &Scene, selected: Option<EntityId>, world: [f32; 2]) -> Option<DragAxis> {
+    let id = selected?;
+    let entity = scene.get(id)?;
+    let p = entity.transform.position;
+    let dx = world[0] - p[0];
+    let dy = world[1] - p[1];
+
+    // Center handle (free).
+    if dx.abs() <= GIZMO_HANDLE_HALF && dy.abs() <= GIZMO_HANDLE_HALF {
+        return Some(DragAxis::Free);
+    }
+    // X handle: along [+0, +GIZMO_AXIS_LEN] with thickness.
+    if (0.0..=GIZMO_AXIS_LEN).contains(&dx) && dy.abs() <= GIZMO_PICK_THICKNESS * 0.5 {
+        return Some(DragAxis::X);
+    }
+    // Y handle.
+    if (0.0..=GIZMO_AXIS_LEN).contains(&dy) && dx.abs() <= GIZMO_PICK_THICKNESS * 0.5 {
+        return Some(DragAxis::Y);
+    }
+    None
+}
+
 fn pick_entity(scene: &Scene, world_point: [f32; 2]) -> Option<(EntityId, [f32; 2])> {
     let mut hit = None;
     for entity in &scene.entities {
@@ -350,14 +388,28 @@ impl AppHandler for Editor {
             .as_ref()
             .is_some_and(|e| e.wants_pointer_input());
 
-        if left_just_pressed
-            && !egui_pointer
-            && let Some((id, ofs)) = pick_entity(&self.scene, cursor_world)
-        {
-            self.push_snapshot();
-            self.selected = Some(id);
-            self.dragging = Some(id);
-            self.drag_offset = ofs;
+        if left_just_pressed && !egui_pointer {
+            // Gizmo on the selected entity takes priority over body pick.
+            let gizmo_hit = pick_gizmo(&self.scene, self.selected, cursor_world);
+            if let Some(axis) = gizmo_hit
+                && let Some(id) = self.selected
+            {
+                let p = self
+                    .scene
+                    .get(id)
+                    .map(|e| e.transform.position)
+                    .unwrap_or([0.0, 0.0]);
+                self.push_snapshot();
+                self.dragging = Some(id);
+                self.drag_axis = axis;
+                self.drag_offset = [cursor_world[0] - p[0], cursor_world[1] - p[1]];
+            } else if let Some((id, ofs)) = pick_entity(&self.scene, cursor_world) {
+                self.push_snapshot();
+                self.selected = Some(id);
+                self.dragging = Some(id);
+                self.drag_axis = DragAxis::Free;
+                self.drag_offset = ofs;
+            }
         }
         if left_just_released {
             self.dragging = None;
@@ -366,8 +418,20 @@ impl AppHandler for Editor {
             && let Some(id) = self.dragging
             && let Some(entity) = self.scene.get_mut(id)
         {
-            entity.transform.position[0] = cursor_world[0] - self.drag_offset[0];
-            entity.transform.position[1] = cursor_world[1] - self.drag_offset[1];
+            let new_x = cursor_world[0] - self.drag_offset[0];
+            let new_y = cursor_world[1] - self.drag_offset[1];
+            match self.drag_axis {
+                DragAxis::Free => {
+                    entity.transform.position[0] = new_x;
+                    entity.transform.position[1] = new_y;
+                }
+                DragAxis::X => {
+                    entity.transform.position[0] = new_x;
+                }
+                DragAxis::Y => {
+                    entity.transform.position[1] = new_y;
+                }
+            }
         }
 
         let fps = self.fps_ema;
@@ -576,15 +640,35 @@ impl AppHandler for Editor {
         }
         if let Some(id) = self.selected
             && let Some(entity) = self.scene.get(id)
-            && let Some(sprite) = &entity.sprite
         {
             let p = entity.transform.position;
-            let hx = sprite.size[0] * entity.transform.scale[0] * 0.5;
-            let hy = sprite.size[1] * entity.transform.scale[1] * 0.5;
+            if let Some(sprite) = &entity.sprite {
+                let hx = sprite.size[0] * entity.transform.scale[0] * 0.5;
+                let hy = sprite.size[1] * entity.transform.scale[1] * 0.5;
+                renderer.debug_rect(
+                    [p[0] - hx, p[1] - hy],
+                    [p[0] + hx, p[1] + hy],
+                    [1.0, 0.9, 0.2, 1.0],
+                );
+            }
+            // Translate gizmo arms.
+            let red = [1.0, 0.3, 0.3, 1.0];
+            let green = [0.3, 1.0, 0.3, 1.0];
+            let yellow = [1.0, 1.0, 0.3, 1.0];
+            renderer.debug_line(p, [p[0] + GIZMO_AXIS_LEN, p[1]], red);
+            renderer.debug_line(p, [p[0], p[1] + GIZMO_AXIS_LEN], green);
+            // Tip arrows (small chevrons).
+            let tip_x = [p[0] + GIZMO_AXIS_LEN, p[1]];
+            renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] + 6.0], red);
+            renderer.debug_line(tip_x, [tip_x[0] - 10.0, tip_x[1] - 6.0], red);
+            let tip_y = [p[0], p[1] + GIZMO_AXIS_LEN];
+            renderer.debug_line(tip_y, [tip_y[0] - 6.0, tip_y[1] - 10.0], green);
+            renderer.debug_line(tip_y, [tip_y[0] + 6.0, tip_y[1] - 10.0], green);
+            // Center handle.
             renderer.debug_rect(
-                [p[0] - hx, p[1] - hy],
-                [p[0] + hx, p[1] + hy],
-                [1.0, 0.9, 0.2, 1.0],
+                [p[0] - GIZMO_HANDLE_HALF, p[1] - GIZMO_HANDLE_HALF],
+                [p[0] + GIZMO_HANDLE_HALF, p[1] + GIZMO_HANDLE_HALF],
+                yellow,
             );
         }
 

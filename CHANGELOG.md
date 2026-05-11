@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Editor 2D translate gizmo (Phase 9.3): axis-locked translate handles render via the debug overlay around the selected entity. Red arm = X axis, green arm = Y axis, yellow center square = free drag. Picking respects gizmo priority over body pick. Once a handle is grabbed, drag only modifies the chosen axis (Free / X / Y). 3D translate gizmos arrive once the editor renders 3D scenes.
 - Editor undo / redo (Phase 9.2): snapshot-based history of the whole `Scene`, ring-buffered at 64 entries. Snapshots are pushed before any structural change (drag-start, add entity, remove entity). Keyboard: `Ctrl+Z` undo, `Ctrl+Y` or `Ctrl+Shift+Z` redo. Toolbar buttons in the inspector show the current stack depths.
 - New crate `infengine_editor_app` with a standalone `editor_app` binary (Phase 9.1): takes an optional `project.ron` path on the command line (creates one if missing), loads the project manifest, and presents a scene picker, hierarchy, and selection inspector. Mouse picking + drag, log-scaled zoom (Q/E), scene save / project save / new-scene buttons, add-entity buttons, region picker, color edits, scale + position drag values.
 - `infengine_core::project::Project` with serde RON serialization, asset-root resolution helpers, and a unit test for round-tripping. Adds `ProjectError` and a `ProjectScene { name, path }` entry.
