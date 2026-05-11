@@ -116,6 +116,71 @@ impl MeshComponent {
     }
 }
 
+/// 3D body kind mirror, kept independent of `infengine_physics` so the
+/// scene model has no rapier dependency.
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyKind3D {
+    Dynamic,
+    Static,
+    Kinematic,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderShape3D {
+    Box { half_extents: [f32; 3] },
+    Sphere { radius: f32 },
+    Capsule { half_height: f32, radius: f32 },
+}
+
+/// 3D physics component: body kind + collider + material properties.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Physics3DComponent {
+    pub body: BodyKind3D,
+    pub shape: ColliderShape3D,
+    #[serde(default)]
+    pub linear_damping: f32,
+    #[serde(default = "default_ang_damping")]
+    pub angular_damping: f32,
+    #[serde(default)]
+    pub restitution: f32,
+    #[serde(default = "default_friction")]
+    pub friction: f32,
+}
+
+fn default_ang_damping() -> f32 {
+    0.05
+}
+
+impl Physics3DComponent {
+    pub fn dynamic_box() -> Self {
+        Self {
+            body: BodyKind3D::Dynamic,
+            shape: ColliderShape3D::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            linear_damping: 0.0,
+            angular_damping: 0.05,
+            restitution: 0.3,
+            friction: 0.5,
+        }
+    }
+
+    pub fn static_box() -> Self {
+        Self {
+            body: BodyKind3D::Static,
+            shape: ColliderShape3D::Box {
+                half_extents: [0.5, 0.5, 0.5],
+            },
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            restitution: 0.0,
+            friction: 0.7,
+        }
+    }
+}
+
 /// Visual data for a sprite entity. `size` is in world units; the final
 /// rendered size is `size * transform.scale`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +282,8 @@ pub struct Entity {
     pub transform_3d: Option<Transform3D>,
     #[serde(default)]
     pub mesh: Option<MeshComponent>,
+    #[serde(default)]
+    pub physics_3d: Option<Physics3DComponent>,
 }
 
 impl Entity {
@@ -229,6 +296,7 @@ impl Entity {
             physics: None,
             transform_3d: None,
             mesh: None,
+            physics_3d: None,
         }
     }
 

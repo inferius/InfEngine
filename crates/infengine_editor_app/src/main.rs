@@ -17,11 +17,17 @@ use glam::{Mat4, Quat, Vec3, Vec4};
 use infengine_assets::AssetServer;
 use infengine_blueprint::BlueprintEditor;
 use infengine_core::project::{Project, ProjectError, ProjectScene};
+use std::collections::HashMap;
+
 use infengine_core::scene::{
-    AtlasRegion, Entity, EntityId, MeshComponent, Scene, SpriteComponent, Transform2D, Transform3D,
+    AtlasRegion, BodyKind3D, ColliderShape3D, Entity, EntityId, MeshComponent, Physics3DComponent,
+    Scene, SpriteComponent, Transform2D, Transform3D,
 };
 use infengine_editor::EditorUi;
-use infengine_physics::PhysicsWorld;
+use infengine_physics::{
+    BodyDesc, BodyId as PhysicsBodyId, BodyKind3D as PhysicsBodyKind3D,
+    ColliderShape3D as PhysicsColliderShape3D, PhysicsWorld, PhysicsWorld3D,
+};
 use infengine_render::{Camera3D, Renderer, SpriteInstance};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -72,6 +78,8 @@ struct Editor {
     /// while `play_state != Editing`.
     play_snapshot: Option<Scene>,
     play_physics: Option<PhysicsWorld>,
+    play_physics_3d: Option<PhysicsWorld3D>,
+    play_body_map_3d: HashMap<EntityId, PhysicsBodyId>,
     /// Visual scripting editor. The graph is in-memory only at the
     /// scaffold stage; persistence + node-graph execution come later.
     blueprint: BlueprintEditor,
@@ -162,6 +170,8 @@ impl Editor {
             play_state: PlayState::Editing,
             play_snapshot: None,
             play_physics: None,
+            play_physics_3d: None,
+            play_body_map_3d: HashMap::new(),
             blueprint: BlueprintEditor::new(),
             blueprint_open: false,
         };
@@ -363,6 +373,51 @@ impl Editor {
         let mut world = PhysicsWorld::new();
         world.rebuild(&self.scene);
         self.play_physics = Some(world);
+        // Build the 3D physics world from any entity that carries both
+        // a Transform3D and a Physics3DComponent.
+        let mut world_3d = PhysicsWorld3D::new();
+        let mut map_3d: HashMap<EntityId, PhysicsBodyId> = HashMap::new();
+        for entity in &self.scene.entities {
+            if let (Some(t), Some(p)) = (&entity.transform_3d, &entity.physics_3d) {
+                let kind = match p.body {
+                    BodyKind3D::Dynamic => PhysicsBodyKind3D::Dynamic,
+                    BodyKind3D::Static => PhysicsBodyKind3D::Static,
+                    BodyKind3D::Kinematic => PhysicsBodyKind3D::Kinematic,
+                };
+                let shape = match p.shape {
+                    ColliderShape3D::Box { half_extents } => {
+                        PhysicsColliderShape3D::Box { half_extents }
+                    }
+                    ColliderShape3D::Sphere { radius } => PhysicsColliderShape3D::Sphere { radius },
+                    ColliderShape3D::Capsule {
+                        half_height,
+                        radius,
+                    } => PhysicsColliderShape3D::Capsule {
+                        half_height,
+                        radius,
+                    },
+                };
+                let rotation = Quat::from_euler(
+                    glam::EulerRot::XYZ,
+                    t.rotation[0],
+                    t.rotation[1],
+                    t.rotation[2],
+                );
+                let id = world_3d.create_body(BodyDesc {
+                    kind,
+                    shape,
+                    position: Vec3::from_array(t.position),
+                    rotation,
+                    linear_damping: p.linear_damping,
+                    angular_damping: p.angular_damping,
+                    restitution: p.restitution,
+                    friction: p.friction,
+                });
+                map_3d.insert(entity.id, id);
+            }
+        }
+        self.play_physics_3d = Some(world_3d);
+        self.play_body_map_3d = map_3d;
         self.play_state = PlayState::Playing;
         self.status = "Play mode".into();
     }
@@ -385,6 +440,8 @@ impl Editor {
             self.scene = snap;
         }
         self.play_physics = None;
+        self.play_physics_3d = None;
+        self.play_body_map_3d.clear();
         self.play_state = PlayState::Editing;
         self.status = "Stopped".into();
     }
@@ -393,11 +450,21 @@ impl Editor {
         if self.play_state != PlayState::Playing {
             return;
         }
-        let Some(world) = self.play_physics.as_mut() else {
-            return;
-        };
-        world.step(dt);
-        world.write_back(&mut self.scene);
+        if let Some(world) = self.play_physics.as_mut() {
+            world.step(dt);
+            world.write_back(&mut self.scene);
+        }
+        if let Some(world) = self.play_physics_3d.as_mut() {
+            world.step(dt);
+            for (entity_id, body_id) in &self.play_body_map_3d {
+                if let Some(pos) = world.translation(*body_id)
+                    && let Some(entity) = self.scene.get_mut(*entity_id)
+                    && let Some(t) = entity.transform_3d.as_mut()
+                {
+                    t.position = pos.to_array();
+                }
+            }
+        }
     }
 
     fn camera_pos(&self) -> [f32; 2] {
@@ -1241,6 +1308,7 @@ fn inspector_for_selection(ui: &mut egui::Ui, scene: &mut Scene, selected: &mut 
             transform_3d_editor(ui, t);
         }
         mesh_editor(ui, entity);
+        physics_3d_editor(ui, entity);
     } else {
         transform_editor(ui, &mut entity.transform);
         sprite_editor(ui, entity);
@@ -1324,6 +1392,72 @@ fn mesh_editor(ui: &mut egui::Ui, entity: &mut Entity) {
     });
     ui.add(egui::Slider::new(&mut mesh.metallic, 0.0..=1.0).text("Metallic"));
     ui.add(egui::Slider::new(&mut mesh.roughness, 0.04..=1.0).text("Roughness"));
+}
+
+fn physics_3d_editor(ui: &mut egui::Ui, entity: &mut Entity) {
+    ui.separator();
+    let Some(p) = entity.physics_3d.as_mut() else {
+        ui.horizontal(|ui| {
+            if ui.button("Add dynamic 3D body").clicked() {
+                entity.physics_3d = Some(Physics3DComponent::dynamic_box());
+            }
+            if ui.button("Add static 3D body").clicked() {
+                entity.physics_3d = Some(Physics3DComponent::static_box());
+            }
+        });
+        return;
+    };
+    ui.label("3D physics");
+    egui::ComboBox::from_id_salt("body_3d_kind")
+        .selected_text(match p.body {
+            BodyKind3D::Dynamic => "Dynamic",
+            BodyKind3D::Static => "Static",
+            BodyKind3D::Kinematic => "Kinematic",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut p.body, BodyKind3D::Dynamic, "Dynamic");
+            ui.selectable_value(&mut p.body, BodyKind3D::Static, "Static");
+            ui.selectable_value(&mut p.body, BodyKind3D::Kinematic, "Kinematic");
+        });
+    match &mut p.shape {
+        ColliderShape3D::Box { half_extents } => {
+            ui.label("Box half-extents");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut half_extents[0])
+                        .prefix("X: ")
+                        .speed(0.05),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut half_extents[1])
+                        .prefix("Y: ")
+                        .speed(0.05),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut half_extents[2])
+                        .prefix("Z: ")
+                        .speed(0.05),
+                );
+            });
+        }
+        ColliderShape3D::Sphere { radius } => {
+            ui.add(egui::Slider::new(radius, 0.05..=10.0).text("Sphere radius"));
+        }
+        ColliderShape3D::Capsule {
+            half_height,
+            radius,
+        } => {
+            ui.add(egui::Slider::new(half_height, 0.05..=10.0).text("Capsule half-height"));
+            ui.add(egui::Slider::new(radius, 0.05..=10.0).text("Capsule radius"));
+        }
+    }
+    ui.add(egui::Slider::new(&mut p.friction, 0.0..=2.0).text("Friction"));
+    ui.add(egui::Slider::new(&mut p.restitution, 0.0..=1.0).text("Restitution"));
+    ui.add(egui::Slider::new(&mut p.linear_damping, 0.0..=5.0).text("Linear damping"));
+    ui.add(egui::Slider::new(&mut p.angular_damping, 0.0..=5.0).text("Angular damping"));
+    if ui.button("Remove 3D body").clicked() {
+        entity.physics_3d = None;
+    }
 }
 
 fn transform_editor(ui: &mut egui::Ui, t: &mut Transform2D) {
