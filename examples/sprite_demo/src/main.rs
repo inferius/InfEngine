@@ -1,17 +1,16 @@
-//! Sprite demo - Phase 2.7 of InfEngine.
+//! Sprite demo - Phase 5.2 of InfEngine.
 //!
-//! Combines every Phase-2 feature: tilemap background, batched sprite
-//! player, screen-space HUD text, and a debug-line overlay (origin
-//! cross, player bounding box and visibility circle, plus a leader
-//! line from origin to player). WASD / arrows move, Q / E zoom out /
-//! in, R resets, Escape exits.
+//! The scene is now data: entities live in an `infengine_core::Scene`
+//! that is saved to / loaded from `assets/scene.ron`. The inspector
+//! edits the selected entity in place; WASD / arrows move the selection.
 
 use std::path::PathBuf;
 
 use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
 use infengine_audio::AudioSystem;
+use infengine_core::scene::{AtlasRegion, Entity, EntityId, Scene, SpriteComponent, Transform2D};
 use infengine_editor::EditorUi;
-use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
+use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap};
 use infengine_window::raw_winit::event::WindowEvent;
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -24,6 +23,8 @@ const ZOOM_RATE: f32 = 1.6;
 const ZOOM_MIN: f32 = 0.25;
 const ZOOM_MAX: f32 = 4.0;
 
+const SCENE_PATH: &str = "assets/scene.ron";
+
 struct Demo {
     renderer: Option<Renderer>,
     editor: Option<EditorUi>,
@@ -34,11 +35,10 @@ struct Demo {
     audio: Option<AudioSystem>,
     reload_count: u32,
     beep_count: u32,
-    pos: [f32; 2],
+    scene: Scene,
+    selected: Option<EntityId>,
+    save_status: String,
     zoom: f32,
-    player_size: f32,
-    player_color: [f32; 4],
-    clear_color: [f32; 3],
     show_debug_overlay: bool,
     follow_camera: bool,
     viewport: (u32, u32),
@@ -48,22 +48,20 @@ struct Demo {
 
 impl Default for Demo {
     fn default() -> Self {
-        let assets_root = PathBuf::from("assets");
         Self {
             renderer: None,
             editor: None,
             tilemap: build_tilemap(),
-            assets: AssetServer::new(assets_root),
+            assets: AssetServer::new(PathBuf::from("assets")),
             asset_watcher: None,
             sample_image: None,
             audio: None,
             reload_count: 0,
             beep_count: 0,
-            pos: [0.0, 0.0],
+            scene: Scene::default(),
+            selected: None,
+            save_status: String::new(),
             zoom: 1.0,
-            player_size: 64.0,
-            player_color: [1.0, 0.85, 0.4, 1.0],
-            clear_color: [0.05, 0.10, 0.18],
             show_debug_overlay: true,
             follow_camera: true,
             viewport: (1, 1),
@@ -71,31 +69,6 @@ impl Default for Demo {
             frame: 0,
         }
     }
-}
-
-/// Generate a small "InfEngine" gradient PNG into `assets/sample.png`
-/// if it does not exist, so the demo always has something to load.
-fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
-    if !asset_root.exists() {
-        std::fs::create_dir_all(asset_root)?;
-    }
-    let target = asset_root.join("sample.png");
-    if target.exists() {
-        return Ok(());
-    }
-    let (w, h) = (128u32, 128u32);
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let r = ((x as f32 / w as f32) * 255.0) as u8;
-            let g = ((y as f32 / h as f32) * 255.0) as u8;
-            let b = 0x60;
-            rgba.extend_from_slice(&[r, g, b, 255]);
-        }
-    }
-    image::save_buffer(&target, &rgba, w, h, image::ExtendedColorType::Rgba8)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    Ok(())
 }
 
 fn build_tilemap() -> Tilemap {
@@ -122,11 +95,82 @@ fn map_half_extent() -> (f32, f32) {
     (half_w, half_h)
 }
 
+fn default_scene() -> Scene {
+    let mut scene = Scene {
+        name: "demo".to_owned(),
+        ..Scene::default()
+    };
+    let i = scene.add_entity("player");
+    scene.entities[i].transform = Transform2D::default();
+    scene.entities[i].sprite = Some(SpriteComponent {
+        size: [64.0, 64.0],
+        color: [1.0, 0.85, 0.4, 1.0],
+        region: AtlasRegion::Checker,
+    });
+    let i = scene.add_entity("orb_a");
+    scene.entities[i].transform.position = [-300.0, 200.0];
+    scene.entities[i].sprite = Some(SpriteComponent {
+        size: [80.0, 80.0],
+        color: [0.4, 0.9, 1.0, 1.0],
+        region: AtlasRegion::Dots,
+    });
+    let i = scene.add_entity("orb_b");
+    scene.entities[i].transform.position = [300.0, -200.0];
+    scene.entities[i].sprite = Some(SpriteComponent {
+        size: [80.0, 80.0],
+        color: [1.0, 0.6, 0.6, 1.0],
+        region: AtlasRegion::Cross,
+    });
+    scene
+}
+
+fn ensure_sample_image(asset_root: &std::path::Path) -> std::io::Result<()> {
+    if !asset_root.exists() {
+        std::fs::create_dir_all(asset_root)?;
+    }
+    let target = asset_root.join("sample.png");
+    if target.exists() {
+        return Ok(());
+    }
+    let (w, h) = (128u32, 128u32);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let r = ((x as f32 / w as f32) * 255.0) as u8;
+            let g = ((y as f32 / h as f32) * 255.0) as u8;
+            let b = 0x60;
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    image::save_buffer(&target, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(())
+}
+
+fn first_sprite_entity(scene: &Scene) -> Option<EntityId> {
+    scene
+        .entities
+        .iter()
+        .find(|e| e.sprite.is_some())
+        .map(|e| e.id)
+}
+
+fn region_label(r: &AtlasRegion) -> &'static str {
+    match r {
+        AtlasRegion::Full => "Full",
+        AtlasRegion::Checker => "Checker",
+        AtlasRegion::Dots => "Dots",
+        AtlasRegion::Stripes => "Stripes",
+        AtlasRegion::Cross => "Cross",
+    }
+}
+
 impl AppHandler for Demo {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
         self.viewport = (w, h);
         info!(width = w, height = h, "sprite_demo started");
+
         match Renderer::new(window) {
             Ok(r) => {
                 let editor = EditorUi::new(r.wgpu_device(), r.surface_format(), window.raw(), 1);
@@ -142,30 +186,36 @@ impl AppHandler for Demo {
         if let Err(err) = ensure_sample_image(self.assets.root()) {
             warn!(error = %err, "failed to write sample.png");
         }
-        match self.assets.load_image("sample.png") {
-            Ok(handle) => {
-                if let Some(img) = self.assets.get_image(handle) {
-                    info!(
-                        width = img.width,
-                        height = img.height,
-                        bytes = img.rgba.len(),
-                        "sample asset loaded"
-                    );
-                }
-                self.sample_image = Some(handle);
-            }
-            Err(err) => warn!(error = %err, "failed to load sample.png"),
+        if let Ok(handle) = self.assets.load_image("sample.png") {
+            self.sample_image = Some(handle);
         }
-
         match self.assets.watch() {
             Ok(w) => self.asset_watcher = Some(w),
             Err(err) => warn!(error = %err, "filesystem watcher unavailable"),
         }
-
         match AudioSystem::new() {
             Ok(a) => self.audio = Some(a),
             Err(err) => warn!(error = %err, "audio system unavailable"),
         }
+
+        // Load scene from disk if it exists; otherwise build a default
+        // scene and persist it so the next run picks up the same content.
+        let scene_path = PathBuf::from(SCENE_PATH);
+        self.scene = match Scene::load(&scene_path) {
+            Ok(s) => {
+                info!(path = %scene_path.display(), entities = s.entities.len(), "scene loaded");
+                s
+            }
+            Err(err) => {
+                info!(error = %err, "scene file missing, building default");
+                let s = default_scene();
+                if let Err(save_err) = s.save(&scene_path) {
+                    warn!(error = %save_err, "failed to write default scene");
+                }
+                s
+            }
+        };
+        self.selected = first_sprite_entity(&self.scene);
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
@@ -191,7 +241,6 @@ impl AppHandler for Demo {
         let instant_fps = 1.0 / dt;
         self.fps_ema = self.fps_ema * 0.9 + instant_fps * 0.1;
 
-        // Drain hot-reload events; reload the sample image when it changes.
         if let Some(w) = self.asset_watcher.as_ref() {
             while let Ok(event) = w.receiver.try_recv() {
                 match event {
@@ -214,6 +263,7 @@ impl AppHandler for Demo {
             }
         }
 
+        // Movement input drives the selected entity.
         let mut dx = 0.0_f32;
         let mut dy = 0.0_f32;
         if ctx.input.any_pressed(&[Key::A, Key::ArrowLeft]) {
@@ -228,12 +278,15 @@ impl AppHandler for Demo {
         if ctx.input.any_pressed(&[Key::S, Key::ArrowDown]) {
             dy -= 1.0;
         }
-        if dx != 0.0 || dy != 0.0 {
+        if (dx != 0.0 || dy != 0.0)
+            && let Some(id) = self.selected
+            && let Some(entity) = self.scene.get_mut(id)
+        {
             let len = (dx * dx + dy * dy).sqrt();
             dx /= len;
             dy /= len;
-            self.pos[0] += dx * MOVE_SPEED * dt;
-            self.pos[1] += dy * MOVE_SPEED * dt;
+            entity.transform.position[0] += dx * MOVE_SPEED * dt;
+            entity.transform.position[1] += dy * MOVE_SPEED * dt;
         }
 
         let mut zoom_step = 0.0_f32;
@@ -248,15 +301,27 @@ impl AppHandler for Demo {
             self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         }
 
-        if ctx.input.is_pressed(Key::R) {
-            self.pos = [0.0, 0.0];
+        if ctx.input.is_pressed(Key::R)
+            && let Some(id) = self.selected
+            && let Some(entity) = self.scene.get_mut(id)
+        {
+            entity.transform.position = [0.0, 0.0];
             self.zoom = 1.0;
         }
 
+        // Clamp the selected entity into the playable area.
         let (half_w, half_h) = map_half_extent();
-        let pad = self.player_size * 0.5;
-        self.pos[0] = self.pos[0].clamp(-(half_w - pad), half_w - pad);
-        self.pos[1] = self.pos[1].clamp(-(half_h - pad), half_h - pad);
+        if let Some(id) = self.selected
+            && let Some(entity) = self.scene.get_mut(id)
+            && let Some(sprite) = &entity.sprite
+        {
+            let pad_x = sprite.size[0] * entity.transform.scale[0] * 0.5;
+            let pad_y = sprite.size[1] * entity.transform.scale[1] * 0.5;
+            entity.transform.position[0] =
+                entity.transform.position[0].clamp(-(half_w - pad_x), half_w - pad_x);
+            entity.transform.position[1] =
+                entity.transform.position[1].clamp(-(half_h - pad_y), half_h - pad_y);
+        }
 
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -264,41 +329,57 @@ impl AppHandler for Demo {
 
         {
             let camera = renderer.camera_mut();
-            if self.follow_camera {
-                camera.position = self.pos;
+            if self.follow_camera
+                && let Some(id) = self.selected
+                && let Some(entity) = self.scene.get(id)
+            {
+                camera.position = entity.transform.position;
             } else {
                 camera.position = [0.0, 0.0];
             }
             camera.zoom = self.zoom;
         }
         renderer.set_clear_color(
-            self.clear_color[0] as f64,
-            self.clear_color[1] as f64,
-            self.clear_color[2] as f64,
+            self.scene.clear_color[0] as f64,
+            self.scene.clear_color[1] as f64,
+            self.scene.clear_color[2] as f64,
             1.0,
         );
 
         renderer.draw_tilemap(&self.tilemap);
-        renderer.draw_sprite(
-            SpriteInstance::from_region(
-                self.pos,
-                [self.player_size, self.player_size],
-                demo_atlas::CHECKER,
-            )
-            .with_color(self.player_color),
-        );
+        for entity in &self.scene.entities {
+            if let Some(sprite) = &entity.sprite {
+                let size = [
+                    sprite.size[0] * entity.transform.scale[0],
+                    sprite.size[1] * entity.transform.scale[1],
+                ];
+                let (uv_min, uv_max) = sprite.region.uv_rect();
+                renderer.draw_sprite(SpriteInstance {
+                    position: entity.transform.position,
+                    size,
+                    color: sprite.color,
+                    uv_min,
+                    uv_max,
+                });
+            }
+        }
 
         if self.show_debug_overlay {
             renderer.debug_line([-24.0, 0.0], [24.0, 0.0], [1.0, 0.4, 0.4, 1.0]);
             renderer.debug_line([0.0, -24.0], [0.0, 24.0], [0.4, 1.0, 0.4, 1.0]);
-            let half = self.player_size * 0.5;
-            renderer.debug_rect(
-                [self.pos[0] - half, self.pos[1] - half],
-                [self.pos[0] + half, self.pos[1] + half],
-                [1.0, 1.0, 0.0, 1.0],
-            );
-            renderer.debug_circle(self.pos, self.player_size, [0.6, 0.9, 1.0, 0.9], 48);
-            renderer.debug_line([0.0, 0.0], self.pos, [1.0, 1.0, 1.0, 0.4]);
+            if let Some(id) = self.selected
+                && let Some(entity) = self.scene.get(id)
+                && let Some(sprite) = &entity.sprite
+            {
+                let half_x = sprite.size[0] * entity.transform.scale[0] * 0.5;
+                let half_y = sprite.size[1] * entity.transform.scale[1] * 0.5;
+                let p = entity.transform.position;
+                renderer.debug_rect(
+                    [p[0] - half_x, p[1] - half_y],
+                    [p[0] + half_x, p[1] + half_y],
+                    [1.0, 1.0, 0.0, 1.0],
+                );
+            }
         }
 
         let queued = renderer.queued_sprite_count();
@@ -307,63 +388,83 @@ impl AppHandler for Demo {
         let beeps = self.beep_count;
         let (map_half_w, map_half_h) = map_half_extent();
 
-        // Mutable references to state the inspector can edit.
-        let pos = &mut self.pos;
-        let zoom = &mut self.zoom;
-        let player_size = &mut self.player_size;
-        let player_color = &mut self.player_color;
-        let clear_color = &mut self.clear_color;
-        let show_debug = &mut self.show_debug_overlay;
-        let follow_camera = &mut self.follow_camera;
+        // Borrows for inspector edits.
+        let zoom_ref = &mut self.zoom;
+        let show_debug_ref = &mut self.show_debug_overlay;
+        let follow_camera_ref = &mut self.follow_camera;
+        let scene_ref = &mut self.scene;
+        let selected_ref = &mut self.selected;
+        let save_status_ref = &mut self.save_status;
 
         if let Some(editor) = self.editor.as_mut() {
             editor.run(window.raw(), |ctx| {
                 egui::SidePanel::left("inspector")
                     .resizable(true)
-                    .default_width(280.0)
+                    .default_width(300.0)
                     .show(ctx, |ui| {
-                        ui.heading("InfEngine - Phase 4.2");
-                        ui.label(format!("FPS: {fps:.0}"));
-                        ui.label(format!("Sprites/frame: {queued}"));
+                        ui.heading("InfEngine - Phase 5.2");
+                        ui.label(format!("FPS: {fps:.0}   Sprites: {queued}"));
                         ui.label(format!("Reloads: {reloads}   Beeps: {beeps}"));
                         ui.separator();
 
+                        ui.collapsing("Scene", |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("Save").clicked() {
+                                    match scene_ref.save(SCENE_PATH) {
+                                        Ok(()) => {
+                                            *save_status_ref = format!("Saved -> {SCENE_PATH}");
+                                        }
+                                        Err(err) => {
+                                            *save_status_ref = format!("Save failed: {err}");
+                                        }
+                                    }
+                                }
+                                if ui.button("Load").clicked() {
+                                    match Scene::load(SCENE_PATH) {
+                                        Ok(s) => {
+                                            *scene_ref = s;
+                                            *selected_ref = first_sprite_entity(scene_ref);
+                                            *save_status_ref = format!("Loaded {SCENE_PATH}");
+                                        }
+                                        Err(err) => {
+                                            *save_status_ref = format!("Load failed: {err}");
+                                        }
+                                    }
+                                }
+                                if ui.button("Reset").clicked() {
+                                    *scene_ref = default_scene();
+                                    *selected_ref = first_sprite_entity(scene_ref);
+                                    *save_status_ref = "Reset to default scene".to_owned();
+                                }
+                            });
+                            if !save_status_ref.is_empty() {
+                                ui.small(save_status_ref.clone());
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Background");
+                                ui.color_edit_button_rgb(&mut scene_ref.clear_color);
+                            });
+                        });
+
                         ui.collapsing("Camera", |ui| {
-                            ui.checkbox(follow_camera, "Follow player");
+                            ui.checkbox(follow_camera_ref, "Follow selection");
                             ui.add(
-                                egui::Slider::new(zoom, 0.25..=4.0)
+                                egui::Slider::new(zoom_ref, ZOOM_MIN..=ZOOM_MAX)
                                     .text("Zoom")
                                     .logarithmic(true),
                             );
+                            ui.checkbox(show_debug_ref, "Debug overlay");
                         });
 
-                        ui.collapsing("Player", |ui| {
-                            ui.add(
-                                egui::Slider::new(&mut pos[0], -map_half_w..=map_half_w).text("X"),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut pos[1], -map_half_h..=map_half_h).text("Y"),
-                            );
-                            ui.add(egui::Slider::new(player_size, 16.0..=256.0).text("Size"));
-                            ui.horizontal(|ui| {
-                                ui.label("Tint");
-                                ui.color_edit_button_rgba_unmultiplied(player_color);
-                            });
-                        });
-
-                        ui.collapsing("World", |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Background");
-                                ui.color_edit_button_rgb(clear_color);
-                            });
-                            ui.checkbox(show_debug, "Debug overlay");
+                        ui.collapsing("Selection", |ui| {
+                            entity_inspector(ui, scene_ref, selected_ref, map_half_w, map_half_h);
                         });
 
                         ui.separator();
                         ui.label("Controls:");
-                        ui.label("WASD / arrows = move");
+                        ui.label("WASD / arrows = move selection");
                         ui.label("Q / E = zoom out / in");
-                        ui.label("Space = beep, R = reset, Esc = quit");
+                        ui.label("Space = beep, R = recenter, Esc = quit");
                     });
             });
         }
@@ -382,8 +483,6 @@ impl AppHandler for Demo {
             info!(
                 frame = self.frame,
                 fps = self.fps_ema,
-                x = self.pos[0],
-                y = self.pos[1],
                 zoom = self.zoom,
                 sprites = queued,
                 "frame"
@@ -404,6 +503,79 @@ impl AppHandler for Demo {
     }
 }
 
+fn entity_inspector(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    selected: &mut Option<EntityId>,
+    map_half_w: f32,
+    map_half_h: f32,
+) {
+    let Some(id) = *selected else {
+        ui.label("(no entity selected)");
+        return;
+    };
+    let Some(entity) = scene.get_mut(id) else {
+        ui.label("(selection lost)");
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label("Name");
+        ui.text_edit_singleline(&mut entity.name);
+    });
+    ui.label(format!("Id: {}", id.0));
+    transform_editor(ui, &mut entity.transform, map_half_w, map_half_h);
+    sprite_editor(ui, entity);
+}
+
+fn transform_editor(ui: &mut egui::Ui, t: &mut Transform2D, map_w: f32, map_h: f32) {
+    ui.add(egui::Slider::new(&mut t.position[0], -map_w..=map_w).text("X"));
+    ui.add(egui::Slider::new(&mut t.position[1], -map_h..=map_h).text("Y"));
+    ui.add(egui::Slider::new(&mut t.scale[0], 0.25..=4.0).text("Scale X"));
+    ui.add(egui::Slider::new(&mut t.scale[1], 0.25..=4.0).text("Scale Y"));
+}
+
+fn sprite_editor(ui: &mut egui::Ui, entity: &mut Entity) {
+    let has_sprite = entity.sprite.is_some();
+    let mut keep = has_sprite;
+    if has_sprite {
+        ui.checkbox(&mut keep, "Sprite component");
+    } else if ui.button("Add sprite component").clicked() {
+        entity.sprite = Some(SpriteComponent::new([64.0, 64.0], AtlasRegion::Checker));
+        keep = true;
+    }
+    if has_sprite && !keep {
+        entity.sprite = None;
+        return;
+    }
+    let Some(sprite) = entity.sprite.as_mut() else {
+        return;
+    };
+    ui.add(egui::Slider::new(&mut sprite.size[0], 8.0..=256.0).text("Width"));
+    ui.add(egui::Slider::new(&mut sprite.size[1], 8.0..=256.0).text("Height"));
+    ui.horizontal(|ui| {
+        ui.label("Color");
+        ui.color_edit_button_rgba_unmultiplied(&mut sprite.color);
+    });
+    egui::ComboBox::from_label("Region")
+        .selected_text(region_label(&sprite.region))
+        .show_ui(ui, |ui| {
+            for r in [
+                AtlasRegion::Checker,
+                AtlasRegion::Dots,
+                AtlasRegion::Stripes,
+                AtlasRegion::Cross,
+                AtlasRegion::Full,
+            ] {
+                let label = region_label(&r);
+                let is_selected =
+                    std::mem::discriminant(&sprite.region) == std::mem::discriminant(&r);
+                if ui.selectable_label(is_selected, label).clicked() {
+                    sprite.region = r;
+                }
+            }
+        });
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -412,7 +584,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 4.2)".into(),
+        title: "InfEngine - sprite_demo (Phase 5.2)".into(),
         width: 1280,
         height: 720,
         resizable: true,
