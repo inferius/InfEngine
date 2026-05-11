@@ -36,7 +36,10 @@ const UNLOAD_DISTANCE_CHUNKS: i32 = 6;
 /// doesn't stall the renderer on long walks.
 const CHUNKS_PER_FRAME: usize = 2;
 const PLAYER_SPEED: f32 = 6.0;
-const JUMP_VELOCITY: f32 = 6.0;
+/// Initial upward velocity on jump. Peak height = `v^2 / (2 * |g|)`,
+/// so 8.0 ^ 2 / 36 ≈ 1.78 voxels - enough to clear a one-block step
+/// with margin, similar to Minecraft's 1.25-block jump.
+const JUMP_VELOCITY: f32 = 8.0;
 const GRAVITY: f32 = -18.0;
 const PLAYER_HEIGHT: f32 = 1.7;
 const PLAYER_RADIUS: f32 = 0.3;
