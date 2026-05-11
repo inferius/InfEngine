@@ -10,6 +10,7 @@
 mod camera;
 mod camera_3d;
 mod debug;
+mod debug3d;
 mod font;
 mod grid;
 mod mesh3d;
@@ -33,6 +34,7 @@ use camera::CameraResource;
 pub use camera_3d::Camera3D;
 use camera_3d::Camera3DResource;
 use debug::{DebugPass, DebugVertex};
+use debug3d::{Debug3DPass, Debug3DVertex};
 use grid::GridPass;
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
@@ -83,6 +85,8 @@ pub struct Renderer {
     shadow: ShadowPass,
     grid: GridPass,
     show_grid: bool,
+    debug3d: Debug3DPass,
+    debug3d_vertices: Vec<Debug3DVertex>,
 }
 
 impl Renderer {
@@ -183,6 +187,12 @@ impl Renderer {
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
         );
+        let debug3d = Debug3DPass::new(
+            &device,
+            config.format,
+            DEPTH_FORMAT,
+            &camera_3d_resource.layout,
+        );
         let mut meshes = Mesh3DRegistry::default();
         let (cube_v, cube_i) = mesh3d::cube_geometry_public();
         let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
@@ -210,6 +220,8 @@ impl Renderer {
             shadow,
             grid,
             show_grid: true,
+            debug3d,
+            debug3d_vertices: Vec::new(),
         })
     }
 
@@ -319,6 +331,44 @@ impl Renderer {
 
     pub fn set_show_grid(&mut self, show: bool) {
         self.show_grid = show;
+    }
+
+    /// Queue a 3D world-space line segment for this frame. Rendered
+    /// after the 3D meshes with depth-test only (no depth write).
+    pub fn debug_line_3d(&mut self, a: [f32; 3], b: [f32; 3], color: [f32; 4]) {
+        self.debug3d_vertices
+            .push(Debug3DVertex { position: a, color });
+        self.debug3d_vertices
+            .push(Debug3DVertex { position: b, color });
+    }
+
+    /// Queue an axis-aligned wireframe box (12 edges) in world space.
+    pub fn debug_box_3d(&mut self, min: [f32; 3], max: [f32; 3], color: [f32; 4]) {
+        let c = [
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], min[1], max[2]],
+            [min[0], min[1], max[2]],
+            [min[0], max[1], min[2]],
+            [max[0], max[1], min[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ];
+        // Bottom rectangle 0-1-2-3-0.
+        self.debug_line_3d(c[0], c[1], color);
+        self.debug_line_3d(c[1], c[2], color);
+        self.debug_line_3d(c[2], c[3], color);
+        self.debug_line_3d(c[3], c[0], color);
+        // Top rectangle 4-5-6-7-4.
+        self.debug_line_3d(c[4], c[5], color);
+        self.debug_line_3d(c[5], c[6], color);
+        self.debug_line_3d(c[6], c[7], color);
+        self.debug_line_3d(c[7], c[4], color);
+        // Vertical edges.
+        self.debug_line_3d(c[0], c[4], color);
+        self.debug_line_3d(c[1], c[5], color);
+        self.debug_line_3d(c[2], c[6], color);
+        self.debug_line_3d(c[3], c[7], color);
     }
 
     /// Queue every non-empty tile of `map` as a sprite. Convenience
@@ -450,9 +500,12 @@ impl Renderer {
         let mesh_batches = self
             .mesh3d
             .upload(&self.device, &self.queue, &self.mesh3d_queue);
+        self.debug3d
+            .upload(&self.device, &self.queue, &self.debug3d_vertices);
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
         let mesh3d_count = self.mesh3d_queue.len() as u32;
+        let debug3d_count = self.debug3d_vertices.len() as u32;
 
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
@@ -488,9 +541,9 @@ impl Renderer {
         }
 
         // 3D pass next (with depth), then 2D pass on top (no depth).
-        // Always run when meshes OR grid are present so the depth/color
-        // attachments get cleared.
-        let run_scene3d = mesh3d_count > 0 || self.show_grid;
+        // Always run when meshes, grid, or debug lines are present so
+        // the depth/color attachments get cleared.
+        let run_scene3d = mesh3d_count > 0 || self.show_grid || debug3d_count > 0;
         if run_scene3d {
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::mesh3d_pass"),
@@ -529,6 +582,10 @@ impl Renderer {
                 // group at slot 0.
                 self.grid.draw(&mut rpass);
             }
+            // Debug 3D lines on top of the 3D scene. Same camera bind
+            // group at slot 0; pipeline owns depth-test-only state so
+            // they overlay geometry naturally.
+            self.debug3d.draw(&mut rpass, debug3d_count);
         }
 
         {
@@ -575,6 +632,7 @@ impl Renderer {
         self.sprite_queue.clear();
         self.debug_vertices.clear();
         self.mesh3d_queue.clear();
+        self.debug3d_vertices.clear();
         Ok(())
     }
 

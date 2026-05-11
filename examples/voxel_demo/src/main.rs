@@ -339,12 +339,37 @@ impl Voxel {
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             ui.label("Mouse aim, WASD, Space jump, Esc menu");
+                            ui.label("LMB break, RMB place");
                             if show_fps {
                                 ui.separator();
                                 ui.label(format!("FPS: {fps:.0}"));
                             }
                         });
                     });
+                // Crosshair drawn directly on the egui screen layer.
+                // Two thin segments through the screen centre.
+                let screen = ctx.content_rect();
+                let center = screen.center();
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("voxel_crosshair"),
+                ));
+                let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 240, 240));
+                let half = 8.0_f32;
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - half, center.y),
+                        egui::pos2(center.x + half, center.y),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x, center.y - half),
+                        egui::pos2(center.x, center.y + half),
+                    ],
+                    stroke,
+                );
             }
         });
 
@@ -489,6 +514,7 @@ impl AppHandler for Voxel {
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
         let registry = &self.registry;
+        let target = self.target;
         let ui = self.ui.as_mut();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -510,6 +536,23 @@ impl AppHandler for Voxel {
                     def.roughness,
                 );
             }
+        }
+        // Wire outline around the voxel the player is currently aiming
+        // at. The outline is slightly inflated (0.005 unit margin) so
+        // the lines are not z-fighting with the surface they hug.
+        if let Some(hit) = target {
+            let v = hit.voxel;
+            let min = [
+                v[0] as f32 - 0.005,
+                v[1] as f32 - 0.005,
+                v[2] as f32 - 0.005,
+            ];
+            let max = [
+                v[0] as f32 + 1.005,
+                v[1] as f32 + 1.005,
+                v[2] as f32 + 1.005,
+            ];
+            renderer.debug_box_3d(min, max, [0.0, 0.0, 0.0, 0.9]);
         }
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
