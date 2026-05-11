@@ -1,0 +1,18 @@
+[package]
+name = "infengine_audio"
+description = "Audio playback for InfEngine, built on the kira crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+kira = { workspace = true }

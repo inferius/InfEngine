@@ -5,6 +5,7 @@ members = [
     "crates/infengine_window",
     "crates/infengine_render",
     "crates/infengine_assets",
+    "crates/infengine_audio",
     "examples/sprite_demo",
 ]
 
@@ -58,6 +59,7 @@ bevy_ecs = "0.17"
 # Assets
 notify = "8"
 image = "0.25"
+kira = "0.10"
 
 [profile.release]
 opt-level = 3

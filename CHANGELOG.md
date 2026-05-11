@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New crate `infengine_audio` (Phase 3.3): wraps `kira` 0.10 with an `AudioSystem` that initializes the default backend and exposes `play_beep(freq_hz, duration_secs, volume)`. Synthesizes a sine-wave tone with 5 ms fade in / out and submits it to `kira` as a `StaticSoundData`. `AudioError` covers backend init and play failures.
+- `sprite_demo` initializes the audio system at startup and plays a 440 Hz, 100 ms beep on each Space-key press; the HUD shows a running `BEEPS` counter alongside `RELOADS`.
 - `infengine_assets` hot reload (Phase 3.2): `AssetServer::watch()` returns an `AssetWatcher` whose `receiver` yields `AssetEvent::Modified(path)` and `Removed(path)` over a `std::sync::mpsc::Receiver`. Paths are emitted relative to the asset root. `AssetServer::handle_path(handle)` reverse-resolves a handle back to its source path so callers can decide when to call `reload_image`. The underlying watcher uses `notify::RecommendedWatcher` and stops when the `AssetWatcher` is dropped.
 - `sprite_demo` polls hot-reload events each frame, reloads `sample.png` when modified, and shows the running reload count on the HUD.
 - `infengine_assets::AssetServer`, `AssetHandle<T>`, and `ImageAsset` (Phase 3.1): typed handles backed by a numeric `AssetId`, a `RwLock`-guarded cache, and PNG/JPG/WebP decoding via the `image` crate. `AssetServer::load_image` returns a cached `Arc<ImageAsset>` and rejects paths that try to escape the asset root.

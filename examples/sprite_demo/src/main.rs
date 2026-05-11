@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use infengine_assets::{AssetEvent, AssetHandle, AssetServer, AssetWatcher, ImageAsset};
+use infengine_audio::AudioSystem;
 use infengine_render::{Renderer, SpriteInstance, TileId, Tilemap, demo_atlas};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
 use tracing::{error, info, warn};
@@ -30,7 +31,9 @@ struct Demo {
     assets: AssetServer,
     asset_watcher: Option<AssetWatcher>,
     sample_image: Option<AssetHandle<ImageAsset>>,
+    audio: Option<AudioSystem>,
     reload_count: u32,
+    beep_count: u32,
     pos: [f32; 2],
     zoom: f32,
     viewport: (u32, u32),
@@ -47,7 +50,9 @@ impl Default for Demo {
             assets: AssetServer::new(assets_root),
             asset_watcher: None,
             sample_image: None,
+            audio: None,
             reload_count: 0,
+            beep_count: 0,
             pos: [0.0, 0.0],
             zoom: 1.0,
             viewport: (1, 1),
@@ -140,6 +145,23 @@ impl AppHandler for Demo {
         match self.assets.watch() {
             Ok(w) => self.asset_watcher = Some(w),
             Err(err) => warn!(error = %err, "filesystem watcher unavailable"),
+        }
+
+        match AudioSystem::new() {
+            Ok(a) => self.audio = Some(a),
+            Err(err) => warn!(error = %err, "audio system unavailable"),
+        }
+    }
+
+    fn on_key(&mut self, key: Key, pressed: bool) {
+        if pressed
+            && key == Key::Space
+            && let Some(audio) = self.audio.as_mut()
+        {
+            match audio.play_beep(440.0, 0.10, 0.3) {
+                Ok(()) => self.beep_count += 1,
+                Err(err) => warn!(error = %err, "play_beep failed"),
+            }
         }
     }
 
@@ -254,10 +276,10 @@ impl AppHandler for Demo {
         let top_left_y = self.pos[1] + half_h_world - margin;
         let line_step = text_world_size * 1.25;
 
-        let line1 = format!("INFENGINE PHASE 3.2  FPS {:.0}", self.fps_ema);
+        let line1 = format!("INFENGINE PHASE 3.3  FPS {:.0}", self.fps_ema);
         let line2 = format!(
-            "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}  RELOADS {}",
-            self.pos[0], self.pos[1], self.zoom, self.reload_count
+            "X {:>5.0}  Y {:>5.0}  ZOOM {:.2}  RELOADS {}  BEEPS {}",
+            self.pos[0], self.pos[1], self.zoom, self.reload_count, self.beep_count
         );
         renderer.draw_text(
             &line1,
@@ -312,7 +334,7 @@ fn main() {
         .init();
 
     let config = WindowConfig {
-        title: "InfEngine - sprite_demo (Phase 3.2)".into(),
+        title: "InfEngine - sprite_demo (Phase 3.3)".into(),
         width: 1280,
         height: 720,
         resizable: true,
