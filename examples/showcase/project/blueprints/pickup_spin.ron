@@ -1,0 +1,122 @@
+(
+    name: "Pickup Spin",
+    target: class("Pickup"),
+    graph: (
+        nodes: [
+            (
+                id: (0),
+                kind: "on_tick",
+                position: (40.0, 40.0),
+                params: {},
+            ),
+            (
+                id: (1),
+                kind: "sequence",
+                position: (240.0, 40.0),
+                params: {},
+            ),
+            (
+                id: (2),
+                kind: "get_float_var",
+                position: (40.0, 160.0),
+                params: {
+                    "name": "Angle",
+                },
+            ),
+            (
+                id: (3),
+                kind: "delta_time",
+                position: (40.0, 260.0),
+                params: {},
+            ),
+            (
+                id: (4),
+                kind: "multiply",
+                position: (240.0, 260.0),
+                params: {
+                    "pin_b": "2",
+                },
+            ),
+            (
+                id: (5),
+                kind: "add",
+                position: (440.0, 160.0),
+                params: {},
+            ),
+            (
+                id: (6),
+                kind: "set_float_var",
+                position: (640.0, 40.0),
+                params: {
+                    "name": "Angle",
+                },
+            ),
+            (
+                id: (7),
+                kind: "set_rotation",
+                position: (860.0, 40.0),
+                params: {},
+            ),
+        ],
+        edges: [
+            (
+                from_node: (0),
+                from_pin: "exec",
+                to_node: (1),
+                to_pin: "in",
+            ),
+            (
+                from_node: (1),
+                from_pin: "then_0",
+                to_node: (6),
+                to_pin: "in",
+            ),
+            (
+                from_node: (1),
+                from_pin: "then_1",
+                to_node: (7),
+                to_pin: "in",
+            ),
+            (
+                from_node: (3),
+                from_pin: "value",
+                to_node: (4),
+                to_pin: "a",
+            ),
+            (
+                from_node: (2),
+                from_pin: "value",
+                to_node: (5),
+                to_pin: "a",
+            ),
+            (
+                from_node: (4),
+                from_pin: "product",
+                to_node: (5),
+                to_pin: "b",
+            ),
+            (
+                from_node: (5),
+                from_pin: "sum",
+                to_node: (6),
+                to_pin: "value",
+            ),
+            (
+                from_node: (5),
+                from_pin: "sum",
+                to_node: (7),
+                to_pin: "y",
+            ),
+        ],
+        next_id: 8,
+    ),
+    variables: [
+        (
+            name: "Angle",
+            ty: float,
+            default: "0",
+        ),
+    ],
+    functions: [],
+    macros: [],
+)

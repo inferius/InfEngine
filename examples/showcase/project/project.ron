@@ -1,0 +1,20 @@
+(
+    name: "Arena Showcase",
+    asset_root: "assets",
+    scenes: [
+        (
+            name: "Arena",
+            path: "scenes/arena.ron",
+        ),
+    ],
+    classes: [
+        (
+            name: "Pickup",
+            blueprint: Some("blueprints/pickup_spin.ron"),
+            default_components: [],
+        ),
+    ],
+    blueprint_libraries: [
+        "blueprints/lib_math.ron",
+    ],
+)

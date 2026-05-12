@@ -1,0 +1,21 @@
+[package]
+name = "showcase"
+description = "End-to-end demo: scene, classes, audio, lights, physics, blueprints, C# script."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "showcase_setup"
+path = "src/main.rs"
+
+[dependencies]
+infengine_core = { path = "../../crates/infengine_core" }
+infengine_blueprint = { path = "../../crates/infengine_blueprint" }
+anyhow = { workspace = true }
