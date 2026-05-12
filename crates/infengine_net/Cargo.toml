@@ -1,0 +1,19 @@
+[package]
+name = "infengine_net"
+description = "UDP networking + entity replication for InfEngine projects."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_core = { path = "../infengine_core" }
+serde = { workspace = true }
+bincode = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }

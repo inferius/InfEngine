@@ -451,6 +451,37 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "net_is_server",
+        label: "Is Server",
+        category: "Network",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Bool)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "net_client_count",
+        label: "Client Count",
+        category: "Network",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        // Sends a named event with a single float payload to peers.
+        // `params["name"]` carries the event tag; both blueprints
+        // and C# can subscribe via the host's net_send / net_recv
+        // surface.
+        id: "net_send_event",
+        label: "Send Net Event",
+        category: "Network",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("value", PinType::Float),
+        ],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
+    },
+    NodeKindDef {
         // Calls a C# method registered via the
         // [BlueprintCallable] attribute. `params["method"]` holds
         // the method's name; v1 is exec-only with no arg / return
@@ -1112,6 +1143,7 @@ fn category_header_color(category: &str) -> [u8; 3] {
         "Audio" => [150, 90, 170],
         "Time" => [80, 140, 170],
         "Functions" => [130, 80, 170],
+        "Network" => [60, 130, 130],
         "Debug" | "Values" => [110, 110, 110],
         _ => [72, 84, 108],
     }
@@ -1800,6 +1832,16 @@ impl BlueprintEditor {
                     ui.label("path");
                     if ui.text_edit_singleline(&mut path).changed() {
                         node.params.insert("path".into(), path);
+                        dirty = true;
+                    }
+                });
+            }
+            "net_send_event" => {
+                let mut name = node.params.get("name").cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("event");
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        node.params.insert("name".into(), name);
                         dirty = true;
                     }
                 });

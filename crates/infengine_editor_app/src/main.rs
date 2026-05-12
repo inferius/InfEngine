@@ -27,6 +27,7 @@ use infengine_scripting::{
     BlueprintInvokeFn, FnBlueprintInvoke, FnLoadGame, FnRegisterApi, ScriptAssembly,
     ScriptHost, default_engine_api,
 };
+use infengine_net::{EntitySnapshot as NetEntitySnapshot, NetClient, NetServer};
 use infengine_core::scene::{
     AtlasRegion, AudioComponent, BodyKind3D, ColliderShape3D, Entity, EntityId, MeshComponent,
     Physics3DComponent, Scene, SpriteComponent, Transform2D, Transform3D,
@@ -136,6 +137,13 @@ struct Editor {
     /// runtime. Lazily initialised the first time we see a project
     /// with a `scripts/` directory containing built C# output.
     script_bootstrap: Option<ScriptBootstrap>,
+    /// Active networking role. `None` => single-player editing.
+    /// Server replicates entity transforms each tick; client applies
+    /// snapshots before running its own blueprints.
+    net_session: Option<NetSession>,
+    /// Network events received this frame; drained into the
+    /// PlayHost so blueprints / C# can react.
+    net_inbox: Vec<(String, f32)>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -241,6 +249,8 @@ impl Editor {
             play_total_seconds: 0.0,
             audio_system: None,
             script_bootstrap: None,
+            net_session: None,
+            net_inbox: Vec::new(),
             last_left_click_time: None,
             last_left_click_pos: [0.0, 0.0],
         };
@@ -1129,12 +1139,57 @@ impl Editor {
                 name_to_id.insert(entity.name.clone(), entity.id.0);
             }
             let bp_invoke = self.script_bootstrap.as_ref().map(|b| b.bp_invoke);
+            // Poll the net session pre-tick so:
+            // 1. clients see fresh snapshots before BPs read transforms
+            // 2. servers harvest incoming events before BPs check inbox
+            let mut net_is_server = false;
+            let mut net_client_count = 0u32;
+            if let Some(session) = self.net_session.as_mut() {
+                match session {
+                    NetSession::Server(s) => {
+                        s.poll();
+                        net_is_server = true;
+                        net_client_count = s.client_count() as u32;
+                        // Surface client->server events to BP / C#.
+                        for (_cid, name, payload) in s.drain_events() {
+                            self.net_inbox.push((name, payload));
+                        }
+                    }
+                    NetSession::Client(c) => {
+                        c.poll();
+                        for (name, payload) in c.drain_events() {
+                            self.net_inbox.push((name, payload));
+                        }
+                        // Apply server snapshot to local 3D transforms
+                        // so blueprints see authoritative state.
+                        if let Some((_tick, ents)) = c.last_snapshot.clone() {
+                            for snap in ents {
+                                if let Some(entity) =
+                                    self.scene.get_mut(EntityId(snap.entity_id))
+                                    && let Some(t) = entity.transform_3d.as_mut()
+                                {
+                                    t.position = snap.position;
+                                    t.rotation = snap.rotation;
+                                    t.scale = snap.scale;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Inbox event log so the user can see traffic; future
+            // versions route to BP "on_net_event" trigger nodes.
+            for (name, payload) in self.net_inbox.drain(..) {
+                tracing::info!(event = %name, payload, "net event received");
+            }
             let mut host = PlayHost {
                 delta_time: dt,
                 time_seconds: self.play_total_seconds,
                 entity_lookup,
                 name_to_id,
                 bp_invoke,
+                net_is_server,
+                net_client_count,
                 ..Default::default()
             };
             for prog in &self.play_blueprint_ticks {
@@ -1183,6 +1238,36 @@ impl Editor {
                             Err(err) => {
                                 warn!(error = %err, path = %full.display(), "play_sound failed");
                             }
+                        }
+                    }
+                }
+            }
+            // Network outbox: drain blueprint-emitted events through
+            // the active session (broadcast on server, send-to-server
+            // on client). Server also broadcasts a fresh snapshot of
+            // every 3D entity each tick.
+            if let Some(session) = self.net_session.as_mut() {
+                match session {
+                    NetSession::Server(s) => {
+                        for (name, payload) in host.net_outbox.drain(..) {
+                            s.broadcast_event(&name, payload);
+                        }
+                        let mut snaps: Vec<NetEntitySnapshot> = Vec::new();
+                        for entity in &self.scene.entities {
+                            if let Some(t3) = entity.transform_3d.as_ref() {
+                                snaps.push(NetEntitySnapshot {
+                                    entity_id: entity.id.0,
+                                    position: t3.position,
+                                    rotation: t3.rotation,
+                                    scale: t3.scale,
+                                });
+                            }
+                        }
+                        s.broadcast_snapshot(snaps);
+                    }
+                    NetSession::Client(c) => {
+                        for (name, payload) in host.net_outbox.drain(..) {
+                            let _ = c.send_event(&name, payload);
                         }
                     }
                 }
@@ -1304,6 +1389,14 @@ impl std::fmt::Debug for ScriptBootstrap {
     }
 }
 
+/// Active networking role for the editor session. Each variant owns
+/// the relevant endpoint state so the editor can poll it per tick.
+#[derive(Debug)]
+enum NetSession {
+    Server(NetServer),
+    Client(NetClient),
+}
+
 #[derive(Debug, Default, Clone)]
 struct EntitySnapshot {
     position: [f32; 3],
@@ -1330,6 +1423,12 @@ struct PlayHost {
     /// `[BlueprintCallable]` C# methods. `None` when scripting
     /// isn't bootstrapped (no `scripts/` dir or build failed).
     bp_invoke: Option<BlueprintInvokeFn>,
+    /// Networking role flags + outbox so blueprint nodes can ask
+    /// `Is Server` / `Client Count` / `Send Net Event`. Server
+    /// outbox is drained into broadcast_event after each tick.
+    net_is_server: bool,
+    net_client_count: u32,
+    net_outbox: Vec<(String, f32)>,
 }
 
 impl infengine_blueprint::exec::Host for PlayHost {
@@ -1383,6 +1482,15 @@ impl infengine_blueprint::exec::Host for PlayHost {
     }
     fn find_entity_by_name(&self, name: &str) -> Option<u32> {
         self.name_to_id.get(name).copied()
+    }
+    fn net_is_server(&self) -> bool {
+        self.net_is_server
+    }
+    fn net_client_count(&self) -> u32 {
+        self.net_client_count
+    }
+    fn net_send_event(&mut self, name: &str, payload: f32) {
+        self.net_outbox.push((name.to_string(), payload));
     }
     fn call_csharp(
         &mut self,
@@ -2249,6 +2357,90 @@ impl AppHandler for Editor {
                                     self.project
                                         .blueprint_libraries
                                         .push("blueprints/library.ron".into());
+                                }
+                            });
+                        });
+
+                        ui.collapsing("Multiplayer", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Bind");
+                                ui.text_edit_singleline(&mut self.project.network.server_bind);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Connect");
+                                ui.text_edit_singleline(
+                                    &mut self.project.network.client_connect,
+                                );
+                            });
+                            let role = match &self.net_session {
+                                None => "offline".to_string(),
+                                Some(NetSession::Server(s)) => {
+                                    format!("server ({} clients)", s.client_count())
+                                }
+                                Some(NetSession::Client(c)) => format!(
+                                    "client {} (handshake={})",
+                                    c.client_id
+                                        .map(|i| i.to_string())
+                                        .unwrap_or_else(|| "-".into()),
+                                    c.handshake_done()
+                                ),
+                            };
+                            ui.label(format!("State: {role}"));
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        self.net_session.is_none(),
+                                        egui::Button::new("Start Server"),
+                                    )
+                                    .clicked()
+                                {
+                                    match NetServer::bind(&self.project.network.server_bind) {
+                                        Ok(s) => {
+                                            self.status = format!(
+                                                "Server bound on {}",
+                                                self.project.network.server_bind
+                                            );
+                                            self.net_session = Some(NetSession::Server(s));
+                                        }
+                                        Err(err) => {
+                                            self.status =
+                                                format!("Server bind failed: {err}");
+                                        }
+                                    }
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.net_session.is_none(),
+                                        egui::Button::new("Connect Client"),
+                                    )
+                                    .clicked()
+                                {
+                                    match NetClient::connect(
+                                        &self.project.network.client_connect,
+                                        self.project.name.clone(),
+                                    ) {
+                                        Ok(c) => {
+                                            self.status = format!(
+                                                "Connecting to {}",
+                                                self.project.network.client_connect
+                                            );
+                                            self.net_session = Some(NetSession::Client(c));
+                                        }
+                                        Err(err) => {
+                                            self.status =
+                                                format!("Client connect failed: {err}");
+                                        }
+                                    }
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.net_session.is_some(),
+                                        egui::Button::new("Disconnect"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.net_session = None;
+                                    self.status = "Network disconnected".into();
                                 }
                             });
                         });
@@ -3148,6 +3340,7 @@ fn load_or_create_project(path: &Path) -> Result<Project, ProjectError> {
             scenes: Vec::new(),
             classes: Vec::new(),
             blueprint_libraries: Vec::new(),
+            network: Default::default(),
         };
         project.save(path)?;
         info!(path = %path.display(), "created blank project");

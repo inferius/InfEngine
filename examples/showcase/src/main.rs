@@ -67,6 +67,7 @@ fn main() -> Result<()> {
             default_components: vec![],
         }],
         blueprint_libraries: vec!["blueprints/lib_math.ron".into()],
+        network: Default::default(),
     };
     project
         .save(proj_dir.join("project.ron"))

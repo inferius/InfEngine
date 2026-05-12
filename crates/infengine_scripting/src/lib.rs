@@ -72,6 +72,11 @@ pub struct EngineApi {
     pub get_player_pos: extern "C" fn(out_x: *mut f32, out_y: *mut f32),
     /// Set the player position for the next renderer pass.
     pub set_player_pos: extern "C" fn(x: f32, y: f32),
+    /// Send / broadcast a named network event with a float payload.
+    /// Routed through the host's active session; no-op when offline.
+    pub net_send_event: extern "C" fn(name: *const u8, len: usize, payload: f32),
+    /// `1` when the host is running as the networking authority.
+    pub net_is_server: extern "C" fn() -> u8,
 }
 
 impl std::fmt::Debug for EngineApi {
@@ -89,6 +94,8 @@ pub fn default_engine_api() -> EngineApi {
         time_secs: rust_time_secs,
         get_player_pos: rust_get_player_pos,
         set_player_pos: rust_set_player_pos,
+        net_send_event: rust_net_send_event,
+        net_is_server: rust_net_is_server,
     }
 }
 
@@ -156,6 +163,48 @@ extern "C" fn rust_set_player_pos(x: f32, y: f32) {
     FRAME_CTX.with(|c| {
         c.borrow_mut().player_pos = [x, y];
     });
+}
+
+// Thread-local outbox of C# -> Rust network events accumulated this
+// frame. The host drains it after the C# tick and forwards through
+// the active `NetSession`.
+thread_local! {
+    static NET_OUTBOX: std::cell::RefCell<Vec<(String, f32)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+    static NET_IS_SERVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tell the scripting layer whether the host is currently the
+/// networking server. Read by C# via `Engine.NetIsServer`. Default
+/// is `false` so non-networked sessions report offline.
+pub fn set_net_is_server(value: bool) {
+    NET_IS_SERVER.with(|c| c.set(value));
+}
+
+/// Drain the network outbox C# pushed into via `Engine.NetSendEvent`.
+/// Called by the host once per tick after the C# tick fires.
+pub fn drain_net_outbox() -> Vec<(String, f32)> {
+    NET_OUTBOX.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+extern "C" fn rust_net_send_event(name: *const u8, len: usize, payload: f32) {
+    if name.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `name..name+len` is valid for the
+    // duration of the call.
+    let bytes = unsafe { std::slice::from_raw_parts(name, len) };
+    let s = String::from_utf8_lossy(bytes).into_owned();
+    NET_OUTBOX.with(|c| c.borrow_mut().push((s, payload)));
+}
+
+extern "C" fn rust_net_is_server() -> u8 {
+    if NET_IS_SERVER.with(|c| c.get()) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Errors raised while bootstrapping or driving the CoreCLR host.

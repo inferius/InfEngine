@@ -109,6 +109,18 @@ pub enum Op {
         arg_count: u8,
         has_return: bool,
     },
+    /// Push `Bool(true)` if the host is currently running as a
+    /// networking server, else `Bool(false)`. Lets blueprints fork
+    /// authority-only logic.
+    PushNetIsServer,
+    /// Push the connected client count (as Float) the host knows
+    /// about. Always 0 when not running as a server.
+    PushNetClientCount,
+    /// Pop a Float payload + emit a named event over the network.
+    /// On a server the event broadcasts to every client; on a
+    /// client it sends to the server. Servers and clients without
+    /// any peers silently drop.
+    NetSendEvent(String),
     /// Pop a Vec3; push the requested component (0=x, 1=y, 2=z) as
     /// a float. Backs each output pin of a `break_vec3` node, which
     /// the compiler emits once per consumer.
@@ -318,6 +330,12 @@ fn compile_data(
                 ops.push(Op::PushFloat(0.0));
             }
         }
+        "net_is_server" => {
+            ops.push(Op::PushNetIsServer);
+        }
+        "net_client_count" => {
+            ops.push(Op::PushNetClientCount);
+        }
         "self_entity" => {
             // Bake the blueprint target's entity id. Global
             // blueprints have no self entity; emit a 0 ref so the
@@ -519,6 +537,18 @@ fn compile_sink(
         "play_sound" => {
             let path = node.params.get("path").cloned().unwrap_or_default();
             ops.push(Op::PlaySound(path));
+        }
+        "net_send_event" => {
+            // Single float payload on `value` pin; name in params.
+            let name = node.params.get("name").cloned().unwrap_or_default();
+            match find_data_source(graph, node_id, "value") {
+                Some((src, src_pin)) => {
+                    let mut visiting = HashSet::new();
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
+                }
+                None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
+            }
+            ops.push(Op::NetSendEvent(name));
         }
         "call_cs_method" => {
             // Invoke a C# method registered via the
@@ -846,6 +876,18 @@ pub trait Host {
     fn call_csharp(&mut self, _method: &str, _args: &[Value]) -> Option<Value> {
         None
     }
+    /// True when the host is currently the networking authority.
+    fn net_is_server(&self) -> bool {
+        false
+    }
+    /// Number of connected clients (server-only; clients return 0).
+    fn net_client_count(&self) -> u32 {
+        0
+    }
+    /// Broadcast / send a named event with a single float payload.
+    /// Default impl is a no-op so non-networked hosts (tests) do
+    /// nothing.
+    fn net_send_event(&mut self, _name: &str, _payload: f32) {}
 }
 
 #[derive(Debug, Default)]
@@ -995,6 +1037,16 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             }
             Op::PushEntityRef(id) => {
                 stack.push(Value::EntityRef(*id));
+            }
+            Op::PushNetIsServer => {
+                stack.push(Value::Bool(host.net_is_server()));
+            }
+            Op::PushNetClientCount => {
+                stack.push(Value::Float(host.net_client_count() as f32));
+            }
+            Op::NetSendEvent(name) => {
+                let payload = stack.pop().map(|v| v.as_float()).unwrap_or(0.0);
+                host.net_send_event(name, payload);
             }
             Op::CallCSharp {
                 method,

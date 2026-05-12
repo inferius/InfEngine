@@ -13,6 +13,7 @@ members = [
     "crates/infengine_runtime",
     "crates/infengine_blueprint",
     "crates/infengine_voxel",
+    "crates/infengine_net",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",

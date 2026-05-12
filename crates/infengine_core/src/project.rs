@@ -58,6 +58,33 @@ pub struct Project {
     /// existing rename-refactor logic on the library blueprint.
     #[serde(default)]
     pub blueprint_libraries: Vec<String>,
+    /// Default networking endpoint settings. The editor exposes
+    /// "Start Server" + "Connect Client" buttons that consume this
+    /// config; tweaks land in `project.ron` so the team shares one
+    /// default.
+    #[serde(default)]
+    pub network: NetworkConfig,
+}
+
+/// Project-level network defaults used by the editor's Multiplayer
+/// panel and the runtime when a build is started in server / client
+/// mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    /// `host:port` the server binds on (default `"0.0.0.0:7777"`).
+    pub server_bind: String,
+    /// `host:port` clients connect to by default
+    /// (default `"127.0.0.1:7777"`).
+    pub client_connect: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            server_bind: "0.0.0.0:7777".into(),
+            client_connect: "127.0.0.1:7777".into(),
+        }
+    }
 }
 
 fn default_asset_root() -> PathBuf {
@@ -72,6 +99,7 @@ impl Default for Project {
             scenes: Vec::new(),
             classes: Vec::new(),
             blueprint_libraries: Vec::new(),
+            network: NetworkConfig::default(),
         }
     }
 }
@@ -151,6 +179,7 @@ mod tests {
             }],
             classes: Vec::new(),
             blueprint_libraries: Vec::new(),
+            network: NetworkConfig::default(),
         };
         let text = ron::ser::to_string(&p).unwrap();
         let back: Project = ron::de::from_str(&text).unwrap();
