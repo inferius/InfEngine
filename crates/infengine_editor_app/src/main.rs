@@ -814,6 +814,7 @@ impl Editor {
         self.play_physics_3d = None;
         self.play_body_map_3d.clear();
         self.play_blueprint_ticks.clear();
+        self.blueprint.set_play_captures(Default::default());
         self.play_state = PlayState::Editing;
         self.status = "Stopped".into();
     }
@@ -851,6 +852,9 @@ impl Editor {
             for prog in &self.play_blueprint_ticks {
                 run_program(prog, &mut host);
             }
+            // Surface the per-node Play-time values to the blueprint
+            // workspace so its canvas can paint watch badges.
+            self.blueprint.set_play_captures(host.captures.clone());
             for (eid, pos) in host.pending_position_writes {
                 if let Some(entity) = self.scene.get_mut(EntityId(eid))
                     && let Some(t) = entity.transform_3d.as_mut()
@@ -997,6 +1001,7 @@ struct PlayHost {
     pending_rotation_writes: Vec<(u32, [f32; 3])>,
     pending_scale_writes: Vec<(u32, [f32; 3])>,
     pending_sound_plays: Vec<String>,
+    captures: HashMap<u32, infengine_blueprint::exec::Value>,
     delta_time: f32,
     time_seconds: f32,
 }
@@ -1028,6 +1033,9 @@ impl infengine_blueprint::exec::Host for PlayHost {
     }
     fn time_seconds(&self) -> f32 {
         self.time_seconds
+    }
+    fn capture(&mut self, slot: u32, value: infengine_blueprint::exec::Value) {
+        self.captures.insert(slot, value);
     }
 }
 

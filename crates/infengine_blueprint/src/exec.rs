@@ -93,6 +93,12 @@ pub enum Op {
     PushVar(String),
     /// Pop the top value and store it under the variable name.
     SetVar(String),
+    /// Peek the top of the stack (without popping) and report the
+    /// value to the host as the latest output of the data node with
+    /// id `slot`. Used by the editor's Play-time "watch values"
+    /// display so a node shows its current numeric / boolean /
+    /// vector value next to its label.
+    Capture(u32),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -282,6 +288,11 @@ fn compile_data(
             });
         }
     }
+    // Emit a capture op so the host can show the latest produced
+    // value next to this data node in the editor. Peeks the top of
+    // the stack without popping, so the consumer still sees the
+    // expected value.
+    ops.push(Op::Capture(node_id.0));
     visiting.remove(&node_id);
     Ok(())
 }
@@ -539,6 +550,10 @@ pub trait Host {
     /// Forward a `Value` to the editor / runtime sink. The
     /// implementation usually pretty-prints it; tests capture it.
     fn print(&mut self, value: Value);
+    /// Record `value` as the latest output of the node identified by
+    /// `slot` (the node's u32 id). Default impl is a no-op so hosts
+    /// that don't care about watch-values can ignore it.
+    fn capture(&mut self, _slot: u32, _value: Value) {}
     /// Write a 3D position to the given entity. Default impl is a
     /// noop so a host that only cares about Print doesn't have to
     /// implement transform mutation.
@@ -710,6 +725,11 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             Op::SetVar(name) => {
                 let v = stack.pop().unwrap_or(Value::Float(0.0));
                 vars.insert(name.clone(), v);
+            }
+            Op::Capture(slot) => {
+                if let Some(v) = stack.last().copied() {
+                    host.capture(*slot, v);
+                }
             }
         }
         pc += 1;

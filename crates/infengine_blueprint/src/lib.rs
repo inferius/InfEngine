@@ -940,6 +940,9 @@ pub struct BlueprintEditor {
     /// extras are along for the ride so Delete and drag can act on
     /// them too.
     selected_extra: HashSet<NodeId>,
+    /// Latest Play-mode capture map; mirrored from the workspace
+    /// before each show() so the canvas can paint live values.
+    pub play_captures: HashMap<u32, exec::Value>,
     /// Live search query for the context menu. Unreal-style: typing
     /// filters the flat list of node kinds by case-insensitive
     /// substring match against label + category.
@@ -2100,6 +2103,26 @@ impl BlueprintEditor {
                 egui::FontId::proportional(13.0),
                 egui::Color32::WHITE,
             );
+            // Watch-value badge: if this data node produced a value
+            // in the most recent Play tick, render it right-aligned
+            // in the header bar.
+            if let Some(v) = self.play_captures.get(&node.id.0) {
+                let label = match v {
+                    exec::Value::Float(f) => format!("{f:.3}"),
+                    exec::Value::Bool(b) => format!("{b}"),
+                    exec::Value::Vec3(arr) => {
+                        format!("({:.2}, {:.2}, {:.2})", arr[0], arr[1], arr[2])
+                    }
+                    exec::Value::EntityRef(e) => format!("#{e}"),
+                };
+                painter.text(
+                    origin + egui::vec2(NODE_WIDTH - 8.0, 6.0),
+                    egui::Align2::RIGHT_TOP,
+                    label,
+                    egui::FontId::monospace(11.0),
+                    egui::Color32::from_rgb(140, 220, 140),
+                );
+            }
             for (i, pin) in def.inputs.iter().enumerate() {
                 let y = origin.y
                     + NODE_HEADER_HEIGHT
@@ -2430,11 +2453,21 @@ impl BlueprintEditor {
 pub struct BlueprintWorkspace {
     pub tabs: Vec<BlueprintEditor>,
     pub active: usize,
+    /// Latest Play-mode captures by node id. Refreshed each tick
+    /// from the editor's `PlayHost`; the canvas reads this map to
+    /// paint a "live value" badge next to each data node.
+    pub play_captures: HashMap<u32, exec::Value>,
 }
 
 impl BlueprintWorkspace {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replace the captured-values map. Called by editor_app once
+    /// per Play tick after running the cached programs.
+    pub fn set_play_captures(&mut self, captures: HashMap<u32, exec::Value>) {
+        self.play_captures = captures;
     }
 
     /// Open a blueprint in a fresh tab. If a tab already exists for
@@ -2510,10 +2543,11 @@ impl BlueprintWorkspace {
             );
             return dirty;
         }
-        if let Some(tab) = self.tabs.get_mut(self.active)
-            && tab.show(ui, registry)
-        {
-            dirty = true;
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.play_captures = self.play_captures.clone();
+            if tab.show(ui, registry) {
+                dirty = true;
+            }
         }
         dirty
     }
