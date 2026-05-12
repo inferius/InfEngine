@@ -300,14 +300,26 @@ fn build_scene_arena() -> Blueprint {
     let reg = NodeKindRegistry::with_builtins();
     let g = &mut bp.graph;
     let on_start = g.add_node("on_start", [40.0, 40.0]);
-    let start_print = g.add_node("print", [240.0, 40.0]);
+    // Sequence the OnStart so we can both reset the C#-side score
+    // counter AND emit the sentinel "started" print.
+    let start_seq = g.add_node("sequence", [240.0, 40.0]);
+    let reset_cs = g.add_node("call_cs_method", [440.0, 40.0]);
+    g.nodes
+        .iter_mut()
+        .find(|n| n.id == reset_cs)
+        .unwrap()
+        .params
+        .insert("method".into(), "Showcase.ResetScore".into());
+    let start_print = g.add_node("print", [440.0, 120.0]);
     g.nodes
         .iter_mut()
         .find(|n| n.id == start_print)
         .unwrap()
         .params
         .insert("pin_value".into(), "1".into()); // Float marker = "1.0 = started"
-    let _ = g.connect(&reg, on_start, "exec", start_print, "in");
+    let _ = g.connect(&reg, on_start, "exec", start_seq, "in");
+    let _ = g.connect(&reg, start_seq, "then_0", reset_cs, "in");
+    let _ = g.connect(&reg, start_seq, "then_1", start_print, "in");
 
     let on_tick = g.add_node("on_tick", [40.0, 200.0]);
     let time = g.add_node("time_seconds", [40.0, 300.0]);
@@ -428,13 +440,19 @@ fn build_player_bp(reg: &NodeKindRegistry) -> Blueprint {
     let _ = g.connect(reg, on_start, "exec", hello, "in");
 
     let on_tick = g.add_node("on_tick", [40.0, 200.0]);
+    // Bridge into the Game assembly's Showcase.OnPickupCollected via
+    // the [BlueprintCallable] surface defined in
+    // scripts/InfEngine.Scripts.Game/Showcase.cs. v1 logs through
+    // the stub host (see docs/design/blueprint_csharp_callable.md);
+    // the same node graph picks up the real reverse-call once the
+    // CoreCLR manifest pipeline lands.
     let cs = g.add_node("call_cs_method", [240.0, 200.0]);
     g.nodes
         .iter_mut()
         .find(|n| n.id == cs)
         .unwrap()
         .params
-        .insert("method".into(), "Engine.TimeSeconds".into());
+        .insert("method".into(), "Showcase.OnPickupCollected".into());
     let _ = g.connect(reg, on_tick, "exec", cs, "in");
     bp
 }

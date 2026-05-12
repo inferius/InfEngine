@@ -45,8 +45,8 @@
                 kind: "set_position",
                 position: (660.0, 40.0),
                 params: {
-                    "pin_x": "3",
                     "pin_z": "3",
+                    "pin_x": "3",
                 },
             ),
             (

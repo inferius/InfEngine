@@ -31,7 +31,7 @@
                 kind: "call_cs_method",
                 position: (240.0, 200.0),
                 params: {
-                    "method": "Engine.TimeSeconds",
+                    "method": "Showcase.OnPickupCollected",
                 },
             ),
         ],

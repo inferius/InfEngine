@@ -22,6 +22,39 @@ blueprints (entity, class, global, library) + C# scripting hook.
 - **`player_bp.ron`** - per-entity blueprint on Player. Demonstrates `print` and `call_cs_method` referencing `Engine.TimeSeconds`.
 - **`light_pulse.ron`** - per-entity blueprint on Light_Warm. Drives Y position via accumulating phase variable.
 
+## C# scripting
+
+The showcase project ties into the InfEngine C# scripting layer
+through `scripts/InfEngine.Scripts.Game/Showcase.cs`. That file
+lives in the hot-reloadable game assembly alongside `Player.cs`
+and exposes four methods:
+
+| Method                       | Attribute             | Purpose |
+|------------------------------|-----------------------|---------|
+| `Showcase.OnTick(float dt)`  | (resolved by name)    | Plain hot-reload entry the host calls every frame. Logs a status line every 5 seconds. |
+| `Showcase.OnPickupCollected` | `[BlueprintCallable]` | Increments the pickup counter, called from `player_bp.ron`. |
+| `Showcase.GetPickupCount`    | `[BlueprintCallable]` | Returns the running pickup count. |
+| `Showcase.ResetScore`        | `[BlueprintCallable]` | Wipes the counter; called from `scene_arena.ron`'s OnStart. |
+
+Build the C# side once:
+
+```sh
+cd scripts/InfEngine.Scripts.Game
+dotnet build -c Release
+cd ../..
+```
+
+Then any rebuild of `Showcase.cs` swaps in via the host's
+reload entry point - no engine restart needed.
+
+The blueprint nodes referencing `Showcase.OnPickupCollected` and
+`Showcase.ResetScore` currently route through the stub
+`Host::call_csharp` (logs the call) - the full CoreCLR reverse-
+call wiring is the remaining piece described in
+`docs/design/blueprint_csharp_callable.md`. Once that lands the
+same blueprint graph picks up the real C# method without any
+.ron edits.
+
 ## Run it
 
 ### 1. Generate the project files
