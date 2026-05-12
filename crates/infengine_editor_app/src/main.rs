@@ -564,6 +564,94 @@ impl Editor {
         self.blueprint_open = true;
     }
 
+    /// Compile every script's OnStart + OnTick triggers, merging
+    /// each blueprint's local functions with the project-wide
+    /// library functions. The OnStart programs run immediately via
+    /// the throw-away tracing host if `fire_on_start` is true (so
+    /// initial Play does its setup); OnTick programs are pushed into
+    /// `out_ticks` for the live tick loop to execute each frame.
+    fn compile_play_scripts(
+        scripts: &[(infengine_blueprint::Blueprint, std::path::PathBuf)],
+        library_functions: &[infengine_blueprint::NamedGraph],
+        out_ticks: &mut Vec<Program>,
+        fire_on_start: bool,
+    ) {
+        out_ticks.clear();
+        for (bp, _path) in scripts {
+            let mut merged_functions: Vec<infengine_blueprint::NamedGraph> =
+                bp.functions.clone();
+            for lib_fn in library_functions {
+                if !merged_functions.iter().any(|f| f.name == lib_fn.name) {
+                    merged_functions.push(lib_fn.clone());
+                }
+            }
+            if fire_on_start {
+                match infengine_blueprint::exec::compile_with_functions(
+                    &bp.graph,
+                    &merged_functions,
+                    Trigger::OnStart,
+                    &bp.target,
+                ) {
+                    Ok(prog) => {
+                        let mut host = TracingHost;
+                        run_program(&prog, &mut host);
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "blueprint OnStart compile failed");
+                    }
+                }
+            }
+            if let Ok(prog) = infengine_blueprint::exec::compile_with_functions(
+                &bp.graph,
+                &merged_functions,
+                Trigger::OnTick,
+                &bp.target,
+            ) {
+                out_ticks.push(prog);
+            }
+        }
+    }
+
+    /// Re-collect the live script set and recompile the OnTick
+    /// programs without re-firing OnStart, then swap them under the
+    /// running tick loop. Called when a blueprint was saved while
+    /// Play is active.
+    fn hot_reload_play_blueprints(&mut self) {
+        if self.play_state == PlayState::Editing {
+            return;
+        }
+        let mut scripts_to_run: Vec<(infengine_blueprint::Blueprint, std::path::PathBuf)> =
+            Vec::new();
+        for entity in &self.scene.entities {
+            for rel in &entity.blueprints {
+                let full = self.project_root.join(rel);
+                if let Ok(mut bp) = Blueprint::load(&full) {
+                    bp.target = infengine_blueprint::BlueprintTarget::Entity {
+                        entity_id: entity.id.0,
+                        entity_name: entity.name.clone(),
+                    };
+                    scripts_to_run.push((bp, full));
+                }
+            }
+        }
+        if let Some(active) = self.blueprint.active() {
+            scripts_to_run.push((
+                active.blueprint.clone(),
+                active.path.clone().unwrap_or_default(),
+            ));
+        }
+        Self::compile_play_scripts(
+            &scripts_to_run,
+            &self.load_blueprint_library_functions(),
+            &mut self.play_blueprint_ticks,
+            false,
+        );
+        self.status = format!(
+            "Blueprints hot-reloaded ({} programs)",
+            self.play_blueprint_ticks.len()
+        );
+    }
+
     /// Load every project-declared blueprint library and return the
     /// flat list of their `functions`. Missing or invalid library
     /// paths are logged and skipped. Used at Play start so calls to
@@ -661,6 +749,13 @@ impl Editor {
         let bp = tab.blueprint.clone();
         if let Err(err) = bp.save(&path) {
             self.status = format!("Blueprint save failed: {err}");
+            return;
+        }
+        // Phase 9 hot-reload: if we saved while Play is running,
+        // immediately recompile and swap the tick programs so the
+        // user sees their edit live without leaving Play mode.
+        if self.play_state != PlayState::Editing {
+            self.hot_reload_play_blueprints();
         }
     }
 
@@ -748,43 +843,16 @@ impl Editor {
                 active.path.clone().unwrap_or_default(),
             ));
         }
-        // Load functions from every blueprint library declared in
-        // the project so cross-blueprint `call_function` calls
-        // resolve. Merged with each script's own functions before
-        // compilation.
-        let library_functions = self.load_blueprint_library_functions();
-        for (bp, _path) in &scripts_to_run {
-            let mut merged_functions: Vec<infengine_blueprint::NamedGraph> =
-                bp.functions.clone();
-            for lib_fn in &library_functions {
-                // Skip duplicates - local functions shadow library ones.
-                if !merged_functions.iter().any(|f| f.name == lib_fn.name) {
-                    merged_functions.push(lib_fn.clone());
-                }
-            }
-            match infengine_blueprint::exec::compile_with_functions(
-                &bp.graph,
-                &merged_functions,
-                Trigger::OnStart,
-                &bp.target,
-            ) {
-                Ok(prog) => {
-                    let mut host = TracingHost;
-                    run_program(&prog, &mut host);
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "blueprint OnStart compile failed");
-                }
-            }
-            if let Ok(prog) = infengine_blueprint::exec::compile_with_functions(
-                &bp.graph,
-                &merged_functions,
-                Trigger::OnTick,
-                &bp.target,
-            ) {
-                self.play_blueprint_ticks.push(prog);
-            }
-        }
+        // Compile + optionally fire OnStart for every script in the
+        // play set. Extracted so the same compile pass can be re-run
+        // during Play when the user edits a blueprint (Phase 9 hot
+        // reload).
+        Self::compile_play_scripts(
+            &scripts_to_run,
+            &self.load_blueprint_library_functions(),
+            &mut self.play_blueprint_ticks,
+            true,
+        );
         // Autoplay sounds attached to entities.
         let auto_clips: Vec<(String, f32)> = self
             .scene
