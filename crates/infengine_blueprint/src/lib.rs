@@ -423,6 +423,18 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
     },
     NodeKindDef {
+        // Visual-only annotation. Has no pins; the renderer special-
+        // cases this kind to paint a larger translucent box with a
+        // text label stored in `params["text"]`. Never participates
+        // in compile.
+        id: "comment",
+        label: "Comment",
+        category: "Annotations",
+        inputs: &[],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
         // `params["path"]` carries the asset path; the host resolves
         // it against the project root and feeds it to the audio
         // backend.
@@ -887,6 +899,11 @@ pub struct BlueprintEditor {
     /// and auto-connects whatever node the user picks. This stores the
     /// originating pin until the menu closes.
     context_menu_from_pin: Option<PendingEdge>,
+    /// Additional nodes added to the selection via Shift+click.
+    /// `selected` is still the "primary" (drives the inspector); the
+    /// extras are along for the ride so Delete and drag can act on
+    /// them too.
+    selected_extra: HashSet<NodeId>,
     /// Live search query for the context menu. Unreal-style: typing
     /// filters the flat list of node kinds by case-insensitive
     /// substring match against label + category.
@@ -971,8 +988,14 @@ impl BlueprintEditor {
                 continue;
             };
             let origin = self.node_origin(canvas_min, node);
-            let rect =
-                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
+            // Comment nodes use a wider, fixed-height rect (matches
+            // the renderer's layout).
+            let size = if node.kind == "comment" {
+                egui::vec2(NODE_WIDTH * 2.2, 64.0)
+            } else {
+                egui::vec2(NODE_WIDTH, node_height_def(def))
+            };
+            let rect = egui::Rect::from_min_size(origin, size);
             if rect.contains(pos) {
                 return Some(node.id);
             }
@@ -1679,13 +1702,28 @@ impl BlueprintEditor {
                 self.dragging = None;
             } else if let Some(node_id) = self.hit_node(registry, rect.min, pos) {
                 self.dragging = Some(node_id);
-                self.selected = Some(node_id);
+                let shift = ui.input(|i| i.modifiers.shift);
+                if shift {
+                    // Toggle this node's membership in the extra set
+                    // without disturbing the primary `selected`.
+                    if self.selected_extra.contains(&node_id) {
+                        self.selected_extra.remove(&node_id);
+                    } else {
+                        self.selected_extra.insert(node_id);
+                    }
+                } else {
+                    // Plain click clears multi-selection and picks
+                    // this node as the new primary.
+                    self.selected_extra.clear();
+                    self.selected = Some(node_id);
+                }
                 if let Some(node) = self.blueprint.graph.nodes.iter().find(|n| n.id == node_id) {
                     let origin = self.node_origin(rect.min, node);
                     self.drag_node_offset = pos - origin;
                 }
             } else {
                 self.selected = None;
+                self.selected_extra.clear();
             }
         }
 
@@ -1739,9 +1777,15 @@ impl BlueprintEditor {
         }
 
         let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
-        if delete_pressed && let Some(id) = self.selected.take() {
-            self.blueprint.graph.remove_node(id);
-            dirty = true;
+        if delete_pressed {
+            let mut to_remove: Vec<NodeId> = self.selected_extra.drain().collect();
+            if let Some(id) = self.selected.take() {
+                to_remove.push(id);
+            }
+            for id in to_remove {
+                self.blueprint.graph.remove_node(id);
+                dirty = true;
+            }
         }
 
         // Find which edge (if any) the cursor is hovering. We
@@ -1860,6 +1904,7 @@ impl BlueprintEditor {
         // the graph nodes mutably (needed for inline pin defaults).
         let view_offset = self.view_offset;
         let selected_id = self.selected;
+        let multi_selected = self.selected_extra.clone();
         // Build a set of pins that have an incoming edge so inline
         // editors can hide themselves while a wire is connected.
         let connected_in_pins: HashSet<(NodeId, String)> = self
@@ -1876,10 +1921,48 @@ impl BlueprintEditor {
             let origin = rect.min
                 + view_offset
                 + egui::vec2(node.position[0], node.position[1]);
+            // Comment nodes are an annotation overlay - a wide,
+            // translucent rect with an editable text caption and no
+            // pins. They never compile and never participate in
+            // wire routing.
+            if node.kind == "comment" {
+                let size = egui::vec2(NODE_WIDTH * 2.2, 64.0);
+                let cmt_rect = egui::Rect::from_min_size(origin, size);
+                painter.rect_filled(
+                    cmt_rect,
+                    6.0,
+                    egui::Color32::from_rgba_unmultiplied(80, 60, 30, 110),
+                );
+                let stroke_col = if selected_id == Some(node.id) {
+                    egui::Color32::from_rgb(255, 200, 80)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(200, 160, 70, 200)
+                };
+                painter.rect_stroke(
+                    cmt_rect,
+                    6.0,
+                    egui::Stroke::new(1.5, stroke_col),
+                    egui::StrokeKind::Inside,
+                );
+                let mut text = node.params.get("text").cloned().unwrap_or_default();
+                let edit_rect = cmt_rect.shrink(8.0);
+                let resp = ui.put(
+                    edit_rect,
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_width(edit_rect.width())
+                        .font(egui::TextStyle::Body)
+                        .hint_text("comment..."),
+                );
+                if resp.changed() {
+                    node.params.insert("text".into(), text);
+                    dirty = true;
+                }
+                continue;
+            }
             let rect_node =
                 egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
             painter.rect_filled(rect_node, 4.0, egui::Color32::from_rgb(48, 56, 72));
-            let selected = selected_id == Some(node.id);
+            let selected = selected_id == Some(node.id) || multi_selected.contains(&node.id);
             let border = if selected {
                 egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80))
             } else {
