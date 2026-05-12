@@ -943,6 +943,11 @@ pub struct BlueprintEditor {
     /// Latest Play-mode capture map; mirrored from the workspace
     /// before each show() so the canvas can paint live values.
     pub play_captures: HashMap<u32, exec::Value>,
+    /// Find-in-graph state. `find_open` toggles the small floating
+    /// search panel; `find_query` is the live filter; the canvas
+    /// reads both each frame and offers click-to-jump for matches.
+    find_open: bool,
+    find_query: String,
     /// Live search query for the context menu. Unreal-style: typing
     /// filters the flat list of node kinds by case-insensitive
     /// substring match against label + category.
@@ -1878,6 +1883,16 @@ impl BlueprintEditor {
             }
         }
 
+        // Ctrl+F toggles find-in-graph.
+        let ctrl_f = ui.input(|i| {
+            i.key_pressed(egui::Key::F) && i.modifiers.command_only()
+        });
+        if ctrl_f {
+            self.find_open = !self.find_open;
+            if !self.find_open {
+                self.find_query.clear();
+            }
+        }
         let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
         if delete_pressed {
             let mut to_remove: Vec<NodeId> = self.selected_extra.drain().collect();
@@ -2250,6 +2265,81 @@ impl BlueprintEditor {
                     egui::FontId::proportional(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
+            }
+        }
+
+        // Find-in-graph floating panel. Sits in the top-right of
+        // the canvas while open; lists matching nodes; click a row
+        // to recentre the viewport on that node.
+        if self.find_open {
+            let anchor = egui::pos2(rect.max.x - 280.0, rect.min.y + 8.0);
+            let mut jump_to: Option<NodeId> = None;
+            egui::Area::new(egui::Id::new("bp_find_panel"))
+                .fixed_pos(anchor)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(260.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Find:");
+                            let resp =
+                                ui.text_edit_singleline(&mut self.find_query);
+                            resp.request_focus();
+                            if ui.small_button("X").clicked() {
+                                self.find_open = false;
+                                self.find_query.clear();
+                            }
+                        });
+                        ui.separator();
+                        let query = self.find_query.to_lowercase();
+                        if query.is_empty() {
+                            ui.label("(type to filter nodes)");
+                        } else {
+                            let mut hits = 0;
+                            egui::ScrollArea::vertical()
+                                .max_height(240.0)
+                                .show(ui, |ui| {
+                                    for node in &self.blueprint.graph.nodes {
+                                        let kind_match =
+                                            node.kind.to_lowercase().contains(&query);
+                                        let params_match = node
+                                            .params
+                                            .iter()
+                                            .any(|(_, v)| v.to_lowercase().contains(&query));
+                                        if kind_match || params_match {
+                                            hits += 1;
+                                            let extra: String = node
+                                                .params
+                                                .iter()
+                                                .map(|(k, v)| format!("{k}={v}"))
+                                                .collect::<Vec<_>>()
+                                                .join(" ");
+                                            let label = format!(
+                                                "#{} {} {}",
+                                                node.id.0, node.kind, extra
+                                            );
+                                            if ui.button(label).clicked() {
+                                                jump_to = Some(node.id);
+                                            }
+                                        }
+                                    }
+                                    if hits == 0 {
+                                        ui.label("(no matches)");
+                                    }
+                                });
+                        }
+                    });
+                });
+            if let Some(id) = jump_to
+                && let Some(node) =
+                    self.blueprint.graph.nodes.iter().find(|n| n.id == id)
+            {
+                let canvas_center =
+                    egui::vec2(rect.width() * 0.5, rect.height() * 0.5);
+                self.view_offset = canvas_center
+                    - egui::vec2(node.position[0], node.position[1])
+                    - egui::vec2(NODE_WIDTH * 0.5, 0.0);
+                self.selected = Some(id);
             }
         }
 
