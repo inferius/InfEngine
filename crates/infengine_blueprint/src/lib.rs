@@ -1793,6 +1793,20 @@ impl BlueprintEditor {
                 egui::Stroke::new(1.0, egui::Color32::from_gray(120))
             };
             painter.rect_stroke(rect_node, 4.0, border, egui::StrokeKind::Inside);
+            // Selection glow: a second outer rect a few pixels out
+            // from the node so the selected node visually pops.
+            if selected {
+                let glow_rect = rect_node.expand(3.0);
+                painter.rect_stroke(
+                    glow_rect,
+                    6.0,
+                    egui::Stroke::new(
+                        1.5,
+                        egui::Color32::from_rgba_unmultiplied(255, 200, 80, 90),
+                    ),
+                    egui::StrokeKind::Outside,
+                );
+            }
             // Header colour keyed off the node's category so the user
             // can tell Events / Math / Control / Variables apart at
             // a glance, Unreal-style.
@@ -1817,11 +1831,34 @@ impl BlueprintEditor {
                     + i as f32 * PIN_ROW_HEIGHT
                     + PIN_ROW_HEIGHT * 0.5;
                 let [r, g, b] = pin.ty.rgb();
+                let connected =
+                    connected_in_pins.contains(&(node.id, pin.name.to_string()));
+                let pin_center = egui::pos2(origin.x, y);
+                let hover_rect = egui::Rect::from_center_size(
+                    pin_center,
+                    egui::vec2(PIN_RADIUS * 3.0, PIN_RADIUS * 3.0),
+                );
+                let hover_resp = ui.interact(
+                    hover_rect,
+                    ui.id().with(("bp_pin_in", node.id.0, i as u32)),
+                    egui::Sense::hover(),
+                );
+                let radius = if hover_resp.hovered() {
+                    PIN_RADIUS + 2.0
+                } else {
+                    PIN_RADIUS
+                };
                 painter.circle_filled(
-                    egui::pos2(origin.x, y),
-                    PIN_RADIUS,
+                    pin_center,
+                    radius,
                     egui::Color32::from_rgb(r, g, b),
                 );
+                hover_resp.on_hover_text(format!(
+                    "{} : {}\n{}",
+                    pin.name,
+                    pin.ty.label(),
+                    if connected { "connected" } else { "default literal" }
+                ));
                 painter.text(
                     egui::pos2(origin.x + 10.0, y - 7.0),
                     egui::Align2::LEFT_TOP,
@@ -1886,11 +1923,28 @@ impl BlueprintEditor {
                     + i as f32 * PIN_ROW_HEIGHT
                     + PIN_ROW_HEIGHT * 0.5;
                 let [r, g, b] = pin.ty.rgb();
+                let pin_center = egui::pos2(origin.x + NODE_WIDTH, y);
+                let hover_rect = egui::Rect::from_center_size(
+                    pin_center,
+                    egui::vec2(PIN_RADIUS * 3.0, PIN_RADIUS * 3.0),
+                );
+                let hover_resp = ui.interact(
+                    hover_rect,
+                    ui.id().with(("bp_pin_out", node.id.0, i as u32)),
+                    egui::Sense::hover(),
+                );
+                let radius = if hover_resp.hovered() {
+                    PIN_RADIUS + 2.0
+                } else {
+                    PIN_RADIUS
+                };
                 painter.circle_filled(
-                    egui::pos2(origin.x + NODE_WIDTH, y),
-                    PIN_RADIUS,
+                    pin_center,
+                    radius,
                     egui::Color32::from_rgb(r, g, b),
                 );
+                hover_resp
+                    .on_hover_text(format!("{} : {}", pin.name, pin.ty.label()));
                 painter.text(
                     egui::pos2(origin.x + NODE_WIDTH - 10.0, y - 7.0),
                     egui::Align2::RIGHT_TOP,
