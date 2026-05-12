@@ -23,6 +23,10 @@ use infengine_core::project::{Project, ProjectError, ProjectScene};
 use std::collections::HashMap;
 
 use infengine_audio::AudioSystem;
+use infengine_scripting::{
+    BlueprintInvokeFn, FnBlueprintInvoke, FnLoadGame, FnRegisterApi, ScriptAssembly,
+    ScriptHost, default_engine_api,
+};
 use infengine_core::scene::{
     AtlasRegion, AudioComponent, BodyKind3D, ColliderShape3D, Entity, EntityId, MeshComponent,
     Physics3DComponent, Scene, SpriteComponent, Transform2D, Transform3D,
@@ -126,6 +130,12 @@ struct Editor {
     /// Audio backend; lazily initialised on first sound request.
     /// `None` when the host has no audio device.
     audio_system: Option<AudioSystem>,
+    /// CoreCLR scripting bootstrap. Owns the loaded host assembly +
+    /// the resolved reverse-call dispatcher, so each Play tick can
+    /// invoke `[BlueprintCallable]` methods without re-loading the
+    /// runtime. Lazily initialised the first time we see a project
+    /// with a `scripts/` directory containing built C# output.
+    script_bootstrap: Option<ScriptBootstrap>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -230,6 +240,7 @@ impl Editor {
             play_blueprint_ticks: Vec::new(),
             play_total_seconds: 0.0,
             audio_system: None,
+            script_bootstrap: None,
             last_left_click_time: None,
             last_left_click_pos: [0.0, 0.0],
         };
@@ -260,6 +271,124 @@ impl Editor {
     /// with `[BlueprintCallable]` and hand the result to the BP
     /// workspace so its context menu / inspector can list them as
     /// dedicated entries. Idempotent; safe to call at any time.
+    /// Bring up the CoreCLR scripting host the first time we see a
+    /// built `Showcase.dll`-style game assembly inside the project's
+    /// `scripts/` tree. Idempotent: once bootstrapped we hand back
+    /// the cached invoke fn pointer on every Play start.
+    fn ensure_scripting_bootstrap(&mut self) -> Option<BlueprintInvokeFn> {
+        if let Some(b) = &self.script_bootstrap {
+            return Some(b.bp_invoke);
+        }
+        // Engine-wide host assembly + runtime config. Built once via
+        // `dotnet build -c Release` in scripts/InfEngine.Scripts.Host.
+        // The path is repo-relative because the editor is typically
+        // launched from the workspace root.
+        let host_dir = std::path::PathBuf::from(
+            "scripts/InfEngine.Scripts.Host/bin/Release/net10.0",
+        );
+        let runtime_config = host_dir.join("InfEngine.Scripts.Host.runtimeconfig.json");
+        let host_dll = host_dir.join("InfEngine.Scripts.Host.dll");
+        if !runtime_config.exists() || !host_dll.exists() {
+            tracing::warn!(
+                runtime = %runtime_config.display(),
+                "C# host assembly not built - skipping scripting bootstrap"
+            );
+            return None;
+        }
+        let host = match ScriptHost::new(&runtime_config) {
+            Ok(h) => h,
+            Err(err) => {
+                tracing::error!(error = %err, "ScriptHost::new failed");
+                return None;
+            }
+        };
+        let assembly = match host.load_assembly(&host_dll) {
+            Ok(a) => a,
+            Err(err) => {
+                tracing::error!(error = %err, "load Host assembly failed");
+                return None;
+            }
+        };
+        // Register the engine API once so Engine.Log works inside C#.
+        let api = default_engine_api();
+        match assembly
+            .get_fn_register_api("InfEngine.Scripts.Host.Engine, InfEngine.Scripts.Host", "RegisterApi")
+        {
+            Ok(register) => {
+                let f: FnRegisterApi = register;
+                f(&api as *const _);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "Engine.RegisterApi resolve failed");
+            }
+        }
+        // Hot-load the project's game DLL if it exists. The harvested
+        // [BlueprintCallable] methods become invokable through the
+        // dispatcher.
+        let game_dll = self
+            .project_root
+            .join("scripts/bin/Release/net10.0")
+            .join(format!("{}.dll", self.project.name.replace(' ', "_")));
+        let game_dll = if game_dll.exists() {
+            Some(game_dll)
+        } else {
+            // Fall back to scanning for any .dll under the project's
+            // scripts/bin/Release/* path so renamed projects still
+            // find their built output.
+            let bin_root = self.project_root.join("scripts/bin/Release/net10.0");
+            std::fs::read_dir(&bin_root)
+                .ok()
+                .and_then(|it| {
+                    it.flatten()
+                        .map(|e| e.path())
+                        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("dll"))
+                })
+        };
+        if let Some(g) = game_dll {
+            match assembly.get_fn_load_game(
+                "InfEngine.Scripts.Host.HotLoader, InfEngine.Scripts.Host",
+                "LoadGame",
+            ) {
+                Ok(load) => {
+                    let f: FnLoadGame = load;
+                    let bytes = g.to_string_lossy().into_owned();
+                    let raw = bytes.as_bytes();
+                    let ok = f(raw.as_ptr(), raw.len());
+                    if ok == 1 {
+                        tracing::info!(path = %g.display(), "game DLL loaded into game ALC");
+                    } else {
+                        tracing::warn!(path = %g.display(), "game DLL load returned 0");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "HotLoader.LoadGame resolve failed");
+                }
+            }
+        }
+        // Resolve the blueprint-reverse-call dispatcher.
+        let invoke = match assembly.get_fn_blueprint_invoke(
+            "InfEngine.Scripts.Host.HotLoader, InfEngine.Scripts.Host",
+            "InvokeBlueprintMethod",
+        ) {
+            Ok(fp) => {
+                let fp: FnBlueprintInvoke = fp;
+                let raw: BlueprintInvokeFn = *fp;
+                raw
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "HotLoader.InvokeBlueprintMethod resolve failed");
+                return None;
+            }
+        };
+        self.script_bootstrap = Some(ScriptBootstrap {
+            bp_invoke: invoke,
+            _assembly: assembly,
+            _host: host,
+        });
+        tracing::info!("C# scripting bootstrap complete");
+        Some(invoke)
+    }
+
     fn refresh_callable_methods(&mut self) {
         let scripts_dir = self.project_root.join("scripts");
         let methods =
@@ -789,6 +918,9 @@ impl Editor {
         if self.play_state != PlayState::Editing {
             return;
         }
+        // Lazy CoreCLR bootstrap so blueprints can actually call C#
+        // methods this Play session.
+        let _ = self.ensure_scripting_bootstrap();
         self.play_snapshot = Some(self.scene.clone());
         let mut world = PhysicsWorld::new();
         world.rebuild(&self.scene);
@@ -996,11 +1128,13 @@ impl Editor {
                 entity_lookup.insert(entity.id.0, snap);
                 name_to_id.insert(entity.name.clone(), entity.id.0);
             }
+            let bp_invoke = self.script_bootstrap.as_ref().map(|b| b.bp_invoke);
             let mut host = PlayHost {
                 delta_time: dt,
                 time_seconds: self.play_total_seconds,
                 entity_lookup,
                 name_to_id,
+                bp_invoke,
                 ..Default::default()
             };
             for prog in &self.play_blueprint_ticks {
@@ -1149,6 +1283,27 @@ fn pick_gizmo_3d(
 /// Blueprint VM host the editor uses during Play. Captures
 /// SetEntityPosition writes so the editor can apply them after the
 /// VM relinquishes its &mut borrow on the host.
+/// Owns the live CoreCLR scripting state for one editor session.
+/// Held in an `Option` on the editor; populated lazily when we spot
+/// a built `scripts/` directory under the project root.
+struct ScriptBootstrap {
+    // Drop order matters: `bp_invoke` is a fn pointer into the
+    // loaded assembly's code section; `_assembly` and `_host` must
+    // outlive any use of `bp_invoke`. Rust drops fields top-down so
+    // the fn pointer (Copy, no Drop) effectively becomes invalid
+    // when the assembly drops - but we hold the host alive for the
+    // editor's lifetime so this never matters in practice.
+    bp_invoke: BlueprintInvokeFn,
+    _assembly: ScriptAssembly,
+    _host: ScriptHost,
+}
+
+impl std::fmt::Debug for ScriptBootstrap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptBootstrap").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct EntitySnapshot {
     position: [f32; 3],
@@ -1171,6 +1326,10 @@ struct PlayHost {
     name_to_id: HashMap<String, u32>,
     delta_time: f32,
     time_seconds: f32,
+    /// Optional reverse-call into the CoreCLR runtime for
+    /// `[BlueprintCallable]` C# methods. `None` when scripting
+    /// isn't bootstrapped (no `scripts/` dir or build failed).
+    bp_invoke: Option<BlueprintInvokeFn>,
 }
 
 impl infengine_blueprint::exec::Host for PlayHost {
@@ -1230,11 +1389,45 @@ impl infengine_blueprint::exec::Host for PlayHost {
         method: &str,
         args: &[infengine_blueprint::exec::Value],
     ) -> Option<infengine_blueprint::exec::Value> {
-        // TODO: route through the CoreCLR scripting bridge once
-        // reverse-call wiring lands. For now log so the user has
-        // feedback the node fired and what args it carried.
-        tracing::info!(method = %method, ?args, "blueprint -> C# call (stub)");
-        None
+        // Real CoreCLR reverse-call when scripting is bootstrapped.
+        // v1 only marshals method-name + optional float return.
+        // Parameter passing across the FFI is documented as future
+        // work; the args slice is forwarded to the log for now so
+        // the user can see the wiring is exercised.
+        if let Some(invoke) = self.bp_invoke {
+            let bytes = method.as_bytes();
+            let mut out: f32 = 0.0;
+            let code = invoke(bytes.as_ptr(), bytes.len(), &mut out as *mut f32);
+            match code {
+                0 => {
+                    tracing::info!(method = %method, ?args, "blueprint -> C# call (void)");
+                    None
+                }
+                1 => {
+                    tracing::info!(
+                        method = %method,
+                        ?args,
+                        result = out,
+                        "blueprint -> C# call (float)"
+                    );
+                    Some(infengine_blueprint::exec::Value::Float(out))
+                }
+                _ => {
+                    tracing::warn!(
+                        method = %method,
+                        "blueprint -> C# call failed (dispatcher returned error)"
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::info!(
+                method = %method,
+                ?args,
+                "blueprint -> C# call (stub; scripting not bootstrapped)"
+            );
+            None
+        }
     }
 }
 

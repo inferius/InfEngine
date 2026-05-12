@@ -41,6 +41,23 @@ pub type FnTick = ManagedFunction<extern "system" fn(f32)>;
 /// `1` on success, `0` on failure (the managed side logs the reason).
 pub type FnLoadGame = ManagedFunction<extern "system" fn(*const u8, usize) -> u8>;
 
+/// Reverse-call dispatcher for `[BlueprintCallable]` methods. Caller
+/// hands over a UTF-8 method name (`"Class.Method"`) plus a slot for
+/// an optional float return. v1 only supports parameter-less methods
+/// returning void or float / int.
+///
+/// Returns:
+/// - `0` => method invoked, no return value.
+/// - `1` => method invoked, return value written into `out_result`.
+/// - `-1` => method not found or invocation threw.
+pub type FnBlueprintInvoke =
+    ManagedFunction<extern "system" fn(*const u8, usize, *mut f32) -> i32>;
+
+/// Raw fn pointer extracted from `FnBlueprintInvoke` so callers can
+/// stash and copy it without dragging the `ManagedFunction` wrapper
+/// around. Same calling convention; same memory; just no Drop logic.
+pub type BlueprintInvokeFn = extern "system" fn(*const u8, usize, *mut f32) -> i32;
+
 /// Engine functions exposed to C# code. Layout is FFI-stable so that
 /// the same `#[repr(C)]` struct can be marshalled on the managed side.
 ///
@@ -305,6 +322,26 @@ impl ScriptAssembly {
         let m = pdc_from_str(method_name)?;
         self.loader
             .get_function_with_unmanaged_callers_only::<fn(*const u8, usize) -> u8>(&t, &m)
+            .map_err(|source| ScriptError::ResolveFunction {
+                type_name: type_name.to_owned(),
+                method_name: method_name.to_owned(),
+                source,
+            })
+    }
+
+    /// Resolve the blueprint-reverse-call dispatcher
+    /// (`int method(byte*, nuint, float*)`) on a host class.
+    pub fn get_fn_blueprint_invoke(
+        &self,
+        type_name: &str,
+        method_name: &str,
+    ) -> Result<FnBlueprintInvoke, ScriptError> {
+        let t = pdc_from_str(type_name)?;
+        let m = pdc_from_str(method_name)?;
+        self.loader
+            .get_function_with_unmanaged_callers_only::<fn(*const u8, usize, *mut f32) -> i32>(
+                &t, &m,
+            )
             .map_err(|source| ScriptError::ResolveFunction {
                 type_name: type_name.to_owned(),
                 method_name: method_name.to_owned(),

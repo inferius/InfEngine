@@ -1102,6 +1102,7 @@ dependencies = [
  "infengine_editor",
  "infengine_physics",
  "infengine_render",
+ "infengine_scripting",
  "infengine_window",
  "tracing",
  "tracing-subscriber",

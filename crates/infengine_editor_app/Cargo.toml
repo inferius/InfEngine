@@ -24,6 +24,7 @@ infengine_assets = { path = "../infengine_assets" }
 infengine_physics = { path = "../infengine_physics" }
 infengine_blueprint = { path = "../infengine_blueprint" }
 infengine_audio = { path = "../infengine_audio" }
+infengine_scripting = { path = "../infengine_scripting" }
 glam = { workspace = true }
 egui = { workspace = true }
 tracing = { workspace = true }
