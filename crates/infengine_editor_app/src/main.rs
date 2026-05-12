@@ -947,9 +947,33 @@ impl Editor {
         // borrow during the VM loop.
         if !self.play_blueprint_ticks.is_empty() {
             self.play_total_seconds += dt;
+            // Snapshot every entity's transform + name so the VM
+            // can read them via Get Position / Find Entity by Name
+            // without re-borrowing the scene mid-run.
+            let mut entity_lookup: HashMap<u32, EntitySnapshot> = HashMap::new();
+            let mut name_to_id: HashMap<String, u32> = HashMap::new();
+            for entity in &self.scene.entities {
+                let snap = if let Some(t3) = entity.transform_3d.as_ref() {
+                    EntitySnapshot {
+                        position: t3.position,
+                        rotation: t3.rotation,
+                        scale: t3.scale,
+                    }
+                } else {
+                    EntitySnapshot {
+                        position: [entity.transform.position[0], entity.transform.position[1], 0.0],
+                        rotation: [0.0; 3],
+                        scale: [entity.transform.scale[0], entity.transform.scale[1], 1.0],
+                    }
+                };
+                entity_lookup.insert(entity.id.0, snap);
+                name_to_id.insert(entity.name.clone(), entity.id.0);
+            }
             let mut host = PlayHost {
                 delta_time: dt,
                 time_seconds: self.play_total_seconds,
+                entity_lookup,
+                name_to_id,
                 ..Default::default()
             };
             for prog in &self.play_blueprint_ticks {
@@ -1098,6 +1122,13 @@ fn pick_gizmo_3d(
 /// Blueprint VM host the editor uses during Play. Captures
 /// SetEntityPosition writes so the editor can apply them after the
 /// VM relinquishes its &mut borrow on the host.
+#[derive(Debug, Default, Clone)]
+struct EntitySnapshot {
+    position: [f32; 3],
+    rotation: [f32; 3],
+    scale: [f32; 3],
+}
+
 #[derive(Debug, Default)]
 struct PlayHost {
     pending_position_writes: Vec<(u32, [f32; 3])>,
@@ -1105,6 +1136,12 @@ struct PlayHost {
     pending_scale_writes: Vec<(u32, [f32; 3])>,
     pending_sound_plays: Vec<String>,
     captures: HashMap<u32, infengine_blueprint::exec::Value>,
+    /// Read-only snapshot of every entity's current transform
+    /// values + name, refreshed before each tick. Lets the VM
+    /// answer Get Position / Find Entity by Name queries without
+    /// re-borrowing the scene during the run loop.
+    entity_lookup: HashMap<u32, EntitySnapshot>,
+    name_to_id: HashMap<String, u32>,
     delta_time: f32,
     time_seconds: f32,
 }
@@ -1139,6 +1176,27 @@ impl infengine_blueprint::exec::Host for PlayHost {
     }
     fn capture(&mut self, slot: u32, value: infengine_blueprint::exec::Value) {
         self.captures.insert(slot, value);
+    }
+    fn entity_position(&self, entity_id: u32) -> [f32; 3] {
+        self.entity_lookup
+            .get(&entity_id)
+            .map(|s| s.position)
+            .unwrap_or([0.0; 3])
+    }
+    fn entity_rotation(&self, entity_id: u32) -> [f32; 3] {
+        self.entity_lookup
+            .get(&entity_id)
+            .map(|s| s.rotation)
+            .unwrap_or([0.0; 3])
+    }
+    fn entity_scale(&self, entity_id: u32) -> [f32; 3] {
+        self.entity_lookup
+            .get(&entity_id)
+            .map(|s| s.scale)
+            .unwrap_or([1.0; 3])
+    }
+    fn find_entity_by_name(&self, name: &str) -> Option<u32> {
+        self.name_to_id.get(name).copied()
     }
 }
 

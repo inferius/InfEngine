@@ -84,6 +84,20 @@ pub enum Op {
     PushDeltaTime,
     /// Push the host's wall-clock time as a Float.
     PushTimeSeconds,
+    /// Push the world-space position of the baked entity as a Vec3.
+    /// Compiler bakes the entity id from `BlueprintTarget` so this
+    /// op is only emitted for Entity / Class blueprints.
+    PushEntityPosition(u32),
+    PushEntityRotation(u32),
+    PushEntityScale(u32),
+    /// Ask the host for the entity id with the given name. Pushes
+    /// `EntityRef(id)` on success or `EntityRef(0)` if none match.
+    FindEntityByName(String),
+    /// Pop a Vec3 then an EntityRef; write the Vec3 as the entity's
+    /// world-space position / rotation / scale via the host.
+    SetEntityPositionRef,
+    SetEntityRotationRef,
+    SetEntityScaleRef,
     /// Pop a bool; if false jump to absolute op index. True falls
     /// through. Used by Branch nodes.
     JumpIfFalse(u32),
@@ -165,12 +179,14 @@ fn find_data_source<'a>(
         .map(|e| (e.from_node, e.from_pin.as_str()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_data(
     graph: &Graph,
     node_id: NodeId,
     pin: &str,
     visiting: &mut HashSet<NodeId>,
     ops: &mut Vec<Op>,
+    target: &BlueprintTarget,
 ) -> Result<(), CompileError> {
     if !visiting.insert(node_id) {
         return Err(CompileError::Cycle { node: node_id });
@@ -215,11 +231,31 @@ fn compile_data(
         "time_seconds" => {
             ops.push(Op::PushTimeSeconds);
         }
+        "get_position" | "get_rotation" | "get_scale" => {
+            // Read transform fields off the entity baked into the
+            // blueprint's target. Global blueprints fall back to
+            // zero values (the host's default impl) so the program
+            // still compiles.
+            let eid = match target {
+                BlueprintTarget::Entity { entity_id, .. } => *entity_id,
+                _ => 0,
+            };
+            let op = match node.kind.as_str() {
+                "get_position" => Op::PushEntityPosition(eid),
+                "get_rotation" => Op::PushEntityRotation(eid),
+                _ => Op::PushEntityScale(eid),
+            };
+            ops.push(op);
+        }
+        "find_entity_by_name" => {
+            let name = node.params.get("name").cloned().unwrap_or_default();
+            ops.push(Op::FindEntityByName(name));
+        }
         "add" | "subtract" | "multiply" | "divide" => {
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -235,7 +271,7 @@ fn compile_data(
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -250,7 +286,7 @@ fn compile_data(
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
                     }
                     None => ops.push(Op::PushBool(pin_default_bool(node, input))),
                 }
@@ -264,7 +300,7 @@ fn compile_data(
         "not" => {
             match find_data_source(graph, node_id, "value") {
                 Some((src_node, src_pin)) => {
-                    compile_data(graph, src_node, src_pin, visiting, ops)?;
+                    compile_data(graph, src_node, src_pin, visiting, ops, target)?;
                 }
                 None => ops.push(Op::PushBool(pin_default_bool(node, "value"))),
             }
@@ -274,7 +310,7 @@ fn compile_data(
             for input in ["x", "y", "z"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -314,7 +350,7 @@ fn compile_sink(
             match find_data_source(graph, node_id, "value") {
                 Some((src, src_pin)) => {
                     let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops)?;
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
                 }
                 None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
@@ -325,7 +361,7 @@ fn compile_sink(
             match find_data_source(graph, node_id, "value") {
                 Some((src, src_pin)) => {
                     let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops)?;
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
                 }
                 None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
@@ -336,7 +372,7 @@ fn compile_sink(
                 match find_data_source(graph, node_id, input) {
                     Some((src, src_pin)) => {
                         let mut visiting = HashSet::new();
-                        compile_data(graph, src, src_pin, &mut visiting, ops)?;
+                        compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -361,6 +397,36 @@ fn compile_sink(
         "play_sound" => {
             let path = node.params.get("path").cloned().unwrap_or_default();
             ops.push(Op::PlaySound(path));
+        }
+        "set_position_of" | "set_rotation_of" | "set_scale_of" => {
+            // Entity-ref-driven transform write. Pops a Vec3 then an
+            // EntityRef inside the op. Compile order: push entity
+            // (data input), then x / y / z (assembled into Vec3), so
+            // the stack ends with [EntityRef, Vec3] which matches
+            // the runtime's pop sequence.
+            match find_data_source(graph, node_id, "entity") {
+                Some((src, src_pin)) => {
+                    let mut visiting = HashSet::new();
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                }
+                None => ops.push(Op::PushFloat(0.0)),
+            }
+            for input in ["x", "y", "z"] {
+                match find_data_source(graph, node_id, input) {
+                    Some((src, src_pin)) => {
+                        let mut visiting = HashSet::new();
+                        compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                    }
+                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
+                }
+            }
+            ops.push(Op::MakeVec3);
+            let op = match node.kind.as_str() {
+                "set_position_of" => Op::SetEntityPositionRef,
+                "set_rotation_of" => Op::SetEntityRotationRef,
+                _ => Op::SetEntityScaleRef,
+            };
+            ops.push(op);
         }
         "call_function" => {
             let name = node.params.get("name").cloned().unwrap_or_default();
@@ -458,7 +524,7 @@ fn compile_exec_from(
                 match find_data_source(graph, sink_id, "condition") {
                     Some((src, src_pin)) => {
                         let mut local = HashSet::new();
-                        compile_data(graph, src, src_pin, &mut local, ops)?;
+                        compile_data(graph, src, src_pin, &mut local, ops, target)?;
                     }
                     None => {
                         let sink_node = find_node(graph, sink_id).ok_or(
@@ -572,6 +638,22 @@ pub trait Host {
     /// Wall-clock seconds since the host started.
     fn time_seconds(&self) -> f32 {
         0.0
+    }
+    /// Read the current world position / rotation / scale of an
+    /// entity. Default returns zero / identity values so tests
+    /// don't have to model a scene.
+    fn entity_position(&self, _entity_id: u32) -> [f32; 3] {
+        [0.0, 0.0, 0.0]
+    }
+    fn entity_rotation(&self, _entity_id: u32) -> [f32; 3] {
+        [0.0, 0.0, 0.0]
+    }
+    fn entity_scale(&self, _entity_id: u32) -> [f32; 3] {
+        [1.0, 1.0, 1.0]
+    }
+    /// Resolve an entity by its display name. `None` => no match.
+    fn find_entity_by_name(&self, _name: &str) -> Option<u32> {
+        None
     }
 }
 
@@ -707,6 +789,61 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             }
             Op::PushDeltaTime => stack.push(Value::Float(host.delta_time())),
             Op::PushTimeSeconds => stack.push(Value::Float(host.time_seconds())),
+            Op::PushEntityPosition(eid) => {
+                stack.push(Value::Vec3(host.entity_position(*eid)));
+            }
+            Op::PushEntityRotation(eid) => {
+                stack.push(Value::Vec3(host.entity_rotation(*eid)));
+            }
+            Op::PushEntityScale(eid) => {
+                stack.push(Value::Vec3(host.entity_scale(*eid)));
+            }
+            Op::FindEntityByName(name) => {
+                let id = host.find_entity_by_name(name).unwrap_or(0);
+                stack.push(Value::EntityRef(id));
+            }
+            Op::SetEntityPositionRef => {
+                let vec = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, 0.0, 0.0],
+                    _ => [0.0; 3],
+                };
+                let eid = match stack.pop().unwrap_or(Value::EntityRef(0)) {
+                    Value::EntityRef(e) => e,
+                    _ => 0,
+                };
+                if eid != 0 {
+                    host.set_entity_position(eid, vec);
+                }
+            }
+            Op::SetEntityRotationRef => {
+                let vec = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, 0.0, 0.0],
+                    _ => [0.0; 3],
+                };
+                let eid = match stack.pop().unwrap_or(Value::EntityRef(0)) {
+                    Value::EntityRef(e) => e,
+                    _ => 0,
+                };
+                if eid != 0 {
+                    host.set_entity_rotation(eid, vec);
+                }
+            }
+            Op::SetEntityScaleRef => {
+                let vec = match stack.pop().unwrap_or(Value::Vec3([1.0; 3])) {
+                    Value::Vec3(v) => v,
+                    Value::Float(f) => [f, f, f],
+                    _ => [1.0; 3],
+                };
+                let eid = match stack.pop().unwrap_or(Value::EntityRef(0)) {
+                    Value::EntityRef(e) => e,
+                    _ => 0,
+                };
+                if eid != 0 {
+                    host.set_entity_scale(eid, vec);
+                }
+            }
             Op::JumpIfFalse(addr) => {
                 let cond = matches!(stack.pop(), Some(Value::Bool(true)));
                 if !cond {
@@ -952,6 +1089,48 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(8.0)]);
+    }
+
+    #[test]
+    fn entity_lookup_and_set_position_of() {
+        // Build a graph: OnTick -> SetPositionOf( FindEntity("Cube"),
+        // x=10, y=20, z=30 ). The mock host returns id 7 for "Cube"
+        // and records the set call so we can assert the path end to
+        // end.
+        struct Mock {
+            sets: Vec<(u32, [f32; 3])>,
+        }
+        impl Host for Mock {
+            fn print(&mut self, _: Value) {}
+            fn set_entity_position(&mut self, entity_id: u32, position: [f32; 3]) {
+                self.sets.push((entity_id, position));
+            }
+            fn find_entity_by_name(&self, name: &str) -> Option<u32> {
+                if name == "Cube" { Some(7) } else { None }
+            }
+        }
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let setp = g.add_node("set_position_of", [0.0, 0.0]);
+        // Inline xyz defaults on the set node.
+        let setn = g.nodes.iter_mut().find(|n| n.id == setp).unwrap();
+        setn.params.insert("pin_x".into(), "10".into());
+        setn.params.insert("pin_y".into(), "20".into());
+        setn.params.insert("pin_z".into(), "30".into());
+        let find = g.add_node("find_entity_by_name", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == find)
+            .unwrap()
+            .params
+            .insert("name".into(), "Cube".into());
+        assert!(g.connect(&reg, tick, "exec", setp, "in").unwrap());
+        assert!(g.connect(&reg, find, "entity", setp, "entity").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut h = Mock { sets: Vec::new() };
+        run(&prog, &mut h);
+        assert_eq!(h.sets, vec![(7, [10.0, 20.0, 30.0])]);
     }
 
     #[test]

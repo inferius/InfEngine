@@ -462,6 +462,89 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        // Reads the blueprint target entity's current world
+        // position. Bound at compile time to the target id, so only
+        // useful in Entity / Class blueprints.
+        id: "get_position",
+        label: "Get Position",
+        category: "Transform",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Vec3)],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        id: "get_rotation",
+        label: "Get Rotation",
+        category: "Transform",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Vec3)],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        id: "get_scale",
+        label: "Get Scale",
+        category: "Transform",
+        inputs: &[],
+        outputs: &[PinSpec::new("value", PinType::Vec3)],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        // `params["name"]` is the display name to look up; the
+        // output is the entity id (0 if no match). Available in any
+        // context.
+        id: "find_entity_by_name",
+        label: "Find Entity by Name",
+        category: "Scene",
+        inputs: &[],
+        outputs: &[PinSpec::new("entity", PinType::EntityRef)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        // Sets transform fields of any entity (referenced via
+        // EntityRef input). Useful in Global blueprints together
+        // with Find Entity by Name.
+        id: "set_position_of",
+        label: "Set Position Of",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "set_rotation_of",
+        label: "Set Rotation Of",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "set_scale_of",
+        label: "Set Scale Of",
+        category: "Transform",
+        inputs: &[
+            PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        outputs: &[],
+        contexts: &[],
+    },
+    NodeKindDef {
         // The function name is stored in `params["name"]`; the
         // compiler inlines the named function's body (matched against
         // `Blueprint::functions`) and skips recursion to keep the
@@ -1431,6 +1514,16 @@ impl BlueprintEditor {
                     ui.label("path");
                     if ui.text_edit_singleline(&mut path).changed() {
                         node.params.insert("path".into(), path);
+                        dirty = true;
+                    }
+                });
+            }
+            "find_entity_by_name" => {
+                let mut name = node.params.get("name").cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("name");
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        node.params.insert("name".into(), name);
                         dirty = true;
                     }
                 });
