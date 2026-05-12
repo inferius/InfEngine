@@ -2031,6 +2031,11 @@ impl BlueprintEditor {
             .iter()
             .map(|e| (e.to_node, e.to_pin.clone()))
             .collect();
+        // Clip every widget we put inside the canvas (inline pin
+        // editors, comment text edits) to the canvas rect so they
+        // can't bleed through onto the side panel when a node sits
+        // partially off-screen to the left.
+        ui.set_clip_rect(rect);
         for node in &mut self.blueprint.graph.nodes {
             let Some(def) = registry.get(&node.kind) else {
                 continue;
@@ -2038,6 +2043,24 @@ impl BlueprintEditor {
             let origin = rect.min
                 + view_offset
                 + egui::vec2(node.position[0], node.position[1]);
+            // Cheap culling: skip any node whose bounding box is
+            // entirely outside the visible canvas. Avoids both
+            // pointless painter calls and `ui.put` widgets escaping
+            // through the canvas edge.
+            let cull_w = if node.kind == "comment" {
+                NODE_WIDTH * 2.2
+            } else {
+                NODE_WIDTH
+            };
+            let cull_h = if node.kind == "comment" {
+                64.0
+            } else {
+                node_height_def(def)
+            };
+            let node_bounds = egui::Rect::from_min_size(origin, egui::vec2(cull_w, cull_h));
+            if !rect.intersects(node_bounds) {
+                continue;
+            }
             // Comment nodes are an annotation overlay - a wide,
             // translucent rect with an editable text caption and no
             // pins. They never compile and never participate in
