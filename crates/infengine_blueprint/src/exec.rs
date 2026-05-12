@@ -101,6 +101,10 @@ pub enum Op {
     /// `method` argument. Argument marshaling is not implemented in
     /// v1; the call is purely exec-flow and produces no value.
     CallCSharp(String),
+    /// Pop a Vec3; push the requested component (0=x, 1=y, 2=z) as
+    /// a float. Backs each output pin of a `break_vec3` node, which
+    /// the compiler emits once per consumer.
+    ExtractFloat(u8),
     /// Pop a Vec3 then an EntityRef; write the Vec3 as the entity's
     /// world-space position / rotation / scale via the host.
     SetEntityPositionRef,
@@ -278,6 +282,25 @@ fn compile_data(
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(0);
             ops.push(Op::PushEntityRef(id));
+        }
+        "break_vec3" => {
+            // Materialise the source Vec3 once, then extract the
+            // requested component based on which output pin the
+            // consumer wired to. The component index comes from the
+            // `pin` parameter the caller passed in.
+            match find_data_source(graph, node_id, "value") {
+                Some((src, src_pin)) => {
+                    compile_data(graph, src, src_pin, visiting, ops, target)?;
+                }
+                None => ops.push(Op::PushVec3([0.0, 0.0, 0.0])),
+            }
+            let idx: u8 = match pin {
+                "x" => 0,
+                "y" => 1,
+                "z" => 2,
+                _ => 0,
+            };
+            ops.push(Op::ExtractFloat(idx));
         }
         "add" | "subtract" | "multiply" | "divide" => {
             for input in ["a", "b"] {
@@ -847,6 +870,14 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             Op::CallCSharp(method) => {
                 host.call_csharp(method);
             }
+            Op::ExtractFloat(idx) => {
+                let v = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
+                    Value::Vec3(arr) => arr.get(*idx as usize).copied().unwrap_or(0.0),
+                    Value::Float(f) => f,
+                    _ => 0.0,
+                };
+                stack.push(Value::Float(v));
+            }
             Op::SetEntityPositionRef => {
                 let vec = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
                     Value::Vec3(v) => v,
@@ -1134,6 +1165,30 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(8.0)]);
+    }
+
+    #[test]
+    fn break_vec3_extracts_components() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let v = g.add_node("const_vec3", [0.0, 0.0]);
+        {
+            let n = g.nodes.iter_mut().find(|n| n.id == v).unwrap();
+            n.params.insert("x".into(), "1".into());
+            n.params.insert("y".into(), "2".into());
+            n.params.insert("z".into(), "3".into());
+        }
+        let br = g.add_node("break_vec3", [0.0, 0.0]);
+        let p = g.add_node("print", [0.0, 0.0]);
+        assert!(g.connect(&reg, tick, "exec", p, "in").unwrap());
+        assert!(g.connect(&reg, v, "value", br, "value").unwrap());
+        // Print only the Y component.
+        assert!(g.connect(&reg, br, "y", p, "value").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(2.0)]);
     }
 
     #[test]

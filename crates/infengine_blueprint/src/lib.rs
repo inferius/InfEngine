@@ -216,6 +216,23 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        // Inverse of Make Vec3: take a Vec3 in, expose its three
+        // float components as separate outputs. Each output is
+        // compiled on demand (one ExtractFloat per consumer) so the
+        // source Vec3 may be recomputed if its data subgraph isn't
+        // pure-cheap.
+        id: "break_vec3",
+        label: "Break Vec3",
+        category: "Math",
+        inputs: &[PinSpec::new("value", PinType::Vec3)],
+        outputs: &[
+            PinSpec::new("x", PinType::Float),
+            PinSpec::new("y", PinType::Float),
+            PinSpec::new("z", PinType::Float),
+        ],
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "add",
         label: "Add",
         category: "Math",
@@ -2087,21 +2104,17 @@ impl BlueprintEditor {
                 self.find_query.clear();
             }
         }
-        // Ctrl + scroll-wheel zooms the canvas around the cursor.
-        // Without Ctrl the scroll is ignored so it doesn't fight
-        // the rest of egui's scroll handling. The cursor's canvas
-        // anchor is preserved so the user can zoom into whatever
-        // they're looking at instead of being teleported away.
+        // Canvas zoom: egui's `zoom_delta` already folds Ctrl+wheel
+        // and macOS pinch into a single multiplier so we don't have
+        // to fight scroll-area propagation. We only consume it when
+        // the pointer is actually over the canvas.
         if let Some(hover_pos) = hover {
-            let (scroll, ctrl) = ui.input(|i| {
-                (i.smooth_scroll_delta.y, i.modifiers.command_only())
-            });
-            if ctrl && scroll.abs() > 0.01 {
+            let zoom_delta = ui.input(|i| i.zoom_delta());
+            if (zoom_delta - 1.0).abs() > 0.001 {
                 let prev_zoom = self.view_zoom.max(0.01);
-                let factor = (scroll * 0.0015).exp();
-                let new_zoom = (prev_zoom * factor).clamp(0.25, 3.0);
+                let new_zoom = (prev_zoom * zoom_delta).clamp(0.25, 3.0);
                 // Solve for view_offset so the canvas point under the
-                // cursor stays where it was after the zoom change.
+                // cursor stays put after the zoom change.
                 let anchor = hover_pos - rect.min;
                 let canvas_anchor = (anchor - self.view_offset) / prev_zoom;
                 self.view_offset = anchor - canvas_anchor * new_zoom;
@@ -2357,6 +2370,39 @@ impl BlueprintEditor {
                 egui::FontId::proportional(13.0),
                 egui::Color32::WHITE,
             );
+            // Subtitle: extra labelling drawn under the header that
+            // makes EntityRef literal / Self / Find nodes
+            // self-describing on the canvas without needing the
+            // inspector. Keeps the inline-edit area free.
+            let subtitle: Option<String> = match node.kind.as_str() {
+                "entity_ref" => {
+                    let id = node.params.get("id").cloned().unwrap_or_default();
+                    Some(format!("id = {id}"))
+                }
+                "find_entity_by_name" => {
+                    let n = node.params.get("name").cloned().unwrap_or_default();
+                    Some(format!("name = \"{n}\""))
+                }
+                "self_entity" => Some("(target entity)".into()),
+                "call_cs_method" => {
+                    let m = node.params.get("method").cloned().unwrap_or_default();
+                    Some(format!("-> {m}"))
+                }
+                "call_function" => {
+                    let n = node.params.get("name").cloned().unwrap_or_default();
+                    Some(format!("-> {n}"))
+                }
+                _ => None,
+            };
+            if let Some(sub) = subtitle {
+                painter.text(
+                    origin + egui::vec2(8.0, NODE_HEADER_HEIGHT + 2.0),
+                    egui::Align2::LEFT_TOP,
+                    sub,
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::from_rgb(180, 180, 200),
+                );
+            }
             // Watch-value badge: if this data node produced a value
             // in the most recent Play tick, render it right-aligned
             // in the header bar.
