@@ -1237,45 +1237,40 @@ impl BlueprintEditor {
     /// this frame so the host can persist it.
     pub fn show(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
-        let total_w = ui.available_width();
-        let total_h = ui.available_height();
-        // Three-pane layout: left (drag sources), middle (canvas),
-        // right (Properties context-sensitive on the selected
-        // target). Mirrors Unreal's "My Blueprint" + Graph +
-        // "Details" arrangement.
-        let left_w = 220.0;
-        let right_w = 260.0;
-        let center_w = (total_w - left_w - right_w - 16.0).max(200.0);
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(left_w, total_h),
-                egui::Layout::top_down_justified(egui::Align::LEFT),
-                |ui| {
+        // Three-pane layout via egui's resizable SidePanel + the
+        // implicit central area. Using SidePanel::show_inside means
+        // the containing Window can shrink / grow freely instead of
+        // chasing its own content-requested size every frame (which
+        // caused the editor to balloon to full width on every show).
+        // Bottom-up ids prevent clashes if multiple tabs are open.
+        let tab_id = self.path.as_ref().map(|p| p.to_string_lossy().to_string());
+        let id_suffix = tab_id.as_deref().unwrap_or("default");
+        egui::SidePanel::left(format!("bp_left_{id_suffix}"))
+            .resizable(true)
+            .default_width(220.0)
+            .width_range(160.0..=360.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.render_side_panel(ui) {
                         dirty = true;
                     }
-                },
-            );
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(center_w, total_h),
-                egui::Layout::top_down_justified(egui::Align::LEFT),
-                |ui| {
-                    if self.show_canvas(ui, registry) {
-                        dirty = true;
-                    }
-                },
-            );
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(right_w, total_h),
-                egui::Layout::top_down_justified(egui::Align::LEFT),
-                |ui| {
+                });
+            });
+        egui::SidePanel::right(format!("bp_right_{id_suffix}"))
+            .resizable(true)
+            .default_width(260.0)
+            .width_range(200.0..=420.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.render_properties_panel(ui) {
                         dirty = true;
                     }
-                },
-            );
+                });
+            });
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            if self.show_canvas(ui, registry) {
+                dirty = true;
+            }
         });
         dirty
     }
