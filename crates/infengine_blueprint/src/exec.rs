@@ -418,7 +418,28 @@ fn compile_sink(
             }
             ops.push(Op::SetVar(name));
         }
-        "set_position" | "set_rotation" | "set_scale" => {
+        "set_position" | "set_rotation" | "set_scale" | "set_position_of"
+        | "set_rotation_of" | "set_scale_of" => {
+            // Unified transform-write path. If the `entity` pin has
+            // an incoming edge, route through that EntityRef.
+            // Otherwise bake the blueprint's own target id (Self)
+            // so Entity / Class blueprints can affect themselves
+            // without an extra Self node. Compile order leaves the
+            // stack as `[EntityRef, Vec3]` which matches the Ref op
+            // pop sequence.
+            match find_data_source(graph, node_id, "entity") {
+                Some((src, src_pin)) => {
+                    let mut visiting = HashSet::new();
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                }
+                None => {
+                    let self_id = match target {
+                        BlueprintTarget::Entity { entity_id, .. } => *entity_id,
+                        _ => 0,
+                    };
+                    ops.push(Op::PushEntityRef(self_id));
+                }
+            }
             for input in ["x", "y", "z"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src, src_pin)) => {
@@ -429,21 +450,14 @@ fn compile_sink(
                 }
             }
             ops.push(Op::MakeVec3);
-            match target {
-                BlueprintTarget::Entity { entity_id, .. } => {
-                    let eid = *entity_id;
-                    let op = match node.kind.as_str() {
-                        "set_position" => Op::SetEntityPosition(eid),
-                        "set_rotation" => Op::SetEntityRotation(eid),
-                        _ => Op::SetEntityScale(eid),
-                    };
-                    ops.push(op);
-                }
-                _ => {
-                    // Non-entity target: discard the vec3 by printing.
-                    ops.push(Op::Print);
-                }
-            }
+            // Both old (`set_*`) and new (`set_*_of`) kinds map to
+            // the same Ref op now.
+            let op = match node.kind.as_str() {
+                "set_position" | "set_position_of" => Op::SetEntityPositionRef,
+                "set_rotation" | "set_rotation_of" => Op::SetEntityRotationRef,
+                _ => Op::SetEntityScaleRef,
+            };
+            ops.push(op);
         }
         "play_sound" => {
             let path = node.params.get("path").cloned().unwrap_or_default();
@@ -455,36 +469,6 @@ fn compile_sink(
             // arg marshaling.
             let method = node.params.get("method").cloned().unwrap_or_default();
             ops.push(Op::CallCSharp(method));
-        }
-        "set_position_of" | "set_rotation_of" | "set_scale_of" => {
-            // Entity-ref-driven transform write. Pops a Vec3 then an
-            // EntityRef inside the op. Compile order: push entity
-            // (data input), then x / y / z (assembled into Vec3), so
-            // the stack ends with [EntityRef, Vec3] which matches
-            // the runtime's pop sequence.
-            match find_data_source(graph, node_id, "entity") {
-                Some((src, src_pin)) => {
-                    let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
-                }
-                None => ops.push(Op::PushFloat(0.0)),
-            }
-            for input in ["x", "y", "z"] {
-                match find_data_source(graph, node_id, input) {
-                    Some((src, src_pin)) => {
-                        let mut visiting = HashSet::new();
-                        compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
-                    }
-                    None => ops.push(Op::PushFloat(pin_default_float(node, input))),
-                }
-            }
-            ops.push(Op::MakeVec3);
-            let op = match node.kind.as_str() {
-                "set_position_of" => Op::SetEntityPositionRef,
-                "set_rotation_of" => Op::SetEntityRotationRef,
-                _ => Op::SetEntityScaleRef,
-            };
-            ops.push(op);
         }
         "call_function" => {
             let name = node.params.get("name").cloned().unwrap_or_default();

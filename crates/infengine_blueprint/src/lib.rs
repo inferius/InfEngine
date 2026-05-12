@@ -399,19 +399,27 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         ],
         contexts: &[],
     },
+    // Unified transform-write nodes. The `entity` pin is optional:
+    // leave it unconnected and the compiler bakes the blueprint's
+    // own target entity (Self) so Entity / Class blueprints can
+    // affect themselves without an extra Self node. Connect it to
+    // any EntityRef source (Self / Find Entity by Name / Entity Ref
+    // literal) to affect that entity instead. Global blueprints
+    // MUST connect the entity pin - an unconnected pin pushes
+    // EntityRef(0) which the VM treats as a no-op.
     NodeKindDef {
         id: "set_position",
         label: "Set Position",
         category: "Transform",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
             PinSpec::new("x", PinType::Float),
             PinSpec::new("y", PinType::Float),
             PinSpec::new("z", PinType::Float),
         ],
         outputs: &[],
-        // Entity-only - rejects in a Global blueprint.
-        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+        contexts: &[],
     },
     NodeKindDef {
         id: "set_rotation",
@@ -419,12 +427,13 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         category: "Transform",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
             PinSpec::new("x", PinType::Float),
             PinSpec::new("y", PinType::Float),
             PinSpec::new("z", PinType::Float),
         ],
         outputs: &[],
-        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+        contexts: &[],
     },
     NodeKindDef {
         id: "set_scale",
@@ -432,12 +441,13 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         category: "Transform",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
+            PinSpec::new("entity", PinType::EntityRef),
             PinSpec::new("x", PinType::Float),
             PinSpec::new("y", PinType::Float),
             PinSpec::new("z", PinType::Float),
         ],
         outputs: &[],
-        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+        contexts: &[],
     },
     NodeKindDef {
         // Calls a C# method registered via the
@@ -552,13 +562,15 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         outputs: &[PinSpec::new("entity", PinType::EntityRef)],
         contexts: &[],
     },
+    // Legacy aliases retained so saved blueprints that referenced
+    // the explicit "Set * Of" nodes keep loading. The unified Set *
+    // nodes above now cover both the self-target and ref-target
+    // case via the optional `entity` pin; new content should reach
+    // for those. Compile path treats both ids in the same arm.
     NodeKindDef {
-        // Sets transform fields of any entity (referenced via
-        // EntityRef input). Useful in Global blueprints together
-        // with Find Entity by Name.
         id: "set_position_of",
-        label: "Set Position Of",
-        category: "Transform",
+        label: "Set Position Of (legacy)",
+        category: "Deprecated",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
             PinSpec::new("entity", PinType::EntityRef),
@@ -571,8 +583,8 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
     },
     NodeKindDef {
         id: "set_rotation_of",
-        label: "Set Rotation Of",
-        category: "Transform",
+        label: "Set Rotation Of (legacy)",
+        category: "Deprecated",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
             PinSpec::new("entity", PinType::EntityRef),
@@ -585,8 +597,8 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
     },
     NodeKindDef {
         id: "set_scale_of",
-        label: "Set Scale Of",
-        category: "Transform",
+        label: "Set Scale Of (legacy)",
+        category: "Deprecated",
         inputs: &[
             PinSpec::new("in", PinType::Exec),
             PinSpec::new("entity", PinType::EntityRef),
