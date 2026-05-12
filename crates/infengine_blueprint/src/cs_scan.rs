@@ -18,6 +18,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::PinType;
+
+/// One parameter of a discovered C# method, mapped to a blueprint
+/// pin type. Used to render per-method nodes with real input pins
+/// instead of an opaque "Call C# Method" with a free-text method
+/// field.
+#[derive(Debug, Clone)]
+pub struct CsParam {
+    pub name: String,
+    pub ty: PinType,
+    /// The original C# type token (e.g. `"float"`, `"Vector3"`).
+    /// Retained so unsupported types degrade gracefully (we keep
+    /// them as Float pins for now and surface the token in the
+    /// tooltip).
+    pub raw_type: String,
+}
+
 /// One method discovered in a project's C# scripts that should
 /// appear as a dedicated node in the blueprint editor.
 #[derive(Debug, Clone)]
@@ -46,6 +63,54 @@ pub struct BlueprintCallableMethod {
     /// Parameter list verbatim, e.g. `"float dt"`. Empty string
     /// when the method takes no parameters.
     pub parameters: String,
+    /// Parsed parameters mapped to blueprint pin types.
+    pub param_pins: Vec<CsParam>,
+    /// Mapped return pin type. `None` means the method returns
+    /// `void` (no data output).
+    pub return_pin: Option<PinType>,
+}
+
+/// Map a C# type token to a blueprint `PinType`. Unsupported types
+/// fall back to Float with `raw_type` surfaced in the tooltip so
+/// the user can see "this pin wants Vector3 but is wired through
+/// Float" without the editor refusing to load the project.
+pub fn map_cs_type(token: &str) -> Option<PinType> {
+    match token.trim() {
+        "float" | "double" | "int" | "long" | "short" | "byte" => Some(PinType::Float),
+        "bool" => Some(PinType::Bool),
+        "string" => Some(PinType::Text),
+        "uint" | "EntityRef" | "InfEngine.EntityRef" => Some(PinType::EntityRef),
+        "Vector3" | "System.Numerics.Vector3" => Some(PinType::Vec3),
+        "void" => None,
+        _ => None,
+    }
+}
+
+/// Parse a C# parameter list (`"float dt, bool active"`) into pin
+/// descriptors. Unknown types degrade to Float; the parser is
+/// deliberately forgiving so a typo in C# doesn't crash the
+/// editor.
+fn parse_params(raw: &str) -> Vec<CsParam> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for piece in raw.split(',') {
+        let tokens: Vec<&str> = piece.split_whitespace().collect();
+        if tokens.len() < 2 {
+            continue;
+        }
+        let raw_type = tokens[0].to_string();
+        let name = tokens[tokens.len() - 1].trim_start_matches('@').to_string();
+        let ty = map_cs_type(&raw_type).unwrap_or(PinType::Float);
+        out.push(CsParam {
+            name,
+            ty,
+            raw_type,
+        });
+    }
+    out
 }
 
 /// Walk `root` recursively, parse every `.cs` file, and return the
@@ -141,6 +206,8 @@ pub fn scan_text(text: &str) -> Vec<BlueprintCallableMethod> {
                 let full = format!("{class}.{}", sig.name);
                 let display = attr.display_name.unwrap_or_else(|| full.clone());
                 let category = attr.category.unwrap_or_else(|| "Scripts".into());
+                let param_pins = parse_params(&sig.parameters);
+                let return_pin = map_cs_type(&sig.return_type);
                 out.push(BlueprintCallableMethod {
                     source_path: PathBuf::new(),
                     class,
@@ -151,6 +218,8 @@ pub fn scan_text(text: &str) -> Vec<BlueprintCallableMethod> {
                     tooltip: attr.tooltip,
                     return_type: sig.return_type,
                     parameters: sig.parameters,
+                    param_pins,
+                    return_pin,
                 });
                 continue;
             }
@@ -168,6 +237,8 @@ pub fn scan_text(text: &str) -> Vec<BlueprintCallableMethod> {
             let full = format!("{class}.{}", sig.name);
             let display = attr.display_name.unwrap_or_else(|| full.clone());
             let category = attr.category.unwrap_or_else(|| "Scripts".into());
+            let param_pins = parse_params(&sig.parameters);
+            let return_pin = map_cs_type(&sig.return_type);
             out.push(BlueprintCallableMethod {
                 source_path: PathBuf::new(),
                 class,
@@ -178,6 +249,8 @@ pub fn scan_text(text: &str) -> Vec<BlueprintCallableMethod> {
                 tooltip: attr.tooltip,
                 return_type: sig.return_type,
                 parameters: sig.parameters,
+                param_pins,
+                return_pin,
             });
         }
     }

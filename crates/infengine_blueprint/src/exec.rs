@@ -18,6 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{BlueprintTarget, BlueprintVariable, Graph, NamedGraph, Node, NodeId};
+use crate::cs_scan::BlueprintCallableMethod;
 
 /// Runtime value the stack carries between ops.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -97,10 +98,17 @@ pub enum Op {
     /// the `self_entity` node (id = blueprint's target entity) and
     /// by the `entity_ref` constant node (id from params).
     PushEntityRef(u32),
-    /// Ask the host to invoke the C# method whose name is the
-    /// `method` argument. Argument marshaling is not implemented in
-    /// v1; the call is purely exec-flow and produces no value.
-    CallCSharp(String),
+    /// Ask the host to invoke the C# method. Pops `arg_count` Values
+    /// off the stack (top-of-stack = last declared parameter), hands
+    /// them to the host, and if `has_return` is true pushes the
+    /// host's returned `Value` back. The host's default impl ignores
+    /// the args; full reverse-call wiring lives in
+    /// `docs/design/blueprint_csharp_callable.md`.
+    CallCSharp {
+        method: String,
+        arg_count: u8,
+        has_return: bool,
+    },
     /// Pop a Vec3; push the requested component (0=x, 1=y, 2=z) as
     /// a float. Backs each output pin of a `break_vec3` node, which
     /// the compiler emits once per consumer.
@@ -199,6 +207,7 @@ fn compile_data(
     visiting: &mut HashSet<NodeId>,
     ops: &mut Vec<Op>,
     target: &BlueprintTarget,
+    callable_methods: &[BlueprintCallableMethod],
 ) -> Result<(), CompileError> {
     if !visiting.insert(node_id) {
         return Err(CompileError::Cycle { node: node_id });
@@ -263,6 +272,52 @@ fn compile_data(
             let name = node.params.get("name").cloned().unwrap_or_default();
             ops.push(Op::FindEntityByName(name));
         }
+        "call_cs_method" => {
+            // Pulling data from a C# method's return pin: emit the
+            // full call (with args from connected inputs) so the
+            // return value sits on the stack for the consumer. The
+            // call is impure - we issue side effects every time the
+            // value is pulled. Acceptable for v1; UE's pure-vs-impure
+            // distinction is future work.
+            let method = node.params.get("method").cloned().unwrap_or_default();
+            let known = callable_methods.iter().find(|m| m.full_name == method);
+            let (arg_count, has_return) = if let Some(m) = known {
+                for p in &m.param_pins {
+                    match find_data_source(graph, node_id, &p.name) {
+                        Some((src, src_pin)) => {
+                            compile_data(graph, src, src_pin, visiting, ops, target, callable_methods)?;
+                        }
+                        None => match p.ty {
+                            crate::PinType::Bool => {
+                                ops.push(Op::PushBool(pin_default_bool(node, &p.name)));
+                            }
+                            crate::PinType::Vec3 => {
+                                ops.push(Op::PushVec3([0.0, 0.0, 0.0]));
+                            }
+                            crate::PinType::EntityRef => {
+                                ops.push(Op::PushEntityRef(0));
+                            }
+                            _ => {
+                                ops.push(Op::PushFloat(pin_default_float(node, &p.name)));
+                            }
+                        },
+                    }
+                }
+                (m.param_pins.len() as u8, m.return_pin.is_some())
+            } else {
+                (0u8, false)
+            };
+            ops.push(Op::CallCSharp {
+                method,
+                arg_count,
+                has_return,
+            });
+            // If the method has no return value, push a placeholder
+            // so the data-pull contract (one Value pushed) holds.
+            if !has_return {
+                ops.push(Op::PushFloat(0.0));
+            }
+        }
         "self_entity" => {
             // Bake the blueprint target's entity id. Global
             // blueprints have no self entity; emit a 0 ref so the
@@ -290,7 +345,7 @@ fn compile_data(
             // `pin` parameter the caller passed in.
             match find_data_source(graph, node_id, "value") {
                 Some((src, src_pin)) => {
-                    compile_data(graph, src, src_pin, visiting, ops, target)?;
+                    compile_data(graph, src, src_pin, visiting, ops, target, callable_methods)?;
                 }
                 None => ops.push(Op::PushVec3([0.0, 0.0, 0.0])),
             }
@@ -306,7 +361,7 @@ fn compile_data(
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target, callable_methods)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -322,7 +377,7 @@ fn compile_data(
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target, callable_methods)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -337,7 +392,7 @@ fn compile_data(
             for input in ["a", "b"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target, callable_methods)?;
                     }
                     None => ops.push(Op::PushBool(pin_default_bool(node, input))),
                 }
@@ -351,7 +406,7 @@ fn compile_data(
         "not" => {
             match find_data_source(graph, node_id, "value") {
                 Some((src_node, src_pin)) => {
-                    compile_data(graph, src_node, src_pin, visiting, ops, target)?;
+                    compile_data(graph, src_node, src_pin, visiting, ops, target, callable_methods)?;
                 }
                 None => ops.push(Op::PushBool(pin_default_bool(node, "value"))),
             }
@@ -361,7 +416,7 @@ fn compile_data(
             for input in ["x", "y", "z"] {
                 match find_data_source(graph, node_id, input) {
                     Some((src_node, src_pin)) => {
-                        compile_data(graph, src_node, src_pin, visiting, ops, target)?;
+                        compile_data(graph, src_node, src_pin, visiting, ops, target, callable_methods)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -384,6 +439,7 @@ fn compile_data(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_sink(
     graph: &Graph,
     node_id: NodeId,
@@ -391,6 +447,7 @@ fn compile_sink(
     target: &BlueprintTarget,
     functions: &[NamedGraph],
     calling: &mut HashSet<String>,
+    callable_methods: &[BlueprintCallableMethod],
 ) -> Result<(), CompileError> {
     let node = find_node(graph, node_id).ok_or(CompileError::MissingInput {
         node: node_id,
@@ -401,7 +458,7 @@ fn compile_sink(
             match find_data_source(graph, node_id, "value") {
                 Some((src, src_pin)) => {
                     let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
                 }
                 None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
@@ -412,7 +469,7 @@ fn compile_sink(
             match find_data_source(graph, node_id, "value") {
                 Some((src, src_pin)) => {
                     let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
                 }
                 None => ops.push(Op::PushFloat(pin_default_float(node, "value"))),
             }
@@ -430,7 +487,7 @@ fn compile_sink(
             match find_data_source(graph, node_id, "entity") {
                 Some((src, src_pin)) => {
                     let mut visiting = HashSet::new();
-                    compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                    compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
                 }
                 None => {
                     let self_id = match target {
@@ -444,7 +501,7 @@ fn compile_sink(
                 match find_data_source(graph, node_id, input) {
                     Some((src, src_pin)) => {
                         let mut visiting = HashSet::new();
-                        compile_data(graph, src, src_pin, &mut visiting, ops, target)?;
+                        compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
                     }
                     None => ops.push(Op::PushFloat(pin_default_float(node, input))),
                 }
@@ -464,11 +521,48 @@ fn compile_sink(
             ops.push(Op::PlaySound(path));
         }
         "call_cs_method" => {
-            // Invoke a C# method previously registered via the
-            // [BlueprintCallable] attribute. v1: exec-only, no
-            // arg marshaling.
+            // Invoke a C# method registered via the
+            // [BlueprintCallable] attribute. If the editor's C#
+            // scanner saw the method, we know its parameter list +
+            // return type and emit data pushes for each parameter
+            // (defaulting to inline literals when unconnected) and
+            // tell the VM to push the return value back when the
+            // method isn't void. Falls back to exec-only when the
+            // method isn't in the registry.
             let method = node.params.get("method").cloned().unwrap_or_default();
-            ops.push(Op::CallCSharp(method));
+            let known = callable_methods.iter().find(|m| m.full_name == method);
+            let (arg_count, has_return) = if let Some(m) = known {
+                for p in &m.param_pins {
+                    match find_data_source(graph, node_id, &p.name) {
+                        Some((src, src_pin)) => {
+                            let mut visiting = HashSet::new();
+                            compile_data(graph, src, src_pin, &mut visiting, ops, target, callable_methods)?;
+                        }
+                        None => match p.ty {
+                            crate::PinType::Bool => {
+                                ops.push(Op::PushBool(pin_default_bool(node, &p.name)));
+                            }
+                            crate::PinType::Vec3 => {
+                                ops.push(Op::PushVec3([0.0, 0.0, 0.0]));
+                            }
+                            crate::PinType::EntityRef => {
+                                ops.push(Op::PushEntityRef(0));
+                            }
+                            _ => {
+                                ops.push(Op::PushFloat(pin_default_float(node, &p.name)));
+                            }
+                        },
+                    }
+                }
+                (m.param_pins.len() as u8, m.return_pin.is_some())
+            } else {
+                (0u8, false)
+            };
+            ops.push(Op::CallCSharp {
+                method,
+                arg_count,
+                has_return,
+            });
         }
         "call_function" => {
             let name = node.params.get("name").cloned().unwrap_or_default();
@@ -505,6 +599,7 @@ fn compile_sink(
                     &mut inner_visited,
                     functions,
                     calling,
+                    callable_methods,
                 )?;
             }
             calling.remove(&name);
@@ -532,6 +627,7 @@ fn compile_exec_from(
     visited: &mut HashSet<NodeId>,
     functions: &[NamedGraph],
     calling: &mut HashSet<String>,
+    callable_methods: &[BlueprintCallableMethod],
 ) -> Result<(), CompileError> {
     let next_sinks: Vec<NodeId> = graph
         .edges
@@ -554,19 +650,23 @@ fn compile_exec_from(
                 // top-to-bottom.
                 for pin_name in ["then_0", "then_1", "then_2", "then_3"] {
                     compile_exec_from(
-                        graph, sink_id, pin_name, ops, target, visited, functions, calling,
+                        graph,
+                        sink_id,
+                        pin_name,
+                        ops,
+                        target,
+                        visited,
+                        functions,
+                        calling,
+                        callable_methods,
                     )?;
                 }
             }
             "branch" => {
-                // Evaluate the bool condition then emit the
-                // standard JumpIfFalse + true-body + Jump-to-end +
-                // false-body pattern, patching the jump targets
-                // once each body's length is known.
                 match find_data_source(graph, sink_id, "condition") {
                     Some((src, src_pin)) => {
                         let mut local = HashSet::new();
-                        compile_data(graph, src, src_pin, &mut local, ops, target)?;
+                        compile_data(graph, src, src_pin, &mut local, ops, target, callable_methods)?;
                     }
                     None => {
                         let sink_node = find_node(graph, sink_id).ok_or(
@@ -580,28 +680,55 @@ fn compile_exec_from(
                 }
                 let jif_idx = ops.len();
                 ops.push(Op::JumpIfFalse(0));
-                // True branch.
                 compile_exec_from(
-                    graph, sink_id, "true", ops, target, visited, functions, calling,
+                    graph,
+                    sink_id,
+                    "true",
+                    ops,
+                    target,
+                    visited,
+                    functions,
+                    calling,
+                    callable_methods,
                 )?;
                 let jmp_idx = ops.len();
                 ops.push(Op::Jump(0));
                 let false_start = ops.len() as u32;
-                // False branch.
                 compile_exec_from(
-                    graph, sink_id, "false", ops, target, visited, functions, calling,
+                    graph,
+                    sink_id,
+                    "false",
+                    ops,
+                    target,
+                    visited,
+                    functions,
+                    calling,
+                    callable_methods,
                 )?;
                 let end_addr = ops.len() as u32;
                 ops[jif_idx] = Op::JumpIfFalse(false_start);
                 ops[jmp_idx] = Op::Jump(end_addr);
             }
             _ => {
-                compile_sink(graph, sink_id, ops, target, functions, calling)?;
-                // A regular sink may have its own `exec` output (rare
-                // for the current node set); follow it so chains of
-                // Prints / SetPositions all run.
+                compile_sink(
+                    graph,
+                    sink_id,
+                    ops,
+                    target,
+                    functions,
+                    calling,
+                    callable_methods,
+                )?;
                 compile_exec_from(
-                    graph, sink_id, "exec", ops, target, visited, functions, calling,
+                    graph,
+                    sink_id,
+                    "exec",
+                    ops,
+                    target,
+                    visited,
+                    functions,
+                    calling,
+                    callable_methods,
                 )?;
             }
         }
@@ -617,7 +744,7 @@ pub fn compile(
     trigger: Trigger,
     target: &BlueprintTarget,
 ) -> Result<Program, CompileError> {
-    compile_with_functions(graph, &[], trigger, target)
+    compile_with_context(graph, &[], &[], trigger, target)
 }
 
 /// Compile an event graph that may contain `call_function` nodes
@@ -627,6 +754,20 @@ pub fn compile(
 pub fn compile_with_functions(
     graph: &Graph,
     functions: &[NamedGraph],
+    trigger: Trigger,
+    target: &BlueprintTarget,
+) -> Result<Program, CompileError> {
+    compile_with_context(graph, functions, &[], trigger, target)
+}
+
+/// Most general entry point. Combines per-blueprint functions plus
+/// the project's discovered `[BlueprintCallable]` C# methods, so the
+/// compiler can emit proper argument pushes and return-value handling
+/// for `call_cs_method` nodes pinned to a known method.
+pub fn compile_with_context(
+    graph: &Graph,
+    functions: &[NamedGraph],
+    callable_methods: &[BlueprintCallableMethod],
     trigger: Trigger,
     target: &BlueprintTarget,
 ) -> Result<Program, CompileError> {
@@ -649,6 +790,7 @@ pub fn compile_with_functions(
             &mut visited,
             functions,
             &mut calling,
+            callable_methods,
         )?;
     }
     Ok(Program { ops })
@@ -697,10 +839,13 @@ pub trait Host {
     fn find_entity_by_name(&self, _name: &str) -> Option<u32> {
         None
     }
-    /// Invoke a C# method registered via `[BlueprintCallable]`. v1
-    /// is exec-only with no arg marshaling; the full pipeline is
-    /// described in `docs/design/blueprint_csharp_callable.md`.
-    fn call_csharp(&mut self, _method: &str) {}
+    /// Invoke a C# method registered via `[BlueprintCallable]`.
+    /// `args` carries the marshalled parameter values in declared
+    /// order. Returning `Some(v)` pushes `v` back onto the VM
+    /// stack; `None` is the no-return / void case.
+    fn call_csharp(&mut self, _method: &str, _args: &[Value]) -> Option<Value> {
+        None
+    }
 }
 
 #[derive(Debug, Default)]
@@ -851,8 +996,22 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             Op::PushEntityRef(id) => {
                 stack.push(Value::EntityRef(*id));
             }
-            Op::CallCSharp(method) => {
-                host.call_csharp(method);
+            Op::CallCSharp {
+                method,
+                arg_count,
+                has_return,
+            } => {
+                let mut args: Vec<Value> = Vec::with_capacity(*arg_count as usize);
+                for _ in 0..*arg_count {
+                    args.push(stack.pop().unwrap_or(Value::Float(0.0)));
+                }
+                args.reverse(); // restore declared order
+                let ret = host.call_csharp(method, &args);
+                if *has_return
+                    && let Some(v) = ret
+                {
+                    stack.push(v);
+                }
             }
             Op::ExtractFloat(idx) => {
                 let v = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
@@ -1176,14 +1335,74 @@ mod tests {
     }
 
     #[test]
+    fn call_cs_method_marshals_arguments() {
+        struct Mock {
+            last: Option<(String, Vec<Value>)>,
+        }
+        impl Host for Mock {
+            fn print(&mut self, _: Value) {}
+            fn call_csharp(
+                &mut self,
+                method: &str,
+                args: &[Value],
+            ) -> Option<Value> {
+                self.last = Some((method.to_string(), args.to_vec()));
+                None
+            }
+        }
+        // Build a fake callable manifest: Showcase.SetScore(float).
+        let manifest = vec![crate::cs_scan::BlueprintCallableMethod {
+            source_path: std::path::PathBuf::new(),
+            class: "Showcase".into(),
+            method: "SetScore".into(),
+            full_name: "Showcase.SetScore".into(),
+            display_name: "Showcase.SetScore".into(),
+            category: "Scripts".into(),
+            tooltip: None,
+            return_type: "void".into(),
+            parameters: "float score".into(),
+            param_pins: vec![crate::cs_scan::CsParam {
+                name: "score".into(),
+                ty: crate::PinType::Float,
+                raw_type: "float".into(),
+            }],
+            return_pin: None,
+        }];
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let call = g.add_node("call_cs_method", [0.0, 0.0]);
+        {
+            let n = g.nodes.iter_mut().find(|n| n.id == call).unwrap();
+            n.params.insert("method".into(), "Showcase.SetScore".into());
+            n.params.insert("pin_score".into(), "42".into());
+        }
+        assert!(g.connect(&reg, tick, "exec", call, "in").unwrap());
+        let prog = compile_with_context(
+            &g,
+            &[],
+            &manifest,
+            Trigger::OnTick,
+            &BlueprintTarget::Global,
+        )
+        .unwrap();
+        let mut h = Mock { last: None };
+        run(&prog, &mut h);
+        let (m, args) = h.last.unwrap();
+        assert_eq!(m, "Showcase.SetScore");
+        assert_eq!(args, vec![Value::Float(42.0)]);
+    }
+
+    #[test]
     fn call_cs_method_invokes_host() {
         struct Mock {
             calls: Vec<String>,
         }
         impl Host for Mock {
             fn print(&mut self, _: Value) {}
-            fn call_csharp(&mut self, method: &str) {
+            fn call_csharp(&mut self, method: &str, _args: &[Value]) -> Option<Value> {
                 self.calls.push(method.to_string());
+                None
             }
         }
         let reg = NodeKindRegistry::with_builtins();

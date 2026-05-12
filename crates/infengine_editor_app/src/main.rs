@@ -591,6 +591,7 @@ impl Editor {
     fn compile_play_scripts(
         scripts: &[(infengine_blueprint::Blueprint, std::path::PathBuf)],
         library_functions: &[infengine_blueprint::NamedGraph],
+        callable_methods: &[infengine_blueprint::cs_scan::BlueprintCallableMethod],
         out_ticks: &mut Vec<Program>,
         fire_on_start: bool,
     ) {
@@ -604,9 +605,10 @@ impl Editor {
                 }
             }
             if fire_on_start {
-                match infengine_blueprint::exec::compile_with_functions(
+                match infengine_blueprint::exec::compile_with_context(
                     &bp.graph,
                     &merged_functions,
+                    callable_methods,
                     Trigger::OnStart,
                     &bp.target,
                 ) {
@@ -619,9 +621,10 @@ impl Editor {
                     }
                 }
             }
-            if let Ok(prog) = infengine_blueprint::exec::compile_with_functions(
+            if let Ok(prog) = infengine_blueprint::exec::compile_with_context(
                 &bp.graph,
                 &merged_functions,
+                callable_methods,
                 Trigger::OnTick,
                 &bp.target,
             ) {
@@ -661,6 +664,7 @@ impl Editor {
         Self::compile_play_scripts(
             &scripts_to_run,
             &self.load_blueprint_library_functions(),
+            &self.blueprint.callable_methods.clone(),
             &mut self.play_blueprint_ticks,
             false,
         );
@@ -872,6 +876,7 @@ impl Editor {
         Self::compile_play_scripts(
             &scripts_to_run,
             &self.load_blueprint_library_functions(),
+            &self.blueprint.callable_methods.clone(),
             &mut self.play_blueprint_ticks,
             true,
         );
@@ -1220,11 +1225,16 @@ impl infengine_blueprint::exec::Host for PlayHost {
     fn find_entity_by_name(&self, name: &str) -> Option<u32> {
         self.name_to_id.get(name).copied()
     }
-    fn call_csharp(&mut self, method: &str) {
+    fn call_csharp(
+        &mut self,
+        method: &str,
+        args: &[infengine_blueprint::exec::Value],
+    ) -> Option<infengine_blueprint::exec::Value> {
         // TODO: route through the CoreCLR scripting bridge once
         // reverse-call wiring lands. For now log so the user has
-        // feedback the node fired.
-        tracing::info!(method = %method, "blueprint -> C# call (stub)");
+        // feedback the node fired and what args it carried.
+        tracing::info!(method = %method, ?args, "blueprint -> C# call (stub)");
+        None
     }
 }
 

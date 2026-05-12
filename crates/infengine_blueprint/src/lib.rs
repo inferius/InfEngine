@@ -789,6 +789,37 @@ impl Graph {
         });
         Ok(true)
     }
+
+    /// Like `connect` but skips the registry-driven pin lookup. The
+    /// caller is responsible for type-checking via `effective_pins`
+    /// or equivalent. Needed for nodes whose pins aren't statically
+    /// known to the registry (e.g. `call_cs_method` parameters).
+    pub fn raw_connect(
+        &mut self,
+        from_node: NodeId,
+        from_pin: &str,
+        to_node: NodeId,
+        to_pin: &str,
+    ) -> bool {
+        if from_node == to_node {
+            return false;
+        }
+        if self.edges.iter().any(|e| {
+            e.from_node == from_node
+                && e.from_pin == from_pin
+                && e.to_node == to_node
+                && e.to_pin == to_pin
+        }) {
+            return false;
+        }
+        self.edges.push(Edge {
+            from_node,
+            from_pin: from_pin.to_owned(),
+            to_node,
+            to_pin: to_pin.to_owned(),
+        });
+        true
+    }
 }
 
 /// What a blueprint applies to. Drives the editor's header label and
@@ -923,6 +954,68 @@ const PIN_HIT_RADIUS: f32 = 10.0;
 
 fn node_height_def(def: &NodeKindDef) -> f32 {
     let rows = def.inputs.len().max(def.outputs.len()) as f32;
+    NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
+}
+
+/// Owned pin descriptor used when the editor needs to combine
+/// statically-known pins (from `NodeKindDef`) with dynamic pins
+/// (e.g. the parameters of a `[BlueprintCallable]` C# method). The
+/// renderer / hit-test / compile paths all read from these so a
+/// `call_cs_method` node's parameters are first-class.
+#[derive(Debug, Clone)]
+pub struct EffectivePin {
+    pub name: String,
+    pub ty: PinType,
+}
+
+impl EffectivePin {
+    fn from_spec(p: &PinSpec) -> Self {
+        Self {
+            name: p.name.to_string(),
+            ty: p.ty,
+        }
+    }
+}
+
+/// Resolve the effective input + output pin lists for `node`. For
+/// most kinds this just clones the static `NodeKindDef` pins. For
+/// `call_cs_method` it appends the parameters of the targeted
+/// `[BlueprintCallable]` method (if known) and exposes its return
+/// type as a `return` output pin when the method isn't void.
+pub fn effective_pins(
+    node: &Node,
+    def: Option<&NodeKindDef>,
+    callable_methods: &[cs_scan::BlueprintCallableMethod],
+) -> (Vec<EffectivePin>, Vec<EffectivePin>) {
+    let mut inputs: Vec<EffectivePin> = def
+        .map(|d| d.inputs.iter().map(EffectivePin::from_spec).collect())
+        .unwrap_or_default();
+    let mut outputs: Vec<EffectivePin> = def
+        .map(|d| d.outputs.iter().map(EffectivePin::from_spec).collect())
+        .unwrap_or_default();
+    if node.kind == "call_cs_method"
+        && let Some(name) = node.params.get("method")
+        && let Some(m) = callable_methods.iter().find(|m| &m.full_name == name)
+    {
+        for p in &m.param_pins {
+            inputs.push(EffectivePin {
+                name: p.name.clone(),
+                ty: p.ty,
+            });
+        }
+        if let Some(ret) = m.return_pin {
+            outputs.push(EffectivePin {
+                name: "return".into(),
+                ty: ret,
+            });
+        }
+    }
+    (inputs, outputs)
+}
+
+/// Height of the visual node given its effective pin lists.
+fn node_height_pins(inputs: &[EffectivePin], outputs: &[EffectivePin]) -> f32 {
+    let rows = inputs.len().max(outputs.len()) as f32;
     NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
 }
 
@@ -1147,8 +1240,9 @@ impl BlueprintEditor {
         pin: &str,
         is_output: bool,
     ) -> Option<egui::Pos2> {
-        let def = registry.get(&node.kind)?;
-        let pins = if is_output { def.outputs } else { def.inputs };
+        let def = registry.get(&node.kind);
+        let (eff_in, eff_out) = effective_pins(node, def, &self.callable_methods);
+        let pins = if is_output { &eff_out } else { &eff_in };
         let idx = pins.iter().position(|p| p.name == pin)?;
         let origin = self.node_origin(canvas_min, node);
         let y = origin.y + NODE_HEADER_HEIGHT + idx as f32 * PIN_ROW_HEIGHT + PIN_ROW_HEIGHT * 0.5;
@@ -1170,13 +1264,15 @@ impl BlueprintEditor {
             let Some(def) = registry.get(&node.kind) else {
                 continue;
             };
-            for (is_output, pins) in [(true, def.outputs), (false, def.inputs)] {
+            let (eff_in, eff_out) =
+                effective_pins(node, Some(def), &self.callable_methods);
+            for (is_output, pins) in [(true, &eff_out), (false, &eff_in)] {
                 for pin in pins {
-                    if let Some(p) =
-                        self.pin_position(registry, canvas_min, node, pin.name, is_output)
-                        && pos.distance(p) <= PIN_HIT_RADIUS
+                    if let Some(p) = self.pin_position(
+                        registry, canvas_min, node, &pin.name, is_output,
+                    ) && pos.distance(p) <= PIN_HIT_RADIUS
                     {
-                        return Some((node.id, pin.name.to_string(), is_output, pin.ty));
+                        return Some((node.id, pin.name.clone(), is_output, pin.ty));
                     }
                 }
             }
@@ -1197,10 +1293,12 @@ impl BlueprintEditor {
             let origin = self.node_origin(canvas_min, node);
             // Comment nodes use a wider, fixed-height rect (matches
             // the renderer's layout).
+            let (eff_in, eff_out) =
+                effective_pins(node, Some(def), &self.callable_methods);
             let size = if node.kind == "comment" {
                 egui::vec2(NODE_WIDTH * 2.2, 64.0)
             } else {
-                egui::vec2(NODE_WIDTH, node_height_def(def))
+                egui::vec2(NODE_WIDTH, node_height_pins(&eff_in, &eff_out))
             };
             let rect = egui::Rect::from_min_size(origin, size);
             if rect.contains(pos) {
@@ -2152,18 +2250,46 @@ impl BlueprintEditor {
                         } else {
                             (target_node, target_pin, pending.node, pending.pin.clone())
                         };
-                        match self
+                        // When either side is a dynamic-pin node
+                        // (call_cs_method with method-specific args /
+                        // return), the static registry doesn't know
+                        // its pins. Validate via effective_pins and
+                        // bypass `connect`'s registry lookup.
+                        let from_is_cs = self
                             .blueprint
                             .graph
-                            .connect(registry, from_node, &from_pin, to_node, &to_pin)
-                        {
-                            Ok(true) => {
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == from_node)
+                            .map(|n| n.kind == "call_cs_method")
+                            .unwrap_or(false);
+                        let to_is_cs = self
+                            .blueprint
+                            .graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == to_node)
+                            .map(|n| n.kind == "call_cs_method")
+                            .unwrap_or(false);
+                        if from_is_cs || to_is_cs {
+                            if self.blueprint.graph.raw_connect(
+                                from_node, &from_pin, to_node, &to_pin,
+                            ) {
                                 dirty = true;
                                 self.status.clear();
                             }
-                            Ok(false) => {}
-                            Err(err) => {
-                                self.status = format!("Connect: {err}");
+                        } else {
+                            match self.blueprint.graph.connect(
+                                registry, from_node, &from_pin, to_node, &to_pin,
+                            ) {
+                                Ok(true) => {
+                                    dirty = true;
+                                    self.status.clear();
+                                }
+                                Ok(false) => {}
+                                Err(err) => {
+                                    self.status = format!("Connect: {err}");
+                                }
                             }
                         }
                     }
@@ -2365,10 +2491,12 @@ impl BlueprintEditor {
             } else {
                 NODE_WIDTH
             };
+            let (eff_inputs, eff_outputs) =
+                effective_pins(node, Some(def), &self.callable_methods);
             let cull_h = if node.kind == "comment" {
                 64.0
             } else {
-                node_height_def(def)
+                node_height_pins(&eff_inputs, &eff_outputs)
             };
             let node_bounds = egui::Rect::from_min_size(origin, egui::vec2(cull_w, cull_h));
             if !rect.intersects(node_bounds) {
@@ -2517,14 +2645,14 @@ impl BlueprintEditor {
                     egui::Color32::from_rgb(140, 220, 140),
                 );
             }
-            for (i, pin) in def.inputs.iter().enumerate() {
+            for (i, pin) in eff_inputs.iter().enumerate() {
                 let y = origin.y
                     + NODE_HEADER_HEIGHT
                     + i as f32 * PIN_ROW_HEIGHT
                     + PIN_ROW_HEIGHT * 0.5;
                 let [r, g, b] = pin.ty.rgb();
                 let connected =
-                    connected_in_pins.contains(&(node.id, pin.name.to_string()));
+                    connected_in_pins.contains(&(node.id, pin.name.clone()));
                 let pin_center = egui::pos2(origin.x, y);
                 let hover_rect = egui::Rect::from_center_size(
                     pin_center,
@@ -2554,7 +2682,7 @@ impl BlueprintEditor {
                 painter.text(
                     egui::pos2(origin.x + 10.0, y - 7.0),
                     egui::Align2::LEFT_TOP,
-                    pin.name,
+                    &pin.name,
                     egui::FontId::proportional(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
@@ -2578,7 +2706,7 @@ impl BlueprintEditor {
                     // Pin already wired - paint a dim "<- wired"
                     // placeholder so adjacent inline-editable rows
                     // don't look misaligned. Skip the actual widget.
-                    if connected_in_pins.contains(&(node.id, pin.name.to_string())) {
+                    if connected_in_pins.contains(&(node.id, pin.name.clone())) {
                         if edit_w > 24.0 {
                             let placeholder = egui::Rect::from_min_size(
                                 egui::pos2(edit_x, y - 9.0),
@@ -2641,7 +2769,7 @@ impl BlueprintEditor {
                     }
                 }
             }
-            for (i, pin) in def.outputs.iter().enumerate() {
+            for (i, pin) in eff_outputs.iter().enumerate() {
                 let y = origin.y
                     + NODE_HEADER_HEIGHT
                     + i as f32 * PIN_ROW_HEIGHT
@@ -2672,7 +2800,7 @@ impl BlueprintEditor {
                 painter.text(
                     egui::pos2(origin.x + NODE_WIDTH - 10.0, y - 7.0),
                     egui::Align2::RIGHT_TOP,
-                    pin.name,
+                    &pin.name,
                     egui::FontId::proportional(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
