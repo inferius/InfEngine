@@ -1237,12 +1237,18 @@ impl BlueprintEditor {
     /// this frame so the host can persist it.
     pub fn show(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
+        let total_w = ui.available_width();
+        let total_h = ui.available_height();
+        // Three-pane layout: left (drag sources), middle (canvas),
+        // right (Properties context-sensitive on the selected
+        // target). Mirrors Unreal's "My Blueprint" + Graph +
+        // "Details" arrangement.
+        let left_w = 220.0;
+        let right_w = 260.0;
+        let center_w = (total_w - left_w - right_w - 16.0).max(200.0);
         ui.horizontal_top(|ui| {
-            // Left side panel: blueprint metadata + variables /
-            // functions / macros lists (Unreal-style).
-            let side_w = 240.0;
             ui.allocate_ui_with_layout(
-                egui::vec2(side_w, ui.available_height()),
+                egui::vec2(left_w, total_h),
                 egui::Layout::top_down_justified(egui::Align::LEFT),
                 |ui| {
                     if self.render_side_panel(ui) {
@@ -1251,12 +1257,126 @@ impl BlueprintEditor {
                 },
             );
             ui.separator();
-            // Right column: the existing canvas surface.
-            ui.vertical(|ui| {
-                if self.show_canvas(ui, registry) {
+            ui.allocate_ui_with_layout(
+                egui::vec2(center_w, total_h),
+                egui::Layout::top_down_justified(egui::Align::LEFT),
+                |ui| {
+                    if self.show_canvas(ui, registry) {
+                        dirty = true;
+                    }
+                },
+            );
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_w, total_h),
+                egui::Layout::top_down_justified(egui::Align::LEFT),
+                |ui| {
+                    if self.render_properties_panel(ui) {
+                        dirty = true;
+                    }
+                },
+            );
+        });
+        dirty
+    }
+
+    /// Right-side Properties panel. Shows the inspector for the
+    /// currently selected node, falling back to blueprint settings
+    /// when nothing is picked. Mirrors Unreal's "Details" panel so
+    /// the user doesn't have to dig inside a side-panel collapsing
+    /// section just to tweak a node's params.
+    fn render_properties_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut dirty = false;
+        ui.heading("Properties");
+        ui.separator();
+        if self.selected.is_some() {
+            ui.label("Selected node");
+            ui.separator();
+            if self.render_node_inspector(ui) {
+                dirty = true;
+            }
+            ui.separator();
+        } else {
+            ui.label("(nothing selected)");
+            ui.label("Click a node, variable, or function row.");
+            ui.separator();
+        }
+        // Always show blueprint-level settings at the bottom; the
+        // user often wants to flip target / rename while authoring.
+        ui.collapsing("Blueprint settings", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                if ui.text_edit_singleline(&mut self.blueprint.name).changed() {
                     dirty = true;
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Target");
+                let current = self.blueprint.target.label();
+                egui::ComboBox::from_id_salt("blueprint_target_props")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Global),
+                                "Global",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Global;
+                            dirty = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Entity { .. }),
+                                "Entity",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Entity {
+                                entity_id: 0,
+                                entity_name: "unnamed".into(),
+                            };
+                            dirty = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(self.blueprint.target, BlueprintTarget::Class(_)),
+                                "Class",
+                            )
+                            .clicked()
+                        {
+                            self.blueprint.target = BlueprintTarget::Class("Player".into());
+                            dirty = true;
+                        }
+                    });
+            });
+            match &mut self.blueprint.target {
+                BlueprintTarget::Global => {}
+                BlueprintTarget::Entity {
+                    entity_id,
+                    entity_name,
+                } => {
+                    ui.horizontal(|ui| {
+                        ui.label("Entity id");
+                        if ui.add(egui::DragValue::new(entity_id)).changed() {
+                            dirty = true;
+                        }
+                        ui.label("Name");
+                        if ui.text_edit_singleline(entity_name).changed() {
+                            dirty = true;
+                        }
+                    });
+                }
+                BlueprintTarget::Class(name) => {
+                    ui.horizontal(|ui| {
+                        ui.label("Class");
+                        if ui.text_edit_singleline(name).changed() {
+                            dirty = true;
+                        }
+                    });
+                }
+            }
         });
         dirty
     }
@@ -1421,13 +1541,6 @@ impl BlueprintEditor {
             }
             dirty = true;
         }
-        // Inspector for the currently selected node. Lives here on
-        // the side panel so the canvas stays clean.
-        ui.collapsing("Selected node", |ui| {
-            if self.render_node_inspector(ui) {
-                dirty = true;
-            }
-        });
         // Macros (scaffold).
         ui.collapsing("Macros", |ui| {
             let mut remove: Option<usize> = None;
@@ -1848,82 +1961,9 @@ impl BlueprintEditor {
             ui.colored_label(egui::Color32::from_rgb(255, 200, 80), &self.status);
         }
 
-        // Blueprint settings: name + target picker.
-        ui.collapsing("Blueprint settings", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                if ui.text_edit_singleline(&mut self.blueprint.name).changed() {
-                    dirty = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Target");
-                let current = self.blueprint.target.label();
-                egui::ComboBox::from_id_salt("blueprint_target")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(
-                                matches!(self.blueprint.target, BlueprintTarget::Global),
-                                "Global",
-                            )
-                            .clicked()
-                        {
-                            self.blueprint.target = BlueprintTarget::Global;
-                            dirty = true;
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.blueprint.target, BlueprintTarget::Entity { .. }),
-                                "Entity",
-                            )
-                            .clicked()
-                        {
-                            self.blueprint.target = BlueprintTarget::Entity {
-                                entity_id: 0,
-                                entity_name: "unnamed".into(),
-                            };
-                            dirty = true;
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.blueprint.target, BlueprintTarget::Class(_)),
-                                "Class",
-                            )
-                            .clicked()
-                        {
-                            self.blueprint.target = BlueprintTarget::Class("Player".into());
-                            dirty = true;
-                        }
-                    });
-            });
-            match &mut self.blueprint.target {
-                BlueprintTarget::Global => {}
-                BlueprintTarget::Entity {
-                    entity_id,
-                    entity_name,
-                } => {
-                    ui.horizontal(|ui| {
-                        ui.label("Entity id");
-                        if ui.add(egui::DragValue::new(entity_id)).changed() {
-                            dirty = true;
-                        }
-                        ui.label("Name");
-                        if ui.text_edit_singleline(entity_name).changed() {
-                            dirty = true;
-                        }
-                    });
-                }
-                BlueprintTarget::Class(name) => {
-                    ui.horizontal(|ui| {
-                        ui.label("Class");
-                        if ui.text_edit_singleline(name).changed() {
-                            dirty = true;
-                        }
-                    });
-                }
-            }
-        });
+        // Blueprint name + target are edited from the right-hand
+        // Properties panel now - the canvas just paints graph
+        // content.
         ui.separator();
 
         let canvas = ui.available_size_before_wrap();
