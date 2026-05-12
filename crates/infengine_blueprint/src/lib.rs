@@ -768,6 +768,48 @@ fn node_height_def(def: &NodeKindDef) -> f32 {
 /// Header tint for a node, keyed off its declared category. Mirrors
 /// Unreal's coloured-header convention so the user can spot events,
 /// math, control flow and variable nodes at a glance.
+/// Minimum distance from `point` to the cubic bezier wire that
+/// `draw_edge` paints between `a` and `b`. We sample the same 24
+/// points and take the closest segment, which is plenty accurate
+/// for "is the cursor on this wire" hover detection.
+fn bezier_min_distance(a: egui::Pos2, b: egui::Pos2, point: egui::Pos2) -> f32 {
+    let dx = (b.x - a.x).abs().max(40.0) * 0.5;
+    let c1 = egui::pos2(a.x + dx, a.y);
+    let c2 = egui::pos2(b.x - dx, b.y);
+    let mut prev = a;
+    let mut best = f32::INFINITY;
+    for i in 1..=24 {
+        let t = i as f32 / 24.0;
+        let one = 1.0 - t;
+        let x = one * one * one * a.x
+            + 3.0 * one * one * t * c1.x
+            + 3.0 * one * t * t * c2.x
+            + t * t * t * b.x;
+        let y = one * one * one * a.y
+            + 3.0 * one * one * t * c1.y
+            + 3.0 * one * t * t * c2.y
+            + t * t * t * b.y;
+        let curr = egui::pos2(x, y);
+        // Distance from `point` to segment (prev, curr).
+        let sx = curr.x - prev.x;
+        let sy = curr.y - prev.y;
+        let len_sq = sx * sx + sy * sy;
+        let t_proj = if len_sq > 0.0 {
+            (((point.x - prev.x) * sx + (point.y - prev.y) * sy) / len_sq).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let nx = prev.x + sx * t_proj;
+        let ny = prev.y + sy * t_proj;
+        let d = ((point.x - nx).powi(2) + (point.y - ny).powi(2)).sqrt();
+        if d < best {
+            best = d;
+        }
+        prev = curr;
+    }
+    best
+}
+
 fn category_header_color(category: &str) -> [u8; 3] {
     match category {
         "Events" => [180, 60, 60],
@@ -1696,7 +1738,63 @@ impl BlueprintEditor {
             }
         }
 
-        if response.clicked_by(egui::PointerButton::Secondary)
+        let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
+        if delete_pressed && let Some(id) = self.selected.take() {
+            self.blueprint.graph.remove_node(id);
+            dirty = true;
+        }
+
+        // Find which edge (if any) the cursor is hovering. We
+        // approximate the bezier with the same 24-sample polyline
+        // draw_edge uses, then take the minimum point-to-segment
+        // distance across all samples.
+        let mut hovered_edge: Option<usize> = None;
+        if let Some(p) = hover
+            && self.pending_edge.is_none()
+        {
+            let mut best = 8.0_f32;
+            for (idx, edge) in self.blueprint.graph.edges.iter().enumerate() {
+                let from = self
+                    .blueprint
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == edge.from_node);
+                let to = self
+                    .blueprint
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == edge.to_node);
+                if let (Some(f), Some(t)) = (from, to)
+                    && let (Some(a), Some(b)) = (
+                        self.pin_position(registry, rect.min, f, &edge.from_pin, true),
+                        self.pin_position(registry, rect.min, t, &edge.to_pin, false),
+                    )
+                {
+                    let d = bezier_min_distance(a, b, p);
+                    if d < best {
+                        best = d;
+                        hovered_edge = Some(idx);
+                    }
+                }
+            }
+        }
+
+        // Right-click on a hovered wire -> break the link. Bypasses
+        // the empty-canvas context menu trigger below.
+        let mut wire_break_consumed = false;
+        if let Some(idx) = hovered_edge
+            && response.clicked_by(egui::PointerButton::Secondary)
+        {
+            self.blueprint.graph.edges.remove(idx);
+            wire_break_consumed = true;
+            dirty = true;
+        }
+        // Empty-canvas right-click: open the Add-node context menu.
+        // Skipped if a wire was just broken.
+        if !wire_break_consumed
+            && response.clicked_by(egui::PointerButton::Secondary)
             && let Some(pos) = hover
             && self.hit_pin(registry, rect.min, pos).is_none()
             && self.hit_node(registry, rect.min, pos).is_none()
@@ -1704,14 +1802,8 @@ impl BlueprintEditor {
             self.context_menu_at = Some(pos);
         }
 
-        let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
-        if delete_pressed && let Some(id) = self.selected.take() {
-            self.blueprint.graph.remove_node(id);
-            dirty = true;
-        }
-
         // Edges first.
-        for edge in &self.blueprint.graph.edges {
+        for (idx, edge) in self.blueprint.graph.edges.iter().enumerate() {
             let from = self
                 .blueprint
                 .graph
@@ -1739,7 +1831,8 @@ impl BlueprintEditor {
                         egui::Color32::from_rgb(r, g, b)
                     })
                     .unwrap_or(egui::Color32::from_gray(200));
-                Self::draw_edge(&painter, a, b, color, 2.0);
+                let stroke_w = if hovered_edge == Some(idx) { 4.0 } else { 2.0 };
+                Self::draw_edge(&painter, a, b, color, stroke_w);
             }
         }
 
