@@ -4883,6 +4883,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "voxel_demo_mp"
+version = "0.0.1"
+dependencies = [
+ "bincode",
+ "egui",
+ "glam 0.30.10",
+ "infengine_editor",
+ "infengine_net",
+ "infengine_render",
+ "infengine_voxel",
+ "infengine_window",
+ "serde",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -61,6 +61,12 @@ pub enum NetMessage {
     /// (blueprints, C# RPC). Payload is a single float for now;
     /// richer marshalling is roadmap.
     Event { name: String, payload: f32 },
+    /// Generic typed payload envelope. Applications (e.g. the voxel
+    /// MP demo) bincode-encode their own structs and ship them
+    /// through here, tagged by `kind` so the receiver can dispatch.
+    /// Direction is bidirectional; servers can broadcast and clients
+    /// can send to server. Loss is fire-and-forget UDP.
+    Bytes { kind: String, data: Vec<u8> },
     /// Liveness probe; receiver replies with `Pong`.
     Ping,
     Pong,
@@ -89,6 +95,7 @@ pub struct NetServer {
     next_id: u32,
     tick: u64,
     inbox_events: Vec<(u32, String, f32)>,
+    inbox_bytes: Vec<(u32, String, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +129,7 @@ impl NetServer {
             next_id: 1,
             tick: 0,
             inbox_events: Vec::new(),
+            inbox_bytes: Vec::new(),
         })
     }
 
@@ -200,8 +208,30 @@ impl NetServer {
                     self.inbox_events.push((c.id, name, payload));
                 }
             }
+            NetMessage::Bytes { kind, data } => {
+                if let Some(c) = self.clients.get(&addr) {
+                    self.inbox_bytes.push((c.id, kind, data));
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Broadcast a typed byte payload to every connected client.
+    pub fn broadcast_bytes(&self, kind: &str, data: Vec<u8>) {
+        let msg = NetMessage::Bytes {
+            kind: kind.to_string(),
+            data,
+        };
+        for addr in self.clients.keys() {
+            let _ = self.send_to(&msg, *addr);
+        }
+    }
+
+    /// Drain any typed payloads received from clients since the
+    /// last call.
+    pub fn drain_bytes(&mut self) -> Vec<(u32, String, Vec<u8>)> {
+        std::mem::take(&mut self.inbox_bytes)
     }
 
     /// Broadcast a snapshot of every replicated entity to every
@@ -256,6 +286,7 @@ pub struct NetClient {
     pub client_id: Option<u32>,
     pub last_snapshot: Option<(u64, Vec<EntitySnapshot>)>,
     inbox_events: Vec<(String, f32)>,
+    inbox_bytes: Vec<(String, Vec<u8>)>,
     name: String,
     last_hello_sent: Option<Instant>,
 }
@@ -289,6 +320,7 @@ impl NetClient {
             client_id: None,
             last_snapshot: None,
             inbox_events: Vec::new(),
+            inbox_bytes: Vec::new(),
             name: name.into(),
             last_hello_sent: None,
         })
@@ -355,6 +387,9 @@ impl NetClient {
             NetMessage::Event { name, payload } => {
                 self.inbox_events.push((name, payload));
             }
+            NetMessage::Bytes { kind, data } => {
+                self.inbox_bytes.push((kind, data));
+            }
             NetMessage::Pong => {}
             _ => {}
         }
@@ -365,6 +400,17 @@ impl NetClient {
             name: name.to_string(),
             payload,
         })
+    }
+
+    pub fn send_bytes(&self, kind: &str, data: Vec<u8>) -> Result<(), NetError> {
+        self.send(&NetMessage::Bytes {
+            kind: kind.to_string(),
+            data,
+        })
+    }
+
+    pub fn drain_bytes(&mut self) -> Vec<(String, Vec<u8>)> {
+        std::mem::take(&mut self.inbox_bytes)
     }
 
     pub fn ping(&self) -> Result<(), NetError> {

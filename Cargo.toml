@@ -19,6 +19,7 @@ members = [
     "examples/csharp_demo",
     "examples/demo_game",
     "examples/voxel_demo",
+    "examples/voxel_demo_mp",
     "examples/showcase",
 ]
 

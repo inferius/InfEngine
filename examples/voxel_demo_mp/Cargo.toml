@@ -1,0 +1,29 @@
+[package]
+name = "voxel_demo_mp"
+description = "Multiplayer voxel demo: shared world over UDP using infengine_net."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "voxel_demo_mp"
+path = "src/main.rs"
+
+[dependencies]
+infengine_voxel = { path = "../../crates/infengine_voxel" }
+infengine_window = { path = "../../crates/infengine_window" }
+infengine_render = { path = "../../crates/infengine_render" }
+infengine_editor = { path = "../../crates/infengine_editor" }
+infengine_net = { path = "../../crates/infengine_net" }
+egui = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true, features = ["serde"] }

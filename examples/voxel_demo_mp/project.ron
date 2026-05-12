@@ -1,0 +1,12 @@
+(
+    name: "voxel_demo",
+    asset_root: "assets",
+    scenes: [],
+    classes: [
+        (
+            name: "Player",
+            blueprint: None,
+            default_components: [],
+        ),
+    ],
+)
