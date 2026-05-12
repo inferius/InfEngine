@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!--
+      Project-specific game assembly. Lives next to the showcase
+      project's data (scenes, blueprints) so a game's C# code, its
+      blueprint graphs, and its scenes ship as a single folder. The
+      engine loads this DLL into a collectible AssemblyLoadContext at
+      runtime; rebuilding `Showcase.cs` swaps the implementation
+      without restarting the editor / runtime.
+    -->
+    <RootNamespace>InfEngine.Scripts.Game</RootNamespace>
+    <AssemblyName>Showcase</AssemblyName>
+    <Optimize>true</Optimize>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Reference the engine-wide Host assembly for `Engine.*` helpers
+      and `[BlueprintCallable]`. Private=false keeps the Host DLL
+      out of this project's output - the engine loads it itself.
+    -->
+    <ProjectReference Include="..\..\..\..\scripts\InfEngine.Scripts.Host\InfEngine.Scripts.Host.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>

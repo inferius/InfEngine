@@ -45,6 +45,8 @@ secrets.toml
 # C# build output
 /scripts/**/bin/
 /scripts/**/obj/
+**/project/scripts/bin/
+**/project/scripts/obj/
 
 # Editor scratch files at workspace root
 /project.ron

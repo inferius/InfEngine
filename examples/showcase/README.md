@@ -24,10 +24,26 @@ blueprints (entity, class, global, library) + C# scripting hook.
 
 ## C# scripting
 
-The showcase project ties into the InfEngine C# scripting layer
-through `scripts/InfEngine.Scripts.Game/Showcase.cs`. That file
-lives in the hot-reloadable game assembly alongside `Player.cs`
-and exposes four methods:
+Project-specific C# code lives **next to the project data**, not
+inside the engine's `scripts/` tree:
+
+```text
+examples/showcase/project/
+|- project.ron
+|- scenes/
+|- blueprints/
+`- scripts/
+   |- Showcase.cs       Game-side game logic + [BlueprintCallable] hooks
+   `- Showcase.csproj   Builds Showcase.dll, references engine Host
+```
+
+That way a game's data (scenes, blueprints) and its game-side C#
+ship as one folder you can copy / version-control together. The
+engine-wide `scripts/InfEngine.Scripts.Host/` only carries the
+public API surface (the `Engine` static class, the
+`[BlueprintCallable]` attribute) every project shares.
+
+`Showcase.cs` exposes four methods:
 
 | Method                       | Attribute             | Purpose |
 |------------------------------|-----------------------|---------|
@@ -39,13 +55,15 @@ and exposes four methods:
 Build the C# side once:
 
 ```sh
-cd scripts/InfEngine.Scripts.Game
+cd examples/showcase/project/scripts
 dotnet build -c Release
-cd ../..
+cd ../../../..
 ```
 
-Then any rebuild of `Showcase.cs` swaps in via the host's
-reload entry point - no engine restart needed.
+Output lands in
+`examples/showcase/project/scripts/bin/Release/net10.0/Showcase.dll`.
+Any rebuild swaps in via the host's reload entry point - no engine
+restart needed.
 
 The blueprint nodes referencing `Showcase.OnPickupCollected` and
 `Showcase.ResetScore` currently route through the stub
