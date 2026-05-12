@@ -51,6 +51,13 @@ pub struct Project {
     /// Registered entity classes (Unreal-lite templates).
     #[serde(default)]
     pub classes: Vec<Class>,
+    /// Asset-relative paths to blueprint files whose `functions` are
+    /// exposed globally. Any blueprint compiled in this project can
+    /// call them via a `call_function` node referencing the function
+    /// name. Renames in the library propagate locally via the
+    /// existing rename-refactor logic on the library blueprint.
+    #[serde(default)]
+    pub blueprint_libraries: Vec<String>,
 }
 
 fn default_asset_root() -> PathBuf {
@@ -64,6 +71,7 @@ impl Default for Project {
             asset_root: default_asset_root(),
             scenes: Vec::new(),
             classes: Vec::new(),
+            blueprint_libraries: Vec::new(),
         }
     }
 }
@@ -142,6 +150,7 @@ mod tests {
                 path: "scene.ron".into(),
             }],
             classes: Vec::new(),
+            blueprint_libraries: Vec::new(),
         };
         let text = ron::ser::to_string(&p).unwrap();
         let back: Project = ron::de::from_str(&text).unwrap();

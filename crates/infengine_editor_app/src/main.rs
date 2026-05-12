@@ -564,6 +564,28 @@ impl Editor {
         self.blueprint_open = true;
     }
 
+    /// Load every project-declared blueprint library and return the
+    /// flat list of their `functions`. Missing or invalid library
+    /// paths are logged and skipped. Used at Play start so calls to
+    /// shared library functions resolve at compile time.
+    fn load_blueprint_library_functions(&self) -> Vec<infengine_blueprint::NamedGraph> {
+        let mut out = Vec::new();
+        for rel in &self.project.blueprint_libraries {
+            let full = self.project_root.join(rel);
+            match Blueprint::load(&full) {
+                Ok(bp) => {
+                    for f in bp.functions {
+                        out.push(f);
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, path = %full.display(), "library load failed");
+                }
+            }
+        }
+        out
+    }
+
     fn open_entity_blueprint(&mut self, eid: EntityId) {
         // Save whatever was being edited before swapping.
         self.save_active_blueprint();
@@ -726,10 +748,23 @@ impl Editor {
                 active.path.clone().unwrap_or_default(),
             ));
         }
+        // Load functions from every blueprint library declared in
+        // the project so cross-blueprint `call_function` calls
+        // resolve. Merged with each script's own functions before
+        // compilation.
+        let library_functions = self.load_blueprint_library_functions();
         for (bp, _path) in &scripts_to_run {
+            let mut merged_functions: Vec<infengine_blueprint::NamedGraph> =
+                bp.functions.clone();
+            for lib_fn in &library_functions {
+                // Skip duplicates - local functions shadow library ones.
+                if !merged_functions.iter().any(|f| f.name == lib_fn.name) {
+                    merged_functions.push(lib_fn.clone());
+                }
+            }
             match infengine_blueprint::exec::compile_with_functions(
                 &bp.graph,
-                &bp.functions,
+                &merged_functions,
                 Trigger::OnStart,
                 &bp.target,
             ) {
@@ -743,7 +778,7 @@ impl Editor {
             }
             if let Ok(prog) = infengine_blueprint::exec::compile_with_functions(
                 &bp.graph,
-                &bp.functions,
+                &merged_functions,
                 Trigger::OnTick,
                 &bp.target,
             ) {
@@ -1834,6 +1869,33 @@ impl AppHandler for Editor {
                             });
                         });
 
+                        ui.collapsing("Blueprint libraries", |ui| {
+                            ui.small(
+                                "Other blueprints can call any function defined here via Call Function."
+                            );
+                            let mut remove: Option<usize> = None;
+                            for (i, lib) in
+                                self.project.blueprint_libraries.iter_mut().enumerate()
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.text_edit_singleline(lib);
+                                    if ui.small_button("X").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                self.project.blueprint_libraries.remove(i);
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Add library").clicked() {
+                                    self.project
+                                        .blueprint_libraries
+                                        .push("blueprints/library.ron".into());
+                                }
+                            });
+                        });
+
                         ui.collapsing("Hierarchy", |ui| {
                             egui::ScrollArea::vertical()
                                 .max_height(240.0)
@@ -2728,6 +2790,7 @@ fn load_or_create_project(path: &Path) -> Result<Project, ProjectError> {
             asset_root: PathBuf::from("assets"),
             scenes: Vec::new(),
             classes: Vec::new(),
+            blueprint_libraries: Vec::new(),
         };
         project.save(path)?;
         info!(path = %path.display(), "created blank project");
