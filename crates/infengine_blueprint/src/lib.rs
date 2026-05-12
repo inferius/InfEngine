@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod cs_scan;
 pub mod exec;
 
 /// Stable numeric id of a node inside a graph.
@@ -1096,6 +1097,10 @@ pub struct BlueprintEditor {
     /// Latest Play-mode capture map; mirrored from the workspace
     /// before each show() so the canvas can paint live values.
     pub play_captures: HashMap<u32, exec::Value>,
+    /// Project-wide list of methods exposed by `[BlueprintCallable]`
+    /// in the game C# scripts. Mirrored from the workspace before
+    /// each show(); the context menu + inspector dropdown consume it.
+    pub callable_methods: Vec<cs_scan::BlueprintCallableMethod>,
     /// Find-in-graph state. `find_open` toggles the small floating
     /// search panel; `find_query` is the live filter; the canvas
     /// reads both each frame and offers click-to-jump for matches.
@@ -1722,12 +1727,26 @@ impl BlueprintEditor {
                 });
             }
             "call_cs_method" => {
-                // Static dropdown of method names known at build time.
-                // A reflection-driven registry will replace this list
-                // once the C# -> Rust manifest pipeline is wired -
-                // see docs/design/blueprint_csharp_callable.md.
+                // Dropdown sourced from the project's discovered
+                // `[BlueprintCallable]` methods (filled in by the
+                // editor's startup scan + hot-reload of .cs files).
+                // Falls back to two engine-wide helpers if the scan
+                // turned up nothing - useful while the user hasn't
+                // built their game's C# yet.
                 let mut method =
                     node.params.get("method").cloned().unwrap_or_default();
+                let mut entries: Vec<String> = self
+                    .callable_methods
+                    .iter()
+                    .map(|m| m.full_name.clone())
+                    .collect();
+                if entries.is_empty() {
+                    entries.extend(
+                        ["Engine.Log", "Engine.TimeSeconds"]
+                            .iter()
+                            .map(|s| s.to_string()),
+                    );
+                }
                 ui.horizontal(|ui| {
                     ui.label("method");
                     egui::ComboBox::from_id_salt(format!("cs_method_{}", node.id.0))
@@ -1737,13 +1756,14 @@ impl BlueprintEditor {
                             method.as_str()
                         })
                         .show_ui(ui, |ui| {
-                            for known in ["Engine.Log", "Engine.TimeSeconds"] {
+                            for known in &entries {
                                 if ui
-                                    .selectable_label(method == known, known)
+                                    .selectable_label(&method == known, known)
                                     .clicked()
                                 {
-                                    method = known.into();
-                                    node.params.insert("method".into(), method.clone());
+                                    method = known.clone();
+                                    node.params
+                                        .insert("method".into(), method.clone());
                                     dirty = true;
                                 }
                             }
@@ -1753,6 +1773,23 @@ impl BlueprintEditor {
                         dirty = true;
                     }
                 });
+                // Show optional tooltip when a discovered method is
+                // selected so the user remembers what it does.
+                if let Some(m) = self
+                    .callable_methods
+                    .iter()
+                    .find(|m| m.full_name == node.params.get("method").cloned().unwrap_or_default())
+                {
+                    if !m.parameters.is_empty() {
+                        ui.small(format!("params: {}", m.parameters));
+                    }
+                    if !m.return_type.is_empty() {
+                        ui.small(format!("returns: {}", m.return_type));
+                    }
+                    if let Some(t) = &m.tooltip {
+                        ui.small(t);
+                    }
+                }
             }
             "call_function" => {
                 let mut name = node
@@ -2723,6 +2760,12 @@ impl BlueprintEditor {
         if let Some(anchor) = self.context_menu_at {
             let mut close = false;
             let mut add_kind: Option<&'static str> = None;
+            // When the user picks one of the project's discovered
+            // C# methods, we want a call_cs_method node pre-bound to
+            // that method's name. Stored separately from add_kind
+            // because the kind is static but the method name is
+            // dynamic (sourced from the .cs scan).
+            let mut add_cs_method: Option<String> = None;
             let pin_filter = self.context_menu_from_pin.clone();
             egui::Area::new(egui::Id::new("blueprint_context_menu"))
                 .fixed_pos(anchor)
@@ -2784,6 +2827,34 @@ impl BlueprintEditor {
                         egui::ScrollArea::vertical()
                             .max_height(340.0)
                             .show(ui, |ui| {
+                                // Discovered C# methods (only when
+                                // the pin filter would accept an Exec
+                                // input, since call_cs_method is
+                                // exec-only in v1). Empty list = skip.
+                                let cs_compatible = pin_filter
+                                    .as_ref()
+                                    .map(|p| p.ty == PinType::Exec && p.is_output)
+                                    .unwrap_or(true);
+                                let cs_matches: Vec<&cs_scan::BlueprintCallableMethod> =
+                                    if cs_compatible {
+                                        self.callable_methods
+                                            .iter()
+                                            .filter(|m| {
+                                                query.is_empty()
+                                                    || m.full_name
+                                                        .to_lowercase()
+                                                        .contains(&query)
+                                                    || m.display_name
+                                                        .to_lowercase()
+                                                        .contains(&query)
+                                                    || m.category
+                                                        .to_lowercase()
+                                                        .contains(&query)
+                                            })
+                                            .collect()
+                                    } else {
+                                        Vec::new()
+                                    };
                                 if query.is_empty() {
                                     // Tree view by category.
                                     let mut by_cat: HashMap<
@@ -2811,15 +2882,82 @@ impl BlueprintEditor {
                                             }
                                         });
                                     }
+                                    // Project C# methods grouped by
+                                    // their attribute Category. Each
+                                    // entry creates a call_cs_method
+                                    // node pre-bound to the method.
+                                    if !cs_matches.is_empty() {
+                                        let mut cs_by_cat: HashMap<
+                                            String,
+                                            Vec<&cs_scan::BlueprintCallableMethod>,
+                                        > = HashMap::new();
+                                        for m in &cs_matches {
+                                            cs_by_cat
+                                                .entry(format!("C#: {}", m.category))
+                                                .or_default()
+                                                .push(m);
+                                        }
+                                        let mut keys: Vec<_> =
+                                            cs_by_cat.keys().cloned().collect();
+                                        keys.sort();
+                                        for key in keys {
+                                            ui.collapsing(&key, |ui| {
+                                                let mut ms = cs_by_cat[&key].clone();
+                                                ms.sort_by(|a, b| {
+                                                    a.display_name.cmp(&b.display_name)
+                                                });
+                                                for m in ms {
+                                                    let label = if m.display_name == m.full_name {
+                                                        m.display_name.clone()
+                                                    } else {
+                                                        format!(
+                                                            "{} ({})",
+                                                            m.display_name, m.full_name
+                                                        )
+                                                    };
+                                                    if ui
+                                                        .button(label)
+                                                        .on_hover_text(
+                                                            m.tooltip
+                                                                .clone()
+                                                                .unwrap_or_else(|| {
+                                                                    m.full_name.clone()
+                                                                }),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        add_cs_method =
+                                                            Some(m.full_name.clone());
+                                                        close = true;
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
                                 } else {
                                     // Flat ranked list while searching.
-                                    if matches.is_empty() {
+                                    if matches.is_empty() && cs_matches.is_empty() {
                                         ui.label("(no matches)");
                                     }
                                     for def in &matches {
                                         let label = format!("{} - {}", def.category, def.label);
                                         if ui.button(label).on_hover_text(def.id).clicked() {
                                             add_kind = Some(def.id);
+                                            close = true;
+                                        }
+                                    }
+                                    for m in &cs_matches {
+                                        let label = format!("C# - {}", m.full_name);
+                                        if ui
+                                            .button(label)
+                                            .on_hover_text(
+                                                m.tooltip
+                                                    .clone()
+                                                    .unwrap_or_else(|| m.full_name.clone()),
+                                            )
+                                            .clicked()
+                                        {
+                                            add_cs_method = Some(m.full_name.clone());
                                             close = true;
                                         }
                                     }
@@ -2855,6 +2993,42 @@ impl BlueprintEditor {
                             .graph
                             .connect(registry, from_node, &from_pin, to_node, &to_pin);
                     }
+                }
+            }
+            // Discovered C# method selection: spawn a call_cs_method
+            // node with the method name baked into params.
+            if let Some(method) = add_cs_method {
+                let zoom = self.view_zoom.max(0.01);
+                let canvas_pos = (anchor - rect.min - self.view_offset) / zoom;
+                let new_id = self
+                    .blueprint
+                    .graph
+                    .add_node("call_cs_method", [canvas_pos.x, canvas_pos.y]);
+                if let Some(n) = self
+                    .blueprint
+                    .graph
+                    .nodes
+                    .iter_mut()
+                    .find(|n| n.id == new_id)
+                {
+                    n.params.insert("method".into(), method);
+                }
+                self.selected = Some(new_id);
+                dirty = true;
+                // Auto-connect a pending exec drag onto the new node's
+                // `in` pin so the user keeps wiring without breaking
+                // flow.
+                if let Some(p) = self.context_menu_from_pin.take()
+                    && p.is_output
+                    && p.ty == PinType::Exec
+                {
+                    let _ = self.blueprint.graph.connect(
+                        registry,
+                        p.node,
+                        &p.pin,
+                        new_id,
+                        "in",
+                    );
                 }
             }
             if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2923,6 +3097,12 @@ pub struct BlueprintWorkspace {
     /// from the editor's `PlayHost`; the canvas reads this map to
     /// paint a "live value" badge next to each data node.
     pub play_captures: HashMap<u32, exec::Value>,
+    /// Project-level discovered C# methods marked with
+    /// `[BlueprintCallable]`. The editor populates this list by
+    /// scanning the project's scripts directory; the context menu
+    /// turns each entry into a dedicated "create call_cs_method
+    /// pre-bound to <method>" action.
+    pub callable_methods: Vec<cs_scan::BlueprintCallableMethod>,
 }
 
 impl BlueprintWorkspace {
@@ -2934,6 +3114,16 @@ impl BlueprintWorkspace {
     /// per Play tick after running the cached programs.
     pub fn set_play_captures(&mut self, captures: HashMap<u32, exec::Value>) {
         self.play_captures = captures;
+    }
+
+    /// Replace the project's discovered `[BlueprintCallable]`
+    /// method list. Called by editor_app whenever the project is
+    /// loaded or its scripts hot-reload.
+    pub fn set_callable_methods(
+        &mut self,
+        methods: Vec<cs_scan::BlueprintCallableMethod>,
+    ) {
+        self.callable_methods = methods;
     }
 
     /// Open a blueprint in a fresh tab. If a tab already exists for
@@ -3011,6 +3201,7 @@ impl BlueprintWorkspace {
         }
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.play_captures = self.play_captures.clone();
+            tab.callable_methods = self.callable_methods.clone();
             if tab.show(ui, registry) {
                 dirty = true;
             }

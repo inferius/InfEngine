@@ -252,7 +252,25 @@ impl Editor {
             me.open_scene(0);
         }
         me.refresh_assets();
+        me.refresh_callable_methods();
         me
+    }
+
+    /// Scan the project's scripts directory for `.cs` files marked
+    /// with `[BlueprintCallable]` and hand the result to the BP
+    /// workspace so its context menu / inspector can list them as
+    /// dedicated entries. Idempotent; safe to call at any time.
+    fn refresh_callable_methods(&mut self) {
+        let scripts_dir = self.project_root.join("scripts");
+        let methods =
+            infengine_blueprint::cs_scan::scan_directory(&scripts_dir);
+        let count = methods.len();
+        self.blueprint.set_callable_methods(methods);
+        tracing::info!(
+            count,
+            scripts = %scripts_dir.display(),
+            "blueprint editor refreshed C# callable methods"
+        );
     }
 
     fn refresh_assets(&mut self) {
@@ -756,6 +774,10 @@ impl Editor {
         // user sees their edit live without leaving Play mode.
         if self.play_state != PlayState::Editing {
             self.hot_reload_play_blueprints();
+            // Saving a BP often pairs with a C# rebuild in the same
+            // session; re-scan so dropdowns / context menu reflect
+            // anything the user just added or renamed.
+            self.refresh_callable_methods();
         }
     }
 
