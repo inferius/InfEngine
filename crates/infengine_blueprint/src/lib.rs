@@ -822,6 +822,42 @@ fn bezier_min_distance(a: egui::Pos2, b: egui::Pos2, point: egui::Pos2) -> f32 {
     best
 }
 
+/// Rewrite every `get_*_var` / `set_*_var` node's `params["name"]`
+/// according to the `(old, new)` rename map. Idempotent: applying
+/// twice is harmless because we only ever rewrite when the old name
+/// matches exactly.
+/// Same as `refactor_var_renames` but for `call_function` nodes.
+fn refactor_fn_renames(graph: &mut Graph, renames: &[(String, String)]) {
+    for node in &mut graph.nodes {
+        if node.kind != "call_function" {
+            continue;
+        }
+        if let Some(name) = node.params.get_mut("name") {
+            for (old, new) in renames {
+                if name == old {
+                    *name = new.clone();
+                }
+            }
+        }
+    }
+}
+
+fn refactor_var_renames(graph: &mut Graph, renames: &[(String, String)]) {
+    for node in &mut graph.nodes {
+        let is_var_node = matches!(node.kind.as_str(), "get_float_var" | "set_float_var");
+        if !is_var_node {
+            continue;
+        }
+        if let Some(name) = node.params.get_mut("name") {
+            for (old, new) in renames {
+                if name == old {
+                    *name = new.clone();
+                }
+            }
+        }
+    }
+}
+
 fn category_header_color(category: &str) -> [u8; 3] {
     match category {
         "Events" => [180, 60, 60],
@@ -1065,6 +1101,15 @@ impl BlueprintEditor {
         ui.label(format!("Name: {}", self.blueprint.name));
         ui.label(format!("Target: {}", self.blueprint.target.label()));
         ui.separator();
+        // Snapshot variable names BEFORE the inline edits so we can
+        // detect renames and refactor all `get_*_var` / `set_*_var`
+        // references after the loop.
+        let pre_var_names: Vec<String> = self
+            .blueprint
+            .variables
+            .iter()
+            .map(|v| v.name.clone())
+            .collect();
         // Variables.
         ui.collapsing("Variables", |ui| {
             let mut remove: Option<usize> = None;
@@ -1124,6 +1169,38 @@ impl BlueprintEditor {
                 dirty = true;
             }
         });
+        // Detect any rename pairs (old -> new) by comparing the
+        // snapshot we took before the variable widgets ran against
+        // the post-edit names, then refactor every reference in the
+        // event graph + functions + macros so the user's wiring
+        // doesn't silently desync.
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for (i, old_name) in pre_var_names.iter().enumerate() {
+            if let Some(var) = self.blueprint.variables.get(i)
+                && var.name != *old_name
+                && !old_name.is_empty()
+                && !var.name.is_empty()
+            {
+                renames.push((old_name.clone(), var.name.clone()));
+            }
+        }
+        if !renames.is_empty() {
+            refactor_var_renames(&mut self.blueprint.graph, &renames);
+            for f in &mut self.blueprint.functions {
+                refactor_var_renames(&mut f.graph, &renames);
+            }
+            for m in &mut self.blueprint.macros {
+                refactor_var_renames(&mut m.graph, &renames);
+            }
+            dirty = true;
+        }
+        // Snapshot function names for the same refactor pattern.
+        let pre_fn_names: Vec<String> = self
+            .blueprint
+            .functions
+            .iter()
+            .map(|f| f.name.clone())
+            .collect();
         // Functions (drag-droppable: drop onto canvas -> CallFunction).
         ui.collapsing("Functions", |ui| {
             let mut remove: Option<usize> = None;
@@ -1156,6 +1233,28 @@ impl BlueprintEditor {
                 dirty = true;
             }
         });
+        // Function rename refactor: rewrite every `call_function`
+        // node that referenced the old name.
+        let mut fn_renames: Vec<(String, String)> = Vec::new();
+        for (i, old_name) in pre_fn_names.iter().enumerate() {
+            if let Some(f) = self.blueprint.functions.get(i)
+                && f.name != *old_name
+                && !old_name.is_empty()
+                && !f.name.is_empty()
+            {
+                fn_renames.push((old_name.clone(), f.name.clone()));
+            }
+        }
+        if !fn_renames.is_empty() {
+            refactor_fn_renames(&mut self.blueprint.graph, &fn_renames);
+            for f in &mut self.blueprint.functions {
+                refactor_fn_renames(&mut f.graph, &fn_renames);
+            }
+            for m in &mut self.blueprint.macros {
+                refactor_fn_renames(&mut m.graph, &fn_renames);
+            }
+            dirty = true;
+        }
         // Inspector for the currently selected node. Lives here on
         // the side panel so the canvas stays clean.
         ui.collapsing("Selected node", |ui| {
@@ -2423,6 +2522,56 @@ impl BlueprintWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refactor_var_rename_rewrites_references() {
+        let mut g = Graph::default();
+        let n = g.add_node("get_float_var", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|x| x.id == n)
+            .unwrap()
+            .params
+            .insert("name".into(), "Speed".into());
+        let m = g.add_node("set_float_var", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|x| x.id == m)
+            .unwrap()
+            .params
+            .insert("name".into(), "Speed".into());
+        let k = g.add_node("get_float_var", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|x| x.id == k)
+            .unwrap()
+            .params
+            .insert("name".into(), "Other".into());
+        refactor_var_renames(&mut g, &[("Speed".into(), "Velocity".into())]);
+        let names: Vec<String> = g
+            .nodes
+            .iter()
+            .map(|nn| nn.params.get("name").cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(names, vec!["Velocity", "Velocity", "Other"]);
+    }
+
+    #[test]
+    fn refactor_fn_rename_rewrites_call_function() {
+        let mut g = Graph::default();
+        let c = g.add_node("call_function", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|x| x.id == c)
+            .unwrap()
+            .params
+            .insert("name".into(), "Old".into());
+        refactor_fn_renames(&mut g, &[("Old".into(), "New".into())]);
+        assert_eq!(
+            g.nodes[0].params.get("name").cloned().unwrap_or_default(),
+            "New"
+        );
+    }
 
     #[test]
     fn typed_connect_accepts_matching() {
