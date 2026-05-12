@@ -1008,6 +1008,11 @@ pub struct BlueprintEditor {
     /// Which sub-graph is currently active in the canvas.
     pub active_sub_graph: SubGraphRef,
     view_offset: egui::Vec2,
+    /// Canvas zoom factor (1.0 = identity). Affects node positions
+    /// only; node visual size stays constant so labels and pin
+    /// targets remain readable. Spatial-only zoom is enough to give
+    /// an overview of large graphs and keep things ergonomic.
+    view_zoom: f32,
     dragging: Option<NodeId>,
     drag_node_offset: egui::Vec2,
     pending_edge: Option<PendingEdge>,
@@ -1056,7 +1061,12 @@ impl BlueprintEditor {
     }
 
     fn node_origin(&self, canvas_min: egui::Pos2, node: &Node) -> egui::Pos2 {
-        canvas_min + self.view_offset + egui::vec2(node.position[0], node.position[1])
+        canvas_min
+            + self.view_offset
+            + egui::vec2(
+                node.position[0] * self.view_zoom,
+                node.position[1] * self.view_zoom,
+            )
     }
 
     fn pin_position(
@@ -1676,6 +1686,12 @@ impl BlueprintEditor {
     /// afterwards. Returns `true` when the active graph mutated.
     fn show_canvas_body(&mut self, ui: &mut egui::Ui, registry: &NodeKindRegistry) -> bool {
         let mut dirty = false;
+        // Guard the zoom factor: serde load or Default::default may
+        // leave it at zero, which would collapse the layout to a
+        // single point.
+        if self.view_zoom < 0.05 {
+            self.view_zoom = 1.0;
+        }
 
         // Header: blueprint name + target + nodes/edges counts.
         ui.horizontal(|ui| {
@@ -1716,7 +1732,9 @@ impl BlueprintEditor {
             });
             if ui.button("Reset view").clicked() {
                 self.view_offset = egui::Vec2::ZERO;
+                self.view_zoom = 1.0;
             }
+            ui.label(format!("Zoom: {:.0}%", self.view_zoom * 100.0));
         });
         if !self.status.is_empty() {
             ui.colored_label(egui::Color32::from_rgb(255, 200, 80), &self.status);
@@ -1813,7 +1831,8 @@ impl BlueprintEditor {
             // Hover position is the cursor when the release happened;
             // fall back to canvas top-left if egui didn't capture one.
             let drop_pos = response.hover_pos().unwrap_or(rect.min);
-            let canvas_pos = drop_pos - rect.min - self.view_offset;
+            let zoom = self.view_zoom.max(0.01);
+            let canvas_pos = (drop_pos - rect.min - self.view_offset) / zoom;
             match payload.as_ref() {
                 BpDragPayload::Function(name) => {
                     let new_id = self
@@ -1933,8 +1952,11 @@ impl BlueprintEditor {
             && let Some(node) = self.blueprint.graph.nodes.iter_mut().find(|n| n.id == id)
         {
             let local = pos - rect.min - self.view_offset - self.drag_node_offset;
-            node.position[0] = local.x;
-            node.position[1] = local.y;
+            // Drag deltas are in screen pixels; node.position is
+            // stored in canvas-space so divide out the zoom factor.
+            let zoom = self.view_zoom.max(0.01);
+            node.position[0] = local.x / zoom;
+            node.position[1] = local.y / zoom;
             dirty = true;
         }
 
@@ -1984,6 +2006,27 @@ impl BlueprintEditor {
             self.find_open = !self.find_open;
             if !self.find_open {
                 self.find_query.clear();
+            }
+        }
+        // Ctrl + scroll-wheel zooms the canvas around the cursor.
+        // Without Ctrl the scroll is ignored so it doesn't fight
+        // the rest of egui's scroll handling. The cursor's canvas
+        // anchor is preserved so the user can zoom into whatever
+        // they're looking at instead of being teleported away.
+        if let Some(hover_pos) = hover {
+            let (scroll, ctrl) = ui.input(|i| {
+                (i.smooth_scroll_delta.y, i.modifiers.command_only())
+            });
+            if ctrl && scroll.abs() > 0.01 {
+                let prev_zoom = self.view_zoom.max(0.01);
+                let factor = (scroll * 0.0015).exp();
+                let new_zoom = (prev_zoom * factor).clamp(0.25, 3.0);
+                // Solve for view_offset so the canvas point under the
+                // cursor stays where it was after the zoom change.
+                let anchor = hover_pos - rect.min;
+                let canvas_anchor = (anchor - self.view_offset) / prev_zoom;
+                self.view_offset = anchor - canvas_anchor * new_zoom;
+                self.view_zoom = new_zoom;
             }
         }
         let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
@@ -2113,6 +2156,7 @@ impl BlueprintEditor {
         // Nodes. Snapshot view + selection state so we can borrow
         // the graph nodes mutably (needed for inline pin defaults).
         let view_offset = self.view_offset;
+        let view_zoom = self.view_zoom;
         let selected_id = self.selected;
         let multi_selected = self.selected_extra.clone();
         // Build a set of pins that have an incoming edge so inline
@@ -2135,7 +2179,7 @@ impl BlueprintEditor {
             };
             let origin = rect.min
                 + view_offset
-                + egui::vec2(node.position[0], node.position[1]);
+                + egui::vec2(node.position[0] * view_zoom, node.position[1] * view_zoom);
             // Cheap culling: skip any node whose bounding box is
             // entirely outside the visible canvas. Avoids both
             // pointless painter calls and `ui.put` widgets escaping
@@ -2452,8 +2496,9 @@ impl BlueprintEditor {
             {
                 let canvas_center =
                     egui::vec2(rect.width() * 0.5, rect.height() * 0.5);
+                let zoom = self.view_zoom.max(0.01);
                 self.view_offset = canvas_center
-                    - egui::vec2(node.position[0], node.position[1])
+                    - egui::vec2(node.position[0] * zoom, node.position[1] * zoom)
                     - egui::vec2(NODE_WIDTH * 0.5, 0.0);
                 self.selected = Some(id);
             }
@@ -2573,7 +2618,8 @@ impl BlueprintEditor {
                     });
                 });
             if let Some(kind) = add_kind {
-                let canvas_pos = anchor - rect.min - self.view_offset;
+                let zoom = self.view_zoom.max(0.01);
+                let canvas_pos = (anchor - rect.min - self.view_offset) / zoom;
                 let new_id = self
                     .blueprint
                     .graph
