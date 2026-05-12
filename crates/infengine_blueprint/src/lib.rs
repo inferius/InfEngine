@@ -2524,9 +2524,7 @@ impl BlueprintEditor {
                 // Inline pin-default editor: only for non-exec inputs
                 // that have no incoming edge. Stored under
                 // `params["pin_<name>"]`.
-                if pin.ty != PinType::Exec
-                    && !connected_in_pins.contains(&(node.id, pin.name.to_string()))
-                {
+                if pin.ty != PinType::Exec {
                     let label_w = (pin.name.len() as f32) * 6.5;
                     let edit_x = origin.x + 14.0 + label_w + 4.0;
                     // Clamp the edit rect to both the node's right
@@ -2538,6 +2536,30 @@ impl BlueprintEditor {
                     let max_right = (origin.x + NODE_WIDTH - 8.0).min(rect.max.x - 4.0);
                     let edit_w = max_right - edit_x;
                     if edit_x >= rect.max.x - 4.0 {
+                        continue;
+                    }
+                    // Pin already wired - paint a dim "<- wired"
+                    // placeholder so adjacent inline-editable rows
+                    // don't look misaligned. Skip the actual widget.
+                    if connected_in_pins.contains(&(node.id, pin.name.to_string())) {
+                        if edit_w > 24.0 {
+                            let placeholder = egui::Rect::from_min_size(
+                                egui::pos2(edit_x, y - 9.0),
+                                egui::vec2(edit_w, 16.0),
+                            );
+                            painter.rect_filled(
+                                placeholder,
+                                3.0,
+                                egui::Color32::from_rgba_unmultiplied(60, 70, 90, 90),
+                            );
+                            painter.text(
+                                placeholder.left_center() + egui::vec2(6.0, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                "wired",
+                                egui::FontId::monospace(10.0),
+                                egui::Color32::from_rgb(140, 150, 170),
+                            );
+                        }
                         continue;
                     }
                     if edit_w > 24.0 {
