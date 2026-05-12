@@ -500,6 +500,28 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        // Returns the EntityRef of the blueprint's own target
+        // entity. Only useful in Entity / Class blueprints since
+        // Global blueprints have no self.
+        id: "self_entity",
+        label: "Self",
+        category: "Scene",
+        inputs: &[],
+        outputs: &[PinSpec::new("entity", PinType::EntityRef)],
+        contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
+    },
+    NodeKindDef {
+        // Literal entity-id constant. `params["id"]` holds the u32
+        // baked at compile time. Useful for referencing an entity
+        // by its stable scene id when the name lookup is overkill.
+        id: "entity_ref",
+        label: "Entity Ref",
+        category: "Scene",
+        inputs: &[],
+        outputs: &[PinSpec::new("entity", PinType::EntityRef)],
+        contexts: &[],
+    },
+    NodeKindDef {
         // Sets transform fields of any entity (referenced via
         // EntityRef input). Useful in Global blueprints together
         // with Find Entity by Name.
@@ -1534,6 +1556,16 @@ impl BlueprintEditor {
                     ui.label("name");
                     if ui.text_edit_singleline(&mut name).changed() {
                         node.params.insert("name".into(), name);
+                        dirty = true;
+                    }
+                });
+            }
+            "entity_ref" => {
+                let mut id_str = node.params.get("id").cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("id");
+                    if ui.text_edit_singleline(&mut id_str).changed() {
+                        node.params.insert("id".into(), id_str);
                         dirty = true;
                     }
                 });

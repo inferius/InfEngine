@@ -93,6 +93,10 @@ pub enum Op {
     /// Ask the host for the entity id with the given name. Pushes
     /// `EntityRef(id)` on success or `EntityRef(0)` if none match.
     FindEntityByName(String),
+    /// Push a literal `EntityRef(id)` baked at compile time. Used by
+    /// the `self_entity` node (id = blueprint's target entity) and
+    /// by the `entity_ref` constant node (id from params).
+    PushEntityRef(u32),
     /// Pop a Vec3 then an EntityRef; write the Vec3 as the entity's
     /// world-space position / rotation / scale via the host.
     SetEntityPositionRef,
@@ -250,6 +254,26 @@ fn compile_data(
         "find_entity_by_name" => {
             let name = node.params.get("name").cloned().unwrap_or_default();
             ops.push(Op::FindEntityByName(name));
+        }
+        "self_entity" => {
+            // Bake the blueprint target's entity id. Global
+            // blueprints have no self entity; emit a 0 ref so the
+            // VM's "id != 0" guards skip the write.
+            let eid = match target {
+                BlueprintTarget::Entity { entity_id, .. } => *entity_id,
+                _ => 0,
+            };
+            ops.push(Op::PushEntityRef(eid));
+        }
+        "entity_ref" => {
+            // Literal entity id stored in the node's params, useful
+            // when the user knows a stable entity id ahead of time.
+            let id = node
+                .params
+                .get("id")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            ops.push(Op::PushEntityRef(id));
         }
         "add" | "subtract" | "multiply" | "divide" => {
             for input in ["a", "b"] {
@@ -802,6 +826,9 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
                 let id = host.find_entity_by_name(name).unwrap_or(0);
                 stack.push(Value::EntityRef(id));
             }
+            Op::PushEntityRef(id) => {
+                stack.push(Value::EntityRef(*id));
+            }
             Op::SetEntityPositionRef => {
                 let vec = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
                     Value::Vec3(v) => v,
@@ -1089,6 +1116,38 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(8.0)]);
+    }
+
+    #[test]
+    fn self_entity_node_bakes_target_id() {
+        struct Mock {
+            sets: Vec<(u32, [f32; 3])>,
+        }
+        impl Host for Mock {
+            fn print(&mut self, _: Value) {}
+            fn set_entity_position(&mut self, entity_id: u32, position: [f32; 3]) {
+                self.sets.push((entity_id, position));
+            }
+        }
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let setp = g.add_node("set_position_of", [0.0, 0.0]);
+        let me = g.add_node("self_entity", [0.0, 0.0]);
+        let setn = g.nodes.iter_mut().find(|n| n.id == setp).unwrap();
+        setn.params.insert("pin_x".into(), "1".into());
+        setn.params.insert("pin_y".into(), "2".into());
+        setn.params.insert("pin_z".into(), "3".into());
+        assert!(g.connect(&reg, tick, "exec", setp, "in").unwrap());
+        assert!(g.connect(&reg, me, "entity", setp, "entity").unwrap());
+        let target = BlueprintTarget::Entity {
+            entity_id: 42,
+            entity_name: "Cube".into(),
+        };
+        let prog = compile(&g, Trigger::OnTick, &target).unwrap();
+        let mut h = Mock { sets: Vec::new() };
+        run(&prog, &mut h);
+        assert_eq!(h.sets, vec![(42, [1.0, 2.0, 3.0])]);
     }
 
     #[test]
