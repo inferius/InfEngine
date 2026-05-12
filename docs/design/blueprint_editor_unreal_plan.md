@@ -60,6 +60,26 @@ What does not exist yet:
 - "Promote to variable" / "Convert to function".
 - Hot-reload of blueprint changes without leaving Play mode.
 
+## Status snapshot
+
+| Phase | Status |
+|-------|--------|
+| 1 - Inline pin defaults | DONE (commit f7c24c6) |
+| 2 - Pin tooltips + selection glow | DONE (commit be839d8) |
+| 3 - Wire hover + right-click break | DONE (commit 9bdc571) |
+| 4 - Comment nodes + Shift-multi-select | DONE (commit ba0a545) |
+| 5 - Variable + function rename refactor | DONE (commit 71b4ffb) |
+| 6 - Watch-values during Play | DONE (commit 241f339) |
+| 7 - Find-in-graph (Ctrl+F) | DONE (commit fe910ea) |
+| 8 - Blueprint function libraries | DONE (commit 8521ef5) |
+| 9 - Hot-reload blueprints during Play | DONE (commit 06179fa) |
+
+Carry-overs not yet implemented (Promote-to-Variable from a pin,
+box-select drag, multi-drag, bookmarks, minimap, auto-arrange,
+interfaces, event dispatchers, breakpoints / step-through, knot /
+reroute nodes). These remain backlog work and are noted inline in
+their respective phase sections below.
+
 ## Phase 1 - Inline pin defaults (current)
 
 **Goal**: every unconnected input pin shows an inline editor so the
