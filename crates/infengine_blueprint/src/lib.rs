@@ -2361,7 +2361,17 @@ impl BlueprintEditor {
                     egui::StrokeKind::Inside,
                 );
                 let mut text = node.params.get("text").cloned().unwrap_or_default();
-                let edit_rect = cmt_rect.shrink(8.0);
+                // Same clamp as inline pin editors: never let the
+                // text edit poke past the canvas's right edge into
+                // the Properties pane.
+                let shrunk = cmt_rect.shrink(8.0);
+                let edit_rect = egui::Rect::from_min_max(
+                    shrunk.min,
+                    egui::pos2(shrunk.max.x.min(rect.max.x - 4.0), shrunk.max.y),
+                );
+                if edit_rect.width() < 24.0 {
+                    continue;
+                }
                 let resp = ui.put(
                     edit_rect,
                     egui::TextEdit::multiline(&mut text)
@@ -2519,7 +2529,17 @@ impl BlueprintEditor {
                 {
                     let label_w = (pin.name.len() as f32) * 6.5;
                     let edit_x = origin.x + 14.0 + label_w + 4.0;
-                    let edit_w = (origin.x + NODE_WIDTH - 8.0) - edit_x;
+                    // Clamp the edit rect to both the node's right
+                    // edge AND the canvas's right edge. egui's
+                    // ScrollArea / SidePanel siblings would otherwise
+                    // happily render the TextEdit straight through
+                    // the divider into the next pane when the node
+                    // sits near the canvas boundary.
+                    let max_right = (origin.x + NODE_WIDTH - 8.0).min(rect.max.x - 4.0);
+                    let edit_w = max_right - edit_x;
+                    if edit_x >= rect.max.x - 4.0 {
+                        continue;
+                    }
                     if edit_w > 24.0 {
                         let key = format!("pin_{}", pin.name);
                         let edit_rect = egui::Rect::from_min_size(
