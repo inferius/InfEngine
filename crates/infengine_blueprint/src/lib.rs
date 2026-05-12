@@ -423,6 +423,20 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[BlueprintContext::Entity, BlueprintContext::Class],
     },
     NodeKindDef {
+        // Calls a C# method registered via the
+        // [BlueprintCallable] attribute. `params["method"]` holds
+        // the method's name; v1 is exec-only with no arg / return
+        // value marshaling - see
+        // docs/design/blueprint_csharp_callable.md for the full
+        // plan.
+        id: "call_cs_method",
+        label: "Call C# Method",
+        category: "Scripts",
+        inputs: &[PinSpec::new("in", PinType::Exec)],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
+    },
+    NodeKindDef {
         // Visual-only annotation. Has no pins; the renderer special-
         // cases this kind to paint a larger translucent box with a
         // text label stored in `params["text"]`. Never participates
@@ -1566,6 +1580,39 @@ impl BlueprintEditor {
                     ui.label("id");
                     if ui.text_edit_singleline(&mut id_str).changed() {
                         node.params.insert("id".into(), id_str);
+                        dirty = true;
+                    }
+                });
+            }
+            "call_cs_method" => {
+                // Static dropdown of method names known at build time.
+                // A reflection-driven registry will replace this list
+                // once the C# -> Rust manifest pipeline is wired -
+                // see docs/design/blueprint_csharp_callable.md.
+                let mut method =
+                    node.params.get("method").cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("method");
+                    egui::ComboBox::from_id_salt(format!("cs_method_{}", node.id.0))
+                        .selected_text(if method.is_empty() {
+                            "(none)"
+                        } else {
+                            method.as_str()
+                        })
+                        .show_ui(ui, |ui| {
+                            for known in ["Engine.Log", "Engine.TimeSeconds"] {
+                                if ui
+                                    .selectable_label(method == known, known)
+                                    .clicked()
+                                {
+                                    method = known.into();
+                                    node.params.insert("method".into(), method.clone());
+                                    dirty = true;
+                                }
+                            }
+                        });
+                    if ui.text_edit_singleline(&mut method).changed() {
+                        node.params.insert("method".into(), method);
                         dirty = true;
                     }
                 });

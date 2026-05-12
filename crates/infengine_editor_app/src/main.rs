@@ -1198,6 +1198,12 @@ impl infengine_blueprint::exec::Host for PlayHost {
     fn find_entity_by_name(&self, name: &str) -> Option<u32> {
         self.name_to_id.get(name).copied()
     }
+    fn call_csharp(&mut self, method: &str) {
+        // TODO: route through the CoreCLR scripting bridge once
+        // reverse-call wiring lands. For now log so the user has
+        // feedback the node fired.
+        tracing::info!(method = %method, "blueprint -> C# call (stub)");
+    }
 }
 
 fn transform_3d_to_matrix(t: &Transform3D) -> Mat4 {

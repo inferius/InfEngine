@@ -97,6 +97,10 @@ pub enum Op {
     /// the `self_entity` node (id = blueprint's target entity) and
     /// by the `entity_ref` constant node (id from params).
     PushEntityRef(u32),
+    /// Ask the host to invoke the C# method whose name is the
+    /// `method` argument. Argument marshaling is not implemented in
+    /// v1; the call is purely exec-flow and produces no value.
+    CallCSharp(String),
     /// Pop a Vec3 then an EntityRef; write the Vec3 as the entity's
     /// world-space position / rotation / scale via the host.
     SetEntityPositionRef,
@@ -422,6 +426,13 @@ fn compile_sink(
             let path = node.params.get("path").cloned().unwrap_or_default();
             ops.push(Op::PlaySound(path));
         }
+        "call_cs_method" => {
+            // Invoke a C# method previously registered via the
+            // [BlueprintCallable] attribute. v1: exec-only, no
+            // arg marshaling.
+            let method = node.params.get("method").cloned().unwrap_or_default();
+            ops.push(Op::CallCSharp(method));
+        }
         "set_position_of" | "set_rotation_of" | "set_scale_of" => {
             // Entity-ref-driven transform write. Pops a Vec3 then an
             // EntityRef inside the op. Compile order: push entity
@@ -679,6 +690,10 @@ pub trait Host {
     fn find_entity_by_name(&self, _name: &str) -> Option<u32> {
         None
     }
+    /// Invoke a C# method registered via `[BlueprintCallable]`. v1
+    /// is exec-only with no arg marshaling; the full pipeline is
+    /// described in `docs/design/blueprint_csharp_callable.md`.
+    fn call_csharp(&mut self, _method: &str) {}
 }
 
 #[derive(Debug, Default)]
@@ -828,6 +843,9 @@ pub fn run_with_vars(program: &Program, host: &mut dyn Host, vars: &mut HashMap<
             }
             Op::PushEntityRef(id) => {
                 stack.push(Value::EntityRef(*id));
+            }
+            Op::CallCSharp(method) => {
+                host.call_csharp(method);
             }
             Op::SetEntityPositionRef => {
                 let vec = match stack.pop().unwrap_or(Value::Vec3([0.0; 3])) {
@@ -1116,6 +1134,34 @@ mod tests {
         let mut cap = Capture(Vec::new());
         run(&prog, &mut cap);
         assert_eq!(cap.0, vec![Value::Float(8.0)]);
+    }
+
+    #[test]
+    fn call_cs_method_invokes_host() {
+        struct Mock {
+            calls: Vec<String>,
+        }
+        impl Host for Mock {
+            fn print(&mut self, _: Value) {}
+            fn call_csharp(&mut self, method: &str) {
+                self.calls.push(method.to_string());
+            }
+        }
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let call = g.add_node("call_cs_method", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == call)
+            .unwrap()
+            .params
+            .insert("method".into(), "Engine.Log".into());
+        assert!(g.connect(&reg, tick, "exec", call, "in").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut h = Mock { calls: Vec::new() };
+        run(&prog, &mut h);
+        assert_eq!(h.calls, vec!["Engine.Log".to_string()]);
     }
 
     #[test]

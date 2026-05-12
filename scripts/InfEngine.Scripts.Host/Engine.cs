@@ -32,6 +32,11 @@ public static unsafe class Engine
         Log("[CS] engine API registered");
     }
 
+    [BlueprintCallable(
+        DisplayName = "Log Message",
+        Category = "Debug",
+        Tooltip = "Send a string to the engine's tracing log."
+    )]
     public static void Log(string message)
     {
         if (_api.LogInfo == null)
@@ -46,6 +51,11 @@ public static unsafe class Engine
         }
     }
 
+    [BlueprintCallable(
+        DisplayName = "Time Seconds",
+        Category = "Time",
+        Tooltip = "Wall-clock seconds since the host started."
+    )]
     public static float TimeSeconds()
     {
         if (_api.TimeSecs == null) return 0f;
