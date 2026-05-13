@@ -122,6 +122,13 @@ const HOTBAR_SLOTS: usize = 6;
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum AppState {
     MainMenu,
+    /// Direct-IP connect dialog: user types `host:port` and hits Join.
+    DirectConnect,
+    /// Browses servers fetched from the configured master server.
+    ServerBrowser,
+    /// Configures + spawns a host (game server). User can opt to
+    /// announce on the master so others see it in the browser.
+    HostSetup,
     Playing,
     Paused,
     Settings { back_to: BackTo },
@@ -210,6 +217,25 @@ struct Voxel {
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
+    /// Master-server endpoint the in-game browser queries. Settable
+    /// via `--master <addr>` argv; defaults to the configured
+    /// public master.
+    master_addr: String,
+    /// Buffers + state backing the three new menu screens. Lifted
+    /// out of `AppState` so the enum stays Copy.
+    direct_addr_buf: String,
+    host_name_buf: String,
+    host_port_buf: String,
+    host_announce: bool,
+    browser_servers: Vec<infengine_net::master::ServerInfo>,
+    browser_error: Option<String>,
+    browser_last_refresh: Option<std::time::Instant>,
+    /// Returned by the master server on successful Register; the
+    /// host echoes it back on Heartbeat + Unregister.
+    master_token: Option<u64>,
+    /// Last heartbeat we sent to the master (server mode). Drives
+    /// the periodic re-heartbeat in `tick_net`.
+    last_heartbeat: Option<std::time::Instant>,
 }
 
 impl Voxel {
@@ -217,6 +243,121 @@ impl Voxel {
         let mut v = Self::new();
         v.net = net;
         v
+    }
+
+    /// Spawn a NetClient at `addr` and transition into Playing.
+    fn connect_as_client(&mut self, addr: &str) {
+        match NetClient::connect(addr, "voxel-mp-client") {
+            Ok(c) => {
+                info!(addr = %addr, "joining server");
+                self.net = NetRole::Client {
+                    client: c,
+                    remote: HashMap::new(),
+                    pending_edits: Vec::new(),
+                };
+                self.state = AppState::Playing;
+                self.mouse_dx = 0.0;
+                self.mouse_dy = 0.0;
+            }
+            Err(err) => {
+                warn!(error = %err, addr = %addr, "client connect failed");
+                self.browser_error = Some(format!("connect failed: {err}"));
+            }
+        }
+    }
+
+    /// Bind a NetServer on the configured port, optionally announce
+    /// to the master server, then drop into Playing.
+    fn start_hosting(&mut self) {
+        let port: u16 = self.host_port_buf.parse().unwrap_or(7777);
+        let bind = format!("0.0.0.0:{port}");
+        match NetServer::bind(&bind) {
+            Ok(s) => {
+                info!(addr = %bind, "hosting voxel server");
+                self.net = NetRole::Server {
+                    server: s,
+                    poses: HashMap::new(),
+                };
+                self.state = AppState::Playing;
+                self.mouse_dx = 0.0;
+                self.mouse_dy = 0.0;
+                if self.host_announce {
+                    self.announce_to_master(port);
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, port, "server bind failed");
+                self.browser_error = Some(format!("host failed: {err}"));
+            }
+        }
+    }
+
+    /// Register this host with the configured master server. Caches
+    /// the returned token so periodic heartbeats land on the right
+    /// directory entry.
+    fn announce_to_master(&mut self, port: u16) {
+        use infengine_net::master::{
+            MASTER_PROTO, MasterRequest, MasterResponse, ServerInfo, request_blocking,
+        };
+        // The server doesn't know its own public IP - the master
+        // doesn't either (we don't relay packet src for security).
+        // The user supplies a routable "host:port" through
+        // `host_port_buf` (port only) + the announce path uses the
+        // master-known IP by leaving the address empty; master
+        // substitutes the packet source when it sees `0.0.0.0:port`.
+        let info = ServerInfo {
+            name: self.host_name_buf.clone(),
+            addr: format!("0.0.0.0:{port}"),
+            players: 0,
+            max_players: 16,
+            mode: "voxel".into(),
+        };
+        let req = MasterRequest::Register {
+            proto: MASTER_PROTO,
+            info,
+        };
+        match request_blocking(&self.master_addr, &req, std::time::Duration::from_secs(2)) {
+            Some(MasterResponse::Registered { token }) => {
+                info!(token, "announced to master");
+                self.master_token = Some(token);
+                self.last_heartbeat = Some(std::time::Instant::now());
+            }
+            Some(MasterResponse::Error { message }) => {
+                warn!(message, "master register error");
+                self.browser_error = Some(format!("master: {message}"));
+            }
+            _ => {
+                warn!("master register timed out");
+                self.browser_error = Some("master timeout".into());
+            }
+        }
+    }
+
+    /// Fetch the server list from the master and stash it for the
+    /// browser UI to render.
+    fn refresh_browser(&mut self) {
+        use infengine_net::master::{
+            MASTER_PROTO, MasterRequest, MasterResponse, request_blocking,
+        };
+        self.browser_last_refresh = Some(std::time::Instant::now());
+        let req = MasterRequest::ListServers {
+            proto: MASTER_PROTO,
+        };
+        match request_blocking(&self.master_addr, &req, std::time::Duration::from_secs(2)) {
+            Some(MasterResponse::List { servers }) => {
+                info!(count = servers.len(), "fetched server list");
+                self.browser_servers = servers;
+                self.browser_error = None;
+            }
+            Some(MasterResponse::Error { message }) => {
+                warn!(message, "master list error");
+                self.browser_error = Some(format!("master: {message}"));
+            }
+            _ => {
+                warn!("master list timed out");
+                self.browser_error = Some("master timeout".into());
+            }
+        }
     }
 
     /// Per-tick networking step:
@@ -230,6 +371,25 @@ impl Voxel {
         let player_pos = self.player_pos;
         let player_yaw = self.player_yaw;
         let player_pitch = self.player_pitch;
+        // Server-side heartbeat to the master server. Cheap so we
+        // can do it inline.
+        if let NetRole::Server { server, poses } = &self.net
+            && let Some(token) = self.master_token
+            && self
+                .last_heartbeat
+                .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(5))
+        {
+            use infengine_net::master::{MasterRequest, MasterResponse, request_blocking};
+            let players = poses.len().saturating_sub(1) as u32 + server.client_count() as u32;
+            let req = MasterRequest::Heartbeat { token, players };
+            let _ = request_blocking(
+                &self.master_addr,
+                &req,
+                std::time::Duration::from_millis(250),
+            );
+            self.last_heartbeat = Some(std::time::Instant::now());
+            let _ = MasterResponse::Heartbeated; // tag-import side-effect
+        }
         // Drain incoming bytes + edits to apply. Collect first so the
         // borrow on `self.net` releases before we mutate the world.
         let mut to_apply: Vec<EditMsg> = Vec::new();
@@ -289,31 +449,49 @@ impl Voxel {
             } => {
                 client.poll();
                 let my_id = client.client_id;
+                // Sweep own id out of the remote table - if a
+                // pre-handshake broadcast snuck our pose in before
+                // we knew our own id, drop it now.
+                if let Some(mine) = my_id {
+                    remote.remove(&mine);
+                }
                 for (kind, data) in client.drain_bytes() {
                     match kind.as_str() {
                         "vx.edit" => {
                             if let Ok((e, _)) =
                                 bincode::serde::decode_from_slice::<EditMsg, _>(&data, cfg)
                             {
+                                // Server-echoed edit: retire any
+                                // pending request that matches it
+                                // by coordinate + block. Idempotent
+                                // dups are cheap; this just stops
+                                // the retry-resend loop.
+                                if let Some(idx) = pending_edits.iter().position(|p| {
+                                    p.x == e.x
+                                        && p.y == e.y
+                                        && p.z == e.z
+                                        && p.block == e.block
+                                }) {
+                                    pending_edits.remove(idx);
+                                }
                                 to_apply.push(e);
                             }
                         }
                         "vx.player" => {
                             if let Ok((p, _)) =
                                 bincode::serde::decode_from_slice::<PlayerMsg, _>(&data, cfg)
+                                && my_id != Some(p.id)
                             {
-                                // Skip own pose echo when the server
-                                // assigned us this id.
-                                if my_id != Some(p.id) {
-                                    remote.insert(p.id, p);
-                                }
+                                remote.insert(p.id, p);
                             }
                         }
                         _ => {}
                     }
                 }
-                // Flush pending edits.
-                for e in pending_edits.drain(..) {
+                // Re-send every pending edit each tick - UDP loss
+                // on the upstream path eventually catches a retry.
+                // Server applies idempotently so dups are free.
+                for e in pending_edits.iter() {
                     if let Ok(buf) = bincode::serde::encode_to_vec(e, cfg) {
                         let _ = client.send_bytes("vx.edit", buf);
                     }
@@ -386,6 +564,19 @@ impl Voxel {
             fps_ema: 60.0,
             net: NetRole::Offline,
             player_cube: None,
+            master_addr: format!(
+                "91.232.214.139:{}",
+                infengine_net::master::MASTER_PORT
+            ),
+            direct_addr_buf: "127.0.0.1:7777".into(),
+            host_name_buf: "My InfEngine Server".into(),
+            host_port_buf: "7777".into(),
+            host_announce: true,
+            browser_servers: Vec::new(),
+            browser_error: None,
+            browser_last_refresh: None,
+            master_token: None,
+            last_heartbeat: None,
         }
     }
 
@@ -726,6 +917,20 @@ impl Voxel {
         let mut action_pause_to_settings = false;
         let mut action_back_settings = false;
         let mut action_main_menu = false;
+        let mut action_to_direct = false;
+        let mut action_to_browser = false;
+        let mut action_to_host = false;
+        let mut action_join_direct = false;
+        let mut action_join_browser: Option<String> = None;
+        let mut action_browser_refresh = false;
+        let mut action_host_start = false;
+        let direct_buf = &mut self.direct_addr_buf;
+        let host_name = &mut self.host_name_buf;
+        let host_port = &mut self.host_port_buf;
+        let host_announce = &mut self.host_announce;
+        let master_addr = &mut self.master_addr;
+        let browser_servers = &self.browser_servers;
+        let browser_error = &self.browser_error;
 
         let Some(ui) = self.ui.as_mut() else {
             return;
@@ -734,18 +939,123 @@ impl Voxel {
             AppState::MainMenu => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.add_space(80.0);
+                        ui.add_space(60.0);
                         ui.heading("InfEngine - Voxel Demo");
                         ui.add_space(20.0);
-                        if ui.button("Play").clicked() {
+                        if ui.button("Play offline").clicked() {
                             action_start = true;
                         }
+                        if ui.button("Host server...").clicked() {
+                            action_to_host = true;
+                        }
+                        if ui.button("Direct connect...").clicked() {
+                            action_to_direct = true;
+                        }
+                        if ui.button("Browse servers...").clicked() {
+                            action_to_browser = true;
+                        }
+                        ui.add_space(10.0);
                         if ui.button("Settings").clicked() {
                             action_menu_to_settings = true;
                         }
                         if ui.button("Quit").clicked() {
                             action_quit = true;
                         }
+                        ui.add_space(20.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Master server:");
+                            ui.text_edit_singleline(master_addr);
+                        });
+                    });
+                });
+            }
+            AppState::DirectConnect => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(80.0);
+                        ui.heading("Direct connect");
+                        ui.add_space(10.0);
+                        ui.label("Enter host:port of the game server:");
+                        ui.text_edit_singleline(direct_buf);
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Join").clicked() {
+                                action_join_direct = true;
+                            }
+                            if ui.button("Back").clicked() {
+                                action_main_menu = true;
+                            }
+                        });
+                    });
+                });
+            }
+            AppState::ServerBrowser => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading("Server browser");
+                    ui.horizontal(|ui| {
+                        ui.label("Master:");
+                        ui.text_edit_singleline(master_addr);
+                        if ui.button("Refresh").clicked() {
+                            action_browser_refresh = true;
+                        }
+                        if ui.button("Back").clicked() {
+                            action_main_menu = true;
+                        }
+                    });
+                    if let Some(err) = browser_error {
+                        ui.colored_label(egui::Color32::from_rgb(220, 100, 100), err);
+                    }
+                    ui.separator();
+                    if browser_servers.is_empty() {
+                        ui.label("(no servers - press Refresh)");
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for s in browser_servers {
+                            ui.horizontal(|ui| {
+                                if ui.button("Join").clicked() {
+                                    action_join_browser = Some(s.addr.clone());
+                                }
+                                ui.label(format!(
+                                    "{}  -  {} ({}/{}{})",
+                                    s.addr,
+                                    s.name,
+                                    s.players,
+                                    s.max_players,
+                                    if s.mode.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(", {}", s.mode)
+                                    }
+                                ));
+                            });
+                        }
+                    });
+                });
+            }
+            AppState::HostSetup => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(60.0);
+                        ui.heading("Host server");
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Display name:");
+                            ui.text_edit_singleline(host_name);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Bind port:");
+                            ui.text_edit_singleline(host_port);
+                        });
+                        ui.checkbox(host_announce, "Announce on master server");
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Start hosting").clicked() {
+                                action_host_start = true;
+                            }
+                            if ui.button("Back").clicked() {
+                                action_main_menu = true;
+                            }
+                        });
                     });
                 });
             }
@@ -920,6 +1230,29 @@ impl Voxel {
         if action_main_menu {
             self.state = AppState::MainMenu;
         }
+        if action_to_direct {
+            self.state = AppState::DirectConnect;
+        }
+        if action_to_browser {
+            self.state = AppState::ServerBrowser;
+            self.browser_last_refresh = None; // force a refresh on entry
+        }
+        if action_to_host {
+            self.state = AppState::HostSetup;
+        }
+        if action_join_direct {
+            let addr = self.direct_addr_buf.clone();
+            self.connect_as_client(&addr);
+        }
+        if let Some(addr) = action_join_browser {
+            self.connect_as_client(&addr);
+        }
+        if action_browser_refresh {
+            self.refresh_browser();
+        }
+        if action_host_start {
+            self.start_hosting();
+        }
     }
 }
 
@@ -1018,7 +1351,10 @@ impl AppHandler for Voxel {
                         BackTo::Pause => AppState::Paused,
                     };
                 }
-                AppState::MainMenu => {}
+                AppState::MainMenu
+                | AppState::DirectConnect
+                | AppState::ServerBrowser
+                | AppState::HostSetup => {}
             }
         }
 

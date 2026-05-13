@@ -24,6 +24,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod master;
+
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};

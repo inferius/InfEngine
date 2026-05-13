@@ -14,6 +14,7 @@ members = [
     "crates/infengine_blueprint",
     "crates/infengine_voxel",
     "crates/infengine_net",
+    "crates/infengine_master_server",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",

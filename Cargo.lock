@@ -2110,6 +2110,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "infengine_master_server"
+version = "0.0.1"
+dependencies = [
+ "infengine_net",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "infengine_net"
 version = "0.0.1"
 dependencies = [
