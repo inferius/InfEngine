@@ -183,6 +183,33 @@ impl MasterServer {
         self.entries.len()
     }
 
+    /// Sorted snapshot of every active entry. Used by the
+    /// daemon's `list` console command. Tuple is `(token, info)`.
+    pub fn snapshot_entries(&self) -> Vec<(u64, ServerInfo)> {
+        let mut v: Vec<(u64, ServerInfo)> = self
+            .entries
+            .iter()
+            .map(|(k, e)| (*k, e.info.clone()))
+            .collect();
+        v.sort_by_key(|(k, _)| *k);
+        v
+    }
+
+    /// Drop every entry whose `addr` field contains the substring
+    /// `needle`. Returns how many were removed.
+    pub fn kick_matching(&mut self, needle: &str) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|_, e| !e.info.addr.contains(needle));
+        before - self.entries.len()
+    }
+
+    /// Drop every entry. Returns how many were removed.
+    pub fn clear(&mut self) -> usize {
+        let n = self.entries.len();
+        self.entries.clear();
+        n
+    }
+
     fn handle(&mut self, from: SocketAddr, req: MasterRequest) -> MasterResponse {
         match req {
             MasterRequest::Register { proto, mut info } => {
