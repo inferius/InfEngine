@@ -229,6 +229,8 @@ struct Voxel {
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
+    /// CPU particle system: short-lived debris on every block break.
+    particles: infengine_particles::ParticleSystem,
     /// Master-server endpoint the in-game browser queries. Settable
     /// via `--master <addr>` argv; defaults to the configured
     /// public master.
@@ -264,6 +266,41 @@ impl Voxel {
         let mut v = Self::new();
         v.net = net;
         v
+    }
+
+    /// Push a small burst of debris particles into the system at the
+    /// centre of `voxel`. Used as a "block broken" effect from every
+    /// edit-apply path so both the player and remote players see
+    /// puffs when something mines.
+    fn spawn_break_particles(&mut self, voxel: [i32; 3]) {
+        let pos = [
+            voxel[0] as f32 + 0.5,
+            voxel[1] as f32 + 0.5,
+            voxel[2] as f32 + 0.5,
+        ];
+        let mut rng: u32 = 0xCAFEBABE
+            ^ (voxel[0] as u32)
+            ^ ((voxel[1] as u32) << 7)
+            ^ ((voxel[2] as u32) << 13);
+        let mut rand01 = || -> f32 {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+        };
+        for _ in 0..12 {
+            let vx = (rand01() * 2.0 - 1.0) * 3.0;
+            let vy = rand01() * 3.5;
+            let vz = (rand01() * 2.0 - 1.0) * 3.0;
+            self.particles.particles.push(infengine_particles::Particle {
+                position: pos,
+                velocity: [vx, vy, vz],
+                color: [0.75, 0.55, 0.30, 1.0],
+                size: 0.12,
+                age: 0.0,
+                lifetime: 0.5,
+            });
+        }
     }
 
     /// Spawn a NetClient at `addr` and transition into Playing.
@@ -672,6 +709,24 @@ impl Voxel {
             fps_ema: 60.0,
             net: NetRole::Offline,
             player_cube: None,
+            particles: {
+                // Particle system starts with one "ambient" emitter
+                // (rate=0, max=0) that only contributes its gravity
+                // + interpolation curves to direct-burst particles.
+                let mut s = infengine_particles::ParticleSystem::new();
+                s.add_emitter(infengine_particles::Emitter {
+                    rate: 0.0,
+                    max_particles: 0,
+                    gravity: [0.0, -10.0, 0.0],
+                    color_start: [0.75, 0.55, 0.30, 1.0],
+                    color_end: [0.50, 0.32, 0.18, 0.0],
+                    size_start: 0.12,
+                    size_end: 0.04,
+                    lifetime: 0.5,
+                    ..Default::default()
+                });
+                s
+            },
             edit_history: Vec::new(),
             known_client_ids: HashSet::new(),
             master_addr: format!(
@@ -1592,6 +1647,7 @@ impl AppHandler for Voxel {
                     self.world.set(hit.voxel, BlockId::AIR);
                     let coords = Self::affected_chunks(hit.voxel);
                     self.rebuild_chunks(&coords);
+                    self.spawn_break_particles(hit.voxel);
                     if let NetRole::Client { pending_edits, .. } = &mut self.net {
                         pending_edits.push(edit);
                     }
@@ -1599,6 +1655,7 @@ impl AppHandler for Voxel {
                     self.world.set(hit.voxel, BlockId::AIR);
                     let coords = Self::affected_chunks(hit.voxel);
                     self.rebuild_chunks(&coords);
+                    self.spawn_break_particles(hit.voxel);
                     if let NetRole::Server { server, .. } = &self.net {
                         let cfg = bincode::config::standard();
                         if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
@@ -1654,6 +1711,8 @@ impl AppHandler for Voxel {
         }
         // Net tick: poll + apply + broadcast / send.
         self.tick_net();
+        // Tick particles regardless of net role.
+        self.particles.tick(dt);
 
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
@@ -1700,6 +1759,10 @@ impl AppHandler for Voxel {
                 renderer.draw_mesh_pbr(*cube, m.to_cols_array(), color, 0.0, 0.7);
             }
         }
+        // Render any live debris particles before the world cubes
+        // so chunk faces draw on top when a particle ends up
+        // inside a block.
+        renderer.draw_particles(&self.particles);
         let model = Mat4::IDENTITY.to_cols_array();
         for (_coord, block, handle) in &chunk_meshes {
             if let Some(def) = registry.get(*block) {

@@ -321,6 +321,25 @@ impl Renderer {
         self.cube_handle
     }
 
+    /// Iterate a particle system and queue one cube draw per live
+    /// particle. Each cube uses the particle's `size` as a uniform
+    /// scale and its `color` as the PBR albedo tint. Emissive
+    /// glow + roughness are hardcoded here for the v1 look; a
+    /// dedicated particle pass with point sprites lives on the
+    /// roadmap once the renderer grows transparent batches.
+    pub fn draw_particles(&mut self, system: &infengine_particles::ParticleSystem) {
+        let cube = self.cube_handle;
+        for p in system.iter_live() {
+            let model = glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::splat(p.size.max(0.01)),
+                glam::Quat::IDENTITY,
+                glam::Vec3::from_array(p.position),
+            )
+            .to_cols_array();
+            self.draw_mesh_pbr(cube, model, p.color, 0.0, 0.8);
+        }
+    }
+
     /// Release a previously-registered mesh. Returns `true` when the
     /// handle was active. Caller must guarantee no `draw_mesh_pbr`
     /// for this handle remains in the current frame's queue (a safe

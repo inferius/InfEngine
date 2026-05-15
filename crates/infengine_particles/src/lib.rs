@@ -65,10 +65,15 @@ pub struct Emitter {
     /// once `live_count >= max_particles`. Keeps the simulation
     /// bounded under bursty emitters.
     pub max_particles: usize,
+    /// Fractional spawn accumulator. Bumped by `rate * dt` each
+    /// tick; whole-number portions become new particles. Reset to
+    /// zero by `Default`; downstream code rarely touches it.
     #[serde(skip)]
-    spawn_acc: f32,
+    pub spawn_acc: f32,
+    /// xorshift32 state for deterministic velocity sampling.
+    /// `Default` seeds with the golden-ratio constant.
     #[serde(skip)]
-    rng: u32,
+    pub rng: u32,
 }
 
 impl Default for Emitter {
