@@ -1239,6 +1239,10 @@ pub struct BlueprintEditor {
     /// no box drag is active. The release path collects every node
     /// whose screen-space origin falls inside the rect.
     box_select_start: Option<egui::Pos2>,
+    /// Bookmark slots: Ctrl+1..9 saves the current `view_offset` +
+    /// `view_zoom` into the matching slot; Shift+1..9 jumps back.
+    /// Slots use index 0..8 in the array; the UI is 1-based.
+    bookmarks: [Option<(egui::Vec2, f32)>; 9],
     /// Latest Play-mode capture map; mirrored from the workspace
     /// before each show() so the canvas can paint live values.
     pub play_captures: HashMap<u32, exec::Value>,
@@ -2432,6 +2436,38 @@ impl BlueprintEditor {
             }
         }
 
+        // Bookmark hotkeys: Ctrl+1..9 saves the current view,
+        // Shift+1..9 jumps back. Skipped while a text edit holds
+        // focus (egui swallows the number key on its own).
+        let (digits_held, ctrl_held, shift_held) = ui.input(|i| {
+            let mut digits = [false; 9];
+            use egui::Key;
+            let keys = [
+                Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5,
+                Key::Num6, Key::Num7, Key::Num8, Key::Num9,
+            ];
+            for (idx, k) in keys.iter().enumerate() {
+                digits[idx] = i.key_pressed(*k);
+            }
+            (digits, i.modifiers.command_only(), i.modifiers.shift_only())
+        });
+        if !ui.memory(|m| m.focused().is_some()) {
+            for (idx, &pressed) in digits_held.iter().enumerate() {
+                if !pressed {
+                    continue;
+                }
+                if ctrl_held {
+                    self.bookmarks[idx] = Some((self.view_offset, self.view_zoom));
+                    self.status = format!("Bookmark {} saved", idx + 1);
+                } else if shift_held
+                    && let Some((offset, zoom)) = self.bookmarks[idx]
+                {
+                    self.view_offset = offset;
+                    self.view_zoom = zoom;
+                    self.status = format!("Jumped to bookmark {}", idx + 1);
+                }
+            }
+        }
         // Ctrl+F toggles find-in-graph.
         let ctrl_f = ui.input(|i| {
             i.key_pressed(egui::Key::F) && i.modifiers.command_only()
