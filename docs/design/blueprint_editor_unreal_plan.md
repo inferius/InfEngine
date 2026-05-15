@@ -81,6 +81,12 @@ What does not exist yet:
 | 15 - Minimap overlay | DONE (commit fe030b1) |
 | 16 - Knot / reroute nodes (Exec + Float) | DONE (commit 922cd47) |
 
+Outside the BP roadmap, voxel demo backlog:
+- Per-block textures (procedural or atlas-loaded). Requires
+  `Renderer::set_mesh_texture(handle, texture)` plus a per-block
+  texture sampler in the chunk PBR pipeline. Voxel meshes already
+  carry UV-per-face, so the work is renderer-side.
+
 Carry-overs not yet implemented (Promote-to-Variable from a pin,
 box-select drag, multi-drag, bookmarks, minimap, auto-arrange,
 interfaces, event dispatchers, breakpoints / step-through, knot /
