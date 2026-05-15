@@ -79,6 +79,7 @@ What does not exist yet:
 | 13 - Bookmarks Ctrl+1..9 / Shift+1..9 | DONE (commit 6b47227) |
 | 14 - Auto-arrange button | DONE (commit 8c80362) |
 | 15 - Minimap overlay | DONE (commit fe030b1) |
+| 16 - Knot / reroute nodes (Exec + Float) | DONE (commit 922cd47) |
 
 Carry-overs not yet implemented (Promote-to-Variable from a pin,
 box-select drag, multi-drag, bookmarks, minimap, auto-arrange,
