@@ -334,14 +334,19 @@ impl Mesh3DPass {
             },
         );
         let albedo_view = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Nearest sampling preserves the crisp pixel-art look of
+        // voxel / Minecraft-style textures. Linear filtering would
+        // blur 16x16 tiles into mush at any reasonable view
+        // distance. Higher-res PBR meshes that need smooth filtering
+        // can request a different sampler via a follow-up API.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("infengine_render::mesh3d_sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
         let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
