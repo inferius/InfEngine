@@ -218,6 +218,14 @@ struct Voxel {
     /// Networking role + state. `Offline` runs the demo unchanged;
     /// `Server` / `Client` flip on the per-tick replication path.
     net: NetRole,
+    /// Authoritative edit log on the server. Late-joining clients
+    /// get the full history rebroadcast so their generated world
+    /// catches up with everyone else's. Server-only; clients leave
+    /// it empty.
+    edit_history: Vec<EditMsg>,
+    /// Client ids the server saw last tick. Used to detect joins
+    /// for the catch-up broadcast.
+    known_client_ids: HashSet<u32>,
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
@@ -493,6 +501,40 @@ impl Voxel {
                         _ => {}
                     }
                 }
+                // Catch-up: any client id that wasn't in last tick's
+                // roster gets the entire edit history rebroadcast so
+                // its locally-generated world matches the server's.
+                // Existing clients receive duplicate edits but each
+                // edit is an idempotent voxel set, so the redundant
+                // traffic is correctness-safe.
+                let current_ids: HashSet<u32> = poses
+                    .keys()
+                    .copied()
+                    .filter(|id| *id != 0)
+                    .collect();
+                let new_ids: Vec<u32> = current_ids
+                    .iter()
+                    .filter(|id| !self.known_client_ids.contains(*id))
+                    .copied()
+                    .collect();
+                if !new_ids.is_empty() && !self.edit_history.is_empty() {
+                    tracing::info!(
+                        joined = ?new_ids,
+                        edits = self.edit_history.len(),
+                        "rebroadcasting edit history for new client(s)"
+                    );
+                    for e in &self.edit_history {
+                        if let Ok(buf) = bincode::serde::encode_to_vec(e, cfg) {
+                            server.broadcast_bytes("vx.edit", buf);
+                        }
+                    }
+                }
+                self.known_client_ids = current_ids;
+                // Server also records every received edit so future
+                // joiners get a complete history.
+                for e in &to_apply {
+                    self.edit_history.push(*e);
+                }
                 // Broadcast each player's pose (one packet each;
                 // future: batch). Also rebroadcast any incoming
                 // edits we'll apply below.
@@ -630,6 +672,8 @@ impl Voxel {
             fps_ema: 60.0,
             net: NetRole::Offline,
             player_cube: None,
+            edit_history: Vec::new(),
+            known_client_ids: HashSet::new(),
             master_addr: format!(
                 "91.232.214.139:{}",
                 infengine_net::master::MASTER_PORT
@@ -1540,6 +1584,14 @@ impl AppHandler for Voxel {
                     block: 0,
                 };
                 if is_client {
+                    // Client-side prediction: apply immediately for
+                    // snappy feedback, queue for the server. The
+                    // server's echo will re-apply (idempotent set);
+                    // a future rollback layer would reconcile on a
+                    // mismatch.
+                    self.world.set(hit.voxel, BlockId::AIR);
+                    let coords = Self::affected_chunks(hit.voxel);
+                    self.rebuild_chunks(&coords);
                     if let NetRole::Client { pending_edits, .. } = &mut self.net {
                         pending_edits.push(edit);
                     }
@@ -1553,6 +1605,7 @@ impl AppHandler for Voxel {
                             server.broadcast_bytes("vx.edit", buf);
                         }
                     }
+                    self.edit_history.push(edit);
                 }
             } else if rmb && let Some(block) = selected_block {
                 // Reject placement when it would intersect the player
@@ -1578,6 +1631,9 @@ impl AppHandler for Voxel {
                         block: block.0,
                     };
                     if is_client {
+                        self.world.set(hit.place_at, block);
+                        let coords = Self::affected_chunks(hit.place_at);
+                        self.rebuild_chunks(&coords);
                         if let NetRole::Client { pending_edits, .. } = &mut self.net {
                             pending_edits.push(edit);
                         }
@@ -1591,6 +1647,7 @@ impl AppHandler for Voxel {
                                 server.broadcast_bytes("vx.edit", buf);
                             }
                         }
+                        self.edit_history.push(edit);
                     }
                 }
             }
