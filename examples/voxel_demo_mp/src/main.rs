@@ -117,7 +117,7 @@ const PLAYER_RADIUS: f32 = 0.3;
 const COLLISION_EPSILON: f32 = 1e-4;
 /// Hotbar slots: index 0 is the "break" slot (empty hand), the rest
 /// hold the block ids in `Self::HOTBAR_BLOCKS`.
-const HOTBAR_SLOTS: usize = 6;
+const HOTBAR_SLOTS: usize = 7;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum AppState {
@@ -733,6 +733,7 @@ impl Voxel {
         registry.insert(BlockId(3), BlockDef::solid("grass", [0.35, 0.62, 0.28]));
         registry.insert(BlockId(4), BlockDef::solid("sand", [0.92, 0.86, 0.62]));
         registry.insert(BlockId(5), BlockDef::solid("wood", [0.55, 0.38, 0.22]));
+        registry.insert(BlockId(6), BlockDef::solid("leaves", [0.24, 0.50, 0.20]));
         Self {
             state: AppState::MainMenu,
             settings: Settings::default(),
@@ -764,6 +765,7 @@ impl Voxel {
                 Some(BlockId(3)),
                 Some(BlockId(4)),
                 Some(BlockId(5)),
+                Some(BlockId(6)),
             ],
             selected_slot: 0,
             wheel_accum: 0.0,
@@ -2071,34 +2073,68 @@ fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
             BlockId(1)
         }
     });
-    // Tree pass: in plains biomes drop a 1x4 wood pillar at points
-    // whose hash falls under a threshold. Uses world coords so
-    // adjacent chunks line up.
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            let wx = origin.x as i32 + x as i32;
-            let wz = origin.z as i32 + z as i32;
+    // Tree pass: in plains biomes drop a small oak with wood pillar
+    // + a leafy canopy. We loop over (-2 .. CHUNK_SIZE+2) so trees
+    // anchored just outside the chunk still drop their leaves into
+    // this chunk - otherwise canopies that overhang the boundary
+    // would clip. Each block is only written when its `(lx, lz)`
+    // pair sits inside the current chunk.
+    let cs = CHUNK_SIZE as i32;
+    let set_in_chunk = |chunk: &mut Chunk, lx: i32, ly: i32, lz: i32, block: BlockId| {
+        if lx < 0 || lx >= cs || lz < 0 || lz >= cs || ly < 0 || ly >= cs {
+            return;
+        }
+        chunk.set(lx as usize, ly as usize, lz as usize, block);
+    };
+    for x in -2..(cs + 2) {
+        for z in -2..(cs + 2) {
+            let wx = origin.x as i32 + x;
+            let wz = origin.z as i32 + z;
             let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
             if biome != Biome::Plains {
                 continue;
             }
-            let h = hash2(wx, wz);
-            if h % 64 != 7 {
+            if hash2(wx, wz) % 64 != 7 {
                 continue;
             }
             let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
+            // Trunk: 4 wood blocks above the surface voxel.
             for ty in 1..=4 {
                 let wy = ground + ty;
                 let local_y = wy - origin.y as i32;
-                if local_y < 0 || local_y >= CHUNK_SIZE as i32 {
-                    continue;
+                set_in_chunk(&mut chunk, x, local_y, z, BlockId(5));
+            }
+            // Canopy: two 5x5 layers (corners trimmed) at trunk
+            // top -1 / 0, a 3x3 cap above, and a single top block.
+            for layer in 0i32..2 {
+                let wy = ground + 3 + layer;
+                let local_y = wy - origin.y as i32;
+                for dx in -2i32..=2 {
+                    for dz in -2i32..=2 {
+                        if dx.abs() == 2 && dz.abs() == 2 {
+                            continue;
+                        }
+                        if dx == 0 && dz == 0 && layer == 0 {
+                            continue;
+                        }
+                        set_in_chunk(&mut chunk, x + dx, local_y, z + dz, BlockId(6));
+                    }
                 }
-                chunk.set(
-                    x,
-                    local_y as usize,
-                    z,
-                    BlockId(5),
-                );
+            }
+            {
+                let wy = ground + 5;
+                let local_y = wy - origin.y as i32;
+                for dx in -1i32..=1 {
+                    for dz in -1i32..=1 {
+                        set_in_chunk(&mut chunk, x + dx, local_y, z + dz, BlockId(6));
+                    }
+                }
+            }
+            // Single block top.
+            {
+                let wy = ground + 6;
+                let local_y = wy - origin.y as i32;
+                set_in_chunk(&mut chunk, x, local_y, z, BlockId(6));
             }
         }
     }
