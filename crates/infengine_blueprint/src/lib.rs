@@ -1729,6 +1729,61 @@ impl BlueprintEditor {
     /// types fall back to `get_float_var` / `set_float_var` until the
     /// generalised variable ops land (the value still flows through
     /// the VM, just narrowed to float at the boundary).
+    /// Topological-ish auto-arrange. Walks the exec graph from
+    /// every event root (`on_start` / `on_tick` and any node with
+    /// no incoming `in` exec edge), assigns depth via BFS, and
+    /// lays nodes out left-to-right with one column per depth
+    /// level. Within a column, nodes stack vertically in the
+    /// order they were discovered. Disconnected data nodes get
+    /// depth 0 so they cluster at the left.
+    fn auto_arrange(&mut self) {
+        let has_incoming_exec: HashSet<NodeId> = self
+            .blueprint
+            .graph
+            .edges
+            .iter()
+            .filter(|e| e.to_pin == "in")
+            .map(|e| e.to_node)
+            .collect();
+        let mut depth: HashMap<NodeId, i32> = HashMap::new();
+        // Seed roots with depth 0.
+        for n in &self.blueprint.graph.nodes {
+            if !has_incoming_exec.contains(&n.id) {
+                depth.insert(n.id, 0);
+            }
+        }
+        // BFS forward via exec edges.
+        let mut changed = true;
+        let mut guard = 0;
+        while changed && guard < 64 {
+            guard += 1;
+            changed = false;
+            for edge in &self.blueprint.graph.edges {
+                if edge.to_pin != "in" {
+                    continue;
+                }
+                if let Some(&d) = depth.get(&edge.from_node) {
+                    let new_d = d + 1;
+                    let cur = depth.get(&edge.to_node).copied().unwrap_or(-1);
+                    if new_d > cur {
+                        depth.insert(edge.to_node, new_d);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // Assign positions per depth.
+        let mut per_layer: HashMap<i32, i32> = HashMap::new();
+        for node in self.blueprint.graph.nodes.iter_mut() {
+            let d = depth.get(&node.id).copied().unwrap_or(0);
+            let row = *per_layer.entry(d).or_insert(0);
+            per_layer.insert(d, row + 1);
+            node.position[0] = (d as f32) * 240.0 + 40.0;
+            node.position[1] = (row as f32) * 90.0 + 40.0;
+        }
+        self.status = "Auto-arranged".into();
+    }
+
     fn spawn_var_node(
         &mut self,
         name: &str,
@@ -2150,6 +2205,10 @@ impl BlueprintEditor {
             if ui.button("Reset view").clicked() {
                 self.view_offset = egui::Vec2::ZERO;
                 self.view_zoom = 1.0;
+            }
+            if ui.button("Auto-arrange").clicked() {
+                self.auto_arrange();
+                dirty = true;
             }
             ui.label(format!("Zoom: {:.0}%", self.view_zoom * 100.0));
         });
