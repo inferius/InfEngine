@@ -2071,22 +2071,50 @@ fn hash2(wx: i32, wz: i32) -> u32 {
     h.wrapping_mul(0xC2B2_AE35)
 }
 
-/// Block id -> UV rect in the procedural atlas (4x2 grid of 16x16
-/// tiles). Each rect is `[u0, v0, u1, v1]`. Air falls through to
-/// a fallback slot but never participates in rendering.
-fn atlas_uv_rect(block: BlockId) -> [f32; 4] {
+/// Per-(block, face) tile coordinates inside the 4x4 atlas
+/// (64x64 px, 16x16 tiles).
+///
+/// Layout:
+/// ```text
+///  col   0       1         2          3
+/// row0  stone   dirt      grass_top  sand
+/// row1  wood    leaves    grass_side wood_top
+/// row2  ...     ...       ...        ...
+/// ```
+///
+/// Grass + wood swap tiles based on `face_normal`: a face whose
+/// normal points up gets the top tile, down gets a different
+/// tile (dirt for grass, wood_top for wood), and any other normal
+/// uses the side tile.
+fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {
     let (col, row): (u32, u32) = match block.0 {
         1 => (0, 0), // stone
         2 => (1, 0), // dirt
-        3 => (2, 0), // grass
+        3 => {
+            // grass: top -> grass_top, bottom -> dirt, side -> grass_side
+            if normal[1] > 0 {
+                (2, 0)
+            } else if normal[1] < 0 {
+                (1, 0)
+            } else {
+                (2, 1)
+            }
+        }
         4 => (3, 0), // sand
-        5 => (0, 1), // wood
+        5 => {
+            // wood: top/bottom -> log_oak_top, side -> log_oak
+            if normal[1] != 0 {
+                (3, 1)
+            } else {
+                (0, 1)
+            }
+        }
         6 => (1, 1), // leaves
-        _ => (3, 1), // fallback
+        _ => (3, 3), // fallback (empty tile)
     };
     let u0 = col as f32 * 0.25;
-    let v0 = row as f32 * 0.5;
-    [u0, v0, u0 + 0.25, v0 + 0.5]
+    let v0 = row as f32 * 0.25;
+    [u0, v0, u0 + 0.25, v0 + 0.25]
 }
 
 /// Try to load the atlas from a directory of 16x16 PNG / TGA files
@@ -2106,7 +2134,7 @@ fn atlas_uv_rect(block: BlockId) -> [f32; 4] {
 /// ```
 fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
     const W: u32 = 64;
-    const H: u32 = 32;
+    const H: u32 = 64;
     let mut rgba = vec![0u8; (W * H * 4) as usize];
     let mut copy_tile = |path: &std::path::Path, col: u32, row: u32| -> Option<()> {
         let img = image::open(path).ok()?.to_rgba8();
@@ -2140,13 +2168,25 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
             dir.join("leaves_oak_opaque.png")
         }
     };
-    let tiles: [(std::path::PathBuf, u32, u32); 6] = [
+    let grass_side_path = {
+        let tga = dir.join("grass_side.tga");
+        if tga.exists() {
+            tga
+        } else {
+            // Fall back to grass_top so at least the green colour is
+            // close even without the side variant.
+            dir.join("grass_top.png")
+        }
+    };
+    let tiles: [(std::path::PathBuf, u32, u32); 8] = [
         (dir.join("stone.png"), 0, 0),
         (dir.join("dirt.png"), 1, 0),
         (dir.join("grass_top.png"), 2, 0),
         (dir.join("sand.png"), 3, 0),
         (dir.join("log_oak.png"), 0, 1),
         (leaves_path, 1, 1),
+        (grass_side_path, 2, 1),
+        (dir.join("log_oak_top.png"), 3, 1),
     ];
     for (path, col, row) in &tiles {
         if copy_tile(path, *col, *row).is_none() {
@@ -2164,15 +2204,20 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
 /// than flat colour.
 fn build_block_atlas() -> (u32, u32, Vec<u8>) {
     const W: u32 = 64;
-    const H: u32 = 32;
+    const H: u32 = 64;
     let mut rgba = vec![0u8; (W * H * 4) as usize];
-    let tile_colors: [([u8; 3], (u32, u32)); 6] = [
+    // (base color, (col, row)). Tile (3,1) approximates a top
+    // cross-section of oak; (2,1) is grass+dirt blend for the side
+    // strip when running without a real texture pack.
+    let tile_colors: [([u8; 3], (u32, u32)); 8] = [
         ([128, 128, 140], (0, 0)),
         ([115, 82, 51], (1, 0)),
         ([89, 158, 71], (2, 0)),
         ([235, 219, 158], (3, 0)),
         ([140, 97, 56], (0, 1)),
         ([61, 128, 51], (1, 1)),
+        ([105, 130, 60], (2, 1)),
+        ([170, 130, 70], (3, 1)),
     ];
     for (color, (col, row)) in tile_colors {
         for ty in 0..16u32 {

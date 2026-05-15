@@ -176,22 +176,22 @@ pub struct ChunkSubmesh {
 pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
     // Back-compat shim: every face samples the full 0..1 UV rect
     // (matches the historical behaviour). New code should call
-    // `chunk_mesh_with_atlas` and supply a per-block UV rect so the
-    // shader can sample an atlas tile.
-    chunk_mesh_with_atlas(chunk, origin, |_| [0.0, 0.0, 1.0, 1.0])
+    // `chunk_mesh_with_atlas` and supply a per-(block, face) UV
+    // rect so the shader can sample an atlas tile.
+    chunk_mesh_with_atlas(chunk, origin, |_, _| [0.0, 0.0, 1.0, 1.0])
 }
 
 /// Like `chunk_mesh`, but each face's UVs are pre-scaled into the
-/// `[u0, v0, u1, v1]` rect that `uv_rect(block)` returns. Lets the
-/// caller pack every block type into a single texture atlas and
-/// pay one upload instead of one per submesh.
+/// `[u0, v0, u1, v1]` rect that `uv_rect(block, normal)` returns.
+/// Per-face mapping lets blocks like grass swap between top / side /
+/// bottom tiles based on the outward face normal.
 pub fn chunk_mesh_with_atlas<F>(
     chunk: &Chunk,
     origin: Vec3,
     uv_rect: F,
 ) -> Vec<ChunkSubmesh>
 where
-    F: Fn(BlockId) -> [f32; 4],
+    F: Fn(BlockId, [i8; 3]) -> [f32; 4],
 {
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
@@ -207,7 +207,6 @@ where
                     origin.y + y as f32,
                     origin.z + z as f32,
                 );
-                let rect = uv_rect(block);
                 let entry = per_block
                     .entry(block)
                     .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
@@ -231,6 +230,7 @@ where
                     if !neighbour.is_air() {
                         continue;
                     }
+                    let rect = uv_rect(block, face.normal);
                     emit_quad(&mut entry.0, &mut entry.1, p, face, rect);
                 }
             }
