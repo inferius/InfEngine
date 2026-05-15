@@ -176,6 +176,14 @@ impl NetServer {
     }
 
     fn handle_message(&mut self, addr: SocketAddr, msg: NetMessage) {
+        // Any packet from a known client is a liveness signal - keep
+        // them in the directory. The reaper checks `last_seen` against
+        // a 5 s cutoff; without this update, clients that send only
+        // application-level Bytes / Event traffic (no Pings) get
+        // dropped despite being actively present.
+        if let Some(c) = self.clients.get_mut(&addr) {
+            c.last_seen = Instant::now();
+        }
         match msg {
             NetMessage::Hello { proto, name } => {
                 if proto != PROTO_VERSION {

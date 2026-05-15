@@ -191,6 +191,10 @@ struct Voxel {
     player_yaw: f32,
     player_pitch: f32,
 
+    // True while the OS reports this window as focused. Cursor
+    // lock + mouse-motion handling are gated on it so two instances
+    // on the same machine don't fight over input.
+    has_focus: bool,
     last_mouse: Option<[f32; 2]>,
     mouse_dx: f32,
     mouse_dy: f32,
@@ -604,6 +608,7 @@ impl Voxel {
             player_vel: Vec3::ZERO,
             player_yaw: 0.0,
             player_pitch: -0.4,
+            has_focus: true,
             last_mouse: None,
             mouse_dx: 0.0,
             mouse_dy: 0.0,
@@ -875,7 +880,11 @@ impl Voxel {
         use infengine_window::raw_winit::window::CursorGrabMode;
         let playing = matches!(self.state, AppState::Playing);
         let raw = window.raw();
-        let grab = if playing && self.settings.lock_cursor {
+        // Only grab when we have OS focus. Trying to grab an
+        // unfocused window on Windows silently drops the lock and
+        // can teleport the cursor onto a sibling window mid-click.
+        let active = playing && self.has_focus;
+        let grab = if active && self.settings.lock_cursor {
             if self.settings.hide_cursor {
                 CursorGrabMode::Locked
             } else {
@@ -887,7 +896,7 @@ impl Voxel {
         if raw.set_cursor_grab(grab).is_err() && grab == CursorGrabMode::Locked {
             let _ = raw.set_cursor_grab(CursorGrabMode::Confined);
         }
-        raw.set_cursor_visible(!(playing && self.settings.hide_cursor));
+        raw.set_cursor_visible(!(active && self.settings.hide_cursor));
     }
 
     fn update_play(&mut self, ctx: &FrameContext<'_>, dt: f32) {
@@ -1375,6 +1384,20 @@ impl AppHandler for Voxel {
         if let Some(ui) = self.ui.as_mut() {
             ui.handle_engine_event(window, event);
         }
+        // Focus tracking. Clicking another window on the same machine
+        // shifts focus; without this guard `apply_cursor_settings`
+        // would keep wrestling the cursor away from whichever window
+        // the user actually clicked.
+        if let WindowEvent::Focused(focused) = event {
+            self.has_focus = *focused;
+            if !*focused {
+                self.lmb_pending = false;
+                self.rmb_pending = false;
+                self.mouse_dx = 0.0;
+                self.mouse_dy = 0.0;
+                self.last_mouse = None;
+            }
+        }
         // Track cursor moved deltas only when no grab is active (i.e. in
         // menus this is the only source; in Play raw DeviceEvent
         // supplies the deltas).
@@ -1390,8 +1413,11 @@ impl AppHandler for Voxel {
             self.last_mouse = Some(now);
         }
         // Edge-triggered LMB / RMB while in Play state. Both flags are
-        // consumed in `on_update` next frame.
+        // consumed in `on_update` next frame. Ignored when the window
+        // doesn't have focus so a click on a sibling instance never
+        // mines a block here.
         if matches!(self.state, AppState::Playing)
+            && self.has_focus
             && let WindowEvent::MouseInput { state, button, .. } = event
             && matches!(state, ElementState::Pressed)
         {
@@ -1417,6 +1443,12 @@ impl AppHandler for Voxel {
     fn on_device_event(&mut self, event: &infengine_window::raw_winit::event::DeviceEvent) {
         use infengine_window::raw_winit::event::DeviceEvent;
         if !matches!(self.state, AppState::Playing) {
+            return;
+        }
+        // Device events fire globally - any other instance with cursor
+        // lock would otherwise rotate its camera off our motion. Gate
+        // on focus to keep input owner-local.
+        if !self.has_focus {
             return;
         }
         if !(self.settings.lock_cursor || self.settings.hide_cursor) {
