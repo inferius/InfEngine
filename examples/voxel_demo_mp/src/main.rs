@@ -226,6 +226,10 @@ struct Voxel {
     /// Client ids the server saw last tick. Used to detect joins
     /// for the catch-up broadcast.
     known_client_ids: HashSet<u32>,
+    /// Last time the server's `edit_history` was flushed to disk.
+    /// `None` until the first save fires (30 s after Play start);
+    /// any later instant gates the next periodic flush.
+    last_state_save: Option<std::time::Instant>,
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
@@ -266,6 +270,56 @@ impl Voxel {
         let mut v = Self::new();
         v.net = net;
         v
+    }
+
+    /// Path of the server-side world delta file. Lives next to the
+    /// launch directory so a host can be torn down + brought back up
+    /// without losing the players' edits.
+    const STATE_FILE: &'static str = "voxel_server_state.bin";
+
+    /// Read the on-disk edit log and apply every entry to the local
+    /// world. Called once on the server right after the world's
+    /// procedural base is generated.
+    fn load_server_state(&mut self) {
+        let path = std::path::PathBuf::from(Self::STATE_FILE);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let cfg = bincode::config::standard();
+        let edits: Vec<EditMsg> = match bincode::serde::decode_from_slice(&bytes, cfg) {
+            Ok((e, _)) => e,
+            Err(err) => {
+                warn!(error = %err, path = %path.display(), "state load decode failed");
+                return;
+            }
+        };
+        info!(count = edits.len(), path = %path.display(), "loaded server state");
+        for e in &edits {
+            self.world.set([e.x, e.y, e.z], BlockId(e.block));
+        }
+        self.edit_history = edits;
+        // Rebuild affected chunks so the loaded world renders right.
+        self.rebuild_all_meshes();
+    }
+
+    /// Flush the in-memory edit log to disk. Called periodically
+    /// while the server runs (every 30 s) so a crash loses at most
+    /// half a minute of edits.
+    fn save_server_state(&mut self) {
+        if !matches!(self.net, NetRole::Server { .. }) {
+            return;
+        }
+        let path = std::path::PathBuf::from(Self::STATE_FILE);
+        let cfg = bincode::config::standard();
+        match bincode::serde::encode_to_vec(&self.edit_history, cfg) {
+            Ok(bytes) => {
+                if let Err(err) = std::fs::write(&path, &bytes) {
+                    warn!(error = %err, path = %path.display(), "state save failed");
+                }
+            }
+            Err(err) => warn!(error = %err, "state save encode failed"),
+        }
+        self.last_state_save = Some(std::time::Instant::now());
     }
 
     /// Push a small burst of debris particles into the system at the
@@ -661,6 +715,15 @@ impl Voxel {
             let coords = Self::affected_chunks(voxel);
             self.rebuild_chunks(&coords);
         }
+        // Periodic state flush on the server so a crash loses at
+        // most ~30 seconds of edits.
+        if matches!(self.net, NetRole::Server { .. })
+            && self
+                .last_state_save
+                .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(30))
+        {
+            self.save_server_state();
+        }
     }
 
     fn new() -> Self {
@@ -729,6 +792,7 @@ impl Voxel {
             },
             edit_history: Vec::new(),
             known_client_ids: HashSet::new(),
+            last_state_save: None,
             master_addr: format!(
                 "91.232.214.139:{}",
                 infengine_net::master::MASTER_PORT
@@ -1477,6 +1541,12 @@ impl AppHandler for Voxel {
         }
         self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
         self.build_world();
+        // Server resumes any persisted edits so a restart picks up
+        // where the world left off. Clients sync via the catch-up
+        // broadcast on first heartbeat.
+        if matches!(self.net, NetRole::Server { .. }) {
+            self.load_server_state();
+        }
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
