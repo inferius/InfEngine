@@ -230,6 +230,15 @@ struct Voxel {
     browser_servers: Vec<infengine_net::master::ServerInfo>,
     browser_error: Option<String>,
     browser_last_refresh: Option<std::time::Instant>,
+    /// In-flight master `ListServers` query. The refresh path now
+    /// runs on a worker thread so the UI doesn't freeze for the
+    /// 2-second master timeout. `Some` while a query is pending;
+    /// cleared on result delivery.
+    browser_query_rx:
+        Option<std::sync::mpsc::Receiver<Result<Vec<infengine_net::master::ServerInfo>, String>>>,
+    /// In-flight master `Register` query (host announce). Same
+    /// async pattern as the browser refresh.
+    announce_query_rx: Option<std::sync::mpsc::Receiver<Result<u64, String>>>,
     /// Returned by the master server on successful Register; the
     /// host echoes it back on Heartbeat + Unregister.
     master_token: Option<u64>,
@@ -296,15 +305,10 @@ impl Voxel {
     /// the returned token so periodic heartbeats land on the right
     /// directory entry.
     fn announce_to_master(&mut self, port: u16) {
-        use infengine_net::master::{
-            MASTER_PROTO, MasterRequest, MasterResponse, ServerInfo, request_blocking,
-        };
-        // The server doesn't know its own public IP - the master
-        // doesn't either (we don't relay packet src for security).
-        // The user supplies a routable "host:port" through
-        // `host_port_buf` (port only) + the announce path uses the
-        // master-known IP by leaving the address empty; master
-        // substitutes the packet source when it sees `0.0.0.0:port`.
+        use infengine_net::master::{MASTER_PROTO, MasterRequest, ServerInfo};
+        if self.announce_query_rx.is_some() {
+            return; // in-flight already
+        }
         let info = ServerInfo {
             name: self.host_name_buf.clone(),
             addr: format!("0.0.0.0:{port}"),
@@ -316,47 +320,102 @@ impl Voxel {
             proto: MASTER_PROTO,
             info,
         };
-        match request_blocking(&self.master_addr, &req, std::time::Duration::from_secs(2)) {
-            Some(MasterResponse::Registered { token }) => {
-                info!(token, "announced to master");
-                self.master_token = Some(token);
-                self.last_heartbeat = Some(std::time::Instant::now());
-            }
-            Some(MasterResponse::Error { message }) => {
-                warn!(message, "master register error");
-                self.browser_error = Some(format!("master: {message}"));
-            }
-            _ => {
-                warn!("master register timed out");
-                self.browser_error = Some("master timeout".into());
-            }
-        }
+        let addr = self.master_addr.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use infengine_net::master::{MasterResponse, request_blocking};
+            let result =
+                match request_blocking(&addr, &req, std::time::Duration::from_secs(2)) {
+                    Some(MasterResponse::Registered { token }) => Ok(token),
+                    Some(MasterResponse::Error { message }) => {
+                        Err(format!("master: {message}"))
+                    }
+                    _ => Err("master timeout".into()),
+                };
+            let _ = tx.send(result);
+        });
+        self.announce_query_rx = Some(rx);
     }
 
     /// Fetch the server list from the master and stash it for the
     /// browser UI to render.
     fn refresh_browser(&mut self) {
-        use infengine_net::master::{
-            MASTER_PROTO, MasterRequest, MasterResponse, request_blocking,
-        };
-        self.browser_last_refresh = Some(std::time::Instant::now());
+        use infengine_net::master::{MASTER_PROTO, MasterRequest};
+        if self.browser_query_rx.is_some() {
+            return; // already in flight
+        }
+        self.browser_error = None;
         let req = MasterRequest::ListServers {
             proto: MASTER_PROTO,
         };
-        match request_blocking(&self.master_addr, &req, std::time::Duration::from_secs(2)) {
-            Some(MasterResponse::List { servers }) => {
-                info!(count = servers.len(), "fetched server list");
-                self.browser_servers = servers;
-                self.browser_error = None;
+        let addr = self.master_addr.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use infengine_net::master::{MasterResponse, request_blocking};
+            let result =
+                match request_blocking(&addr, &req, std::time::Duration::from_secs(2)) {
+                    Some(MasterResponse::List { servers }) => Ok(servers),
+                    Some(MasterResponse::Error { message }) => {
+                        Err(format!("master: {message}"))
+                    }
+                    _ => Err("master timeout".into()),
+                };
+            let _ = tx.send(result);
+        });
+        self.browser_query_rx = Some(rx);
+    }
+
+    /// Drain any completed background master queries. Called every
+    /// tick from `on_update` so async results land back on the UI
+    /// without polling tight loops.
+    fn poll_master_queries(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let browser_done = if let Some(rx) = &self.browser_query_rx {
+            match rx.try_recv() {
+                Ok(Ok(servers)) => {
+                    info!(count = servers.len(), "fetched server list");
+                    self.browser_servers = servers;
+                    self.browser_error = None;
+                    self.browser_last_refresh = Some(std::time::Instant::now());
+                    true
+                }
+                Ok(Err(err)) => {
+                    warn!(error = %err, "master list failed");
+                    self.browser_error = Some(err);
+                    self.browser_last_refresh = Some(std::time::Instant::now());
+                    true
+                }
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => true,
             }
-            Some(MasterResponse::Error { message }) => {
-                warn!(message, "master list error");
-                self.browser_error = Some(format!("master: {message}"));
+        } else {
+            false
+        };
+        if browser_done {
+            self.browser_query_rx = None;
+        }
+        let announce_done = if let Some(rx) = &self.announce_query_rx {
+            match rx.try_recv() {
+                Ok(Ok(token)) => {
+                    info!(token, "announced to master");
+                    self.master_token = Some(token);
+                    self.last_heartbeat = Some(std::time::Instant::now());
+                    self.browser_error = None;
+                    true
+                }
+                Ok(Err(err)) => {
+                    warn!(error = %err, "announce failed");
+                    self.browser_error = Some(err);
+                    true
+                }
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => true,
             }
-            _ => {
-                warn!("master list timed out");
-                self.browser_error = Some("master timeout".into());
-            }
+        } else {
+            false
+        };
+        if announce_done {
+            self.announce_query_rx = None;
         }
     }
 
@@ -379,16 +438,18 @@ impl Voxel {
                 .last_heartbeat
                 .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(5))
         {
-            use infengine_net::master::{MasterRequest, MasterResponse, request_blocking};
+            use infengine_net::master::{MasterRequest, request_blocking};
             let players = poses.len().saturating_sub(1) as u32 + server.client_count() as u32;
             let req = MasterRequest::Heartbeat { token, players };
-            let _ = request_blocking(
-                &self.master_addr,
-                &req,
-                std::time::Duration::from_millis(250),
-            );
+            let addr = self.master_addr.clone();
+            // Fire-and-forget so the server tick never stalls on a
+            // network round trip. We don't care about the response;
+            // a stale token just causes the next heartbeat to log
+            // a warning.
+            std::thread::spawn(move || {
+                let _ = request_blocking(&addr, &req, std::time::Duration::from_millis(500));
+            });
             self.last_heartbeat = Some(std::time::Instant::now());
-            let _ = MasterResponse::Heartbeated; // tag-import side-effect
         }
         // Drain incoming bytes + edits to apply. Collect first so the
         // borrow on `self.net` releases before we mutate the world.
@@ -575,6 +636,8 @@ impl Voxel {
             browser_servers: Vec::new(),
             browser_error: None,
             browser_last_refresh: None,
+            browser_query_rx: None,
+            announce_query_rx: None,
             master_token: None,
             last_heartbeat: None,
         }
@@ -932,6 +995,7 @@ impl Voxel {
         let browser_servers = &self.browser_servers;
         let browser_error = &self.browser_error;
         let browser_last_refresh = self.browser_last_refresh;
+        let browser_querying = self.browser_query_rx.is_some();
 
         let Some(ui) = self.ui.as_mut() else {
             return;
@@ -1008,17 +1072,21 @@ impl Voxel {
                     ui.horizontal(|ui| {
                         let age = browser_last_refresh
                             .map(|t| format!("{:.0}s ago", t.elapsed().as_secs_f32()));
-                        let status = match (browser_error.as_deref(), age.as_deref()) {
-                            (Some(err), _) => format!("[ERR] {err}"),
-                            (None, Some(a)) => {
-                                format!(
+                        let status = if browser_querying {
+                            "[...] querying master".to_string()
+                        } else {
+                            match (browser_error.as_deref(), age.as_deref()) {
+                                (Some(err), _) => format!("[ERR] {err}"),
+                                (None, Some(a)) => format!(
                                     "[OK] {} server(s) - refreshed {a}",
                                     browser_servers.len()
-                                )
+                                ),
+                                (None, None) => "[idle] press Refresh".to_string(),
                             }
-                            (None, None) => "[idle] press Refresh".to_string(),
                         };
-                        let color = if browser_error.is_some() {
+                        let color = if browser_querying {
+                            egui::Color32::from_rgb(140, 180, 220)
+                        } else if browser_error.is_some() {
                             egui::Color32::from_rgb(220, 100, 100)
                         } else if browser_servers.is_empty() {
                             egui::Color32::from_rgb(220, 200, 100)
@@ -1363,6 +1431,10 @@ impl AppHandler for Voxel {
     fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.clamp(1e-4, 0.1);
         self.fps_ema = self.fps_ema * 0.9 + (1.0 / dt) * 0.1;
+
+        // Pull any pending master-query results back onto the main
+        // thread (refresh + announce both run on background workers).
+        self.poll_master_queries();
 
         // Esc cycles Play <-> Paused and Settings -> back. Never quits.
         let esc_now = ctx.input.is_pressed(Key::Escape);
