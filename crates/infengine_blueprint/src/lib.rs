@@ -1157,6 +1157,18 @@ struct PendingEdge {
     ty: PinType,
 }
 
+/// Pin right-click popup state. Stores everything the actions need
+/// (which pin, what type, where to anchor the popup) so the canvas
+/// renders the menu independently of where the cursor moved.
+#[derive(Debug, Clone)]
+struct PinContextMenu {
+    at: egui::Pos2,
+    node: NodeId,
+    pin: String,
+    is_output: bool,
+    ty: PinType,
+}
+
 /// Payload for the side-panel -> canvas drag-and-drop flow. The side
 /// panel wraps each variable / function row in a `dnd_drag_source`
 /// carrying one of these; the canvas registers a matching drop zone
@@ -1214,6 +1226,10 @@ pub struct BlueprintEditor {
     /// and auto-connects whatever node the user picks. This stores the
     /// originating pin until the menu closes.
     context_menu_from_pin: Option<PendingEdge>,
+    /// Popup shown after right-clicking a pin. Currently offers
+    /// "Promote to Variable" + (for connected pins) "Break Link";
+    /// future pin-scoped actions land here too.
+    pin_context_menu: Option<PinContextMenu>,
     /// Additional nodes added to the selection via Shift+click.
     /// `selected` is still the "primary" (drives the inspector); the
     /// extras are along for the ride so Delete and drag can act on
@@ -2432,9 +2448,27 @@ impl BlueprintEditor {
             wire_break_consumed = true;
             dirty = true;
         }
-        // Empty-canvas right-click: open the Add-node context menu.
-        // Skipped if a wire was just broken.
+        // Right-click on a pin -> open the pin context menu so the
+        // user can promote it to a variable.
+        let mut pin_menu_consumed = false;
         if !wire_break_consumed
+            && response.clicked_by(egui::PointerButton::Secondary)
+            && let Some(pos) = hover
+            && let Some((nid, pname, is_output, ty)) = self.hit_pin(registry, rect.min, pos)
+        {
+            self.pin_context_menu = Some(PinContextMenu {
+                at: pos,
+                node: nid,
+                pin: pname,
+                is_output,
+                ty,
+            });
+            pin_menu_consumed = true;
+        }
+        // Empty-canvas right-click: open the Add-node context menu.
+        // Skipped if a wire was just broken or a pin menu was opened.
+        if !wire_break_consumed
+            && !pin_menu_consumed
             && response.clicked_by(egui::PointerButton::Secondary)
             && let Some(pos) = hover
             && self.hit_pin(registry, rect.min, pos).is_none()
@@ -3247,6 +3281,162 @@ impl BlueprintEditor {
                 });
             if consumed || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.pending_var_drop = None;
+            }
+        }
+
+        // Pin context menu (right-click on a pin). Currently offers
+        // Promote to Variable + Break Link (when the pin is wired).
+        if let Some(menu) = self.pin_context_menu.clone() {
+            let mut consumed = false;
+            let pin_ty = menu.ty;
+            let pin_is_output = menu.is_output;
+            let pin_node = menu.node;
+            let pin_name = menu.pin.clone();
+            let zoom = self.view_zoom.max(0.01);
+            egui::Area::new(egui::Id::new(("bp_pin_menu", pin_node.0)))
+                .fixed_pos(menu.at)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(180.0);
+                        let [r, g, b] = pin_ty.rgb();
+                        ui.colored_label(
+                            egui::Color32::from_rgb(r, g, b),
+                            format!(
+                                "{} : {} ({})",
+                                pin_name,
+                                pin_ty.label(),
+                                if pin_is_output { "output" } else { "input" }
+                            ),
+                        );
+                        ui.separator();
+                        // Promote: only for typed (non-Exec) pins.
+                        let promotable = pin_ty != PinType::Exec
+                            && matches!(
+                                pin_ty,
+                                PinType::Float | PinType::Bool | PinType::Vec3
+                            );
+                        if ui
+                            .add_enabled(
+                                promotable,
+                                egui::Button::new("Promote to Variable"),
+                            )
+                            .clicked()
+                        {
+                            // Generate a unique variable name.
+                            let mut idx = self.blueprint.variables.len() + 1;
+                            let var_name = loop {
+                                let n = format!("NewVar{idx}");
+                                if !self.blueprint.variables.iter().any(|v| v.name == n) {
+                                    break n;
+                                }
+                                idx += 1;
+                            };
+                            let default = match pin_ty {
+                                PinType::Bool => "false".to_string(),
+                                PinType::Vec3 => "0,0,0".to_string(),
+                                _ => "0".to_string(),
+                            };
+                            self.blueprint.variables.push(BlueprintVariable {
+                                name: var_name.clone(),
+                                ty: pin_ty,
+                                default,
+                            });
+                            // Spawn a Get / Set var node next to the
+                            // source pin and wire it into the
+                            // original pin. v1 only fully supports
+                            // Float variables; other types still get
+                            // the variable + a generic float var node
+                            // until typed var ops land.
+                            let var_kind = if pin_is_output {
+                                "set_float_var"
+                            } else {
+                                "get_float_var"
+                            };
+                            if let Some(origin) = self.pin_position(
+                                registry, rect.min, &Node::new(pin_node, "", [0.0; 2]),
+                                &pin_name, pin_is_output,
+                            ) {
+                                let _ = origin;
+                            }
+                            // Place the new node a fixed offset from
+                            // the original node's position in
+                            // canvas-space.
+                            let node_pos = self
+                                .blueprint
+                                .graph
+                                .nodes
+                                .iter()
+                                .find(|n| n.id == pin_node)
+                                .map(|n| n.position)
+                                .unwrap_or([0.0, 0.0]);
+                            let offset = if pin_is_output {
+                                [node_pos[0] + 220.0, node_pos[1]]
+                            } else {
+                                [node_pos[0] - 220.0, node_pos[1]]
+                            };
+                            let _ = zoom; // suppress unused if not paths
+                            let new_id = self
+                                .blueprint
+                                .graph
+                                .add_node(var_kind, offset);
+                            if let Some(n) = self
+                                .blueprint
+                                .graph
+                                .nodes
+                                .iter_mut()
+                                .find(|n| n.id == new_id)
+                            {
+                                n.params.insert("name".into(), var_name.clone());
+                            }
+                            // Wire the new node to the original pin
+                            // (output -> Set.value, input -> read
+                            // from Get.value).
+                            let (from_node, from_pin, to_node, to_pin) = if pin_is_output {
+                                (pin_node, pin_name.clone(), new_id, "value".to_string())
+                            } else {
+                                (new_id, "value".to_string(), pin_node, pin_name.clone())
+                            };
+                            let _ = self.blueprint.graph.raw_connect(
+                                from_node, &from_pin, to_node, &to_pin,
+                            );
+                            dirty = true;
+                            consumed = true;
+                        }
+                        // Break Link: drop every edge touching this
+                        // pin.
+                        let has_edges = self.blueprint.graph.edges.iter().any(|e| {
+                            (e.from_node == pin_node
+                                && e.from_pin == pin_name
+                                && pin_is_output)
+                                || (e.to_node == pin_node
+                                    && e.to_pin == pin_name
+                                    && !pin_is_output)
+                        });
+                        if ui
+                            .add_enabled(has_edges, egui::Button::new("Break Link(s)"))
+                            .clicked()
+                        {
+                            let before = self.blueprint.graph.edges.len();
+                            self.blueprint.graph.edges.retain(|e| {
+                                if pin_is_output {
+                                    !(e.from_node == pin_node && e.from_pin == pin_name)
+                                } else {
+                                    !(e.to_node == pin_node && e.to_pin == pin_name)
+                                }
+                            });
+                            if self.blueprint.graph.edges.len() != before {
+                                dirty = true;
+                            }
+                            consumed = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            consumed = true;
+                        }
+                    });
+                });
+            if consumed || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.pin_context_menu = None;
             }
         }
 
