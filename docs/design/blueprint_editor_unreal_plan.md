@@ -82,10 +82,23 @@ What does not exist yet:
 | 16 - Knot / reroute nodes (Exec + Float) | DONE (commit 922cd47) |
 
 Outside the BP roadmap, voxel demo backlog:
-- Per-block textures (procedural or atlas-loaded). Requires
-  `Renderer::set_mesh_texture(handle, texture)` plus a per-block
-  texture sampler in the chunk PBR pipeline. Voxel meshes already
-  carry UV-per-face, so the work is renderer-side.
+- Per-block textures (procedural or atlas-loaded). Two paths:
+  - **Shared bind group**: lift `Renderer.mesh_albedos` from
+    `HashMap<MeshHandle, BindGroup>` to
+    `HashMap<MeshHandle, Arc<BindGroup>>`. Expose
+    `make_mesh_albedo(w, h, rgba) -> AlbedoHandle` and
+    `set_mesh_albedo_arc(mesh, AlbedoHandle)`. Voxel demo
+    pre-builds one AlbedoHandle per block id at startup; each
+    chunk rebuild just clones the Arc into the new mesh's slot.
+    Cheap on the GPU side - no re-upload per chunk.
+  - **Atlas**: a single 4x2 texture with 16x16 tiles, plus a
+    block_id -> tile-uv-rect lookup. `chunk_mesh` emits UVs
+    pre-scaled into the tile's rect. One texture upload total;
+    shader stays unchanged. Voxel meshes already carry
+    UV-per-face so the bake is a multiply + offset per quad.
+
+  Either path keeps the existing leafy / grass colour fields as
+  the fallback tint when no texture is bound.
 
 Carry-overs not yet implemented (Promote-to-Variable from a pin,
 box-select drag, multi-drag, bookmarks, minimap, auto-arrange,
