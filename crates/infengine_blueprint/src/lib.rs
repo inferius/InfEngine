@@ -357,6 +357,25 @@ const BUILTIN_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        // Reroute / knot node for the exec channel. Pure visual
+        // passthrough; the compiler walks straight through.
+        id: "knot_exec",
+        label: "Reroute (Exec)",
+        category: "Control",
+        inputs: &[PinSpec::new("in", PinType::Exec)],
+        outputs: &[PinSpec::new("exec", PinType::Exec)],
+        contexts: &[],
+    },
+    NodeKindDef {
+        // Reroute / knot node for a Float data wire.
+        id: "knot_float",
+        label: "Reroute (Float)",
+        category: "Control",
+        inputs: &[PinSpec::new("in", PinType::Float)],
+        outputs: &[PinSpec::new("value", PinType::Float)],
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "print",
         label: "Print",
         category: "Debug",

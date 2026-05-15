@@ -258,6 +258,16 @@ fn compile_data(
             let name = node.params.get("name").cloned().unwrap_or_default();
             ops.push(Op::PushVar(name));
         }
+        "knot_float" => {
+            // Reroute node for a Float data wire - emit whatever
+            // feeds its `in` pin.
+            match find_data_source(graph, node_id, "in") {
+                Some((src, src_pin)) => {
+                    compile_data(graph, src, src_pin, visiting, ops, target, callable_methods)?;
+                }
+                None => ops.push(Op::PushFloat(pin_default_float(node, "in"))),
+            }
+        }
         "delta_time" => {
             ops.push(Op::PushDeltaTime);
         }
@@ -674,6 +684,21 @@ fn compile_exec_from(
             pin: "(sink)".to_string(),
         })?;
         match sink_node.kind.as_str() {
+            "knot_exec" => {
+                // Reroute node for the exec channel. Pure visual,
+                // no VM op - walk straight through its `exec` output.
+                compile_exec_from(
+                    graph,
+                    sink_id,
+                    "exec",
+                    ops,
+                    target,
+                    visited,
+                    functions,
+                    calling,
+                    callable_methods,
+                )?;
+            }
             "sequence" => {
                 // Walk each `then_N` exec output in order. No VM op
                 // needed - we just concatenate the chains so they run
@@ -1546,6 +1571,33 @@ mod tests {
         let mut h = Mock { sets: Vec::new() };
         run(&prog, &mut h);
         assert_eq!(h.sets, vec![(7, [10.0, 20.0, 30.0])]);
+    }
+
+    #[test]
+    fn knot_passthrough_exec_and_float() {
+        let reg = NodeKindRegistry::with_builtins();
+        let mut g = Graph::default();
+        let tick = g.add_node("on_tick", [0.0, 0.0]);
+        let knot_x = g.add_node("knot_exec", [0.0, 0.0]);
+        let knot_v = g.add_node("knot_float", [0.0, 0.0]);
+        let c = g.add_node("const_float", [0.0, 0.0]);
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == c)
+            .unwrap()
+            .params
+            .insert("value".into(), "42".into());
+        let p = g.add_node("print", [0.0, 0.0]);
+        // Exec: tick -> knot_exec -> print
+        assert!(g.connect(&reg, tick, "exec", knot_x, "in").unwrap());
+        assert!(g.connect(&reg, knot_x, "exec", p, "in").unwrap());
+        // Data: const -> knot_float -> print.value
+        assert!(g.connect(&reg, c, "value", knot_v, "in").unwrap());
+        assert!(g.connect(&reg, knot_v, "value", p, "value").unwrap());
+        let prog = compile(&g, Trigger::OnTick, &BlueprintTarget::Global).unwrap();
+        let mut cap = Capture(Vec::new());
+        run(&prog, &mut cap);
+        assert_eq!(cap.0, vec![Value::Float(42.0)]);
     }
 
     #[test]
