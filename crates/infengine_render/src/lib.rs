@@ -42,6 +42,12 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
+
+/// Reference-counted albedo bind group built once by
+/// `Renderer::make_mesh_albedo` and cheaply cloned into any number
+/// of mesh slots via `Renderer::bind_mesh_albedo_arc`. Opaque to
+/// downstream crates so they don't have to depend on `wgpu`.
+pub type AlbedoHandle = std::sync::Arc<wgpu::BindGroup>;
 use shadow::ShadowPass;
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
@@ -94,7 +100,7 @@ pub struct Renderer {
     /// Per-mesh albedo bind groups. When a mesh handle has an entry
     /// here, the mesh pipeline binds it for that mesh's draw call;
     /// otherwise it falls back to the global default (1x1 white).
-    mesh_albedos: std::collections::HashMap<MeshHandle, wgpu::BindGroup>,
+    mesh_albedos: std::collections::HashMap<MeshHandle, AlbedoHandle>,
     lights: LightsResource,
     light_queue: Vec<PointLight>,
 }
@@ -388,7 +394,31 @@ impl Renderer {
         let bg = self
             .mesh3d
             .make_albedo_bind_group(&self.device, &self.queue, width, height, rgba);
-        self.mesh_albedos.insert(handle, bg);
+        self.mesh_albedos.insert(handle, std::sync::Arc::new(bg));
+    }
+
+    /// Pre-build an albedo texture once + return the shared
+    /// `Arc<BindGroup>`. The caller stashes the handle and feeds it
+    /// into `bind_mesh_albedo_arc` for as many meshes as needed -
+    /// the GPU texture isn't re-uploaded per mesh. Designed for
+    /// voxel atlases where every chunk submesh wants the same
+    /// texture without paying upload cost on every rebuild.
+    pub fn make_mesh_albedo(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> AlbedoHandle {
+        let bg = self
+            .mesh3d
+            .make_albedo_bind_group(&self.device, &self.queue, width, height, rgba);
+        std::sync::Arc::new(bg)
+    }
+
+    /// Bind a pre-built albedo to a specific mesh handle. Cheap
+    /// clone of the `Arc` - no GPU work.
+    pub fn bind_mesh_albedo_arc(&mut self, handle: MeshHandle, albedo: AlbedoHandle) {
+        self.mesh_albedos.insert(handle, albedo);
     }
 
     /// Load an albedo texture from a file (PNG / JPG / WEBP / etc. -

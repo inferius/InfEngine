@@ -28,7 +28,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, ChunkSubmesh, RayHit, World,
-    chunk_mesh, raycast,
+    chunk_mesh_with_atlas, raycast,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -235,6 +235,10 @@ struct Voxel {
     player_cube: Option<MeshHandle>,
     /// CPU particle system: short-lived debris on every block break.
     particles: infengine_particles::ParticleSystem,
+    /// Shared atlas bind group for the voxel chunk submeshes. Built
+    /// once in `on_start`; every new chunk submesh clones the Arc
+    /// instead of uploading a fresh texture.
+    voxel_atlas: Option<infengine_render::AlbedoHandle>,
     /// Master-server endpoint the in-game browser queries. Settable
     /// via `--master <addr>` argv; defaults to the configured
     /// public master.
@@ -774,6 +778,7 @@ impl Voxel {
             fps_ema: 60.0,
             net: NetRole::Offline,
             player_cube: None,
+            voxel_atlas: None,
             particles: {
                 // Particle system starts with one "ambient" emitter
                 // (rate=0, max=0) that only contributes its gravity
@@ -925,12 +930,16 @@ impl Voxel {
             let cc = result.coord;
             {
                 let renderer = self.renderer.as_mut().expect("renderer ready");
+                let atlas = self.voxel_atlas.clone();
                 for sub in result.submeshes {
                     let handle = renderer.create_mesh(
                         &format!("voxel_chunk_{}_{}_{}_b{}", cc[0], cc[1], cc[2], sub.block.0),
                         &sub.vertices,
                         &sub.indices,
                     );
+                    if let Some(a) = atlas.clone() {
+                        renderer.bind_mesh_albedo_arc(handle, a);
+                    }
                     self.chunk_meshes.push((cc, sub.block, handle));
                 }
             }
@@ -997,12 +1006,13 @@ impl Voxel {
             }
         }
         self.chunk_meshes = keep;
+        let atlas = self.voxel_atlas.clone();
         for coord in coords {
             let Some(chunk) = self.world.chunk(*coord) else {
                 continue;
             };
             let origin = World::chunk_world_origin(*coord);
-            for sub in chunk_mesh(chunk, origin) {
+            for sub in chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect) {
                 let handle = renderer.create_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
@@ -1011,6 +1021,9 @@ impl Voxel {
                     &sub.vertices,
                     &sub.indices,
                 );
+                if let Some(a) = atlas.clone() {
+                    renderer.bind_mesh_albedo_arc(handle, a);
+                }
                 self.chunk_meshes.push((*coord, sub.block, handle));
             }
         }
@@ -1021,12 +1034,13 @@ impl Voxel {
     /// chunk + its solid neighbours so the cost stays local.
     fn rebuild_all_meshes(&mut self) {
         self.chunk_meshes.clear();
+        let atlas = self.voxel_atlas.clone();
         let renderer = self.renderer.as_mut().expect("renderer ready");
         let coords: Vec<ChunkCoord> = self.world.iter_chunks().map(|(c, _)| *c).collect();
         for coord in coords {
             let chunk = self.world.chunk(coord).expect("chunk present");
             let origin = World::chunk_world_origin(coord);
-            let subs = chunk_mesh(chunk, origin);
+            let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect);
             for sub in subs {
                 let handle = renderer.create_mesh(
                     &format!(
@@ -1036,6 +1050,9 @@ impl Voxel {
                     &sub.vertices,
                     &sub.indices,
                 );
+                if let Some(a) = atlas.clone() {
+                    renderer.bind_mesh_albedo_arc(handle, a);
+                }
                 self.chunk_meshes.push((coord, sub.block, handle));
             }
         }
@@ -1541,6 +1558,14 @@ impl AppHandler for Voxel {
                 std::process::exit(2);
             }
         }
+        // Build the procedural block atlas once + cache the shared
+        // bind group. Every chunk submesh clones the Arc when it
+        // creates its mesh handle so the GPU only pays the upload
+        // cost once at startup.
+        if let Some(r) = self.renderer.as_mut() {
+            let (aw, ah, atlas_rgba) = build_block_atlas();
+            self.voxel_atlas = Some(r.make_mesh_albedo(aw, ah, &atlas_rgba));
+        }
         self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
         self.build_world();
         // Server resumes any persisted edits so a restart picks up
@@ -1949,7 +1974,7 @@ impl WorkerPool {
                             };
                             let chunk = generate_chunk_at(coord);
                             let origin = World::chunk_world_origin(coord);
-                            let submeshes = chunk_mesh(&chunk, origin);
+                            let submeshes = chunk_mesh_with_atlas(&chunk, origin, atlas_uv_rect);
                             if res_tx
                                 .send(WorkerResult {
                                     coord,
@@ -2025,6 +2050,58 @@ fn hash2(wx: i32, wz: i32) -> u32 {
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
     h.wrapping_mul(0xC2B2_AE35)
+}
+
+/// Block id -> UV rect in the procedural atlas (4x2 grid of 16x16
+/// tiles). Each rect is `[u0, v0, u1, v1]`. Air falls through to
+/// a fallback slot but never participates in rendering.
+fn atlas_uv_rect(block: BlockId) -> [f32; 4] {
+    let (col, row): (u32, u32) = match block.0 {
+        1 => (0, 0), // stone
+        2 => (1, 0), // dirt
+        3 => (2, 0), // grass
+        4 => (3, 0), // sand
+        5 => (0, 1), // wood
+        6 => (1, 1), // leaves
+        _ => (3, 1), // fallback
+    };
+    let u0 = col as f32 * 0.25;
+    let v0 = row as f32 * 0.5;
+    [u0, v0, u0 + 0.25, v0 + 0.5]
+}
+
+/// Procedural 64x32 RGBA atlas built once at startup. Each 16x16
+/// tile is the block's base colour modulated by a deterministic
+/// per-pixel noise so the texture reads as voxelly fabric rather
+/// than flat colour.
+fn build_block_atlas() -> (u32, u32, Vec<u8>) {
+    const W: u32 = 64;
+    const H: u32 = 32;
+    let mut rgba = vec![0u8; (W * H * 4) as usize];
+    let tile_colors: [([u8; 3], (u32, u32)); 6] = [
+        ([128, 128, 140], (0, 0)),
+        ([115, 82, 51], (1, 0)),
+        ([89, 158, 71], (2, 0)),
+        ([235, 219, 158], (3, 0)),
+        ([140, 97, 56], (0, 1)),
+        ([61, 128, 51], (1, 1)),
+    ];
+    for (color, (col, row)) in tile_colors {
+        for ty in 0..16u32 {
+            for tx in 0..16u32 {
+                let px = col * 16 + tx;
+                let py = row * 16 + ty;
+                let idx = ((py * W + px) * 4) as usize;
+                let h = ((tx.wrapping_mul(31) ^ ty.wrapping_mul(17)) % 64) as i32 - 32;
+                let bias = (h as f32 / 32.0) * 24.0;
+                rgba[idx] = (color[0] as f32 + bias).clamp(0.0, 255.0) as u8;
+                rgba[idx + 1] = (color[1] as f32 + bias).clamp(0.0, 255.0) as u8;
+                rgba[idx + 2] = (color[2] as f32 + bias).clamp(0.0, 255.0) as u8;
+                rgba[idx + 3] = 255;
+            }
+        }
+    }
+    (W, H, rgba)
 }
 
 fn generate_chunk_at(coord: ChunkCoord) -> Chunk {

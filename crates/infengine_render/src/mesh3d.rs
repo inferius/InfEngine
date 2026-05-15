@@ -665,7 +665,10 @@ impl Mesh3DPass {
         batches: &[MeshBatch],
         shadow_bg: &'a wgpu::BindGroup,
         lights_bg: &'a wgpu::BindGroup,
-        mesh_textures: &'a std::collections::HashMap<MeshHandle, wgpu::BindGroup>,
+        mesh_textures: &'a std::collections::HashMap<
+            MeshHandle,
+            std::sync::Arc<wgpu::BindGroup>,
+        >,
     ) {
         if batches.is_empty() {
             return;
@@ -681,9 +684,10 @@ impl Mesh3DPass {
             // Pick a per-mesh albedo bind group if one was registered
             // via `Renderer::set_mesh_albedo_for`, else fall back to
             // the global default (1x1 white).
-            let bg = mesh_textures
-                .get(&batch.handle)
-                .unwrap_or(&self.texture_bind_group);
+            let bg: &wgpu::BindGroup = match mesh_textures.get(&batch.handle) {
+                Some(arc) => arc.as_ref(),
+                None => &self.texture_bind_group,
+            };
             rpass.set_bind_group(1, bg, &[]);
             rpass.set_vertex_buffer(0, entry.vertex_buffer.slice(..));
             rpass.set_index_buffer(entry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

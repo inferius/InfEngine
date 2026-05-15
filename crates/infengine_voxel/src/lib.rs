@@ -174,6 +174,25 @@ pub struct ChunkSubmesh {
 /// are emitted in world space, so the caller can either feed the mesh
 /// in directly or use an identity model matrix when drawing.
 pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
+    // Back-compat shim: every face samples the full 0..1 UV rect
+    // (matches the historical behaviour). New code should call
+    // `chunk_mesh_with_atlas` and supply a per-block UV rect so the
+    // shader can sample an atlas tile.
+    chunk_mesh_with_atlas(chunk, origin, |_| [0.0, 0.0, 1.0, 1.0])
+}
+
+/// Like `chunk_mesh`, but each face's UVs are pre-scaled into the
+/// `[u0, v0, u1, v1]` rect that `uv_rect(block)` returns. Lets the
+/// caller pack every block type into a single texture atlas and
+/// pay one upload instead of one per submesh.
+pub fn chunk_mesh_with_atlas<F>(
+    chunk: &Chunk,
+    origin: Vec3,
+    uv_rect: F,
+) -> Vec<ChunkSubmesh>
+where
+    F: Fn(BlockId) -> [f32; 4],
+{
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
     for z in 0..CHUNK_SIZE {
@@ -188,6 +207,7 @@ pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
                     origin.y + y as f32,
                     origin.z + z as f32,
                 );
+                let rect = uv_rect(block);
                 let entry = per_block
                     .entry(block)
                     .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
@@ -211,7 +231,7 @@ pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
                     if !neighbour.is_air() {
                         continue;
                     }
-                    emit_quad(&mut entry.0, &mut entry.1, p, face);
+                    emit_quad(&mut entry.0, &mut entry.1, p, face, rect);
                 }
             }
         }
@@ -300,15 +320,23 @@ const FACES: &[Face] = &[
     },
 ];
 
-fn emit_quad(vertices: &mut Vec<MeshVertex>, indices: &mut Vec<u32>, origin: Vec3, face: &Face) {
+fn emit_quad(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    origin: Vec3,
+    face: &Face,
+    uv_rect: [f32; 4],
+) {
     let normal = [
         face.normal[0] as f32,
         face.normal[1] as f32,
         face.normal[2] as f32,
     ];
     let base = vertices.len() as u32;
-    // Standard quad UVs: bottom-left, bottom-right, top-right, top-left.
-    let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    // Standard quad UVs mapped into the supplied atlas tile rect.
+    // Rect layout = [u0, v0, u1, v1] (top-left, bottom-right).
+    let [u0, v0, u1, v1] = uv_rect;
+    let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
     for (i, corner) in face.corners.iter().enumerate() {
         vertices.push(
             MeshVertex::new(
