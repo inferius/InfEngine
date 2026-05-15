@@ -187,10 +187,33 @@ public static class HotLoader
                 return -1;
             }
             object?[] boxed = new object?[pars.Length];
+            int cursor = 0;
             for (int i = 0; i < pars.Length; i++)
             {
-                float raw = argsPtr != null ? argsPtr[i] : 0f;
                 var pt = pars[i].ParameterType;
+                // Vec3 consumes three slots (x, y, z); every other
+                // supported primitive consumes one. The caller fed
+                // a flattened float buffer so the cursor walks
+                // forward by the right step.
+                if (pt == typeof(System.Numerics.Vector3))
+                {
+                    if (argsPtr == null || cursor + 3 > (int)argsLen)
+                    {
+                        Engine.Log($"[hot] {key}: Vec3 param past end of args");
+                        return -1;
+                    }
+                    boxed[i] = new System.Numerics.Vector3(
+                        argsPtr[cursor],
+                        argsPtr[cursor + 1],
+                        argsPtr[cursor + 2]
+                    );
+                    cursor += 3;
+                    continue;
+                }
+                float raw = argsPtr != null && cursor < (int)argsLen
+                    ? argsPtr[cursor]
+                    : 0f;
+                cursor += 1;
                 if (pt == typeof(float))
                 {
                     boxed[i] = raw;
