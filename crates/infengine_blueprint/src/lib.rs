@@ -3449,6 +3449,84 @@ impl BlueprintEditor {
             }
         }
 
+        // Minimap overlay in the bottom-right of the canvas. Renders
+        // every node as a small rectangle in its canvas-space
+        // position; the current viewport sits on top as a yellow
+        // outline. Click teleports the view centre to the clicked
+        // canvas point.
+        if !self.blueprint.graph.nodes.is_empty() {
+            let mm_size = egui::vec2(180.0, 110.0);
+            let mm_pos = egui::pos2(rect.max.x - mm_size.x - 8.0, rect.max.y - mm_size.y - 8.0);
+            let mm_rect = egui::Rect::from_min_size(mm_pos, mm_size);
+            painter.rect_filled(
+                mm_rect,
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(8, 12, 20, 220),
+            );
+            painter.rect_stroke(
+                mm_rect,
+                3.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                egui::StrokeKind::Inside,
+            );
+            // Bounds of all node positions in canvas-space.
+            let mut min = [f32::INFINITY, f32::INFINITY];
+            let mut max = [f32::NEG_INFINITY, f32::NEG_INFINITY];
+            for n in &self.blueprint.graph.nodes {
+                min[0] = min[0].min(n.position[0]);
+                min[1] = min[1].min(n.position[1]);
+                max[0] = max[0].max(n.position[0] + NODE_WIDTH);
+                max[1] = max[1].max(n.position[1] + 80.0);
+            }
+            // Include the visible viewport so the user can tell where
+            // they are even when the camera is outside the graph.
+            let zoom = self.view_zoom.max(0.01);
+            let view_min = (-self.view_offset) / zoom;
+            let view_size = rect.size() / zoom;
+            min[0] = min[0].min(view_min.x);
+            min[1] = min[1].min(view_min.y);
+            max[0] = max[0].max(view_min.x + view_size.x);
+            max[1] = max[1].max(view_min.y + view_size.y);
+            let span_x = (max[0] - min[0]).max(1.0);
+            let span_y = (max[1] - min[1]).max(1.0);
+            // Uniform scale to preserve aspect.
+            let scale_x = (mm_size.x - 8.0) / span_x;
+            let scale_y = (mm_size.y - 8.0) / span_y;
+            let scale = scale_x.min(scale_y);
+            let project = |x: f32, y: f32| -> egui::Pos2 {
+                egui::pos2(
+                    mm_pos.x + 4.0 + (x - min[0]) * scale,
+                    mm_pos.y + 4.0 + (y - min[1]) * scale,
+                )
+            };
+            for n in &self.blueprint.graph.nodes {
+                let p0 = project(n.position[0], n.position[1]);
+                let p1 = project(n.position[0] + NODE_WIDTH, n.position[1] + 30.0);
+                let r = egui::Rect::from_two_pos(p0, p1);
+                painter.rect_filled(r, 0.0, egui::Color32::from_rgb(80, 120, 180));
+            }
+            let v0 = project(view_min.x, view_min.y);
+            let v1 = project(view_min.x + view_size.x, view_min.y + view_size.y);
+            painter.rect_stroke(
+                egui::Rect::from_two_pos(v0, v1),
+                0.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 220, 80)),
+                egui::StrokeKind::Inside,
+            );
+            // Click anywhere on the minimap to recenter the view on
+            // that canvas-space point.
+            if response.clicked_by(egui::PointerButton::Primary)
+                && let Some(pos) = hover
+                && mm_rect.contains(pos)
+            {
+                let canvas_x = min[0] + (pos.x - mm_pos.x - 4.0) / scale;
+                let canvas_y = min[1] + (pos.y - mm_pos.y - 4.0) / scale;
+                let centre = rect.size() * 0.5;
+                self.view_offset =
+                    centre - egui::vec2(canvas_x * zoom, canvas_y * zoom);
+            }
+        }
+
         // Pin context menu (right-click on a pin). Currently offers
         // Promote to Variable + Break Link (when the pin is wired).
         if let Some(menu) = self.pin_context_menu.clone() {
