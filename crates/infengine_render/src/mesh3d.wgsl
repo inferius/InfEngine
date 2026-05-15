@@ -134,6 +134,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex = textureSample(albedo_tex, albedo_smp, in.uv);
     let albedo = in.color.rgb * tex.rgb;
     let alpha = in.color.a * tex.a;
+    // Simple alpha cutout for foliage / leaves. The default 1x1
+    // white texture has alpha=1 so opaque blocks are unaffected;
+    // atlas tiles with see-through pixels (e.g. leaves) get the
+    // gaps discarded.
+    if alpha < 0.5 {
+        discard;
+    }
 
     let n = normalize(in.world_normal);
     let v = normalize(camera.camera_pos.xyz - in.world_pos);

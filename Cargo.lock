@@ -4907,6 +4907,7 @@ dependencies = [
  "bincode",
  "egui",
  "glam 0.30.10",
+ "image",
  "infengine_editor",
  "infengine_net",
  "infengine_particles",

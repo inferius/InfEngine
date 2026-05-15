@@ -243,6 +243,10 @@ struct Voxel {
     /// once in `on_start`; every new chunk submesh clones the Arc
     /// instead of uploading a fresh texture.
     voxel_atlas: Option<infengine_render::AlbedoHandle>,
+    /// Optional directory of PNG / TGA block textures. When set,
+    /// `on_start` tries to load the atlas from there before
+    /// falling back to the procedural builder.
+    texture_dir: Option<std::path::PathBuf>,
     /// Master-server endpoint the in-game browser queries. Settable
     /// via `--master <addr>` argv; defaults to the configured
     /// public master.
@@ -783,6 +787,7 @@ impl Voxel {
             net: NetRole::Offline,
             player_cube: None,
             voxel_atlas: None,
+            texture_dir: None,
             particles: {
                 // Particle system starts with one "ambient" emitter
                 // (rate=0, max=0) that only contributes its gravity
@@ -1573,7 +1578,11 @@ impl AppHandler for Voxel {
         // creates its mesh handle so the GPU only pays the upload
         // cost once at startup.
         if let Some(r) = self.renderer.as_mut() {
-            let (aw, ah, atlas_rgba) = build_block_atlas();
+            let (aw, ah, atlas_rgba) = self
+                .texture_dir
+                .as_ref()
+                .and_then(|d| load_block_atlas_from_dir(d))
+                .unwrap_or_else(build_block_atlas);
             self.voxel_atlas = Some(r.make_mesh_albedo(aw, ah, &atlas_rgba));
         }
         self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
@@ -2080,6 +2089,75 @@ fn atlas_uv_rect(block: BlockId) -> [f32; 4] {
     [u0, v0, u0 + 0.25, v0 + 0.5]
 }
 
+/// Try to load the atlas from a directory of 16x16 PNG / TGA files
+/// (one per block kind). Returns `None` if the directory is missing
+/// or any required texture fails to load. The names match the
+/// Mojang Bedrock sample pack so users can drop those textures
+/// straight in:
+///
+/// ```text
+/// <dir>/stone.png
+/// <dir>/dirt.png
+/// <dir>/grass_top.png
+/// <dir>/sand.png
+/// <dir>/log_oak.png
+/// <dir>/leaves_oak.tga    (preferred - has alpha)
+/// <dir>/leaves_oak_opaque.png  (fallback)
+/// ```
+fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
+    const W: u32 = 64;
+    const H: u32 = 32;
+    let mut rgba = vec![0u8; (W * H * 4) as usize];
+    let mut copy_tile = |path: &std::path::Path, col: u32, row: u32| -> Option<()> {
+        let img = image::open(path).ok()?.to_rgba8();
+        // Resize / center-crop to 16x16 if needed. Bedrock textures
+        // are already 16x16 but a higher-res pack would otherwise
+        // overflow the tile.
+        let img = if img.width() == 16 && img.height() == 16 {
+            img
+        } else {
+            image::imageops::resize(&img, 16, 16, image::imageops::FilterType::Nearest)
+        };
+        for ty in 0..16u32 {
+            for tx in 0..16u32 {
+                let px = col * 16 + tx;
+                let py = row * 16 + ty;
+                let idx = ((py * W + px) * 4) as usize;
+                let pixel = img.get_pixel(tx, ty);
+                rgba[idx] = pixel.0[0];
+                rgba[idx + 1] = pixel.0[1];
+                rgba[idx + 2] = pixel.0[2];
+                rgba[idx + 3] = pixel.0[3];
+            }
+        }
+        Some(())
+    };
+    let leaves_path = {
+        let tga = dir.join("leaves_oak.tga");
+        if tga.exists() {
+            tga
+        } else {
+            dir.join("leaves_oak_opaque.png")
+        }
+    };
+    let tiles: [(std::path::PathBuf, u32, u32); 6] = [
+        (dir.join("stone.png"), 0, 0),
+        (dir.join("dirt.png"), 1, 0),
+        (dir.join("grass_top.png"), 2, 0),
+        (dir.join("sand.png"), 3, 0),
+        (dir.join("log_oak.png"), 0, 1),
+        (leaves_path, 1, 1),
+    ];
+    for (path, col, row) in &tiles {
+        if copy_tile(path, *col, *row).is_none() {
+            tracing::warn!(path = %path.display(), "atlas texture missing or unreadable");
+            return None;
+        }
+    }
+    tracing::info!(dir = %dir.display(), "loaded block atlas from disk");
+    Some((W, H, rgba))
+}
+
 /// Procedural 64x32 RGBA atlas built once at startup. Each 16x16
 /// tile is the block's base colour modulated by a deterministic
 /// per-pixel noise so the texture reads as voxelly fabric rather
@@ -2328,8 +2406,13 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut net = NetRole::Offline;
     let mut title_suffix = String::new();
+    let mut texture_dir: Option<std::path::PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--textures" => {
+                let p = args.next().unwrap_or_default();
+                texture_dir = Some(std::path::PathBuf::from(p));
+            }
             "--server" => {
                 let addr = args.next().unwrap_or_else(|| "0.0.0.0:7777".to_string());
                 match NetServer::bind(&addr) {
@@ -2380,7 +2463,9 @@ fn main() -> ExitCode {
         height: 720,
         resizable: true,
     };
-    if let Err(err) = run(config, Voxel::new_with_net(net)) {
+    let mut voxel = Voxel::new_with_net(net);
+    voxel.texture_dir = texture_dir;
+    if let Err(err) = run(config, voxel) {
         error!(error = %err, "event loop failed");
         return ExitCode::from(1);
     }
