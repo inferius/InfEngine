@@ -1498,14 +1498,35 @@ impl infengine_blueprint::exec::Host for PlayHost {
         args: &[infengine_blueprint::exec::Value],
     ) -> Option<infengine_blueprint::exec::Value> {
         // Real CoreCLR reverse-call when scripting is bootstrapped.
-        // v1 only marshals method-name + optional float return.
-        // Parameter passing across the FFI is documented as future
-        // work; the args slice is forwarded to the log for now so
-        // the user can see the wiring is exercised.
+        // v1.5 marshals one f32 per argument (Bool / Vec3 /
+        // EntityRef projected onto float since the C# dispatcher
+        // takes a float buffer). Native types beyond Bool / int /
+        // float on the C# side reject the call.
         if let Some(invoke) = self.bp_invoke {
             let bytes = method.as_bytes();
             let mut out: f32 = 0.0;
-            let code = invoke(bytes.as_ptr(), bytes.len(), &mut out as *mut f32);
+            // Flatten Values to floats. Vec3 contributes its first
+            // component (good enough for v1.5; Vec3-aware marshalling
+            // lives in v2). Bool maps to 0.0 / 1.0; EntityRef maps
+            // to its u32 id as float.
+            let arg_floats: Vec<f32> = args
+                .iter()
+                .map(|v| match v {
+                    infengine_blueprint::exec::Value::Float(f) => *f,
+                    infengine_blueprint::exec::Value::Bool(b) => {
+                        if *b { 1.0 } else { 0.0 }
+                    }
+                    infengine_blueprint::exec::Value::Vec3(v) => v[0],
+                    infengine_blueprint::exec::Value::EntityRef(e) => *e as f32,
+                })
+                .collect();
+            let code = invoke(
+                bytes.as_ptr(),
+                bytes.len(),
+                arg_floats.as_ptr(),
+                arg_floats.len(),
+                &mut out as *mut f32,
+            );
             match code {
                 0 => {
                     tracing::info!(method = %method, ?args, "blueprint -> C# call (void)");

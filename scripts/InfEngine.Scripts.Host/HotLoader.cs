@@ -147,18 +147,26 @@ public static class HotLoader
 
     /// <summary>
     /// Reverse-call dispatcher for blueprints. Rust pushes a UTF-8
-    /// method name ("Class.Method") and a destination slot for an
-    /// optional float return. Returns:
+    /// method name ("Class.Method"), a buffer of float arguments
+    /// (one slot per declared parameter), and a destination slot
+    /// for the optional float return. Each arg slot is cast to the
+    /// parameter's declared type: `float` straight through, `int` /
+    /// `uint` truncated, `bool` non-zero. Other parameter types
+    /// reject the call.
+    ///
+    /// Return codes:
     ///   0 - method invoked, no return value (void).
     ///   1 - method invoked, return value written to *outResult.
-    ///  -1 - method not found / invocation threw.
-    /// v1 supports parameter-less methods returning void or float;
-    /// arg marshalling lands in a follow-up. Methods with other
-    /// shapes return -1 so the blueprint VM keeps running.
+    ///  -1 - method not found, signature unsupported, or threw.
     /// </summary>
     [System.Runtime.InteropServices.UnmanagedCallersOnly(
         CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    public static unsafe int InvokeBlueprintMethod(byte* namePtr, nuint nameLen, float* outResult)
+    public static unsafe int InvokeBlueprintMethod(
+        byte* namePtr,
+        nuint nameLen,
+        float* argsPtr,
+        nuint argsLen,
+        float* outResult)
     {
         try
         {
@@ -172,32 +180,71 @@ public static class HotLoader
                 Engine.Log("[hot] InvokeBlueprintMethod: unknown method " + key);
                 return -1;
             }
-            // v1 ignores parameters; reject any signature with required args.
             var pars = method.GetParameters();
-            if (pars.Length > 0)
+            if ((int)argsLen < pars.Length)
             {
-                Engine.Log("[hot] " + key + ": parameters not yet marshalled (v1 limit)");
+                Engine.Log($"[hot] {key}: expected {pars.Length} args, caller sent {argsLen}");
                 return -1;
             }
-            object? ret = method.Invoke(null, null);
+            object?[] boxed = new object?[pars.Length];
+            for (int i = 0; i < pars.Length; i++)
+            {
+                float raw = argsPtr != null ? argsPtr[i] : 0f;
+                var pt = pars[i].ParameterType;
+                if (pt == typeof(float))
+                {
+                    boxed[i] = raw;
+                }
+                else if (pt == typeof(double))
+                {
+                    boxed[i] = (double)raw;
+                }
+                else if (pt == typeof(int))
+                {
+                    boxed[i] = (int)raw;
+                }
+                else if (pt == typeof(uint))
+                {
+                    boxed[i] = (uint)raw;
+                }
+                else if (pt == typeof(bool))
+                {
+                    boxed[i] = raw != 0f;
+                }
+                else
+                {
+                    Engine.Log($"[hot] {key}: unsupported param type {pt.Name}");
+                    return -1;
+                }
+            }
+            object? ret = method.Invoke(null, boxed);
             if (method.ReturnType == typeof(void))
             {
                 return 0;
             }
-            if (method.ReturnType == typeof(float))
+            if (method.ReturnType == typeof(float) && ret is float f)
             {
-                if (outResult != null && ret is float f)
-                {
-                    *outResult = f;
-                }
+                if (outResult != null) *outResult = f;
                 return 1;
             }
-            if (method.ReturnType == typeof(int))
+            if (method.ReturnType == typeof(double) && ret is double d)
             {
-                if (outResult != null && ret is int i)
-                {
-                    *outResult = i;
-                }
+                if (outResult != null) *outResult = (float)d;
+                return 1;
+            }
+            if (method.ReturnType == typeof(int) && ret is int iret)
+            {
+                if (outResult != null) *outResult = iret;
+                return 1;
+            }
+            if (method.ReturnType == typeof(uint) && ret is uint uret)
+            {
+                if (outResult != null) *outResult = uret;
+                return 1;
+            }
+            if (method.ReturnType == typeof(bool) && ret is bool bret)
+            {
+                if (outResult != null) *outResult = bret ? 1f : 0f;
                 return 1;
             }
             // Unknown return type - call still happened, but caller
