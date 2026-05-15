@@ -43,6 +43,12 @@ pub struct BlockDef {
     pub color: [f32; 3],
     pub metallic: f32,
     pub roughness: f32,
+    /// `true` for blocks with alpha-cutout textures (leaves, grass,
+    /// glass). Transparent blocks don't fully occlude their
+    /// neighbours - chunk meshing still emits the neighbour face
+    /// instead of culling it.
+    #[serde(default)]
+    pub transparent: bool,
 }
 
 impl BlockDef {
@@ -52,6 +58,19 @@ impl BlockDef {
             color,
             metallic: 0.0,
             roughness: 0.85,
+            transparent: false,
+        }
+    }
+
+    /// Like `solid`, but tags the block as transparent so neighbour
+    /// faces aren't culled when they touch it.
+    pub fn transparent(name: impl Into<String>, color: [f32; 3]) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            metallic: 0.0,
+            roughness: 0.85,
+            transparent: true,
         }
     }
 }
@@ -175,23 +194,26 @@ pub struct ChunkSubmesh {
 /// in directly or use an identity model matrix when drawing.
 pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
     // Back-compat shim: every face samples the full 0..1 UV rect
-    // (matches the historical behaviour). New code should call
-    // `chunk_mesh_with_atlas` and supply a per-(block, face) UV
-    // rect so the shader can sample an atlas tile.
-    chunk_mesh_with_atlas(chunk, origin, |_, _| [0.0, 0.0, 1.0, 1.0])
+    // and every non-air block is treated as opaque.
+    chunk_mesh_with_atlas(chunk, origin, |_, _| [0.0, 0.0, 1.0, 1.0], |_| true)
 }
 
 /// Like `chunk_mesh`, but each face's UVs are pre-scaled into the
 /// `[u0, v0, u1, v1]` rect that `uv_rect(block, normal)` returns.
-/// Per-face mapping lets blocks like grass swap between top / side /
-/// bottom tiles based on the outward face normal.
-pub fn chunk_mesh_with_atlas<F>(
+/// `is_opaque(block)` lets the caller mark transparent blocks
+/// (leaves, glass) so their neighbour faces stay visible instead
+/// of getting occluded. A pair of touching identical transparent
+/// blocks still culls the shared face to avoid in-cluster
+/// over-draw.
+pub fn chunk_mesh_with_atlas<F, O>(
     chunk: &Chunk,
     origin: Vec3,
     uv_rect: F,
+    is_opaque: O,
 ) -> Vec<ChunkSubmesh>
 where
     F: Fn(BlockId, [i8; 3]) -> [f32; 4],
+    O: Fn(BlockId) -> bool,
 {
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
@@ -227,8 +249,18 @@ where
                     } else {
                         BlockId::AIR
                     };
+                    // Cull rules:
+                    //   neighbour air                     -> emit
+                    //   neighbour opaque                  -> skip
+                    //   neighbour transparent (== self)   -> skip
+                    //   neighbour transparent (!= self)   -> emit
                     if !neighbour.is_air() {
-                        continue;
+                        if is_opaque(neighbour) {
+                            continue;
+                        }
+                        if neighbour == block {
+                            continue;
+                        }
                     }
                     let rect = uv_rect(block, face.normal);
                     emit_quad(&mut entry.0, &mut entry.1, p, face, rect);

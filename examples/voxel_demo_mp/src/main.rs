@@ -745,7 +745,7 @@ impl Voxel {
         registry.insert(BlockId(3), BlockDef::solid("grass", [0.35, 0.62, 0.28]));
         registry.insert(BlockId(4), BlockDef::solid("sand", [0.92, 0.86, 0.62]));
         registry.insert(BlockId(5), BlockDef::solid("wood", [0.55, 0.38, 0.22]));
-        registry.insert(BlockId(6), BlockDef::solid("leaves", [0.24, 0.50, 0.20]));
+        registry.insert(BlockId(6), BlockDef::transparent("leaves", [0.24, 0.50, 0.20]));
         Self {
             state: AppState::MainMenu,
             settings: Settings::default(),
@@ -1027,7 +1027,7 @@ impl Voxel {
                 continue;
             };
             let origin = World::chunk_world_origin(*coord);
-            for sub in chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect) {
+            for sub in chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque) {
                 let handle = renderer.create_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
@@ -1055,7 +1055,7 @@ impl Voxel {
         for coord in coords {
             let chunk = self.world.chunk(coord).expect("chunk present");
             let origin = World::chunk_world_origin(coord);
-            let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect);
+            let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque);
             for sub in subs {
                 let handle = renderer.create_mesh(
                     &format!(
@@ -1993,7 +1993,7 @@ impl WorkerPool {
                             };
                             let chunk = generate_chunk_at(coord);
                             let origin = World::chunk_world_origin(coord);
-                            let submeshes = chunk_mesh_with_atlas(&chunk, origin, atlas_uv_rect);
+                            let submeshes = chunk_mesh_with_atlas(&chunk, origin, atlas_uv_rect, block_is_opaque);
                             if res_tx
                                 .send(WorkerResult {
                                     coord,
@@ -2086,6 +2086,13 @@ fn hash2(wx: i32, wz: i32) -> u32 {
 /// normal points up gets the top tile, down gets a different
 /// tile (dirt for grass, wood_top for wood), and any other normal
 /// uses the side tile.
+/// Opacity table consulted by `chunk_mesh_with_atlas`. Leaves are
+/// the only see-through block today; everything else fully
+/// occludes its neighbour face.
+fn block_is_opaque(b: BlockId) -> bool {
+    b.0 != 6
+}
+
 fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {
     let (col, row): (u32, u32) = match block.0 {
         1 => (0, 0), // stone
