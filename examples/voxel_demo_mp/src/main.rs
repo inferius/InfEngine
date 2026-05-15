@@ -931,6 +931,7 @@ impl Voxel {
         let master_addr = &mut self.master_addr;
         let browser_servers = &self.browser_servers;
         let browser_error = &self.browser_error;
+        let browser_last_refresh = self.browser_last_refresh;
 
         let Some(ui) = self.ui.as_mut() else {
             return;
@@ -1002,12 +1003,35 @@ impl Voxel {
                             action_main_menu = true;
                         }
                     });
-                    if let Some(err) = browser_error {
-                        ui.colored_label(egui::Color32::from_rgb(220, 100, 100), err);
-                    }
+                    // Diagnostic status banner so the user knows
+                    // whether the last query reached the master.
+                    ui.horizontal(|ui| {
+                        let age = browser_last_refresh
+                            .map(|t| format!("{:.0}s ago", t.elapsed().as_secs_f32()));
+                        let status = match (browser_error.as_deref(), age.as_deref()) {
+                            (Some(err), _) => format!("[ERR] {err}"),
+                            (None, Some(a)) => {
+                                format!(
+                                    "[OK] {} server(s) - refreshed {a}",
+                                    browser_servers.len()
+                                )
+                            }
+                            (None, None) => "[idle] press Refresh".to_string(),
+                        };
+                        let color = if browser_error.is_some() {
+                            egui::Color32::from_rgb(220, 100, 100)
+                        } else if browser_servers.is_empty() {
+                            egui::Color32::from_rgb(220, 200, 100)
+                        } else {
+                            egui::Color32::from_rgb(140, 220, 140)
+                        };
+                        ui.colored_label(color, status);
+                    });
                     ui.separator();
-                    if browser_servers.is_empty() {
-                        ui.label("(no servers - press Refresh)");
+                    if browser_servers.is_empty() && browser_error.is_none() {
+                        ui.label(
+                            "(no servers - host one from the menu or wait for someone to announce)"
+                        );
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for s in browser_servers {
@@ -1235,7 +1259,10 @@ impl Voxel {
         }
         if action_to_browser {
             self.state = AppState::ServerBrowser;
-            self.browser_last_refresh = None; // force a refresh on entry
+            self.browser_last_refresh = None;
+            // Auto-refresh on entering the browser so the user
+            // immediately sees the current directory contents.
+            self.refresh_browser();
         }
         if action_to_host {
             self.state = AppState::HostSetup;
