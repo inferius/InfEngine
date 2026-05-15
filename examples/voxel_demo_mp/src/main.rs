@@ -93,6 +93,10 @@ impl NetRole {
 /// world streams more chunks in as the player walks beyond this
 /// footprint.
 const INITIAL_CHUNKS: i32 = 3;
+/// Number of stacked chunk layers along the Y axis. Each chunk is
+/// `CHUNK_SIZE` (=16) tall, so 4 layers give us 64 vertical voxels
+/// - enough for mountains, sky-builds, and underground digging.
+const VERTICAL_CHUNKS: i32 = 4;
 /// Chunks within this Chebyshev distance of the player chunk are
 /// kept loaded; new ones get queued for generation.
 const VIEW_DISTANCE_CHUNKS: i32 = 4;
@@ -824,8 +828,10 @@ impl Voxel {
     fn build_world(&mut self) {
         for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
             for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
-                let cc: ChunkCoord = [cx, 0, cz];
-                self.world.insert_chunk(cc, generate_chunk_at(cc));
+                for cy in 0..VERTICAL_CHUNKS {
+                    let cc: ChunkCoord = [cx, cy, cz];
+                    self.world.insert_chunk(cc, generate_chunk_at(cc));
+                }
             }
         }
         self.rebuild_all_meshes();
@@ -847,12 +853,16 @@ impl Voxel {
             (self.player_pos.z.floor() as i32).div_euclid(cs),
         ];
 
-        // Queue missing chunks inside the view radius.
+        // Queue missing chunks inside the view radius. Vertical
+        // column always loaded (cy 0..VERTICAL_CHUNKS) so mountain
+        // peaks + sky builds never pop in.
         for dz in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
             for dx in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
-                let cc = [player_chunk[0] + dx, player_chunk[1], player_chunk[2] + dz];
-                if self.world.chunk(cc).is_none() && self.pending_set.insert(cc) {
-                    self.pending_chunks.push_back(cc);
+                for cy in 0..VERTICAL_CHUNKS {
+                    let cc = [player_chunk[0] + dx, cy, player_chunk[2] + dz];
+                    if self.world.chunk(cc).is_none() && self.pending_set.insert(cc) {
+                        self.pending_chunks.push_back(cc);
+                    }
                 }
             }
         }
@@ -2108,14 +2118,14 @@ fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let height_at = |wx: f32, wz: f32, biome: Biome| -> i32 {
         let base = match biome {
-            Biome::Desert => 6.0,
-            Biome::Plains => 9.0,
-            Biome::Mountain => 14.0,
+            Biome::Desert => 12.0,
+            Biome::Plains => 18.0,
+            Biome::Mountain => 30.0,
         };
         let amp = match biome {
-            Biome::Desert => 1.5,
-            Biome::Plains => 3.0,
-            Biome::Mountain => 7.0,
+            Biome::Desert => 3.0,
+            Biome::Plains => 6.0,
+            Biome::Mountain => 18.0,
         };
         let h = base
             + ((wx * 0.13).sin() * 0.5 + (wz * 0.17).cos() * 0.5) * amp
