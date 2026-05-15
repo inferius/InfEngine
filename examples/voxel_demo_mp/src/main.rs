@@ -1918,32 +1918,120 @@ impl Drop for WorkerPool {
 
 /// Free-standing generator the workers call. Independent of any `Self`
 /// so it ports cleanly into the worker closure.
+/// Three large-scale biomes drive both the terrain height curve and
+/// the surface block. Biome selection rides on a slow 2D noise so a
+/// peer running the same generator picks the same biome at every
+/// (wx, wz) - no extra net traffic needed.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Biome {
+    Desert,
+    Plains,
+    Mountain,
+}
+
+fn biome_at(wx: f32, wz: f32) -> Biome {
+    // Two layered sin/cos waves keep the biome map smooth and
+    // deterministic. Range maps roughly to `[-1, 1]` so the cutoffs
+    // are easy to reason about.
+    let n = (wx * 0.012).sin() * 0.6 + (wz * 0.009).cos() * 0.5
+        + ((wx + wz) * 0.004).sin() * 0.3;
+    if n < -0.5 {
+        Biome::Desert
+    } else if n > 0.5 {
+        Biome::Mountain
+    } else {
+        Biome::Plains
+    }
+}
+
+/// Cheap, deterministic 2D hash. Used for tree placement so two
+/// peers running the same generator drop trees in the same spots.
+fn hash2(wx: i32, wz: i32) -> u32 {
+    let mut h = (wx as u32).wrapping_mul(0x27D4_EB2F);
+    h ^= (wz as u32).wrapping_mul(0x1656_67B1);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h.wrapping_mul(0xC2B2_AE35)
+}
+
 fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
     let origin = World::chunk_world_origin(coord);
-    let height_at = |wx: f32, wz: f32| -> i32 {
-        let h = 8.0
-            + (wx * 0.13).sin() * 2.5
-            + (wz * 0.17).cos() * 2.0
-            + ((wx + wz) * 0.07).sin() * 1.5;
+    let height_at = |wx: f32, wz: f32, biome: Biome| -> i32 {
+        let base = match biome {
+            Biome::Desert => 6.0,
+            Biome::Plains => 9.0,
+            Biome::Mountain => 14.0,
+        };
+        let amp = match biome {
+            Biome::Desert => 1.5,
+            Biome::Plains => 3.0,
+            Biome::Mountain => 7.0,
+        };
+        let h = base
+            + ((wx * 0.13).sin() * 0.5 + (wz * 0.17).cos() * 0.5) * amp
+            + ((wx + wz) * 0.07).sin() * amp * 0.4;
         h.round() as i32
     };
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
         let wz = origin.z + z as f32;
-        let h = height_at(wx, wz);
+        let biome = biome_at(wx, wz);
+        let h = height_at(wx, wz, biome);
         let wy = origin.y as i32 + y as i32;
         if wy > h {
             return BlockId::AIR;
         }
+        let surface = match biome {
+            Biome::Desert => BlockId(4),
+            Biome::Plains => BlockId(3),
+            Biome::Mountain => BlockId(1),
+        };
+        let near_surface = match biome {
+            Biome::Desert => BlockId(4),
+            Biome::Plains => BlockId(2),
+            Biome::Mountain => BlockId(1),
+        };
         if wy == h {
-            BlockId(3)
+            surface
         } else if wy >= h - 3 {
-            BlockId(2)
+            near_surface
         } else {
             BlockId(1)
         }
     });
+    // Tree pass: in plains biomes drop a 1x4 wood pillar at points
+    // whose hash falls under a threshold. Uses world coords so
+    // adjacent chunks line up.
+    for x in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            let wx = origin.x as i32 + x as i32;
+            let wz = origin.z as i32 + z as i32;
+            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            if biome != Biome::Plains {
+                continue;
+            }
+            let h = hash2(wx, wz);
+            if h % 64 != 7 {
+                continue;
+            }
+            let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
+            for ty in 1..=4 {
+                let wy = ground + ty;
+                let local_y = wy - origin.y as i32;
+                if local_y < 0 || local_y >= CHUNK_SIZE as i32 {
+                    continue;
+                }
+                chunk.set(
+                    x,
+                    local_y as usize,
+                    z,
+                    BlockId(5),
+                );
+            }
+        }
+    }
     chunk
 }
 
