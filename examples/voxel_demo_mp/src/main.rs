@@ -2168,27 +2168,50 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
         Some(())
     };
     let leaves_path = {
+        // Leaves textures in Bedrock are grayscale + biome-tinted at
+        // runtime. We don't sample biome tints, so prefer the
+        // pre-coloured `*_carried` variants where they exist. We
+        // still want alpha though: leaves_oak.tga has it, so try
+        // .tga first, fall back to opaque PNG or carried.
         let tga = dir.join("leaves_oak.tga");
         if tga.exists() {
             tga
+        } else if dir.join("leaves_oak_carried.png").exists() {
+            dir.join("leaves_oak_carried.png")
         } else {
             dir.join("leaves_oak_opaque.png")
         }
     };
     let grass_side_path = {
-        let tga = dir.join("grass_side.tga");
-        if tga.exists() {
-            tga
+        // `grass_side.tga` is the in-game gray variant; the engine
+        // tints it via the biome's foliage colour. We don't sample
+        // biome tints, so prefer `grass_side_carried.png` (inventory
+        // variant) - it has the green grass top + brown dirt baked
+        // in already.
+        let carried = dir.join("grass_side_carried.png");
+        if carried.exists() {
+            carried
+        } else if dir.join("grass_side.tga").exists() {
+            dir.join("grass_side.tga")
         } else {
-            // Fall back to grass_top so at least the green colour is
-            // close even without the side variant.
+            dir.join("grass_top.png")
+        }
+    };
+    let grass_top_path = {
+        // Same biome-tint story for the top face. `grass_carried.png`
+        // is pre-coloured green; `grass_top.png` is the gray variant
+        // (engine tints it). Pick whichever exists; carried first.
+        let carried = dir.join("grass_carried.png");
+        if carried.exists() {
+            carried
+        } else {
             dir.join("grass_top.png")
         }
     };
     let tiles: [(std::path::PathBuf, u32, u32); 8] = [
         (dir.join("stone.png"), 0, 0),
         (dir.join("dirt.png"), 1, 0),
-        (dir.join("grass_top.png"), 2, 0),
+        (grass_top_path, 2, 0),
         (dir.join("sand.png"), 3, 0),
         (dir.join("log_oak.png"), 0, 1),
         (leaves_path, 1, 1),
