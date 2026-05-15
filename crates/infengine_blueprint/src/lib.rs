@@ -2335,15 +2335,35 @@ impl BlueprintEditor {
         if primary_down
             && let Some(id) = self.dragging
             && let Some(pos) = pointer
-            && let Some(node) = self.blueprint.graph.nodes.iter_mut().find(|n| n.id == id)
         {
-            let local = pos - rect.min - self.view_offset - self.drag_node_offset;
-            // Drag deltas are in screen pixels; node.position is
-            // stored in canvas-space so divide out the zoom factor.
             let zoom = self.view_zoom.max(0.01);
-            node.position[0] = local.x / zoom;
-            node.position[1] = local.y / zoom;
-            dirty = true;
+            let local = pos - rect.min - self.view_offset - self.drag_node_offset;
+            let new_x = local.x / zoom;
+            let new_y = local.y / zoom;
+            // Compute delta against the dragged node's previous
+            // position so every node in `selected_extra` slides by
+            // the same amount.
+            let prev = self
+                .blueprint
+                .graph
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.position);
+            if let Some(p) = prev {
+                let dx = new_x - p[0];
+                let dy = new_y - p[1];
+                for node in self.blueprint.graph.nodes.iter_mut() {
+                    if node.id == id {
+                        node.position[0] = new_x;
+                        node.position[1] = new_y;
+                    } else if self.selected_extra.contains(&node.id) {
+                        node.position[0] += dx;
+                        node.position[1] += dy;
+                    }
+                }
+                dirty = true;
+            }
         }
 
         if primary_released {
