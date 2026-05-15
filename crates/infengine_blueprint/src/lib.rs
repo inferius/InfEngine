@@ -1235,6 +1235,10 @@ pub struct BlueprintEditor {
     /// extras are along for the ride so Delete and drag can act on
     /// them too.
     selected_extra: HashSet<NodeId>,
+    /// Anchor of an in-flight Shift+drag box selection. `None` when
+    /// no box drag is active. The release path collects every node
+    /// whose screen-space origin falls inside the rect.
+    box_select_start: Option<egui::Pos2>,
     /// Latest Play-mode capture map; mirrored from the workspace
     /// before each show() so the canvas can paint live values.
     pub play_captures: HashMap<u32, exec::Value>,
@@ -2277,8 +2281,54 @@ impl BlueprintEditor {
                     self.drag_node_offset = pos - origin;
                 }
             } else {
-                self.selected = None;
-                self.selected_extra.clear();
+                // Shift on empty starts a box-selection drag; plain
+                // click clears selection as before.
+                let shift = ui.input(|i| i.modifiers.shift);
+                if shift {
+                    self.box_select_start = Some(pos);
+                } else {
+                    self.selected = None;
+                    self.selected_extra.clear();
+                }
+            }
+        }
+        // Box-selection drag: paint outline + on release collect
+        // every node whose origin sits inside the rect.
+        if let Some(start) = self.box_select_start {
+            if let Some(p) = pointer {
+                let r = egui::Rect::from_two_pos(start, p);
+                painter.rect_stroke(
+                    r,
+                    2.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 220, 80)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if primary_released {
+                if let Some(end) = pointer {
+                    let r = egui::Rect::from_two_pos(start, end);
+                    let zoom = self.view_zoom.max(0.01);
+                    for node in &self.blueprint.graph.nodes {
+                        let origin = rect.min
+                            + self.view_offset
+                            + egui::vec2(
+                                node.position[0] * zoom,
+                                node.position[1] * zoom,
+                            );
+                        if r.contains(origin) {
+                            self.selected_extra.insert(node.id);
+                        }
+                    }
+                    if !self.selected_extra.is_empty() && self.selected.is_none() {
+                        // Promote the first into the primary slot
+                        // so the inspector has something to drive.
+                        if let Some(&first) = self.selected_extra.iter().next() {
+                            self.selected = Some(first);
+                            self.selected_extra.remove(&first);
+                        }
+                    }
+                }
+                self.box_select_start = None;
             }
         }
 
