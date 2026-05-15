@@ -740,12 +740,16 @@ impl Voxel {
 
     fn new() -> Self {
         let mut registry = BlockRegistry::new();
-        registry.insert(BlockId(1), BlockDef::solid("stone", [0.50, 0.50, 0.55]));
-        registry.insert(BlockId(2), BlockDef::solid("dirt", [0.45, 0.32, 0.20]));
-        registry.insert(BlockId(3), BlockDef::solid("grass", [0.35, 0.62, 0.28]));
-        registry.insert(BlockId(4), BlockDef::solid("sand", [0.92, 0.86, 0.62]));
-        registry.insert(BlockId(5), BlockDef::solid("wood", [0.55, 0.38, 0.22]));
-        registry.insert(BlockId(6), BlockDef::transparent("leaves", [0.24, 0.50, 0.20]));
+        // Drive the runtime block registry from the BLOCK_TYPES
+        // table so adding a new block kind is a one-place change.
+        for bt in BLOCK_TYPES {
+            let def = if bt.transparent {
+                BlockDef::transparent(bt.name, bt.color)
+            } else {
+                BlockDef::solid(bt.name, bt.color)
+            };
+            registry.insert(BlockId(bt.id), def);
+        }
         Self {
             state: AppState::MainMenu,
             settings: Settings::default(),
@@ -2071,57 +2075,121 @@ fn hash2(wx: i32, wz: i32) -> u32 {
     h.wrapping_mul(0xC2B2_AE35)
 }
 
-/// Per-(block, face) tile coordinates inside the 4x4 atlas
-/// (64x64 px, 16x16 tiles).
-///
-/// Layout:
-/// ```text
-///  col   0       1         2          3
-/// row0  stone   dirt      grass_top  sand
-/// row1  wood    leaves    grass_side wood_top
-/// row2  ...     ...       ...        ...
-/// ```
-///
-/// Grass + wood swap tiles based on `face_normal`: a face whose
-/// normal points up gets the top tile, down gets a different
-/// tile (dirt for grass, wood_top for wood), and any other normal
-/// uses the side tile.
-/// Opacity table consulted by `chunk_mesh_with_atlas`. Leaves are
-/// the only see-through block today; everything else fully
-/// occludes its neighbour face.
+/// One tile inside the 4x4 atlas. `files` is the ordered fallback
+/// list of source-file names the loader tries; first match wins.
+/// `keep_alpha=true` means the source alpha channel survives into
+/// the atlas (required for cutout textures like leaves);
+/// `false` forces the atlas pixel alpha to 255 so anti-aliased
+/// edges in the source don't accidentally discard solid pixels
+/// via the global alpha-cutout shader path.
+struct TileSpec {
+    col: u32,
+    row: u32,
+    files: &'static [&'static str],
+    keep_alpha: bool,
+}
+
+/// One block kind's full definition. Adding a new block = one
+/// entry here + a hotbar slot below; the registry, atlas loader,
+/// UV lookup and opacity test all read from this table so there's
+/// no second source of truth to keep in sync.
+struct BlockType {
+    id: u16,
+    name: &'static str,
+    color: [f32; 3],
+    transparent: bool,
+    top: TileSpec,
+    bottom: TileSpec,
+    sides: TileSpec,
+}
+
+const ATLAS_COLS: u32 = 4;
+const ATLAS_ROWS: u32 = 4;
+const TILE_PX: u32 = 16;
+
+const BLOCK_TYPES: &[BlockType] = &[
+    BlockType {
+        id: 1, name: "stone", color: [0.50, 0.50, 0.55], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 2, name: "dirt", color: [0.45, 0.32, 0.20], transparent: false,
+        top: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
+        bottom: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
+        sides: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 3, name: "grass", color: [0.35, 0.62, 0.28], transparent: false,
+        top: TileSpec {
+            col: 2, row: 0,
+            files: &["grass_carried.png", "grass_top.png"],
+            keep_alpha: false,
+        },
+        bottom: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
+        sides: TileSpec {
+            col: 2, row: 1,
+            files: &["grass_side_carried.png", "grass_side.tga"],
+            keep_alpha: false,
+        },
+    },
+    BlockType {
+        id: 4, name: "sand", color: [0.92, 0.86, 0.62], transparent: false,
+        top: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
+        sides: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 5, name: "wood", color: [0.55, 0.38, 0.22], transparent: false,
+        top: TileSpec { col: 3, row: 1, files: &["log_oak_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["log_oak_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["log_oak.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 6, name: "leaves", color: [0.24, 0.50, 0.20], transparent: true,
+        top: TileSpec {
+            col: 1, row: 1,
+            files: &["leaves_oak.tga", "leaves_oak_carried.png", "leaves_oak_opaque.png"],
+            keep_alpha: true,
+        },
+        bottom: TileSpec {
+            col: 1, row: 1,
+            files: &["leaves_oak.tga", "leaves_oak_carried.png", "leaves_oak_opaque.png"],
+            keep_alpha: true,
+        },
+        sides: TileSpec {
+            col: 1, row: 1,
+            files: &["leaves_oak.tga", "leaves_oak_carried.png", "leaves_oak_opaque.png"],
+            keep_alpha: true,
+        },
+    },
+];
+
+fn block_type(id: u16) -> Option<&'static BlockType> {
+    BLOCK_TYPES.iter().find(|b| b.id == id)
+}
+
 fn block_is_opaque(b: BlockId) -> bool {
-    b.0 != 6
+    block_type(b.0).map(|t| !t.transparent).unwrap_or(true)
 }
 
 fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {
-    let (col, row): (u32, u32) = match block.0 {
-        1 => (0, 0), // stone
-        2 => (1, 0), // dirt
-        3 => {
-            // grass: top -> grass_top, bottom -> dirt, side -> grass_side
-            if normal[1] > 0 {
-                (2, 0)
-            } else if normal[1] < 0 {
-                (1, 0)
-            } else {
-                (2, 1)
-            }
-        }
-        4 => (3, 0), // sand
-        5 => {
-            // wood: top/bottom -> log_oak_top, side -> log_oak
-            if normal[1] != 0 {
-                (3, 1)
-            } else {
-                (0, 1)
-            }
-        }
-        6 => (1, 1), // leaves
-        _ => (3, 3), // fallback (empty tile)
+    let Some(bt) = block_type(block.0) else {
+        return [0.0, 0.0, 1.0, 1.0];
     };
-    let u0 = col as f32 * 0.25;
-    let v0 = row as f32 * 0.25;
-    [u0, v0, u0 + 0.25, v0 + 0.25]
+    let tile = if normal[1] > 0 {
+        &bt.top
+    } else if normal[1] < 0 {
+        &bt.bottom
+    } else {
+        &bt.sides
+    };
+    let u_step = 1.0 / ATLAS_COLS as f32;
+    let v_step = 1.0 / ATLAS_ROWS as f32;
+    let u0 = tile.col as f32 * u_step;
+    let v0 = tile.row as f32 * v_step;
+    [u0, v0, u0 + u_step, v0 + v_step]
 }
 
 /// Try to load the atlas from a directory of 16x16 PNG / TGA files
@@ -2140,103 +2208,60 @@ fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {
 /// <dir>/leaves_oak_opaque.png  (fallback)
 /// ```
 fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
-    const W: u32 = 64;
-    const H: u32 = 64;
-    let mut rgba = vec![0u8; (W * H * 4) as usize];
-    let mut copy_tile =
-        |path: &std::path::Path, col: u32, row: u32, keep_alpha: bool| -> Option<()> {
-            let img = image::open(path).ok()?.to_rgba8();
-            // Resize / center-crop to 16x16 if needed. Bedrock textures
-            // are already 16x16 but a higher-res pack would otherwise
-            // overflow the tile.
-            let img = if img.width() == 16 && img.height() == 16 {
-                img
-            } else {
-                image::imageops::resize(&img, 16, 16, image::imageops::FilterType::Nearest)
-            };
-            for ty in 0..16u32 {
-                for tx in 0..16u32 {
-                    let px = col * 16 + tx;
-                    let py = row * 16 + ty;
-                    let idx = ((py * W + px) * 4) as usize;
-                    let pixel = img.get_pixel(tx, ty);
-                    rgba[idx] = pixel.0[0];
-                    rgba[idx + 1] = pixel.0[1];
-                    rgba[idx + 2] = pixel.0[2];
-                    // Force opaque on tiles whose source PNG has
-                    // anti-aliased edges (grass_side_carried has
-                    // semi-transparent pixels around the green
-                    // drips) - otherwise the global alpha-cutout
-                    // shader discards them and you see straight
-                    // through the block.
-                    rgba[idx + 3] = if keep_alpha { pixel.0[3] } else { 255 };
-                }
-            }
-            Some(())
+    let w = ATLAS_COLS * TILE_PX;
+    let h = ATLAS_ROWS * TILE_PX;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let mut copy_tile = |spec: &TileSpec| -> Option<()> {
+        // Pick the first existing file from the fallback list.
+        let path = spec
+            .files
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|p| p.exists())?;
+        let img = image::open(&path).ok()?.to_rgba8();
+        let img = if img.width() == TILE_PX && img.height() == TILE_PX {
+            img
+        } else {
+            image::imageops::resize(&img, TILE_PX, TILE_PX, image::imageops::FilterType::Nearest)
         };
-    let leaves_path = {
-        // Leaves textures in Bedrock are grayscale + biome-tinted at
-        // runtime. We don't sample biome tints, so prefer the
-        // pre-coloured `*_carried` variants where they exist. We
-        // still want alpha though: leaves_oak.tga has it, so try
-        // .tga first, fall back to opaque PNG or carried.
-        let tga = dir.join("leaves_oak.tga");
-        if tga.exists() {
-            tga
-        } else if dir.join("leaves_oak_carried.png").exists() {
-            dir.join("leaves_oak_carried.png")
-        } else {
-            dir.join("leaves_oak_opaque.png")
+        for ty in 0..TILE_PX {
+            for tx in 0..TILE_PX {
+                let px = spec.col * TILE_PX + tx;
+                let py = spec.row * TILE_PX + ty;
+                let idx = ((py * w + px) * 4) as usize;
+                let pixel = img.get_pixel(tx, ty);
+                rgba[idx] = pixel.0[0];
+                rgba[idx + 1] = pixel.0[1];
+                rgba[idx + 2] = pixel.0[2];
+                // Opaque tiles force alpha to 255 so anti-aliased
+                // edges in the source can't trip the global
+                // alpha-cutout shader.
+                rgba[idx + 3] = if spec.keep_alpha { pixel.0[3] } else { 255 };
+            }
         }
+        Some(())
     };
-    let grass_side_path = {
-        // `grass_side.tga` is the in-game gray variant; the engine
-        // tints it via the biome's foliage colour. We don't sample
-        // biome tints, so prefer `grass_side_carried.png` (inventory
-        // variant) - it has the green grass top + brown dirt baked
-        // in already.
-        let carried = dir.join("grass_side_carried.png");
-        if carried.exists() {
-            carried
-        } else if dir.join("grass_side.tga").exists() {
-            dir.join("grass_side.tga")
-        } else {
-            dir.join("grass_top.png")
-        }
-    };
-    let grass_top_path = {
-        // Same biome-tint story for the top face. `grass_carried.png`
-        // is pre-coloured green; `grass_top.png` is the gray variant
-        // (engine tints it). Pick whichever exists; carried first.
-        let carried = dir.join("grass_carried.png");
-        if carried.exists() {
-            carried
-        } else {
-            dir.join("grass_top.png")
-        }
-    };
-    // Tuple = (path, col, row, keep_alpha). Only the leaves tile
-    // actually wants the source PNG's alpha channel; every other
-    // tile should land fully opaque so the global alpha-cutout
-    // shader doesn't carve see-through gaps out of solid blocks.
-    let tiles: [(std::path::PathBuf, u32, u32, bool); 8] = [
-        (dir.join("stone.png"), 0, 0, false),
-        (dir.join("dirt.png"), 1, 0, false),
-        (grass_top_path, 2, 0, false),
-        (dir.join("sand.png"), 3, 0, false),
-        (dir.join("log_oak.png"), 0, 1, false),
-        (leaves_path, 1, 1, true),
-        (grass_side_path, 2, 1, false),
-        (dir.join("log_oak_top.png"), 3, 1, false),
-    ];
-    for (path, col, row, keep_alpha) in &tiles {
-        if copy_tile(path, *col, *row, *keep_alpha).is_none() {
-            tracing::warn!(path = %path.display(), "atlas texture missing or unreadable");
-            return None;
+    // Iterate every (block, face) tile in the registry. Dedup by
+    // (col, row) so a tile shared by multiple faces / blocks is
+    // copied once.
+    let mut seen: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    for bt in BLOCK_TYPES {
+        for spec in [&bt.top, &bt.bottom, &bt.sides] {
+            if !seen.insert((spec.col, spec.row)) {
+                continue;
+            }
+            if copy_tile(spec).is_none() {
+                tracing::warn!(
+                    block = bt.name,
+                    files = ?spec.files,
+                    "atlas texture missing or unreadable"
+                );
+                return None;
+            }
         }
     }
     tracing::info!(dir = %dir.display(), "loaded block atlas from disk");
-    Some((W, H, rgba))
+    Some((w, h, rgba))
 }
 
 /// Procedural 64x32 RGBA atlas built once at startup. Each 16x16
@@ -2244,38 +2269,41 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
 /// per-pixel noise so the texture reads as voxelly fabric rather
 /// than flat colour.
 fn build_block_atlas() -> (u32, u32, Vec<u8>) {
-    const W: u32 = 64;
-    const H: u32 = 64;
-    let mut rgba = vec![0u8; (W * H * 4) as usize];
-    // (base color, (col, row)). Tile (3,1) approximates a top
-    // cross-section of oak; (2,1) is grass+dirt blend for the side
-    // strip when running without a real texture pack.
-    let tile_colors: [([u8; 3], (u32, u32)); 8] = [
-        ([128, 128, 140], (0, 0)),
-        ([115, 82, 51], (1, 0)),
-        ([89, 158, 71], (2, 0)),
-        ([235, 219, 158], (3, 0)),
-        ([140, 97, 56], (0, 1)),
-        ([61, 128, 51], (1, 1)),
-        ([105, 130, 60], (2, 1)),
-        ([170, 130, 70], (3, 1)),
-    ];
-    for (color, (col, row)) in tile_colors {
-        for ty in 0..16u32 {
-            for tx in 0..16u32 {
-                let px = col * 16 + tx;
-                let py = row * 16 + ty;
-                let idx = ((py * W + px) * 4) as usize;
-                let h = ((tx.wrapping_mul(31) ^ ty.wrapping_mul(17)) % 64) as i32 - 32;
-                let bias = (h as f32 / 32.0) * 24.0;
+    let w = ATLAS_COLS * TILE_PX;
+    let h = ATLAS_ROWS * TILE_PX;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    // Paint every tile referenced by BLOCK_TYPES once. The
+    // procedural fallback approximates the block's albedo with
+    // per-pixel noise so the texture reads as voxelly fabric
+    // rather than flat colour. Each tile picks the colour of the
+    // first BlockType that points at it.
+    let mut seen: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    let paint = |rgba: &mut Vec<u8>, col: u32, row: u32, color: [u8; 3]| {
+        for ty in 0..TILE_PX {
+            for tx in 0..TILE_PX {
+                let px = col * TILE_PX + tx;
+                let py = row * TILE_PX + ty;
+                let idx = ((py * w + px) * 4) as usize;
+                let n =
+                    ((tx.wrapping_mul(31) ^ ty.wrapping_mul(17)) % 64) as i32 - 32;
+                let bias = (n as f32 / 32.0) * 24.0;
                 rgba[idx] = (color[0] as f32 + bias).clamp(0.0, 255.0) as u8;
                 rgba[idx + 1] = (color[1] as f32 + bias).clamp(0.0, 255.0) as u8;
                 rgba[idx + 2] = (color[2] as f32 + bias).clamp(0.0, 255.0) as u8;
                 rgba[idx + 3] = 255;
             }
         }
+    };
+    let f2u = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+    for bt in BLOCK_TYPES {
+        let base = [f2u(bt.color[0]), f2u(bt.color[1]), f2u(bt.color[2])];
+        for spec in [&bt.top, &bt.bottom, &bt.sides] {
+            if seen.insert((spec.col, spec.row)) {
+                paint(&mut rgba, spec.col, spec.row, base);
+            }
+        }
     }
-    (W, H, rgba)
+    (w, h, rgba)
 }
 
 fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
