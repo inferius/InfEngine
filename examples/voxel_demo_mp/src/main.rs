@@ -2143,30 +2143,37 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
     const W: u32 = 64;
     const H: u32 = 64;
     let mut rgba = vec![0u8; (W * H * 4) as usize];
-    let mut copy_tile = |path: &std::path::Path, col: u32, row: u32| -> Option<()> {
-        let img = image::open(path).ok()?.to_rgba8();
-        // Resize / center-crop to 16x16 if needed. Bedrock textures
-        // are already 16x16 but a higher-res pack would otherwise
-        // overflow the tile.
-        let img = if img.width() == 16 && img.height() == 16 {
-            img
-        } else {
-            image::imageops::resize(&img, 16, 16, image::imageops::FilterType::Nearest)
-        };
-        for ty in 0..16u32 {
-            for tx in 0..16u32 {
-                let px = col * 16 + tx;
-                let py = row * 16 + ty;
-                let idx = ((py * W + px) * 4) as usize;
-                let pixel = img.get_pixel(tx, ty);
-                rgba[idx] = pixel.0[0];
-                rgba[idx + 1] = pixel.0[1];
-                rgba[idx + 2] = pixel.0[2];
-                rgba[idx + 3] = pixel.0[3];
+    let mut copy_tile =
+        |path: &std::path::Path, col: u32, row: u32, keep_alpha: bool| -> Option<()> {
+            let img = image::open(path).ok()?.to_rgba8();
+            // Resize / center-crop to 16x16 if needed. Bedrock textures
+            // are already 16x16 but a higher-res pack would otherwise
+            // overflow the tile.
+            let img = if img.width() == 16 && img.height() == 16 {
+                img
+            } else {
+                image::imageops::resize(&img, 16, 16, image::imageops::FilterType::Nearest)
+            };
+            for ty in 0..16u32 {
+                for tx in 0..16u32 {
+                    let px = col * 16 + tx;
+                    let py = row * 16 + ty;
+                    let idx = ((py * W + px) * 4) as usize;
+                    let pixel = img.get_pixel(tx, ty);
+                    rgba[idx] = pixel.0[0];
+                    rgba[idx + 1] = pixel.0[1];
+                    rgba[idx + 2] = pixel.0[2];
+                    // Force opaque on tiles whose source PNG has
+                    // anti-aliased edges (grass_side_carried has
+                    // semi-transparent pixels around the green
+                    // drips) - otherwise the global alpha-cutout
+                    // shader discards them and you see straight
+                    // through the block.
+                    rgba[idx + 3] = if keep_alpha { pixel.0[3] } else { 255 };
+                }
             }
-        }
-        Some(())
-    };
+            Some(())
+        };
     let leaves_path = {
         // Leaves textures in Bedrock are grayscale + biome-tinted at
         // runtime. We don't sample biome tints, so prefer the
@@ -2208,18 +2215,22 @@ fn load_block_atlas_from_dir(dir: &std::path::Path) -> Option<(u32, u32, Vec<u8>
             dir.join("grass_top.png")
         }
     };
-    let tiles: [(std::path::PathBuf, u32, u32); 8] = [
-        (dir.join("stone.png"), 0, 0),
-        (dir.join("dirt.png"), 1, 0),
-        (grass_top_path, 2, 0),
-        (dir.join("sand.png"), 3, 0),
-        (dir.join("log_oak.png"), 0, 1),
-        (leaves_path, 1, 1),
-        (grass_side_path, 2, 1),
-        (dir.join("log_oak_top.png"), 3, 1),
+    // Tuple = (path, col, row, keep_alpha). Only the leaves tile
+    // actually wants the source PNG's alpha channel; every other
+    // tile should land fully opaque so the global alpha-cutout
+    // shader doesn't carve see-through gaps out of solid blocks.
+    let tiles: [(std::path::PathBuf, u32, u32, bool); 8] = [
+        (dir.join("stone.png"), 0, 0, false),
+        (dir.join("dirt.png"), 1, 0, false),
+        (grass_top_path, 2, 0, false),
+        (dir.join("sand.png"), 3, 0, false),
+        (dir.join("log_oak.png"), 0, 1, false),
+        (leaves_path, 1, 1, true),
+        (grass_side_path, 2, 1, false),
+        (dir.join("log_oak_top.png"), 3, 1, false),
     ];
-    for (path, col, row) in &tiles {
-        if copy_tile(path, *col, *row).is_none() {
+    for (path, col, row, keep_alpha) in &tiles {
+        if copy_tile(path, *col, *row, *keep_alpha).is_none() {
             tracing::warn!(path = %path.display(), "atlas texture missing or unreadable");
             return None;
         }
