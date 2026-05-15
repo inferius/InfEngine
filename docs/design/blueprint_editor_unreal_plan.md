@@ -73,6 +73,12 @@ What does not exist yet:
 | 7 - Find-in-graph (Ctrl+F) | DONE (commit fe910ea) |
 | 8 - Blueprint function libraries | DONE (commit 8521ef5) |
 | 9 - Hot-reload blueprints during Play | DONE (commit 06179fa) |
+| 10 - Pin context menu (Promote to Variable, Break Link) | DONE (commit 9d2005c) |
+| 11 - Box-select drag | DONE (commit c56fad7) |
+| 12 - Multi-node drag (selected_extra moves with primary) | DONE (commit 2ecb439) |
+| 13 - Bookmarks Ctrl+1..9 / Shift+1..9 | DONE (commit 6b47227) |
+| 14 - Auto-arrange button | DONE (commit 8c80362) |
+| 15 - Minimap overlay | DONE (commit fe030b1) |
 
 Carry-overs not yet implemented (Promote-to-Variable from a pin,
 box-select drag, multi-drag, bookmarks, minimap, auto-arrange,
