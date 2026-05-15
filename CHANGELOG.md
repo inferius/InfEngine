@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Networking foundation + multiplayer voxel showcase: new
+  `infengine_net` crate ships a UDP transport with handshake,
+  per-tick entity snapshot replication, named-event channel, and
+  generic `Bytes { kind, data }` envelope. New `voxel_demo_mp`
+  example exercises the full stack with server / client / offline
+  modes, client-side edit prediction, server-owned authoritative
+  edit history (rebroadcast on late join), and a persisted
+  `voxel_server_state.bin` so server restarts don't lose edits.
+  Master-server crate (`infengine_master_server`) hosts a
+  discoverable directory + interactive console (help / list /
+  kick / clear / quit). Voxel demo's server browser is async,
+  status-banner-driven, and auto-refreshes on entry.
+- Blueprint editor UE-parity phases 10-16: pin context menu
+  (Promote to Variable, Break Link), box-select drag, multi-node
+  drag (`selected_extra` slides with primary), bookmark slots
+  Ctrl+1..9 / Shift+1..9, auto-arrange (topological exec layout),
+  minimap overlay, knot/reroute nodes (Exec + Float). See
+  `docs/design/blueprint_editor_unreal_plan.md` for the full
+  table.
+- C# bridge plumbing: real CoreCLR reverse-call for
+  `[BlueprintCallable]` methods through `HotLoader.InvokeBlueprintMethod`,
+  argument marshalling for float / double / int / uint / bool +
+  Vector3, and a corresponding `BlueprintInvokeFn` typed fn-pointer
+  on the Rust side. The editor scans the project's `scripts/`
+  tree, harvests `[BlueprintCallable]` methods from .cs sources,
+  and renders them as dedicated context-menu entries with the
+  right parameter pins.
+- New `infengine_particles` crate (CPU emitter + simulation) plus
+  `Renderer::draw_particles` integration. Voxel demo spawns
+  per-block debris bursts on mining.
+- Voxel demo terrain biomes (Desert / Plains / Mountain) selected
+  by a slow 2D noise sample plus deterministic per-column tree
+  placement.
 - C# hot reload via collectible ALC (Phase 10.1): the previously-single `scripts/InfEngine.Scripts` project is split into `InfEngine.Scripts.Host` (default ALC, stable) and `InfEngine.Scripts.Game` (collectible ALC, reloadable). The host's new `HotLoader` class owns a `GameLoadContext` that resolves shared types against the host's own ALC, loads the game assembly from a byte stream (so the .dll stays writable), and dispatches `Tick(float)` through a cached `Action<float>` delegate. Rust gains `ScriptAssembly::get_fn_load_game` returning a `byte` success flag; `sprite_demo` exposes a "Reload game assembly" button in the Scripting inspector that calls `UnloadGame` + `LoadGame` on the next frame.
 - Editor asset browser (Phase 9.5): a new collapsing "Assets" section lists every file under the project's asset root, recursive + sorted, with a Refresh button to rescan.
 - `docs/editor-guide.md` covering quickstart, project model, inspector sections, viewport controls, the undo/redo behaviour, and the Export flow. Linked from README's roadmap entry.
