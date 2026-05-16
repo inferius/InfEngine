@@ -59,6 +59,18 @@ struct PlayerMsg {
     pitch: f32,
 }
 
+/// Server -> all clients: a player has left. Recipients drop the
+/// id from their `remote` table so the leaver's cube + pose stop
+/// rendering immediately instead of waiting for an eventual
+/// timeout.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct PlayerRemoveMsg {
+    id: u32,
+}
+
+// `vx.leave` is sent as an empty-payload `client.send_bytes`
+// (no struct needed - presence of the kind string is the signal).
+
 /// Full per-client inventory snapshot. Server -> client only. The
 /// server is authoritative; every break / place / drag-and-drop /
 /// craft action on the server resolves to a fresh snapshot, sent
@@ -2053,6 +2065,7 @@ impl Voxel {
         // Mob pose updates received this tick (client). Folded into
         // `self.remote_mobs` after the match exits.
         let mut mob_updates: Vec<MobMsg> = Vec::new();
+        let mut player_removals: Vec<u32> = Vec::new();
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -2131,25 +2144,56 @@ impl Voxel {
                                 pending_inv_sends.insert(client_id);
                             }
                         }
+                        "vx.leave" => {
+                            // Explicit disconnect: drop the pose
+                            // straight away so the reaper's 5 s
+                            // grace doesn't strand a frozen ghost.
+                            poses.remove(&client_id);
+                            tracing::info!(
+                                client_id,
+                                "client requested explicit leave"
+                            );
+                        }
                         _ => {}
                     }
                 }
-                // Catch-up: any client id that wasn't in last tick's
-                // roster gets the entire edit history rebroadcast so
-                // its locally-generated world matches the server's.
-                // Existing clients receive duplicate edits but each
-                // edit is an idempotent voxel set, so the redundant
-                // traffic is correctness-safe.
-                let current_ids: HashSet<u32> = poses
-                    .keys()
-                    .copied()
-                    .filter(|id| *id != 0)
-                    .collect();
+                // Roster snapshot: use the authoritative connection
+                // list (`server.client_ids`) rather than the pose
+                // table, so dropped clients are detected as soon as
+                // the reaper or an explicit `vx.leave` removes them
+                // from the socket layer.
+                let current_ids: HashSet<u32> =
+                    server.client_ids().into_iter().collect();
                 let new_ids: Vec<u32> = current_ids
                     .iter()
                     .filter(|id| !self.known_client_ids.contains(*id))
                     .copied()
                     .collect();
+                let departed_ids: Vec<u32> = self
+                    .known_client_ids
+                    .iter()
+                    .filter(|id| !current_ids.contains(*id))
+                    .copied()
+                    .collect();
+                // Drop server-side state for clients that left so
+                // their pose / inventory don't keep replicating.
+                // Persist their inventory by name (if known) so the
+                // next save flushes it, then evict.
+                for id in &departed_ids {
+                    poses.remove(id);
+                    if let Some(inv) = inventories.remove(id)
+                        && let Some(name) = server.client_name(*id)
+                    {
+                        self.saved_inventories.insert(name, inv);
+                    }
+                    pending_inv_sends.remove(id);
+                    // Tell every still-connected peer to forget
+                    // the departed player's cube.
+                    let msg = PlayerRemoveMsg { id: *id };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        server.broadcast_bytes("vx.player_remove", buf);
+                    }
+                }
                 if !new_ids.is_empty() && !self.edit_history.is_empty() {
                     tracing::info!(
                         joined = ?new_ids,
@@ -2395,6 +2439,15 @@ impl Voxel {
                                 mob_removals.push(id);
                             }
                         }
+                        "vx.player_remove" => {
+                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                                PlayerRemoveMsg,
+                                _,
+                            >(&data, cfg)
+                            {
+                                player_removals.push(m.id);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -2455,6 +2508,16 @@ impl Voxel {
         }
         for m in mob_updates {
             self.remote_mobs.insert(m.id, m);
+        }
+        // Drop departed players from the client-side remote table
+        // so their cubes stop rendering as soon as the server
+        // tells us they left.
+        if !player_removals.is_empty()
+            && let NetRole::Client { remote, .. } = &mut self.net
+        {
+            for id in &player_removals {
+                remote.remove(id);
+            }
         }
         // Apply mob hits requested by clients. Server validates
         // reach against the sender's last known pose before

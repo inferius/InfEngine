@@ -142,6 +142,15 @@ impl NetServer {
         self.clients.len()
     }
 
+    /// Snapshot of the currently connected client ids. The roster
+    /// is reaped after 5 s of silence (see `poll`), so anything
+    /// not returned here is either dropped or about to be. Useful
+    /// for detecting departures: compare two snapshots across
+    /// ticks and clean up state for ids no longer present.
+    pub fn client_ids(&self) -> Vec<u32> {
+        self.clients.values().map(|c| c.id).collect()
+    }
+
     /// Look up the registered name of the given client, if known.
     /// The name is the string the client sent in its `Hello`.
     pub fn client_name(&self, client_id: u32) -> Option<String> {
