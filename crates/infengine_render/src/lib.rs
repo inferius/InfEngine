@@ -103,6 +103,11 @@ pub struct Renderer {
     mesh_albedos: std::collections::HashMap<MeshHandle, AlbedoHandle>,
     lights: LightsResource,
     light_queue: Vec<PointLight>,
+    /// Directional sun direction (points TOWARDS the sun). Used by
+    /// the shadow pass + the mesh3d PBR shader. Defaults to a
+    /// high-noon angle; drivers can swing this through the day via
+    /// [`Renderer::set_sun_dir`].
+    sun_dir: glam::Vec3,
 }
 
 impl Renderer {
@@ -243,6 +248,7 @@ impl Renderer {
             mesh_albedos: std::collections::HashMap::new(),
             lights: lights_res,
             light_queue: Vec::new(),
+            sun_dir: glam::Vec3::new(0.4, 0.9, 0.5),
         })
     }
 
@@ -325,6 +331,17 @@ impl Renderer {
     /// Handle of the built-in unit cube.
     pub fn cube_handle(&self) -> MeshHandle {
         self.cube_handle
+    }
+
+    /// Create a fresh cube-geometry mesh. Useful when a caller
+    /// wants a unit cube with its own albedo binding without
+    /// disturbing the global `cube_handle` (e.g. a textured sheep
+    /// body alongside an untextured player cube). The mesh data
+    /// is identical to `cube_handle()`; only the registry slot
+    /// differs.
+    pub fn create_cube_mesh(&mut self, name: &str) -> MeshHandle {
+        let (v, i) = mesh3d::cube_geometry_public();
+        self.meshes.insert(&self.device, name, &v, &i)
     }
 
     /// Iterate a particle system and queue one cube draw per live
@@ -601,6 +618,26 @@ impl Renderer {
         self.clear_color = Color { r, g, b, a };
     }
 
+    /// Set the directional sun direction (the vector pointing
+    /// TOWARDS the sun). The vector is normalised internally;
+    /// passing the zero vector falls back to a fixed high-noon
+    /// angle so the scene never goes completely flat-lit.
+    pub fn set_sun_dir(&mut self, dir: glam::Vec3) {
+        let n = dir.normalize_or_zero();
+        self.sun_dir = if n.length_squared() > 1e-6 {
+            n
+        } else {
+            glam::Vec3::new(0.4, 0.9, 0.5).normalize()
+        };
+    }
+
+    /// Read the current sun direction (normalised, points TOWARDS
+    /// the sun). Useful for drivers that want to compute the sky
+    /// color from the same angle they pushed.
+    pub fn sun_dir(&self) -> glam::Vec3 {
+        self.sun_dir
+    }
+
     /// Render one frame, with an optional overlay callback.
     ///
     /// The closure runs after the engine's main pass with its own
@@ -637,7 +674,7 @@ impl Renderer {
         // Anchor the sun frustum on the 3D camera's look-at target so
         // the shadow map follows what the user is looking at.
         let target = self.camera_3d.target;
-        let light_dir = glam::Vec3::new(0.4, 0.9, 0.5);
+        let light_dir = self.sun_dir;
         self.shadow
             .upload_light(&self.queue, target, light_dir, 20.0, 40.0);
         self.sprite

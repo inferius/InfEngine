@@ -103,7 +103,6 @@ pub struct NetServer {
 #[derive(Debug, Clone)]
 struct ClientSlot {
     id: u32,
-    #[allow(dead_code)]
     name: String,
     last_seen: Instant,
 }
@@ -141,6 +140,15 @@ impl NetServer {
 
     pub fn client_count(&self) -> usize {
         self.clients.len()
+    }
+
+    /// Look up the registered name of the given client, if known.
+    /// The name is the string the client sent in its `Hello`.
+    pub fn client_name(&self, client_id: u32) -> Option<String> {
+        self.clients
+            .values()
+            .find(|c| c.id == client_id)
+            .map(|c| c.name.clone())
     }
 
     pub fn tick(&self) -> u64 {
@@ -236,6 +244,26 @@ impl NetServer {
         for addr in self.clients.keys() {
             let _ = self.send_to(&msg, *addr);
         }
+    }
+
+    /// Send a typed byte payload to a single client identified by
+    /// `client_id`. Silently no-ops if the id is unknown (the
+    /// caller's client roster can outlive the actual connection by
+    /// a few ticks due to the 5 s reaper).
+    pub fn send_bytes_to_client(&self, client_id: u32, kind: &str, data: Vec<u8>) {
+        let Some(addr) = self
+            .clients
+            .iter()
+            .find(|(_, c)| c.id == client_id)
+            .map(|(a, _)| *a)
+        else {
+            return;
+        };
+        let msg = NetMessage::Bytes {
+            kind: kind.to_string(),
+            data,
+        };
+        let _ = self.send_to(&msg, addr);
     }
 
     /// Drain any typed payloads received from clients since the

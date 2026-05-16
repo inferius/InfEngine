@@ -42,6 +42,13 @@ secrets.toml
 # Demo-generated assets (regenerated on first run if missing)
 /assets/
 
+# Third-party Mojang Bedrock texture / sound assets bundled
+# locally by voxel_demo_mp for fast iteration. These files are
+# copyrighted by Mojang and MUST NOT be committed to a public
+# repository - the demo falls back to procedural textures /
+# synth audio when this directory is absent.
+/examples/voxel_demo_mp/assets/
+
 # C# build output
 /scripts/**/bin/
 /scripts/**/obj/
