@@ -836,6 +836,11 @@ struct Voxel {
     /// True when the inventory overlay is up. Pauses player input
     /// + shows the cursor.
     inventory_open: bool,
+    /// In multiplayer roles, Esc opens an overlay menu *without*
+    /// pausing the world simulation - other peers shouldn't see a
+    /// frozen ghost just because someone hit Esc. This flag drives
+    /// the overlay; `update_play` keeps ticking either way.
+    mp_menu_open: bool,
     /// 2x2 crafting grid laid out row-major (idx = row*2 + col).
     /// Drained on a successful craft. Only relevant while the
     /// inventory overlay is open.
@@ -1529,6 +1534,15 @@ impl Voxel {
     /// day-of-cycle to disk in the new versioned `INFV` format.
     /// Called periodically while the server runs (every 30 s) so a
     /// crash loses at most half a minute of state.
+    /// Fire-and-forget `vx.leave` to the server (if any). Called
+    /// on explicit disconnect / quit so the server doesn't have
+    /// to wait its 5 s silence reaper to broadcast a removal.
+    fn notify_server_leaving(&self) {
+        if let NetRole::Client { client, .. } = &self.net {
+            let _ = client.send_bytes("vx.leave", Vec::new());
+        }
+    }
+
     fn save_server_state(&mut self) {
         if !matches!(self.net, NetRole::Server { .. }) {
             return;
@@ -2628,6 +2642,7 @@ impl Voxel {
             },
             selected_slot: 0,
             inventory_open: false,
+            mp_menu_open: false,
             craft_grid: [None; 4],
             wheel_accum: 0.0,
             grounded: false,
@@ -2956,7 +2971,10 @@ impl Voxel {
         // Inventory overlay needs a usable cursor + breaks the
         // lock so the mouse can leave the window without being
         // snapped back to the centre.
-        let active = playing && self.has_focus && !self.inventory_open;
+        let active = playing
+            && self.has_focus
+            && !self.inventory_open
+            && !self.mp_menu_open;
         let grab = if active && self.settings.lock_cursor {
             if self.settings.hide_cursor {
                 CursorGrabMode::Locked
@@ -2979,7 +2997,7 @@ impl Voxel {
         // mouse-look, WASD, jump, hotbar wheel. This matches the
         // Minecraft convention - opening the inventory in multiplayer
         // never pauses the world for anyone.
-        let input_active = !self.inventory_open;
+        let input_active = !self.inventory_open && !self.mp_menu_open;
 
         if input_active {
             let dx = std::mem::take(&mut self.mouse_dx);
@@ -3207,6 +3225,12 @@ impl Voxel {
             .map(|s| icon(*s))
             .collect();
         let inventory_open = self.inventory_open;
+        let mp_menu_open = self.mp_menu_open;
+        let mp_role_label: Option<&'static str> = match &self.net {
+            NetRole::Offline => None,
+            NetRole::Server { .. } => Some("hosting server"),
+            NetRole::Client { .. } => Some("connected to server"),
+        };
         let inventory_snapshot: Vec<Option<SlotIcon>> = if inventory_open {
             self.inventory[HOTBAR_SLOTS..]
                 .iter()
@@ -3250,6 +3274,11 @@ impl Voxel {
         let mut action_join_browser: Option<String> = None;
         let mut action_browser_refresh = false;
         let mut action_host_start = false;
+        // MP overlay actions: continue playing (close overlay) /
+        // explicit disconnect-and-return-to-main-menu.
+        let mut action_mp_resume = false;
+        let mut action_mp_disconnect = false;
+        let mut action_mp_quit = false;
         let direct_buf = &mut self.direct_addr_buf;
         let host_name = &mut self.host_name_buf;
         let host_port = &mut self.host_port_buf;
@@ -3473,6 +3502,44 @@ impl Voxel {
                             }
                         });
                     });
+                // Multiplayer in-game menu. Opens on Esc when a
+                // net role is active. World keeps simulating
+                // underneath (other peers must not see a frozen
+                // ghost), so this is a thin overlay rather than a
+                // pause state.
+                if mp_menu_open
+                    && let Some(role) = mp_role_label
+                {
+                    egui::Window::new("Game menu")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label(format!("Status: {role}"));
+                            ui.separator();
+                            if ui
+                                .add_sized([220.0, 32.0], egui::Button::new("Resume"))
+                                .clicked()
+                            {
+                                action_mp_resume = true;
+                            }
+                            if ui
+                                .add_sized(
+                                    [220.0, 32.0],
+                                    egui::Button::new("Disconnect to main menu"),
+                                )
+                                .clicked()
+                            {
+                                action_mp_disconnect = true;
+                            }
+                            if ui
+                                .add_sized([220.0, 32.0], egui::Button::new("Quit"))
+                                .clicked()
+                            {
+                                action_mp_quit = true;
+                            }
+                        });
+                }
                 // F3 debug panel: top-right corner, lots of state in
                 // one place. Mirrors Minecraft's debug overlay.
                 if show_debug {
@@ -3811,6 +3878,25 @@ impl Voxel {
         if action_quit {
             self.requested_quit = true;
         }
+        if action_mp_resume {
+            self.mp_menu_open = false;
+        }
+        if action_mp_disconnect {
+            // Best-effort vx.leave so the server pre-empts its
+            // 5s silence reaper + broadcasts the removal right
+            // away. Then drop the net role + return to the main
+            // menu so the user can rejoin / host again.
+            self.notify_server_leaving();
+            self.net = NetRole::Offline;
+            self.mp_menu_open = false;
+            self.state = AppState::MainMenu;
+            self.remote_mobs.clear();
+            self.mobs.clear();
+        }
+        if action_mp_quit {
+            self.notify_server_leaving();
+            self.requested_quit = true;
+        }
         if action_menu_to_settings {
             self.state = AppState::Settings {
                 back_to: BackTo::MainMenu,
@@ -4033,6 +4119,14 @@ impl AppHandler for Voxel {
         if let Some(ui) = self.ui.as_mut() {
             ui.handle_engine_event(window, event);
         }
+        // Window close: send a `vx.leave` first so the server can
+        // reap our pose instantly + broadcast the removal to the
+        // other peers. The actual process exit happens on the next
+        // `on_update` via `requested_quit`.
+        if matches!(event, WindowEvent::CloseRequested) {
+            self.notify_server_leaving();
+            self.requested_quit = true;
+        }
         // Focus tracking. Clicking another window on the same machine
         // shifts focus; without this guard `apply_cursor_settings`
         // would keep wrestling the cursor away from whichever window
@@ -4117,13 +4211,26 @@ impl AppHandler for Voxel {
         // thread (refresh + announce both run on background workers).
         self.poll_master_queries();
 
-        // Esc cycles Play <-> Paused and Settings -> back. Never quits.
+        // Esc behaviour depends on net role:
+        //  - Offline: classic Play <-> Paused toggle (whole world
+        //    halts while the pause overlay is up).
+        //  - Server / Client: world must keep running for the
+        //    other peers, so Esc just toggles `mp_menu_open` which
+        //    drives an overlay UI; physics / net tick continue.
+        // Settings always backs out via Esc regardless of role.
         let esc_now = ctx.input.is_pressed(Key::Escape);
         let esc_just = esc_now && !self.esc_prev;
         self.esc_prev = esc_now;
         if esc_just {
+            let mp = !matches!(self.net, NetRole::Offline);
             match self.state {
-                AppState::Playing => self.state = AppState::Paused,
+                AppState::Playing => {
+                    if mp {
+                        self.mp_menu_open = !self.mp_menu_open;
+                    } else {
+                        self.state = AppState::Paused;
+                    }
+                }
                 AppState::Paused => self.state = AppState::Playing,
                 AppState::Settings { back_to } => {
                     self.state = match back_to {
@@ -4215,7 +4322,7 @@ impl AppHandler for Voxel {
         // Mob attack interception: if LMB and a mob is closer than
         // the targeted voxel (or there's no voxel target), route
         // the click as a melee strike instead of a block break.
-        let mob_target = if lmb && !self.inventory_open {
+        let mob_target = if lmb && !self.inventory_open && !self.mp_menu_open {
             self.raycast_mob(self.player_pos, forward, MOB_ATTACK_REACH)
         } else {
             None
@@ -4260,7 +4367,11 @@ impl AppHandler for Voxel {
         }
         // Block edits pause when the inventory overlay is open so
         // panel clicks don't accidentally mine the world behind it.
-        if !self.inventory_open && attack_mob.is_none() && let Some(hit) = self.target {
+        if !self.inventory_open
+            && !self.mp_menu_open
+            && attack_mob.is_none()
+            && let Some(hit) = self.target
+        {
             if lmb {
                 // Capture the block we're about to break so we can
                 // pop it into the inventory (creative-but-greedy
