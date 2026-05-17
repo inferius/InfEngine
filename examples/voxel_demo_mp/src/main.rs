@@ -1195,6 +1195,10 @@ struct Voxel {
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.
     heartbeat_accum: f32,
+    /// Creative-style fly mode. Toggled by `/fly`. Disables
+    /// gravity + fall damage and remaps Space / Shift to vertical
+    /// thrust. Off by default so a vanilla session is unchanged.
+    fly_mode: bool,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -3742,6 +3746,7 @@ impl Voxel {
             sounds_dir: None,
             step_cooldown: 0.0,
             heartbeat_accum: 0.0,
+            fly_mode: false,
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
@@ -4169,23 +4174,43 @@ impl Voxel {
         self.player_vel.x = hvel_x;
         self.player_vel.z = hvel_z;
 
-        if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
-            self.player_vel.y = JUMP_VELOCITY;
+        if self.fly_mode {
+            // Free-flight: Space = up, Shift = down. Velocity is
+            // replaced (not integrated) so the player stops the
+            // instant the key is released, the way Minecraft's
+            // creative fly works.
+            let up = input_active && ctx.input.is_pressed(Key::Space);
+            let down = input_active
+                && (ctx.input.is_pressed(Key::ShiftLeft)
+                    || ctx.input.is_pressed(Key::ShiftRight));
+            let v = if up && !down {
+                8.0
+            } else if down && !up {
+                -8.0
+            } else {
+                0.0
+            };
+            self.player_vel.y = v;
             self.grounded = false;
-            // Sprint-jump boost: add forward kick so a moving
-            // jump covers more ground than a stand-still jump.
-            if self.sprinting {
-                let fwd_h = Vec3::new(
-                    self.player_yaw.cos(),
-                    0.0,
-                    -self.player_yaw.sin(),
-                )
-                .normalize_or_zero();
-                self.player_vel.x += fwd_h.x * 3.0;
-                self.player_vel.z += fwd_h.z * 3.0;
+        } else {
+            if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
+                self.player_vel.y = JUMP_VELOCITY;
+                self.grounded = false;
+                // Sprint-jump boost: add forward kick so a moving
+                // jump covers more ground than a stand-still jump.
+                if self.sprinting {
+                    let fwd_h = Vec3::new(
+                        self.player_yaw.cos(),
+                        0.0,
+                        -self.player_yaw.sin(),
+                    )
+                    .normalize_or_zero();
+                    self.player_vel.x += fwd_h.x * 3.0;
+                    self.player_vel.z += fwd_h.z * 3.0;
+                }
             }
+            self.player_vel.y += GRAVITY * dt;
         }
-        self.player_vel.y += GRAVITY * dt;
 
         // Footstep audio: fire a short click every ~0.4 s of
         // grounded horizontal motion. Sprint shortens the cadence
@@ -4308,7 +4333,9 @@ impl Voxel {
             && let Some(start_y) = self.fall_start_y.take()
         {
             let drop = (start_y - self.player_pos.y).max(0.0);
-            if drop > SAFE_FALL {
+            // Fly mode disables fall damage so toggling /fly off
+            // mid-air doesn't immediately murder the player.
+            if drop > SAFE_FALL && !self.fly_mode {
                 let dmg = drop - SAFE_FALL;
                 self.apply_player_damage(dmg);
                 let landing = [
@@ -5771,7 +5798,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /fly"
                                     .to_string(),
                             );
                         }
@@ -5779,6 +5806,36 @@ impl Voxel {
                             // Snap day_time to mid-morning.
                             self.day_time = DAY_LENGTH_S * 0.25;
                             local_lines.push("Time set to morning.".to_string());
+                            handled_locally = true;
+                        }
+                        "heal" => {
+                            // Refill local HP. Resets the regen
+                            // timer so the player doesn't get a
+                            // double-tick the next frame.
+                            self.player_health = PLAYER_MAX_HEALTH;
+                            self.regen_accum = 0.0;
+                            self.hurt_flash = 0.0;
+                            self.heartbeat_accum = 0.0;
+                            local_lines.push("Healed to full.".to_string());
+                            handled_locally = true;
+                        }
+                        "fly" => {
+                            // Toggle the local fly mode flag. The
+                            // movement integrator reads it; off
+                            // by default so a vanilla player
+                            // experience is unchanged.
+                            self.fly_mode = !self.fly_mode;
+                            if self.fly_mode {
+                                self.player_vel = Vec3::ZERO;
+                                self.fall_start_y = None;
+                                local_lines.push(
+                                    "Fly mode ON. Space = up, Shift = down."
+                                        .to_string(),
+                                );
+                            } else {
+                                local_lines
+                                    .push("Fly mode OFF.".to_string());
+                            }
                             handled_locally = true;
                         }
                         "night" => {
