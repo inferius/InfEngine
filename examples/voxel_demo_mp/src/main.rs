@@ -2420,6 +2420,10 @@ impl Voxel {
         if self.god_mode {
             let _ = writeln!(text, "god_mode=true");
         }
+        // World seed persists for solo play so re-runs share
+        // the same terrain. Hosted sessions still rely on
+        // ServerStateV2's own seed field.
+        let _ = writeln!(text, "world_seed={}", world_seed());
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2509,6 +2513,13 @@ impl Voxel {
                 }
                 "god_mode" => {
                     self.god_mode = matches!(value, "true" | "1" | "yes");
+                }
+                "world_seed" => {
+                    if let Ok(v) = value.parse::<u32>()
+                        && v != 0
+                    {
+                        set_world_seed(v);
+                    }
                 }
                 _ => {}
             }
