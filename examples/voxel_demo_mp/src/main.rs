@@ -12129,6 +12129,22 @@ impl AppHandler for Voxel {
                     "mob/sheep",
                     &["step1.ogg", "step2.ogg", "step3.ogg", "step4.ogg", "step5.ogg"],
                 ),
+                // Water splash variants from the Bedrock sound pack
+                // (random/splash*.ogg). Falls back to synthesised
+                // tone via `play_click` when none are present.
+                (
+                    "splash",
+                    "random",
+                    &["splash1.ogg", "splash2.ogg", "splash3.ogg", "splash.ogg"],
+                ),
+                // Liquid ambience (slow water flow). Used as the
+                // "splash_out" cue today but the same pool can drive
+                // a future swim-loop ambient.
+                (
+                    "splash_out",
+                    "liquid",
+                    &["water.ogg", "lava.ogg"],
+                ),
             ];
             for (key, subdir, files) in scans {
                 let paths: Vec<std::path::PathBuf> = files
