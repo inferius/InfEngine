@@ -11609,6 +11609,47 @@ impl AppHandler for Voxel {
                 // Sentinel arm so the existing `else if rmb ...`
                 // structure stays a single `if/else if` chain.
                 unreachable!()
+            } else if rmb
+                && self.world.get(hit.voxel).0 == 3
+                && {
+                    let held = self
+                        .inventory
+                        .get(self.selected_slot)
+                        .copied()
+                        .unwrap_or(None)
+                        .map(|(b, _)| b)
+                        .unwrap_or(BlockId::AIR);
+                    shovel_tier(held) > 0
+                }
+            {
+                // Shovel-RMB on grass -> degrade to dirt (Minecraft's
+                // "path" shortcut). Routes through the edit pipeline
+                // so the change replicates + persists.
+                let voxel = hit.voxel;
+                let edit = EditMsg {
+                    x: voxel[0],
+                    y: voxel[1],
+                    z: voxel[2],
+                    block: 2,
+                };
+                self.world_set_tracked(voxel, BlockId(2));
+                let coords = Self::affected_chunks(voxel);
+                self.rebuild_chunks(&coords);
+                let cfg = bincode::config::standard();
+                match &mut self.net {
+                    NetRole::Offline => {}
+                    NetRole::Server { server, .. } => {
+                        self.edit_history.push(edit);
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(edit, cfg)
+                        {
+                            server.broadcast_bytes("vx.edit", buf);
+                        }
+                    }
+                    NetRole::Client { pending_edits, .. } => {
+                        pending_edits.push(edit);
+                    }
+                }
             } else if rmb && self.world.get(hit.voxel).0 == 35 {
                 // RMB on a bed: trigger /sleep behaviour if it's
                 // night. Skips on host only since the day clock
