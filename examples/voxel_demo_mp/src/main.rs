@@ -153,6 +153,41 @@ struct MobState {
 /// every peer.
 const MOB_DEATH_FADE: f32 = 0.55;
 
+/// In-progress mining session. The player has been holding LMB on
+/// `voxel` for `progress` seconds; the block falls once `progress`
+/// reaches `total`. Tracking the original block lets us reset the
+/// session if someone else breaks it first or if the target shifts.
+#[derive(Debug, Clone, Copy)]
+struct MiningState {
+    voxel: [i32; 3],
+    progress: f32,
+    total: f32,
+    block: BlockId,
+    /// Time (seconds) since the last dig sound + crack particle
+    /// burst. Reset to 0 each time the periodic effect fires.
+    fx_cooldown: f32,
+}
+
+/// Seconds required to fully mine each block kind. Higher = tougher
+/// material. Air falls through to a tiny "miss" delay so the swing
+/// still produces feedback.
+fn block_hardness(block: BlockId) -> f32 {
+    match block.0 {
+        0 => 0.05,        // air (no-op swing)
+        1 | 8 => 1.6,     // stone, cobble
+        2 | 3 => 0.55,    // dirt, grass
+        4 => 0.5,         // sand
+        5 => 1.0,         // wood log
+        6 => 0.25,        // leaves
+        7 => 0.9,         // planks
+        9 => 0.45,        // glass
+        10 => 0.1,        // torch
+        11 => 0.6,        // wool
+        12 => 0.4,        // meat
+        _ => 0.8,
+    }
+}
+
 const MOB_CAP: usize = 12;
 const MOB_SPEED: f32 = 1.2;
 const MOB_MAX_HEALTH: f32 = 8.0;
@@ -833,6 +868,18 @@ struct Voxel {
     e_prev: bool,
     lmb_pending: bool,
     rmb_pending: bool,
+    /// Level state of the mouse buttons (set on Pressed events,
+    /// cleared on Released). Drives the hold-to-mine loop - the
+    /// edge-triggered `lmb_pending` still routes single clicks to
+    /// melee attacks on mobs.
+    lmb_held: bool,
+    rmb_held: bool,
+    /// Active mining session. `None` when the player isn't holding
+    /// LMB on a voxel; populated with the targeted cell + the time
+    /// elapsed / required to break the block. Cancels when LMB
+    /// releases, the aim moves to a different voxel, or the
+    /// targeted voxel disappears (someone else broke it first).
+    mining: Option<MiningState>,
     /// `None` = break slot (empty hand). `Some(block)` = place that
     /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
@@ -2706,6 +2753,9 @@ impl Voxel {
             e_prev: false,
             lmb_pending: false,
             rmb_pending: false,
+            lmb_held: false,
+            rmb_held: false,
+            mining: None,
             inventory: {
                 // Seed the hotbar with one starter stack per known
                 // block type so the demo is playable from the first
@@ -4243,11 +4293,25 @@ impl AppHandler for Voxel {
         if matches!(self.state, AppState::Playing)
             && self.has_focus
             && let WindowEvent::MouseInput { state, button, .. } = event
-            && matches!(state, ElementState::Pressed)
         {
-            match button {
-                MouseButton::Left => self.lmb_pending = true,
-                MouseButton::Right => self.rmb_pending = true,
+            match (state, button) {
+                (ElementState::Pressed, MouseButton::Left) => {
+                    self.lmb_pending = true;
+                    self.lmb_held = true;
+                }
+                (ElementState::Released, MouseButton::Left) => {
+                    self.lmb_held = false;
+                    // Releasing the button cancels any active
+                    // mining session.
+                    self.mining = None;
+                }
+                (ElementState::Pressed, MouseButton::Right) => {
+                    self.rmb_pending = true;
+                    self.rmb_held = true;
+                }
+                (ElementState::Released, MouseButton::Right) => {
+                    self.rmb_held = false;
+                }
                 _ => {}
             }
         }
@@ -4446,79 +4510,145 @@ impl AppHandler for Voxel {
                 self.damage_mob(mob_id, Some(0));
             }
         }
-        // Block edits pause when the inventory overlay is open so
-        // panel clicks don't accidentally mine the world behind it.
+        // Mining: LMB held + a voxel in view, but no mob in front
+        // (a melee swing takes priority). Tick the active session
+        // toward `total`; on completion, set `mine_break` so the
+        // block-edit path below executes the break exactly once.
+        let lmb_active = self.lmb_held
+            && !self.inventory_open
+            && !self.mp_menu_open
+            && attack_mob.is_none();
+        let mut mine_break: Option<[i32; 3]> = None;
+        if lmb_active && let Some(hit) = self.target {
+            let block = self.world.get(hit.voxel);
+            if block != BlockId::AIR {
+                // Restart the session if either the target voxel
+                // changed or the block at the target has been
+                // replaced (e.g. by another player).
+                let restart = match self.mining {
+                    Some(s) => s.voxel != hit.voxel || s.block != block,
+                    None => true,
+                };
+                if restart {
+                    self.mining = Some(MiningState {
+                        voxel: hit.voxel,
+                        progress: 0.0,
+                        total: block_hardness(block).max(0.05),
+                        block,
+                        fx_cooldown: 0.0,
+                    });
+                }
+                // Pull the state out by value so we can call
+                // `sfx_at` (which needs `&mut self`) without the
+                // borrow checker complaining about overlap with
+                // `self.mining`. Write the updated state back at
+                // the end of the tick.
+                if let Some(mut m) = self.mining.take() {
+                    m.progress += dt;
+                    m.fx_cooldown -= dt;
+                    let done = m.progress >= m.total;
+                    let voxel_center = [
+                        m.voxel[0] as f32 + 0.5,
+                        m.voxel[1] as f32 + 0.5,
+                        m.voxel[2] as f32 + 0.5,
+                    ];
+                    let fire_fx = m.fx_cooldown <= 0.0 || done;
+                    if fire_fx {
+                        m.fx_cooldown = 0.22;
+                    }
+                    let key = format!("dig:{}", block_material(block));
+                    let freq = 220.0 + (block.0 as f32) * 18.0;
+                    let total = m.total;
+                    let progress = m.progress;
+                    if fire_fx {
+                        self.sfx_at(&key, voxel_center, move |a, g| {
+                            let _ = a.play_thud(
+                                freq,
+                                0.10 * g * (0.5 + 0.5 * progress / total),
+                            );
+                        });
+                    }
+                    if done {
+                        mine_break = Some(m.voxel);
+                    } else {
+                        self.mining = Some(m);
+                    }
+                }
+            } else {
+                self.mining = None;
+            }
+        } else {
+            self.mining = None;
+        }
+        // Suppress the legacy single-click break: mining now drives
+        // it via `mine_break`. Keep `lmb` consumed so a fresh
+        // press doesn't bleed through somewhere else.
+        let _ = lmb;
+        // Block break: fires once when `mine_break` is set (i.e.
+        // the hold-to-mine session completed). The path applies
+        // the world edit, broadcasts, credits the pickup, and
+        // plays the break SFX.
+        if !self.inventory_open
+            && !self.mp_menu_open
+            && let Some(voxel) = mine_break
+        {
+            // Capture the block we're about to break so we can
+            // pop it into the inventory (greedy collection - air
+            // just no-ops).
+            let broken = self.world.get(voxel);
+            let edit = EditMsg {
+                x: voxel[0],
+                y: voxel[1],
+                z: voxel[2],
+                block: 0,
+            };
+            if is_client {
+                self.world_set_tracked(voxel, BlockId::AIR);
+                let coords = Self::affected_chunks(voxel);
+                self.rebuild_chunks(&coords);
+                self.spawn_break_particles(voxel);
+                if let NetRole::Client { pending_edits, .. } = &mut self.net {
+                    pending_edits.push(edit);
+                }
+            } else {
+                self.world_set_tracked(voxel, BlockId::AIR);
+                let coords = Self::affected_chunks(voxel);
+                self.rebuild_chunks(&coords);
+                self.spawn_break_particles(voxel);
+                if let NetRole::Server { server, .. } = &self.net {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                }
+                self.edit_history.push(edit);
+            }
+            if !is_client && broken != BlockId::AIR {
+                self.pickup(broken);
+            }
+            // Final break SFX (the loop already plays intermediate
+            // dig sounds while the player holds LMB).
+            let voxel_center = [
+                voxel[0] as f32 + 0.5,
+                voxel[1] as f32 + 0.5,
+                voxel[2] as f32 + 0.5,
+            ];
+            let key = format!("dig:{}", block_material(broken));
+            let freq = 220.0 + (broken.0 as f32) * 28.0;
+            self.sfx_at(&key, voxel_center, move |a, g| {
+                let _ = a.play_thud(freq, 0.30 * g);
+            });
+        }
+        // Block place: RMB single click stays instant; no mining.
         if !self.inventory_open
             && !self.mp_menu_open
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
-            if lmb {
-                // Capture the block we're about to break so we can
-                // pop it into the inventory (creative-but-greedy
-                // collection - air just no-ops).
-                let broken = self.world.get(hit.voxel);
-                let edit = EditMsg {
-                    x: hit.voxel[0],
-                    y: hit.voxel[1],
-                    z: hit.voxel[2],
-                    block: 0,
-                };
-                if is_client {
-                    // Client-side prediction: apply immediately for
-                    // snappy feedback, queue for the server. The
-                    // server's echo will re-apply (idempotent set);
-                    // a future rollback layer would reconcile on a
-                    // mismatch.
-                    self.world_set_tracked(hit.voxel, BlockId::AIR);
-                    let coords = Self::affected_chunks(hit.voxel);
-                    self.rebuild_chunks(&coords);
-                    self.spawn_break_particles(hit.voxel);
-                    if let NetRole::Client { pending_edits, .. } = &mut self.net {
-                        pending_edits.push(edit);
-                    }
-                } else {
-                    self.world_set_tracked(hit.voxel, BlockId::AIR);
-                    let coords = Self::affected_chunks(hit.voxel);
-                    self.rebuild_chunks(&coords);
-                    self.spawn_break_particles(hit.voxel);
-                    if let NetRole::Server { server, .. } = &self.net {
-                        let cfg = bincode::config::standard();
-                        if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                            server.broadcast_bytes("vx.edit", buf);
-                        }
-                    }
-                    self.edit_history.push(edit);
-                }
-                // Inventory bookkeeping:
-                //  - Offline / Server (host): authoritative locally,
-                //    credit the pickup straight away.
-                //  - Client: defer - the server credits + replies
-                //    with a `vx.inv` snapshot. Predicting locally
-                //    would risk a double-credit when the snapshot
-                //    arrives.
-                if !is_client && broken != BlockId::AIR {
-                    self.pickup(broken);
-                }
-                // Break sound: per-material `dig:*` from the asset
-                // pack with distance roll-off. Air swings still get
-                // a soft click so the player feels the swing.
-                let voxel_center = [
-                    hit.voxel[0] as f32 + 0.5,
-                    hit.voxel[1] as f32 + 0.5,
-                    hit.voxel[2] as f32 + 0.5,
-                ];
-                if broken == BlockId::AIR {
-                    self.sfx_at("place:air", voxel_center, |a, g| {
-                        let _ = a.play_click(180.0, 0.10 * g);
-                    });
-                } else {
-                    let key = format!("dig:{}", block_material(broken));
-                    let freq = 220.0 + (broken.0 as f32) * 28.0;
-                    self.sfx_at(&key, voxel_center, move |a, g| {
-                        let _ = a.play_thud(freq, 0.30 * g);
-                    });
-                }
+            if false {
+                // Sentinel arm so the existing `else if rmb ...`
+                // structure stays a single `if/else if` chain.
+                unreachable!()
             } else if rmb && let Some(block) = selected_block {
                 // Reject placement when it would intersect the player
                 // capsule - otherwise the player gets stuck inside
@@ -4921,6 +5051,27 @@ impl AppHandler for Voxel {
                 cell[2] as f32 + 1.005,
             ];
             renderer.debug_box_3d(min, max, color);
+        }
+        // Mining-progress overlay: an extra wire box tinted from
+        // bright yellow (just-started) through orange to red
+        // (almost broken). Drawn slightly larger than the targeted
+        // voxel so it doesn't z-fight with the regular outline.
+        if let Some(m) = self.mining {
+            let t = (m.progress / m.total).clamp(0.0, 1.0);
+            let r = 1.0;
+            let g = 1.0 - t * 0.8;
+            let b = 0.1 * (1.0 - t);
+            let min = [
+                m.voxel[0] as f32 - 0.02,
+                m.voxel[1] as f32 - 0.02,
+                m.voxel[2] as f32 - 0.02,
+            ];
+            let max = [
+                m.voxel[0] as f32 + 1.02,
+                m.voxel[1] as f32 + 1.02,
+                m.voxel[2] as f32 + 1.02,
+            ];
+            renderer.debug_box_3d(min, max, [r, g, b, 1.0]);
         }
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
