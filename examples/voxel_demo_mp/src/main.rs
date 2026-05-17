@@ -6503,6 +6503,29 @@ impl AppHandler for Voxel {
         // flag is gated here too so debug panels stay clean).
         self.tab_held =
             matches!(self.state, AppState::Playing) && ctx.input.is_pressed(Key::Tab);
+        // 1..9 select the matching hotbar slot directly (Minecraft
+        // convention). Slot 0 is the empty/break-hand slot; we
+        // map digit 1 to slot 0 so the user-facing numbering
+        // matches the visual order in the hotbar.
+        if matches!(self.state, AppState::Playing) && !self.chat_open {
+            let digits = [
+                Key::Digit1,
+                Key::Digit2,
+                Key::Digit3,
+                Key::Digit4,
+                Key::Digit5,
+                Key::Digit6,
+                Key::Digit7,
+                Key::Digit8,
+                Key::Digit9,
+            ];
+            for (i, key) in digits.iter().enumerate() {
+                if ctx.input.is_pressed(*key) && i < HOTBAR_SLOTS {
+                    self.selected_slot = i;
+                    break;
+                }
+            }
+        }
 
         let e_now = ctx.input.is_pressed(Key::E);
         let e_just = e_now && !self.e_prev;
