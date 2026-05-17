@@ -922,7 +922,7 @@ const STACK_MAX: u8 = 64;
 /// Length of one full day/night cycle in seconds. Short enough to
 /// see the sun move during a single play session - feel free to
 /// crank up for atmosphere later. 240s = 4 min full cycle.
-const DAY_LENGTH_S: f32 = 240.0;
+const DAY_LENGTH_S: f32 = 600.0;
 
 /// Shapeless 2x2 crafting recipe. Each entry is `(BlockId, count)`
 /// the player must place into the 2x2 grid (order doesn't matter).
@@ -1572,6 +1572,10 @@ struct Voxel {
     /// positive the sky washes toward white. Decays each frame
     /// via the update tick.
     lightning_flash: f32,
+    /// Accumulator that fires periodic snow-layer placement
+    /// while weather=2 (host-only). Drives the visual snow
+    /// blanket that grows on top of nearby grass voxels.
+    snow_accum: f32,
     /// Seconds until the next lightning strike attempt while
     /// weather=1. Initialised to a positive value so the first
     /// strike isn't instant on /weather rain.
@@ -4648,6 +4652,7 @@ impl Voxel {
             freeze_time: false,
             weather: 0,
             lightning_flash: 0.0,
+            snow_accum: 0.0,
             next_lightning_at: 6.0,
             muted_players: HashSet::new(),
             head_bob_phase: 0.0,
@@ -5339,6 +5344,65 @@ impl Voxel {
         // flakes). Both stay purely visual. Skips spawning while
         // the player has solid ceiling overhead so being indoors
         // doesn't fill the room with rain.
+        // Snow accumulation: while snowing, periodically blanket
+        // a grass / dirt / sand voxel within ~12 blocks of the
+        // player with a snow layer. Host-only so the edit goes
+        // through the authoritative replication path. Limits to
+        // one cell per fire so the world doesn't snap to a
+        // uniform white sheet instantly.
+        if self.weather == 2
+            && matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+        {
+            self.snow_accum += dt;
+            if self.snow_accum >= 0.4 {
+                self.snow_accum = 0.0;
+                let r = 12i32;
+                let mut rng = (self.net_tick as u32)
+                    .wrapping_mul(0x9E37_79B1);
+                let mut rand = || -> u32 {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    rng
+                };
+                let dx = (rand() % (2 * r as u32 + 1)) as i32 - r;
+                let dz = (rand() % (2 * r as u32 + 1)) as i32 - r;
+                let cx = self.player_pos.x.floor() as i32 + dx;
+                let cz = self.player_pos.z.floor() as i32 + dz;
+                let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+                if let Some(sy) =
+                    self.surface_y_below(cx, cz, ceiling)
+                {
+                    let surface = self.world.get([cx, sy, cz]).0;
+                    let above = self.world.get([cx, sy + 1, cz]).0;
+                    // Only blanket grass / dirt / sand / cobble;
+                    // air above so we don't overwrite an
+                    // existing block.
+                    if matches!(surface, 2 | 3 | 4 | 8) && above == 0 {
+                        let voxel = [cx, sy + 1, cz];
+                        let edit = EditMsg {
+                            x: voxel[0],
+                            y: voxel[1],
+                            z: voxel[2],
+                            block: 15,
+                        };
+                        self.world_set_tracked(voxel, BlockId(15));
+                        let coords = Self::affected_chunks(voxel);
+                        self.rebuild_chunks(&coords);
+                        let cfg = bincode::config::standard();
+                        if let NetRole::Server { server, .. } = &mut self.net
+                        {
+                            self.edit_history.push(edit);
+                            if let Ok(buf) =
+                                bincode::serde::encode_to_vec(edit, cfg)
+                            {
+                                server.broadcast_bytes("vx.edit", buf);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut sheltered = false;
         if self.weather == 1 || self.weather == 2 {
             let px = self.player_pos.x.floor() as i32;
@@ -11696,7 +11760,25 @@ impl AppHandler for Voxel {
                     && min.y < voxel_max[1]
                     && max.z > voxel_min[2]
                     && min.z < voxel_max[2];
-                if !overlaps {
+                // Torches need at least one solid neighbour
+                // (floor or wall) to mount on.
+                let torch_unsupported = block.0 == TORCH_ID && {
+                    let q = hit.place_at;
+                    let below = self
+                        .world
+                        .get([q[0], q[1] - 1, q[2]])
+                        .is_air();
+                    let walls_clear = [
+                        [q[0] - 1, q[1], q[2]],
+                        [q[0] + 1, q[1], q[2]],
+                        [q[0], q[1], q[2] - 1],
+                        [q[0], q[1], q[2] + 1],
+                    ]
+                    .iter()
+                    .all(|v| self.world.get(*v).is_air());
+                    below && walls_clear
+                };
+                if !overlaps && !torch_unsupported {
                     let edit = EditMsg {
                         x: hit.place_at[0],
                         y: hit.place_at[1],
@@ -11904,7 +11986,7 @@ impl AppHandler for Voxel {
         let raw_elev = theta.sin();
         // 3.0 at noon, ~0.4 at midnight (soft moonlight), smooth
         // transition through the horizon. Clamp avoids negatives.
-        let sun_intensity = (1.7 + raw_elev * 1.3).clamp(0.4, 3.0);
+        let sun_intensity = (1.5 + raw_elev * 1.5).clamp(0.10, 3.0);
         renderer.set_sun_intensity(sun_intensity);
         // Sun + moon as 3D meshes far away. Going through the
         // mesh3d pass means the depth buffer occludes them when
@@ -11996,22 +12078,91 @@ impl AppHandler for Voxel {
             );
         }
         // Render every torch as a thin wooden pillar + a small
-        // glowing tip, replacing the previously-meshed full-cube
-        // voxel shape. Uses the player_cube handle scaled into
-        // a torch-shaped box.
+        // glowing tip. Orientation is derived from the world
+        // each frame: if the voxel directly below is solid the
+        // torch stands upright; otherwise it leans toward the
+        // first neighbouring solid block (wall-mount).
         if !self.torch_positions.is_empty() {
             let cube = *self
                 .player_cube
                 .get_or_insert_with(|| renderer.cube_handle());
             for p in self.torch_positions.iter() {
+                // Pick orientation:
+                //   (dx, dz, lean angle around X/Z, tilt_dir):
+                //   (0, 0) = floor torch.
+                let below = self.world.get([p[0], p[1] - 1, p[2]]);
+                let neighbours = [
+                    ([p[0] - 1, p[1], p[2]], (-1, 0)),
+                    ([p[0] + 1, p[1], p[2]], (1, 0)),
+                    ([p[0], p[1], p[2] - 1], (0, -1)),
+                    ([p[0], p[1], p[2] + 1], (0, 1)),
+                ];
+                let (lean_x, lean_z) = if !below.is_air() {
+                    (0i32, 0i32)
+                } else {
+                    let mut found = (0, 0);
+                    for (v, (dx, dz)) in neighbours.iter() {
+                        if !self.world.get(*v).is_air() {
+                            // Lean direction points AWAY from
+                            // the wall so the flame ends up on
+                            // the room side.
+                            found = (-dx, -dz);
+                            break;
+                        }
+                    }
+                    found
+                };
                 let cx = p[0] as f32 + 0.5;
                 let cy = p[1] as f32;
                 let cz = p[2] as f32 + 0.5;
-                // Stick: thin vertical pillar.
+                // Build a transform: floor torch points up;
+                // wall torch tilts ~30 deg toward the lean dir
+                // + shifts toward the supporting wall.
+                let (stick_pos, stick_rot, tip_pos) =
+                    if lean_x == 0 && lean_z == 0 {
+                        (
+                            Vec3::new(cx, cy + 0.35, cz),
+                            glam::Quat::IDENTITY,
+                            Vec3::new(cx, cy + 0.78, cz),
+                        )
+                    } else {
+                        let tilt_axis = if lean_x != 0 {
+                            Vec3::Z
+                        } else {
+                            Vec3::X
+                        };
+                        let tilt_sign = if lean_x != 0 {
+                            -lean_x as f32
+                        } else {
+                            lean_z as f32
+                        };
+                        let angle = 0.55 * tilt_sign;
+                        let rot = glam::Quat::from_axis_angle(
+                            tilt_axis, angle,
+                        );
+                        // Shift the torch base toward the wall
+                        // it's mounted on so the foot sits on
+                        // the supporting block.
+                        let shift_x = -lean_x as f32 * 0.42;
+                        let shift_z = -lean_z as f32 * 0.42;
+                        let sx = cx + shift_x;
+                        let sz = cz + shift_z;
+                        let sy = cy + 0.45;
+                        let tip_x = sx
+                            + lean_x as f32 * 0.18;
+                        let tip_z = sz
+                            + lean_z as f32 * 0.18;
+                        let tip_y = sy + 0.32;
+                        (
+                            Vec3::new(sx, sy, sz),
+                            rot,
+                            Vec3::new(tip_x, tip_y, tip_z),
+                        )
+                    };
                 let stick = Mat4::from_scale_rotation_translation(
                     Vec3::new(0.12, 0.7, 0.12),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + 0.35, cz),
+                    stick_rot,
+                    stick_pos,
                 );
                 renderer.draw_mesh_pbr(
                     cube,
@@ -12032,14 +12183,18 @@ impl AppHandler for Voxel {
                 let flicker_t =
                     (self.day_time * 10.0 + phase_f).sin();
                 let scale = 0.16 + 0.025 * flicker_t;
-                let tip_y = cy + 0.78 + 0.015 * flicker_t;
+                let tip_pos = Vec3::new(
+                    tip_pos.x,
+                    tip_pos.y + 0.015 * flicker_t,
+                    tip_pos.z,
+                );
                 let r = 1.0;
                 let g = (0.72 + 0.10 * flicker_t).clamp(0.0, 1.0);
                 let b = (0.25 + 0.08 * flicker_t).clamp(0.0, 1.0);
                 let tip = Mat4::from_scale_rotation_translation(
                     Vec3::splat(scale),
                     glam::Quat::IDENTITY,
-                    Vec3::new(cx, tip_y, cz),
+                    tip_pos,
                 );
                 renderer.draw_mesh_pbr(
                     cube,
