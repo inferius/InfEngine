@@ -2366,6 +2366,28 @@ impl Voxel {
         std::path::PathBuf::from("voxel_demo_mp.config")
     }
 
+    /// Resolve the optional message-of-the-day file path. Lives
+    /// next to the exe so a host can hand-edit `motd.txt`. None
+    /// when the file isn't present.
+    fn motd_lines() -> Vec<String> {
+        let path = if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            dir.join("motd.txt")
+        } else {
+            std::path::PathBuf::from("motd.txt")
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => text
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(8)
+                .map(|s| s.to_string())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Persist user-facing settings (name, sensitivity, toggles)
     /// to disk as a tiny key=value text file. Called from the
     /// Settings panel's Back button + on shutdown so the next run
@@ -6995,6 +7017,20 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "motd" => {
+                            let lines = Self::motd_lines();
+                            if lines.is_empty() {
+                                local_lines.push(
+                                    "(no motd.txt next to exe)"
+                                        .to_string(),
+                                );
+                            } else {
+                                for l in lines {
+                                    local_lines.push(format!("[MOTD] {l}"));
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "version" | "ver" => {
                             // Print the build's CARGO_PKG_VERSION
                             // plus the active net role so quick
@@ -9176,6 +9212,16 @@ impl AppHandler for Voxel {
         // chosen identity instead of a fresh random Player####.
         self.load_config();
         self.session_started = Some(std::time::Instant::now());
+        // Drop the MOTD lines into the local chat log on
+        // startup so the player sees the host's welcome banner
+        // immediately. Empty/missing file = no-op.
+        let motd = Self::motd_lines();
+        if !motd.is_empty() {
+            let now = std::time::Instant::now();
+            for line in motd {
+                self.chat_log.push((now, format!("[MOTD] {line}")));
+            }
+        }
         // Pick a default world seed for solo / offline play so
         // each cold start gets a different layout. Hosts override
         // via start_hosting; persisted state will eventually load
