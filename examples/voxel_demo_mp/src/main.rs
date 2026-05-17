@@ -5516,21 +5516,36 @@ impl AppHandler for Voxel {
         if !remote_iter.is_empty() {
             let cube = self.player_cube.get_or_insert_with(|| renderer.cube_handle());
             for p in remote_iter {
-                let m = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.6, 1.7, 0.6),
-                    glam::Quat::from_rotation_y(p.yaw),
-                    Vec3::new(p.pos[0], p.pos[1] - 0.85, p.pos[2]),
-                );
-                // Hash id to a stable colour.
+                // Hash id to a stable colour + a slightly cooler
+                // head tone so the two parts read as separate body
+                // segments instead of a single block.
                 let h = (p.id.wrapping_mul(2654435761)) as f32 / u32::MAX as f32;
                 let tau = std::f32::consts::TAU;
-                let color = [
+                let body_color = [
                     (0.4 + 0.5 * (h * tau).sin().abs()).min(1.0),
                     (0.4 + 0.5 * ((h + 0.33) * tau).sin().abs()).min(1.0),
                     (0.4 + 0.5 * ((h + 0.66) * tau).sin().abs()).min(1.0),
                     1.0,
                 ];
-                renderer.draw_mesh_pbr(*cube, m.to_cols_array(), color, 0.0, 0.7);
+                let head_color = [
+                    (body_color[0] * 0.85).min(1.0),
+                    (body_color[1] * 0.85).min(1.0),
+                    (body_color[2] * 0.85).min(1.0),
+                    1.0,
+                ];
+                let rot = glam::Quat::from_rotation_y(p.yaw);
+                let body = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.65, 1.0, 0.4),
+                    rot,
+                    Vec3::new(p.pos[0], p.pos[1] - 1.2, p.pos[2]),
+                );
+                renderer.draw_mesh_pbr(*cube, body.to_cols_array(), body_color, 0.0, 0.7);
+                let head = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.55, 0.55, 0.55),
+                    rot,
+                    Vec3::new(p.pos[0], p.pos[1] - 0.45, p.pos[2]),
+                );
+                renderer.draw_mesh_pbr(*cube, head.to_cols_array(), head_color, 0.0, 0.7);
             }
         }
         // Render every known sheep (server: from `mobs`, client:
