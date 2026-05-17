@@ -2186,6 +2186,92 @@ impl Voxel {
         }
     }
 
+    /// Authoritative decay pass. Flow water (depth >= 1)
+    /// evaporates when it loses support:
+    ///  - no horizontal neighbour with strictly lower depth, AND
+    ///  - no water directly above (a feeding stream).
+    ///
+    /// Sources (depth 0) never decay. Runs every 8th host tick
+    /// to keep churn cheap on big pools.
+    fn tick_water_decay(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if !self.net_tick.is_multiple_of(8) {
+            return;
+        }
+        if self.water_depth.is_empty() {
+            return;
+        }
+        // Snapshot flow cells so we can release the borrow on
+        // `self.water_depth` before mutating the world.
+        let candidates: Vec<([i32; 3], u8)> = self
+            .water_depth
+            .iter()
+            .filter(|(_, d)| **d > 0)
+            .take(64)
+            .map(|(v, d)| (*v, *d))
+            .collect();
+        let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
+        for (pos, depth) in &candidates {
+            if self.world.get(*pos).0 != WATER_ID {
+                continue;
+            }
+            let mut supported = false;
+            let horiz = [
+                [pos[0] + 1, pos[1], pos[2]],
+                [pos[0] - 1, pos[1], pos[2]],
+                [pos[0], pos[1], pos[2] + 1],
+                [pos[0], pos[1], pos[2] - 1],
+            ];
+            for n in &horiz {
+                if self.world.get(*n).0 == WATER_ID {
+                    let nd = self
+                        .water_depth
+                        .get(n)
+                        .copied()
+                        .unwrap_or(0);
+                    if nd < *depth {
+                        supported = true;
+                        break;
+                    }
+                }
+            }
+            if !supported {
+                let above = [pos[0], pos[1] + 1, pos[2]];
+                if self.world.get(above).0 == WATER_ID {
+                    supported = true;
+                }
+            }
+            if !supported {
+                to_evaporate.push(*pos);
+            }
+        }
+        if to_evaporate.is_empty() {
+            return;
+        }
+        for pos in &to_evaporate {
+            self.world_set_tracked(*pos, BlockId::AIR);
+            let coords = Self::affected_chunks(*pos);
+            self.rebuild_chunks(&coords);
+        }
+        let cfg = bincode::config::standard();
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for pos in &to_evaporate {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: 0,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+        }
+    }
+
     /// Server-side mob update: gravity-snap to surface, walk
     /// toward target, retarget on arrival / timeout, spawn new
     /// sheep when the cap allows. Builds the broadcast list as a
@@ -12739,6 +12825,9 @@ impl AppHandler for Voxel {
         // resting on solid ground extends one cell outward
         // until the spread depth caps at `MAX_WATER_SPREAD`.
         self.tick_water_spread();
+        // Decay isolated flow water so breaking a source
+        // drains the dependent pool over the next few ticks.
+        self.tick_water_decay();
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
