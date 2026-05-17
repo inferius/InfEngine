@@ -8479,6 +8479,18 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "grid" => {
+                            self.show_chunk_grid = !self.show_chunk_grid;
+                            local_lines.push(format!(
+                                "Chunk grid {}",
+                                if self.show_chunk_grid {
+                                    "ON"
+                                } else {
+                                    "OFF"
+                                }
+                            ));
+                            handled_locally = true;
+                        }
                         "chunkinfo" => {
                             // Diagnostic: chunk count + size +
                             // pending queue + edit history length.
