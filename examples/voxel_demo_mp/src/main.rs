@@ -7226,6 +7226,37 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "serverinfo" => {
+                            // Diagnostics dump: host name +
+                            // connected client count + active
+                            // role. Works in any role.
+                            let role = match &self.net {
+                                NetRole::Offline => "offline".to_string(),
+                                NetRole::Server { server, .. } => {
+                                    format!(
+                                        "host ({} clients)",
+                                        server.client_count()
+                                    )
+                                }
+                                NetRole::Client { client, .. } => {
+                                    format!(
+                                        "client id={:?}",
+                                        client.client_id
+                                    )
+                                }
+                            };
+                            let host = match &self.net {
+                                NetRole::Server { .. } => {
+                                    self.host_name_buf.clone()
+                                }
+                                _ => "n/a".to_string(),
+                            };
+                            local_lines.push(format!(
+                                "Server: {host}  Role: {role}  Seed: {}",
+                                world_seed()
+                            ));
+                            handled_locally = true;
+                        }
                         "version" | "ver" => {
                             // Print the build's CARGO_PKG_VERSION
                             // plus the active net role so quick
