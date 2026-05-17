@@ -4628,12 +4628,11 @@ impl Voxel {
             self.step_cooldown = 0.0;
         }
 
-        // Rain spawner. While weather=1 we drop ~30 thin
-        // streak particles per second within a 24-block radius
-        // above the player. They free-fall via gravity and die
-        // after a short lifetime. Cheap and totally visual.
-        if self.weather == 1 {
-            const RAIN_PER_FRAME: u32 = 20;
+        // Precipitation spawner. weather=1 = rain (fast falling
+        // blue streaks); weather=2 = snow (slow drifting white
+        // flakes). Both stay purely visual.
+        if self.weather == 1 || self.weather == 2 {
+            const FALL_PER_FRAME: u32 = 20;
             let mut rng: u32 = ((self.net_tick as u32)
                 .wrapping_mul(0x9E37_79B1))
                 ^ 0xCAFE_F00D;
@@ -4648,17 +4647,35 @@ impl Voxel {
                 self.player_pos.y + 14.0,
                 self.player_pos.z,
             ];
-            for _ in 0..RAIN_PER_FRAME {
+            for _ in 0..FALL_PER_FRAME {
                 let dx = (rand01() * 2.0 - 1.0) * 22.0;
                 let dz = (rand01() * 2.0 - 1.0) * 22.0;
+                let (vel, color, size, life) = if self.weather == 1 {
+                    (
+                        [0.0_f32, -16.0, 0.0_f32],
+                        [0.55, 0.65, 0.85, 0.65],
+                        0.05,
+                        1.2,
+                    )
+                } else {
+                    // Snow: small lateral drift + slow descent.
+                    let drift_x = (rand01() * 2.0 - 1.0) * 0.6;
+                    let drift_z = (rand01() * 2.0 - 1.0) * 0.6;
+                    (
+                        [drift_x, -1.6, drift_z],
+                        [0.92, 0.95, 1.00, 0.85],
+                        0.08,
+                        7.0,
+                    )
+                };
                 self.particles.particles.push(
                     infengine_particles::Particle {
                         position: [base[0] + dx, base[1], base[2] + dz],
-                        velocity: [0.0, -16.0, 0.0],
-                        color: [0.55, 0.65, 0.85, 0.65],
-                        size: 0.05,
+                        velocity: vel,
+                        color,
+                        size,
                         age: 0.0,
-                        lifetime: 1.2,
+                        lifetime: life,
                     },
                 );
             }
@@ -6901,6 +6918,7 @@ impl Voxel {
                             // their visuals to match.
                             let kind = match arg.to_lowercase().as_str() {
                                 "rain" => Some(1u8),
+                                "snow" => Some(2u8),
                                 "clear" | "" => Some(0u8),
                                 _ => None,
                             };
@@ -6919,7 +6937,11 @@ impl Voxel {
                                     }
                                     local_lines.push(format!(
                                         "Weather: {}",
-                                        if k == 1 { "rain" } else { "clear" }
+                                        match k {
+                                            1 => "rain",
+                                            2 => "snow",
+                                            _ => "clear",
+                                        }
                                     ));
                                 }
                                 None => {
@@ -8522,11 +8544,17 @@ impl AppHandler for Voxel {
         // night). The sky color is a perceptual mix between three
         // anchor swatches keyed on the sun's elevation.
         let (sun_dir, mut sky) = day_night(self.day_time);
-        // During rain we wash the sky toward a uniform overcast
-        // grey so the visual match the falling particles.
+        // Precipitation re-tints the sky. Rain: dark stormy
+        // grey. Snow: lighter, slightly blue-tinged overcast.
         if self.weather == 1 {
             let target = [0.42, 0.46, 0.52];
             let t = 0.6;
+            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
+            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
+            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
+        } else if self.weather == 2 {
+            let target = [0.70, 0.74, 0.80];
+            let t = 0.55;
             sky[0] = sky[0] * (1.0 - t) + target[0] * t;
             sky[1] = sky[1] * (1.0 - t) + target[1] * t;
             sky[2] = sky[2] * (1.0 - t) + target[2] * t;
