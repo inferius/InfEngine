@@ -8982,6 +8982,16 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
         sides: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
     },
+    BlockType {
+        // Snow cap. Caps mountain biome heights above the snow
+        // line in gen_classic; otherwise behaves like a stone-y
+        // surface block. Falls back to a near-white solid colour
+        // when no snow.png ships with the assets pack.
+        id: 15, name: "snow", color: [0.95, 0.97, 1.00], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -9348,10 +9358,18 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
         if wy < h - 3 && cave_at(wx, wy as f32, wz) {
             return BlockId::AIR;
         }
+        // Surface block per biome. Mountains above the snow line
+        // swap to snow (id 15) for visual identity.
         let surface = match biome {
             Biome::Desert => BlockId(4),
             Biome::Plains => BlockId(3),
-            Biome::Mountain => BlockId(1),
+            Biome::Mountain => {
+                if h >= 26 {
+                    BlockId(15)
+                } else {
+                    BlockId(1)
+                }
+            }
         };
         let near_surface = match biome {
             Biome::Desert => BlockId(4),
