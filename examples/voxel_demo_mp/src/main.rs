@@ -1561,6 +1561,10 @@ struct Voxel {
     /// emit chat lines on the day <-> night transitions without
     /// spamming every frame.
     was_night: bool,
+    /// Tracks the previous tick's submerged state so we can
+    /// fire a splash sting + droplet particles on the air ->
+    /// water transition (and a quieter exit cue going out).
+    was_in_water: bool,
     /// `/lock` toggle on the host. When on, client-issued
     /// `vx.edit` packets are dropped so only the host can modify
     /// the world. Useful for showcase/no-grief sessions.
@@ -4978,6 +4982,7 @@ impl Voxel {
             god_mode: false,
             invuln_remaining: 0.0,
             was_night: false,
+            was_in_water: false,
             world_locked: false,
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
@@ -5968,6 +5973,49 @@ impl Voxel {
             // doesn't punish on the next grounded transition.
             self.fall_start_y = None;
         }
+        // Splash on the air -> water transition: short droplet
+        // burst + click SFX. Quieter cue going the other way.
+        if in_water != self.was_in_water {
+            let base = [
+                self.player_pos.x,
+                self.player_pos.y - PLAYER_HEIGHT * 0.5,
+                self.player_pos.z,
+            ];
+            if in_water {
+                self.sfx_at("splash", base, |a, g| {
+                    let _ = a.play_click(280.0, 0.22 * g);
+                });
+                let mut rng: u32 = ((self.net_tick as u32)
+                    .wrapping_mul(0xBEEF_0BAD))
+                    ^ 0x5EA_5EA;
+                let mut rand01 = || -> f32 {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+                };
+                for _ in 0..18 {
+                    let vx = (rand01() * 2.0 - 1.0) * 2.4;
+                    let vy = rand01() * 2.6 + 1.5;
+                    let vz = (rand01() * 2.0 - 1.0) * 2.4;
+                    self.particles.particles.push(
+                        infengine_particles::Particle {
+                            position: base,
+                            velocity: [vx, vy, vz],
+                            color: [0.65, 0.80, 0.95, 0.95],
+                            size: 0.07,
+                            age: 0.0,
+                            lifetime: 0.45,
+                        },
+                    );
+                }
+            } else {
+                self.sfx_at("splash_out", base, |a, g| {
+                    let _ = a.play_click(220.0, 0.12 * g);
+                });
+            }
+        }
+        self.was_in_water = in_water;
         // Axis-resolved voxel AABB collision.
         let was_grounded = self.grounded;
         let delta = self.player_vel * dt;
