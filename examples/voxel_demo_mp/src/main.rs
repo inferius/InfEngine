@@ -1638,6 +1638,12 @@ struct Voxel {
     /// and pushes the new resting position back. Drained when
     /// the column hits solid ground.
     water_active: HashSet<[i32; 3]>,
+    /// Every water voxel currently in the world. Maintained on
+    /// every peer (host + clients) so the dedicated water-slab
+    /// render path can iterate without scanning chunks. Updated
+    /// in `world_set_tracked` + chunk-load scans alongside the
+    /// torch / snow trackers.
+    water_positions: HashSet<[i32; 3]>,
     /// Spread depth from the nearest source. 0 = source (pond
     /// gen + manual place), 1..=MAX_WATER_SPREAD = flow. Missing
     /// entry = source (default 0). Capped so a single source
@@ -1690,6 +1696,10 @@ struct Voxel {
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
+    /// Dedicated cube handle for water voxels. Tagged transparent
+    /// so it routes through the alpha-blended mesh3d pipeline
+    /// without dragging player_cube / mob meshes along.
+    water_cube: Option<MeshHandle>,
     /// Dedicated cube mesh for sheep bodies. Has its own
     /// `AlbedoHandle` binding so the texture (loaded from
     /// `assets/textures/entity/sheep/sheep.tga`) doesn't leak onto
@@ -1793,8 +1803,10 @@ impl Voxel {
         if block.0 == WATER_ID {
             self.water_active.insert(voxel);
             self.water_depth.entry(voxel).or_insert(0);
+            self.water_positions.insert(voxel);
         } else {
             self.water_depth.remove(&voxel);
+            self.water_positions.remove(&voxel);
         }
     }
 
@@ -2032,6 +2044,11 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
+        // Slow the falling cadence so a poured column reads as
+        // a stream rather than teleporting downward.
+        if !self.net_tick.is_multiple_of(2) {
+            return;
+        }
         if self.water_active.is_empty() {
             return;
         }
@@ -2111,7 +2128,7 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
-        if !self.net_tick.is_multiple_of(4) {
+        if !self.net_tick.is_multiple_of(10) {
             return;
         }
         if self.water_active.is_empty() {
@@ -2249,7 +2266,7 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
-        if !self.net_tick.is_multiple_of(8) {
+        if !self.net_tick.is_multiple_of(16) {
             return;
         }
         if self.water_depth.is_empty() {
@@ -5291,6 +5308,7 @@ impl Voxel {
             day_time: DAY_LENGTH_S * 0.3,
             net: NetRole::Offline,
             player_cube: None,
+            water_cube: None,
             sheep_mesh: None,
             sheep_head_mesh: None,
             voxel_atlas: None,
@@ -5359,6 +5377,7 @@ impl Voxel {
             snow_positions: HashMap::new(),
             water_active: HashSet::new(),
             water_depth: HashMap::new(),
+            water_positions: HashSet::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -5422,6 +5441,7 @@ impl Voxel {
                                     self.torch_positions.insert(v);
                                 } else if b.0 == WATER_ID {
                                     self.water_active.insert(v);
+                                    self.water_positions.insert(v);
                                 }
                             }
                         }
@@ -5557,11 +5577,13 @@ impl Voxel {
                                     origin.z as i32 + lz,
                                 ]);
                             } else if b.0 == WATER_ID {
-                                self.water_active.insert([
+                                let wv = [
                                     origin.x as i32 + lx,
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
-                                ]);
+                                ];
+                                self.water_active.insert(wv);
+                                self.water_positions.insert(wv);
                             }
                         }
                     }
@@ -5585,6 +5607,12 @@ impl Voxel {
                     if sub.vertices.is_empty() || sub.indices.is_empty() {
                         continue;
                     }
+                    // Water uses a dedicated per-voxel slab render
+                    // path so depth-based slope works; skip the
+                    // chunk-mesh build for it.
+                    if sub.block.0 == WATER_ID {
+                        continue;
+                    }
                     let handle = renderer.create_mesh(
                         &format!("voxel_chunk_{}_{}_{}_b{}", cc[0], cc[1], cc[2], sub.block.0),
                         &sub.vertices,
@@ -5592,9 +5620,6 @@ impl Voxel {
                     );
                     if let Some(a) = atlas.clone() {
                         renderer.bind_mesh_albedo_arc(handle, a);
-                    }
-                    if sub.block.0 == WATER_ID {
-                        renderer.set_mesh_transparent(handle, true);
                     }
                     self.chunk_meshes.push((cc, sub.block, handle));
                 }
@@ -5676,7 +5701,10 @@ impl Voxel {
                 // through dedicated world-pass meshes (thin
                 // torch + thin snow slab) instead of as full
                 // cube voxels.
-                if sub.block.0 == TORCH_ID || sub.block.0 == 15 {
+                if sub.block.0 == TORCH_ID
+                    || sub.block.0 == 15
+                    || sub.block.0 == WATER_ID
+                {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -5689,9 +5717,6 @@ impl Voxel {
                 );
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
-                }
-                if sub.block.0 == WATER_ID {
-                    renderer.set_mesh_transparent(handle, true);
                 }
                 self.chunk_meshes.push((*coord, sub.block, handle));
             }
@@ -5718,7 +5743,10 @@ impl Voxel {
                 // through dedicated world-pass meshes (thin
                 // torch + thin snow slab) instead of as full
                 // cube voxels.
-                if sub.block.0 == TORCH_ID || sub.block.0 == 15 {
+                if sub.block.0 == TORCH_ID
+                    || sub.block.0 == 15
+                    || sub.block.0 == WATER_ID
+                {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -5731,9 +5759,6 @@ impl Voxel {
                 );
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
-                }
-                if sub.block.0 == WATER_ID {
-                    renderer.set_mesh_transparent(handle, true);
                 }
                 self.chunk_meshes.push((coord, sub.block, handle));
             }
@@ -13313,6 +13338,59 @@ impl AppHandler for Voxel {
                     [0.97, 0.98, 1.0, 1.0],
                     0.0,
                     0.9,
+                );
+            }
+        }
+        // Water voxels render as translucent slabs whose height
+        // depends on the source-distance depth:
+        //   depth 0 (source)    -> 0.90 (almost full, leaves a
+        //                          tiny lip so the surface reads
+        //                          like water, not a solid cube)
+        //   depth 1             -> 0.75
+        //   depth 2             -> 0.60
+        //   depth 3             -> 0.45
+        //   depth 4             -> 0.30
+        // If the voxel directly above is also water, the cell
+        // is part of a falling column and renders full-height
+        // so the stream stays visually continuous.
+        if !self.water_positions.is_empty() {
+            let cube = *self.water_cube.get_or_insert_with(|| {
+                let h = renderer.cube_handle();
+                renderer.set_mesh_transparent(h, true);
+                h
+            });
+            for p in self.water_positions.iter() {
+                let cx = p[0] as f32 + 0.5;
+                let cy = p[1] as f32;
+                let cz = p[2] as f32 + 0.5;
+                let above = self.world.get([p[0], p[1] + 1, p[2]]);
+                let height = if above.0 == WATER_ID {
+                    1.0
+                } else {
+                    let depth = self
+                        .water_depth
+                        .get(p)
+                        .copied()
+                        .unwrap_or(0);
+                    match depth {
+                        0 => 0.90,
+                        1 => 0.75,
+                        2 => 0.60,
+                        3 => 0.45,
+                        _ => 0.30,
+                    }
+                };
+                let slab = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, height, 1.0),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy + height * 0.5, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    slab.to_cols_array(),
+                    [0.20, 0.40, 0.85, 0.65],
+                    0.0,
+                    0.18,
                 );
             }
         }
