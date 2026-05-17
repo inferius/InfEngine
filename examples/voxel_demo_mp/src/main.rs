@@ -8483,7 +8483,16 @@ impl AppHandler for Voxel {
         // axis) and the clear color (sunrise -> noon -> sunset ->
         // night). The sky color is a perceptual mix between three
         // anchor swatches keyed on the sun's elevation.
-        let (sun_dir, sky) = day_night(self.day_time);
+        let (sun_dir, mut sky) = day_night(self.day_time);
+        // During rain we wash the sky toward a uniform overcast
+        // grey so the visual match the falling particles.
+        if self.weather == 1 {
+            let target = [0.42, 0.46, 0.52];
+            let t = 0.6;
+            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
+            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
+            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
+        }
         renderer.set_sun_dir(sun_dir);
         renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
         // Tie sun intensity to the real (un-clamped) elevation so
