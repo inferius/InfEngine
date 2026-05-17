@@ -9561,9 +9561,15 @@ impl Voxel {
                                 ui.colored_label(col, line);
                             }
                             if chat_open {
-                                let resp = ui.add(
+                                // `add_sized` forces the widget to
+                                // a hard 720x36 rect; the bare
+                                // `TextEdit::desired_width` hint
+                                // gets squashed by the parent
+                                // `Area`'s auto-shrink so the box
+                                // ended up tiny regardless.
+                                let resp = ui.add_sized(
+                                    [720.0, 36.0],
                                     egui::TextEdit::singleline(chat_buf)
-                                        .desired_width(640.0)
                                         .font(egui::FontId::proportional(18.0))
                                         .margin(egui::Vec2::new(8.0, 6.0))
                                         .hint_text("press T to chat, Enter sends"),
