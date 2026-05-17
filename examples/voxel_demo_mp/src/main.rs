@@ -6067,7 +6067,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /sleep, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
                                     .to_string(),
                             );
                         }
@@ -6096,6 +6096,36 @@ impl Voxel {
                             // + when stuck in geometry.
                             let dmg = self.player_health + 1.0;
                             self.apply_player_damage(dmg);
+                            handled_locally = true;
+                        }
+                        "sleep" => {
+                            // Skip the night: if the sun is below
+                            // the horizon, fast-forward day_time
+                            // to morning. Daytime use is a no-op
+                            // (matches the MC bed rule). Host-only
+                            // in MP so the night gets skipped for
+                            // every connected player via the
+                            // existing day_time broadcast.
+                            let phase = (self.day_time / DAY_LENGTH_S)
+                                .rem_euclid(1.0);
+                            let raw_elev =
+                                (phase * std::f32::consts::TAU).sin();
+                            let is_night = raw_elev < -0.05;
+                            if !is_night {
+                                local_lines.push(
+                                    "You can only sleep at night.".to_string(),
+                                );
+                            } else if matches!(self.net, NetRole::Client { .. }) {
+                                local_lines.push(
+                                    "Only the host can advance time.".to_string(),
+                                );
+                            } else {
+                                self.day_time = DAY_LENGTH_S * 0.20;
+                                self.last_day_broadcast = None; // force resend
+                                local_lines.push(
+                                    "You slept until morning.".to_string(),
+                                );
+                            }
                             handled_locally = true;
                         }
                         "sethome" => {
