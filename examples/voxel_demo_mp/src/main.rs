@@ -5607,10 +5607,11 @@ impl Voxel {
                     if sub.vertices.is_empty() || sub.indices.is_empty() {
                         continue;
                     }
-                    // Water uses a dedicated per-voxel slab render
-                    // path so depth-based slope works; skip the
-                    // chunk-mesh build for it.
-                    if sub.block.0 == WATER_ID {
+                    // Skip blocks that own a dedicated render path
+                    // (torch, snow, water - everything marked
+                    // `F_DEDICATED_RENDER`). They get drawn by
+                    // per-voxel slab / pillar passes downstream.
+                    if block_skips_chunk_mesh(sub.block) {
                         continue;
                     }
                     let handle = renderer.create_mesh(
@@ -5701,10 +5702,7 @@ impl Voxel {
                 // through dedicated world-pass meshes (thin
                 // torch + thin snow slab) instead of as full
                 // cube voxels.
-                if sub.block.0 == TORCH_ID
-                    || sub.block.0 == 15
-                    || sub.block.0 == WATER_ID
-                {
+                if block_skips_chunk_mesh(sub.block) {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -5743,10 +5741,7 @@ impl Voxel {
                 // through dedicated world-pass meshes (thin
                 // torch + thin snow slab) instead of as full
                 // cube voxels.
-                if sub.block.0 == TORCH_ID
-                    || sub.block.0 == 15
-                    || sub.block.0 == WATER_ID
-                {
+                if block_skips_chunk_mesh(sub.block) {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -6351,7 +6346,7 @@ impl Voxel {
         // swim-up). Skipped in fly mode so /fly through water
         // still glides freely.
         let in_water = !self.fly_mode
-            && aabb_intersects_water(&self.world, self.player_pos);
+            && aabb_intersects_swim_medium(&self.world, self.player_pos);
         if in_water {
             // Cap fall speed - water resistance fights gravity.
             if self.player_vel.y < -1.8 {
@@ -12347,10 +12342,7 @@ impl AppHandler for Voxel {
                 self.player_pos,
                 forward,
                 6.0,
-                |b| {
-                    !b.is_air()
-                        && !matches!(b.0, TORCH_ID | 20 | 21 | 22)
-                },
+                |b| !b.is_air() && !block_is_ray_passable(b),
             )
         } else {
             None
@@ -12783,22 +12775,24 @@ impl AppHandler for Voxel {
                     && min.y < voxel_max[1]
                     && max.z > voxel_min[2]
                     && min.z < voxel_max[2];
-                // Block-occupied check: ray-pass-through decorations
-                // (torch, flowers) sit in the world as non-air voxels
-                // even though the raycast skips them. Treat them as
-                // "occupied" so RMB-place over a torch refuses
-                // instead of silently overwriting the torch.
-                let occupied = !self.world.get(hit.place_at).is_air();
+                // Block-occupied check: any non-air voxel marked
+                // `F_NO_PLACE` (torch, flowers, ...) blocks RMB
+                // placement so the player has to break the
+                // decoration first.
+                let occupied =
+                    block_is_placement_blocked(self.world.get(hit.place_at));
                 // Torches need at least one solid neighbour
-                // (floor or wall) to mount on. The neighbour
-                // check also rejects the supporting cell being a
-                // torch itself - torches can't hang off torches.
+                // (floor or wall) to mount on. A neighbour that's
+                // air OR another `F_NO_PLACE` decoration doesn't
+                // count as support - torches can't hang off
+                // torches / flowers.
                 let torch_unsupported = block.0 == TORCH_ID && {
                     let q = hit.place_at;
+                    let unsupportive = |b: BlockId| {
+                        b.is_air() || block_is_placement_blocked(b)
+                    };
                     let below_blk = self.world.get([q[0], q[1] - 1, q[2]]);
-                    let below_air = below_blk.is_air()
-                        || below_blk.0 == TORCH_ID
-                        || matches!(below_blk.0, 20..=22);
+                    let below_air = unsupportive(below_blk);
                     let walls_clear = [
                         [q[0] - 1, q[1], q[2]],
                         [q[0] + 1, q[1], q[2]],
@@ -12806,12 +12800,7 @@ impl AppHandler for Voxel {
                         [q[0], q[1], q[2] + 1],
                     ]
                     .iter()
-                    .all(|v| {
-                        let b = self.world.get(*v);
-                        b.is_air()
-                            || b.0 == TORCH_ID
-                            || matches!(b.0, 20..=22)
-                    });
+                    .all(|v| unsupportive(self.world.get(*v)));
                     below_air && walls_clear
                 };
                 if !overlaps && !torch_unsupported && !occupied {
@@ -13356,7 +13345,14 @@ impl AppHandler for Voxel {
         if !self.water_positions.is_empty() {
             let cube = *self.water_cube.get_or_insert_with(|| {
                 let h = renderer.cube_handle();
-                renderer.set_mesh_transparent(h, true);
+                // Water carries `F_TRANSPARENT_RENDER`, so route
+                // the dedicated cube through the alpha-blended
+                // pipeline. Generic check so a future liquid that
+                // sets the same flag picks up the same render path
+                // without extra wiring.
+                if block_is_transparent_render(BlockId(WATER_ID)) {
+                    renderer.set_mesh_transparent(h, true);
+                }
                 h
             });
             for p in self.water_positions.iter() {
@@ -14027,6 +14023,21 @@ struct TileSpec {
     keep_alpha: bool,
 }
 
+/// Bitmask flags carried on every `BlockType`. Each is a behaviour
+/// gate the engine checks instead of hard-coding block ids in the
+/// caller. Adding a new flag = one constant + one accessor; adding
+/// a new block keeps its flags additive on the table row.
+const F_RAY_PASS: u8 = 1 << 0; // raycast traverses through (decorations)
+const F_AABB_PASS: u8 = 1 << 1; // player AABB doesn't collide
+const F_NO_PLACE: u8 = 1 << 2; // RMB-place refuses to overwrite this voxel
+const F_TRANSPARENT_RENDER: u8 = 1 << 3; // alpha-blend pipeline, no shadow
+const F_SWIM: u8 = 1 << 4; // liquid: swim drag + buoyancy
+/// Block renders via a dedicated per-voxel mesh path (torches as
+/// pillars, snow / water as scaled slabs) so the chunk mesher
+/// skips it entirely. Saves the cost of generating face geometry
+/// only to discard it at registration time.
+const F_DEDICATED_RENDER: u8 = 1 << 5;
+
 /// One block kind's full definition. Adding a new block = one
 /// entry here + a hotbar slot below; the registry, atlas loader,
 /// UV lookup and opacity test all read from this table so there's
@@ -14036,6 +14047,11 @@ struct BlockType {
     name: &'static str,
     color: [f32; 3],
     transparent: bool,
+    /// Behaviour bitmask. See `F_*` constants above. `0` = solid
+    /// "normal" block. Set bits opt the block into ray pass-through,
+    /// passable collision, no-place semantics, transparent render
+    /// or swim mechanics.
+    flags: u8,
     top: TileSpec,
     bottom: TileSpec,
     sides: TileSpec,
@@ -14047,19 +14063,19 @@ const TILE_PX: u32 = 16;
 
 const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
-        id: 1, name: "stone", color: [0.50, 0.50, 0.55], transparent: false,
+        id: 1, name: "stone", color: [0.50, 0.50, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 2, name: "dirt", color: [0.45, 0.32, 0.20], transparent: false,
+        id: 2, name: "dirt", color: [0.45, 0.32, 0.20], transparent: false, flags: 0,
         top: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
         bottom: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
         sides: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
     },
     BlockType {
-        id: 3, name: "grass", color: [0.35, 0.62, 0.28], transparent: false,
+        id: 3, name: "grass", color: [0.35, 0.62, 0.28], transparent: false, flags: 0,
         top: TileSpec {
             col: 2, row: 0,
             files: &["grass_carried.png", "grass_top.png"],
@@ -14073,19 +14089,19 @@ const BLOCK_TYPES: &[BlockType] = &[
         },
     },
     BlockType {
-        id: 4, name: "sand", color: [0.92, 0.86, 0.62], transparent: false,
+        id: 4, name: "sand", color: [0.92, 0.86, 0.62], transparent: false, flags: 0,
         top: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
         bottom: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
         sides: TileSpec { col: 3, row: 0, files: &["sand.png"], keep_alpha: false },
     },
     BlockType {
-        id: 5, name: "wood", color: [0.55, 0.38, 0.22], transparent: false,
+        id: 5, name: "wood", color: [0.55, 0.38, 0.22], transparent: false, flags: 0,
         top: TileSpec { col: 3, row: 1, files: &["log_oak_top.png"], keep_alpha: false },
         bottom: TileSpec { col: 3, row: 1, files: &["log_oak_top.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 1, files: &["log_oak.png"], keep_alpha: false },
     },
     BlockType {
-        id: 6, name: "leaves", color: [0.24, 0.50, 0.20], transparent: true,
+        id: 6, name: "leaves", color: [0.24, 0.50, 0.20], transparent: true, flags: 0,
         top: TileSpec {
             col: 1, row: 1,
             files: &["leaves_oak.tga", "leaves_oak_carried.png", "leaves_oak_opaque.png"],
@@ -14103,49 +14119,50 @@ const BLOCK_TYPES: &[BlockType] = &[
         },
     },
     BlockType {
-        id: 7, name: "planks", color: [0.78, 0.60, 0.36], transparent: false,
+        id: 7, name: "planks", color: [0.78, 0.60, 0.36], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
     },
     BlockType {
-        id: 8, name: "cobble", color: [0.42, 0.42, 0.45], transparent: false,
+        id: 8, name: "cobble", color: [0.42, 0.42, 0.45], transparent: false, flags: 0,
         top: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
         bottom: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
         sides: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 9, name: "glass", color: [0.85, 0.92, 0.98], transparent: true,
+        id: 9, name: "glass", color: [0.85, 0.92, 0.98], transparent: true, flags: 0,
         top: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
         bottom: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
         sides: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
     },
     BlockType {
         id: 10, name: "torch", color: [1.00, 0.78, 0.40], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER,
         top: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
         sides: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
     },
     BlockType {
-        id: 11, name: "wool", color: [0.95, 0.95, 0.95], transparent: false,
+        id: 11, name: "wool", color: [0.95, 0.95, 0.95], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 3, files: &["wool.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 3, files: &["wool.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 3, files: &["wool.png"], keep_alpha: false },
     },
     BlockType {
-        id: 12, name: "meat", color: [0.85, 0.45, 0.40], transparent: false,
+        id: 12, name: "meat", color: [0.85, 0.45, 0.40], transparent: false, flags: 0,
         top: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
         bottom: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
         sides: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
     },
     BlockType {
-        id: 13, name: "coal", color: [0.30, 0.30, 0.30], transparent: false,
+        id: 13, name: "coal", color: [0.30, 0.30, 0.30], transparent: false, flags: 0,
         top: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
         bottom: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
         sides: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
     },
     BlockType {
-        id: 14, name: "iron", color: [0.75, 0.65, 0.55], transparent: false,
+        id: 14, name: "iron", color: [0.75, 0.65, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
         bottom: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
         sides: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
@@ -14160,6 +14177,7 @@ const BLOCK_TYPES: &[BlockType] = &[
         // tile assignments so the texture still gets sourced
         // from the atlas / asset pack.
         id: 15, name: "snow", color: [0.97, 0.98, 1.00], transparent: true,
+        flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
@@ -14168,19 +14186,19 @@ const BLOCK_TYPES: &[BlockType] = &[
     // rejects them from the place path. Atlas tiles fall back to
     // tinted swatches when no `pickaxe_*.png` ships in the pack.
     BlockType {
-        id: 16, name: "pickaxe_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        id: 16, name: "pickaxe_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
     },
     BlockType {
-        id: 17, name: "pickaxe_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        id: 17, name: "pickaxe_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 18, name: "pickaxe_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        id: 18, name: "pickaxe_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
@@ -14189,7 +14207,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // chicken-themed recipe slot - not placeable as a world
     // block, so the place path treats it like the pickaxes.
     BlockType {
-        id: 19, name: "feather", color: [0.95, 0.95, 0.95], transparent: false,
+        id: 19, name: "feather", color: [0.95, 0.95, 0.95], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
@@ -14199,18 +14217,21 @@ const BLOCK_TYPES: &[BlockType] = &[
     // procedural generator only spawns it on top of grass voxels.
     BlockType {
         id: 20, name: "flower", color: [0.95, 0.30, 0.30], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
         top: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
     },
     BlockType {
         id: 21, name: "flower_yellow", color: [1.00, 0.85, 0.20], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
         top: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
     },
     BlockType {
         id: 22, name: "flower_blue", color: [0.40, 0.55, 0.95], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
         top: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
@@ -14219,19 +14240,19 @@ const BLOCK_TYPES: &[BlockType] = &[
     // but reject placement; selected slot's `weapon_tier` boosts
     // the player's attack damage when fighting mobs / peers.
     BlockType {
-        id: 23, name: "sword_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        id: 23, name: "sword_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
     },
     BlockType {
-        id: 24, name: "sword_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        id: 24, name: "sword_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 25, name: "sword_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        id: 25, name: "sword_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
@@ -14240,7 +14261,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // desert biomes so digging through dunes hits a usable
     // building material instead of bare stone.
     BlockType {
-        id: 26, name: "sandstone", color: [0.92, 0.85, 0.62], transparent: false,
+        id: 26, name: "sandstone", color: [0.92, 0.85, 0.62], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["sandstone_top.png", "sandstone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["sandstone_bottom.png", "sandstone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sandstone.png"], keep_alpha: false },
@@ -14248,7 +14269,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // Cactus block. Spawns occasionally in desert biomes. Hurts
     // the player on contact via the world-side touch check.
     BlockType {
-        id: 27, name: "cactus", color: [0.30, 0.55, 0.25], transparent: false,
+        id: 27, name: "cactus", color: [0.30, 0.55, 0.25], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["cactus_top.png", "cactus.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["cactus_bottom.png", "cactus.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["cactus_side.png", "cactus.png"], keep_alpha: false },
@@ -14257,7 +14278,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // light: tracked in torch_positions so the shader picks it
     // up alongside placed torches.
     BlockType {
-        id: 28, name: "glowstone", color: [1.00, 0.92, 0.60], transparent: false,
+        id: 28, name: "glowstone", color: [1.00, 0.92, 0.60], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
@@ -14267,37 +14288,37 @@ const BLOCK_TYPES: &[BlockType] = &[
     // chew wood / planks / leaves. Like pickaxes they are tool-
     // slot items rejected by the place path.
     BlockType {
-        id: 29, name: "shovel_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        id: 29, name: "shovel_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
     },
     BlockType {
-        id: 30, name: "shovel_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        id: 30, name: "shovel_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 31, name: "shovel_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        id: 31, name: "shovel_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
     },
     BlockType {
-        id: 32, name: "axe_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        id: 32, name: "axe_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
     },
     BlockType {
-        id: 33, name: "axe_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        id: 33, name: "axe_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
     },
     BlockType {
-        id: 34, name: "axe_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        id: 34, name: "axe_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
@@ -14306,7 +14327,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // behaviour yet - /sleep handles the time skip - but the
     // distinct texture marks safe-rest spots for builders.
     BlockType {
-        id: 35, name: "bed", color: [0.85, 0.30, 0.30], transparent: false,
+        id: 35, name: "bed", color: [0.85, 0.30, 0.30], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["bed_top.png", "bed.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["bed_bottom.png", "bed.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["bed_side.png", "bed.png"], keep_alpha: false },
@@ -14318,6 +14339,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // with a bare hand.
     BlockType {
         id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
@@ -14383,6 +14405,62 @@ static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(
 
 fn block_type(id: u16) -> Option<&'static BlockType> {
     BLOCK_TYPES.iter().find(|b| b.id == id)
+}
+
+/// Bit-test helper: do all bits in `mask` light up for `block`?
+/// Air is always treated as having zero flags so the caller doesn't
+/// have to guard against it. Unknown ids likewise return `false`.
+#[inline]
+fn block_has_flag(block: BlockId, mask: u8) -> bool {
+    if block.is_air() {
+        return false;
+    }
+    block_type(block.0)
+        .map(|t| (t.flags & mask) == mask)
+        .unwrap_or(false)
+}
+
+/// Raycast traverses through this voxel (decorations: torch,
+/// flowers). Pairs with the `is_blocked` predicate handed to
+/// `raycast_with`.
+#[inline]
+fn block_is_ray_passable(b: BlockId) -> bool {
+    block_has_flag(b, F_RAY_PASS)
+}
+
+/// Player AABB skips this voxel for collision. Decorations + the
+/// water column.
+#[inline]
+fn block_is_aabb_passable(b: BlockId) -> bool {
+    block_has_flag(b, F_AABB_PASS)
+}
+
+/// `RMB place` refuses to overwrite this voxel - the player has
+/// to break it first.
+#[inline]
+fn block_is_placement_blocked(b: BlockId) -> bool {
+    block_has_flag(b, F_NO_PLACE)
+}
+
+/// Voxel routes through the alpha-blended mesh pipeline + skips
+/// the shadow pass.
+#[inline]
+fn block_is_transparent_render(b: BlockId) -> bool {
+    block_has_flag(b, F_TRANSPARENT_RENDER)
+}
+
+/// Voxel is a liquid the player can swim in.
+#[inline]
+fn block_is_swim_medium(b: BlockId) -> bool {
+    block_has_flag(b, F_SWIM)
+}
+
+/// Block has its own per-voxel render path (torch pillar, snow
+/// slab, water slab) so the chunk mesher should skip emitting
+/// full-cube geometry for it.
+#[inline]
+fn block_skips_chunk_mesh(b: BlockId) -> bool {
+    block_has_flag(b, F_DEDICATED_RENDER)
 }
 
 /// Map a block id to the Minecraft sound-material name. Used to
@@ -14945,12 +15023,14 @@ fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
     )
 }
 
-/// True for "decoration" blocks the player can walk through:
-/// torches, flowers. Snow layer goes through this path too but
-/// caller queries `voxel_is_solid` so partial-snow voxels are
-/// passable while a full 8-layer voxel is solid.
+/// True for blocks the player walks through (collision-wise).
+/// Delegates to the generic `F_AABB_PASS` flag so decorations
+/// (torch, flowers) and liquids (water) are handled by their
+/// `BlockType` row rather than a hard-coded id list. Snow goes
+/// through `voxel_is_solid` because its passable / solid state
+/// depends on the runtime layer count.
 fn is_passable(b: BlockId) -> bool {
-    matches!(b.0, 10 | 20 | 21 | 22 | 36)
+    block_is_aabb_passable(b)
 }
 
 /// Combined solid lookup: world solid AND not in the passable
@@ -14976,9 +15056,12 @@ fn voxel_is_solid(
     true
 }
 
-/// Returns true if the player's AABB at `pos` overlaps any water
-/// voxel. Drives swim drag + buoyancy in the movement loop.
-fn aabb_intersects_water(world: &World, pos: Vec3) -> bool {
+/// Returns true if the player's AABB at `pos` overlaps any voxel
+/// flagged `F_SWIM` (the generic "liquid" gate). Drives swim drag
+/// plus buoyancy in the movement loop. Generic so a future lava
+/// or other-liquid block can opt in by setting `F_SWIM` without
+/// touching this function.
+fn aabb_intersects_swim_medium(world: &World, pos: Vec3) -> bool {
     let (min, max) = body_aabb(pos);
     let x0 = min.x.floor() as i32;
     let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
@@ -14989,7 +15072,7 @@ fn aabb_intersects_water(world: &World, pos: Vec3) -> bool {
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
-                if world.get([x, y, z]).0 == WATER_ID {
+                if block_is_swim_medium(world.get([x, y, z])) {
                     return true;
                 }
             }
