@@ -2126,10 +2126,14 @@ impl Voxel {
     }
 
     /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz`
-    /// in `{0,1}` pick which corner. Averages the surface
-    /// heights of the (up to 4) same-kind liquid voxels that
-    /// share the corner so adjacent cells at different levels
-    /// blend into a continuous slope.
+    /// in `{0,1}` pick which corner. The corner samples the four
+    /// cells that share it: same-kind liquid contributes its
+    /// surface height, AIR contributes 0 (the corner drops
+    /// toward the bank), solid blocks are skipped entirely so a
+    /// pond against a stone wall stays flat at the wall. The
+    /// averaging gives a smooth slope at every air-water edge
+    /// instead of the boxy slab look the strict water-only
+    /// average produced.
     fn liquid_corner_height(
         &self,
         vx: i32,
@@ -2148,11 +2152,16 @@ impl Voxel {
         let mut sum = 0.0_f32;
         let mut count = 0u32;
         for t in &touching {
-            let h = self.liquid_surface_height(*t, liquid_id);
-            if h > 0.0 {
-                sum += h;
-                count += 1;
+            let b = self.world.get(*t);
+            // Solid (non-air, non-liquid) cells block contribution.
+            // Decorations (torch, flowers) count as air for the
+            // smoothing so a flower next to a pond doesn't tilt
+            // the corner upward.
+            if !b.is_air() && liquid_for(b).is_none() {
+                continue;
             }
+            sum += self.liquid_surface_height(*t, liquid_id);
+            count += 1;
         }
         if count == 0 {
             0.0
