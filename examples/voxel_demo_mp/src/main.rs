@@ -7432,6 +7432,8 @@ impl Voxel {
                             } else {
                                 let kind = if arg.eq_ignore_ascii_case("zombie") {
                                     KIND_ZOMBIE
+                                } else if arg.eq_ignore_ascii_case("chicken") {
+                                    KIND_CHICKEN
                                 } else {
                                     KIND_SHEEP
                                 };
