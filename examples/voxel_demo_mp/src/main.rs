@@ -4979,7 +4979,8 @@ impl Voxel {
             && self.has_focus
             && !self.inventory_open
             && !self.mp_menu_open
-            && !self.chat_open;
+            && !self.chat_open
+            && !self.show_debug_panel;
         let grab = if active && self.settings.lock_cursor {
             if self.settings.hide_cursor {
                 CursorGrabMode::Locked
@@ -5002,8 +5003,10 @@ impl Voxel {
         // mouse-look, WASD, jump, hotbar wheel. This matches the
         // Minecraft convention - opening the inventory in multiplayer
         // never pauses the world for anyone.
-        let input_active =
-            !self.inventory_open && !self.mp_menu_open && !self.chat_open;
+        let input_active = !self.inventory_open
+            && !self.mp_menu_open
+            && !self.chat_open
+            && !self.show_debug_panel;
 
         if input_active {
             let dx = std::mem::take(&mut self.mouse_dx);
@@ -11298,8 +11301,11 @@ impl AppHandler for Voxel {
         // Mob attack interception: if LMB and a mob is closer than
         // the targeted voxel (or there's no voxel target), route
         // the click as a melee strike instead of a block break.
-        let combat_gate =
-            lmb && !self.inventory_open && !self.mp_menu_open && !self.chat_open;
+        let combat_gate = lmb
+            && !self.inventory_open
+            && !self.mp_menu_open
+            && !self.chat_open
+            && !self.show_debug_panel;
         let mob_target = if combat_gate {
             self.raycast_mob(self.player_pos, forward, MOB_ATTACK_REACH)
         } else {
@@ -11424,6 +11430,7 @@ impl AppHandler for Voxel {
             && !self.inventory_open
             && !self.mp_menu_open
             && !self.chat_open
+            && !self.show_debug_panel
             && attack_mob.is_none()
             && attack_player.is_none();
         let mut mine_break: Option<[i32; 3]> = None;
@@ -11602,6 +11609,7 @@ impl AppHandler for Voxel {
         if !self.inventory_open
             && !self.mp_menu_open
             && !self.chat_open
+            && !self.show_debug_panel
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
