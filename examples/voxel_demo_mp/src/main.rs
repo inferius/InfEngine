@@ -6558,6 +6558,20 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "uptime" => {
+                            // Session timer formatted as hh:mm:ss.
+                            let secs = self
+                                .session_started
+                                .map(|t| t.elapsed().as_secs())
+                                .unwrap_or(0);
+                            let h = secs / 3600;
+                            let m = (secs % 3600) / 60;
+                            let s = secs % 60;
+                            local_lines.push(format!(
+                                "Uptime: {h:02}:{m:02}:{s:02}"
+                            ));
+                            handled_locally = true;
+                        }
                         "version" | "ver" => {
                             // Print the build's CARGO_PKG_VERSION
                             // plus the active net role so quick
