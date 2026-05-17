@@ -1026,6 +1026,16 @@ struct Voxel {
     /// and stress-testing the renderer without overlay overhead.
     hud_visible: bool,
     f1_prev: bool,
+    /// True while the chat input box is open. Gates player input
+    /// like the inventory / MP menu overlays.
+    chat_open: bool,
+    /// Buffer the chat input box edits while open.
+    chat_input: String,
+    /// Recent chat lines: `(arrival_instant, formatted_text)`.
+    /// Older entries fade out + drop after a few seconds.
+    chat_log: Vec<(std::time::Instant, String)>,
+    /// Previous-frame state of the T key for rising-edge open.
+    t_prev: bool,
     lmb_pending: bool,
     rmb_pending: bool,
     /// Level state of the mouse buttons (set on Pressed events,
@@ -2673,6 +2683,9 @@ impl Voxel {
         //  - vx.pvp_hit (server side, host = target): a remote
         //    client whacked the host.
         let mut pvp_self_damage: f32 = 0.0;
+        // Chat lines received this tick. Appended to `chat_log`
+        // after the net match arm releases its borrow on `self.net`.
+        let mut chat_inbox: Vec<String> = Vec::new();
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -2761,6 +2774,26 @@ impl Voxel {
                                 client_id,
                                 "client requested explicit leave"
                             );
+                        }
+                        "vx.chat" => {
+                            // Decode + tag with the sender's
+                            // client name, then broadcast so every
+                            // peer (including the originator) sees
+                            // the same final line.
+                            if let Ok((text, _)) = bincode::serde::decode_from_slice::<
+                                String,
+                                _,
+                            >(&data, cfg)
+                            {
+                                let sender = server
+                                    .client_name(client_id)
+                                    .unwrap_or_else(|| format!("p{client_id}"));
+                                let line = format!("<{sender}> {text}");
+                                chat_inbox.push(line.clone());
+                                if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
+                                    server.broadcast_bytes("vx.chat", buf);
+                                }
+                            }
                         }
                         "vx.pvp_hit" => {
                             // Validate the attacker's reach + the
@@ -3112,6 +3145,15 @@ impl Voxel {
                                 player_removals.push(m.id);
                             }
                         }
+                        "vx.chat" => {
+                            if let Ok((line, _)) = bincode::serde::decode_from_slice::<
+                                String,
+                                _,
+                            >(&data, cfg)
+                            {
+                                chat_inbox.push(line);
+                            }
+                        }
                         "vx.damage" => {
                             if let Ok((d, _)) = bincode::serde::decode_from_slice::<
                                 DamageMsg,
@@ -3190,6 +3232,22 @@ impl Voxel {
                 .entry(p.id)
                 .and_modify(|r| r.push(p))
                 .or_insert_with(|| RemoteInterp::new(p));
+        }
+        // Drain chat lines collected while the `net` borrow was
+        // held in the receive match. They render in the HUD chat
+        // log with a 10s fade.
+        if !chat_inbox.is_empty() {
+            let now = std::time::Instant::now();
+            for line in chat_inbox {
+                self.chat_log.push((now, line));
+            }
+            // Cap log length so very long sessions don't grow
+            // unbounded.
+            let max_chat = 64usize;
+            if self.chat_log.len() > max_chat {
+                let drop = self.chat_log.len() - max_chat;
+                self.chat_log.drain(0..drop);
+            }
         }
         if pvp_self_damage > 0.0 {
             self.apply_player_damage(pvp_self_damage);
@@ -3316,6 +3374,10 @@ impl Voxel {
             f_prev: false,
             hud_visible: true,
             f1_prev: false,
+            chat_open: false,
+            chat_input: String::new(),
+            chat_log: Vec::new(),
+            t_prev: false,
             lmb_pending: false,
             rmb_pending: false,
             lmb_held: false,
@@ -3679,7 +3741,8 @@ impl Voxel {
         let active = playing
             && self.has_focus
             && !self.inventory_open
-            && !self.mp_menu_open;
+            && !self.mp_menu_open
+            && !self.chat_open;
         let grab = if active && self.settings.lock_cursor {
             if self.settings.hide_cursor {
                 CursorGrabMode::Locked
@@ -3702,7 +3765,8 @@ impl Voxel {
         // mouse-look, WASD, jump, hotbar wheel. This matches the
         // Minecraft convention - opening the inventory in multiplayer
         // never pauses the world for anyone.
-        let input_active = !self.inventory_open && !self.mp_menu_open;
+        let input_active =
+            !self.inventory_open && !self.mp_menu_open && !self.chat_open;
 
         if input_active {
             let dx = std::mem::take(&mut self.mouse_dx);
@@ -4005,6 +4069,21 @@ impl Voxel {
         let show_debug = self.show_debug;
         let hud_visible = self.hud_visible;
         let kill_count = self.kill_count;
+        let chat_open = self.chat_open;
+        // Snapshot recent chat lines (newest last) along with their
+        // age so the renderer can fade older entries.
+        let chat_now = std::time::Instant::now();
+        let chat_lines: Vec<(String, f32)> = self
+            .chat_log
+            .iter()
+            .map(|(t, line)| {
+                (
+                    line.clone(),
+                    chat_now.saturating_duration_since(*t).as_secs_f32(),
+                )
+            })
+            .collect();
+        let mut chat_send_now = false;
         // View-projection for projecting mob HP bars to screen.
         // Built from the same camera state the world pass uses;
         // captured here so the egui closure doesn't need renderer
@@ -4220,6 +4299,11 @@ impl Voxel {
         let browser_error = &self.browser_error;
         let browser_last_refresh = self.browser_last_refresh;
         let browser_querying = self.browser_query_rx.is_some();
+        // Mutable borrow for the chat input box captured by the
+        // egui closure. Taken last so earlier self.* reads
+        // (raycast_mob, registry, etc.) finish before this
+        // exclusive borrow begins.
+        let chat_buf = &mut self.chat_input;
 
         let Some(ui) = self.ui.as_mut() else {
             return;
@@ -4988,6 +5072,42 @@ impl Voxel {
                         egui::Color32::from_rgb(240, 240, 240),
                     );
                 }
+                // Chat: log of recent lines at bottom-left + an
+                // input box when `chat_open`. Each log entry
+                // fades out over ~10 s; messages older than that
+                // are dropped after this pass.
+                if hud_visible || chat_open {
+                    egui::Area::new(egui::Id::new("voxel_chat"))
+                        .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -90.0])
+                        .show(ctx, |ui| {
+                            for (line, age) in &chat_lines {
+                                let alpha = ((10.0 - age) / 2.0).clamp(0.0, 1.0);
+                                if alpha <= 0.0 {
+                                    continue;
+                                }
+                                let a = (255.0 * alpha) as u8;
+                                ui.colored_label(
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        240, 240, 240, a,
+                                    ),
+                                    line,
+                                );
+                            }
+                            if chat_open {
+                                let resp = ui.add(
+                                    egui::TextEdit::singleline(chat_buf)
+                                        .desired_width(360.0)
+                                        .hint_text("press T to chat, Enter sends"),
+                                );
+                                resp.request_focus();
+                                if resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
+                                    chat_send_now = true;
+                                }
+                            }
+                        });
+                }
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
                 if hud_visible {
@@ -5017,6 +5137,49 @@ impl Voxel {
             }
         });
 
+        // Drop chat lines older than 10 s. Done after the render
+        // pass so the egui closure had a chance to display them
+        // one last frame.
+        self.chat_log
+            .retain(|(t, _)| chat_now.saturating_duration_since(*t).as_secs_f32() < 10.0);
+        // Send the chat line if the user pressed Enter.
+        if chat_send_now {
+            let text = self.chat_input.trim().to_string();
+            self.chat_input.clear();
+            self.chat_open = false;
+            if !text.is_empty() {
+                match &self.net {
+                    NetRole::Offline => {
+                        // No-op offline: chat only makes sense in
+                        // MP. Drop the input silently.
+                    }
+                    NetRole::Server { server, .. } => {
+                        // Host prepends its own name + appends to
+                        // the local log, then broadcasts so every
+                        // client renders the same line.
+                        let line = format!("<Host> {text}");
+                        self.chat_log
+                            .push((std::time::Instant::now(), line.clone()));
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(&line, bincode::config::standard())
+                        {
+                            server.broadcast_bytes("vx.chat", buf);
+                        }
+                    }
+                    NetRole::Client { client, .. } => {
+                        // Client sends the raw text; the server
+                        // tags it with the sender name before
+                        // broadcasting back.
+                        if let Ok(buf) = bincode::serde::encode_to_vec(
+                            &text,
+                            bincode::config::standard(),
+                        ) {
+                            let _ = client.send_bytes("vx.chat", buf);
+                        }
+                    }
+                }
+            }
+        }
         // Apply inventory clicks captured during the egui pass. The
         // egui closure can't touch `self.inventory` directly (the
         // renderer already holds a `&mut self`), so we buffer the
@@ -5434,7 +5597,12 @@ impl AppHandler for Voxel {
             let mp = !matches!(self.net, NetRole::Offline);
             match self.state {
                 AppState::Playing => {
-                    if mp {
+                    // Chat input takes priority - Esc just dismisses
+                    // it without opening the MP menu underneath.
+                    if self.chat_open {
+                        self.chat_open = false;
+                        self.chat_input.clear();
+                    } else if mp {
                         self.mp_menu_open = !self.mp_menu_open;
                     } else {
                         self.state = AppState::Paused;
@@ -5482,6 +5650,22 @@ impl AppHandler for Voxel {
             // against the world.
             self.lmb_pending = false;
             self.rmb_pending = false;
+        }
+
+        // T opens the chat input. Only fires in MP roles + while
+        // no other overlay is up. Esc + Enter both close it.
+        let t_now = ctx.input.is_pressed(Key::T);
+        let t_just = t_now && !self.t_prev;
+        self.t_prev = t_now;
+        if t_just
+            && matches!(self.state, AppState::Playing)
+            && !matches!(self.net, NetRole::Offline)
+            && !self.inventory_open
+            && !self.mp_menu_open
+            && !self.chat_open
+        {
+            self.chat_open = true;
+            self.chat_input.clear();
         }
 
         // F = eat. Consumes one meat block (id 12) from anywhere in
@@ -5576,12 +5760,14 @@ impl AppHandler for Voxel {
         // Mob attack interception: if LMB and a mob is closer than
         // the targeted voxel (or there's no voxel target), route
         // the click as a melee strike instead of a block break.
-        let mob_target = if lmb && !self.inventory_open && !self.mp_menu_open {
+        let combat_gate =
+            lmb && !self.inventory_open && !self.mp_menu_open && !self.chat_open;
+        let mob_target = if combat_gate {
             self.raycast_mob(self.player_pos, forward, MOB_ATTACK_REACH)
         } else {
             None
         };
-        let pvp_target = if lmb && !self.inventory_open && !self.mp_menu_open {
+        let pvp_target = if combat_gate {
             self.raycast_remote_player(self.player_pos, forward, PVP_REACH)
         } else {
             None
@@ -5676,6 +5862,7 @@ impl AppHandler for Voxel {
         let lmb_active = self.lmb_held
             && !self.inventory_open
             && !self.mp_menu_open
+            && !self.chat_open
             && attack_mob.is_none()
             && attack_player.is_none();
         let mut mine_break: Option<[i32; 3]> = None;
@@ -5810,6 +5997,7 @@ impl AppHandler for Voxel {
         // Block place: RMB single click stays instant; no mining.
         if !self.inventory_open
             && !self.mp_menu_open
+            && !self.chat_open
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
