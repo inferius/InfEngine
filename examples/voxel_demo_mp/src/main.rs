@@ -717,10 +717,6 @@ const VERTICAL_CHUNKS: i32 = 4;
 /// Chunks within this Chebyshev distance of the player chunk are
 /// kept loaded; new ones get queued for generation.
 const VIEW_DISTANCE_CHUNKS: i32 = 4;
-/// Chunks beyond this distance are unloaded (slightly larger than
-/// `VIEW_DISTANCE_CHUNKS` so the player jiggling on the boundary
-/// doesn't churn chunks every step).
-const UNLOAD_DISTANCE_CHUNKS: i32 = 6;
 /// Maximum number of worker results consumed per frame (each runs
 /// `Renderer::create_mesh` for several submeshes - bounded so the
 /// main thread doesn't stall on a sudden burst).
@@ -971,6 +967,10 @@ struct Settings {
     lock_cursor: bool,
     hide_cursor: bool,
     show_fps: bool,
+    /// Render distance in chunks (Chebyshev). The unload radius is
+    /// computed as `view_distance + 2` so the player can wobble on
+    /// the boundary without thrashing chunk loads.
+    view_distance: u8,
 }
 
 impl Default for Settings {
@@ -980,6 +980,7 @@ impl Default for Settings {
             lock_cursor: true,
             hide_cursor: true,
             show_fps: true,
+            view_distance: VIEW_DISTANCE_CHUNKS as u8,
         }
     }
 }
@@ -2211,6 +2212,7 @@ impl Voxel {
         let _ = writeln!(text, "show_fps={}", self.settings.show_fps);
         let _ = writeln!(text, "lock_cursor={}", self.settings.lock_cursor);
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
+        let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2261,6 +2263,11 @@ impl Voxel {
                 "hide_cursor" => {
                     self.settings.hide_cursor =
                         matches!(value, "true" | "1" | "yes");
+                }
+                "view_distance" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        self.settings.view_distance = v.clamp(2, 12);
+                    }
                 }
                 _ => {}
             }
@@ -3826,12 +3833,14 @@ impl Voxel {
             0,
             (self.player_pos.z.floor() as i32).div_euclid(cs),
         ];
+        let view_dist = self.settings.view_distance.clamp(2, 12) as i32;
+        let unload_dist = view_dist + 2;
 
         // Queue missing chunks inside the view radius. Vertical
         // column always loaded (cy 0..VERTICAL_CHUNKS) so mountain
         // peaks + sky builds never pop in.
-        for dz in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
-            for dx in -VIEW_DISTANCE_CHUNKS..=VIEW_DISTANCE_CHUNKS {
+        for dz in -view_dist..=view_dist {
+            for dx in -view_dist..=view_dist {
                 for cy in 0..VERTICAL_CHUNKS {
                     let cc = [player_chunk[0] + dx, cy, player_chunk[2] + dz];
                     if self.world.chunk(cc).is_none() && self.pending_set.insert(cc) {
@@ -3850,7 +3859,7 @@ impl Voxel {
             .filter(|c| {
                 let dx = (c[0] - player_chunk[0]).abs();
                 let dz = (c[2] - player_chunk[2]).abs();
-                dx > UNLOAD_DISTANCE_CHUNKS || dz > UNLOAD_DISTANCE_CHUNKS
+                dx > unload_dist || dz > unload_dist
             })
             .collect();
         if !to_unload.is_empty() {
@@ -3898,7 +3907,7 @@ impl Voxel {
             // past it while the worker was busy). Drop stale data.
             let dx = (result.coord[0] - player_chunk[0]).abs();
             let dz = (result.coord[2] - player_chunk[2]).abs();
-            if dx > UNLOAD_DISTANCE_CHUNKS || dz > UNLOAD_DISTANCE_CHUNKS {
+            if dx > unload_dist || dz > unload_dist {
                 continue;
             }
             if self.world.chunk(result.coord).is_some() {
@@ -4936,6 +4945,10 @@ impl Voxel {
                     ui.add(
                         egui::Slider::new(&mut settings_edit.mouse_sensitivity, 0.1..=2.0)
                             .text("Mouse sensitivity"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut settings_edit.view_distance, 2..=12)
+                            .text("Render distance (chunks)"),
                     );
                     ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
                     ui.checkbox(
