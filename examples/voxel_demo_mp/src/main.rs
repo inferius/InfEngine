@@ -1603,6 +1603,48 @@ impl Voxel {
         (0..=top).rev().find(|&y| !self.world.get([wx, y, wz]).is_air())
     }
 
+    /// Resolve a safe player spawn for the current world. Uses
+    /// `spawn_pos` when configured, otherwise scans an outward
+    /// spiral around the origin for a column whose top voxel is
+    /// solid + has clear air above. Falls back to high-altitude
+    /// Y=90 so gravity can drop the player onto whatever terrain
+    /// exists below. Caller should clear `player_vel` +
+    /// `fall_start_y` after assigning the returned position.
+    fn safe_spawn(&self) -> Vec3 {
+        if let Some(p) = self.spawn_pos {
+            return Vec3::new(p[0], p[1], p[2]);
+        }
+        let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+        // Square-spiral search out to 24 blocks. The first column
+        // with a confirmed surface + 2 blocks of air directly
+        // above wins so the player doesn't ever spawn buried.
+        for r in 0i32..=24 {
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    // Cheap ring filter: only inspect cells on
+                    // the current ring perimeter.
+                    if r > 0 && dx.abs() != r && dz.abs() != r {
+                        continue;
+                    }
+                    let sy = match self.surface_y_below(dx, dz, ceiling) {
+                        Some(y) => y,
+                        None => continue,
+                    };
+                    let above1 = self.world.get([dx, sy + 1, dz]);
+                    let above2 = self.world.get([dx, sy + 2, dz]);
+                    if above1.is_air() && above2.is_air() {
+                        return Vec3::new(
+                            dx as f32 + 0.5,
+                            sy as f32 + 1.5,
+                            dz as f32 + 0.5,
+                        );
+                    }
+                }
+            }
+        }
+        Vec3::new(0.0, 90.0, 0.0)
+    }
+
     /// Server-side mob update: gravity-snap to surface, walk
     /// toward target, retarget on arrival / timeout, spawn new
     /// sheep when the cap allows. Builds the broadcast list as a
@@ -2290,10 +2332,7 @@ impl Voxel {
         });
         if self.player_health <= 0.0 {
             tracing::warn!("player died (HP = 0) - respawning");
-            self.player_pos = match self.spawn_pos {
-                Some(p) => Vec3::new(p[0], p[1], p[2]),
-                None => Vec3::new(0.0, 32.0, 0.0),
-            };
+            self.player_pos = self.safe_spawn();
             self.player_vel = Vec3::ZERO;
             self.player_health = PLAYER_MAX_HEALTH;
             self.invuln_remaining = 3.0;
@@ -5087,10 +5126,7 @@ impl Voxel {
                 pos = ?[self.player_pos.x, self.player_pos.y, self.player_pos.z],
                 "player fell through the world - respawning"
             );
-            self.player_pos = match self.spawn_pos {
-                Some(p) => Vec3::new(p[0], p[1], p[2]),
-                None => Vec3::new(0.0, 32.0, 0.0),
-            };
+            self.player_pos = self.safe_spawn();
             self.player_vel = Vec3::ZERO;
             let mut dropped = 0usize;
             for slot in self.inventory[HOTBAR_SLOTS..].iter_mut() {
@@ -9091,15 +9127,12 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "spawn" => {
-                            // Snap to the configured spawn (or
-                            // the origin pad if nothing set).
-                            // Works in any role since the local
-                            // player's pose is always
-                            // authoritative on its own client.
-                            self.player_pos = match self.spawn_pos {
-                                Some(p) => Vec3::new(p[0], p[1], p[2]),
-                                None => Vec3::new(0.0, 32.0, 0.0),
-                            };
+                            // Snap to the configured spawn or
+                            // the terrain-aware fallback. Avoids
+                            // dropping the player inside stone
+                            // when the seed put a mountain at
+                            // the origin column.
+                            self.player_pos = self.safe_spawn();
                             self.player_vel = Vec3::ZERO;
                             self.fall_start_y = None;
                             local_lines.push("Teleported to spawn.".to_string());
@@ -9623,6 +9656,14 @@ impl AppHandler for Voxel {
         }
         self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
         self.build_world();
+        // Place the player on top of the actual terrain so the
+        // hardcoded (0, 32, 0) origin doesn't drop them inside a
+        // stone column when the seed happens to put a mountain
+        // at the world origin.
+        let spawn = self.safe_spawn();
+        self.player_pos = spawn;
+        self.player_vel = Vec3::ZERO;
+        self.fall_start_y = None;
         // Best-effort audio: a missing output device just disables
         // SFX rather than blocking the demo from launching.
         match infengine_audio::AudioSystem::new() {
