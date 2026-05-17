@@ -587,6 +587,13 @@ const GRAVITY: f32 = -18.0;
 const PLAYER_HEIGHT: f32 = 1.7;
 const PLAYER_RADIUS: f32 = 0.3;
 const COLLISION_EPSILON: f32 = 1e-4;
+/// Maximum player hit points. 20 mirrors the Minecraft scale (10
+/// hearts of 2 HP each).
+const PLAYER_MAX_HEALTH: f32 = 20.0;
+/// Free-fall distance, in voxels, before fall damage kicks in. A
+/// 3-block drop is harmless; anything taller deals
+/// `fall_distance - SAFE_FALL` HP.
+const SAFE_FALL: f32 = 3.0;
 /// Hotbar slots: index 0 is the "break" slot (empty hand), the rest
 /// hold the block ids in `Self::HOTBAR_BLOCKS`.
 /// Hotbar occupies the first row of the inventory grid; the
@@ -880,6 +887,17 @@ struct Voxel {
     /// releases, the aim moves to a different voxel, or the
     /// targeted voxel disappears (someone else broke it first).
     mining: Option<MiningState>,
+    /// Current player hit points. Capped at `PLAYER_MAX_HEALTH`.
+    /// Reaches zero = death, which respawns at origin + wipes the
+    /// storage rows the same way the fall-out path already does.
+    player_health: f32,
+    /// World-Y the player last left solid ground at. `None` when
+    /// grounded; populated on the rising edge of an airborne
+    /// transition + read on landing for fall-damage calculation.
+    fall_start_y: Option<f32>,
+    /// Seconds remaining in the red screen-flash overlay that
+    /// fires on any non-trivial damage event. Decays in update.
+    hurt_flash: f32,
     /// `None` = break slot (empty hand). `Some(block)` = place that
     /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
@@ -1652,6 +1670,47 @@ impl Voxel {
     /// day-of-cycle to disk in the new versioned `INFV` format.
     /// Called periodically while the server runs (every 30 s) so a
     /// crash loses at most half a minute of state.
+    /// Apply HP damage to the local player. Reaches zero = death
+    /// = respawn at origin + storage-row wipe + inventory snapshot
+    /// fired through the existing `vx.fellout` channel so the
+    /// server's authoritative copy stays in sync.
+    fn apply_player_damage(&mut self, amount: f32) {
+        if amount <= 0.0 {
+            return;
+        }
+        self.player_health = (self.player_health - amount).max(0.0);
+        self.hurt_flash = 0.5;
+        // Synth hurt grunt so the player hears the hit even when
+        // no asset pack is loaded.
+        let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+        self.sfx_at("hurt", pos, |a, g| {
+            let _ = a.play_thud(140.0, 0.35 * g);
+        });
+        if self.player_health <= 0.0 {
+            tracing::warn!("player died (HP = 0) - respawning");
+            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+            self.player_vel = Vec3::ZERO;
+            self.player_health = PLAYER_MAX_HEALTH;
+            let mut dropped = 0usize;
+            for slot in self.inventory[HOTBAR_SLOTS..].iter_mut() {
+                if slot.take().is_some() {
+                    dropped += 1;
+                }
+            }
+            for slot in self.craft_grid.iter_mut() {
+                if slot.take().is_some() {
+                    dropped += 1;
+                }
+            }
+            if dropped > 0 {
+                tracing::info!(dropped, "death penalty: cleared storage stacks");
+            }
+            if let NetRole::Client { client, .. } = &self.net {
+                let _ = client.send_bytes("vx.fellout", Vec::new());
+            }
+        }
+    }
+
     /// Fire-and-forget `vx.leave` to the server (if any). Called
     /// on explicit disconnect / quit so the server doesn't have
     /// to wait its 5 s silence reaper to broadcast a removal.
@@ -2756,6 +2815,9 @@ impl Voxel {
             lmb_held: false,
             rmb_held: false,
             mining: None,
+            player_health: PLAYER_MAX_HEALTH,
+            fall_start_y: None,
+            hurt_flash: 0.0,
             inventory: {
                 // Seed the hotbar with one starter stack per known
                 // block type so the demo is playable from the first
@@ -3240,6 +3302,7 @@ impl Voxel {
         }
 
         // Axis-resolved voxel AABB collision.
+        let was_grounded = self.grounded;
         let delta = self.player_vel * dt;
         let (new_pos, hit_floor, hit_ceiling) = sweep_aabb(&self.world, self.player_pos, delta);
         self.player_pos = new_pos;
@@ -3251,6 +3314,32 @@ impl Voxel {
         }
         if hit_ceiling {
             self.player_vel.y = 0.0;
+        }
+        // Fall-damage tracking. Note the world-Y the moment we
+        // first leave the ground, then on the landing transition
+        // compute the drop height + apply damage.
+        if was_grounded && !self.grounded {
+            self.fall_start_y = Some(self.player_pos.y);
+        }
+        if !was_grounded
+            && self.grounded
+            && let Some(start_y) = self.fall_start_y.take()
+        {
+            let drop = (start_y - self.player_pos.y).max(0.0);
+            if drop > SAFE_FALL {
+                let dmg = drop - SAFE_FALL;
+                self.apply_player_damage(dmg);
+                let landing = [
+                    self.player_pos.x.floor() as i32,
+                    (self.player_pos.y - PLAYER_HEIGHT - 0.05).floor() as i32,
+                    self.player_pos.z.floor() as i32,
+                ];
+                self.spawn_break_particles(landing);
+            }
+        }
+        // Hurt-flash decay.
+        if self.hurt_flash > 0.0 {
+            self.hurt_flash = (self.hurt_flash - dt).max(0.0);
         }
 
         if self.player_pos.y < -20.0 {
@@ -3292,6 +3381,8 @@ impl Voxel {
         let fps = self.fps_ema;
         let show_fps = self.settings.show_fps;
         let day_time = self.day_time;
+        let player_health = self.player_health;
+        let player_hurt_flash = self.hurt_flash;
         let show_debug = self.show_debug;
         let dbg_player = self.player_pos;
         let dbg_yaw = self.player_yaw;
@@ -3627,6 +3718,28 @@ impl Voxel {
                             let hh = hours_total.floor() as i32;
                             let mm = ((hours_total - hh as f32) * 60.0) as i32;
                             ui.label(format!("Time: {hh:02}:{mm:02}"));
+                            // Health row: 10 hearts of 2 HP each.
+                            // A heart is full if `player_health` >=
+                            // 2 * (i + 1), half if at the half-step,
+                            // empty otherwise.
+                            ui.horizontal(|ui| {
+                                ui.label("HP:");
+                                for i in 0..10 {
+                                    let need_full = 2.0 * (i as f32 + 1.0);
+                                    let need_half = need_full - 1.0;
+                                    let glyph = if player_health >= need_full {
+                                        "\u{2665}"
+                                    } else if player_health >= need_half {
+                                        "\u{2661}"
+                                    } else {
+                                        " "
+                                    };
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(220, 50, 50),
+                                        glyph,
+                                    );
+                                }
+                            });
                             if show_fps {
                                 ui.separator();
                                 ui.label(format!("FPS: {fps:.0}"));
@@ -3926,6 +4039,29 @@ impl Voxel {
                         });
                 }
 
+                // Hurt-flash: full-screen red overlay that fades
+                // out over ~0.5 s. Painted on the Foreground layer
+                // so it sits above the world but below the
+                // crosshair / inventory windows.
+                if player_hurt_flash > 0.0 {
+                    let alpha =
+                        (player_hurt_flash / 0.5).clamp(0.0, 1.0).powf(1.3);
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_hurt_flash"),
+                    ));
+                    let rect = ctx.content_rect();
+                    layer.rect_filled(
+                        rect,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(
+                            180,
+                            0,
+                            0,
+                            (110.0 * alpha) as u8,
+                        ),
+                    );
+                }
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
                 let screen = ctx.content_rect();
