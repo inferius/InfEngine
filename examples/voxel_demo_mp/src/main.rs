@@ -4452,6 +4452,12 @@ impl Voxel {
                 let renderer = self.renderer.as_mut().expect("renderer ready");
                 let atlas = self.voxel_atlas.clone();
                 for sub in result.submeshes {
+                    // Skip empty submeshes - registering a
+                    // zero-vertex mesh would panic the shadow
+                    // pass's `vertex_buffer.slice(..)`.
+                    if sub.vertices.is_empty() || sub.indices.is_empty() {
+                        continue;
+                    }
                     let handle = renderer.create_mesh(
                         &format!("voxel_chunk_{}_{}_{}_b{}", cc[0], cc[1], cc[2], sub.block.0),
                         &sub.vertices,
@@ -4533,6 +4539,9 @@ impl Voxel {
             };
             let origin = World::chunk_world_origin(*coord);
             for sub in chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque) {
+                if sub.vertices.is_empty() || sub.indices.is_empty() {
+                    continue;
+                }
                 let handle = renderer.create_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
@@ -4562,6 +4571,9 @@ impl Voxel {
             let origin = World::chunk_world_origin(coord);
             let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque);
             for sub in subs {
+                if sub.vertices.is_empty() || sub.indices.is_empty() {
+                    continue;
+                }
                 let handle = renderer.create_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",

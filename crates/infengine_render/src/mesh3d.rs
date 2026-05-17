@@ -61,14 +61,37 @@ impl Mesh3DRegistry {
         vertices: &[MeshVertex],
         indices: &[u32],
     ) -> MeshHandle {
+        // Pad empty mesh data with a single degenerate vertex /
+        // index so the resulting buffer is at least 1 byte.
+        // wgpu's `slice(..)` panics on zero-size buffers, and
+        // callers that submit an empty submesh would crash the
+        // shadow pass. Padding lets the entry exist but the
+        // `index_count = 0` draw call below stays a no-op.
+        let fallback_v: [MeshVertex; 1] = [MeshVertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            uv: [0.0; 2],
+        }];
+        let fallback_i: [u32; 1] = [0];
+        let (vsrc, isrc) = if vertices.is_empty() || indices.is_empty() {
+            (
+                bytemuck::cast_slice(&fallback_v[..]),
+                bytemuck::cast_slice(&fallback_i[..]),
+            )
+        } else {
+            (
+                bytemuck::cast_slice(vertices),
+                bytemuck::cast_slice(indices),
+            )
+        };
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
-            contents: bytemuck::cast_slice(vertices),
+            contents: vsrc,
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
-            contents: bytemuck::cast_slice(indices),
+            contents: isrc,
             usage: wgpu::BufferUsages::INDEX,
         });
         let handle = MeshHandle(self.next_id);
