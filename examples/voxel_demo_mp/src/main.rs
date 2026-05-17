@@ -307,7 +307,7 @@ fn block_required_tier(block: BlockId) -> u8 {
 
 /// True if the block id represents a tool / non-placeable item.
 fn is_tool_block(block: BlockId) -> bool {
-    matches!(block.0, 16..=19 | 23..=25 | 29..=34)
+    matches!(block.0, 16..=19 | 23..=25 | 29..=34 | 38..=40)
 }
 
 /// Human label for a tool slot, used by the HUD readout.
@@ -325,6 +325,38 @@ fn tool_label(block: BlockId) -> Option<&'static str> {
         32 => Some("Wood axe"),
         33 => Some("Stone axe"),
         34 => Some("Iron axe"),
+        38 => Some("Bucket"),
+        39 => Some("Water bucket"),
+        40 => Some("Lava bucket"),
+        _ => None,
+    }
+}
+
+/// Bucket item ids. The empty bucket is the crafted base; the
+/// filled variants come from RMB-scooping the matching liquid.
+const BUCKET_EMPTY_ID: u16 = 38;
+const BUCKET_WATER_ID: u16 = 39;
+const BUCKET_LAVA_ID: u16 = 40;
+
+/// Map a bucket item to the liquid it holds, if any. Used by the
+/// RMB place path to spawn a source block when emptying the
+/// bucket onto a target voxel. Returns `None` for the empty
+/// bucket or for non-bucket items.
+fn bucket_liquid_id(b: BlockId) -> Option<u16> {
+    match b.0 {
+        BUCKET_WATER_ID => Some(WATER_ID),
+        BUCKET_LAVA_ID => Some(LAVA_ID),
+        _ => None,
+    }
+}
+
+/// Map a liquid id to the filled-bucket variant produced when the
+/// player scoops it with an empty bucket. Returns `None` when
+/// the liquid has no bucket variant defined.
+fn liquid_to_bucket_id(liquid: u16) -> Option<u16> {
+    match liquid {
+        WATER_ID => Some(BUCKET_WATER_ID),
+        LAVA_ID => Some(BUCKET_LAVA_ID),
         _ => None,
     }
 }
@@ -1101,6 +1133,14 @@ const RECIPES: &[Recipe] = &[
         inputs: &[(11, 1), (11, 1), (11, 1), (7, 1)],
         output: (35, 1),
         name: "Bed",
+    },
+    // 3 iron -> 1 empty bucket. MC shape (V of 3 ingots)
+    // collapses to a shapeless 3-iron recipe on the 2x2 grid;
+    // a real 3x3 crafting table comes later.
+    Recipe {
+        inputs: &[(14, 1), (14, 1), (14, 1)],
+        output: (BUCKET_EMPTY_ID, 1),
+        name: "Bucket",
     },
 ];
 
@@ -13152,6 +13192,132 @@ impl AppHandler for Voxel {
                     }
                 }
             } else if rmb
+                && let Some(held) = selected_block
+                && matches!(
+                    held.0,
+                    BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID
+                )
+            {
+                // Bucket RMB interactions.
+                //   empty bucket  + liquid voxel -> scoop, swap to
+                //                                   filled bucket.
+                //   filled bucket + air / replaceable cell -> emit
+                //                                   source, swap to
+                //                                   empty bucket.
+                let target_block = self.world.get(hit.voxel);
+                let cfg = bincode::config::standard();
+                if held.0 == BUCKET_EMPTY_ID {
+                    if let Some(filled) =
+                        liquid_to_bucket_id(target_block.0)
+                    {
+                        let voxel = hit.voxel;
+                        self.world_set_tracked(voxel, BlockId::AIR);
+                        let coords = Self::affected_chunks(voxel);
+                        self.rebuild_chunks(&coords);
+                        self.inventory[self.selected_slot] =
+                            Some((BlockId(filled), 1));
+                        let edit = EditMsg {
+                            x: voxel[0],
+                            y: voxel[1],
+                            z: voxel[2],
+                            block: 0,
+                        };
+                        match &mut self.net {
+                            NetRole::Offline => {}
+                            NetRole::Server { server, .. } => {
+                                self.edit_history.push(edit);
+                                if let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        edit, cfg,
+                                    )
+                                {
+                                    server.broadcast_bytes(
+                                        "vx.edit", buf,
+                                    );
+                                }
+                            }
+                            NetRole::Client {
+                                pending_edits, ..
+                            } => {
+                                pending_edits.push(edit);
+                            }
+                        }
+                        let center = [
+                            voxel[0] as f32 + 0.5,
+                            voxel[1] as f32 + 0.5,
+                            voxel[2] as f32 + 0.5,
+                        ];
+                        self.sfx_at("splash", center, |a, g| {
+                            let _ = a.play_thud(140.0, 0.18 * g);
+                            let _ = a.play_swish(0.16 * g);
+                        });
+                    }
+                } else if let Some(liquid_id) = bucket_liquid_id(held) {
+                    let target_voxel = if block_is_replaceable(target_block) {
+                        hit.voxel
+                    } else {
+                        hit.place_at
+                    };
+                    let dest = self.world.get(target_voxel);
+                    if dest.is_air() || block_is_replaceable(dest) {
+                        self.world_set_tracked(
+                            target_voxel,
+                            BlockId(liquid_id),
+                        );
+                        self.liquid_level.insert(target_voxel, 0);
+                        let coords = Self::affected_chunks(target_voxel);
+                        self.rebuild_chunks(&coords);
+                        self.inventory[self.selected_slot] =
+                            Some((BlockId(BUCKET_EMPTY_ID), 1));
+                        let edit = EditMsg {
+                            x: target_voxel[0],
+                            y: target_voxel[1],
+                            z: target_voxel[2],
+                            block: liquid_id,
+                        };
+                        match &mut self.net {
+                            NetRole::Offline => {}
+                            NetRole::Server { server, .. } => {
+                                self.edit_history.push(edit);
+                                if let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        edit, cfg,
+                                    )
+                                {
+                                    server.broadcast_bytes(
+                                        "vx.edit", buf,
+                                    );
+                                }
+                                if let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        (target_voxel, 0u8),
+                                        cfg,
+                                    )
+                                {
+                                    server.broadcast_bytes(
+                                        "vx.liquid_lvl",
+                                        buf,
+                                    );
+                                }
+                            }
+                            NetRole::Client {
+                                pending_edits, ..
+                            } => {
+                                pending_edits.push(edit);
+                            }
+                        }
+                        let center = [
+                            target_voxel[0] as f32 + 0.5,
+                            target_voxel[1] as f32 + 0.5,
+                            target_voxel[2] as f32 + 0.5,
+                        ];
+                        self.sfx_at("splash", center, |a, g| {
+                            let _ = a.play_thud(120.0, 0.18 * g);
+                            let _ = a.play_swish(0.14 * g);
+                        });
+                    }
+                }
+            } else if rmb
                 && let Some(block) = selected_block
                 && !is_tool_block(block)
             {
@@ -14733,6 +14899,27 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+    },
+    // Bucket item ids 38..=40. Tool-class slots (no block place);
+    // RMB on a liquid scoops, RMB on a placement target empties
+    // the bucket into a source block.
+    BlockType {
+        id: 38, name: "bucket", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 39, name: "water_bucket", color: [0.20, 0.45, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 40, name: "lava_bucket", color: [1.00, 0.45, 0.10], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
     },
 ];
 
