@@ -9822,6 +9822,11 @@ impl AppHandler for Voxel {
             attack_mob = None;
             attack_player = None;
         }
+        // Combat consumes a flat 3 stamina per attack so the
+        // sprint pool is shared between movement and fighting.
+        if attack_player.is_some() || attack_mob.is_some() {
+            self.stamina = (self.stamina - 3.0).max(0.0);
+        }
         // Player-vs-player attack: dispatch to server-side damage
         // application. Host applies directly; client sends a
         // `vx.pvp_hit` request the server can validate.
