@@ -1696,10 +1696,13 @@ struct Voxel {
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
-    /// Dedicated cube handle for water voxels. Tagged transparent
-    /// so it routes through the alpha-blended mesh3d pipeline
-    /// without dragging player_cube / mob meshes along.
-    water_cube: Option<MeshHandle>,
+    /// Combined slope-aware mesh for every water voxel currently
+    /// in the world. Rebuilt lazily when `water_mesh_dirty` flips
+    /// (placement, fall, spread, decay, source merge). Drawn via
+    /// the alpha-blended pipeline so the slope reads as a single
+    /// connected surface.
+    water_mesh_handle: Option<MeshHandle>,
+    water_mesh_dirty: bool,
     /// Dedicated cube mesh for sheep bodies. Has its own
     /// `AlbedoHandle` binding so the texture (loaded from
     /// `assets/textures/entity/sheep/sheep.tga`) doesn't leak onto
@@ -1803,10 +1806,32 @@ impl Voxel {
         if block.0 == WATER_ID {
             self.water_active.insert(voxel);
             self.water_depth.entry(voxel).or_insert(0);
-            self.water_positions.insert(voxel);
+            if self.water_positions.insert(voxel) {
+                self.water_mesh_dirty = true;
+            }
+        } else if self.water_positions.remove(&voxel) {
+            self.water_depth.remove(&voxel);
+            self.water_mesh_dirty = true;
         } else {
             self.water_depth.remove(&voxel);
-            self.water_positions.remove(&voxel);
+        }
+        // Any world edit can change a neighbour's air / solid /
+        // water status which feeds into the corner-height blend,
+        // so flag the slope mesh dirty whenever water sits next
+        // to the touched voxel. Cheap 4-cell scan keeps the
+        // overhead tiny for the common solid <-> air edit.
+        if !self.water_mesh_dirty {
+            let neighbours = [
+                [voxel[0] + 1, voxel[1], voxel[2]],
+                [voxel[0] - 1, voxel[1], voxel[2]],
+                [voxel[0], voxel[1], voxel[2] + 1],
+                [voxel[0], voxel[1], voxel[2] - 1],
+                [voxel[0], voxel[1] + 1, voxel[2]],
+                [voxel[0], voxel[1] - 1, voxel[2]],
+            ];
+            if neighbours.iter().any(|n| self.water_positions.contains(n)) {
+                self.water_mesh_dirty = true;
+            }
         }
     }
 
@@ -2033,6 +2058,229 @@ impl Voxel {
         Vec3::new(0.0, 90.0, 0.0)
     }
 
+    /// Surface height (in voxel units) for a single water cell.
+    /// Source = 0.90, flow ramps down with depth, falling water
+    /// (water voxel above) fills the cell to 1.0. Non-water
+    /// voxels return 0.0 so the corner-height accumulator treats
+    /// them as "no contribution".
+    fn water_surface_height(&self, pos: [i32; 3]) -> f32 {
+        if self.world.get(pos).0 != WATER_ID {
+            return 0.0;
+        }
+        if self.world.get([pos[0], pos[1] + 1, pos[2]]).0 == WATER_ID {
+            return 1.0;
+        }
+        let d = self.water_depth.get(&pos).copied().unwrap_or(0);
+        match d {
+            0 => 0.90,
+            1 => 0.75,
+            2 => 0.60,
+            3 => 0.45,
+            _ => 0.30,
+        }
+    }
+
+    /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz` in
+    /// `{0,1}` pick which of the four corners. Averages the
+    /// surface heights of the (up to 4) water voxels that share
+    /// the corner so adjacent cells with different depths blend
+    /// into a continuous slope.
+    fn water_corner_height(
+        &self,
+        vx: i32,
+        vy: i32,
+        vz: i32,
+        cx: i32,
+        cz: i32,
+    ) -> f32 {
+        let touching = [
+            [vx + cx - 1, vy, vz + cz - 1],
+            [vx + cx, vy, vz + cz - 1],
+            [vx + cx - 1, vy, vz + cz],
+            [vx + cx, vy, vz + cz],
+        ];
+        let mut sum = 0.0_f32;
+        let mut count = 0u32;
+        for t in &touching {
+            let h = self.water_surface_height(*t);
+            if h > 0.0 {
+                sum += h;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            0.0
+        } else {
+            sum / count as f32
+        }
+    }
+
+    /// Rebuild the combined water mesh when the dirty flag is
+    /// set. One handle covers every visible water voxel: top
+    /// face uses per-corner heights computed from the depth map,
+    /// side faces drop to y=0 only against air / decorations, and
+    /// the bottom face emits only when there's something the
+    /// player could actually see through the water from below.
+    fn maybe_rebuild_water_mesh(&mut self) {
+        if !self.water_mesh_dirty {
+            return;
+        }
+        if self.renderer.is_none() {
+            return;
+        }
+        if self.water_positions.is_empty() {
+            if let Some(h) = self.water_mesh_handle.take() {
+                let renderer = self
+                    .renderer
+                    .as_mut()
+                    .expect("renderer checked above");
+                renderer.remove_mesh(h);
+            }
+            self.water_mesh_dirty = false;
+            return;
+        }
+        let mut vertices: Vec<MeshVertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let positions: Vec<[i32; 3]> =
+            self.water_positions.iter().copied().collect();
+        for p in &positions {
+            let vx = p[0];
+            let vy = p[1];
+            let vz = p[2];
+            let h00 = self.water_corner_height(vx, vy, vz, 0, 0);
+            let h10 = self.water_corner_height(vx, vy, vz, 1, 0);
+            let h11 = self.water_corner_height(vx, vy, vz, 1, 1);
+            let h01 = self.water_corner_height(vx, vy, vz, 0, 1);
+            let fx = vx as f32;
+            let fy = vy as f32;
+            let fz = vz as f32;
+            // Top face: 4 corners with slope. Only emit when the
+            // voxel above isn't itself water - otherwise the
+            // surface is hidden inside a falling column.
+            let above_water =
+                self.world.get([vx, vy + 1, vz]).0 == WATER_ID;
+            if !above_water {
+                let t0 = [fx, fy + h00, fz];
+                let t1 = [fx + 1.0, fy + h10, fz];
+                let t2 = [fx + 1.0, fy + h11, fz + 1.0];
+                let t3 = [fx, fy + h01, fz + 1.0];
+                let normal = water_face_normal(t0, t1, t2, t3);
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    t0,
+                    t1,
+                    t2,
+                    t3,
+                    normal,
+                );
+            }
+            // Helper: emit a side face on `axis` if the neighbour
+            // there is "open" (air or another decoration with
+            // `F_AABB_PASS`, but not water - water sides cancel).
+            let side_open = |nx: i32, ny: i32, nz: i32| -> bool {
+                let nb = self.world.get([nx, ny, nz]);
+                if nb.0 == WATER_ID {
+                    return false;
+                }
+                nb.is_air() || block_is_aabb_passable(nb)
+            };
+            // -X side (west): corners (0,h00,0) (0,h01,1).
+            if side_open(vx - 1, vy, vz) {
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    [fx, fy, fz + 1.0],
+                    [fx, fy + h01, fz + 1.0],
+                    [fx, fy + h00, fz],
+                    [fx, fy, fz],
+                    [-1.0, 0.0, 0.0],
+                );
+            }
+            // +X side (east).
+            if side_open(vx + 1, vy, vz) {
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    [fx + 1.0, fy, fz],
+                    [fx + 1.0, fy + h10, fz],
+                    [fx + 1.0, fy + h11, fz + 1.0],
+                    [fx + 1.0, fy, fz + 1.0],
+                    [1.0, 0.0, 0.0],
+                );
+            }
+            // -Z side (north).
+            if side_open(vx, vy, vz - 1) {
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    [fx, fy, fz],
+                    [fx, fy + h00, fz],
+                    [fx + 1.0, fy + h10, fz],
+                    [fx + 1.0, fy, fz],
+                    [0.0, 0.0, -1.0],
+                );
+            }
+            // +Z side (south).
+            if side_open(vx, vy, vz + 1) {
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx + 1.0, fy + h11, fz + 1.0],
+                    [fx, fy + h01, fz + 1.0],
+                    [fx, fy, fz + 1.0],
+                    [0.0, 0.0, 1.0],
+                );
+            }
+            // Bottom face: emit only when the cell below is
+            // empty AIR (so the player swimming up can look down
+            // and see the surface from the inside). Skip when
+            // there's any solid / water below so we don't pay
+            // for an invisible face.
+            if self.world.get([vx, vy - 1, vz]).is_air() {
+                push_quad(
+                    &mut vertices,
+                    &mut indices,
+                    [fx, fy, fz],
+                    [fx + 1.0, fy, fz],
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx, fy, fz + 1.0],
+                    [0.0, -1.0, 0.0],
+                );
+            }
+        }
+        // Re-borrow `renderer` now that the `&self` work above is
+        // done. Borrow checker forbids overlapping `&self.world` /
+        // `&self.water_depth` reads with the `&mut self.renderer`
+        // grab, so we split the lifetimes.
+        let renderer = self
+            .renderer
+            .as_mut()
+            .expect("renderer checked at function entry");
+        if let Some(h) = self.water_mesh_handle.take() {
+            renderer.remove_mesh(h);
+        }
+        if !vertices.is_empty() && !indices.is_empty() {
+            let h = renderer.create_mesh(
+                "voxel_water_combined",
+                &vertices,
+                &indices,
+            );
+            // Generic gate: any block with `F_TRANSPARENT_RENDER`
+            // pushes its dedicated mesh through the alpha-blended
+            // pipeline. Pulling the bit off the table row means a
+            // future liquid that wants the same treatment opts in
+            // by flipping its `BlockType` flags - this function
+            // never has to learn about a specific id.
+            if block_is_transparent_render(BlockId(WATER_ID)) {
+                renderer.set_mesh_transparent(h, true);
+            }
+            self.water_mesh_handle = Some(h);
+        }
+        self.water_mesh_dirty = false;
+    }
+
     /// Authoritative water-fall pass. Water voxels in
     /// `water_active` with air directly below get cloned down one
     /// block per call; the new voxel re-enters the queue so a
@@ -2251,6 +2499,9 @@ impl Voxel {
             }
             if sources >= 2 {
                 self.water_depth.insert(*pos, 0);
+                // Source promotion changes the corner-height
+                // ramp used by the slope mesh.
+                self.water_mesh_dirty = true;
             }
         }
     }
@@ -5308,7 +5559,8 @@ impl Voxel {
             day_time: DAY_LENGTH_S * 0.3,
             net: NetRole::Offline,
             player_cube: None,
-            water_cube: None,
+            water_mesh_handle: None,
+            water_mesh_dirty: true,
             sheep_mesh: None,
             sheep_head_mesh: None,
             voxel_atlas: None,
@@ -5441,7 +5693,9 @@ impl Voxel {
                                     self.torch_positions.insert(v);
                                 } else if b.0 == WATER_ID {
                                     self.water_active.insert(v);
-                                    self.water_positions.insert(v);
+                                    if self.water_positions.insert(v) {
+                                        self.water_mesh_dirty = true;
+                                    }
                                 }
                             }
                         }
@@ -5583,7 +5837,9 @@ impl Voxel {
                                     origin.z as i32 + lz,
                                 ];
                                 self.water_active.insert(wv);
-                                self.water_positions.insert(wv);
+                                if self.water_positions.insert(wv) {
+                                    self.water_mesh_dirty = true;
+                                }
                             }
                         }
                     }
@@ -12978,6 +13234,11 @@ impl AppHandler for Voxel {
             self.was_night = is_night_now;
         }
 
+        // Rebuild the combined water mesh once the dirty flag is
+        // set. Done before the renderer borrow below so the
+        // create_mesh / remove_mesh churn doesn't fight with the
+        // per-frame draw calls.
+        self.maybe_rebuild_water_mesh();
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
         let registry = &self.registry;
@@ -13330,65 +13591,18 @@ impl AppHandler for Voxel {
                 );
             }
         }
-        // Water voxels render as translucent slabs whose height
-        // depends on the source-distance depth:
-        //   depth 0 (source)    -> 0.90 (almost full, leaves a
-        //                          tiny lip so the surface reads
-        //                          like water, not a solid cube)
-        //   depth 1             -> 0.75
-        //   depth 2             -> 0.60
-        //   depth 3             -> 0.45
-        //   depth 4             -> 0.30
-        // If the voxel directly above is also water, the cell
-        // is part of a falling column and renders full-height
-        // so the stream stays visually continuous.
-        if !self.water_positions.is_empty() {
-            let cube = *self.water_cube.get_or_insert_with(|| {
-                let h = renderer.cube_handle();
-                // Water carries `F_TRANSPARENT_RENDER`, so route
-                // the dedicated cube through the alpha-blended
-                // pipeline. Generic check so a future liquid that
-                // sets the same flag picks up the same render path
-                // without extra wiring.
-                if block_is_transparent_render(BlockId(WATER_ID)) {
-                    renderer.set_mesh_transparent(h, true);
-                }
-                h
-            });
-            for p in self.water_positions.iter() {
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32;
-                let cz = p[2] as f32 + 0.5;
-                let above = self.world.get([p[0], p[1] + 1, p[2]]);
-                let height = if above.0 == WATER_ID {
-                    1.0
-                } else {
-                    let depth = self
-                        .water_depth
-                        .get(p)
-                        .copied()
-                        .unwrap_or(0);
-                    match depth {
-                        0 => 0.90,
-                        1 => 0.75,
-                        2 => 0.60,
-                        3 => 0.45,
-                        _ => 0.30,
-                    }
-                };
-                let slab = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.0, height, 1.0),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + height * 0.5, cz),
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    slab.to_cols_array(),
-                    [0.20, 0.40, 0.85, 0.65],
-                    0.0,
-                    0.18,
-                );
-            }
+        // Water: one combined mesh with per-corner heights so
+        // adjacent cells with different depths blend into a
+        // continuous slope. Built off the `water_positions` set
+        // and rebuilt only when `water_mesh_dirty` flips.
+        if let Some(h) = self.water_mesh_handle {
+            renderer.draw_mesh_pbr(
+                h,
+                Mat4::IDENTITY.to_cols_array(),
+                [0.20, 0.40, 0.85, 0.65],
+                0.0,
+                0.18,
+            );
         }
         // Render remote players as coloured cubes so each peer is
         // visible. The interpolation buffer (`remote_interp`) is
@@ -15054,6 +15268,50 @@ fn voxel_is_solid(
         return layers >= 8;
     }
     true
+}
+
+/// Approximate face normal from 4 corners (used by the sloped
+/// water top quad where the corner heights differ). Cross product
+/// of two opposing edges - close enough for shading the gentle
+/// slopes the depth ramp produces.
+fn water_face_normal(
+    v0: [f32; 3],
+    v1: [f32; 3],
+    v2: [f32; 3],
+    _v3: [f32; 3],
+) -> [f32; 3] {
+    let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let b = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+    let n = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    if len < 1e-6 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [n[0] / len, n[1] / len, n[2] / len]
+    }
+}
+
+/// Append one quad to `verts` / `idx`. Corners must be CCW from
+/// the `normal` side. Two triangles, four vertices, six indices.
+fn push_quad(
+    verts: &mut Vec<MeshVertex>,
+    idx: &mut Vec<u32>,
+    v0: [f32; 3],
+    v1: [f32; 3],
+    v2: [f32; 3],
+    v3: [f32; 3],
+    normal: [f32; 3],
+) {
+    let base = verts.len() as u32;
+    verts.push(MeshVertex::new(v0, normal).with_uv([0.0, 1.0]));
+    verts.push(MeshVertex::new(v1, normal).with_uv([1.0, 1.0]));
+    verts.push(MeshVertex::new(v2, normal).with_uv([1.0, 0.0]));
+    verts.push(MeshVertex::new(v3, normal).with_uv([0.0, 0.0]));
+    idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
 /// Returns true if the player's AABB at `pos` overlaps any voxel
