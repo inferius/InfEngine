@@ -1631,6 +1631,11 @@ struct Voxel {
     /// and pushes the new resting position back. Drained when
     /// the column hits solid ground.
     water_active: HashSet<[i32; 3]>,
+    /// Spread depth from the nearest source. 0 = source (pond
+    /// gen + manual place), 1..=MAX_WATER_SPREAD = flow. Missing
+    /// entry = source (default 0). Capped so a single source
+    /// can't drown an arbitrarily large plain.
+    water_depth: HashMap<[i32; 3], u8>,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1775,9 +1780,14 @@ impl Voxel {
         // see whether the cell below is air. Replacement /
         // breakage doesn't actively clear the entry - the next
         // tick will notice the world block isn't water and
-        // self-purge.
+        // self-purge. Depth defaults to 0 (source) for direct
+        // writes; the fall / spread passes overwrite this when
+        // they propagate flow from a source.
         if block.0 == WATER_ID {
             self.water_active.insert(voxel);
+            self.water_depth.entry(voxel).or_insert(0);
+        } else {
+            self.water_depth.remove(&voxel);
         }
     }
 
@@ -2048,7 +2058,17 @@ impl Voxel {
             self.water_active.remove(pos);
         }
         for below in &to_fall {
+            // Falling water inherits the source's depth so a
+            // stream off a high source doesn't gain spread
+            // distance just by dropping.
+            let parent = [below[0], below[1] + 1, below[2]];
+            let depth = self
+                .water_depth
+                .get(&parent)
+                .copied()
+                .unwrap_or(0);
             self.world_set_tracked(*below, BlockId(WATER_ID));
+            self.water_depth.insert(*below, depth);
             let coords = Self::affected_chunks(*below);
             self.rebuild_chunks(&coords);
             self.water_active.insert(*below);
@@ -2060,6 +2080,95 @@ impl Voxel {
                     x: below[0],
                     y: below[1],
                     z: below[2],
+                    block: WATER_ID,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+        }
+    }
+
+    /// Horizontal spread pass. Every 4th tick the host walks the
+    /// active water set; any voxel that's resting on solid ground
+    /// (no air below) extends one cell into each of its N/S/E/W
+    /// air neighbours, provided:
+    ///  - the neighbour has a solid block below (no off-ledge
+    ///    spread - that becomes a fall instead),
+    ///  - the source's current depth is below `MAX_WATER_SPREAD`.
+    ///
+    /// Skip on client. Broadcasts each new flow voxel as a normal
+    /// `vx.edit` so peers render the same pool layout.
+    fn tick_water_spread(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if !self.net_tick.is_multiple_of(4) {
+            return;
+        }
+        if self.water_active.is_empty() {
+            return;
+        }
+        let candidates: Vec<[i32; 3]> = self
+            .water_active
+            .iter()
+            .take(64)
+            .copied()
+            .collect();
+        let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
+        for pos in &candidates {
+            if self.world.get(*pos).0 != WATER_ID {
+                continue;
+            }
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            if self.world.get(below).is_air() {
+                // Falls instead of spreading - leave it to
+                // `tick_water_fall`.
+                continue;
+            }
+            let depth = self
+                .water_depth
+                .get(pos)
+                .copied()
+                .unwrap_or(0);
+            if depth >= MAX_WATER_SPREAD {
+                continue;
+            }
+            let neighbours = [
+                [pos[0] + 1, pos[1], pos[2]],
+                [pos[0] - 1, pos[1], pos[2]],
+                [pos[0], pos[1], pos[2] + 1],
+                [pos[0], pos[1], pos[2] - 1],
+            ];
+            for n in &neighbours {
+                if !self.world.get(*n).is_air() {
+                    continue;
+                }
+                // Skip if neighbour already queued this tick.
+                if to_spawn.iter().any(|(p, _)| p == n) {
+                    continue;
+                }
+                to_spawn.push((*n, depth + 1));
+            }
+        }
+        if to_spawn.is_empty() {
+            return;
+        }
+        for (pos, depth) in &to_spawn {
+            self.world_set_tracked(*pos, BlockId(WATER_ID));
+            self.water_depth.insert(*pos, *depth);
+            let coords = Self::affected_chunks(*pos);
+            self.rebuild_chunks(&coords);
+            self.water_active.insert(*pos);
+        }
+        let cfg = bincode::config::standard();
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for (pos, _) in &to_spawn {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
                     block: WATER_ID,
                 };
                 self.edit_history.push(edit);
@@ -5091,6 +5200,7 @@ impl Voxel {
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             water_active: HashSet::new(),
+            water_depth: HashMap::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -12605,6 +12715,10 @@ impl AppHandler for Voxel {
         // below fall one block per tick. Bounded per-frame work
         // so a busy aquifer doesn't stall the host.
         self.tick_water_fall();
+        // Horizontal spread: every 4th host tick, water that's
+        // resting on solid ground extends one cell outward
+        // until the spread depth caps at `MAX_WATER_SPREAD`.
+        self.tick_water_spread();
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
@@ -13921,6 +14035,11 @@ const GLOWSTONE_ID: u16 = 28;
 /// Block id of water. Passable, instant-break, applies swim drag
 /// + buoyancy while the player AABB intersects it.
 const WATER_ID: u16 = 36;
+/// Maximum horizontal spread distance from a water source.
+/// Sources (manually placed + pond worldgen) live at depth 0 and
+/// each spread step bumps the cap by one. Caps so a single
+/// source can't drown an arbitrarily large plain.
+const MAX_WATER_SPREAD: u8 = 4;
 
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator
