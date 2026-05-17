@@ -1102,6 +1102,10 @@ struct Voxel {
     /// `damage_mob` whenever the killing blow is attributed to the
     /// host (id 0). Surfaced in the HUD + F3 debug panel.
     kill_count: u32,
+    /// Session counters for break / place actions the local
+    /// player completed. Surfaced via /stats.
+    blocks_broken: u64,
+    blocks_placed: u64,
     /// Current camera vertical FOV in radians. Smoothly lerps
     /// toward a wider angle while the player sprints, snaps back
     /// when they stop. Read by both the wgpu camera + the egui
@@ -4020,6 +4024,8 @@ impl Voxel {
             hurt_flash: 0.0,
             regen_accum: 0.0,
             kill_count: 0,
+            blocks_broken: 0,
+            blocks_placed: 0,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             stamina: STAMINA_MAX,
@@ -6558,6 +6564,18 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "stats" => {
+                            // Per-session stats. Pairs naturally
+                            // with /uptime + /pos for a quick
+                            // status dump.
+                            local_lines.push(format!(
+                                "Kills: {}  broke: {}  placed: {}",
+                                self.kill_count,
+                                self.blocks_broken,
+                                self.blocks_placed,
+                            ));
+                            handled_locally = true;
+                        }
                         "uptime" => {
                             // Session timer formatted as hh:mm:ss.
                             let secs = self
@@ -8938,6 +8956,9 @@ impl AppHandler for Voxel {
             if !is_client && broken != BlockId::AIR {
                 self.pickup(broken);
             }
+            if broken != BlockId::AIR {
+                self.blocks_broken = self.blocks_broken.saturating_add(1);
+            }
             // Final break SFX (the loop already plays intermediate
             // dig sounds while the player holds LMB).
             let voxel_center = [
@@ -9038,6 +9059,8 @@ impl AppHandler for Voxel {
                         .map(|d| d.color)
                         .unwrap_or([0.7, 0.7, 0.7]);
                     self.spawn_place_particles(hit.place_at, color);
+                    self.blocks_placed =
+                        self.blocks_placed.saturating_add(1);
                 }
             }
         }
