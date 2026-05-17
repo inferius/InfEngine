@@ -3613,6 +3613,11 @@ impl Voxel {
         let mut seed_update: Option<u32> = None;
         let mut weather_update: Option<u8> = None;
         let mut snow_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // Torch lean orientation updates received this tick. Drained
+        // into `self.torch_orient` after the net match arm releases
+        // its borrow on `self.net`. Server arm also rebroadcasts so
+        // every peer renders the matching wall mount.
+        let mut torch_orient_updates: Vec<([i32; 3], u8)> = Vec::new();
         let mut kick_reason: Option<String> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
@@ -3836,6 +3841,32 @@ impl Voxel {
                             >(&data, cfg)
                             {
                                 path_requests.push((client_id, v));
+                            }
+                        }
+                        "vx.torch_orient" => {
+                            // Cosmetic lean info that rides
+                            // alongside a torch place. Edit itself
+                            // was already reach-validated via
+                            // `vx.edit`; here we just record + fan
+                            // out to every other peer so they
+                            // render the matching wall / floor
+                            // mount.
+                            if let Ok(((v, orient), _)) =
+                                bincode::serde::decode_from_slice::<
+                                    ([i32; 3], u8),
+                                    _,
+                                >(&data, cfg)
+                            {
+                                torch_orient_updates.push((v, orient));
+                                if let Ok(buf) = bincode::serde::encode_to_vec(
+                                    (v, orient),
+                                    cfg,
+                                ) {
+                                    server.broadcast_bytes(
+                                        "vx.torch_orient",
+                                        buf,
+                                    );
+                                }
                             }
                         }
                         "vx.fellout" => {
@@ -4453,6 +4484,16 @@ impl Voxel {
                                 snow_updates.push((v, layers));
                             }
                         }
+                        "vx.torch_orient" => {
+                            if let Ok(((v, orient), _)) =
+                                bincode::serde::decode_from_slice::<
+                                    ([i32; 3], u8),
+                                    _,
+                                >(&data, cfg)
+                            {
+                                torch_orient_updates.push((v, orient));
+                            }
+                        }
                         "vx.kick" => {
                             if let Ok((reason, _)) =
                                 bincode::serde::decode_from_slice::<String, _>(
@@ -4631,6 +4672,9 @@ impl Voxel {
         }
         for (v, layers) in snow_updates {
             self.snow_positions.insert(v, layers.clamp(1, 8));
+        }
+        for (v, orient) in torch_orient_updates {
+            self.torch_orient.insert(v, orient);
         }
         if let Some(reason) = kick_reason {
             // Server kicked us. Notify the player + bounce back
@@ -12275,30 +12319,48 @@ impl AppHandler for Voxel {
                     // Record sticky torch orientation from the
                     // ray hit normal so a later neighbour change
                     // can't flip a floor torch into a wall torch.
-                    if block.0 == TORCH_ID {
-                        let n = hit.normal;
-                        let orient = if n[1] > 0 {
-                            0u8 // floor
-                        } else if n[0] > 0 {
-                            1
-                        } else if n[0] < 0 {
-                            2
-                        } else if n[2] > 0 {
-                            3
-                        } else if n[2] < 0 {
-                            4
+                    let torch_orient_msg: Option<([i32; 3], u8)> =
+                        if block.0 == TORCH_ID {
+                            let n = hit.normal;
+                            let orient = if n[1] > 0 {
+                                0u8
+                            } else if n[0] > 0 {
+                                1
+                            } else if n[0] < 0 {
+                                2
+                            } else if n[2] > 0 {
+                                3
+                            } else if n[2] < 0 {
+                                4
+                            } else {
+                                0
+                            };
+                            self.torch_orient
+                                .insert(hit.place_at, orient);
+                            Some((hit.place_at, orient))
                         } else {
-                            0
+                            None
                         };
-                        self.torch_orient
-                            .insert(hit.place_at, orient);
-                    }
                     if is_client {
                         self.world_set_tracked(hit.place_at, block);
                         let coords = Self::affected_chunks(hit.place_at);
                         self.rebuild_chunks(&coords);
-                        if let NetRole::Client { pending_edits, .. } = &mut self.net {
+                        if let NetRole::Client { client, pending_edits, .. } = &mut self.net {
                             pending_edits.push(edit);
+                            // Ship the torch orientation
+                            // alongside the place so the host +
+                            // every other peer renders the right
+                            // lean direction.
+                            if let Some(payload) = torch_orient_msg
+                                && let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        payload,
+                                        bincode::config::standard(),
+                                    )
+                            {
+                                let _ = client
+                                    .send_bytes("vx.torch_orient", buf);
+                            }
                         }
                     } else {
                         self.world_set_tracked(hit.place_at, block);
@@ -12308,6 +12370,20 @@ impl AppHandler for Voxel {
                             let cfg = bincode::config::standard();
                             if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
                                 server.broadcast_bytes("vx.edit", buf);
+                            }
+                            // Broadcast the host's torch lean so
+                            // remote clients render the matching
+                            // wall mount.
+                            if let Some(payload) = torch_orient_msg
+                                && let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        payload, cfg,
+                                    )
+                            {
+                                server.broadcast_bytes(
+                                    "vx.torch_orient",
+                                    buf,
+                                );
                             }
                         }
                         self.edit_history.push(edit);
