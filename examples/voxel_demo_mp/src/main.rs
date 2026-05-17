@@ -1281,6 +1281,10 @@ struct Voxel {
     /// emit chat lines on the day <-> night transitions without
     /// spamming every frame.
     was_night: bool,
+    /// `/lock` toggle on the host. When on, client-issued
+    /// `vx.edit` packets are dropped so only the host can modify
+    /// the world. Useful for showcase/no-grief sessions.
+    world_locked: bool,
     /// Maximum concurrent live mob count. Tweakable via /mobcap
     /// so players on slow machines can cut the spawn pressure;
     /// defaults to `MOB_CAP_DEFAULT`.
@@ -3216,6 +3220,13 @@ impl Voxel {
                 for (client_id, kind, data) in server.drain_bytes() {
                     match kind.as_str() {
                         "vx.edit" => {
+                            // World lock: ignore client edits
+                            // entirely. The host's own edits go
+                            // through the local pipeline + still
+                            // broadcast.
+                            if self.world_locked {
+                                continue;
+                            }
                             if let Ok((e, _)) =
                                 bincode::serde::decode_from_slice::<EditMsg, _>(&data, cfg)
                             {
@@ -4268,6 +4279,7 @@ impl Voxel {
             god_mode: false,
             invuln_remaining: 0.0,
             was_night: false,
+            world_locked: false,
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
             weather: 0,
@@ -8013,6 +8025,41 @@ impl Voxel {
                                         "Usage: /weather clear|rain"
                                             .to_string(),
                                     );
+                                }
+                            }
+                            handled_locally = true;
+                        }
+                        "lock" => {
+                            // Host-only world lock. Blocks any
+                            // vx.edit packets arriving from
+                            // clients. Host can still edit.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/lock is host-only.".to_string(),
+                                );
+                            } else {
+                                self.world_locked = !self.world_locked;
+                                let line = format!(
+                                    "* world {}",
+                                    if self.world_locked {
+                                        "LOCKED"
+                                    } else {
+                                        "unlocked"
+                                    }
+                                );
+                                self.chat_log.push((
+                                    std::time::Instant::now(),
+                                    line.clone(),
+                                ));
+                                if let NetRole::Server { server, .. } =
+                                    &mut self.net
+                                    && let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            &line,
+                                            bincode::config::standard(),
+                                        )
+                                {
+                                    server.broadcast_bytes("vx.chat", buf);
                                 }
                             }
                             handled_locally = true;
