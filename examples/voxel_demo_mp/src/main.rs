@@ -2257,10 +2257,13 @@ impl Voxel {
             return;
         }
         for liquid in LIQUIDS {
-            if (self.net_tick as u32)
-                .is_multiple_of(liquid.tick_period.max(1))
-            {
+            let nt = self.net_tick as u32;
+            // Fall runs on its own faster cadence so columns
+            // stream down before the next spread / decay pass.
+            if nt.is_multiple_of(liquid.fall_period.max(1)) {
                 self.tick_liquid_fall(liquid);
+            }
+            if nt.is_multiple_of(liquid.tick_period.max(1)) {
                 self.tick_liquid_spread(liquid);
                 if liquid.infinite_source {
                     self.tick_liquid_merge(liquid);
@@ -2284,7 +2287,7 @@ impl Voxel {
             .liquid_active
             .iter()
             .filter(|p| self.world.get(**p).0 == liquid_id)
-            .take(64)
+            .take(512)
             .copied()
             .collect();
         if candidates.is_empty() {
@@ -2334,6 +2337,16 @@ impl Voxel {
                 if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
                     server.broadcast_bytes("vx.edit", buf);
                 }
+                // Level sync so client renders the matching
+                // corner-height slope. Falling water inherits
+                // the parent level - clients need that too.
+                let level =
+                    self.liquid_level.get(below).copied().unwrap_or(0);
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec((*below, level), cfg)
+                {
+                    server.broadcast_bytes("vx.liquid_lvl", buf);
+                }
             }
         }
     }
@@ -2355,7 +2368,7 @@ impl Voxel {
             .liquid_active
             .iter()
             .filter(|p| self.world.get(**p).0 == liquid_id)
-            .take(64)
+            .take(512)
             .copied()
             .collect();
         let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
@@ -2425,7 +2438,7 @@ impl Voxel {
         }
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
-            for (pos, _) in &to_spawn {
+            for (pos, lvl) in &to_spawn {
                 let edit = EditMsg {
                     x: pos[0],
                     y: pos[1],
@@ -2435,6 +2448,11 @@ impl Voxel {
                 self.edit_history.push(edit);
                 if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
                     server.broadcast_bytes("vx.edit", buf);
+                }
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec((*pos, *lvl), cfg)
+                {
+                    server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
             }
         }
@@ -2506,7 +2524,7 @@ impl Voxel {
             .liquid_level
             .iter()
             .filter(|(_, d)| **d > 0)
-            .take(64)
+            .take(256)
             .map(|(v, _)| *v)
             .collect();
         for pos in &candidates {
@@ -2532,6 +2550,13 @@ impl Voxel {
             if sources >= 2 {
                 self.liquid_level.insert(*pos, 0);
                 self.liquid_mesh_dirty = true;
+                let cfg = bincode::config::standard();
+                if let NetRole::Server { server, .. } = &mut self.net
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec((*pos, 0u8), cfg)
+                {
+                    server.broadcast_bytes("vx.liquid_lvl", buf);
+                }
             }
         }
     }
@@ -2549,7 +2574,7 @@ impl Voxel {
             .liquid_level
             .iter()
             .filter(|(_, d)| **d > 0)
-            .take(64)
+            .take(256)
             .map(|(v, d)| (*v, *d))
             .collect();
         let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
@@ -4258,6 +4283,13 @@ impl Voxel {
         let mut seed_update: Option<u32> = None;
         let mut weather_update: Option<u8> = None;
         let mut snow_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // Liquid level updates received this tick. Drained into
+        // `self.liquid_level` after the net match arm releases
+        // its borrow on `self.net`. Client-only path: the host
+        // sets the level directly via the tick passes; the
+        // broadcast is only consumed by clients so their slope
+        // mesh matches the host's depth ramp.
+        let mut liquid_level_updates: Vec<([i32; 3], u8)> = Vec::new();
         // Torch lean orientation updates received this tick. Drained
         // into `self.torch_orient` after the net match arm releases
         // its borrow on `self.net`. Server arm also rebroadcasts so
@@ -5129,6 +5161,16 @@ impl Voxel {
                                 snow_updates.push((v, layers));
                             }
                         }
+                        "vx.liquid_lvl" => {
+                            if let Ok(((v, level), _)) =
+                                bincode::serde::decode_from_slice::<
+                                    ([i32; 3], u8),
+                                    _,
+                                >(&data, cfg)
+                            {
+                                liquid_level_updates.push((v, level));
+                            }
+                        }
                         "vx.torch_orient" => {
                             if let Ok(((v, orient), _)) =
                                 bincode::serde::decode_from_slice::<
@@ -5320,6 +5362,13 @@ impl Voxel {
         }
         for (v, orient) in torch_orient_updates {
             self.torch_orient.insert(v, orient);
+        }
+        if !liquid_level_updates.is_empty() {
+            for (v, level) in liquid_level_updates {
+                self.liquid_level.insert(v, level.min(7));
+            }
+            // New levels reshape the slope mesh.
+            self.liquid_mesh_dirty = true;
         }
         if let Some(reason) = kick_reason {
             // Server kicked us. Notify the player + bounce back
@@ -14638,11 +14687,18 @@ struct Liquid {
     /// Horizontal spread distance cap from any source. MC water
     /// = 7, MC overworld lava = 3.
     max_range: u8,
-    /// Net ticks between spread updates. MC ticks are 50 ms; a
-    /// net tick is ~16 ms (60 Hz), so water (every 5 game ticks
-    /// = 250 ms) needs ~15 net ticks here. Lava overworld
-    /// (every 30 game ticks = 1500 ms) maps to ~90.
+    /// Net ticks between spread + merge + decay updates. MC
+    /// ticks are 50 ms; a net tick is ~16 ms (60 Hz), so water
+    /// (every 5 game ticks = 250 ms) maps to ~15 net ticks
+    /// here. Lava overworld (every 30 game ticks = 1500 ms)
+    /// maps to ~90.
     tick_period: u32,
+    /// Net ticks between fall updates. Kept shorter than
+    /// `tick_period` so a column streams down faster than the
+    /// horizontal spread, matching MC where falling water has
+    /// the special "level 8" full-block state and drops
+    /// immediately.
+    fall_period: u32,
     /// Whether two adjacent sources promote a flow voxel between
     /// them to a source. MC: water = true, lava = false.
     infinite_source: bool,
@@ -14657,12 +14713,14 @@ const LIQUIDS: &[Liquid] = &[
         block_id: WATER_ID,
         max_range: 7,
         tick_period: 15,
+        fall_period: 3,
         infinite_source: true,
     },
     Liquid {
         block_id: LAVA_ID,
         max_range: 3,
         tick_period: 90,
+        fall_period: 15,
         infinite_source: false,
     },
 ];
