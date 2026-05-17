@@ -1199,6 +1199,12 @@ struct Voxel {
     /// player completed. Surfaced via /stats.
     blocks_broken: u64,
     blocks_placed: u64,
+    /// Cumulative horizontal travel distance for /stats reports.
+    /// Accumulates each tick whenever the player moves on the
+    /// X/Z plane and resets at session boundaries (no persist).
+    distance_walked: f32,
+    /// Last frame's XZ position used for the delta calculation.
+    last_walk_xz: Option<(f32, f32)>,
     /// Recent local placement history (oldest first). Drives the
     /// Z-key "undo last place" affordance. Capped to a small
     /// window so a long session doesn't bloat memory.
@@ -4354,6 +4360,8 @@ impl Voxel {
             kill_count: 0,
             blocks_broken: 0,
             blocks_placed: 0,
+            distance_walked: 0.0,
+            last_walk_xz: None,
             place_history: Vec::new(),
             z_prev: false,
             show_chunk_grid: false,
@@ -5057,6 +5065,18 @@ impl Voxel {
             self.step_cooldown = 0.0;
         }
 
+        // Distance-walked tracker. Uses XZ deltas only so
+        // fall/jump motion doesn't inflate the counter.
+        let cur_xz = (self.player_pos.x, self.player_pos.z);
+        if let Some(prev) = self.last_walk_xz {
+            let dx = cur_xz.0 - prev.0;
+            let dz = cur_xz.1 - prev.1;
+            let step = (dx * dx + dz * dz).sqrt();
+            if step.is_finite() && step < 10.0 {
+                self.distance_walked += step;
+            }
+        }
+        self.last_walk_xz = Some(cur_xz);
         // Lightning state machine. Only fires while raining.
         // `next_lightning_at` counts down; on zero we trigger a
         // 0.18s flash + a thud and seed the next interval at a
@@ -7151,10 +7171,11 @@ impl Voxel {
                             // with /uptime + /pos for a quick
                             // status dump.
                             local_lines.push(format!(
-                                "Kills: {}  broke: {}  placed: {}",
+                                "Kills: {}  broke: {}  placed: {}  walked: {:.0} m",
                                 self.kill_count,
                                 self.blocks_broken,
                                 self.blocks_placed,
+                                self.distance_walked,
                             ));
                             handled_locally = true;
                         }
