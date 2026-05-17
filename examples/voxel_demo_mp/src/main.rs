@@ -1250,6 +1250,10 @@ struct Voxel {
     /// so players on slow machines can cut the spawn pressure;
     /// defaults to `MOB_CAP_DEFAULT`.
     mob_cap: usize,
+    /// `/freezetime` toggle. When on, the day_time clock stops
+    /// advancing so the sun + sky stay frozen. Useful for
+    /// screenshots / debugging.
+    freeze_time: bool,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -4029,6 +4033,7 @@ impl Voxel {
             fly_mode: false,
             god_mode: false,
             mob_cap: MOB_CAP_DEFAULT,
+            freeze_time: false,
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -6822,6 +6827,18 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "freezetime" | "freeze" => {
+                            self.freeze_time = !self.freeze_time;
+                            local_lines.push(format!(
+                                "Time clock {}",
+                                if self.freeze_time {
+                                    "PAUSED"
+                                } else {
+                                    "RUNNING"
+                                }
+                            ));
+                            handled_locally = true;
+                        }
                         "godmode" | "god" => {
                             self.god_mode = !self.god_mode;
                             local_lines.push(format!(
@@ -8335,8 +8352,11 @@ impl AppHandler for Voxel {
         self.particles.tick(dt);
         // Tick the day clock unconditionally - even paused / in
         // menus the world keeps turning so the host's lighting is
-        // never out of sync with what a client sees.
-        self.day_time = (self.day_time + dt).rem_euclid(DAY_LENGTH_S);
+        // never out of sync with what a client sees. /freezetime
+        // pauses the advance.
+        if !self.freeze_time {
+            self.day_time = (self.day_time + dt).rem_euclid(DAY_LENGTH_S);
+        }
 
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
