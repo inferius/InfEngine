@@ -1336,6 +1336,10 @@ struct Voxel {
     /// attacker + by `vx.mob_event` broadcasts on every other
     /// peer so everyone sees the flash.
     mob_hurt_flash: HashMap<u32, f32>,
+    /// Seconds since each mob last took damage. Drives HP regen
+    /// so mobs only heal when out of combat. Reset on every
+    /// `damage_mob` hit, advanced each tick by `update_mobs`.
+    mob_no_hit_time: HashMap<u32, f32>,
     /// Seconds remaining in the local death-fade animation per
     /// mob. Server populates from `MobState.dying` when a kill
     /// fires; client populates on `vx.mob_event { kind: 1 }`. The
@@ -1457,6 +1461,8 @@ impl Voxel {
         }
         // Local visual flash on every peer that has the mob.
         self.mob_hurt_flash.insert(mob_id, 0.30);
+        // Reset the no-hit timer so the regen path waits anew.
+        self.mob_no_hit_time.insert(mob_id, 0.0);
         // Broadcast the event so remote clients flash + play
         // sound. Hurt = 0, Death = 1.
         if let NetRole::Server { server, .. } = &self.net {
@@ -1590,6 +1596,28 @@ impl Voxel {
         // from `remote_mobs` which is updated by `vx.mob`.
         if matches!(self.net, NetRole::Client { .. }) {
             return;
+        }
+        // HP regen: any mob that hasn't been hit in 6 s slowly
+        // refills toward its kind's max. Heal 1 HP/s. We modify
+        // the live MobState before the rest of the AI tick uses
+        // the values.
+        for m in self.mobs.iter_mut() {
+            if m.dying > 0.0 {
+                continue;
+            }
+            let t = self
+                .mob_no_hit_time
+                .entry(m.id)
+                .and_modify(|v| *v += dt)
+                .or_insert(dt);
+            let max = if m.kind == KIND_ZOMBIE {
+                ZOMBIE_MAX_HEALTH
+            } else {
+                MOB_MAX_HEALTH
+            };
+            if *t > 6.0 && m.health < max {
+                m.health = (m.health + 1.0 * dt).min(max);
+            }
         }
         // Step every mob toward its target.
         let day_time = self.day_time;
@@ -4188,6 +4216,7 @@ impl Voxel {
             mob_say_timers: HashMap::new(),
             mob_last_xz: HashMap::new(),
             mob_hurt_flash: HashMap::new(),
+            mob_no_hit_time: HashMap::new(),
             mob_dying: HashMap::new(),
             mob_lunge: HashMap::new(),
             master_addr: format!(
