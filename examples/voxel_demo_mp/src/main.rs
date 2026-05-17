@@ -2179,8 +2179,28 @@ impl Voxel {
                     "You died and respawned at spawn.".to_string()
                 },
             ));
-            if let NetRole::Client { client, .. } = &self.net {
-                let _ = client.send_bytes("vx.fellout", Vec::new());
+            // Broadcast a public death notice in MP so peers see
+            // the event. Host tags it with `self.player_name`;
+            // clients send the raw line and the server's chat
+            // path wraps it with the sender's identity.
+            let public = "* I just died!".to_string();
+            let cfg = bincode::config::standard();
+            match &mut self.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    let line = format!("* {} died.", self.player_name);
+                    self.chat_log
+                        .push((std::time::Instant::now(), line.clone()));
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
+                        server.broadcast_bytes("vx.chat", buf);
+                    }
+                }
+                NetRole::Client { client, .. } => {
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&public, cfg) {
+                        let _ = client.send_bytes("vx.chat", buf);
+                    }
+                    let _ = client.send_bytes("vx.fellout", Vec::new());
+                }
             }
         }
     }
