@@ -7268,6 +7268,90 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "fw" | "firework" => {
+                            // Spawn a vertical rocket trail of
+                            // particles from the player's feet
+                            // that "explodes" in a multi-colour
+                            // burst near apex. Cosmetic; nothing
+                            // is persisted.
+                            let base = [
+                                self.player_pos.x,
+                                self.player_pos.y - 0.6,
+                                self.player_pos.z,
+                            ];
+                            // Streak: a column of fading orange.
+                            for i in 0..20 {
+                                let t = i as f32 / 20.0;
+                                self.particles.particles.push(
+                                    infengine_particles::Particle {
+                                        position: [
+                                            base[0],
+                                            base[1] + t * 9.0,
+                                            base[2],
+                                        ],
+                                        velocity: [0.0, 6.0, 0.0],
+                                        color: [
+                                            1.0,
+                                            0.7 - t * 0.4,
+                                            0.2,
+                                            0.9 - t * 0.6,
+                                        ],
+                                        size: 0.18,
+                                        age: 0.0,
+                                        lifetime: 0.7 - t * 0.4,
+                                    },
+                                );
+                            }
+                            // Burst: scattered sparks at the
+                            // apex with hash-derived hue.
+                            let apex = [base[0], base[1] + 9.0, base[2]];
+                            let mut rng: u32 = ((self.net_tick as u32)
+                                .wrapping_mul(0x9E37_79B1))
+                                ^ 0xFAFAFA;
+                            let mut rand01 = || -> f32 {
+                                rng ^= rng << 13;
+                                rng ^= rng >> 17;
+                                rng ^= rng << 5;
+                                (rng as f32 / u32::MAX as f32)
+                                    .clamp(0.0, 1.0)
+                            };
+                            let hue_base = rand01();
+                            for _ in 0..60 {
+                                let theta = rand01() * std::f32::consts::TAU;
+                                let phi = (rand01() - 0.5)
+                                    * std::f32::consts::PI;
+                                let speed = 5.0 + rand01() * 3.0;
+                                let vx = theta.cos() * phi.cos() * speed;
+                                let vy = phi.sin() * speed;
+                                let vz = theta.sin() * phi.cos() * speed;
+                                let h =
+                                    (hue_base + rand01() * 0.2).fract();
+                                let tau = std::f32::consts::TAU;
+                                let r =
+                                    (0.5 + 0.5 * (h * tau).sin()).clamp(0.0, 1.0);
+                                let g = (0.5
+                                    + 0.5 * ((h + 0.33) * tau).sin())
+                                    .clamp(0.0, 1.0);
+                                let b = (0.5
+                                    + 0.5 * ((h + 0.66) * tau).sin())
+                                    .clamp(0.0, 1.0);
+                                self.particles.particles.push(
+                                    infengine_particles::Particle {
+                                        position: apex,
+                                        velocity: [vx, vy, vz],
+                                        color: [r, g, b, 1.0],
+                                        size: 0.18,
+                                        age: 0.0,
+                                        lifetime: 1.6,
+                                    },
+                                );
+                            }
+                            self.sfx_at("firework", base, |a, g| {
+                                let _ = a.play_thud(180.0, 0.3 * g);
+                            });
+                            local_lines.push("Boom.".to_string());
+                            handled_locally = true;
+                        }
                         "chunkinfo" => {
                             // Diagnostic: chunk count + size +
                             // pending queue + edit history length.
