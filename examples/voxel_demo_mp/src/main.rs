@@ -8262,6 +8262,21 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "giveall" => {
+                            // Drops one of every block type into
+                            // the local inventory. Handy for UI
+                            // testing or quickly stocking a
+                            // builder slot.
+                            for bt in BLOCK_TYPES.iter() {
+                                if is_tool_block(BlockId(bt.id)) {
+                                    continue;
+                                }
+                                self.pickup(BlockId(bt.id));
+                            }
+                            local_lines
+                                .push("Granted one of each block.".to_string());
+                            handled_locally = true;
+                        }
                         "tool" => {
                             // Quick pickaxe grant: /tool wood|stone|iron.
                             // Equivalent to /give pickaxe_<tier> 1 but
