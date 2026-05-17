@@ -551,6 +551,13 @@ struct ServerStateV2 {
     /// as the in-memory `torch_orient` map.
     #[serde(default)]
     torch_orient: Vec<([i32; 3], u8)>,
+    /// Persisted water spread depth per wet voxel. 0 = source,
+    /// 1..=MAX_WATER_SPREAD = flow. Missing entries default to
+    /// 0 on load - acceptable for old saves but means the
+    /// pre-spread budget is forfeit (water won't widen further
+    /// after a reload of a v0 save).
+    #[serde(default)]
+    water_depth: Vec<([i32; 3], u8)>,
 }
 
 fn default_player_health() -> f32 {
@@ -2718,6 +2725,14 @@ impl Voxel {
                     for (v, o) in state.torch_orient {
                         self.torch_orient.insert(v, o);
                     }
+                    // Replay the persisted water spread depths so
+                    // re-spread doesn't restart on every load. New
+                    // saves carry full depth info; older v2 saves
+                    // without the field land at depth 0 (treated
+                    // as source) which is fine for small pools.
+                    for (v, d) in state.water_depth {
+                        self.water_depth.insert(v, d.min(MAX_WATER_SPREAD));
+                    }
                     // Restore inventories into a side map indexed by
                     // client name. They get re-keyed to live client
                     // ids on connect (see `tick_net`).
@@ -3197,6 +3212,11 @@ impl Voxel {
                 .torch_orient
                 .iter()
                 .map(|(v, o)| (*v, *o))
+                .collect(),
+            water_depth: self
+                .water_depth
+                .iter()
+                .map(|(v, d)| (*v, *d))
                 .collect(),
         };
         match bincode::serde::encode_to_vec(&state, cfg) {
