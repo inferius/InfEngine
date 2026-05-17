@@ -2232,6 +2232,12 @@ impl Voxel {
             return 1.0;
         }
         let level = self.liquid_level.get(&pos).copied().unwrap_or(0);
+        // Source (level 0) renders as a full block per the
+        // reference - a bucket pour creates a "full" cell from
+        // which the slope drops away.
+        if level == 0 {
+            return 1.0;
+        }
         if level >= 8 {
             return 1.0;
         }
@@ -16064,7 +16070,10 @@ const LIQUIDS: &[Liquid] = &[
     Liquid {
         block_id: WATER_ID,
         max_range: 7,
-        tick_period: 15,
+        // ~83 ms per tick at 60 fps. Slightly faster than MC's
+        // 250 ms so the cascade after a source removal drains
+        // a 7-radius pool in roughly a second instead of three.
+        tick_period: 5,
         fall_period: 3,
         infinite_source: true,
         swim_horiz_drag: 0.45,
