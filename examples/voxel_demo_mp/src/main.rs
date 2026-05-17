@@ -7584,6 +7584,61 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "worldgen" | "gen" => {
+                            // /worldgen with no arg prints the
+                            // current mode; with classic / flat /
+                            // islands / amplified it switches +
+                            // regenerates every cached chunk.
+                            // Host-only since the workers share
+                            // the WORLDGEN atomic.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/worldgen is host-only.".to_string(),
+                                );
+                            } else if arg.is_empty() {
+                                local_lines.push(format!(
+                                    "Worldgen: {:?}",
+                                    WorldGen::current()
+                                ));
+                            } else if let Some(g) = WorldGen::from_str(arg) {
+                                WORLDGEN.store(
+                                    g as u8,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                let to_unload: Vec<ChunkCoord> = self
+                                    .world
+                                    .iter_chunks()
+                                    .map(|(c, _)| *c)
+                                    .collect();
+                                if !to_unload.is_empty() {
+                                    let renderer = self
+                                        .renderer
+                                        .as_mut()
+                                        .expect("renderer ready");
+                                    for entry in self.chunk_meshes.drain(..)
+                                    {
+                                        renderer.remove_mesh(entry.2);
+                                    }
+                                    for cc in &to_unload {
+                                        self.world.remove_chunk(*cc);
+                                    }
+                                }
+                                self.pending_chunks.clear();
+                                self.pending_set.clear();
+                                local_lines.push(format!(
+                                    "Worldgen set to {g:?}; chunks regenerating."
+                                ));
+                            } else {
+                                local_lines.push(
+                                    "Usage: /worldgen classic|flat|islands|amplified"
+                                        .to_string(),
+                                );
+                            }
+                            handled_locally = true;
+                        }
                         "clearedits" | "wipe" => {
                             // Host-only: drop the entire edit
                             // history + every cached chunk. Next
