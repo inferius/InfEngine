@@ -629,14 +629,26 @@ struct ClientInv {
 }
 
 impl ClientInv {
-    /// Fresh inventory matching the host's starting layout: hotbar
-    /// slots 1..=BLOCK_TYPES.len() get a full stack each.
+    /// Fresh inventory matching the host's curated starting
+    /// bundle: 4 wood tools + small block stacks so the player
+    /// can immediately mine across every category.
     fn starter() -> Self {
-        let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] = [None; INVENTORY_SLOTS];
-        for (i, bt) in BLOCK_TYPES.iter().enumerate() {
+        let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
+            [None; INVENTORY_SLOTS];
+        let seed: &[(u16, u8)] = &[
+            (16, 1),
+            (23, 1),
+            (29, 1),
+            (32, 1),
+            (2, 16),
+            (7, 16),
+            (8, 16),
+            (10, 4),
+        ];
+        for (i, (bid, count)) in seed.iter().enumerate() {
             let slot = i + 1;
             if slot < HOTBAR_SLOTS {
-                inv[slot] = Some((BlockId(bt.id), STACK_MAX));
+                inv[slot] = Some((BlockId(*bid), *count));
             }
         }
         Self {
@@ -4544,15 +4556,26 @@ impl Voxel {
             tab_held: false,
             pickup_toasts: Vec::new(),
             inventory: {
-                // Seed the hotbar with one starter stack per known
-                // block type so the demo is playable from the first
-                // frame. Slot 0 stays empty - that's the "break /
-                // empty hand" tool.
-                let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] = [None; INVENTORY_SLOTS];
-                for (i, bt) in BLOCK_TYPES.iter().enumerate() {
+                // Curated starter hotbar: empty hand + a small
+                // basic-block bundle + the four wood tools so
+                // the player can immediately mine across every
+                // category without crafting first.
+                let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
+                    [None; INVENTORY_SLOTS];
+                let seed: &[(u16, u8)] = &[
+                    (16, 1), // wood pickaxe
+                    (23, 1), // wood sword
+                    (29, 1), // wood shovel
+                    (32, 1), // wood axe
+                    (2, 16), // dirt
+                    (7, 16), // planks
+                    (8, 16), // cobble
+                    (10, 4), // torch
+                ];
+                for (i, (bid, count)) in seed.iter().enumerate() {
                     let slot = i + 1;
                     if slot < HOTBAR_SLOTS {
-                        inv[slot] = Some((BlockId(bt.id), STACK_MAX));
+                        inv[slot] = Some((BlockId(*bid), *count));
                     }
                 }
                 inv
@@ -7956,20 +7979,28 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "resetinventory" | "resetinv" => {
-                            // Restore the freshly-seeded starter
-                            // inventory: hotbar slots 1..=N get
-                            // one full stack of each known block,
-                            // slot 0 + storage stays empty. Mostly
-                            // useful after /clearinventory in
-                            // local play.
+                            // Restore the curated starter bundle
+                            // (wood tools + basic blocks). Slot
+                            // 0 + storage stay empty.
                             for s in self.inventory.iter_mut() {
                                 *s = None;
                             }
-                            for (i, bt) in BLOCK_TYPES.iter().enumerate() {
+                            let seed: &[(u16, u8)] = &[
+                                (16, 1),
+                                (23, 1),
+                                (29, 1),
+                                (32, 1),
+                                (2, 16),
+                                (7, 16),
+                                (8, 16),
+                                (10, 4),
+                            ];
+                            for (i, (bid, count)) in seed.iter().enumerate()
+                            {
                                 let slot = i + 1;
                                 if slot < HOTBAR_SLOTS {
                                     self.inventory[slot] =
-                                        Some((BlockId(bt.id), STACK_MAX));
+                                        Some((BlockId(*bid), *count));
                                 }
                             }
                             for s in self.craft_grid.iter_mut() {
