@@ -6113,6 +6113,34 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "killmobs" => {
+                            // Host-only: nuke every live mob.
+                            // Pre-bleed HP to one hit so the
+                            // damage_mob call triggers the death
+                            // path the normal way (drops, remove
+                            // broadcast, event).
+                            if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+                                local_lines.push(
+                                    "/killmobs is host-only.".to_string(),
+                                );
+                            } else {
+                                let ids: Vec<u32> =
+                                    self.mobs.iter().map(|m| m.id).collect();
+                                let n = ids.len();
+                                for id in ids {
+                                    if let Some(m) = self
+                                        .mobs
+                                        .iter_mut()
+                                        .find(|m| m.id == id)
+                                    {
+                                        m.health = MOB_HIT_DAMAGE;
+                                    }
+                                    self.damage_mob(id, None);
+                                }
+                                local_lines.push(format!("Killed {n} mobs."));
+                            }
+                            handled_locally = true;
+                        }
                         "spawnmob" => {
                             // Host-only: spawn a sheep or zombie
                             // a few blocks in front of the player.
