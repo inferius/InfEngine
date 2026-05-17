@@ -9563,7 +9563,9 @@ impl Voxel {
                             if chat_open {
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(chat_buf)
-                                        .desired_width(360.0)
+                                        .desired_width(640.0)
+                                        .font(egui::FontId::proportional(18.0))
+                                        .margin(egui::Vec2::new(8.0, 6.0))
                                         .hint_text("press T to chat, Enter sends"),
                                 );
                                 resp.request_focus();
