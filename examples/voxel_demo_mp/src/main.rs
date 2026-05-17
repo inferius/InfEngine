@@ -1881,27 +1881,35 @@ impl Voxel {
             self.liquid_level.remove(&voxel);
         }
         // Any world edit can change a neighbour's air / solid /
-        // water status which feeds into the corner-height blend,
-        // so flag the slope mesh dirty whenever a liquid sits
-        // next to the touched voxel. The same neighbour scan also
-        // re-enters those liquid voxels into `liquid_active` -
-        // critical for refill semantics: when a player digs out a
-        // block under a pool, the pool cells that had previously
-        // settled out of the queue need to wake up so the next
-        // fall / spread tick can fill the new hole.
-        let neighbours = [
-            [voxel[0] + 1, voxel[1], voxel[2]],
-            [voxel[0] - 1, voxel[1], voxel[2]],
-            [voxel[0], voxel[1], voxel[2] + 1],
-            [voxel[0], voxel[1], voxel[2] - 1],
-            [voxel[0], voxel[1] + 1, voxel[2]],
-            [voxel[0], voxel[1] - 1, voxel[2]],
-        ];
+        // water status, which feeds into both the corner-height
+        // blend and the liquid simulation - a settled pool cell
+        // needs to wake up the moment the player digs out a hole
+        // anywhere within flow range.
+        //
+        // Scan a 5x5x5 cube around the touched voxel and pull
+        // every liquid cell in range back into `liquid_active`.
+        // That covers MC's typical 7-block horizontal flow and
+        // any vertical column with room to spare. 125 hash
+        // lookups per world write is cheap; the upside is that
+        // an entire pool snaps awake the moment its basin
+        // changes shape, without per-frame full-chunk rescans.
         let mut neighbour_liquid = false;
-        for n in &neighbours {
-            if self.liquid_positions.contains(n) {
-                neighbour_liquid = true;
-                self.liquid_active.insert(*n);
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                for dz in -2..=2 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let n = [
+                        voxel[0] + dx,
+                        voxel[1] + dy,
+                        voxel[2] + dz,
+                    ];
+                    if self.liquid_positions.contains(&n) {
+                        neighbour_liquid = true;
+                        self.liquid_active.insert(n);
+                    }
+                }
             }
         }
         if neighbour_liquid {
