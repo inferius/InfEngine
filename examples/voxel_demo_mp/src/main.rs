@@ -5730,6 +5730,10 @@ impl Voxel {
         let mut inv_actions: Vec<InvAction> = Vec::new();
         let mut action_start = false;
         let mut action_resume = false;
+        // Set by the recipe-book output slot click handler; drained
+        // after the egui closure exits so the craft-grid mutation
+        // can borrow `self` exclusively.
+        let mut prefill_recipe_idx: Option<usize> = None;
         let mut action_quit = false;
         let mut action_menu_to_settings = false;
         let mut action_pause_to_settings = false;
@@ -6421,7 +6425,9 @@ impl Voxel {
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    for r in RECIPES {
+                                    for (ri, r) in
+                                        RECIPES.iter().enumerate()
+                                    {
                                         ui.horizontal(|ui| {
                                             for (bid, n) in r.inputs {
                                                 let bt = block_type(*bid);
@@ -6467,14 +6473,21 @@ impl Voxel {
                                                             .unwrap_or("?"),
                                                     )
                                                 });
-                                            draw_slot_widget(
+                                            let out_resp = draw_slot_widget(
                                                 ui,
                                                 out_icon,
                                                 atlas_tex_id,
                                                 false,
                                                 false,
-                                                egui::Sense::hover(),
-                                            );
+                                                egui::Sense::click(),
+                                            )
+                                            .on_hover_text(format!(
+                                                "{} - click to fill craft grid",
+                                                r.name
+                                            ));
+                                            if out_resp.clicked() {
+                                                prefill_recipe_idx = Some(ri);
+                                            }
                                             ui.label(r.name);
                                         });
                                     }
@@ -10050,6 +10063,83 @@ impl Voxel {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
             self.mouse_dy = 0.0;
+        }
+        // Recipe-book auto-fill: try to pull every input stack
+        // from `self.inventory` into the 2x2 craft grid. Returns
+        // any earlier withdrawals if the recipe demands more
+        // than the player carries.
+        if let Some(idx) = prefill_recipe_idx
+            && let Some(recipe) = RECIPES.get(idx)
+        {
+            // Inventory of (slot_idx, original_stack) we may
+            // have to refund on failure.
+            let mut taken: Vec<(usize, (BlockId, u8))> = Vec::new();
+            let mut placed: [Option<(BlockId, u8)>; 4] = [None; 4];
+            let mut ok = true;
+            for (i, (bid, n)) in recipe.inputs.iter().enumerate() {
+                if i >= 4 {
+                    break;
+                }
+                let need = *n;
+                let target = BlockId(*bid);
+                // Look for a slot that has the needed block.
+                let mut found_slot: Option<usize> = None;
+                for (si, slot) in self.inventory.iter().enumerate() {
+                    if let Some((b, c)) = slot
+                        && *b == target
+                        && *c >= need
+                    {
+                        found_slot = Some(si);
+                        break;
+                    }
+                }
+                match found_slot {
+                    Some(si) => {
+                        let original =
+                            self.inventory[si].expect("verified above");
+                        taken.push((si, original));
+                        let remaining =
+                            original.1.saturating_sub(need);
+                        self.inventory[si] = if remaining == 0 {
+                            None
+                        } else {
+                            Some((original.0, remaining))
+                        };
+                        placed[i] = Some((target, need));
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                // Return whatever was in the craft grid before
+                // the auto-fill so it's not silently lost.
+                let returns: Vec<(BlockId, u8)> = self
+                    .craft_grid
+                    .iter_mut()
+                    .filter_map(|s| s.take())
+                    .collect();
+                for (b, c) in returns {
+                    for _ in 0..c {
+                        self.pickup(b);
+                    }
+                }
+                self.craft_grid = placed;
+            } else {
+                // Roll back.
+                for (si, original) in taken {
+                    self.inventory[si] = Some(original);
+                }
+                self.chat_log.push((
+                    std::time::Instant::now(),
+                    format!(
+                        "Not enough materials for {}",
+                        recipe.name
+                    ),
+                ));
+            }
         }
         if action_resume {
             self.state = AppState::Playing;
