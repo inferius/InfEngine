@@ -4829,7 +4829,7 @@ impl Voxel {
             NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
         };
         let plate_now = std::time::Instant::now();
-        let nameplates: Vec<([f32; 3], String)> = self
+        let nameplates: Vec<([f32; 3], String, [u8; 3])> = self
             .remote_interp
             .iter()
             .filter(|(id, _)| **id != own_id_for_plates)
@@ -4840,7 +4840,21 @@ impl Voxel {
                     .get(id)
                     .cloned()
                     .unwrap_or_else(|| format!("p{id}"));
-                (p.pos, name)
+                // Stable name colour per id: hash-derived hue,
+                // brightened so the text reads against the sky.
+                let h = (id.wrapping_mul(2654435761)) as f32 / u32::MAX as f32;
+                let tau = std::f32::consts::TAU;
+                let r_c = (0.6 + 0.4 * (h * tau).sin().abs()).min(1.0);
+                let g_c =
+                    (0.6 + 0.4 * ((h + 0.33) * tau).sin().abs()).min(1.0);
+                let b_c =
+                    (0.6 + 0.4 * ((h + 0.66) * tau).sin().abs()).min(1.0);
+                let color = [
+                    (r_c * 255.0) as u8,
+                    (g_c * 255.0) as u8,
+                    (b_c * 255.0) as u8,
+                ];
+                (p.pos, name, color)
             })
             .collect();
         // Pickup toast snapshot: trim entries older than the
@@ -5886,7 +5900,7 @@ impl Voxel {
                         egui::Order::Foreground,
                         egui::Id::new("voxel_nameplates"),
                     ));
-                    for (pos, name) in &nameplates {
+                    for (pos, name, color) in &nameplates {
                         let world = glam::Vec3::new(pos[0], pos[1] + 0.55, pos[2]);
                         let clip = hud_view_proj
                             * glam::Vec4::new(world.x, world.y, world.z, 1.0);
@@ -5926,7 +5940,7 @@ impl Voxel {
                             egui::Align2::CENTER_BOTTOM,
                             name,
                             font,
-                            egui::Color32::from_rgb(245, 245, 245),
+                            egui::Color32::from_rgb(color[0], color[1], color[2]),
                         );
                     }
                 }
