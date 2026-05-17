@@ -12877,7 +12877,11 @@ impl AppHandler for Voxel {
         let mut mine_break: Option<[i32; 3]> = None;
         if lmb_active && let Some(hit) = self.target {
             let block = self.world.get(hit.voxel);
-            if block != BlockId::AIR {
+            // Liquids are not mineable with bare hand or tool.
+            // Players have to scoop them with the matching bucket
+            // (water_bucket / lava_bucket) instead. The break
+            // path bails so the LMB swing has no effect.
+            if block != BlockId::AIR && !block_is_liquid(block) {
                 // Restart the session if either the target voxel
                 // changed or the block at the target has been
                 // replaced (e.g. by another player).
@@ -13151,13 +13155,25 @@ impl AppHandler for Voxel {
                 && let Some(block) = selected_block
                 && !is_tool_block(block)
             {
-                // Reject placement when it would intersect the player
-                // capsule - otherwise the player gets stuck inside
-                // the freshly placed block.
-                let candidate = self.player_pos; // current eye pos
-                let test_pos = candidate;
-                let (min, max) = body_aabb(test_pos);
-                let p = hit.place_at;
+                // Pick the destination voxel: if the crosshair is
+                // on a `F_REPLACEABLE` cell (water, lava, snow
+                // layer), the new block lands AT that cell -
+                // mirroring MC where a block dropped into water
+                // displaces the water. Otherwise the usual
+                // "adjacent to the hit face" cell applies.
+                let target_voxel = if block_is_replaceable(
+                    self.world.get(hit.voxel),
+                ) && self.world.get(hit.voxel).0 != block.0
+                {
+                    hit.voxel
+                } else {
+                    hit.place_at
+                };
+                // Reject placement when it would intersect the
+                // player capsule - otherwise the player gets stuck
+                // inside the freshly placed block.
+                let (min, max) = body_aabb(self.player_pos);
+                let p = target_voxel;
                 let voxel_min = [p[0] as f32, p[1] as f32, p[2] as f32];
                 let voxel_max = [p[0] as f32 + 1.0, p[1] as f32 + 1.0, p[2] as f32 + 1.0];
                 let overlaps = max.x > voxel_min[0]
@@ -13169,16 +13185,19 @@ impl AppHandler for Voxel {
                 // Block-occupied check: any non-air voxel marked
                 // `F_NO_PLACE` (torch, flowers, ...) blocks RMB
                 // placement so the player has to break the
-                // decoration first.
-                let occupied =
-                    block_is_placement_blocked(self.world.get(hit.place_at));
+                // decoration first. Replaceable voxels (liquids,
+                // snow layer) are explicitly NOT occupied.
+                let target_block = self.world.get(target_voxel);
+                let occupied = block_is_placement_blocked(target_block)
+                    || (!target_block.is_air()
+                        && !block_is_replaceable(target_block));
                 // Torches need at least one solid neighbour
                 // (floor or wall) to mount on. A neighbour that's
                 // air OR another `F_NO_PLACE` decoration doesn't
                 // count as support - torches can't hang off
                 // torches / flowers.
                 let torch_unsupported = block.0 == TORCH_ID && {
-                    let q = hit.place_at;
+                    let q = target_voxel;
                     let unsupportive = |b: BlockId| {
                         b.is_air() || block_is_placement_blocked(b)
                     };
@@ -13196,9 +13215,9 @@ impl AppHandler for Voxel {
                 };
                 if !overlaps && !torch_unsupported && !occupied {
                     let edit = EditMsg {
-                        x: hit.place_at[0],
-                        y: hit.place_at[1],
-                        z: hit.place_at[2],
+                        x: target_voxel[0],
+                        y: target_voxel[1],
+                        z: target_voxel[2],
                         block: block.0,
                     };
                     // Record sticky torch orientation from the
@@ -13221,14 +13240,14 @@ impl AppHandler for Voxel {
                                 0
                             };
                             self.torch_orient
-                                .insert(hit.place_at, orient);
-                            Some((hit.place_at, orient))
+                                .insert(target_voxel, orient);
+                            Some((target_voxel, orient))
                         } else {
                             None
                         };
                     if is_client {
-                        self.world_set_tracked(hit.place_at, block);
-                        let coords = Self::affected_chunks(hit.place_at);
+                        self.world_set_tracked(target_voxel, block);
+                        let coords = Self::affected_chunks(target_voxel);
                         self.rebuild_chunks(&coords);
                         if let NetRole::Client { client, pending_edits, .. } = &mut self.net {
                             pending_edits.push(edit);
@@ -13248,8 +13267,8 @@ impl AppHandler for Voxel {
                             }
                         }
                     } else {
-                        self.world_set_tracked(hit.place_at, block);
-                        let coords = Self::affected_chunks(hit.place_at);
+                        self.world_set_tracked(target_voxel, block);
+                        let coords = Self::affected_chunks(target_voxel);
                         self.rebuild_chunks(&coords);
                         if let NetRole::Server { server, .. } = &self.net {
                             let cfg = bincode::config::standard();
@@ -13292,9 +13311,9 @@ impl AppHandler for Voxel {
                     let key = format!("dig:{}", block_material(block));
                     let freq = 380.0 + (block.0 as f32) * 22.0;
                     let place_center = [
-                        hit.place_at[0] as f32 + 0.5,
-                        hit.place_at[1] as f32 + 0.5,
-                        hit.place_at[2] as f32 + 0.5,
+                        target_voxel[0] as f32 + 0.5,
+                        target_voxel[1] as f32 + 0.5,
+                        target_voxel[2] as f32 + 0.5,
                     ];
                     self.sfx_at(&key, place_center, move |a, g| {
                         let _ = a.play_click(freq, 0.18 * g);
@@ -13306,10 +13325,10 @@ impl AppHandler for Voxel {
                         .get(block)
                         .map(|d| d.color)
                         .unwrap_or([0.7, 0.7, 0.7]);
-                    self.spawn_place_particles(hit.place_at, color);
+                    self.spawn_place_particles(target_voxel, color);
                     self.blocks_placed =
                         self.blocks_placed.saturating_add(1);
-                    self.place_history.push(hit.place_at);
+                    self.place_history.push(target_voxel);
                     if self.place_history.len() > 32 {
                         let drop = self.place_history.len() - 32;
                         self.place_history.drain(0..drop);
@@ -14391,6 +14410,11 @@ const F_SWIM: u8 = 1 << 4; // liquid: swim drag + buoyancy
 /// skips it entirely. Saves the cost of generating face geometry
 /// only to discard it at registration time.
 const F_DEDICATED_RENDER: u8 = 1 << 5;
+/// Block can be replaced in-place by RMB-placement. Liquids
+/// plus thin overlays (snow layer, future tall grass) opt in so
+/// the player can drown a water cell with a stone block or drop
+/// a torch into snow without breaking the layer first.
+const F_REPLACEABLE: u8 = 1 << 6;
 
 /// One block kind's full definition. Adding a new block = one
 /// entry here + a hotbar slot below; the registry, atlas loader,
@@ -14531,7 +14555,7 @@ const BLOCK_TYPES: &[BlockType] = &[
         // tile assignments so the texture still gets sourced
         // from the atlas / asset pack.
         id: 15, name: "snow", color: [0.97, 0.98, 1.00], transparent: true,
-        flags: F_DEDICATED_RENDER,
+        flags: F_DEDICATED_RENDER | F_REPLACEABLE,
         top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
@@ -14693,7 +14717,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // with a bare hand.
     BlockType {
         id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
-        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE,
         top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
@@ -14705,7 +14729,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // future commit alongside other liquid effects.
     BlockType {
         id: 37, name: "lava", color: [1.00, 0.40, 0.10], transparent: true,
-        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE,
         top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
@@ -14925,6 +14949,15 @@ fn block_is_swim_medium(b: BlockId) -> bool {
 #[inline]
 fn block_skips_chunk_mesh(b: BlockId) -> bool {
     block_has_flag(b, F_DEDICATED_RENDER)
+}
+
+/// Block can be displaced by RMB-placement (the placed block
+/// lands AT the voxel, the old block is overwritten). Liquid
+/// cells + the snow layer opt in. Air is implicitly replaceable
+/// via the normal "place at adjacent air cell" path.
+#[inline]
+fn block_is_replaceable(b: BlockId) -> bool {
+    block_has_flag(b, F_REPLACEABLE)
 }
 
 /// Map a block id to the Minecraft sound-material name. Used to
