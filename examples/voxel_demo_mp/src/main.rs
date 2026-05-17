@@ -370,6 +370,18 @@ struct ServerStateV2 {
     /// `DAY_LENGTH_S`). Persisted so a host restart doesn't reset
     /// the world to mid-morning.
     day_time: f32,
+    /// Host player health (0..=PLAYER_MAX_HEALTH). `serde(default)`
+    /// fills with `PLAYER_MAX_HEALTH` when loading older saves
+    /// that didn't include HP.
+    #[serde(default = "default_player_health")]
+    player_health: f32,
+    /// Host kill counter persisted across sessions.
+    #[serde(default)]
+    kill_count: u32,
+}
+
+fn default_player_health() -> f32 {
+    PLAYER_MAX_HEALTH
 }
 
 /// On-disk per-client inventory snapshot. `(block_id, count)`
@@ -1881,6 +1893,9 @@ impl Voxel {
                     }
                     self.edit_history = state.edits;
                     self.day_time = state.day_time.rem_euclid(DAY_LENGTH_S);
+                    self.player_health =
+                        state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
+                    self.kill_count = state.kill_count;
                     // Restore inventories into a side map indexed by
                     // client name. They get re-keyed to live client
                     // ids on connect (see `tick_net`).
@@ -2102,6 +2117,8 @@ impl Voxel {
             edits: self.edit_history.clone(),
             inventories: by_name.into_iter().collect(),
             day_time: self.day_time,
+            player_health: self.player_health,
+            kill_count: self.kill_count,
         };
         match bincode::serde::encode_to_vec(&state, cfg) {
             Ok(payload) => {
