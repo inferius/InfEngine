@@ -1625,6 +1625,12 @@ struct Voxel {
     /// existing voxel's layer until it tops out, then a fresh
     /// snow voxel is painted on top.
     snow_positions: HashMap<[i32; 3], u8>,
+    /// Water voxels that the host should re-evaluate for falling.
+    /// Populated on chunk load + on every water place. Each tick
+    /// pops a bounded slice, attempts a single one-voxel fall,
+    /// and pushes the new resting position back. Drained when
+    /// the column hits solid ground.
+    water_active: HashSet<[i32; 3]>,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1763,6 +1769,15 @@ impl Voxel {
         // override so a future placement starts fresh.
         if block.0 != TORCH_ID {
             self.torch_orient.remove(&voxel);
+        }
+        // Water bookkeeping: every fresh water voxel re-enters
+        // the fall queue so the host's `tick_water_fall` can
+        // see whether the cell below is air. Replacement /
+        // breakage doesn't actively clear the entry - the next
+        // tick will notice the world block isn't water and
+        // self-purge.
+        if block.0 == WATER_ID {
+            self.water_active.insert(voxel);
         }
     }
 
@@ -1987,6 +2002,72 @@ impl Voxel {
             }
         }
         Vec3::new(0.0, 90.0, 0.0)
+    }
+
+    /// Authoritative water-fall pass. Water voxels in
+    /// `water_active` with air directly below get cloned down one
+    /// block per call; the new voxel re-enters the queue so a
+    /// column keeps falling until it hits ground. Resting water
+    /// drains out of the active set so the queue size stays
+    /// bounded. Caps work at 64 voxels/call to keep frame time
+    /// flat even on a freshly-flooded chunk.
+    fn tick_water_fall(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if self.water_active.is_empty() {
+            return;
+        }
+        // Snapshot up to 64 candidate voxels so we can release
+        // the immutable borrow on `self.water_active` before
+        // mutating the world.
+        let candidates: Vec<[i32; 3]> = self
+            .water_active
+            .iter()
+            .take(64)
+            .copied()
+            .collect();
+        let mut to_fall: Vec<[i32; 3]> = Vec::new();
+        let mut to_clear: Vec<[i32; 3]> = Vec::new();
+        for pos in &candidates {
+            if self.world.get(*pos).0 != WATER_ID {
+                // Voxel was broken or replaced - drop from set.
+                to_clear.push(*pos);
+                continue;
+            }
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            if self.world.get(below).is_air() {
+                to_fall.push(below);
+            } else {
+                // Resting on ground or other water - no more
+                // work for this voxel.
+                to_clear.push(*pos);
+            }
+        }
+        for pos in &to_clear {
+            self.water_active.remove(pos);
+        }
+        for below in &to_fall {
+            self.world_set_tracked(*below, BlockId(WATER_ID));
+            let coords = Self::affected_chunks(*below);
+            self.rebuild_chunks(&coords);
+            self.water_active.insert(*below);
+        }
+        let cfg = bincode::config::standard();
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for below in &to_fall {
+                let edit = EditMsg {
+                    x: below[0],
+                    y: below[1],
+                    z: below[2],
+                    block: WATER_ID,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+        }
     }
 
     /// Server-side mob update: gravity-snap to surface, walk
@@ -5009,6 +5090,7 @@ impl Voxel {
             torch_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
+            water_active: HashSet::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -5070,6 +5152,8 @@ impl Voxel {
                                     || b.0 == GLOWSTONE_ID
                                 {
                                     self.torch_positions.insert(v);
+                                } else if b.0 == WATER_ID {
+                                    self.water_active.insert(v);
                                 }
                             }
                         }
@@ -5200,6 +5284,12 @@ impl Voxel {
                                 || b.0 == GLOWSTONE_ID
                             {
                                 self.torch_positions.insert([
+                                    origin.x as i32 + lx,
+                                    origin.y as i32 + ly,
+                                    origin.z as i32 + lz,
+                                ]);
+                            } else if b.0 == WATER_ID {
+                                self.water_active.insert([
                                     origin.x as i32 + lx,
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
@@ -12511,6 +12601,10 @@ impl AppHandler for Voxel {
         // path reads `self.remote_mobs` which gets populated by
         // both `tick_mobs` (server) and `vx.mob` (client).
         self.tick_mobs(dt);
+        // Authoritative water physics: water voxels with air
+        // below fall one block per tick. Bounded per-frame work
+        // so a busy aquifer doesn't stall the host.
+        self.tick_water_fall();
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
