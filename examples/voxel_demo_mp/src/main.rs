@@ -2207,10 +2207,12 @@ impl Voxel {
     /// Surface height in voxel units for a single liquid cell.
     /// Matches MC's (8 - level) / 9 ramp so a source (level 0)
     /// fills 8/9 of the cell and a thin level-7 flow leaves
-    /// only 1/9. Falling liquid (same-kind voxel directly above)
-    /// fills to 1.0 so a stream reads as a continuous column.
-    /// Returns 0.0 for voxels that aren't `liquid_id`, so the
-    /// corner-height accumulator treats them as "no contribution".
+    /// only 1/9. Level 8 is the "falling" marker - a column /
+    /// stream cell that ignores the level ramp and renders as
+    /// a full block. Falling liquid (same-kind voxel directly
+    /// above) also rounds to 1.0 so a stream stays continuous
+    /// even if the level map hasn't caught up yet. Returns 0.0
+    /// for voxels that aren't `liquid_id`.
     fn liquid_surface_height(&self, pos: [i32; 3], liquid_id: u16) -> f32 {
         if self.world.get(pos).0 != liquid_id {
             return 0.0;
@@ -2218,7 +2220,10 @@ impl Voxel {
         if self.world.get([pos[0], pos[1] + 1, pos[2]]).0 == liquid_id {
             return 1.0;
         }
-        let level = self.liquid_level.get(&pos).copied().unwrap_or(0).min(7);
+        let level = self.liquid_level.get(&pos).copied().unwrap_or(0);
+        if level >= 8 {
+            return 1.0;
+        }
         (8 - level as i32).max(1) as f32 / 9.0
     }
 
@@ -2685,23 +2690,17 @@ impl Voxel {
             self.liquid_active.remove(pos);
         }
         for below in &to_fall {
-            // Falling cell inherits the parent's level so a
-            // stream off a cliff doesn't reset the spread budget
-            // at the landing pad.
-            let parent = [below[0], below[1] + 1, below[2]];
-            let level = self
-                .liquid_level
-                .get(&parent)
-                .copied()
-                .unwrap_or(0);
-            // Washing a decoration out of the way drops it as
-            // an item the player can pick up.
+            // Falling water carries the MC "level 8" marker.
+            // Renders as a full block, ignores the level-decay
+            // pass, and stays a column until it hits ground -
+            // then the spread step turns it into a regular flow
+            // level the next tick.
             let washed = self.world.get(*below);
             if !washed.is_air() && block_is_washable(washed) {
                 self.spawn_drop(washed, *below);
             }
             self.world_set_tracked(*below, BlockId(liquid_id));
-            self.liquid_level.insert(*below, level);
+            self.liquid_level.insert(*below, 8);
             let coords = Self::affected_chunks(*below);
             self.rebuild_chunks(&coords);
             self.liquid_active.insert(*below);
@@ -2753,6 +2752,107 @@ impl Voxel {
             .take(512)
             .copied()
             .collect();
+        // MC-style level recomputation. For every non-source,
+        // non-falling flow cell:
+        //   * If same liquid sits directly above -> become a
+        //     falling column (level 8).
+        //   * Else: new_level = min(NSEW liquid neighbour
+        //     levels) + 1. If no lower neighbour exists OR the
+        //     new level would exceed `max_range`, the cell
+        //     evaporates back to air.
+        // Source cells (level 0) and falling cells (level 8)
+        // skip this phase - sources are permanent, falling cells
+        // settle on the next fall tick.
+        let mut to_set_level: Vec<([i32; 3], u8)> = Vec::new();
+        let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
+        for pos in &candidates {
+            let current = self
+                .liquid_level
+                .get(pos)
+                .copied()
+                .unwrap_or(0);
+            if current == 0 || current == 8 {
+                continue;
+            }
+            let above = self.world.get([pos[0], pos[1] + 1, pos[2]]);
+            if above.0 == liquid_id {
+                to_set_level.push((*pos, 8));
+                continue;
+            }
+            let nsew = [
+                [pos[0] + 1, pos[1], pos[2]],
+                [pos[0] - 1, pos[1], pos[2]],
+                [pos[0], pos[1], pos[2] + 1],
+                [pos[0], pos[1], pos[2] - 1],
+            ];
+            let mut min_n: u8 = u8::MAX;
+            for n in &nsew {
+                if self.world.get(*n).0 != liquid_id {
+                    continue;
+                }
+                let nl = self.liquid_level.get(n).copied().unwrap_or(0);
+                if nl < min_n {
+                    min_n = nl;
+                }
+            }
+            if min_n == u8::MAX {
+                to_evaporate.push(*pos);
+                continue;
+            }
+            let new_level = min_n.saturating_add(1);
+            if new_level > max_range {
+                to_evaporate.push(*pos);
+                continue;
+            }
+            if new_level != current {
+                to_set_level.push((*pos, new_level));
+            }
+        }
+        // Apply recompute + evaporation before the spread pass
+        // reads levels.
+        for (pos, lvl) in &to_set_level {
+            self.liquid_level.insert(*pos, *lvl);
+            self.liquid_mesh_dirty = true;
+        }
+        let cfg_pre = bincode::config::standard();
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for (pos, lvl) in &to_set_level {
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec((*pos, *lvl), cfg_pre)
+                {
+                    server.broadcast_bytes("vx.liquid_lvl", buf);
+                }
+            }
+        }
+        for pos in &to_evaporate {
+            self.world_set_tracked(*pos, BlockId::AIR);
+            let coords = Self::affected_chunks(*pos);
+            self.rebuild_chunks(&coords);
+        }
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for pos in &to_evaporate {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: 0,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg_pre) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+        }
+        // Re-snapshot candidates after the evaporation pass so
+        // the spread loop doesn't try to flow out of a cell
+        // that just became air.
+        let candidates: Vec<[i32; 3]> = self
+            .liquid_active
+            .iter()
+            .filter(|p| self.world.get(**p).0 == liquid_id)
+            .take(512)
+            .copied()
+            .collect();
         let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
         for pos in &candidates {
             let below = [pos[0], pos[1] - 1, pos[2]];
@@ -2767,6 +2867,11 @@ impl Voxel {
                 .get(pos)
                 .copied()
                 .unwrap_or(0);
+            // Falling cells settle (no horizontal spread until
+            // the fall pass converts them).
+            if level == 8 {
+                continue;
+            }
             if level >= max_range {
                 continue;
             }
