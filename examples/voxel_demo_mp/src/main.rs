@@ -11098,12 +11098,23 @@ impl AppHandler for Voxel {
                     * (lunge_phase * std::f32::consts::PI).sin().max(0.0);
                 let lunge_fwd =
                     Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin()) * lunge_amp;
+                // Small walk-bob: id-hashed phase + day_time so
+                // mobs visibly bounce while wandering. Skipped on
+                // dying mobs so the death tilt stays clean.
+                let walk_bob = if death_progress <= 0.0 {
+                    let phase = mob.id.wrapping_mul(2654435761) as f32
+                        / u32::MAX as f32
+                        * std::f32::consts::TAU;
+                    (self.day_time * 4.0 + phase).sin() * 0.04
+                } else {
+                    0.0
+                };
                 let body = Mat4::from_scale_rotation_translation(
                     body_scale,
                     body_rot,
                     Vec3::new(
                         mob.pos[0] + lunge_fwd.x,
-                        mob.pos[1] + body_y_off - death_sink,
+                        mob.pos[1] + body_y_off - death_sink + walk_bob,
                         mob.pos[2] + lunge_fwd.z,
                     ),
                 );
@@ -11146,7 +11157,7 @@ impl AppHandler for Voxel {
                     };
                 let head_pos = Vec3::new(
                     mob.pos[0] + lunge_fwd.x,
-                    mob.pos[1] + head_off_y - death_sink,
+                    mob.pos[1] + head_off_y - death_sink + walk_bob,
                     mob.pos[2] + lunge_fwd.z,
                 ) + fwd * head_off_fwd;
                 let head_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
