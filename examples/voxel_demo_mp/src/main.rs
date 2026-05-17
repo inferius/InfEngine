@@ -6113,6 +6113,21 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "version" | "ver" => {
+                            // Print the build's CARGO_PKG_VERSION
+                            // plus the active net role so quick
+                            // diagnostic chat doesn't need F3.
+                            let role = match &self.net {
+                                NetRole::Offline => "offline",
+                                NetRole::Server { .. } => "host",
+                                NetRole::Client { .. } => "client",
+                            };
+                            local_lines.push(format!(
+                                "voxel_demo_mp v{}  [{role}]",
+                                env!("CARGO_PKG_VERSION")
+                            ));
+                            handled_locally = true;
+                        }
                         "save" => {
                             // Host-only: flush the server state
                             // (edit history + inventories + day
