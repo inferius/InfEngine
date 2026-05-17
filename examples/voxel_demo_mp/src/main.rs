@@ -5771,9 +5771,48 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n]"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>"
                                     .to_string(),
                             );
+                        }
+                        "day" => {
+                            // Snap day_time to mid-morning.
+                            self.day_time = DAY_LENGTH_S * 0.25;
+                            local_lines.push("Time set to morning.".to_string());
+                            handled_locally = true;
+                        }
+                        "night" => {
+                            // Snap day_time to midnight.
+                            self.day_time = DAY_LENGTH_S * 0.75;
+                            local_lines.push("Time set to night.".to_string());
+                            handled_locally = true;
+                        }
+                        "time" => {
+                            // /time <hh>: jump to a specific
+                            // 24-hour mark. Accepts 0..24, wraps
+                            // anything else.
+                            if arg.is_empty() {
+                                let frac = (self.day_time / DAY_LENGTH_S)
+                                    .rem_euclid(1.0);
+                                let hours = frac * 24.0;
+                                let hh = hours.floor() as i32;
+                                let mm = ((hours - hh as f32) * 60.0) as i32;
+                                local_lines.push(format!(
+                                    "Current time: {hh:02}:{mm:02}"
+                                ));
+                            } else if let Ok(hour) = arg.parse::<f32>() {
+                                let h = hour.rem_euclid(24.0);
+                                self.day_time = DAY_LENGTH_S * (h / 24.0);
+                                local_lines.push(format!(
+                                    "Time set to {:.1}h.",
+                                    h
+                                ));
+                            } else {
+                                local_lines.push(format!(
+                                    "Cannot parse hour: {arg}"
+                                ));
+                            }
+                            handled_locally = true;
                         }
                         "give" => {
                             // Add stacks of a named block to the
