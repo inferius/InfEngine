@@ -2000,6 +2000,16 @@ impl Voxel {
     /// edit-apply path so both the player and remote players see
     /// puffs when something mines.
     fn spawn_break_particles(&mut self, voxel: [i32; 3]) {
+        // No-tint variant: callers that don't know the source
+        // block fall through to a neutral dirt-ish color.
+        self.spawn_break_particles_tinted(voxel, [0.75, 0.55, 0.30]);
+    }
+
+    /// Tinted variant. `color` is the linear-RGB albedo of the
+    /// broken block; the debris cubes pick up that hue with a
+    /// small per-particle brightness jitter so they read as
+    /// material-matched chips instead of a generic puff.
+    fn spawn_break_particles_tinted(&mut self, voxel: [i32; 3], color: [f32; 3]) {
         let pos = [
             voxel[0] as f32 + 0.5,
             voxel[1] as f32 + 0.5,
@@ -2019,10 +2029,18 @@ impl Voxel {
             let vx = (rand01() * 2.0 - 1.0) * 3.0;
             let vy = rand01() * 3.5;
             let vz = (rand01() * 2.0 - 1.0) * 3.0;
+            // Small per-particle brightness jitter so the puff
+            // doesn't read as a flat monochrome cluster.
+            let j = 0.85 + rand01() * 0.30;
             self.particles.particles.push(infengine_particles::Particle {
                 position: pos,
                 velocity: [vx, vy, vz],
-                color: [0.75, 0.55, 0.30, 1.0],
+                color: [
+                    (color[0] * j).clamp(0.0, 1.0),
+                    (color[1] * j).clamp(0.0, 1.0),
+                    (color[2] * j).clamp(0.0, 1.0),
+                    1.0,
+                ],
                 size: 0.12,
                 age: 0.0,
                 lifetime: 0.5,
@@ -5107,6 +5125,14 @@ impl AppHandler for Voxel {
             // pop it into the inventory (greedy collection - air
             // just no-ops).
             let broken = self.world.get(voxel);
+            // Tint the debris with the broken block's albedo so a
+            // stone break sprays grey chips, wood sprays brown,
+            // glass sprays pale blue, etc.
+            let break_color = self
+                .registry
+                .get(broken)
+                .map(|d| d.color)
+                .unwrap_or([0.75, 0.55, 0.30]);
             let edit = EditMsg {
                 x: voxel[0],
                 y: voxel[1],
@@ -5117,7 +5143,7 @@ impl AppHandler for Voxel {
                 self.world_set_tracked(voxel, BlockId::AIR);
                 let coords = Self::affected_chunks(voxel);
                 self.rebuild_chunks(&coords);
-                self.spawn_break_particles(voxel);
+                self.spawn_break_particles_tinted(voxel, break_color);
                 if let NetRole::Client { pending_edits, .. } = &mut self.net {
                     pending_edits.push(edit);
                 }
@@ -5125,7 +5151,7 @@ impl AppHandler for Voxel {
                 self.world_set_tracked(voxel, BlockId::AIR);
                 let coords = Self::affected_chunks(voxel);
                 self.rebuild_chunks(&coords);
-                self.spawn_break_particles(voxel);
+                self.spawn_break_particles_tinted(voxel, break_color);
                 if let NetRole::Server { server, .. } = &self.net {
                     let cfg = bincode::config::standard();
                     if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
