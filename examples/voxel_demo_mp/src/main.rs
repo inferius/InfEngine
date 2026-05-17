@@ -307,7 +307,7 @@ fn block_required_tier(block: BlockId) -> u8 {
 
 /// True if the block id represents a tool / non-placeable item.
 fn is_tool_block(block: BlockId) -> bool {
-    matches!(block.0, 16..=18)
+    matches!(block.0, 16..=19)
 }
 
 const MOB_CAP_DEFAULT: usize = 12;
@@ -1557,20 +1557,21 @@ impl Voxel {
         // for the animation.
         self.mobs[idx].dying = MOB_DEATH_FADE;
         self.mob_dying.insert(mob_id, MOB_DEATH_FADE);
-        // Loot: 1-3 wool + 1-2 meat. Quantities seeded from the
-        // mob id so a save/replay produces identical drops.
+        // Per-kind loot table. Sheep drops 1-3 wool + 1-2 meat;
+        // chicken drops 1-2 feathers + 1-2 meat. Quantities are
+        // seeded from the mob id so save/replay matches.
+        let kind = self.mobs[idx].kind;
         let seed = mob_id.wrapping_mul(2654435761);
-        let wool_qty = 1 + (seed & 0x3) as u8; // 1..=3 (mostly 1-2)
-        let meat_qty = 1 + ((seed >> 8) & 0x1) as u8; // 1..=2
-        let wool_qty = wool_qty.min(3);
-        let meat_qty = meat_qty.min(2);
-        // Credit drops to the attacker's inventory. Host attacker
-        // = `None` (use `self.inventory` directly), remote client
-        // = look up by id in `inventories`.
+        let meat_qty = (1 + ((seed >> 8) & 0x1) as u8).min(2);
+        let (loot_id, loot_qty) = if kind == KIND_CHICKEN {
+            (BlockId(19), (1 + ((seed >> 4) & 0x1) as u8).min(2))
+        } else {
+            (BlockId(11), (1 + (seed & 0x3) as u8).min(3))
+        };
         match attacker_client_id {
             None | Some(0) => {
-                for _ in 0..wool_qty {
-                    self.pickup(BlockId(11));
+                for _ in 0..loot_qty {
+                    self.pickup(loot_id);
                 }
                 for _ in 0..meat_qty {
                     self.pickup(BlockId(12));
@@ -1585,8 +1586,8 @@ impl Voxel {
                 } = &mut self.net
                     && let Some(inv) = inventories.get_mut(&cid)
                 {
-                    for _ in 0..wool_qty {
-                        inv_pickup(&mut inv.inventory, BlockId(11));
+                    for _ in 0..loot_qty {
+                        inv_pickup(&mut inv.inventory, loot_id);
                     }
                     for _ in 0..meat_qty {
                         inv_pickup(&mut inv.inventory, BlockId(12));
@@ -8255,6 +8256,33 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "tool" => {
+                            // Quick pickaxe grant: /tool wood|stone|iron.
+                            // Equivalent to /give pickaxe_<tier> 1 but
+                            // shorter to type.
+                            let id_opt: Option<u16> = match arg
+                                .to_lowercase()
+                                .as_str()
+                            {
+                                "wood" => Some(16),
+                                "stone" => Some(17),
+                                "iron" => Some(18),
+                                _ => None,
+                            };
+                            match id_opt {
+                                None => local_lines.push(
+                                    "Usage: /tool wood|stone|iron"
+                                        .to_string(),
+                                ),
+                                Some(id) => {
+                                    self.pickup(BlockId(id));
+                                    local_lines.push(format!(
+                                        "Granted {arg} pickaxe."
+                                    ));
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "give" => {
                             // Add stacks of a named block to the
                             // local inventory. In MP this only
@@ -11599,6 +11627,15 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
+    },
+    // Chicken feathers drop. Cosmetic item used for the
+    // chicken-themed recipe slot - not placeable as a world
+    // block, so the place path treats it like the pickaxes.
+    BlockType {
+        id: 19, name: "feather", color: [0.95, 0.95, 0.95], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
     },
 ];
 
