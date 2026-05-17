@@ -4408,7 +4408,27 @@ impl Voxel {
                             let hours_total = frac * 24.0;
                             let hh = hours_total.floor() as i32;
                             let mm = ((hours_total - hh as f32) * 60.0) as i32;
-                            ui.label(format!("Time: {hh:02}:{mm:02}    Kills: {kill_count}"));
+                            // Cardinal direction the player is
+                            // facing. Yaw=0 -> east (+X); rotate
+                            // by quadrants for the standard
+                            // N/E/S/W readout.
+                            let yaw_norm = dbg_yaw.rem_euclid(std::f32::consts::TAU);
+                            let octant = (yaw_norm / std::f32::consts::FRAC_PI_4)
+                                .round() as i32
+                                & 7;
+                            let dir = match octant {
+                                0 => "E",
+                                1 => "NE",
+                                2 => "N",
+                                3 => "NW",
+                                4 => "W",
+                                5 => "SW",
+                                6 => "S",
+                                _ => "SE",
+                            };
+                            ui.label(format!(
+                                "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}"
+                            ));
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,
