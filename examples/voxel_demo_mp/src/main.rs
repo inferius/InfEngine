@@ -2736,11 +2736,21 @@ impl Voxel {
                 [0, 0, 1],
                 [0, 0, -1],
             ];
+            // Spread destination filter: air, washable, or same
+            // liquid. Same-liquid neighbours need writes too so
+            // the decay phase doesn't starve interior pond cells
+            // - the strongest contributor wins via
+            // `put_water_update`.
+            let spread_dest = |b: BlockId| {
+                b.is_air()
+                    || block_is_washable(b)
+                    || b.0 == liquid_id
+            };
             let mut weights: [u32; 4] = [u32::MAX; 4];
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
                 let nb = self.world.get(n);
-                if !nb.is_air() && !block_is_washable(nb) {
+                if !spread_dest(nb) {
                     continue;
                 }
                 weights[i] = self.distance_to_drop(n, 4);
@@ -2752,7 +2762,7 @@ impl Voxel {
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
                 let nb = self.world.get(n);
-                if !nb.is_air() && !block_is_washable(nb) {
+                if !spread_dest(nb) {
                     continue;
                 }
                 if any_reachable && weights[i] != min_w {
@@ -2831,21 +2841,43 @@ impl Voxel {
         let mut placed_levels: Vec<([i32; 3], u8)> = Vec::new();
         for (pos, level, falling) in &writes {
             let existing = self.world.get(*pos);
+            let existing_level =
+                self.liquid_level.get(pos).copied().unwrap_or(0);
             // Sources are sacred - never overwrite a level-0
             // voxel with a flow write.
-            if existing.0 == liquid_id
-                && self.liquid_level.get(pos).copied().unwrap_or(0) == 0
-            {
+            if existing.0 == liquid_id && existing_level == 0 {
                 continue;
             }
             let washable = block_is_washable(existing);
             if !existing.is_air() && existing.0 != liquid_id && !washable {
                 continue;
             }
+            let final_level = if *falling { 8 } else { *level };
+            // Don't downgrade an existing flow cell with a weaker
+            // write. The recompute phase already adjusted it; a
+            // stale neighbour's write at higher level shouldn't
+            // push the cell backwards. Sources are caught above.
+            if existing.0 == liquid_id
+                && existing_level != 0
+                && existing_level < final_level
+            {
+                self.liquid_active.insert(*pos);
+                continue;
+            }
+            // No-op skip: if the cell already has this liquid at
+            // the same level, the write would just re-flag the
+            // mesh dirty every tick and produce the visible
+            // "wobble" the user sees in steady-state pools.
+            // Apply-only-on-change keeps a stable pond stable.
+            if existing.0 == liquid_id
+                && existing_level == final_level
+            {
+                self.liquid_active.insert(*pos);
+                continue;
+            }
             if !existing.is_air() && washable {
                 self.spawn_drop(existing, *pos);
             }
-            let final_level = if *falling { 8 } else { *level };
             self.world_set_tracked(*pos, BlockId(liquid_id));
             self.liquid_level.insert(*pos, final_level);
             self.liquid_active.insert(*pos);
