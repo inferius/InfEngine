@@ -1077,6 +1077,9 @@ struct Settings {
     /// Camera head bob while walking. Off-by-default-friendly:
     /// nauseating for some players, polish for others.
     head_bob: bool,
+    /// Invert vertical mouse axis. Some players prefer down=look-up
+    /// so leave it toggleable from the Settings panel.
+    invert_mouse_y: bool,
 }
 
 impl Default for Settings {
@@ -1088,6 +1091,7 @@ impl Default for Settings {
             show_fps: true,
             view_distance: VIEW_DISTANCE_CHUNKS as u8,
             head_bob: true,
+            invert_mouse_y: false,
         }
     }
 }
@@ -2579,6 +2583,11 @@ impl Voxel {
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
         let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
         let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
+        let _ = writeln!(
+            text,
+            "invert_mouse_y={}",
+            self.settings.invert_mouse_y
+        );
         if let Some(p) = self.home_pos {
             let _ = writeln!(text, "home={},{},{}", p[0], p[1], p[2]);
         }
@@ -2655,6 +2664,10 @@ impl Voxel {
                 }
                 "head_bob" => {
                     self.settings.head_bob =
+                        matches!(value, "true" | "1" | "yes");
+                }
+                "invert_mouse_y" => {
+                    self.settings.invert_mouse_y =
                         matches!(value, "true" | "1" | "yes");
                 }
                 "home" => {
@@ -4804,7 +4817,12 @@ impl Voxel {
             let dy = std::mem::take(&mut self.mouse_dy);
             let sens = self.settings.mouse_sensitivity * 0.0035;
             self.player_yaw -= dx * sens;
-            self.player_pitch -= dy * sens;
+            let dy_signed = if self.settings.invert_mouse_y {
+                -dy
+            } else {
+                dy
+            };
+            self.player_pitch -= dy_signed * sens;
             let limit = std::f32::consts::FRAC_PI_2 - 0.05;
             self.player_pitch = self.player_pitch.clamp(-limit, limit);
 
@@ -5930,6 +5948,10 @@ impl Voxel {
                     );
                     ui.checkbox(&mut settings_edit.hide_cursor, "Hide cursor (Play)");
                     ui.checkbox(&mut settings_edit.head_bob, "Camera head bob");
+                    ui.checkbox(
+                        &mut settings_edit.invert_mouse_y,
+                        "Invert mouse Y",
+                    );
                     ui.separator();
                     if ui.button("Back").clicked() {
                         action_back_settings = true;
