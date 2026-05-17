@@ -4583,6 +4583,9 @@ impl Voxel {
             if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
                 self.player_vel.y = JUMP_VELOCITY;
                 self.grounded = false;
+                // Jumping costs a flat 5 stamina so spamming the
+                // bunny-hop drains the pool. Floor at 0.
+                self.stamina = (self.stamina - 5.0).max(0.0);
                 // Sprint-jump boost: add forward kick so a moving
                 // jump covers more ground than a stand-still jump.
                 if self.sprinting {
