@@ -11868,6 +11868,15 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
     },
+    // Sandstone block. Generates below the sand surface in
+    // desert biomes so digging through dunes hits a usable
+    // building material instead of bare stone.
+    BlockType {
+        id: 26, name: "sandstone", color: [0.92, 0.85, 0.62], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["sandstone_top.png", "sandstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sandstone_bottom.png", "sandstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sandstone.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -12248,7 +12257,7 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             }
         };
         let near_surface = match biome {
-            Biome::Desert => BlockId(4),
+            Biome::Desert => BlockId(26), // sandstone under sand cap
             Biome::Plains => BlockId(2),
             Biome::Mountain => BlockId(1),
         };
