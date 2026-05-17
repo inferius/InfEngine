@@ -4041,6 +4041,26 @@ impl Voxel {
             -self.player_yaw.sin() * self.player_pitch.cos(),
         );
         let aim_origin = self.player_pos;
+        // Targeted-block label: name + (if actively mining) the
+        // progress percentage. Hidden when the crosshair isn't on
+        // anything breakable.
+        let targeted_block_info: Option<(&'static str, Option<u8>)> =
+            self.target.and_then(|hit| {
+                let b = self.world.get(hit.voxel);
+                if b == BlockId::AIR {
+                    return None;
+                }
+                let name = block_type(b.0).map(|t| t.name).unwrap_or("?");
+                let pct = self.mining.as_ref().and_then(|m| {
+                    if m.voxel == hit.voxel && m.block == b {
+                        Some(((m.progress / m.total).clamp(0.0, 1.0) * 100.0)
+                            as u8)
+                    } else {
+                        None
+                    }
+                });
+                Some((name, pct))
+            });
         let targeted_mob_info: Option<(&'static str, u8, u8)> = self
             .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
             .and_then(|(id, _)| self.remote_mobs.get(&id).copied())
@@ -4923,6 +4943,31 @@ impl Voxel {
                             egui::StrokeKind::Inside,
                         );
                     }
+                }
+                // Targeted-block label: name + mining progress
+                // (when actively breaking the same voxel). Skipped
+                // when the crosshair already shows a mob label
+                // since both would overlap.
+                if hud_visible
+                    && targeted_mob_info.is_none()
+                    && let Some((name, pct)) = targeted_block_info
+                {
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_block_label"),
+                    ));
+                    let center = screen.center();
+                    let text = match pct {
+                        Some(p) => format!("{name}  {p}%"),
+                        None => name.to_string(),
+                    };
+                    layer.text(
+                        egui::pos2(center.x, center.y + 22.0),
+                        egui::Align2::CENTER_TOP,
+                        text,
+                        egui::FontId::proportional(13.0),
+                        egui::Color32::from_rgb(220, 220, 220),
+                    );
                 }
                 // Targeted-mob label: small text just under the
                 // crosshair when the player is aiming at a mob.
