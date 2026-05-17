@@ -59,6 +59,83 @@ struct PlayerMsg {
     pitch: f32,
 }
 
+/// Two-sample interpolation buffer for one remote player's pose.
+/// The render path samples at `now - INTERP_DELAY` so the most
+/// recent snapshot is one tick "in the future" and we always have
+/// the surrounding pair to lerp between.
+#[derive(Debug, Clone, Copy)]
+struct RemoteInterp {
+    prev: PlayerMsg,
+    current: PlayerMsg,
+    prev_t: std::time::Instant,
+    current_t: std::time::Instant,
+}
+
+/// Render delay (seconds) applied to the interpolation buffer. A
+/// little less than a typical send interval - lets the lerp always
+/// have both endpoints without showing a noticeable lag.
+const INTERP_DELAY: f32 = 0.10;
+
+impl RemoteInterp {
+    fn new(p: PlayerMsg) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            prev: p,
+            current: p,
+            prev_t: now,
+            current_t: now,
+        }
+    }
+
+    fn push(&mut self, p: PlayerMsg) {
+        let now = std::time::Instant::now();
+        self.prev = self.current;
+        self.prev_t = self.current_t;
+        self.current = p;
+        self.current_t = now;
+    }
+
+    /// Pose interpolated at "now minus the render delay", clamped
+    /// to the available buffer so we don't extrapolate past the
+    /// last snapshot when the sender pauses.
+    fn sample(&self, now: std::time::Instant) -> PlayerMsg {
+        let render_t = now - std::time::Duration::from_secs_f32(INTERP_DELAY);
+        let span = self
+            .current_t
+            .saturating_duration_since(self.prev_t)
+            .as_secs_f32()
+            .max(1e-4);
+        let into = render_t
+            .saturating_duration_since(self.prev_t)
+            .as_secs_f32();
+        let t = (into / span).clamp(0.0, 1.0);
+        let lerp = |a: f32, b: f32| a + (b - a) * t;
+        // Shortest-arc lerp for yaw + pitch so wrap-around (PI -> -PI)
+        // doesn't whip the camera the long way around.
+        let lerp_angle = |a: f32, b: f32| {
+            let mut d = b - a;
+            let tau = std::f32::consts::TAU;
+            while d > std::f32::consts::PI {
+                d -= tau;
+            }
+            while d < -std::f32::consts::PI {
+                d += tau;
+            }
+            a + d * t
+        };
+        PlayerMsg {
+            id: self.current.id,
+            pos: [
+                lerp(self.prev.pos[0], self.current.pos[0]),
+                lerp(self.prev.pos[1], self.current.pos[1]),
+                lerp(self.prev.pos[2], self.current.pos[2]),
+            ],
+            yaw: lerp_angle(self.prev.yaw, self.current.yaw),
+            pitch: lerp_angle(self.prev.pitch, self.current.pitch),
+        }
+    }
+}
+
 /// Server -> all clients: a player has left. Recipients drop the
 /// id from their `remote` table so the leaver's cube + pose stop
 /// rendering immediately instead of waiting for an eventual
@@ -898,6 +975,14 @@ struct Voxel {
     /// Seconds remaining in the red screen-flash overlay that
     /// fires on any non-trivial damage event. Decays in update.
     hurt_flash: f32,
+    /// Per-remote-player interpolation buffer. We keep the
+    /// previous + current `PlayerMsg` and their arrival instants
+    /// so the render path can lerp between them at `now - delay`,
+    /// turning a choppy pose stream (one update per net tick) into
+    /// smooth motion regardless of the send rate. Both Server and
+    /// Client roles write into this map - the host needs the same
+    /// smoothing for the joined players it renders locally.
+    remote_interp: HashMap<u32, RemoteInterp>,
     /// `None` = break slot (empty hand). `Some(block)` = place that
     /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
@@ -2257,6 +2342,10 @@ impl Voxel {
         // `self.remote_mobs` after the match exits.
         let mut mob_updates: Vec<MobMsg> = Vec::new();
         let mut player_removals: Vec<u32> = Vec::new();
+        // Pose updates collected this tick. Folded into the
+        // smoothing buffer (`remote_interp`) after the net match
+        // arm releases its borrow on `self.net`.
+        let mut interp_updates: Vec<PlayerMsg> = Vec::new();
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -2303,6 +2392,7 @@ impl Voxel {
                             {
                                 p.id = client_id;
                                 poses.insert(client_id, p);
+                                interp_updates.push(p);
                             }
                         }
                         "vx.inv_act" => {
@@ -2588,6 +2678,7 @@ impl Voxel {
                                 && my_id != Some(p.id)
                             {
                                 remote.insert(p.id, p);
+                                interp_updates.push(p);
                             }
                         }
                         "vx.inv" => {
@@ -2700,6 +2791,15 @@ impl Voxel {
         for m in mob_updates {
             self.remote_mobs.insert(m.id, m);
         }
+        // Fold incoming pose updates into the interpolation buffer
+        // so the render path can lerp toward each new snapshot
+        // instead of teleporting.
+        for p in interp_updates {
+            self.remote_interp
+                .entry(p.id)
+                .and_modify(|r| r.push(p))
+                .or_insert_with(|| RemoteInterp::new(p));
+        }
         // Drop departed players from the client-side remote table
         // so their cubes stop rendering as soon as the server
         // tells us they left.
@@ -2764,6 +2864,10 @@ impl Voxel {
             self.mob_say_timers.remove(&id);
             self.mob_last_xz.remove(&id);
         }
+        // Drop interpolation entries for any player who left.
+        for id in &player_removals {
+            self.remote_interp.remove(id);
+        }
         // Periodic state flush on the server so a crash loses at
         // most ~30 seconds of edits.
         if matches!(self.net, NetRole::Server { .. })
@@ -2818,6 +2922,7 @@ impl Voxel {
             player_health: PLAYER_MAX_HEALTH,
             fall_start_y: None,
             hurt_flash: 0.0,
+            remote_interp: HashMap::new(),
             inventory: {
                 // Seed the hotbar with one starter stack per known
                 // block type so the demo is playable from the first
@@ -4981,15 +5086,25 @@ impl AppHandler for Voxel {
             );
         }
         // Render remote players as coloured cubes so each peer is
-        // visible. Server uses its own `poses` map (skipping id 0 -
-        // that's the host's own pose); client uses the `remote`
-        // table (already strips its own id).
-        let remote_iter: Vec<PlayerMsg> = match &self.net {
-            NetRole::Offline => Vec::new(),
-            NetRole::Server { poses, .. } => {
-                poses.values().filter(|p| p.id != 0).copied().collect()
-            }
-            NetRole::Client { remote, .. } => remote.values().copied().collect(),
+        // visible. The interpolation buffer (`remote_interp`) is
+        // populated by every received `vx.player` regardless of
+        // role, so a single sample call here covers Server + Client
+        // paths uniformly. We skip our own id (0 for the host, the
+        // assigned id for a client) to avoid rendering ourselves.
+        let now = std::time::Instant::now();
+        let own_id: u32 = match &self.net {
+            NetRole::Offline => u32::MAX,
+            NetRole::Server { .. } => 0,
+            NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
+        };
+        let remote_iter: Vec<PlayerMsg> = if matches!(self.net, NetRole::Offline) {
+            Vec::new()
+        } else {
+            self.remote_interp
+                .iter()
+                .filter(|(id, _)| **id != own_id)
+                .map(|(_, r)| r.sample(now))
+                .collect()
         };
         if !remote_iter.is_empty() {
             let cube = self.player_cube.get_or_insert_with(|| renderer.cube_handle());
