@@ -12926,11 +12926,13 @@ impl AppHandler for Voxel {
         let mut mine_break: Option<[i32; 3]> = None;
         if lmb_active && let Some(hit) = self.target {
             let block = self.world.get(hit.voxel);
-            // Liquids are not mineable with bare hand or tool.
-            // Players have to scoop them with the matching bucket
-            // (water_bucket / lava_bucket) instead. The break
-            // path bails so the LMB swing has no effect.
-            if block != BlockId::AIR && !block_is_liquid(block) {
+            // Standard ray skips liquid voxels (F_RAY_PASS) so
+            // the crosshair targets the solid block past any water
+            // or lava in the way - players can dig through a pond
+            // to the seabed, the submerged_mining_mul slows the
+            // swing. Liquids themselves remain unbreakable; they
+            // only come out via the bucket scoop path.
+            if block != BlockId::AIR {
                 // Restart the session if either the target voxel
                 // changed or the block at the target has been
                 // replaced (e.g. by another player).
@@ -13213,13 +13215,27 @@ impl AppHandler for Voxel {
                 //   filled bucket + air / replaceable cell -> emit
                 //                                   source, swap to
                 //                                   empty bucket.
-                let target_block = self.world.get(hit.voxel);
+                // The standard target ray skips liquids (they're
+                // F_RAY_PASS) so we run a separate cast for the
+                // scoop path that stops at the first liquid voxel
+                // OR the first solid block, whichever comes first.
                 let cfg = bincode::config::standard();
                 if held.0 == BUCKET_EMPTY_ID {
-                    if let Some(filled) =
-                        liquid_to_bucket_id(target_block.0)
-                    {
-                        let voxel = hit.voxel;
+                    let liquid_hit = raycast_with(
+                        &self.world,
+                        self.player_pos,
+                        forward,
+                        6.0,
+                        |b| !b.is_air() && (block_is_liquid(b) || !block_is_ray_passable(b)),
+                    );
+                    let scoop_voxel = liquid_hit.map(|h| h.voxel);
+                    let scoop_block = scoop_voxel
+                        .map(|v| self.world.get(v))
+                        .unwrap_or(BlockId::AIR);
+                    if let (Some(filled), Some(voxel)) = (
+                        liquid_to_bucket_id(scoop_block.0),
+                        scoop_voxel,
+                    ) {
                         self.world_set_tracked(voxel, BlockId::AIR);
                         let coords = Self::affected_chunks(voxel);
                         self.rebuild_chunks(&coords);
@@ -13262,6 +13278,7 @@ impl AppHandler for Voxel {
                         });
                     }
                 } else if let Some(liquid_id) = bucket_liquid_id(held) {
+                    let target_block = self.world.get(hit.voxel);
                     let target_voxel = if block_is_replaceable(target_block) {
                         hit.voxel
                     } else {
@@ -14892,7 +14909,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // with a bare hand.
     BlockType {
         id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
-        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
         top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
@@ -14904,7 +14921,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     // future commit alongside other liquid effects.
     BlockType {
         id: 37, name: "lava", color: [1.00, 0.40, 0.10], transparent: true,
-        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
         top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
