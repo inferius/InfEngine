@@ -274,8 +274,40 @@ fn block_hardness(block: BlockId) -> f32 {
         12 => 0.4,        // meat
         13 => 2.4,        // coal ore
         14 => 3.2,        // iron ore
+        15 => 0.4,        // snow
         _ => 0.8,
     }
+}
+
+/// Tool tier for a slot's contents. 0 = bare hand, 1 = wood
+/// pickaxe, 2 = stone pickaxe, 3 = iron pickaxe. Determines what
+/// the player can break + how fast.
+fn tool_tier(block: BlockId) -> u8 {
+    match block.0 {
+        16 => 1, // wood pickaxe
+        17 => 2, // stone pickaxe
+        18 => 3, // iron pickaxe
+        _ => 0,
+    }
+}
+
+/// Minimum tool tier required to drop the block on break. A
+/// player can always swing at a block (no hard gate), but the
+/// drop only credits if their selected slot meets this tier.
+/// Coal lets a bare-hand swing succeed; stone needs wood+; iron
+/// needs stone+.
+fn block_required_tier(block: BlockId) -> u8 {
+    match block.0 {
+        1 | 8 | 15 => 1, // stone, cobble, snow
+        13 => 1,         // coal ore
+        14 => 2,         // iron ore
+        _ => 0,
+    }
+}
+
+/// True if the block id represents a tool / non-placeable item.
+fn is_tool_block(block: BlockId) -> bool {
+    matches!(block.0, 16..=18)
 }
 
 const MOB_CAP_DEFAULT: usize = 12;
@@ -836,6 +868,25 @@ const RECIPES: &[Recipe] = &[
         inputs: &[(5, 1), (5, 1), (6, 1), (6, 1)],
         output: (10, 4),
         name: "Torches",
+    },
+    // 3 planks + 1 wood -> 1 wood pickaxe. The wood log stands
+    // in for the stick handle the 2x2 grid can't shape.
+    Recipe {
+        inputs: &[(7, 1), (7, 1), (7, 1), (5, 1)],
+        output: (16, 1),
+        name: "Wood pickaxe",
+    },
+    // 3 cobble + 1 wood -> 1 stone pickaxe.
+    Recipe {
+        inputs: &[(8, 1), (8, 1), (8, 1), (5, 1)],
+        output: (17, 1),
+        name: "Stone pickaxe",
+    },
+    // 3 iron + 1 wood -> 1 iron pickaxe.
+    Recipe {
+        inputs: &[(14, 1), (14, 1), (14, 1), (5, 1)],
+        output: (18, 1),
+        name: "Iron pickaxe",
     },
 ];
 
@@ -10307,10 +10358,31 @@ impl AppHandler for Voxel {
                     None => true,
                 };
                 if restart {
+                    // Mining speed depends on the held tool tier
+                    // vs the block's required tier:
+                    //   tier >= required: 1.0x time (normal)
+                    //   tier <  required: 4.0x time (penalty)
+                    // Tools above the requirement also shave a
+                    // bit per extra tier so iron > stone > wood.
+                    let held = self
+                        .inventory
+                        .get(self.selected_slot)
+                        .copied()
+                        .unwrap_or(None)
+                        .map(|(b, _)| b)
+                        .unwrap_or(BlockId::AIR);
+                    let tier = tool_tier(held) as i32;
+                    let needed = block_required_tier(block) as i32;
+                    let mult = if tier >= needed {
+                        let extra = (tier - needed).max(0) as f32;
+                        (1.0 - extra * 0.20).max(0.4)
+                    } else {
+                        4.0
+                    };
                     self.mining = Some(MiningState {
                         voxel: hit.voxel,
                         progress: 0.0,
-                        total: block_hardness(block).max(0.05),
+                        total: (block_hardness(block) * mult).max(0.05),
                         block,
                         fx_cooldown: 0.0,
                     });
@@ -10420,7 +10492,23 @@ impl AppHandler for Voxel {
                 self.edit_history.push(edit);
             }
             if !is_client && broken != BlockId::AIR {
-                self.pickup(broken);
+                // Tool gating: drop only when the currently
+                // selected slot's tool tier meets the block's
+                // requirement. Player can still swing at higher
+                // tier blocks but gets nothing back, matching
+                // Minecraft's "wrong tool" semantics.
+                let held = self
+                    .inventory
+                    .get(self.selected_slot)
+                    .copied()
+                    .unwrap_or(None)
+                    .map(|(b, _)| b)
+                    .unwrap_or(BlockId::AIR);
+                let tier = tool_tier(held);
+                let needed = block_required_tier(broken);
+                if tier >= needed {
+                    self.pickup(broken);
+                }
             }
             if broken != BlockId::AIR {
                 self.blocks_broken = self.blocks_broken.saturating_add(1);
@@ -10449,7 +10537,10 @@ impl AppHandler for Voxel {
                 // Sentinel arm so the existing `else if rmb ...`
                 // structure stays a single `if/else if` chain.
                 unreachable!()
-            } else if rmb && let Some(block) = selected_block {
+            } else if rmb
+                && let Some(block) = selected_block
+                && !is_tool_block(block)
+            {
                 // Reject placement when it would intersect the player
                 // capsule - otherwise the player gets stuck inside
                 // the freshly placed block.
@@ -11487,6 +11578,27 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+    },
+    // Pickaxe tools. Stored as block-id slots but `is_tool_block`
+    // rejects them from the place path. Atlas tiles fall back to
+    // tinted swatches when no `pickaxe_*.png` ships in the pack.
+    BlockType {
+        id: 16, name: "pickaxe_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["pickaxe_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 17, name: "pickaxe_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["pickaxe_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 18, name: "pickaxe_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["pickaxe_iron.png"], keep_alpha: false },
     },
 ];
 
