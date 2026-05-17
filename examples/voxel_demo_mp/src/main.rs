@@ -8629,6 +8629,55 @@ impl Voxel {
                                 .push("Granted one of each block.".to_string());
                             handled_locally = true;
                         }
+                        "restock" => {
+                            // Host-only. Drops a stack of every
+                            // non-tool block into every connected
+                            // client's inventory + the host's
+                            // own. Useful for co-op MP starts.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/restock is host-only.".to_string(),
+                                );
+                            } else {
+                                // Self first.
+                                for bt in BLOCK_TYPES.iter() {
+                                    if is_tool_block(BlockId(bt.id)) {
+                                        continue;
+                                    }
+                                    for _ in 0..16 {
+                                        self.pickup(BlockId(bt.id));
+                                    }
+                                }
+                                // Each client.
+                                let mut touched = 0u32;
+                                if let NetRole::Server {
+                                    inventories,
+                                    pending_inv_sends,
+                                    ..
+                                } = &mut self.net
+                                {
+                                    for (cid, inv) in inventories.iter_mut() {
+                                        for bt in BLOCK_TYPES.iter() {
+                                            if is_tool_block(BlockId(bt.id)) {
+                                                continue;
+                                            }
+                                            for _ in 0..16 {
+                                                inv_pickup(
+                                                    &mut inv.inventory,
+                                                    BlockId(bt.id),
+                                                );
+                                            }
+                                        }
+                                        pending_inv_sends.insert(*cid);
+                                        touched += 1;
+                                    }
+                                }
+                                local_lines.push(format!(
+                                    "Restocked self + {touched} clients."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "tool" => {
                             // Quick pickaxe grant: /tool wood|stone|iron.
                             // Equivalent to /give pickaxe_<tier> 1 but
