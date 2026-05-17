@@ -2186,6 +2186,58 @@ impl Voxel {
         }
     }
 
+    /// Source-merge pass: a flow voxel adjacent to two or more
+    /// source neighbours (the classic MC infinite-water trick)
+    /// gets promoted to a source itself. Host-only metadata
+    /// flip; no `vx.edit` broadcast because clients don't track
+    /// `water_depth`. Runs every 4th host tick so the merge
+    /// keeps pace with the spread rate.
+    fn tick_water_merge(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if !self.net_tick.is_multiple_of(4) {
+            return;
+        }
+        if self.water_depth.is_empty() {
+            return;
+        }
+        let candidates: Vec<[i32; 3]> = self
+            .water_depth
+            .iter()
+            .filter(|(_, d)| **d > 0)
+            .take(64)
+            .map(|(v, _)| *v)
+            .collect();
+        for pos in &candidates {
+            if self.world.get(*pos).0 != WATER_ID {
+                continue;
+            }
+            let horiz = [
+                [pos[0] + 1, pos[1], pos[2]],
+                [pos[0] - 1, pos[1], pos[2]],
+                [pos[0], pos[1], pos[2] + 1],
+                [pos[0], pos[1], pos[2] - 1],
+            ];
+            let mut sources = 0u8;
+            for n in &horiz {
+                if self.world.get(*n).0 == WATER_ID {
+                    let nd = self
+                        .water_depth
+                        .get(n)
+                        .copied()
+                        .unwrap_or(0);
+                    if nd == 0 {
+                        sources += 1;
+                    }
+                }
+            }
+            if sources >= 2 {
+                self.water_depth.insert(*pos, 0);
+            }
+        }
+    }
+
     /// Authoritative decay pass. Flow water (depth >= 1)
     /// evaporates when it loses support:
     ///  - no horizontal neighbour with strictly lower depth, AND
@@ -12825,6 +12877,9 @@ impl AppHandler for Voxel {
         // resting on solid ground extends one cell outward
         // until the spread depth caps at `MAX_WATER_SPREAD`.
         self.tick_water_spread();
+        // Source-merge: two source neighbours promote a flow
+        // cell to source (MC infinite-water trick).
+        self.tick_water_merge();
         // Decay isolated flow water so breaking a source
         // drains the dependent pool over the next few ticks.
         self.tick_water_decay();
