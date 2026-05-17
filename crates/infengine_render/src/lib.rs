@@ -378,6 +378,14 @@ impl Renderer {
         self.meshes.remove(handle)
     }
 
+    /// Mark a mesh as transparent so it draws via the alpha-blended
+    /// pipeline after every opaque mesh. Depth-write is disabled for
+    /// the transparent sub-pass so stacked water voxels don't punch
+    /// each other out of the depth buffer.
+    pub fn set_mesh_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+        self.meshes.set_transparent(handle, transparent);
+    }
+
     /// Load every primitive in a glTF / glb file and register each as
     /// its own `MeshHandle`. Returns the list of `(primitive name,
     /// handle)` pairs so the caller can resolve names back to handles

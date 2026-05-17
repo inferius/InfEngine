@@ -51,6 +51,11 @@ pub(crate) struct MeshEntry {
 pub(crate) struct Mesh3DRegistry {
     next_id: u32,
     entries: HashMap<MeshHandle, MeshEntry>,
+    /// Per-mesh transparency flag. Mesh handles in this set route
+    /// to the alpha-blended pipeline + skip depth writes so they
+    /// composite over the opaque scene without occluding each
+    /// other arbitrarily. Default = opaque.
+    transparent: std::collections::HashSet<MeshHandle>,
 }
 
 impl Mesh3DRegistry {
@@ -115,7 +120,23 @@ impl Mesh3DRegistry {
     /// handle was registered. Caller must guarantee no draw call
     /// references the handle in the current frame.
     pub fn remove(&mut self, handle: MeshHandle) -> bool {
+        self.transparent.remove(&handle);
         self.entries.remove(&handle).is_some()
+    }
+
+    /// Flag a registered mesh as transparent (or back to opaque).
+    /// Transparent meshes draw via the alpha-blended pipeline in a
+    /// second sub-pass so they composite over the opaque scene.
+    pub fn set_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+        if transparent {
+            self.transparent.insert(handle);
+        } else {
+            self.transparent.remove(&handle);
+        }
+    }
+
+    pub fn is_transparent(&self, handle: MeshHandle) -> bool {
+        self.transparent.contains(&handle)
     }
 }
 
@@ -264,6 +285,12 @@ pub(crate) struct MeshBatch {
 /// Pipeline + shared instance buffer + albedo texture for batched mesh draws.
 pub(crate) struct Mesh3DPass {
     pipeline: wgpu::RenderPipeline,
+    /// Alpha-blended variant used by transparent meshes (e.g. water).
+    /// Same shader + vertex layout but the colour target swaps to
+    /// premultiplied alpha and depth-write is disabled so multiple
+    /// translucent layers can stack without writing each other out
+    /// of the depth buffer.
+    pipeline_transparent: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
     albedo_texture: wgpu::Texture,
@@ -509,8 +536,68 @@ impl Mesh3DPass {
             cache: None,
         });
 
+        // Transparent pipeline: identical layout / shader, but the
+        // colour target uses alpha blending and depth-write is off
+        // so stacked translucent meshes don't punch each other out.
+        // Cull is also disabled so a swimmer looking up sees the
+        // water surface from below.
+        let pipeline_transparent =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("infengine_render::mesh3d_pipeline_transparent"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[
+                        wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<MeshVertex>()
+                                as wgpu::BufferAddress,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &vertex_attrs,
+                        },
+                        wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<MeshInstance>()
+                                as wgpu::BufferAddress,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &instance_attrs,
+                        },
+                    ],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: depth_format,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+
         Self {
             pipeline,
+            pipeline_transparent,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
             albedo_texture,
@@ -701,17 +788,42 @@ impl Mesh3DPass {
         if batches.is_empty() {
             return;
         }
-        rpass.set_pipeline(&self.pipeline);
+        // Two sub-passes: opaque first (depth-write on), transparent
+        // last (alpha blend, no depth write). Splitting by the
+        // registry's transparent set keeps the two pipelines'
+        // batches contiguous without re-sorting the instance buffer.
         rpass.set_bind_group(2, shadow_bg, &[]);
         rpass.set_bind_group(3, lights_bg, &[]);
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        rpass.set_pipeline(&self.pipeline);
         for batch in batches {
+            if registry.is_transparent(batch.handle) {
+                continue;
+            }
             let Some(entry) = registry.get(batch.handle) else {
                 continue;
             };
-            // Pick a per-mesh albedo bind group if one was registered
-            // via `Renderer::set_mesh_albedo_for`, else fall back to
-            // the global default (1x1 white).
+            let bg: &wgpu::BindGroup = match mesh_textures.get(&batch.handle) {
+                Some(arc) => arc.as_ref(),
+                None => &self.texture_bind_group,
+            };
+            rpass.set_bind_group(1, bg, &[]);
+            rpass.set_vertex_buffer(0, entry.vertex_buffer.slice(..));
+            rpass.set_index_buffer(entry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            rpass.draw_indexed(
+                0..entry.index_count,
+                0,
+                batch.start..batch.start + batch.count,
+            );
+        }
+        rpass.set_pipeline(&self.pipeline_transparent);
+        for batch in batches {
+            if !registry.is_transparent(batch.handle) {
+                continue;
+            }
+            let Some(entry) = registry.get(batch.handle) else {
+                continue;
+            };
             let bg: &wgpu::BindGroup = match mesh_textures.get(&batch.handle) {
                 Some(arc) => arc.as_ref(),
                 None => &self.texture_bind_group,

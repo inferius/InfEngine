@@ -5593,6 +5593,9 @@ impl Voxel {
                     if let Some(a) = atlas.clone() {
                         renderer.bind_mesh_albedo_arc(handle, a);
                     }
+                    if sub.block.0 == WATER_ID {
+                        renderer.set_mesh_transparent(handle, true);
+                    }
                     self.chunk_meshes.push((cc, sub.block, handle));
                 }
             }
@@ -5687,6 +5690,9 @@ impl Voxel {
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
                 }
+                if sub.block.0 == WATER_ID {
+                    renderer.set_mesh_transparent(handle, true);
+                }
                 self.chunk_meshes.push((*coord, sub.block, handle));
             }
         }
@@ -5725,6 +5731,9 @@ impl Voxel {
                 );
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
+                }
+                if sub.block.0 == WATER_ID {
+                    renderer.set_mesh_transparent(handle, true);
                 }
                 self.chunk_meshes.push((coord, sub.block, handle));
             }
@@ -6319,13 +6328,27 @@ impl Voxel {
         let in_water = !self.fly_mode
             && aabb_intersects_water(&self.world, self.player_pos);
         if in_water {
-            if self.player_vel.y < -3.0 {
-                self.player_vel.y = -3.0;
+            // Cap fall speed - water resistance fights gravity.
+            if self.player_vel.y < -1.8 {
+                self.player_vel.y = -1.8;
             }
-            self.player_vel.x *= 0.6;
-            self.player_vel.z *= 0.6;
+            // Stronger horizontal drag than air. Doesn't fully
+            // stop the player so directed movement still works.
+            self.player_vel.x *= 0.45;
+            self.player_vel.z *= 0.45;
+            // Held Space climbs the column at a steady rate.
+            // Released, the player drifts slowly upward thanks
+            // to gentle buoyancy so heads bob at the surface
+            // rather than sinking like a stone.
             if input_active && ctx.input.is_pressed(Key::Space) {
-                self.player_vel.y = self.player_vel.y.max(3.0);
+                self.player_vel.y = self.player_vel.y.max(2.2);
+            } else {
+                // Tiny upward bias - cancels most of gravity
+                // but not all, so the player still sinks slowly.
+                self.player_vel.y += 12.0 * dt;
+                if self.player_vel.y > 1.0 {
+                    self.player_vel.y = 1.0;
+                }
             }
             // Reset fall-damage tracker so falling into water
             // doesn't punish on the next grounded transition.
@@ -13585,10 +13608,15 @@ impl AppHandler for Voxel {
         let model = Mat4::IDENTITY.to_cols_array();
         for (_coord, block, handle) in &chunk_meshes {
             if let Some(def) = registry.get(*block) {
+                // Water draws with reduced alpha so the alpha-blend
+                // pipeline composites it over the seabed. Above the
+                // discard cutout so the shader's leaf path doesn't
+                // wipe it.
+                let alpha = if block.0 == WATER_ID { 0.65 } else { 1.0 };
                 renderer.draw_mesh_pbr(
                     *handle,
                     model,
-                    [def.color[0], def.color[1], def.color[2], 1.0],
+                    [def.color[0], def.color[1], def.color[2], alpha],
                     def.metallic,
                     def.roughness,
                 );

@@ -310,6 +310,13 @@ impl ShadowPass {
         rpass.set_bind_group(0, &self.vertex_bg, &[]);
         rpass.set_vertex_buffer(1, instance_buffer.slice(..));
         for batch in batches {
+            // Transparent meshes (water etc.) skip the shadow pass:
+            // their depth contribution would cast an opaque shadow
+            // even though the lit surface beneath should still be
+            // visible through the water.
+            if registry.is_transparent(batch.handle) {
+                continue;
+            }
             let Some(entry) = registry.get(batch.handle) else {
                 continue;
             };
