@@ -1100,6 +1100,11 @@ struct Voxel {
     /// True while Tab is held. Drives the player list overlay
     /// shown in the HUD.
     tab_held: bool,
+    /// Floating "+N <block>" toasts shown on the right side of
+    /// the HUD whenever the player picks something up. Entries
+    /// fade out after a couple of seconds; consecutive picks of
+    /// the same block collapse into a single counter.
+    pickup_toasts: Vec<(std::time::Instant, BlockId, u8)>,
     /// `None` = break slot (empty hand). `Some(block)` = place that
     /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
@@ -2377,6 +2382,7 @@ impl Voxel {
                 && *count < STACK_MAX
             {
                 *count += 1;
+                self.note_pickup(block);
                 return;
             }
         }
@@ -2385,8 +2391,33 @@ impl Voxel {
         for slot in self.inventory.iter_mut() {
             if slot.is_none() {
                 *slot = Some((block, 1));
+                self.note_pickup(block);
                 return;
             }
+        }
+    }
+
+    /// Register a successful pickup for the floating "+1 wood"
+    /// toast HUD. Collapses adjacent picks of the same block into
+    /// a single entry so spamming the same stack doesn't bury the
+    /// HUD in a wall of one-liners.
+    fn note_pickup(&mut self, block: BlockId) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.pickup_toasts.last_mut()
+            && last.1 == block
+            && now.duration_since(last.0).as_secs_f32() < 1.5
+        {
+            last.0 = now;
+            last.2 = last.2.saturating_add(1);
+            return;
+        }
+        self.pickup_toasts.push((now, block, 1));
+        // Cap the buffer so a long mining session doesn't grow
+        // unbounded. Oldest entries are the first to roll off the
+        // top of the HUD anyway.
+        if self.pickup_toasts.len() > 16 {
+            let drop = self.pickup_toasts.len() - 16;
+            self.pickup_toasts.drain(0..drop);
         }
     }
 
@@ -3367,6 +3398,14 @@ impl Voxel {
         // assigned to someone else) reconciles on this single
         // assignment.
         if let Some(snap) = client_snapshot {
+            // Diff vs the pre-snapshot inventory so server-driven
+            // pickups generate toasts the same way local pickups
+            // do. Counts blocks by id; any positive delta becomes
+            // a `+N` toast.
+            let mut pre: HashMap<u16, u32> = HashMap::new();
+            for (b, c) in self.inventory.iter().flatten() {
+                *pre.entry(b.0).or_insert(0) += *c as u32;
+            }
             for (i, s) in snap.inventory.iter().enumerate() {
                 if i < self.inventory.len() {
                     self.inventory[i] = s.map(|(b, c)| (BlockId(b), c));
@@ -3376,6 +3415,31 @@ impl Voxel {
                 if i < self.craft_grid.len() {
                     self.craft_grid[i] = s.map(|(b, c)| (BlockId(b), c));
                 }
+            }
+            let mut post: HashMap<u16, u32> = HashMap::new();
+            for (b, c) in self.inventory.iter().flatten() {
+                *post.entry(b.0).or_insert(0) += *c as u32;
+            }
+            for (id, after) in post {
+                let before = pre.get(&id).copied().unwrap_or(0);
+                if after > before {
+                    let delta = (after - before).min(u8::MAX as u32) as u8;
+                    let block = BlockId(id);
+                    let now = std::time::Instant::now();
+                    if let Some(last) = self.pickup_toasts.last_mut()
+                        && last.1 == block
+                        && now.duration_since(last.0).as_secs_f32() < 1.5
+                    {
+                        last.0 = now;
+                        last.2 = last.2.saturating_add(delta);
+                    } else {
+                        self.pickup_toasts.push((now, block, delta));
+                    }
+                }
+            }
+            if self.pickup_toasts.len() > 16 {
+                let drop = self.pickup_toasts.len() - 16;
+                self.pickup_toasts.drain(0..drop);
             }
         }
         for m in mob_updates {
@@ -3569,6 +3633,7 @@ impl Voxel {
             },
             player_names: HashMap::new(),
             tab_held: false,
+            pickup_toasts: Vec::new(),
             inventory: {
                 // Seed the hotbar with one starter stack per known
                 // block type so the demo is playable from the first
@@ -4373,6 +4438,31 @@ impl Voxel {
                     .cloned()
                     .unwrap_or_else(|| format!("p{id}"));
                 (p.pos, name)
+            })
+            .collect();
+        // Pickup toast snapshot: trim entries older than the
+        // fade window so the HUD doesn't keep stale text alive.
+        // We do the housekeeping here so the egui closure sees a
+        // clean list.
+        let toast_now = std::time::Instant::now();
+        let toast_lifetime = 2.4_f32;
+        self.pickup_toasts
+            .retain(|(t, _, _)| toast_now.duration_since(*t).as_secs_f32() <= toast_lifetime);
+        let pickup_snapshot: Vec<(f32, String, [f32; 3])> = self
+            .pickup_toasts
+            .iter()
+            .rev()
+            .take(6)
+            .map(|(t, b, c)| {
+                let age = toast_now.duration_since(*t).as_secs_f32();
+                let alpha = (1.0 - (age / toast_lifetime)).clamp(0.0, 1.0);
+                let name = block_type(b.0).map(|t| t.name).unwrap_or("?");
+                let color = self
+                    .registry
+                    .get(*b)
+                    .map(|d| d.color)
+                    .unwrap_or([1.0, 1.0, 1.0]);
+                (alpha, format!("+{c} {name}"), color)
             })
             .collect();
         // Tab playerlist snapshot: pairs of (display_name,
@@ -5406,6 +5496,45 @@ impl Voxel {
                         egui::FontId::proportional(14.0),
                         egui::Color32::from_rgb(240, 240, 240),
                     );
+                }
+                // Pickup toasts on the right edge so the chat
+                // log + hotbar stay readable on the left + bottom.
+                if hud_visible && !pickup_snapshot.is_empty() {
+                    egui::Area::new(egui::Id::new("voxel_pickup_toasts"))
+                        .anchor(egui::Align2::RIGHT_BOTTOM, [-18.0, -120.0])
+                        .show(ctx, |ui| {
+                            for (alpha, line, color) in &pickup_snapshot {
+                                let a = (255.0 * alpha) as u8;
+                                let r = (color[0] * 255.0) as u8;
+                                let g = (color[1] * 255.0) as u8;
+                                let b = (color[2] * 255.0) as u8;
+                                // Brighten the swatch a touch so
+                                // darker block colours (e.g. coal)
+                                // still pop against the night sky.
+                                let r2 = (r as u16 * 5 / 4).min(255) as u8;
+                                let g2 = (g as u16 * 5 / 4).min(255) as u8;
+                                let b2 = (b as u16 * 5 / 4).min(255) as u8;
+                                ui.horizontal(|ui| {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(12.0, 12.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        2.0,
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            r2, g2, b2, a,
+                                        ),
+                                    );
+                                    ui.colored_label(
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            245, 245, 245, a,
+                                        ),
+                                        line,
+                                    );
+                                });
+                            }
+                        });
                 }
                 // Chat: log of recent lines at bottom-left + an
                 // input box when `chat_open`. Each log entry
