@@ -1219,6 +1219,10 @@ struct Voxel {
     /// person front. Cycled with F5 the way Minecraft does it.
     camera_mode: u8,
     f5_prev: bool,
+    /// Player's saved home position. /sethome stores the current
+    /// pose; /home teleports back. Persisted via the config file
+    /// so the location survives across launches.
+    home_pos: Option<[f32; 3]>,
     /// Last time the server broadcast its authoritative
     /// `day_time`. Used to throttle the broadcast cadence to
     /// roughly once per second.
@@ -2246,6 +2250,9 @@ impl Voxel {
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
         let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
         let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
+        if let Some(p) = self.home_pos {
+            let _ = writeln!(text, "home={},{},{}", p[0], p[1], p[2]);
+        }
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2305,6 +2312,18 @@ impl Voxel {
                 "head_bob" => {
                     self.settings.head_bob =
                         matches!(value, "true" | "1" | "yes");
+                }
+                "home" => {
+                    let parts: Vec<&str> = value.split(',').collect();
+                    if parts.len() == 3
+                        && let (Ok(x), Ok(y), Ok(z)) = (
+                            parts[0].trim().parse::<f32>(),
+                            parts[1].trim().parse::<f32>(),
+                            parts[2].trim().parse::<f32>(),
+                        )
+                    {
+                        self.home_pos = Some([x, y, z]);
+                    }
                 }
                 _ => {}
             }
@@ -3905,6 +3924,7 @@ impl Voxel {
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
+            home_pos: None,
             last_day_broadcast: None,
             show_debug: false,
             f3_prev: false,
@@ -6033,7 +6053,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /kill, /fly, /w <name> <msg>"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
                                     .to_string(),
                             );
                         }
@@ -6062,6 +6082,39 @@ impl Voxel {
                             // + when stuck in geometry.
                             let dmg = self.player_health + 1.0;
                             self.apply_player_damage(dmg);
+                            handled_locally = true;
+                        }
+                        "sethome" => {
+                            // Stash the player's current pose for
+                            // /home recall. Saved to disk along
+                            // with the rest of the config on the
+                            // next Settings exit.
+                            self.home_pos = Some([
+                                self.player_pos.x,
+                                self.player_pos.y,
+                                self.player_pos.z,
+                            ]);
+                            self.save_config();
+                            local_lines.push("Home set.".to_string());
+                            handled_locally = true;
+                        }
+                        "home" => {
+                            // Teleport back to the saved home, if
+                            // any. Velocity zeroed so no fall
+                            // damage on landing.
+                            if let Some(p) = self.home_pos {
+                                self.player_pos =
+                                    Vec3::new(p[0], p[1], p[2]);
+                                self.player_vel = Vec3::ZERO;
+                                self.fall_start_y = None;
+                                local_lines
+                                    .push("Teleported home.".to_string());
+                            } else {
+                                local_lines.push(
+                                    "No home set. Use /sethome first."
+                                        .to_string(),
+                                );
+                            }
                             handled_locally = true;
                         }
                         "setblock" => {
