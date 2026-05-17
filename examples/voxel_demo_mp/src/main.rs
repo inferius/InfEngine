@@ -278,7 +278,7 @@ fn block_hardness(block: BlockId) -> f32 {
     }
 }
 
-const MOB_CAP: usize = 12;
+const MOB_CAP_DEFAULT: usize = 12;
 const MOB_SPEED: f32 = 1.2;
 const MOB_MAX_HEALTH: f32 = 8.0;
 const MOB_HIT_DAMAGE: f32 = 2.0;
@@ -1246,6 +1246,10 @@ struct Voxel {
     /// no-op so the local player can't be hurt. Useful for
     /// testing the world without dying.
     god_mode: bool,
+    /// Maximum concurrent live mob count. Tweakable via /mobcap
+    /// so players on slow machines can cut the spawn pressure;
+    /// defaults to `MOB_CAP_DEFAULT`.
+    mob_cap: usize,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -1767,7 +1771,7 @@ impl Voxel {
         const MOB_SPAWN_PERIOD: f32 = 6.0;
         let due = ((day_time - self.last_mob_spawn_time).rem_euclid(DAY_LENGTH_S))
             > MOB_SPAWN_PERIOD;
-        if self.mobs.len() < MOB_CAP && due {
+        if self.mobs.len() < self.mob_cap && due {
             let wx = (rand01() * 40.0 - 20.0).round() as i32;
             let wz = (rand01() * 40.0 - 20.0).round() as i32;
             // Spawn scan: probe the column ceiling so the sheep
@@ -4024,6 +4028,7 @@ impl Voxel {
             heartbeat_accum: 0.0,
             fly_mode: false,
             god_mode: false,
+            mob_cap: MOB_CAP_DEFAULT,
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -6640,6 +6645,31 @@ impl Voxel {
                                 }
                                 handled_locally = true;
                             }
+                        }
+                        "mobcap" => {
+                            // /mobcap reports the cap; /mobcap N
+                            // sets it. Hard ceiling at 64 so the
+                            // server doesn't blow up its tick
+                            // budget; floor at 0 to allow a
+                            // disabled spawner.
+                            if arg.is_empty() {
+                                local_lines.push(format!(
+                                    "Mob cap: {} (live: {})",
+                                    self.mob_cap,
+                                    self.mobs.len()
+                                ));
+                            } else if let Ok(v) = arg.parse::<usize>() {
+                                let new_cap = v.min(64);
+                                self.mob_cap = new_cap;
+                                local_lines.push(format!(
+                                    "Mob cap set to {new_cap}."
+                                ));
+                            } else {
+                                local_lines.push(format!(
+                                    "Cannot parse mob cap: {arg}"
+                                ));
+                            }
+                            handled_locally = true;
                         }
                         "godmode" | "god" => {
                             self.god_mode = !self.god_mode;
