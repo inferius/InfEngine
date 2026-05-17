@@ -697,7 +697,7 @@ impl ClientInv {
             (2, 16),
             (7, 16),
             (8, 16),
-            (10, 4),
+            (BUCKET_WATER_ID, 1),
         ];
         for (i, (bid, count)) in seed.iter().enumerate() {
             let slot = i + 1;
@@ -950,7 +950,8 @@ const COLLISION_EPSILON: f32 = 1e-4;
 /// Floating drop entity left in the world by a mining break or
 /// a liquid washing a decoration away. Drops bob in place with a
 /// gentle sine wave, get picked up when a player walks within
-/// `DROP_PICKUP_RADIUS`, and despawn after `DROP_DESPAWN_SEC`.
+/// `DROP_ATTRACT_RADIUS`, snap collected within
+/// `DROP_COLLECT_RADIUS`, and despawn after `DROP_DESPAWN_SEC`.
 /// Authoritative on the host; clients receive `vx.drop_spawn` +
 /// `vx.drop_pickup` updates from the server.
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -978,16 +979,25 @@ struct DropSpawnMsg {
     pos: [f32; 3],
 }
 
-/// Drops at the same spawn position spread their initial XZ
-/// velocity around so a single tile that drops two items
-/// doesn't have them perfectly overlapping.
-const DROP_PICKUP_RADIUS: f32 = 1.5;
+/// Distance within which a drop magnetises toward the player.
+/// Inside this radius the drop accelerates toward the player's
+/// chest each tick; once it reaches `DROP_COLLECT_RADIUS` it
+/// snaps into the inventory.
+const DROP_ATTRACT_RADIUS: f32 = 3.5;
+/// Final pickup radius. The drop teleports into the inventory
+/// when its centre is closer than this to the player.
+const DROP_COLLECT_RADIUS: f32 = 1.4;
+/// Drops despawn after this many seconds without pickup.
 const DROP_DESPAWN_SEC: f32 = 90.0;
 /// Pickup-eligible delay: the drop ignores the player for the
 /// first ~0.4 s after spawning so the player isn't insta-
 /// picking-up the block they just broke without time to read
-/// it visually.
+/// it visually. Configurable so mods / settings can tune the
+/// loot pace.
 const DROP_PICKUP_DELAY_SEC: f32 = 0.4;
+/// Magnet pull strength (m/s of acceleration toward player when
+/// inside `DROP_ATTRACT_RADIUS`). Higher = snappier collection.
+const DROP_MAGNET_STRENGTH: f32 = 14.0;
 
 /// Damage source classifier - drives the per-kind hurt SFX
 /// `apply_player_damage_kind` plays on integer heart loss. New
@@ -2558,18 +2568,30 @@ impl Voxel {
                 to_despawn.push(i);
                 continue;
             }
-            // Pickup: host-authoritative, only after the
-            // initial delay so the player doesn't insta-collect
-            // every cell they break.
+            // Pickup: host-authoritative. Inside the attract
+            // radius the drop accelerates toward the player's
+            // chest; once it's within the smaller collect
+            // radius it teleports into the inventory.
             if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
                 && drop.age >= DROP_PICKUP_DELAY_SEC
             {
+                let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
                 let dx = player_pos.x - drop.pos[0];
-                let dy = player_pos.y - drop.pos[1];
+                let dy = chest_y - drop.pos[1];
                 let dz = player_pos.z - drop.pos[2];
-                let d2 = dx * dx + dy * dy + dz * dz;
-                if d2 <= DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS {
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if dist <= DROP_COLLECT_RADIUS {
                     to_pickup.push(i);
+                } else if dist <= DROP_ATTRACT_RADIUS && dist > 1e-3 {
+                    // Magnet pull toward the player. Strength
+                    // ramps as the drop gets closer so it
+                    // accelerates into the collect band.
+                    let pull =
+                        DROP_MAGNET_STRENGTH * (1.0 - dist / DROP_ATTRACT_RADIUS);
+                    let inv = pull * dt / dist;
+                    drop.vel[0] += dx * inv;
+                    drop.vel[1] += dy * inv;
+                    drop.vel[2] += dz * inv;
                 }
             }
         }
@@ -13487,11 +13509,12 @@ impl AppHandler for Voxel {
                         .unwrap_or(BlockId::AIR);
                     let (mut mult, _drop_ok) =
                         tool_effectiveness(held, block);
-                    // Submerged mining: liquid slows the swing.
-                    // Pulled off the `Liquid` row so each fluid
-                    // can tune the penalty independently.
+                    // Submerged mining: liquid slows the swing
+                    // ONLY when the head is fully underwater
+                    // (same gate as the screen tint). Wading
+                    // ankle-deep mines at full speed.
                     if let Some(l) =
-                        submerged_liquid(&self.world, self.player_pos)
+                        submerged_liquid_eye(&self.world, self.player_pos)
                     {
                         mult *= l.submerged_mining_mul;
                     }
@@ -13768,10 +13791,21 @@ impl AppHandler for Voxel {
                     let scoop_block = scoop_voxel
                         .map(|v| self.world.get(v))
                         .unwrap_or(BlockId::AIR);
-                    if let (Some(filled), Some(voxel)) = (
-                        liquid_to_bucket_id(scoop_block.0),
-                        scoop_voxel,
-                    ) {
+                    // Scoop only from a source voxel (level 0).
+                    // Flow / falling cells can't be bottled in MC -
+                    // the bucket pops back empty when aimed at a
+                    // stream.
+                    let scoop_level = scoop_voxel
+                        .and_then(|v| self.liquid_level.get(&v).copied())
+                        .unwrap_or(0);
+                    let scoop_is_source =
+                        scoop_voxel.is_some() && scoop_level == 0;
+                    if scoop_is_source
+                        && let (Some(filled), Some(voxel)) = (
+                            liquid_to_bucket_id(scoop_block.0),
+                            scoop_voxel,
+                        )
+                    {
                         self.world_set_tracked(voxel, BlockId::AIR);
                         let coords = Self::affected_chunks(voxel);
                         self.rebuild_chunks(&coords);
