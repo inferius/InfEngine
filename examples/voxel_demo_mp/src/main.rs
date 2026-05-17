@@ -2408,7 +2408,11 @@ impl Voxel {
         let mut to_clear: Vec<[i32; 3]> = Vec::new();
         for pos in &candidates {
             let below = [pos[0], pos[1] - 1, pos[2]];
-            if self.world.get(below).is_air() {
+            let below_b = self.world.get(below);
+            // Fall when the cell below is air or a washable
+            // decoration (torch, flower, snow layer). Liquid
+            // wipes the decoration as it passes through.
+            if below_b.is_air() || block_is_washable(below_b) {
                 to_fall.push(below);
             } else {
                 // Resting on something solid or another liquid -
@@ -2485,8 +2489,10 @@ impl Voxel {
         let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
         for pos in &candidates {
             let below = [pos[0], pos[1] - 1, pos[2]];
-            if self.world.get(below).is_air() {
-                // Falls instead of spreading.
+            let below_b = self.world.get(below);
+            // Skip spread if the cell below is air or washable -
+            // the fall pass handles that direction first.
+            if below_b.is_air() || block_is_washable(below_b) {
                 continue;
             }
             let level = self
@@ -2503,17 +2509,15 @@ impl Voxel {
                 [0, 0, 1],
                 [0, 0, -1],
             ];
-            // Pathfinding influences LEVEL only, not which cells
-            // get water. Every air neighbour is filled so a pool
-            // forms radially around a source on flat ground;
-            // directions pointing toward a reachable drop get a
-            // slightly lower level (one less than they would
-            // otherwise) so the flow visibly biases downhill
-            // without leaving gaps to one side.
+            // Spreadable = air OR a washable decoration. Liquid
+            // washes flowers / torches / snow layer out of its
+            // path; F_WASHABLE flag is the gate.
+            let spreadable =
+                |b: BlockId| b.is_air() || block_is_washable(b);
             let mut weights: [u32; 4] = [u32::MAX; 4];
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                if !self.world.get(n).is_air() {
+                if !spreadable(self.world.get(n)) {
                     continue;
                 }
                 weights[i] = self.distance_to_drop(n, 4);
@@ -2523,7 +2527,7 @@ impl Voxel {
             let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                if !self.world.get(n).is_air() {
+                if !spreadable(self.world.get(n)) {
                     continue;
                 }
                 if to_spawn.iter().any(|(p, _)| p == &n) {
@@ -2585,15 +2589,18 @@ impl Voxel {
     /// downhill paths.
     fn distance_to_drop(&self, start: [i32; 3], max_steps: u32) -> u32 {
         use std::collections::VecDeque;
-        // Quick reject: start itself must be an air cell sitting
-        // on a solid block (anything else would already have
-        // fallen or be blocked).
-        if !self.world.get(start).is_air() {
+        // Pathfinding sees through air AND any block flagged
+        // `F_WASHABLE` (torch, flowers, snow layer) - the liquid
+        // will wash them out of its way when it flows there.
+        let walkable = |b: BlockId| b.is_air() || block_is_washable(b);
+        let drop_at =
+            |p: [i32; 3]| walkable(self.world.get(p));
+        if !walkable(self.world.get(start)) {
             return u32::MAX;
         }
         let below_start = [start[0], start[1] - 1, start[2]];
-        if self.world.get(below_start).is_air() {
-            // start has air directly below -> distance 0.
+        if drop_at(below_start) {
+            // start has open air / wash below -> distance 0.
             return 0;
         }
         let mut visited: HashSet<[i32; 3]> = HashSet::new();
@@ -2615,12 +2622,11 @@ impl Voxel {
                 if visited.contains(&n) {
                     continue;
                 }
-                if !self.world.get(n).is_air() {
+                if !walkable(self.world.get(n)) {
                     continue;
                 }
                 visited.insert(n);
-                // Below the candidate air cell: drop available?
-                if self.world.get([n[0], n[1] - 1, n[2]]).is_air() {
+                if drop_at([n[0], n[1] - 1, n[2]]) {
                     return dist + 1;
                 }
                 queue.push_back((n, dist + 1));
@@ -14791,6 +14797,11 @@ const F_DEDICATED_RENDER: u8 = 1 << 5;
 /// the player can drown a water cell with a stone block or drop
 /// a torch into snow without breaking the layer first.
 const F_REPLACEABLE: u8 = 1 << 6;
+/// Block gets washed away when a liquid spreads or falls into
+/// its cell. Decorations (torch, flowers, snow layer, future
+/// tall grass) opt in - water sweeping past replaces them with
+/// itself. Drops handled separately by the item-entity system.
+const F_WASHABLE: u8 = 1 << 7;
 
 /// One block kind's full definition. Adding a new block = one
 /// entry here + a hotbar slot below; the registry, atlas loader,
@@ -14892,7 +14903,7 @@ const BLOCK_TYPES: &[BlockType] = &[
     },
     BlockType {
         id: 10, name: "torch", color: [1.00, 0.78, 0.40], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
         top: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
         sides: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
@@ -14931,7 +14942,7 @@ const BLOCK_TYPES: &[BlockType] = &[
         // tile assignments so the texture still gets sourced
         // from the atlas / asset pack.
         id: 15, name: "snow", color: [0.97, 0.98, 1.00], transparent: true,
-        flags: F_DEDICATED_RENDER | F_REPLACEABLE,
+        flags: F_DEDICATED_RENDER | F_REPLACEABLE | F_WASHABLE,
         top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
@@ -14971,21 +14982,21 @@ const BLOCK_TYPES: &[BlockType] = &[
     // procedural generator only spawns it on top of grass voxels.
     BlockType {
         id: 20, name: "flower", color: [0.95, 0.30, 0.30], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
         top: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
     },
     BlockType {
         id: 21, name: "flower_yellow", color: [1.00, 0.85, 0.20], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
         top: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
     },
     BlockType {
         id: 22, name: "flower_blue", color: [0.40, 0.55, 0.95], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
         top: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
@@ -15368,6 +15379,14 @@ fn block_skips_chunk_mesh(b: BlockId) -> bool {
 #[inline]
 fn block_is_replaceable(b: BlockId) -> bool {
     block_has_flag(b, F_REPLACEABLE)
+}
+
+/// Block gets washed away when a liquid spreads or falls into
+/// its cell. Decorations opt in; the liquid simply overwrites
+/// them (drops handled by the item-entity system).
+#[inline]
+fn block_is_washable(b: BlockId) -> bool {
+    block_has_flag(b, F_WASHABLE)
 }
 
 /// Map a block id to the Minecraft sound-material name. Used to
