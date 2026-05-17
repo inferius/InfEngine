@@ -1073,6 +1073,13 @@ const RECIPES: &[Recipe] = &[
         output: (34, 1),
         name: "Iron axe",
     },
+    // 3 wool + 1 planks -> 1 bed. Loose interpretation of the
+    // 3-wool + 3-plank MC bed shape, fit into the 2x2 grid.
+    Recipe {
+        inputs: &[(11, 1), (11, 1), (11, 1), (7, 1)],
+        output: (35, 1),
+        name: "Bed",
+    },
 ];
 
 /// Inspect the 2x2 crafting grid and return the recipe output if
@@ -11602,6 +11609,31 @@ impl AppHandler for Voxel {
                 // Sentinel arm so the existing `else if rmb ...`
                 // structure stays a single `if/else if` chain.
                 unreachable!()
+            } else if rmb && self.world.get(hit.voxel).0 == 35 {
+                // RMB on a bed: trigger /sleep behaviour if it's
+                // night. Skips on host only since the day clock
+                // is authoritative there.
+                let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
+                let elev = (phase * std::f32::consts::TAU).sin();
+                let is_night = elev < -0.05;
+                if !is_night {
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "You can only sleep at night.".to_string(),
+                    ));
+                } else if matches!(self.net, NetRole::Client { .. }) {
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "Only the host can advance time.".to_string(),
+                    ));
+                } else {
+                    self.day_time = DAY_LENGTH_S * 0.20;
+                    self.last_day_broadcast = None;
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "* sleeps through the night".to_string(),
+                    ));
+                }
             } else if rmb
                 && let Some(block) = selected_block
                 && !is_tool_block(block)
@@ -12847,6 +12879,15 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+    },
+    // Bed block. Placeable + decorative. Has no special wakeup
+    // behaviour yet - /sleep handles the time skip - but the
+    // distinct texture marks safe-rest spots for builders.
+    BlockType {
+        id: 35, name: "bed", color: [0.85, 0.30, 0.30], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["bed_top.png", "bed.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bed_bottom.png", "bed.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bed_side.png", "bed.png"], keep_alpha: false },
     },
 ];
 
