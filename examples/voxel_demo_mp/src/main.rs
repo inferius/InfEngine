@@ -7079,6 +7079,169 @@ impl Voxel {
                                 handled_locally = true;
                             }
                         }
+                        "fill" => {
+                            // Host-only: fill a box defined by
+                            // (x1 y1 z1 x2 y2 z2 block) with the
+                            // named block. "air" clears. Routes
+                            // every cell through the edit
+                            // pipeline so the change persists +
+                            // replicates. Hard cap at 64^3
+                            // voxels per call.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/fill is host-only.".to_string(),
+                                );
+                            } else {
+                                let parts: Vec<&str> =
+                                    arg.split_whitespace().collect();
+                                if parts.len() != 7 {
+                                    local_lines.push(
+                                        "Usage: /fill x1 y1 z1 x2 y2 z2 block"
+                                            .to_string(),
+                                    );
+                                } else if let (
+                                    Ok(x1),
+                                    Ok(y1),
+                                    Ok(z1),
+                                    Ok(x2),
+                                    Ok(y2),
+                                    Ok(z2),
+                                ) = (
+                                    parts[0].parse::<i32>(),
+                                    parts[1].parse::<i32>(),
+                                    parts[2].parse::<i32>(),
+                                    parts[3].parse::<i32>(),
+                                    parts[4].parse::<i32>(),
+                                    parts[5].parse::<i32>(),
+                                ) {
+                                    let block_id: Option<u16> = if parts[6]
+                                        .eq_ignore_ascii_case("air")
+                                    {
+                                        Some(0)
+                                    } else {
+                                        BLOCK_TYPES
+                                            .iter()
+                                            .find(|bt| {
+                                                bt.name
+                                                    .eq_ignore_ascii_case(
+                                                        parts[6],
+                                                    )
+                                            })
+                                            .map(|bt| bt.id)
+                                    };
+                                    let mn = [
+                                        x1.min(x2),
+                                        y1.min(y2),
+                                        z1.min(z2),
+                                    ];
+                                    let mx = [
+                                        x1.max(x2),
+                                        y1.max(y2),
+                                        z1.max(z2),
+                                    ];
+                                    let span = [
+                                        (mx[0] - mn[0]).unsigned_abs() as u64
+                                            + 1,
+                                        (mx[1] - mn[1]).unsigned_abs() as u64
+                                            + 1,
+                                        (mx[2] - mn[2]).unsigned_abs() as u64
+                                            + 1,
+                                    ];
+                                    let total =
+                                        span[0] * span[1] * span[2];
+                                    let bid_opt = block_id;
+                                    if bid_opt.is_none() {
+                                        local_lines.push(format!(
+                                            "Unknown block: {}",
+                                            parts[6]
+                                        ));
+                                    } else if total > 64 * 64 * 64 {
+                                        local_lines.push(
+                                            "Too large: cap is 64^3 voxels.".to_string(),
+                                        );
+                                    } else if let Some(bid) = bid_opt {
+                                        let block = BlockId(bid);
+                                        let cfg =
+                                            bincode::config::standard();
+                                        let mut count = 0u64;
+                                        for y in mn[1]..=mx[1] {
+                                            for z in mn[2]..=mx[2] {
+                                                for x in mn[0]..=mx[0] {
+                                                    let v = [x, y, z];
+                                                    self.world_set_tracked(
+                                                        v, block,
+                                                    );
+                                                    count += 1;
+                                                    let edit = EditMsg {
+                                                        x,
+                                                        y,
+                                                        z,
+                                                        block: bid,
+                                                    };
+                                                    if let NetRole::Server {
+                                                        server,
+                                                        ..
+                                                    } = &mut self.net
+                                                    {
+                                                        self
+                                                            .edit_history
+                                                            .push(edit);
+                                                        if let Ok(buf) =
+                                                            bincode::serde::encode_to_vec(
+                                                                edit, cfg,
+                                                            )
+                                                        {
+                                                            server
+                                                                .broadcast_bytes(
+                                                                    "vx.edit",
+                                                                    buf,
+                                                                );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Remesh all touched
+                                        // chunks at once.
+                                        let cs = CHUNK_SIZE as i32;
+                                        let min_cc = [
+                                            mn[0].div_euclid(cs),
+                                            mn[1].div_euclid(cs),
+                                            mn[2].div_euclid(cs),
+                                        ];
+                                        let max_cc = [
+                                            mx[0].div_euclid(cs),
+                                            mx[1].div_euclid(cs),
+                                            mx[2].div_euclid(cs),
+                                        ];
+                                        let mut coords: Vec<ChunkCoord> =
+                                            Vec::new();
+                                        for cz in min_cc[2]..=max_cc[2] {
+                                            for cy in min_cc[1]..=max_cc[1] {
+                                                for cx in
+                                                    min_cc[0]..=max_cc[0]
+                                                {
+                                                    coords
+                                                        .push([cx, cy, cz]);
+                                                }
+                                            }
+                                        }
+                                        self.rebuild_chunks(&coords);
+                                        local_lines.push(format!(
+                                            "Filled {count} blocks."
+                                        ));
+                                    }
+                                } else {
+                                    local_lines.push(
+                                        "Coords must be ints.".to_string(),
+                                    );
+                                }
+                                handled_locally = true;
+                            }
+                        }
                         "explode" => {
                             // Host-only: blast a sphere of voxels
                             // to air around the player. Default
