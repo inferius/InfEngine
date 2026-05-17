@@ -6113,6 +6113,75 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "dmg" | "damage" => {
+                            // Host-only: deal damage to a named
+                            // peer or self. Usage: /dmg <name>
+                            // <amount>. Routes through the same
+                            // vx.damage path PvP uses.
+                            if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+                                local_lines.push(
+                                    "/dmg is host-only.".to_string(),
+                                );
+                            } else {
+                                let mut parts = arg.split_whitespace();
+                                let target = parts.next().unwrap_or("");
+                                let amount: f32 = parts
+                                    .next()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(2.0);
+                                if target.is_empty() {
+                                    local_lines.push(
+                                        "Usage: /dmg <name> [amount]"
+                                            .to_string(),
+                                    );
+                                } else {
+                                    let target_id = self
+                                        .player_names
+                                        .iter()
+                                        .find(|(_, n)| {
+                                            n.eq_ignore_ascii_case(target)
+                                        })
+                                        .map(|(id, _)| *id);
+                                    match target_id {
+                                        None => {
+                                            local_lines.push(format!(
+                                                "No player named {target}."
+                                            ));
+                                        }
+                                        Some(0) => {
+                                            self.apply_player_damage(amount);
+                                            local_lines.push(format!(
+                                                "Self-damaged {amount}."
+                                            ));
+                                        }
+                                        Some(id) => {
+                                            let cfg =
+                                                bincode::config::standard();
+                                            if let NetRole::Server {
+                                                server,
+                                                ..
+                                            } = &mut self.net
+                                                && let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        DamageMsg { amount },
+                                                        cfg,
+                                                    )
+                                            {
+                                                server.send_bytes_to_client(
+                                                    id,
+                                                    "vx.damage",
+                                                    buf,
+                                                );
+                                            }
+                                            local_lines.push(format!(
+                                                "Damaged {target} for {amount}."
+                                            ));
+                                        }
+                                    }
+                                }
+                                handled_locally = true;
+                            }
+                        }
                         "killmobs" => {
                             // Host-only: nuke every live mob.
                             // Pre-bleed HP to one hit so the
