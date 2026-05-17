@@ -8540,6 +8540,40 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "face" => {
+                            // Snap the player yaw to a cardinal
+                            // bearing. /face n|e|s|w. yaw=0 ->
+                            // +X (east) per the rest of the demo.
+                            let yaw = match arg.to_lowercase().as_str() {
+                                "e" | "east" => Some(0.0_f32),
+                                "n" | "north" => {
+                                    Some(std::f32::consts::FRAC_PI_2)
+                                }
+                                "w" | "west" => {
+                                    Some(std::f32::consts::PI)
+                                }
+                                "s" | "south" => Some(
+                                    3.0 * std::f32::consts::FRAC_PI_2,
+                                ),
+                                _ => None,
+                            };
+                            match yaw {
+                                Some(y) => {
+                                    self.player_yaw = y;
+                                    self.player_pitch = 0.0;
+                                    local_lines.push(format!(
+                                        "Facing {arg}."
+                                    ));
+                                }
+                                None => {
+                                    local_lines.push(
+                                        "Usage: /face n|e|s|w"
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "pos" => {
                             // Print precise pose. Pairs with the
                             // HUD-line XYZ readout (which is
