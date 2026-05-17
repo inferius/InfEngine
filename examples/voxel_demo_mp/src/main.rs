@@ -947,6 +947,19 @@ const PLAYER_RADIUS: f32 = 0.3;
 const COLLISION_EPSILON: f32 = 1e-4;
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10
 /// hearts of 2 HP each).
+/// Damage source classifier - drives the per-kind hurt SFX
+/// `apply_player_damage_kind` plays on integer heart loss. New
+/// kinds drop in here + add a `match` arm in the SFX selector.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum DamageKind {
+    /// Mob hits, fall damage, PvP - the standard hurt thud.
+    Generic,
+    /// Air ran out underwater - subtle bubble + airy swish.
+    Drown,
+    /// Hot liquid contact - sizzling swish, no bass.
+    Burn,
+}
+
 const PLAYER_MAX_HEALTH: f32 = 20.0;
 const STAMINA_MAX: f32 = 100.0;
 /// Breath capacity in seconds. MC matches this at ~15 s with
@@ -3402,6 +3415,15 @@ impl Voxel {
     /// fired through the existing `vx.fellout` channel so the
     /// server's authoritative copy stays in sync.
     fn apply_player_damage(&mut self, amount: f32) {
+        self.apply_player_damage_kind(amount, DamageKind::Generic);
+    }
+
+    /// Variant that tags the source of the damage so the SFX
+    /// layer can pick a fitting synth (gurgle for drown, sizzle
+    /// for lava, thud for everything else). Sound fires only on
+    /// integer health crossings so a fractional per-frame drain
+    /// doesn't spam the player's ears at 60 Hz.
+    fn apply_player_damage_kind(&mut self, amount: f32, kind: DamageKind) {
         if amount <= 0.0 {
             return;
         }
@@ -3415,16 +3437,39 @@ impl Voxel {
         if self.invuln_remaining > 0.0 {
             return;
         }
+        let prev_int = self.player_health.ceil() as i32;
         self.player_health = (self.player_health - amount).max(0.0);
+        let cur_int = self.player_health.ceil() as i32;
         self.hurt_flash = 0.5;
         // Damage resets the regen grace timer.
         self.regen_accum = 0.0;
-        // Synth hurt grunt so the player hears the hit even when
-        // no asset pack is loaded.
-        let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
-        self.sfx_at("hurt", pos, |a, g| {
-            let _ = a.play_thud(140.0, 0.35 * g);
-        });
+        // SFX fires only when an integer heart slot tips over,
+        // not every fractional tick. Per-kind synth so drown +
+        // burn don't share the loud "hurt" thud.
+        if cur_int < prev_int {
+            let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+            match kind {
+                DamageKind::Generic => {
+                    self.sfx_at("hurt", pos, |a, g| {
+                        let _ = a.play_thud(140.0, 0.35 * g);
+                    });
+                }
+                DamageKind::Drown => {
+                    // Soft bubble + airy swish for the breath-out
+                    // moment. Volume capped so the player can
+                    // hear themselves think.
+                    self.sfx_at("drown", pos, |a, g| {
+                        let _ = a.play_click(95.0, 0.10 * g);
+                        let _ = a.play_swish(0.08 * g);
+                    });
+                }
+                DamageKind::Burn => {
+                    self.sfx_at("burn", pos, |a, g| {
+                        let _ = a.play_swish(0.18 * g);
+                    });
+                }
+            }
+        }
         if self.player_health <= 0.0 {
             tracing::warn!("player died (HP = 0) - respawning");
             self.player_pos = self.safe_spawn();
@@ -6778,8 +6823,9 @@ impl Voxel {
             self.fall_start_y = None;
             // Submerged damage tick (lava burns, future acid).
             if liquid.submerged_damage_per_sec > 0.0 {
-                self.apply_player_damage(
+                self.apply_player_damage_kind(
                     liquid.submerged_damage_per_sec * dt,
+                    DamageKind::Burn,
                 );
             }
             // Breath: drain in liquids flagged `drains_air`; hold
@@ -6788,8 +6834,9 @@ impl Voxel {
             if liquid.drains_air {
                 self.player_air = (self.player_air - dt).max(0.0);
                 if self.player_air <= 0.0 {
-                    self.apply_player_damage(
+                    self.apply_player_damage_kind(
                         DROWN_DAMAGE_PER_SEC * dt,
+                        DamageKind::Drown,
                     );
                 }
             }
