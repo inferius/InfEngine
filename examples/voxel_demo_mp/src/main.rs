@@ -8317,6 +8317,58 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "info" => {
+                            // /info <x> <y> <z> -> name of the
+                            // block at those coords. Without
+                            // args, reads the voxel the player
+                            // currently stands on.
+                            let voxel: Option<[i32; 3]> = if arg.is_empty()
+                            {
+                                Some([
+                                    self.player_pos.x.floor() as i32,
+                                    (self.player_pos.y - PLAYER_HEIGHT - 0.05)
+                                        .floor()
+                                        as i32,
+                                    self.player_pos.z.floor() as i32,
+                                ])
+                            } else {
+                                let parts: Vec<&str> =
+                                    arg.split_whitespace().collect();
+                                if parts.len() == 3 {
+                                    match (
+                                        parts[0].parse::<i32>(),
+                                        parts[1].parse::<i32>(),
+                                        parts[2].parse::<i32>(),
+                                    ) {
+                                        (Ok(x), Ok(y), Ok(z)) => {
+                                            Some([x, y, z])
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            match voxel {
+                                Some(v) => {
+                                    let b = self.world.get(v);
+                                    let name = block_type(b.0)
+                                        .map(|t| t.name)
+                                        .unwrap_or("?");
+                                    local_lines.push(format!(
+                                        "({},{},{}) = {name} (id {})",
+                                        v[0], v[1], v[2], b.0
+                                    ));
+                                }
+                                None => {
+                                    local_lines.push(
+                                        "Usage: /info [x y z]"
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "find" => {
                             // Locates the nearest occurrence of
                             // a named block within a 48-block
