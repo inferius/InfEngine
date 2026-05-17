@@ -694,6 +694,12 @@ const PLAYER_MAX_HEALTH: f32 = 20.0;
 /// 3-block drop is harmless; anything taller deals
 /// `fall_distance - SAFE_FALL` HP.
 const SAFE_FALL: f32 = 3.0;
+/// Seconds without damage before HP starts ticking up.
+const REGEN_DELAY: f32 = 4.0;
+/// HP regenerated per second once `regen_accum` exceeds the delay.
+/// Rate of 0.5 HP/s + 4 s delay = a 5 s grace + 40 s to fill from
+/// near-death to full.
+const REGEN_RATE: f32 = 0.5;
 /// Hotbar slots: index 0 is the "break" slot (empty hand), the rest
 /// hold the block ids in `Self::HOTBAR_BLOCKS`.
 /// Hotbar occupies the first row of the inventory grid; the
@@ -1001,6 +1007,10 @@ struct Voxel {
     /// Seconds remaining in the red screen-flash overlay that
     /// fires on any non-trivial damage event. Decays in update.
     hurt_flash: f32,
+    /// Seconds elapsed since the last damage. Once it crosses
+    /// `REGEN_DELAY`, HP starts ticking up at `REGEN_RATE` HP/s
+    /// (capped at `PLAYER_MAX_HEALTH`).
+    regen_accum: f32,
     /// Per-remote-player interpolation buffer. We keep the
     /// previous + current `PlayerMsg` and their arrival instants
     /// so the render path can lerp between them at `now - delay`,
@@ -1910,6 +1920,8 @@ impl Voxel {
         }
         self.player_health = (self.player_health - amount).max(0.0);
         self.hurt_flash = 0.5;
+        // Damage resets the regen grace timer.
+        self.regen_accum = 0.0;
         // Synth hurt grunt so the player hears the hit even when
         // no asset pack is loaded.
         let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
@@ -3086,6 +3098,7 @@ impl Voxel {
             player_health: PLAYER_MAX_HEALTH,
             fall_start_y: None,
             hurt_flash: 0.0,
+            regen_accum: 0.0,
             remote_interp: HashMap::new(),
             inventory: {
                 // Seed the hotbar with one starter stack per known
@@ -3629,6 +3642,17 @@ impl Voxel {
         // Hurt-flash decay.
         if self.hurt_flash > 0.0 {
             self.hurt_flash = (self.hurt_flash - dt).max(0.0);
+        }
+        // HP regen: tick the grace timer; once the player has gone
+        // `REGEN_DELAY` seconds without damage, drip HP back in at
+        // `REGEN_RATE` HP/s until full.
+        if self.player_health > 0.0 && self.player_health < PLAYER_MAX_HEALTH {
+            self.regen_accum += dt;
+            if self.regen_accum > REGEN_DELAY {
+                let gain = REGEN_RATE * dt;
+                self.player_health =
+                    (self.player_health + gain).min(PLAYER_MAX_HEALTH);
+            }
         }
 
         if self.player_pos.y < -20.0 {
