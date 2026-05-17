@@ -386,9 +386,10 @@ fn tool_effectiveness(
     held: BlockId,
     block: BlockId,
 ) -> (f32, bool) {
-    // Water breaks instantly regardless of tool. Skips the
-    // category-mismatch 4x penalty so bare-hand scoop is fast.
-    if block.0 == WATER_ID {
+    // Liquids break instantly regardless of tool. Skips the
+    // category-mismatch 4x penalty so bare-hand scoop is fast
+    // for every registered liquid (water, lava, ...).
+    if block_is_liquid(block) {
         return (0.25, true);
     }
     let cat = block_category(block);
@@ -552,12 +553,12 @@ struct ServerStateV2 {
     #[serde(default)]
     torch_orient: Vec<([i32; 3], u8)>,
     /// Persisted water spread depth per wet voxel. 0 = source,
-    /// 1..=MAX_WATER_SPREAD = flow. Missing entries default to
+    /// 1..=7 = flow (MC's level range). Missing entries default to
     /// 0 on load - acceptable for old saves but means the
     /// pre-spread budget is forfeit (water won't widen further
     /// after a reload of a v0 save).
     #[serde(default)]
-    water_depth: Vec<([i32; 3], u8)>,
+    liquid_level: Vec<([i32; 3], u8)>,
 }
 
 fn default_player_health() -> f32 {
@@ -1632,23 +1633,22 @@ struct Voxel {
     /// existing voxel's layer until it tops out, then a fresh
     /// snow voxel is painted on top.
     snow_positions: HashMap<[i32; 3], u8>,
-    /// Water voxels that the host should re-evaluate for falling.
-    /// Populated on chunk load + on every water place. Each tick
-    /// pops a bounded slice, attempts a single one-voxel fall,
-    /// and pushes the new resting position back. Drained when
-    /// the column hits solid ground.
-    water_active: HashSet<[i32; 3]>,
-    /// Every water voxel currently in the world. Maintained on
-    /// every peer (host + clients) so the dedicated water-slab
-    /// render path can iterate without scanning chunks. Updated
-    /// in `world_set_tracked` + chunk-load scans alongside the
-    /// torch / snow trackers.
-    water_positions: HashSet<[i32; 3]>,
-    /// Spread depth from the nearest source. 0 = source (pond
-    /// gen + manual place), 1..=MAX_WATER_SPREAD = flow. Missing
-    /// entry = source (default 0). Capped so a single source
-    /// can't drown an arbitrarily large plain.
-    water_depth: HashMap<[i32; 3], u8>,
+    /// Liquid voxels (water + lava) the host should re-evaluate
+    /// for fall + spread. Populated on chunk load + on every
+    /// liquid write. Per-tick scheduler pops a bounded slice
+    /// and runs the MC-style update.
+    liquid_active: HashSet<[i32; 3]>,
+    /// Every liquid voxel currently in the world. Maintained on
+    /// every peer (host + clients) so the dedicated slope-mesh
+    /// render path can iterate without scanning chunks. The
+    /// block id at the world coord tells the mesher which
+    /// liquid lives at that cell.
+    liquid_positions: HashSet<[i32; 3]>,
+    /// MC-style level per liquid voxel: 0 = source, 1..=7 = flow
+    /// (lower = closer to source). Missing entry defaults to 0
+    /// (source) so loaders from old saves treat existing fluid
+    /// as a source.
+    liquid_level: HashMap<[i32; 3], u8>,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1696,13 +1696,14 @@ struct Voxel {
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
-    /// Combined slope-aware mesh for every water voxel currently
-    /// in the world. Rebuilt lazily when `water_mesh_dirty` flips
-    /// (placement, fall, spread, decay, source merge). Drawn via
-    /// the alpha-blended pipeline so the slope reads as a single
-    /// connected surface.
-    water_mesh_handle: Option<MeshHandle>,
-    water_mesh_dirty: bool,
+    /// Slope-aware mesh per liquid kind (one handle for water,
+    /// one for lava, ...). The renderer draws each with its own
+    /// PBR colour so different liquids can share the same
+    /// geometry pipeline. Rebuilt lazily when
+    /// `liquid_mesh_dirty` flips (place / fall / spread / decay
+    /// / source merge).
+    liquid_mesh_handles: HashMap<u16, MeshHandle>,
+    liquid_mesh_dirty: bool,
     /// Dedicated cube mesh for sheep bodies. Has its own
     /// `AlbedoHandle` binding so the texture (loaded from
     /// `assets/textures/entity/sheep/sheep.tga`) doesn't leak onto
@@ -1795,32 +1796,31 @@ impl Voxel {
         if block.0 != TORCH_ID {
             self.torch_orient.remove(&voxel);
         }
-        // Water bookkeeping: every fresh water voxel re-enters
-        // the fall queue so the host's `tick_water_fall` can
-        // see whether the cell below is air. Replacement /
-        // breakage doesn't actively clear the entry - the next
-        // tick will notice the world block isn't water and
-        // self-purge. Depth defaults to 0 (source) for direct
-        // writes; the fall / spread passes overwrite this when
-        // they propagate flow from a source.
-        if block.0 == WATER_ID {
-            self.water_active.insert(voxel);
-            self.water_depth.entry(voxel).or_insert(0);
-            if self.water_positions.insert(voxel) {
-                self.water_mesh_dirty = true;
+        // Liquid bookkeeping: any registered liquid (water,
+        // lava, ...) re-enters the active queue + position set
+        // when it's written. Level defaults to 0 (source) for
+        // direct writes; tick passes overwrite when they
+        // propagate flow from a source. Non-liquid writes purge
+        // the entry so a broken liquid cell doesn't leak into
+        // the tracker.
+        if liquid_for(block).is_some() {
+            self.liquid_active.insert(voxel);
+            self.liquid_level.entry(voxel).or_insert(0);
+            if self.liquid_positions.insert(voxel) {
+                self.liquid_mesh_dirty = true;
             }
-        } else if self.water_positions.remove(&voxel) {
-            self.water_depth.remove(&voxel);
-            self.water_mesh_dirty = true;
+        } else if self.liquid_positions.remove(&voxel) {
+            self.liquid_level.remove(&voxel);
+            self.liquid_mesh_dirty = true;
         } else {
-            self.water_depth.remove(&voxel);
+            self.liquid_level.remove(&voxel);
         }
         // Any world edit can change a neighbour's air / solid /
         // water status which feeds into the corner-height blend,
         // so flag the slope mesh dirty whenever water sits next
         // to the touched voxel. Cheap 4-cell scan keeps the
         // overhead tiny for the common solid <-> air edit.
-        if !self.water_mesh_dirty {
+        if !self.liquid_mesh_dirty {
             let neighbours = [
                 [voxel[0] + 1, voxel[1], voxel[2]],
                 [voxel[0] - 1, voxel[1], voxel[2]],
@@ -1829,8 +1829,8 @@ impl Voxel {
                 [voxel[0], voxel[1] + 1, voxel[2]],
                 [voxel[0], voxel[1] - 1, voxel[2]],
             ];
-            if neighbours.iter().any(|n| self.water_positions.contains(n)) {
-                self.water_mesh_dirty = true;
+            if neighbours.iter().any(|n| self.liquid_positions.contains(n)) {
+                self.liquid_mesh_dirty = true;
             }
         }
     }
@@ -2058,40 +2058,37 @@ impl Voxel {
         Vec3::new(0.0, 90.0, 0.0)
     }
 
-    /// Surface height (in voxel units) for a single water cell.
-    /// Source = 0.90, flow ramps down with depth, falling water
-    /// (water voxel above) fills the cell to 1.0. Non-water
-    /// voxels return 0.0 so the corner-height accumulator treats
-    /// them as "no contribution".
-    fn water_surface_height(&self, pos: [i32; 3]) -> f32 {
-        if self.world.get(pos).0 != WATER_ID {
+    /// Surface height in voxel units for a single liquid cell.
+    /// Matches MC's (8 - level) / 9 ramp so a source (level 0)
+    /// fills 8/9 of the cell and a thin level-7 flow leaves
+    /// only 1/9. Falling liquid (same-kind voxel directly above)
+    /// fills to 1.0 so a stream reads as a continuous column.
+    /// Returns 0.0 for voxels that aren't `liquid_id`, so the
+    /// corner-height accumulator treats them as "no contribution".
+    fn liquid_surface_height(&self, pos: [i32; 3], liquid_id: u16) -> f32 {
+        if self.world.get(pos).0 != liquid_id {
             return 0.0;
         }
-        if self.world.get([pos[0], pos[1] + 1, pos[2]]).0 == WATER_ID {
+        if self.world.get([pos[0], pos[1] + 1, pos[2]]).0 == liquid_id {
             return 1.0;
         }
-        let d = self.water_depth.get(&pos).copied().unwrap_or(0);
-        match d {
-            0 => 0.90,
-            1 => 0.75,
-            2 => 0.60,
-            3 => 0.45,
-            _ => 0.30,
-        }
+        let level = self.liquid_level.get(&pos).copied().unwrap_or(0).min(7);
+        (8 - level as i32).max(1) as f32 / 9.0
     }
 
-    /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz` in
-    /// `{0,1}` pick which of the four corners. Averages the
-    /// surface heights of the (up to 4) water voxels that share
-    /// the corner so adjacent cells with different depths blend
-    /// into a continuous slope.
-    fn water_corner_height(
+    /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz`
+    /// in `{0,1}` pick which corner. Averages the surface
+    /// heights of the (up to 4) same-kind liquid voxels that
+    /// share the corner so adjacent cells at different levels
+    /// blend into a continuous slope.
+    fn liquid_corner_height(
         &self,
         vx: i32,
         vy: i32,
         vz: i32,
         cx: i32,
         cz: i32,
+        liquid_id: u16,
     ) -> f32 {
         let touching = [
             [vx + cx - 1, vy, vz + cz - 1],
@@ -2102,7 +2099,7 @@ impl Voxel {
         let mut sum = 0.0_f32;
         let mut count = 0u32;
         for t in &touching {
-            let h = self.water_surface_height(*t);
+            let h = self.liquid_surface_height(*t, liquid_id);
             if h > 0.0 {
                 sum += h;
                 count += 1;
@@ -2121,75 +2118,63 @@ impl Voxel {
     /// side faces drop to y=0 only against air / decorations, and
     /// the bottom face emits only when there's something the
     /// player could actually see through the water from below.
-    fn maybe_rebuild_water_mesh(&mut self) {
-        if !self.water_mesh_dirty {
+    fn maybe_rebuild_liquid_mesh(&mut self) {
+        if !self.liquid_mesh_dirty {
             return;
         }
         if self.renderer.is_none() {
             return;
         }
-        if self.water_positions.is_empty() {
-            if let Some(h) = self.water_mesh_handle.take() {
-                let renderer = self
-                    .renderer
-                    .as_mut()
-                    .expect("renderer checked above");
-                renderer.remove_mesh(h);
+        // Per-liquid vertex/index pool. One mesh per kind so
+        // each can draw with its own colour (water blue, lava
+        // orange, ...) through the shared alpha-blend pipeline.
+        let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> =
+            HashMap::new();
+        for p in self.liquid_positions.iter().copied() {
+            let block = self.world.get(p);
+            let liquid_id = block.0;
+            if liquid_for(block).is_none() {
+                continue;
             }
-            self.water_mesh_dirty = false;
-            return;
-        }
-        let mut vertices: Vec<MeshVertex> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        let positions: Vec<[i32; 3]> =
-            self.water_positions.iter().copied().collect();
-        for p in &positions {
+            let (vertices, indices) =
+                buckets.entry(liquid_id).or_default();
             let vx = p[0];
             let vy = p[1];
             let vz = p[2];
-            let h00 = self.water_corner_height(vx, vy, vz, 0, 0);
-            let h10 = self.water_corner_height(vx, vy, vz, 1, 0);
-            let h11 = self.water_corner_height(vx, vy, vz, 1, 1);
-            let h01 = self.water_corner_height(vx, vy, vz, 0, 1);
+            let h00 = self.liquid_corner_height(vx, vy, vz, 0, 0, liquid_id);
+            let h10 = self.liquid_corner_height(vx, vy, vz, 1, 0, liquid_id);
+            let h11 = self.liquid_corner_height(vx, vy, vz, 1, 1, liquid_id);
+            let h01 = self.liquid_corner_height(vx, vy, vz, 0, 1, liquid_id);
             let fx = vx as f32;
             let fy = vy as f32;
             let fz = vz as f32;
-            // Top face: 4 corners with slope. Only emit when the
-            // voxel above isn't itself water - otherwise the
-            // surface is hidden inside a falling column.
-            let above_water =
-                self.world.get([vx, vy + 1, vz]).0 == WATER_ID;
-            if !above_water {
+            // Top face: emit only when the voxel above isn't
+            // the same liquid (i.e. we're not buried inside a
+            // falling column).
+            let above_same =
+                self.world.get([vx, vy + 1, vz]).0 == liquid_id;
+            if !above_same {
                 let t0 = [fx, fy + h00, fz];
                 let t1 = [fx + 1.0, fy + h10, fz];
                 let t2 = [fx + 1.0, fy + h11, fz + 1.0];
                 let t3 = [fx, fy + h01, fz + 1.0];
                 let normal = water_face_normal(t0, t1, t2, t3);
-                push_quad(
-                    &mut vertices,
-                    &mut indices,
-                    t0,
-                    t1,
-                    t2,
-                    t3,
-                    normal,
-                );
+                push_quad(vertices, indices, t0, t1, t2, t3, normal);
             }
-            // Helper: emit a side face on `axis` if the neighbour
-            // there is "open" (air or another decoration with
-            // `F_AABB_PASS`, but not water - water sides cancel).
+            // Helper: side face is "open" only against air or
+            // a passable decoration (torch / flower). A neighbour
+            // of the SAME liquid kind cancels - their shared
+            // face is fully inside the body.
             let side_open = |nx: i32, ny: i32, nz: i32| -> bool {
                 let nb = self.world.get([nx, ny, nz]);
-                if nb.0 == WATER_ID {
+                if nb.0 == liquid_id {
                     return false;
                 }
                 nb.is_air() || block_is_aabb_passable(nb)
             };
-            // -X side (west): corners (0,h00,0) (0,h01,1).
             if side_open(vx - 1, vy, vz) {
                 push_quad(
-                    &mut vertices,
-                    &mut indices,
+                    vertices, indices,
                     [fx, fy, fz + 1.0],
                     [fx, fy + h01, fz + 1.0],
                     [fx, fy + h00, fz],
@@ -2197,11 +2182,9 @@ impl Voxel {
                     [-1.0, 0.0, 0.0],
                 );
             }
-            // +X side (east).
             if side_open(vx + 1, vy, vz) {
                 push_quad(
-                    &mut vertices,
-                    &mut indices,
+                    vertices, indices,
                     [fx + 1.0, fy, fz],
                     [fx + 1.0, fy + h10, fz],
                     [fx + 1.0, fy + h11, fz + 1.0],
@@ -2209,11 +2192,9 @@ impl Voxel {
                     [1.0, 0.0, 0.0],
                 );
             }
-            // -Z side (north).
             if side_open(vx, vy, vz - 1) {
                 push_quad(
-                    &mut vertices,
-                    &mut indices,
+                    vertices, indices,
                     [fx, fy, fz],
                     [fx, fy + h00, fz],
                     [fx + 1.0, fy + h10, fz],
@@ -2221,11 +2202,9 @@ impl Voxel {
                     [0.0, 0.0, -1.0],
                 );
             }
-            // +Z side (south).
             if side_open(vx, vy, vz + 1) {
                 push_quad(
-                    &mut vertices,
-                    &mut indices,
+                    vertices, indices,
                     [fx + 1.0, fy, fz + 1.0],
                     [fx + 1.0, fy + h11, fz + 1.0],
                     [fx, fy + h01, fz + 1.0],
@@ -2233,15 +2212,9 @@ impl Voxel {
                     [0.0, 0.0, 1.0],
                 );
             }
-            // Bottom face: emit only when the cell below is
-            // empty AIR (so the player swimming up can look down
-            // and see the surface from the inside). Skip when
-            // there's any solid / water below so we don't pay
-            // for an invisible face.
             if self.world.get([vx, vy - 1, vz]).is_air() {
                 push_quad(
-                    &mut vertices,
-                    &mut indices,
+                    vertices, indices,
                     [fx, fy, fz],
                     [fx + 1.0, fy, fz],
                     [fx + 1.0, fy, fz + 1.0],
@@ -2250,100 +2223,103 @@ impl Voxel {
                 );
             }
         }
-        // Re-borrow `renderer` now that the `&self` work above is
-        // done. Borrow checker forbids overlapping `&self.world` /
-        // `&self.water_depth` reads with the `&mut self.renderer`
-        // grab, so we split the lifetimes.
+        // Re-borrow renderer now that the `&self.world` /
+        // `&self.liquid_level` reads above are done.
         let renderer = self
             .renderer
             .as_mut()
             .expect("renderer checked at function entry");
-        if let Some(h) = self.water_mesh_handle.take() {
+        // Drop every previous handle: the rebuild owns the
+        // full state so we don't try to diff per-cell.
+        for (_, h) in self.liquid_mesh_handles.drain() {
             renderer.remove_mesh(h);
         }
-        if !vertices.is_empty() && !indices.is_empty() {
-            let h = renderer.create_mesh(
-                "voxel_water_combined",
-                &vertices,
-                &indices,
-            );
-            // Generic gate: any block with `F_TRANSPARENT_RENDER`
-            // pushes its dedicated mesh through the alpha-blended
-            // pipeline. Pulling the bit off the table row means a
-            // future liquid that wants the same treatment opts in
-            // by flipping its `BlockType` flags - this function
-            // never has to learn about a specific id.
-            if block_is_transparent_render(BlockId(WATER_ID)) {
+        for (liquid_id, (vertices, indices)) in buckets {
+            if vertices.is_empty() || indices.is_empty() {
+                continue;
+            }
+            let label = format!("voxel_liquid_{liquid_id}");
+            let h = renderer.create_mesh(&label, &vertices, &indices);
+            if block_is_transparent_render(BlockId(liquid_id)) {
                 renderer.set_mesh_transparent(h, true);
             }
-            self.water_mesh_handle = Some(h);
+            self.liquid_mesh_handles.insert(liquid_id, h);
         }
-        self.water_mesh_dirty = false;
+        self.liquid_mesh_dirty = false;
     }
 
-    /// Authoritative water-fall pass. Water voxels in
-    /// `water_active` with air directly below get cloned down one
-    /// block per call; the new voxel re-enters the queue so a
-    /// column keeps falling until it hits ground. Resting water
-    /// drains out of the active set so the queue size stays
-    /// bounded. Caps work at 64 voxels/call to keep frame time
-    /// flat even on a freshly-flooded chunk.
-    fn tick_water_fall(&mut self) {
+    /// Per-frame scheduler. Walks the `LIQUIDS` registry and
+    /// dispatches each liquid's tick passes when the cadence
+    /// (`Liquid::tick_period`) matches. Host-only - clients
+    /// receive the resulting `vx.edit` traffic.
+    fn tick_liquids(&mut self) {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
-        // Slow the falling cadence so a poured column reads as
-        // a stream rather than teleporting downward.
-        if !self.net_tick.is_multiple_of(2) {
+        for liquid in LIQUIDS {
+            if (self.net_tick as u32)
+                .is_multiple_of(liquid.tick_period.max(1))
+            {
+                self.tick_liquid_fall(liquid);
+                self.tick_liquid_spread(liquid);
+                if liquid.infinite_source {
+                    self.tick_liquid_merge(liquid);
+                }
+                self.tick_liquid_decay(liquid);
+            }
+        }
+    }
+
+    /// One-block fall for every cell of `liquid` whose cell
+    /// directly below is air. The falling voxel inherits the
+    /// parent's level so a stream off a high source doesn't gain
+    /// spread budget by dropping. Bounded at 64 cells per call so
+    /// a freshly-poured column doesn't stall frame pacing.
+    fn tick_liquid_fall(&mut self, liquid: &Liquid) {
+        if self.liquid_active.is_empty() {
             return;
         }
-        if self.water_active.is_empty() {
-            return;
-        }
-        // Snapshot up to 64 candidate voxels so we can release
-        // the immutable borrow on `self.water_active` before
-        // mutating the world.
+        let liquid_id = liquid.block_id;
         let candidates: Vec<[i32; 3]> = self
-            .water_active
+            .liquid_active
             .iter()
+            .filter(|p| self.world.get(**p).0 == liquid_id)
             .take(64)
             .copied()
             .collect();
+        if candidates.is_empty() {
+            return;
+        }
         let mut to_fall: Vec<[i32; 3]> = Vec::new();
         let mut to_clear: Vec<[i32; 3]> = Vec::new();
         for pos in &candidates {
-            if self.world.get(*pos).0 != WATER_ID {
-                // Voxel was broken or replaced - drop from set.
-                to_clear.push(*pos);
-                continue;
-            }
             let below = [pos[0], pos[1] - 1, pos[2]];
             if self.world.get(below).is_air() {
                 to_fall.push(below);
             } else {
-                // Resting on ground or other water - no more
-                // work for this voxel.
+                // Resting on something solid or another liquid -
+                // no more falling work for this cell.
                 to_clear.push(*pos);
             }
         }
         for pos in &to_clear {
-            self.water_active.remove(pos);
+            self.liquid_active.remove(pos);
         }
         for below in &to_fall {
-            // Falling water inherits the source's depth so a
-            // stream off a high source doesn't gain spread
-            // distance just by dropping.
+            // Falling cell inherits the parent's level so a
+            // stream off a cliff doesn't reset the spread budget
+            // at the landing pad.
             let parent = [below[0], below[1] + 1, below[2]];
-            let depth = self
-                .water_depth
+            let level = self
+                .liquid_level
                 .get(&parent)
                 .copied()
                 .unwrap_or(0);
-            self.world_set_tracked(*below, BlockId(WATER_ID));
-            self.water_depth.insert(*below, depth);
+            self.world_set_tracked(*below, BlockId(liquid_id));
+            self.liquid_level.insert(*below, level);
             let coords = Self::affected_chunks(*below);
             self.rebuild_chunks(&coords);
-            self.water_active.insert(*below);
+            self.liquid_active.insert(*below);
         }
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
@@ -2352,7 +2328,7 @@ impl Voxel {
                     x: below[0],
                     y: below[1],
                     z: below[2],
-                    block: WATER_ID,
+                    block: liquid_id,
                 };
                 self.edit_history.push(edit);
                 if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
@@ -2362,77 +2338,90 @@ impl Voxel {
         }
     }
 
-    /// Horizontal spread pass. Every 4th tick the host walks the
-    /// active water set; any voxel that's resting on solid ground
-    /// (no air below) extends one cell into each of its N/S/E/W
-    /// air neighbours, provided:
-    ///  - the neighbour has a solid block below (no off-ledge
-    ///    spread - that becomes a fall instead),
-    ///  - the source's current depth is below `MAX_WATER_SPREAD`.
-    ///
-    /// Skip on client. Broadcasts each new flow voxel as a normal
-    /// `vx.edit` so peers render the same pool layout.
-    fn tick_water_spread(&mut self) {
-        if matches!(self.net, NetRole::Client { .. }) {
+    /// Horizontal spread pass following MC's pathfinding rule:
+    /// each cell of `liquid` resting on solid ground tries to
+    /// extend into N/S/E/W air neighbours. When a downhill
+    /// "drop" is reachable in <= 4 steps from a candidate
+    /// neighbour, the liquid prefers that direction; otherwise
+    /// it spreads to every available neighbour symmetrically.
+    /// Level is capped at `liquid.max_range`.
+    fn tick_liquid_spread(&mut self, liquid: &Liquid) {
+        if self.liquid_active.is_empty() {
             return;
         }
-        if !self.net_tick.is_multiple_of(10) {
-            return;
-        }
-        if self.water_active.is_empty() {
-            return;
-        }
+        let liquid_id = liquid.block_id;
+        let max_range = liquid.max_range;
         let candidates: Vec<[i32; 3]> = self
-            .water_active
+            .liquid_active
             .iter()
+            .filter(|p| self.world.get(**p).0 == liquid_id)
             .take(64)
             .copied()
             .collect();
         let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
         for pos in &candidates {
-            if self.world.get(*pos).0 != WATER_ID {
-                continue;
-            }
             let below = [pos[0], pos[1] - 1, pos[2]];
             if self.world.get(below).is_air() {
-                // Falls instead of spreading - leave it to
-                // `tick_water_fall`.
+                // Falls instead of spreading.
                 continue;
             }
-            let depth = self
-                .water_depth
+            let level = self
+                .liquid_level
                 .get(pos)
                 .copied()
                 .unwrap_or(0);
-            if depth >= MAX_WATER_SPREAD {
+            if level >= max_range {
                 continue;
             }
-            let neighbours = [
-                [pos[0] + 1, pos[1], pos[2]],
-                [pos[0] - 1, pos[1], pos[2]],
-                [pos[0], pos[1], pos[2] + 1],
-                [pos[0], pos[1], pos[2] - 1],
+            let dirs: [[i32; 3]; 4] = [
+                [1, 0, 0],
+                [-1, 0, 0],
+                [0, 0, 1],
+                [0, 0, -1],
             ];
-            for n in &neighbours {
-                if !self.world.get(*n).is_air() {
+            // MC pathfinding: for each air neighbour score the
+            // distance to a downward drop (cell with air below)
+            // reachable within 4 steps. Spread only to the
+            // direction(s) with the minimum distance. When no
+            // direction has a reachable drop, every air neighbour
+            // counts.
+            let mut weights: [u32; 4] = [u32::MAX; 4];
+            for (i, d) in dirs.iter().enumerate() {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                if !self.world.get(n).is_air() {
                     continue;
                 }
-                // Skip if neighbour already queued this tick.
-                if to_spawn.iter().any(|(p, _)| p == n) {
+                weights[i] = self.distance_to_drop(n, 4);
+            }
+            let any_reachable =
+                weights.iter().any(|w| *w != u32::MAX && *w < 1000);
+            let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
+            for (i, d) in dirs.iter().enumerate() {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                if !self.world.get(n).is_air() {
                     continue;
                 }
-                to_spawn.push((*n, depth + 1));
+                // When a drop is reachable, restrict spread to the
+                // best-scoring direction(s). Otherwise spread to
+                // every air neighbour (radial pool fill).
+                if any_reachable && weights[i] != min_w {
+                    continue;
+                }
+                if to_spawn.iter().any(|(p, _)| p == &n) {
+                    continue;
+                }
+                to_spawn.push((n, level + 1));
             }
         }
         if to_spawn.is_empty() {
             return;
         }
-        for (pos, depth) in &to_spawn {
-            self.world_set_tracked(*pos, BlockId(WATER_ID));
-            self.water_depth.insert(*pos, *depth);
+        for (pos, lvl) in &to_spawn {
+            self.world_set_tracked(*pos, BlockId(liquid_id));
+            self.liquid_level.insert(*pos, *lvl);
             let coords = Self::affected_chunks(*pos);
             self.rebuild_chunks(&coords);
-            self.water_active.insert(*pos);
+            self.liquid_active.insert(*pos);
         }
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
@@ -2441,7 +2430,7 @@ impl Voxel {
                     x: pos[0],
                     y: pos[1],
                     z: pos[2],
-                    block: WATER_ID,
+                    block: liquid_id,
                 };
                 self.edit_history.push(edit);
                 if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
@@ -2451,31 +2440,77 @@ impl Voxel {
         }
     }
 
-    /// Source-merge pass: a flow voxel adjacent to two or more
-    /// source neighbours (the classic MC infinite-water trick)
-    /// gets promoted to a source itself. Host-only metadata
-    /// flip; no `vx.edit` broadcast because clients don't track
-    /// `water_depth`. Runs every 4th host tick so the merge
-    /// keeps pace with the spread rate.
-    fn tick_water_merge(&mut self) {
-        if matches!(self.net, NetRole::Client { .. }) {
+    /// MC-style pathfinding helper: BFS from `start` over air
+    /// cells looking for one with an air block directly below
+    /// (i.e. liquid could fall here). Returns the cell distance
+    /// to the nearest such drop, capped at `max_steps`, or
+    /// `u32::MAX` when no drop is reachable. Used by
+    /// `tick_liquid_spread` to bias horizontal flow toward
+    /// downhill paths.
+    fn distance_to_drop(&self, start: [i32; 3], max_steps: u32) -> u32 {
+        use std::collections::VecDeque;
+        // Quick reject: start itself must be an air cell sitting
+        // on a solid block (anything else would already have
+        // fallen or be blocked).
+        if !self.world.get(start).is_air() {
+            return u32::MAX;
+        }
+        let below_start = [start[0], start[1] - 1, start[2]];
+        if self.world.get(below_start).is_air() {
+            // start has air directly below -> distance 0.
+            return 0;
+        }
+        let mut visited: HashSet<[i32; 3]> = HashSet::new();
+        visited.insert(start);
+        let mut queue: VecDeque<([i32; 3], u32)> = VecDeque::new();
+        queue.push_back((start, 0));
+        let dirs: [[i32; 3]; 4] = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ];
+        while let Some((cell, dist)) = queue.pop_front() {
+            if dist >= max_steps {
+                continue;
+            }
+            for d in &dirs {
+                let n = [cell[0] + d[0], cell[1] + d[1], cell[2] + d[2]];
+                if visited.contains(&n) {
+                    continue;
+                }
+                if !self.world.get(n).is_air() {
+                    continue;
+                }
+                visited.insert(n);
+                // Below the candidate air cell: drop available?
+                if self.world.get([n[0], n[1] - 1, n[2]]).is_air() {
+                    return dist + 1;
+                }
+                queue.push_back((n, dist + 1));
+            }
+        }
+        u32::MAX
+    }
+
+    /// Source-merge pass: a flow voxel of `liquid` adjacent to
+    /// two or more same-kind source neighbours gets promoted to
+    /// a source itself (MC's infinite-water trick). Only called
+    /// for liquids whose `infinite_source` flag is set.
+    fn tick_liquid_merge(&mut self, liquid: &Liquid) {
+        if self.liquid_level.is_empty() {
             return;
         }
-        if !self.net_tick.is_multiple_of(4) {
-            return;
-        }
-        if self.water_depth.is_empty() {
-            return;
-        }
+        let liquid_id = liquid.block_id;
         let candidates: Vec<[i32; 3]> = self
-            .water_depth
+            .liquid_level
             .iter()
             .filter(|(_, d)| **d > 0)
             .take(64)
             .map(|(v, _)| *v)
             .collect();
         for pos in &candidates {
-            if self.world.get(*pos).0 != WATER_ID {
+            if self.world.get(*pos).0 != liquid_id {
                 continue;
             }
             let horiz = [
@@ -2486,55 +2521,40 @@ impl Voxel {
             ];
             let mut sources = 0u8;
             for n in &horiz {
-                if self.world.get(*n).0 == WATER_ID {
-                    let nd = self
-                        .water_depth
-                        .get(n)
-                        .copied()
-                        .unwrap_or(0);
-                    if nd == 0 {
-                        sources += 1;
-                    }
+                if self.world.get(*n).0 != liquid_id {
+                    continue;
+                }
+                let nd = self.liquid_level.get(n).copied().unwrap_or(0);
+                if nd == 0 {
+                    sources += 1;
                 }
             }
             if sources >= 2 {
-                self.water_depth.insert(*pos, 0);
-                // Source promotion changes the corner-height
-                // ramp used by the slope mesh.
-                self.water_mesh_dirty = true;
+                self.liquid_level.insert(*pos, 0);
+                self.liquid_mesh_dirty = true;
             }
         }
     }
 
-    /// Authoritative decay pass. Flow water (depth >= 1)
-    /// evaporates when it loses support:
-    ///  - no horizontal neighbour with strictly lower depth, AND
-    ///  - no water directly above (a feeding stream).
-    ///
-    /// Sources (depth 0) never decay. Runs every 8th host tick
-    /// to keep churn cheap on big pools.
-    fn tick_water_decay(&mut self) {
-        if matches!(self.net, NetRole::Client { .. }) {
+    /// Decay pass for `liquid`: a flow voxel (level >= 1) loses
+    /// support and evaporates when no horizontal neighbour has a
+    /// strictly lower level AND no same-kind voxel sits directly
+    /// above (feeding stream). Sources (level 0) never decay.
+    fn tick_liquid_decay(&mut self, liquid: &Liquid) {
+        if self.liquid_level.is_empty() {
             return;
         }
-        if !self.net_tick.is_multiple_of(16) {
-            return;
-        }
-        if self.water_depth.is_empty() {
-            return;
-        }
-        // Snapshot flow cells so we can release the borrow on
-        // `self.water_depth` before mutating the world.
+        let liquid_id = liquid.block_id;
         let candidates: Vec<([i32; 3], u8)> = self
-            .water_depth
+            .liquid_level
             .iter()
             .filter(|(_, d)| **d > 0)
             .take(64)
             .map(|(v, d)| (*v, *d))
             .collect();
         let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
-        for (pos, depth) in &candidates {
-            if self.world.get(*pos).0 != WATER_ID {
+        for (pos, level) in &candidates {
+            if self.world.get(*pos).0 != liquid_id {
                 continue;
             }
             let mut supported = false;
@@ -2545,13 +2565,9 @@ impl Voxel {
                 [pos[0], pos[1], pos[2] - 1],
             ];
             for n in &horiz {
-                if self.world.get(*n).0 == WATER_ID {
-                    let nd = self
-                        .water_depth
-                        .get(n)
-                        .copied()
-                        .unwrap_or(0);
-                    if nd < *depth {
+                if self.world.get(*n).0 == liquid_id {
+                    let nd = self.liquid_level.get(n).copied().unwrap_or(0);
+                    if nd < *level {
                         supported = true;
                         break;
                     }
@@ -2559,7 +2575,7 @@ impl Voxel {
             }
             if !supported {
                 let above = [pos[0], pos[1] + 1, pos[2]];
-                if self.world.get(above).0 == WATER_ID {
+                if self.world.get(above).0 == liquid_id {
                     supported = true;
                 }
             }
@@ -3136,8 +3152,12 @@ impl Voxel {
                     // saves carry full depth info; older v2 saves
                     // without the field land at depth 0 (treated
                     // as source) which is fine for small pools.
-                    for (v, d) in state.water_depth {
-                        self.water_depth.insert(v, d.min(MAX_WATER_SPREAD));
+                    for (v, d) in state.liquid_level {
+                        // Clamp at MC's 7-level range so a save
+                        // from an old build with a smaller cap
+                        // still loads cleanly into the new
+                        // generic pipeline.
+                        self.liquid_level.insert(v, d.min(7));
                     }
                     // Restore inventories into a side map indexed by
                     // client name. They get re-keyed to live client
@@ -3619,8 +3639,8 @@ impl Voxel {
                 .iter()
                 .map(|(v, o)| (*v, *o))
                 .collect(),
-            water_depth: self
-                .water_depth
+            liquid_level: self
+                .liquid_level
                 .iter()
                 .map(|(v, d)| (*v, *d))
                 .collect(),
@@ -5559,8 +5579,8 @@ impl Voxel {
             day_time: DAY_LENGTH_S * 0.3,
             net: NetRole::Offline,
             player_cube: None,
-            water_mesh_handle: None,
-            water_mesh_dirty: true,
+            liquid_mesh_handles: HashMap::new(),
+            liquid_mesh_dirty: true,
             sheep_mesh: None,
             sheep_head_mesh: None,
             voxel_atlas: None,
@@ -5627,9 +5647,9 @@ impl Voxel {
             torch_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
-            water_active: HashSet::new(),
-            water_depth: HashMap::new(),
-            water_positions: HashSet::new(),
+            liquid_active: HashSet::new(),
+            liquid_level: HashMap::new(),
+            liquid_positions: HashSet::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -5691,10 +5711,10 @@ impl Voxel {
                                     || b.0 == GLOWSTONE_ID
                                 {
                                     self.torch_positions.insert(v);
-                                } else if b.0 == WATER_ID {
-                                    self.water_active.insert(v);
-                                    if self.water_positions.insert(v) {
-                                        self.water_mesh_dirty = true;
+                                } else if liquid_for(b).is_some() {
+                                    self.liquid_active.insert(v);
+                                    if self.liquid_positions.insert(v) {
+                                        self.liquid_mesh_dirty = true;
                                     }
                                 }
                             }
@@ -5830,15 +5850,15 @@ impl Voxel {
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
                                 ]);
-                            } else if b.0 == WATER_ID {
+                            } else if liquid_for(b).is_some() {
                                 let wv = [
                                     origin.x as i32 + lx,
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
                                 ];
-                                self.water_active.insert(wv);
-                                if self.water_positions.insert(wv) {
-                                    self.water_mesh_dirty = true;
+                                self.liquid_active.insert(wv);
+                                if self.liquid_positions.insert(wv) {
+                                    self.liquid_mesh_dirty = true;
                                 }
                             }
                         }
@@ -13204,20 +13224,11 @@ impl AppHandler for Voxel {
         // path reads `self.remote_mobs` which gets populated by
         // both `tick_mobs` (server) and `vx.mob` (client).
         self.tick_mobs(dt);
-        // Authoritative water physics: water voxels with air
-        // below fall one block per tick. Bounded per-frame work
-        // so a busy aquifer doesn't stall the host.
-        self.tick_water_fall();
-        // Horizontal spread: every 4th host tick, water that's
-        // resting on solid ground extends one cell outward
-        // until the spread depth caps at `MAX_WATER_SPREAD`.
-        self.tick_water_spread();
-        // Source-merge: two source neighbours promote a flow
-        // cell to source (MC infinite-water trick).
-        self.tick_water_merge();
-        // Decay isolated flow water so breaking a source
-        // drains the dependent pool over the next few ticks.
-        self.tick_water_decay();
+        // Generic liquid physics: drive each registered liquid
+        // (water, lava, ...) at its own MC-style cadence. Per
+        // liquid the host runs fall -> spread -> optional source
+        // merge -> decay. Clients skip and rely on `vx.edit`.
+        self.tick_liquids();
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
@@ -13254,7 +13265,7 @@ impl AppHandler for Voxel {
         // set. Done before the renderer borrow below so the
         // create_mesh / remove_mesh churn doesn't fight with the
         // per-frame draw calls.
-        self.maybe_rebuild_water_mesh();
+        self.maybe_rebuild_liquid_mesh();
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
         let registry = &self.registry;
@@ -13607,17 +13618,27 @@ impl AppHandler for Voxel {
                 );
             }
         }
-        // Water: one combined mesh with per-corner heights so
-        // adjacent cells with different depths blend into a
-        // continuous slope. Built off the `water_positions` set
-        // and rebuilt only when `water_mesh_dirty` flips.
-        if let Some(h) = self.water_mesh_handle {
+        // Liquids: one slope-aware mesh per kind (water + lava +
+        // future). Each draws with its own albedo from the
+        // matching `BlockType` row, so adding a new liquid means
+        // a single table flip rather than another draw call here.
+        for (liquid_id, handle) in &self.liquid_mesh_handles {
+            let Some(bt) = block_type(*liquid_id) else {
+                continue;
+            };
+            // Per-liquid alpha + roughness: water reads more
+            // translucent + smooth, lava nearly opaque + matte.
+            let (alpha, rough) = match *liquid_id {
+                WATER_ID => (0.65_f32, 0.18_f32),
+                LAVA_ID => (0.92, 0.55),
+                _ => (0.75, 0.30),
+            };
             renderer.draw_mesh_pbr(
-                h,
+                *handle,
                 Mat4::IDENTITY.to_cols_array(),
-                [0.20, 0.40, 0.85, 0.65],
+                [bt.color[0], bt.color[1], bt.color[2], alpha],
                 0.0,
-                0.18,
+                rough,
             );
         }
         // Render remote players as coloured cubes so each peer is
@@ -13912,11 +13933,15 @@ impl AppHandler for Voxel {
         let model = Mat4::IDENTITY.to_cols_array();
         for (_coord, block, handle) in &chunk_meshes {
             if let Some(def) = registry.get(*block) {
-                // Water draws with reduced alpha so the alpha-blend
-                // pipeline composites it over the seabed. Above the
-                // discard cutout so the shader's leaf path doesn't
-                // wipe it.
-                let alpha = if block.0 == WATER_ID { 0.65 } else { 1.0 };
+                // Liquid voxels arrive here only when their
+                // dedicated slope path is disabled (test paths or
+                // unflagged builds). Generic alpha gate so any
+                // F_TRANSPARENT_RENDER block reads correctly.
+                let alpha = if block_is_transparent_render(*block) {
+                    0.65
+                } else {
+                    1.0
+                };
                 renderer.draw_mesh_pbr(
                     *handle,
                     model,
@@ -14574,6 +14599,18 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
     },
+    // Lava: second liquid using the same generic flow physics
+    // as water. Slower spread + shorter range follow MC's
+    // overworld lava behaviour. Swim mechanics share the
+    // generic `F_SWIM` gate today; lava damage lives in a
+    // future commit alongside other liquid effects.
+    BlockType {
+        id: 37, name: "lava", color: [1.00, 0.40, 0.10], transparent: true,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -14583,11 +14620,66 @@ const GLOWSTONE_ID: u16 = 28;
 /// Block id of water. Passable, instant-break, applies swim drag
 /// + buoyancy while the player AABB intersects it.
 const WATER_ID: u16 = 36;
-/// Maximum horizontal spread distance from a water source.
-/// Sources (manually placed + pond worldgen) live at depth 0 and
-/// each spread step bumps the cap by one. Caps so a single
-/// source can't drown an arbitrarily large plain.
-const MAX_WATER_SPREAD: u8 = 4;
+/// Block id of lava. Same liquid pipeline as water, different
+/// `Liquid` params (shorter range, slower tick, no infinite
+/// source). No damage tick yet - that's a follow-up.
+const LAVA_ID: u16 = 37;
+
+/// Per-liquid physics parameters. The generic `tick_liquid_*`
+/// passes read these so adding a new liquid kind = one
+/// `Liquid` row + one `BlockType` entry with the matching
+/// `F_SWIM | F_DEDICATED_RENDER | F_TRANSPARENT_RENDER` flags.
+#[derive(Debug, Clone, Copy)]
+struct Liquid {
+    /// `BlockId.0` for this liquid's voxel state. Source +
+    /// flowing share the same id; the `liquid_level` map
+    /// distinguishes them.
+    block_id: u16,
+    /// Horizontal spread distance cap from any source. MC water
+    /// = 7, MC overworld lava = 3.
+    max_range: u8,
+    /// Net ticks between spread updates. MC ticks are 50 ms; a
+    /// net tick is ~16 ms (60 Hz), so water (every 5 game ticks
+    /// = 250 ms) needs ~15 net ticks here. Lava overworld
+    /// (every 30 game ticks = 1500 ms) maps to ~90.
+    tick_period: u32,
+    /// Whether two adjacent sources promote a flow voxel between
+    /// them to a source. MC: water = true, lava = false.
+    infinite_source: bool,
+}
+
+/// Registry of every flowing liquid. The tick loop iterates this
+/// table and runs the shared physics with each liquid's params,
+/// so the code path is "this is a liquid" rather than
+/// "this is water".
+const LIQUIDS: &[Liquid] = &[
+    Liquid {
+        block_id: WATER_ID,
+        max_range: 7,
+        tick_period: 15,
+        infinite_source: true,
+    },
+    Liquid {
+        block_id: LAVA_ID,
+        max_range: 3,
+        tick_period: 90,
+        infinite_source: false,
+    },
+];
+
+/// Look up a `Liquid` definition for a placed block. Returns
+/// `None` for non-liquid voxels (every regular solid block).
+fn liquid_for(b: BlockId) -> Option<&'static Liquid> {
+    LIQUIDS.iter().find(|l| l.block_id == b.0)
+}
+
+/// True when the block is one of the registered liquids
+/// (regardless of which one). Used as a fast gate in the
+/// generic tick logic that has to filter water + lava out of
+/// otherwise-solid checks.
+fn block_is_liquid(b: BlockId) -> bool {
+    !b.is_air() && liquid_for(b).is_some()
+}
 
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator
