@@ -5061,6 +5061,11 @@ impl Voxel {
         let hud_visible = self.hud_visible;
         let kill_count = self.kill_count;
         let chat_open = self.chat_open;
+        let weather_label: Option<&'static str> = match self.weather {
+            1 => Some("Rain"),
+            2 => Some("Snow"),
+            _ => None,
+        };
         let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z);
         let spawn_xz: (f32, f32) = match self.spawn_pos {
             Some(p) => (p[0], p[2]),
@@ -5664,7 +5669,11 @@ impl Voxel {
                                 _ => "SE",
                             };
                             ui.label(format!(
-                                "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}    Biome: {biome_name}"
+                                "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}    Biome: {biome_name}{}",
+                                match weather_label {
+                                    Some(w) => format!("    Weather: {w}"),
+                                    None => String::new(),
+                                }
                             ));
                             ui.label(format!(
                                 "XYZ: {:.0}, {:.0}, {:.0}",
