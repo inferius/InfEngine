@@ -1545,7 +1545,8 @@ impl Voxel {
     /// place that knows about torch bookkeeping.
     fn world_set_tracked(&mut self, voxel: [i32; 3], block: BlockId) {
         self.world.set(voxel, block);
-        if block.0 == TORCH_ID {
+        // Both torches + glowstone act as point-light emitters.
+        if block.0 == TORCH_ID || block.0 == GLOWSTONE_ID {
             self.torch_positions.insert(voxel);
         } else {
             self.torch_positions.remove(&voxel);
@@ -12150,11 +12151,21 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["cactus_bottom.png", "cactus.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["cactus_side.png", "cactus.png"], keep_alpha: false },
     },
+    // Glowstone-style light block. Acts as a torch-tier point
+    // light: tracked in torch_positions so the shader picks it
+    // up alongside placed torches.
+    BlockType {
+        id: 28, name: "glowstone", color: [1.00, 0.92, 0.60], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
 /// renderer-side light scan doesn't have to do a string lookup.
 const TORCH_ID: u16 = 10;
+const GLOWSTONE_ID: u16 = 28;
 
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator
