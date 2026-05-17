@@ -4784,6 +4784,14 @@ impl Voxel {
         let dbg_pitch = self.player_pitch;
         let dbg_chunks = self.chunk_meshes.len();
         let dbg_grounded = self.grounded;
+        let dbg_mobs = self.remote_mobs.len();
+        let dbg_particles = self.particles.live_count();
+        let dbg_fly = self.fly_mode;
+        let dbg_cam = match self.camera_mode {
+            0 => "1st",
+            1 => "3rd back",
+            _ => "3rd front",
+        };
         let dbg_net = match &self.net {
             NetRole::Offline => "offline".to_string(),
             NetRole::Server { server, poses, .. } => {
@@ -5250,6 +5258,12 @@ impl Voxel {
                                     if dbg_grounded { "yes" } else { "no" }
                                 ));
                                 ui.label(format!("chunk meshes: {dbg_chunks}"));
+                                ui.label(format!("mobs (remote): {dbg_mobs}"));
+                                ui.label(format!("particles: {dbg_particles}"));
+                                ui.label(format!(
+                                    "camera: {dbg_cam}{}",
+                                    if dbg_fly { "  fly" } else { "" }
+                                ));
                                 ui.label(format!("fps: {fps:.0}"));
                                 ui.label(format!("net: {dbg_net}"));
                             });
