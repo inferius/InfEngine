@@ -428,6 +428,7 @@ const MOB_HIT_DAMAGE: f32 = 2.0;
 const KIND_SHEEP: u8 = 0;
 const KIND_ZOMBIE: u8 = 1;
 const KIND_CHICKEN: u8 = 2;
+const KIND_PIG: u8 = 3;
 /// Per-kind balance knobs.
 const ZOMBIE_SPEED: f32 = 1.8;
 const ZOMBIE_MAX_HEALTH: f32 = 14.0;
@@ -1807,6 +1808,9 @@ impl Voxel {
         let meat_qty = (1 + ((seed >> 8) & 0x1) as u8).min(2);
         let (loot_id, loot_qty) = if kind == KIND_CHICKEN {
             (BlockId(19), (1 + ((seed >> 4) & 0x1) as u8).min(2))
+        } else if kind == KIND_PIG {
+            // Extra meat, no fibre drop.
+            (BlockId(12), (2 + (seed & 0x1) as u8).min(3))
         } else {
             (BlockId(11), (1 + (seed & 0x3) as u8).min(3))
         };
@@ -1867,6 +1871,7 @@ impl Voxel {
             let (hx, hy, hz, cy_off) = match m.kind {
                 KIND_ZOMBIE => (0.45, 1.0, 0.45, 1.0_f32),
                 KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35_f32),
+                KIND_PIG => (0.6, 0.55, 0.45, 0.45_f32),
                 _ => (0.7, 0.75, 0.5, 0.55_f32),
             };
             let cx = m.pos[0];
@@ -2235,10 +2240,12 @@ impl Voxel {
                     let roll = rand01();
                     let kind = if is_night && roll < 0.6 {
                         KIND_ZOMBIE
-                    } else if !is_night && roll < 0.35 {
-                        // Daytime mixes in chickens so plains
-                        // aren't sheep-only.
+                    } else if !is_night && roll < 0.25 {
                         KIND_CHICKEN
+                    } else if !is_night && roll < 0.45 {
+                        // Daytime mixes in pigs alongside
+                        // chickens + sheep.
+                        KIND_PIG
                     } else {
                         KIND_SHEEP
                     };
@@ -2255,6 +2262,7 @@ impl Voxel {
                         health: match kind {
                             KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
                             KIND_CHICKEN => 4.0,
+                            KIND_PIG => 10.0,
                             _ => MOB_MAX_HEALTH,
                         },
                         dying: 0.0,
@@ -2263,6 +2271,7 @@ impl Voxel {
                     let initial_hp = match kind {
                         KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
                         KIND_CHICKEN => 4.0,
+                        KIND_PIG => 10.0,
                         _ => MOB_MAX_HEALTH,
                     } as u8;
                     self.mobs.push(mob);
@@ -6044,11 +6053,13 @@ impl Voxel {
                 let max = match m.kind {
                     KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
                     KIND_CHICKEN => 4u8,
+                    KIND_PIG => 10u8,
                     _ => MOB_MAX_HEALTH as u8,
                 };
                 let name = match m.kind {
                     KIND_ZOMBIE => "Zombie",
                     KIND_CHICKEN => "Chicken",
+                    KIND_PIG => "Pig",
                     _ => "Sheep",
                 };
                 (name, m.health, max)
@@ -6061,6 +6072,7 @@ impl Voxel {
                 let max = match m.kind {
                     KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
                     KIND_CHICKEN => 4u8,
+                    KIND_PIG => 10u8,
                     _ => MOB_MAX_HEALTH as u8,
                 };
                 m.health > 0 && m.health < max && dying <= 0.0
@@ -6069,6 +6081,7 @@ impl Voxel {
                 let max = match m.kind {
                     KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
                     KIND_CHICKEN => 4u8,
+                    KIND_PIG => 10u8,
                     _ => MOB_MAX_HEALTH as u8,
                 };
                 (m.pos, m.health, max)
@@ -8431,6 +8444,8 @@ impl Voxel {
                                     KIND_ZOMBIE
                                 } else if arg.eq_ignore_ascii_case("chicken") {
                                     KIND_CHICKEN
+                                } else if arg.eq_ignore_ascii_case("pig") {
+                                    KIND_PIG
                                 } else {
                                     KIND_SHEEP
                                 };
@@ -12686,6 +12701,7 @@ impl AppHandler for Voxel {
                 // dim green tint stretched into a humanoid box.
                 let is_zombie = mob.kind == KIND_ZOMBIE;
                 let is_chicken = mob.kind == KIND_CHICKEN;
+                let is_pig = mob.kind == KIND_PIG;
                 let (body_scale, body_y_off, base_body_tint, body_use_mesh) = if is_zombie {
                     (
                         Vec3::new(0.65, 1.55, 0.45),
@@ -12694,12 +12710,18 @@ impl AppHandler for Voxel {
                         player_cube_handle,
                     )
                 } else if is_chicken {
-                    // Small white-feathered box; head bolts on
-                    // top with a red comb tint via head_color.
                     (
                         Vec3::new(0.45, 0.55, 0.4),
                         0.28,
                         [0.95, 0.95, 0.9, 1.0],
+                        player_cube_handle,
+                    )
+                } else if is_pig {
+                    // Pinkish stretched cube.
+                    (
+                        Vec3::new(1.1, 0.75, 0.6),
+                        0.35,
+                        [0.95, 0.65, 0.65, 1.0],
                         player_cube_handle,
                     )
                 } else {
@@ -12783,6 +12805,14 @@ impl AppHandler for Voxel {
                             0.25,
                             player_cube_handle,
                             [0.95, 0.35, 0.30, 1.0],
+                        )
+                    } else if is_pig {
+                        (
+                            Vec3::new(0.6, 0.55, 0.55),
+                            0.65,
+                            0.40,
+                            player_cube_handle,
+                            [0.95, 0.65, 0.65, 1.0],
                         )
                     } else {
                         (
