@@ -4023,6 +4023,12 @@ impl Voxel {
             0.1,
             500.0,
         ) * Mat4::look_at_rh(hud_cam_pos, hud_cam_pos + hud_forward, Vec3::Y);
+        // Star field: fades in as the sun drops below the horizon.
+        // The raw sun elevation (un-clamped) gives a smooth
+        // night-factor in [0, 1] when the sun is below the horizon.
+        let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
+        let raw_elev = (phase * std::f32::consts::TAU).sin();
+        let night_factor = (-raw_elev).clamp(0.0, 1.0);
         // Mob HP snapshot: (pos, current, max). Only mobs that
         // are damaged + not dying show a bar so the world doesn't
         // get cluttered with full-health bars.
@@ -4749,6 +4755,87 @@ impl Voxel {
                             (110.0 * alpha) as u8,
                         ),
                     );
+                }
+                // Star field: dimly visible at dusk, brighter at
+                // midnight, gone during the day. Each star sits at
+                // a fixed direction on the celestial sphere; we
+                // project that direction (treated as a far-away
+                // world point relative to the player) through the
+                // HUD view-projection so the field rotates with
+                // the camera but doesn't slide with translation.
+                if night_factor > 0.0 && hud_visible {
+                    const STAR_COUNT: u32 = 90;
+                    const STAR_DIST: f32 = 250.0;
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Background,
+                        egui::Id::new("voxel_stars"),
+                    ));
+                    let screen_rect = ctx.content_rect();
+                    for i in 0..STAR_COUNT {
+                        // Cheap deterministic direction: hash i to
+                        // two angles + sample a hemisphere above
+                        // the horizon (y > 0 in the celestial
+                        // frame, rotated into world via day_time
+                        // so the sky drifts).
+                        let h1 =
+                            (i.wrapping_mul(2654435761)) as f32 / u32::MAX as f32;
+                        let h2 = ((i.wrapping_mul(40503))
+                            .wrapping_add(0x9E37_79B9))
+                            as f32
+                            / u32::MAX as f32;
+                        let azimuth = h1 * std::f32::consts::TAU;
+                        let elev = h2 * std::f32::consts::FRAC_PI_2 * 0.95
+                            + 0.05;
+                        // Rotate the star around +X by the sun
+                        // phase so the sky slowly drifts overnight.
+                        let drift = phase * std::f32::consts::TAU;
+                        let base = glam::Vec3::new(
+                            elev.cos() * azimuth.cos(),
+                            elev.sin(),
+                            elev.cos() * azimuth.sin(),
+                        );
+                        let drifted = glam::Vec3::new(
+                            base.x,
+                            base.y * drift.cos() - base.z * drift.sin(),
+                            base.y * drift.sin() + base.z * drift.cos(),
+                        );
+                        if drifted.y <= 0.05 {
+                            continue;
+                        }
+                        let world = glam::Vec3::new(
+                            hud_cam_pos.x + drifted.x * STAR_DIST,
+                            hud_cam_pos.y + drifted.y * STAR_DIST,
+                            hud_cam_pos.z + drifted.z * STAR_DIST,
+                        );
+                        let clip = hud_view_proj
+                            * glam::Vec4::new(world.x, world.y, world.z, 1.0);
+                        if clip.w <= 0.0 {
+                            continue;
+                        }
+                        let ndc = glam::Vec3::new(
+                            clip.x / clip.w,
+                            clip.y / clip.w,
+                            clip.z / clip.w,
+                        );
+                        if !(0.0..=1.0).contains(&ndc.z) {
+                            continue;
+                        }
+                        let sx = (ndc.x * 0.5 + 0.5) * screen_rect.width()
+                            + screen_rect.min.x;
+                        let sy = (-ndc.y * 0.5 + 0.5) * screen_rect.height()
+                            + screen_rect.min.y;
+                        // Per-star brightness jitter so the field
+                        // doesn't look uniform.
+                        let brightness = 0.55 + (h2 * 3.7).fract() * 0.45;
+                        let alpha = (220.0 * night_factor * brightness) as u8;
+                        layer.circle_filled(
+                            egui::pos2(sx, sy),
+                            1.4,
+                            egui::Color32::from_rgba_unmultiplied(
+                                235, 240, 255, alpha,
+                            ),
+                        );
+                    }
                 }
                 // Floating mob HP bars. Projected onto the screen
                 // from each mob's world-space pos + a vertical
