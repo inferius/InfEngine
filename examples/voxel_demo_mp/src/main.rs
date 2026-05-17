@@ -1224,6 +1224,10 @@ struct Voxel {
     /// pose; /home teleports back. Persisted via the config file
     /// so the location survives across launches.
     home_pos: Option<[f32; 3]>,
+    /// Wallclock instant the session started running. Used by the
+    /// F3 debug overlay to show how long the player has been
+    /// playing. Stays None until on_start runs.
+    session_started: Option<std::time::Instant>,
     /// Last time the server broadcast its authoritative
     /// `day_time`. Used to throttle the broadcast cadence to
     /// roughly once per second.
@@ -3927,6 +3931,7 @@ impl Voxel {
             f5_prev: false,
             q_prev: false,
             home_pos: None,
+            session_started: None,
             last_day_broadcast: None,
             show_debug: false,
             f3_prev: false,
@@ -4794,6 +4799,10 @@ impl Voxel {
             1 => "3rd back",
             _ => "3rd front",
         };
+        let dbg_playtime = self
+            .session_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         let dbg_net = match &self.net {
             NetRole::Offline => "offline".to_string(),
             NetRole::Server { server, poses, .. } => {
@@ -5268,6 +5277,10 @@ impl Voxel {
                                 ));
                                 ui.label(format!("fps: {fps:.0}"));
                                 ui.label(format!("net: {dbg_net}"));
+                                let h = dbg_playtime / 3600;
+                                let m = (dbg_playtime % 3600) / 60;
+                                let s = dbg_playtime % 60;
+                                ui.label(format!("session: {h:02}:{m:02}:{s:02}"));
                             });
                         });
                 }
@@ -6069,7 +6082,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /sleep, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
+                                "Commands: /help, /players, /me <act>, /clear, /clearinventory, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /sleep, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
                                     .to_string(),
                             );
                         }
@@ -6098,6 +6111,23 @@ impl Voxel {
                             // + when stuck in geometry.
                             let dmg = self.player_health + 1.0;
                             self.apply_player_damage(dmg);
+                            handled_locally = true;
+                        }
+                        "clearinventory" | "clearinv" => {
+                            // Empty every slot including hotbar
+                            // + craft grid. Useful for testing.
+                            // In MP this only zeroes the local
+                            // predicted view; the next vx.inv
+                            // snapshot from the host wipes it.
+                            for s in self.inventory.iter_mut() {
+                                *s = None;
+                            }
+                            for s in self.craft_grid.iter_mut() {
+                                *s = None;
+                            }
+                            local_lines.push(
+                                "Inventory cleared.".to_string(),
+                            );
                             handled_locally = true;
                         }
                         "sleep" => {
@@ -6816,6 +6846,7 @@ impl AppHandler for Voxel {
         // the main menu badge + Settings panel show the last
         // chosen identity instead of a fresh random Player####.
         self.load_config();
+        self.session_started = Some(std::time::Instant::now());
         info!(width = w, height = h, "voxel_demo started");
         match Renderer::new(window) {
             Ok(r) => {
