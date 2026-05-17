@@ -6824,6 +6824,56 @@ impl Voxel {
                                 handled_locally = true;
                             }
                         }
+                        "tppos" | "goto" => {
+                            // Teleport to literal coords. Usage:
+                            // /tppos <x> <y> <z>. Velocity zeroed
+                            // + fall tracker reset so no fall
+                            // damage on landing.
+                            let coords: Vec<&str> =
+                                arg.split_whitespace().collect();
+                            if coords.len() != 3 {
+                                local_lines.push(
+                                    "Usage: /tppos <x> <y> <z>".to_string(),
+                                );
+                            } else {
+                                match (
+                                    coords[0].parse::<f32>(),
+                                    coords[1].parse::<f32>(),
+                                    coords[2].parse::<f32>(),
+                                ) {
+                                    (Ok(x), Ok(y), Ok(z)) => {
+                                        self.player_pos = Vec3::new(x, y, z);
+                                        self.player_vel = Vec3::ZERO;
+                                        self.fall_start_y = None;
+                                        local_lines.push(format!(
+                                            "Teleported to ({x:.1}, {y:.1}, {z:.1})."
+                                        ));
+                                    }
+                                    _ => {
+                                        local_lines.push(
+                                            "Coords must be numbers."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
+                        "pos" => {
+                            // Print precise pose. Pairs with the
+                            // HUD-line XYZ readout (which is
+                            // rounded) for when the player needs
+                            // exact coordinates to /tppos back to.
+                            local_lines.push(format!(
+                                "Pos: ({:.2}, {:.2}, {:.2})  yaw: {:.2}  pitch: {:.2}",
+                                self.player_pos.x,
+                                self.player_pos.y,
+                                self.player_pos.z,
+                                self.player_yaw,
+                                self.player_pitch,
+                            ));
+                            handled_locally = true;
+                        }
                         "spawn" => {
                             // Snap the host back to the origin
                             // spawn pad. Works in any role since
