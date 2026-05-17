@@ -983,10 +983,10 @@ struct DropSpawnMsg {
 /// Inside this radius the drop accelerates toward the player's
 /// chest each tick; once it reaches `DROP_COLLECT_RADIUS` it
 /// snaps into the inventory.
-const DROP_ATTRACT_RADIUS: f32 = 3.5;
+const DROP_ATTRACT_RADIUS: f32 = 4.5;
 /// Final pickup radius. The drop teleports into the inventory
 /// when its centre is closer than this to the player.
-const DROP_COLLECT_RADIUS: f32 = 1.4;
+const DROP_COLLECT_RADIUS: f32 = 2.5;
 /// Drops despawn after this many seconds without pickup.
 const DROP_DESPAWN_SEC: f32 = 90.0;
 /// Pickup-eligible delay: the drop ignores the player for the
@@ -14640,6 +14640,7 @@ impl AppHandler for Voxel {
             let cube = *self
                 .player_cube
                 .get_or_insert_with(|| renderer.cube_handle());
+            let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
             for drop in self.dropped_items.iter() {
                 let bob = (drop.age * 2.4).sin() * 0.08;
                 let block = BlockId(drop.block);
@@ -14648,14 +14649,38 @@ impl AppHandler for Voxel {
                     .get(block)
                     .map(|d| d.color)
                     .unwrap_or([0.75, 0.55, 0.30]);
+                // Magnet visual: when the drop is in the attract
+                // band, shrink it toward the player + spin faster
+                // so the pickup reads as a satisfying suck-in
+                // animation. Outside the band the drop sits at
+                // base scale + spin.
+                let dx = player_pos.x - drop.pos[0];
+                let dy = chest_y - drop.pos[1];
+                let dz = player_pos.z - drop.pos[2];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                let attract = if dist < DROP_ATTRACT_RADIUS && dist > 1e-3 {
+                    (1.0 - dist / DROP_ATTRACT_RADIUS).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                // Scale ramps from 0.28 (resting) down to 0.08
+                // at the collect band. Spin speed bumps with
+                // attract so the cube wobbles into the player.
+                let base_scale = 0.28;
+                let scale = base_scale * (1.0 - 0.7 * attract);
+                let spin_rate = 1.4 + 6.0 * attract;
+                // Lean toward the player by a fraction of the
+                // delta so the drop physically streaks in.
+                let lean = 0.45 * attract;
+                let render_pos = Vec3::new(
+                    drop.pos[0] + dx * lean,
+                    drop.pos[1] + 0.14 + bob + dy * lean,
+                    drop.pos[2] + dz * lean,
+                );
                 let m = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.28, 0.28, 0.28),
-                    glam::Quat::from_rotation_y(drop.age * 1.4),
-                    Vec3::new(
-                        drop.pos[0],
-                        drop.pos[1] + 0.14 + bob,
-                        drop.pos[2],
-                    ),
+                    Vec3::splat(scale),
+                    glam::Quat::from_rotation_y(drop.age * spin_rate),
+                    render_pos,
                 );
                 renderer.draw_mesh_pbr(
                     cube,
