@@ -7412,6 +7412,146 @@ impl Voxel {
                                 handled_locally = true;
                             }
                         }
+                        "blob" => {
+                            // Host-only: fill a sphere of voxels
+                            // around the player with the named
+                            // block. Usage: /blob <radius> <block>.
+                            // Hard radius cap at 12 so a typo
+                            // doesn't lock the host.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/blob is host-only.".to_string(),
+                                );
+                            } else {
+                                let mut parts = arg.split_whitespace();
+                                let r_str = parts.next().unwrap_or("");
+                                let block_name = parts.next().unwrap_or("");
+                                let r_opt: Option<i32> =
+                                    r_str.parse().ok();
+                                let bid_opt: Option<u16> = if block_name
+                                    .eq_ignore_ascii_case("air")
+                                {
+                                    Some(0)
+                                } else {
+                                    BLOCK_TYPES
+                                        .iter()
+                                        .find(|bt| {
+                                            bt.name
+                                                .eq_ignore_ascii_case(
+                                                    block_name,
+                                                )
+                                        })
+                                        .map(|bt| bt.id)
+                                };
+                                match (r_opt, bid_opt) {
+                                    (None, _) | (_, None) => {
+                                        local_lines.push(
+                                            "Usage: /blob <radius> <block>"
+                                                .to_string(),
+                                        );
+                                    }
+                                    (Some(r), Some(bid)) => {
+                                        let radius = r.clamp(1, 12);
+                                        let block = BlockId(bid);
+                                        let center = [
+                                            self.player_pos.x.floor() as i32,
+                                            self.player_pos.y.floor() as i32,
+                                            self.player_pos.z.floor() as i32,
+                                        ];
+                                        let r2 = radius * radius;
+                                        let mut count = 0u32;
+                                        let cfg =
+                                            bincode::config::standard();
+                                        for dy in -radius..=radius {
+                                            for dz in -radius..=radius {
+                                                for dx in -radius..=radius
+                                                {
+                                                    if dx * dx + dy * dy
+                                                        + dz * dz
+                                                        > r2
+                                                    {
+                                                        continue;
+                                                    }
+                                                    let v = [
+                                                        center[0] + dx,
+                                                        center[1] + dy,
+                                                        center[2] + dz,
+                                                    ];
+                                                    if v[1] < 1 {
+                                                        continue;
+                                                    }
+                                                    self.world_set_tracked(
+                                                        v, block,
+                                                    );
+                                                    count += 1;
+                                                    let edit = EditMsg {
+                                                        x: v[0],
+                                                        y: v[1],
+                                                        z: v[2],
+                                                        block: bid,
+                                                    };
+                                                    if let NetRole::Server {
+                                                        server,
+                                                        ..
+                                                    } = &mut self.net
+                                                    {
+                                                        self
+                                                            .edit_history
+                                                            .push(edit);
+                                                        if let Ok(buf) =
+                                                            bincode::serde::encode_to_vec(
+                                                                edit, cfg,
+                                                            )
+                                                        {
+                                                            server
+                                                                .broadcast_bytes(
+                                                                    "vx.edit",
+                                                                    buf,
+                                                                );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        let cs = CHUNK_SIZE as i32;
+                                        let mn = [
+                                            (center[0] - radius - 1)
+                                                .div_euclid(cs),
+                                            (center[1] - radius - 1)
+                                                .div_euclid(cs),
+                                            (center[2] - radius - 1)
+                                                .div_euclid(cs),
+                                        ];
+                                        let mx = [
+                                            (center[0] + radius + 1)
+                                                .div_euclid(cs),
+                                            (center[1] + radius + 1)
+                                                .div_euclid(cs),
+                                            (center[2] + radius + 1)
+                                                .div_euclid(cs),
+                                        ];
+                                        let mut coords: Vec<ChunkCoord> =
+                                            Vec::new();
+                                        for cz in mn[2]..=mx[2] {
+                                            for cy in mn[1]..=mx[1] {
+                                                for cx in mn[0]..=mx[0] {
+                                                    coords
+                                                        .push([cx, cy, cz]);
+                                                }
+                                            }
+                                        }
+                                        self.rebuild_chunks(&coords);
+                                        local_lines.push(format!(
+                                            "Placed {count} {block_name} (r={radius})."
+                                        ));
+                                    }
+                                }
+                                handled_locally = true;
+                            }
+                        }
                         "fill" => {
                             // Host-only: fill a box defined by
                             // (x1 y1 z1 x2 y2 z2 block) with the
