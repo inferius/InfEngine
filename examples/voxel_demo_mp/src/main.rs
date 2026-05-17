@@ -1248,6 +1248,9 @@ struct Voxel {
     /// person front. Cycled with F5 the way Minecraft does it.
     camera_mode: u8,
     f5_prev: bool,
+    /// F4 cycles weather modes; mirrors /weather. Host
+    /// broadcasts the change so peers stay in sync.
+    f4_prev: bool,
     q_prev: bool,
     /// Player's saved home position. /sethome stores the current
     /// pose; /home teleports back. Persisted via the config file
@@ -4289,6 +4292,7 @@ impl Voxel {
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
+            f4_prev: false,
             q_prev: false,
             home_pos: None,
             spawn_pos: None,
@@ -9758,6 +9762,34 @@ impl AppHandler for Voxel {
             self.camera_mode = (self.camera_mode + 1) % 3;
         }
         self.f5_prev = f5_now;
+        // F4 cycles weather: clear -> rain -> snow -> clear.
+        // Broadcasts when hosting so peers follow the change.
+        let f4_now = ctx.input.is_pressed(Key::F4);
+        if f4_now
+            && !self.f4_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
+            self.weather = (self.weather + 1) % 3;
+            if let NetRole::Server { server, .. } = &mut self.net
+                && let Ok(buf) = bincode::serde::encode_to_vec(
+                    self.weather,
+                    bincode::config::standard(),
+                )
+            {
+                server.broadcast_bytes("vx.weather", buf);
+            }
+            let label = match self.weather {
+                1 => "Rain",
+                2 => "Snow",
+                _ => "Clear",
+            };
+            self.chat_log.push((
+                std::time::Instant::now(),
+                format!("Weather: {label}"),
+            ));
+        }
+        self.f4_prev = f4_now;
         // Q drops one item from the selected hotbar slot. No
         // dropped-entity model yet so the item simply
         // disappears - useful for trimming overstocked stacks.
