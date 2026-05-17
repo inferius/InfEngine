@@ -2886,6 +2886,18 @@ impl Voxel {
             // path; F_WASHABLE flag is the gate.
             let spreadable =
                 |b: BlockId| b.is_air() || block_is_washable(b);
+            // Pathfinding still picks which neighbours get
+            // priority (downhill direction first). When a drop
+            // is reachable within 4 steps, the spread restricts
+            // to those direction(s) so the flow streams toward
+            // the cliff. With no reachable drop, spread is
+            // radial - every air neighbour fills.
+            //
+            // Level assignment is UNIFORM `level + 1` regardless
+            // of direction. The MC-style per-tick recompute
+            // (phase A above) propagates correct levels outward
+            // each frame, so we don't try to bake "drop bias" into
+            // the initial level here.
             let mut weights: [u32; 4] = [u32::MAX; 4];
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
@@ -2897,27 +2909,25 @@ impl Voxel {
             let any_reachable =
                 weights.iter().any(|w| *w != u32::MAX && *w < 1000);
             let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
+            let new_lvl = level.saturating_add(1);
+            if new_lvl > max_range {
+                continue;
+            }
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
                 if !spreadable(self.world.get(n)) {
                     continue;
                 }
+                // Downhill restriction: when a drop is in range,
+                // only the minimum-distance direction(s) get
+                // spread - matches MC's flow off ledges.
+                if any_reachable && weights[i] != min_w {
+                    continue;
+                }
                 if to_spawn.iter().any(|(p, _)| p == &n) {
                     continue;
                 }
-                // Downhill bias: drop-bound directions get
-                // level+1, every other direction gets level+2 so
-                // the flow visibly streams toward the cliff while
-                // still wetting the back of the pool.
-                let lvl = if any_reachable && weights[i] == min_w {
-                    level.saturating_add(1)
-                } else {
-                    level.saturating_add(2).min(max_range)
-                };
-                if lvl > max_range {
-                    continue;
-                }
-                to_spawn.push((n, lvl));
+                to_spawn.push((n, new_lvl));
             }
         }
         if to_spawn.is_empty() {
