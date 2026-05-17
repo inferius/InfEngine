@@ -2151,14 +2151,16 @@ impl Voxel {
     }
 
     /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz`
-    /// in `{0,1}` pick which corner. The corner samples the four
-    /// cells that share it: same-kind liquid contributes its
-    /// surface height, AIR contributes 0 (the corner drops
-    /// toward the bank), solid blocks are skipped entirely so a
-    /// pond against a stone wall stays flat at the wall. The
-    /// averaging gives a smooth slope at every air-water edge
-    /// instead of the boxy slab look the strict water-only
-    /// average produced.
+    /// in `{0,1}` pick which corner. Matches the MC / `crafti`
+    /// algorithm exactly: scan the 4 cells that share the corner;
+    /// if any is a falling-column cell (same liquid above), the
+    /// corner snaps to full height (1.0) so columns stay full
+    /// blocks. Otherwise average the surface heights of every
+    /// same-kind liquid cell - AIR and solid cells are SKIPPED
+    /// (no contribution), which keeps pond edges flat at the
+    /// source height the way vanilla water does. Slopes only
+    /// appear where neighbouring liquid voxels have different
+    /// levels.
     fn liquid_corner_height(
         &self,
         vx: i32,
@@ -2174,19 +2176,30 @@ impl Voxel {
             [vx + cx - 1, vy, vz + cz],
             [vx + cx, vy, vz + cz],
         ];
+        // Phase 1: any cell with same liquid directly above is a
+        // column - corner is full height.
+        for t in &touching {
+            if self.world.get(*t).0 == liquid_id
+                && self
+                    .world
+                    .get([t[0], t[1] + 1, t[2]])
+                    .0
+                    == liquid_id
+            {
+                return 1.0;
+            }
+        }
+        // Phase 2: average over water cells only. Air / solid
+        // neighbours skipped so a single source cell against a
+        // bank stays at source height (matches MC vanilla).
         let mut sum = 0.0_f32;
         let mut count = 0u32;
         for t in &touching {
-            let b = self.world.get(*t);
-            // Solid (non-air, non-liquid) cells block contribution.
-            // Decorations (torch, flowers) count as air for the
-            // smoothing so a flower next to a pond doesn't tilt
-            // the corner upward.
-            if !b.is_air() && liquid_for(b).is_none() {
-                continue;
+            let h = self.liquid_surface_height(*t, liquid_id);
+            if h > 0.0 {
+                sum += h;
+                count += 1;
             }
-            sum += self.liquid_surface_height(*t, liquid_id);
-            count += 1;
         }
         if count == 0 {
             0.0
