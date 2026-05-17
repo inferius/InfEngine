@@ -6113,6 +6113,23 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "save" => {
+                            // Host-only: flush the server state
+                            // (edit history + inventories + day
+                            // clock + HP + kill count) to disk
+                            // right now instead of waiting for
+                            // the autosave cadence.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/save is host-only.".to_string(),
+                                );
+                            } else {
+                                self.save_server_state();
+                                local_lines
+                                    .push("Server state saved.".to_string());
+                            }
+                            handled_locally = true;
+                        }
                         "dmg" | "damage" => {
                             // Host-only: deal damage to a named
                             // peer or self. Usage: /dmg <name>
