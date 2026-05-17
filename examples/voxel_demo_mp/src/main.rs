@@ -5354,6 +5354,7 @@ impl Voxel {
                                 let m = (dbg_playtime % 3600) / 60;
                                 let s = dbg_playtime % 60;
                                 ui.label(format!("session: {h:02}:{m:02}:{s:02}"));
+                                ui.label(format!("seed: {}", world_seed()));
                             });
                         });
                 }
@@ -6187,14 +6188,63 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "seed" => {
-                            // Report the active world seed. Same
-                            // value the workers use when meshing
-                            // chunks; useful when sharing a
-                            // session with a friend.
-                            local_lines.push(format!(
-                                "World seed: {}",
-                                world_seed()
-                            ));
+                            // /seed prints the active value;
+                            // /seed <n> (host-only) re-rolls the
+                            // world. Adopting a new seed drops
+                            // every generated chunk + broadcasts
+                            // vx.seed so connected clients follow
+                            // suit on the next net tick.
+                            if arg.is_empty() {
+                                local_lines.push(format!(
+                                    "World seed: {}",
+                                    world_seed()
+                                ));
+                            } else if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/seed <n> is host-only.".to_string(),
+                                );
+                            } else if let Ok(new_seed) = arg.parse::<u32>() {
+                                set_world_seed(new_seed);
+                                let to_unload: Vec<ChunkCoord> = self
+                                    .world
+                                    .iter_chunks()
+                                    .map(|(c, _)| *c)
+                                    .collect();
+                                if !to_unload.is_empty() {
+                                    let renderer = self
+                                        .renderer
+                                        .as_mut()
+                                        .expect("renderer ready");
+                                    for entry in self.chunk_meshes.drain(..) {
+                                        renderer.remove_mesh(entry.2);
+                                    }
+                                    for cc in &to_unload {
+                                        self.world.remove_chunk(*cc);
+                                    }
+                                }
+                                self.pending_chunks.clear();
+                                self.pending_set.clear();
+                                if let NetRole::Server { server, .. } =
+                                    &mut self.net
+                                    && let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            new_seed,
+                                            bincode::config::standard(),
+                                        )
+                                {
+                                    server.broadcast_bytes("vx.seed", buf);
+                                }
+                                local_lines.push(format!(
+                                    "World seed set to {new_seed}; chunks regenerating."
+                                ));
+                            } else {
+                                local_lines.push(format!(
+                                    "Cannot parse seed: {arg}"
+                                ));
+                            }
                             handled_locally = true;
                         }
                         "version" | "ver" => {
