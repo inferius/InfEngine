@@ -60,6 +60,9 @@ secrets.toml
 /blueprints/
 /scenes/
 
+# Claude harness state
+/.claude/
+
 # Build artifacts not under target/
 *.exe
 *.dll
