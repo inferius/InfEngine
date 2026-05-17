@@ -8170,6 +8170,55 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "whois" => {
+                            // Diagnostics for a named peer: id +
+                            // last known pose. Useful when
+                            // chasing connection issues.
+                            if arg.is_empty() {
+                                local_lines
+                                    .push("Usage: /whois <name>".to_string());
+                            } else {
+                                let target_id = self
+                                    .player_names
+                                    .iter()
+                                    .find(|(_, n)| {
+                                        n.eq_ignore_ascii_case(arg)
+                                    })
+                                    .map(|(id, _)| *id);
+                                match target_id {
+                                    None => {
+                                        local_lines.push(format!(
+                                            "No player named {arg}."
+                                        ));
+                                    }
+                                    Some(id) => {
+                                        let pose: Option<[f32; 3]> = match &self.net {
+                                            NetRole::Offline => None,
+                                            NetRole::Server { poses, .. } => {
+                                                poses.get(&id).map(|p| p.pos)
+                                            }
+                                            NetRole::Client { remote, .. } => {
+                                                remote.get(&id).map(|p| p.pos)
+                                            }
+                                        };
+                                        match pose {
+                                            Some(p) => {
+                                                local_lines.push(format!(
+                                                    "{arg}: id={id} pos=({:.1}, {:.1}, {:.1})",
+                                                    p[0], p[1], p[2]
+                                                ));
+                                            }
+                                            None => {
+                                                local_lines.push(format!(
+                                                    "{arg}: id={id} (no pose yet)"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "tppos" | "goto" => {
                             // Teleport to literal coords. Usage:
                             // /tppos <x> <y> <z>. Velocity zeroed
