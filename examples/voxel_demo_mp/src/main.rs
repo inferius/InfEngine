@@ -5502,7 +5502,7 @@ impl Voxel {
                             ui.label("Mouse aim, WASD move, Space jump");
                             ui.label("Shift sneak, Ctrl sprint");
                             ui.label("LMB break, RMB place, E inventory, F eat, Esc menu");
-                            ui.label("T chat, Tab playerlist, Q drop, F1 hide HUD, F3 debug, F5 camera");
+                            ui.label("T chat, Tab playerlist, Q drop, Z undo, F1 hide HUD, F3 debug, F5 camera");
                             // Day clock - map [0..DAY_LENGTH_S) onto
                             // 24h so the player has a sense of where
                             // the sun is.
@@ -7909,6 +7909,18 @@ impl Voxel {
                                 self.pending_chunks.len(),
                                 self.edit_history.len(),
                             ));
+                            handled_locally = true;
+                        }
+                        "stuck" | "unstuck" => {
+                            // Quick rescue: punch the player 3
+                            // blocks straight up + zero velocity.
+                            // Useful when wedged inside geometry
+                            // or buried by /explode debris.
+                            self.player_pos.y += 3.0;
+                            self.player_vel = Vec3::ZERO;
+                            self.fall_start_y = None;
+                            local_lines
+                                .push("Lifted 3 blocks up.".to_string());
                             handled_locally = true;
                         }
                         "spawn" => {
