@@ -973,6 +973,9 @@ struct Voxel {
     /// toggle: only fires on the rising edge so holding E doesn't
     /// flicker the overlay.
     e_prev: bool,
+    /// Previous-frame state of the F key. Rising edge consumes
+    /// one piece of food from the inventory + restores HP.
+    f_prev: bool,
     lmb_pending: bool,
     rmb_pending: bool,
     /// Level state of the mouse buttons (set on Pressed events,
@@ -3074,6 +3077,7 @@ impl Voxel {
             mouse_dy: 0.0,
             esc_prev: false,
             e_prev: false,
+            f_prev: false,
             lmb_pending: false,
             rmb_pending: false,
             lmb_held: false,
@@ -4036,7 +4040,7 @@ impl Voxel {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             ui.label("Mouse aim, WASD move, Space jump");
                             ui.label("Shift sneak, Ctrl sprint");
-                            ui.label("LMB break, RMB place, E inventory, Esc menu");
+                            ui.label("LMB break, RMB place, E inventory, F eat, Esc menu");
                             // Day clock - map [0..DAY_LENGTH_S) onto
                             // 24h so the player has a sense of where
                             // the sun is.
@@ -4940,6 +4944,44 @@ impl AppHandler for Voxel {
             // against the world.
             self.lmb_pending = false;
             self.rmb_pending = false;
+        }
+
+        // F = eat. Consumes one meat block (id 12) from anywhere in
+        // the inventory + restores 4 HP. No-op when at full health
+        // or when the player has no meat. Gated on Playing state +
+        // no overlay so the F key doesn't fire while the menu eats
+        // text input.
+        let f_now = ctx.input.is_pressed(Key::F);
+        let f_just = f_now && !self.f_prev;
+        self.f_prev = f_now;
+        if f_just
+            && matches!(self.state, AppState::Playing)
+            && !self.inventory_open
+            && !self.mp_menu_open
+            && self.player_health < PLAYER_MAX_HEALTH
+        {
+            // Find first slot holding meat (offline / host path).
+            let mut ate = false;
+            for slot in self.inventory.iter_mut() {
+                if let Some((b, c)) = slot.as_mut()
+                    && *b == BlockId(12)
+                {
+                    *c = c.saturating_sub(1);
+                    if *c == 0 {
+                        *slot = None;
+                    }
+                    ate = true;
+                    break;
+                }
+            }
+            if ate {
+                self.player_health =
+                    (self.player_health + 4.0).min(PLAYER_MAX_HEALTH);
+                let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+                self.sfx_at("eat", pos, |a, g| {
+                    let _ = a.play_thud(280.0, 0.18 * g);
+                });
+            }
         }
 
         if matches!(self.state, AppState::Playing) {
