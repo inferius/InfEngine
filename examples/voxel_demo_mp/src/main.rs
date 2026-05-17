@@ -307,7 +307,32 @@ fn block_required_tier(block: BlockId) -> u8 {
 
 /// True if the block id represents a tool / non-placeable item.
 fn is_tool_block(block: BlockId) -> bool {
-    matches!(block.0, 16..=19)
+    matches!(block.0, 16..=19 | 23..=25)
+}
+
+/// Human label for a tool slot, used by the HUD readout.
+fn tool_label(block: BlockId) -> Option<&'static str> {
+    match block.0 {
+        16 => Some("Wood pickaxe"),
+        17 => Some("Stone pickaxe"),
+        18 => Some("Iron pickaxe"),
+        23 => Some("Wood sword"),
+        24 => Some("Stone sword"),
+        25 => Some("Iron sword"),
+        _ => None,
+    }
+}
+
+/// Damage multiplier per sword tier. Bare hand = 1.0, wood
+/// = 1.5, stone = 2.0, iron = 2.7. Selected slot drives the
+/// scale applied to the local PvP / mob hits.
+fn weapon_damage_mult(block: BlockId) -> f32 {
+    match block.0 {
+        23 => 1.5,
+        24 => 2.0,
+        25 => 2.7,
+        _ => 1.0,
+    }
 }
 
 const MOB_CAP_DEFAULT: usize = 12;
@@ -887,6 +912,22 @@ const RECIPES: &[Recipe] = &[
         inputs: &[(14, 1), (14, 1), (14, 1), (5, 1)],
         output: (18, 1),
         name: "Iron pickaxe",
+    },
+    // Sword variants: 2 of the material + 1 wood handle.
+    Recipe {
+        inputs: &[(7, 1), (7, 1), (5, 1)],
+        output: (23, 1),
+        name: "Wood sword",
+    },
+    Recipe {
+        inputs: &[(8, 1), (8, 1), (5, 1)],
+        output: (24, 1),
+        name: "Stone sword",
+    },
+    Recipe {
+        inputs: &[(14, 1), (14, 1), (5, 1)],
+        output: (25, 1),
+        name: "Iron sword",
     },
 ];
 
@@ -1507,6 +1548,17 @@ impl Voxel {
     /// `None` for "no inventory credit" (e.g. fall damage path
     /// later).
     fn damage_mob(&mut self, mob_id: u32, attacker_client_id: Option<u32>) {
+        self.damage_mob_scaled(mob_id, attacker_client_id, 1.0);
+    }
+
+    /// Same as `damage_mob` but applies a multiplier to
+    /// MOB_HIT_DAMAGE so sword-tier weapons can swing harder.
+    fn damage_mob_scaled(
+        &mut self,
+        mob_id: u32,
+        attacker_client_id: Option<u32>,
+        mult: f32,
+    ) {
         // Find the mob (server-side).
         let Some(idx) = self.mobs.iter().position(|m| m.id == mob_id) else {
             return;
@@ -1518,7 +1570,7 @@ impl Voxel {
             let m = &mut self.mobs[idx];
             already_dying = m.dying > 0.0;
             if !already_dying {
-                m.health -= MOB_HIT_DAMAGE;
+                m.health -= MOB_HIT_DAMAGE * mult.max(0.1);
             }
             mob_pos = m.pos;
             killed = m.health <= 0.0 && !already_dying;
@@ -5241,12 +5293,7 @@ impl Voxel {
             .get(self.selected_slot)
             .copied()
             .unwrap_or(None)
-            .and_then(|(b, _)| match b.0 {
-                16 => Some("Wood pickaxe"),
-                17 => Some("Stone pickaxe"),
-                18 => Some("Iron pickaxe"),
-                _ => None,
-            });
+            .and_then(|(b, _)| tool_label(b));
         let weather_label: Option<&'static str> = match self.weather {
             1 => Some("Rain"),
             2 => Some("Snow"),
@@ -8353,14 +8400,17 @@ impl Voxel {
                                 .to_lowercase()
                                 .as_str()
                             {
-                                "wood" => Some(16),
-                                "stone" => Some(17),
-                                "iron" => Some(18),
+                                "wood" | "pickaxe_wood" => Some(16),
+                                "stone" | "pickaxe_stone" => Some(17),
+                                "iron" | "pickaxe_iron" => Some(18),
+                                "sword_wood" => Some(23),
+                                "sword_stone" => Some(24),
+                                "sword_iron" => Some(25),
                                 _ => None,
                             };
                             match id_opt {
                                 None => local_lines.push(
-                                    "Usage: /tool wood|stone|iron"
+                                    "Usage: /tool wood|stone|iron|sword_wood|sword_stone|sword_iron"
                                         .to_string(),
                                 ),
                                 Some(id) => {
@@ -10408,6 +10458,14 @@ impl AppHandler for Voxel {
         // application. Host applies directly; client sends a
         // `vx.pvp_hit` request the server can validate.
         if let Some(target_id) = attack_player {
+            let held = self
+                .inventory
+                .get(self.selected_slot)
+                .copied()
+                .unwrap_or(None)
+                .map(|(b, _)| b)
+                .unwrap_or(BlockId::AIR);
+            let mult = weapon_damage_mult(held);
             match &self.net {
                 NetRole::Client { client, .. } => {
                     let cfg = bincode::config::standard();
@@ -10420,7 +10478,9 @@ impl AppHandler for Voxel {
                     // Host is attacker id 0 -> send DamageMsg
                     // straight to the target.
                     let cfg = bincode::config::standard();
-                    let dmg = DamageMsg { amount: PVP_DAMAGE };
+                    let dmg = DamageMsg {
+                        amount: PVP_DAMAGE * mult,
+                    };
                     if let Ok(buf) = bincode::serde::encode_to_vec(dmg, cfg) {
                         server.send_bytes_to_client(target_id, "vx.damage", buf);
                     }
@@ -10449,8 +10509,16 @@ impl AppHandler for Voxel {
                 }
             } else {
                 // Offline / host: authoritative damage path. Host
-                // is attacker id 0.
-                self.damage_mob(mob_id, Some(0));
+                // is attacker id 0. Weapon tier scales the hit.
+                let held = self
+                    .inventory
+                    .get(self.selected_slot)
+                    .copied()
+                    .unwrap_or(None)
+                    .map(|(b, _)| b)
+                    .unwrap_or(BlockId::AIR);
+                let mult = weapon_damage_mult(held);
+                self.damage_mob_scaled(mob_id, Some(0), mult);
             }
         }
         // Mining: LMB held + a voxel in view, but no mob in front
@@ -11757,6 +11825,27 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+    },
+    // Sword tools. Like pickaxes they live in inventory slots
+    // but reject placement; selected slot's `weapon_tier` boosts
+    // the player's attack damage when fighting mobs / peers.
+    BlockType {
+        id: 23, name: "sword_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 24, name: "sword_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 25, name: "sword_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
     },
 ];
 
