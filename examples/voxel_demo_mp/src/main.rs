@@ -7442,6 +7442,33 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "rd" | "renderdistance" => {
+                            // Without args: report current view
+                            // distance. With one arg (2..=12):
+                            // set it. Routes through the same
+                            // settings field the Settings panel
+                            // slider drives, so the change takes
+                            // effect on the next stream pass.
+                            if arg.is_empty() {
+                                local_lines.push(format!(
+                                    "Render distance: {}",
+                                    self.settings.view_distance
+                                ));
+                            } else if let Ok(v) = arg.parse::<u8>() {
+                                self.settings.view_distance =
+                                    v.clamp(2, 12);
+                                self.save_config();
+                                local_lines.push(format!(
+                                    "Render distance set to {}.",
+                                    self.settings.view_distance
+                                ));
+                            } else {
+                                local_lines.push(format!(
+                                    "Cannot parse distance: {arg}"
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "mobcap" => {
                             // /mobcap reports the cap; /mobcap N
                             // sets it. Hard ceiling at 64 so the
