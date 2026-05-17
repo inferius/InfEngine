@@ -386,6 +386,11 @@ fn tool_effectiveness(
     held: BlockId,
     block: BlockId,
 ) -> (f32, bool) {
+    // Water breaks instantly regardless of tool. Skips the
+    // category-mismatch 4x penalty so bare-hand scoop is fast.
+    if block.0 == WATER_ID {
+        return (0.25, true);
+    }
     let cat = block_category(block);
     let needed = block_required_tier(block);
     let pick = tool_tier(held);
@@ -5943,6 +5948,26 @@ impl Voxel {
             self.heartbeat_accum = 0.0;
         }
 
+        // Swim mechanics. While the player's AABB overlaps a
+        // water voxel: cap fall speed, scale horizontal velocity
+        // (drag), and let Space push them upward (buoyancy +
+        // swim-up). Skipped in fly mode so /fly through water
+        // still glides freely.
+        let in_water = !self.fly_mode
+            && aabb_intersects_water(&self.world, self.player_pos);
+        if in_water {
+            if self.player_vel.y < -3.0 {
+                self.player_vel.y = -3.0;
+            }
+            self.player_vel.x *= 0.6;
+            self.player_vel.z *= 0.6;
+            if input_active && ctx.input.is_pressed(Key::Space) {
+                self.player_vel.y = self.player_vel.y.max(3.0);
+            }
+            // Reset fall-damage tracker so falling into water
+            // doesn't punish on the next grounded transition.
+            self.fall_start_y = None;
+        }
         // Axis-resolved voxel AABB collision.
         let was_grounded = self.grounded;
         let delta = self.player_vel * dt;
@@ -13734,12 +13759,26 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["bed_bottom.png", "bed.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["bed_side.png", "bed.png"], keep_alpha: false },
     },
+    // Water source block. Source-only for now (no flow physics
+    // yet); player walks through, swims while submerged. Marked
+    // transparent so the chunk mesher emits faces against air
+    // neighbours and culls water-water seams. Breaks instantly
+    // with a bare hand.
+    BlockType {
+        id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
+        top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
 /// renderer-side light scan doesn't have to do a string lookup.
 const TORCH_ID: u16 = 10;
 const GLOWSTONE_ID: u16 = 28;
+/// Block id of water. Passable, instant-break, applies swim drag
+/// + buoyancy while the player AABB intersects it.
+const WATER_ID: u16 = 36;
 
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator
@@ -13802,6 +13841,7 @@ fn block_material(b: BlockId) -> &'static str {
         5 | 7 | 10 => "wood",       // wood, planks, torch
         6 => "grass",               // leaves
         9 => "glass",
+        36 => "sand", // water - splashy-ish, no dedicated bank yet
         _ => "stone",
     }
 }
@@ -14306,7 +14346,7 @@ fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
 /// caller queries `voxel_is_solid` so partial-snow voxels are
 /// passable while a full 8-layer voxel is solid.
 fn is_passable(b: BlockId) -> bool {
-    matches!(b.0, 10 | 20 | 21 | 22)
+    matches!(b.0, 10 | 20 | 21 | 22 | 36)
 }
 
 /// Combined solid lookup: world solid AND not in the passable
@@ -14330,6 +14370,28 @@ fn voxel_is_solid(
         return layers >= 8;
     }
     true
+}
+
+/// Returns true if the player's AABB at `pos` overlaps any water
+/// voxel. Drives swim drag + buoyancy in the movement loop.
+fn aabb_intersects_water(world: &World, pos: Vec3) -> bool {
+    let (min, max) = body_aabb(pos);
+    let x0 = min.x.floor() as i32;
+    let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
+    let y0 = min.y.floor() as i32;
+    let y1 = (max.y - COLLISION_EPSILON).floor() as i32;
+    let z0 = min.z.floor() as i32;
+    let z1 = (max.z - COLLISION_EPSILON).floor() as i32;
+    for y in y0..=y1 {
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                if world.get([x, y, z]).0 == WATER_ID {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
