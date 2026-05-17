@@ -4870,8 +4870,22 @@ impl Voxel {
         }
         // Precipitation spawner. weather=1 = rain (fast falling
         // blue streaks); weather=2 = snow (slow drifting white
-        // flakes). Both stay purely visual.
+        // flakes). Both stay purely visual. Skips spawning while
+        // the player has solid ceiling overhead so being indoors
+        // doesn't fill the room with rain.
+        let mut sheltered = false;
         if self.weather == 1 || self.weather == 2 {
+            let px = self.player_pos.x.floor() as i32;
+            let pz = self.player_pos.z.floor() as i32;
+            let py = self.player_pos.y.floor() as i32;
+            for dy in 1..15 {
+                if self.world.get([px, py + dy, pz]) != BlockId::AIR {
+                    sheltered = true;
+                    break;
+                }
+            }
+        }
+        if (self.weather == 1 || self.weather == 2) && !sheltered {
             const FALL_PER_FRAME: u32 = 20;
             let mut rng: u32 = ((self.net_tick as u32)
                 .wrapping_mul(0x9E37_79B1))
