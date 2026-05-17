@@ -8437,14 +8437,21 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             // 3D hashes seed coal + iron pockets; each is a noise
             // value that exceeds a threshold rarely. Coal is more
             // common + can live high; iron is rarer + only deep.
+            // Mountain biome boosts both ore probabilities (lower
+            // thresholds) and raises the iron Y ceiling so peaks
+            // become genuinely worth digging into.
             let ox = wx as i32;
             let oy = wy;
             let oz = wz as i32;
             let h_coal = ore_hash(ox, oy, oz, 0x9E37_79B9);
             let h_iron = ore_hash(ox, oy, oz, 0x85EB_CA6B);
-            if h_iron > 0.985 && oy < 14 {
+            let (iron_thr, iron_max_y, coal_thr) = match biome {
+                Biome::Mountain => (0.965, 24, 0.90),
+                _ => (0.985, 14, 0.94),
+            };
+            if h_iron > iron_thr && oy < iron_max_y {
                 BlockId(14)
-            } else if h_coal > 0.94 {
+            } else if h_coal > coal_thr {
                 BlockId(13)
             } else {
                 BlockId(1)
