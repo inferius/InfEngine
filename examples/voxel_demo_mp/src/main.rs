@@ -699,10 +699,15 @@ impl ClientInv {
             (8, 16),
             (BUCKET_WATER_ID, 1),
         ];
+        // Seed straight from slot 0 - leaving slot 0 empty made
+        // `/give` fill it silently while the player assumed slot
+        // 0 was a dedicated "empty hand". With the seed shifted
+        // forward, any extra `/give` lands at slot 8+ and the
+        // player can see the new item appear at the end of the
+        // hotbar.
         for (i, (bid, count)) in seed.iter().enumerate() {
-            let slot = i + 1;
-            if slot < HOTBAR_SLOTS {
-                inv[slot] = Some((BlockId(*bid), *count));
+            if i < HOTBAR_SLOTS {
+                inv[i] = Some((BlockId(*bid), *count));
             }
         }
         Self {
@@ -9613,8 +9618,15 @@ impl Voxel {
                                         }
                                     }
                                 }
-                                if resp.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                // Enter sends + closes the chat.
+                                // Don't gate on `lost_focus` -
+                                // we force-focus the textbox each
+                                // frame via `request_focus`, so
+                                // focus never naturally leaves
+                                // when the user hits Enter. The
+                                // raw key check is enough.
+                                if ui
+                                    .input(|i| i.key_pressed(egui::Key::Enter))
                                 {
                                     chat_send_now = true;
                                 }
