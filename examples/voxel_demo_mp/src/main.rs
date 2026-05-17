@@ -5152,13 +5152,19 @@ impl Voxel {
             // Fly mode disables fall damage so toggling /fly off
             // mid-air doesn't immediately murder the player.
             if drop > SAFE_FALL && !self.fly_mode {
-                let dmg = drop - SAFE_FALL;
-                self.apply_player_damage(dmg);
                 let landing = [
                     self.player_pos.x.floor() as i32,
                     (self.player_pos.y - PLAYER_HEIGHT - 0.05).floor() as i32,
                     self.player_pos.z.floor() as i32,
                 ];
+                // Landing on snow halves the impact - snow
+                // cushion mechanic.
+                let on_snow = self.world.get(landing).0 == 15;
+                let mut dmg = drop - SAFE_FALL;
+                if on_snow {
+                    dmg *= 0.5;
+                }
+                self.apply_player_damage(dmg);
                 self.spawn_break_particles(landing);
             }
         }
