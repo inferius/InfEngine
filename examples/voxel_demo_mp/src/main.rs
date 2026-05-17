@@ -5402,6 +5402,18 @@ impl AppHandler for Voxel {
         let (sun_dir, sky) = day_night(self.day_time);
         renderer.set_sun_dir(sun_dir);
         renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
+        // Tie sun intensity to the real (un-clamped) elevation so
+        // night is actually dim. We recompute the raw direction
+        // here because `day_night` clamps the dir vector when the
+        // sun is below the horizon (to keep shadows sane), losing
+        // the sign we need for the intensity curve.
+        let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
+        let theta = phase * std::f32::consts::TAU;
+        let raw_elev = theta.sin();
+        // 3.0 at noon, ~0.4 at midnight (soft moonlight), smooth
+        // transition through the horizon. Clamp avoids negatives.
+        let sun_intensity = (1.7 + raw_elev * 1.3).clamp(0.4, 3.0);
+        renderer.set_sun_intensity(sun_intensity);
         // Sun + moon as 3D meshes far away. Going through the
         // mesh3d pass means the depth buffer occludes them when
         // terrain stands between the player + the sky (rooms,

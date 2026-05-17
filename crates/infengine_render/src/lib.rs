@@ -108,6 +108,11 @@ pub struct Renderer {
     /// high-noon angle; drivers can swing this through the day via
     /// [`Renderer::set_sun_dir`].
     sun_dir: glam::Vec3,
+    /// Sun lighting intensity (multiplier applied to the
+    /// directional light's diffuse + specular contribution). Set
+    /// via [`Renderer::set_sun_intensity`]; default 3.0 mirrors
+    /// the previous shader-side constant.
+    sun_intensity: f32,
 }
 
 impl Renderer {
@@ -249,6 +254,7 @@ impl Renderer {
             lights: lights_res,
             light_queue: Vec::new(),
             sun_dir: glam::Vec3::new(0.4, 0.9, 0.5),
+            sun_intensity: 3.0,
         })
     }
 
@@ -638,6 +644,14 @@ impl Renderer {
         self.sun_dir
     }
 
+    /// Override the sun lighting intensity. Multiplier applied to
+    /// the directional light's diffuse + specular contribution in
+    /// the PBR mesh shader. Default 3.0; drop to 0 for a moonless
+    /// night.
+    pub fn set_sun_intensity(&mut self, intensity: f32) {
+        self.sun_intensity = intensity.max(0.0);
+    }
+
     /// Render one frame, with an optional overlay callback.
     ///
     /// The closure runs after the engine's main pass with its own
@@ -675,8 +689,14 @@ impl Renderer {
         // the shadow map follows what the user is looking at.
         let target = self.camera_3d.target;
         let light_dir = self.sun_dir;
-        self.shadow
-            .upload_light(&self.queue, target, light_dir, 20.0, 40.0);
+        self.shadow.upload_light(
+            &self.queue,
+            target,
+            light_dir,
+            20.0,
+            40.0,
+            self.sun_intensity,
+        );
         self.sprite
             .upload(&self.device, &self.queue, &self.sprite_queue);
         self.debug

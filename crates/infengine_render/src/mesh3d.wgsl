@@ -165,7 +165,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let diffuse = k_d * albedo / PI;
 
     let shadow_factor = sample_shadow(in.world_pos, n_dot_l);
-    let sun_intensity = 3.0;
+    // Intensity is packed into the w channel of `shadow.light_dir`
+    // by the CPU side (`Renderer::set_sun_intensity`). Default
+    // 3.0 mirrors the previous hardcoded constant; drivers can
+    // taper this toward zero for night.
+    let sun_intensity = shadow.light_dir.w;
     var direct = (diffuse + specular) * n_dot_l * sun_intensity * shadow_factor;
 
     // Accumulate point-light contributions. Range-based smooth

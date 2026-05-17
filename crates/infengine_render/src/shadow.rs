@@ -270,6 +270,7 @@ impl ShadowPass {
         light_dir: Vec3,
         half_size: f32,
         depth: f32,
+        intensity: f32,
     ) {
         let dir = light_dir.normalize_or_zero();
         let dir = if dir == Vec3::ZERO { Vec3::Y } else { dir };
@@ -284,9 +285,13 @@ impl ShadowPass {
             0.0,
             depth * 2.0,
         );
+        // Pack sun intensity into the w channel of light_dir so we
+        // don't need a separate uniform binding. Drivers that
+        // ignore the w component (older shaders) just behave as
+        // if intensity == 0.
         let uniform = ShadowUniform {
             view_proj: (proj * view).to_cols_array_2d(),
-            light_dir: [dir.x, dir.y, dir.z, 0.0],
+            light_dir: [dir.x, dir.y, dir.z, intensity.max(0.0)],
         };
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&uniform));
     }
