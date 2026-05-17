@@ -741,6 +741,10 @@ const COLLISION_EPSILON: f32 = 1e-4;
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10
 /// hearts of 2 HP each).
 const PLAYER_MAX_HEALTH: f32 = 20.0;
+const STAMINA_MAX: f32 = 100.0;
+const STAMINA_DRAIN: f32 = 20.0;
+const STAMINA_REGEN: f32 = 18.0;
+const STAMINA_REACTIVATE: f32 = 25.0;
 /// Free-fall distance, in voxels, before fall damage kicks in. A
 /// 3-block drop is harmless; anything taller deals
 /// `fall_distance - SAFE_FALL` HP.
@@ -1106,6 +1110,11 @@ struct Voxel {
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     sprinting: bool,
+    /// Sprint stamina in 0..STAMINA_MAX. Drains while sprinting,
+    /// regens when not. Reaching zero blocks the sprint speed
+    /// bonus until it regens above the small reactivation
+    /// threshold.
+    stamina: f32,
     /// Per-remote-player interpolation buffer. We keep the
     /// previous + current `PlayerMsg` and their arrival instants
     /// so the render path can lerp between them at `now - delay`,
@@ -4013,6 +4022,7 @@ impl Voxel {
             kill_count: 0,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
+            stamina: STAMINA_MAX,
             remote_interp: HashMap::new(),
             player_name: {
                 // Pseudo-random 4-digit suffix so repeat-launch
@@ -4485,16 +4495,35 @@ impl Voxel {
             if ctx.input.is_pressed(Key::ControlLeft)
                 || ctx.input.is_pressed(Key::ControlRight)
             {
-                speed_mul *= 1.7;
-                // Counts as sprinting only when actually moving;
-                // standing still + holding Ctrl shouldn't widen
-                // the FOV.
-                self.sprinting = move_axis.abs() + strafe.abs() > 0.0;
+                // Stamina gate: sprint refuses to engage while
+                // the player is below the reactivation
+                // threshold so a fully-drained bar enforces a
+                // brief walking penalty.
+                let want_sprint = move_axis.abs() + strafe.abs() > 0.0;
+                let stamina_ok = if self.sprinting {
+                    self.stamina > 0.0
+                } else {
+                    self.stamina >= STAMINA_REACTIVATE
+                };
+                if want_sprint && stamina_ok {
+                    speed_mul *= 1.7;
+                    self.sprinting = true;
+                } else {
+                    self.sprinting = false;
+                }
             } else {
                 self.sprinting = false;
             }
         } else {
             self.sprinting = false;
+        }
+        // Stamina accounting: drain while sprinting, regen
+        // otherwise. Clamped to [0, STAMINA_MAX] each tick.
+        if self.sprinting {
+            self.stamina = (self.stamina - STAMINA_DRAIN * dt).max(0.0);
+        } else {
+            self.stamina =
+                (self.stamina + STAMINA_REGEN * dt).min(STAMINA_MAX);
         }
         // Smooth FOV lerp toward the per-state target. 60 deg
         // baseline, 70 deg while sprinting. The exponential lerp
@@ -4859,6 +4888,8 @@ impl Voxel {
         let show_fps = self.settings.show_fps;
         let day_time = self.day_time;
         let player_health = self.player_health;
+        let stamina_frac =
+            (self.stamina / STAMINA_MAX).clamp(0.0, 1.0);
         let player_hurt_flash = self.hurt_flash;
         let show_debug = self.show_debug;
         let hud_visible = self.hud_visible;
@@ -5480,6 +5511,43 @@ impl Voxel {
                                     );
                                 }
                             });
+                            // Stamina bar. Width tracks the
+                            // current fraction; tint shifts from
+                            // green at full down to orange at
+                            // low. Hidden when sprinting is
+                            // impossible (full + not in use).
+                            if stamina_frac < 0.999 || self.sprinting {
+                                ui.horizontal(|ui| {
+                                    ui.label("SP:");
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(120.0, 8.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let painter = ui.painter();
+                                    painter.rect_filled(
+                                        rect,
+                                        2.0,
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            30, 30, 30, 220,
+                                        ),
+                                    );
+                                    let fill = egui::Rect::from_min_size(
+                                        rect.min,
+                                        egui::vec2(
+                                            rect.width() * stamina_frac,
+                                            rect.height(),
+                                        ),
+                                    );
+                                    let col = if stamina_frac > 0.5 {
+                                        egui::Color32::from_rgb(100, 200, 80)
+                                    } else if stamina_frac > 0.2 {
+                                        egui::Color32::from_rgb(220, 180, 60)
+                                    } else {
+                                        egui::Color32::from_rgb(220, 90, 60)
+                                    };
+                                    painter.rect_filled(fill, 2.0, col);
+                                });
+                            }
                             if show_fps {
                                 ui.separator();
                                 ui.label(format!("FPS: {fps:.0}"));
