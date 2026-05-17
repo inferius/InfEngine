@@ -1793,8 +1793,16 @@ impl Voxel {
         let due = ((day_time - self.last_mob_spawn_time).rem_euclid(DAY_LENGTH_S))
             > MOB_SPAWN_PERIOD;
         if self.mobs.len() < self.mob_cap && due {
-            let wx = (rand01() * 40.0 - 20.0).round() as i32;
-            let wz = (rand01() * 40.0 - 20.0).round() as i32;
+            // Spawn in a ring 12..32 blocks around the host so
+            // the world feels more populated as the player
+            // explores. Pure origin-anchored spawns were
+            // confusing once they wandered far from spawn.
+            let angle = rand01() * std::f32::consts::TAU;
+            let radius = 12.0 + rand01() * 20.0;
+            let cx = self.player_pos.x;
+            let cz = self.player_pos.z;
+            let wx = (cx + angle.cos() * radius).round() as i32;
+            let wz = (cz + angle.sin() * radius).round() as i32;
             // Spawn scan: probe the column ceiling so the sheep
             // lands on real ground (canopy is fine here too since
             // mobs spawn from above).
