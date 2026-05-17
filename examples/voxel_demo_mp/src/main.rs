@@ -2471,6 +2471,27 @@ impl Voxel {
 
     /// Spawn a NetClient at `addr` and transition into Playing.
     fn connect_as_client(&mut self, addr: &str) {
+        // Sanitize: trimmed + non-empty so the server never sees
+        // a blank Hello name. Falls back to a session-anchored
+        // pseudo-random `Player####` when the user cleared the
+        // field in settings.
+        let trimmed: String = self
+            .player_name
+            .trim()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(24)
+            .collect();
+        if trimmed.is_empty() {
+            let n = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+                % 10000;
+            self.player_name = format!("Player{n:04}");
+        } else if trimmed != self.player_name {
+            self.player_name = trimmed;
+        }
         match NetClient::connect(addr, &self.player_name) {
             Ok(c) => {
                 info!(addr = %addr, "joining server");
@@ -4420,6 +4441,7 @@ impl Voxel {
         // (raycast_mob, registry, etc.) finish before this
         // exclusive borrow begins.
         let chat_buf = &mut self.chat_input;
+        let player_name_buf = &mut self.player_name;
 
         let Some(ui) = self.ui.as_mut() else {
             return;
@@ -4451,6 +4473,15 @@ impl Voxel {
                             action_quit = true;
                         }
                         ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Playing as: {}",
+                                player_name_buf
+                            ))
+                            .color(egui::Color32::from_rgb(180, 200, 200))
+                            .italics(),
+                        );
+                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label("Master server:");
                             ui.text_edit_singleline(master_addr);
@@ -4596,6 +4627,10 @@ impl Voxel {
             AppState::Settings { .. } => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.heading("Settings");
+                    ui.horizontal(|ui| {
+                        ui.label("Player name:");
+                        ui.text_edit_singleline(player_name_buf);
+                    });
                     ui.add(
                         egui::Slider::new(&mut settings_edit.mouse_sensitivity, 0.1..=2.0)
                             .text("Mouse sensitivity"),
