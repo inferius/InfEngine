@@ -1085,6 +1085,21 @@ struct Voxel {
     /// Client roles write into this map - the host needs the same
     /// smoothing for the joined players it renders locally.
     remote_interp: HashMap<u32, RemoteInterp>,
+    /// Local player's display name. Sent to the server as the
+    /// `Hello` name (so the server's `client_name` lookup returns
+    /// it), used as the chat sender tag for the host, and pushed
+    /// to other clients via `vx.names`. Defaults to a random
+    /// `Player####` if the user hasn't set one in settings.
+    player_name: String,
+    /// Latest known display name per player id. Filled from the
+    /// `vx.names` roster the server broadcasts on join/leave. Used
+    /// for nameplates above remote players and the Tab playerlist
+    /// overlay. The local player's id always maps to
+    /// `self.player_name`; remote ids come from the server.
+    player_names: HashMap<u32, String>,
+    /// True while Tab is held. Drives the player list overlay
+    /// shown in the HUD.
+    tab_held: bool,
     /// `None` = break slot (empty hand). `Some(block)` = place that
     /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
@@ -2456,7 +2471,7 @@ impl Voxel {
 
     /// Spawn a NetClient at `addr` and transition into Playing.
     fn connect_as_client(&mut self, addr: &str) {
-        match NetClient::connect(addr, "voxel-mp-client") {
+        match NetClient::connect(addr, &self.player_name) {
             Ok(c) => {
                 info!(addr = %addr, "joining server");
                 self.net = NetRole::Client {
@@ -2686,6 +2701,10 @@ impl Voxel {
         // Chat lines received this tick. Appended to `chat_log`
         // after the net match arm releases its borrow on `self.net`.
         let mut chat_inbox: Vec<String> = Vec::new();
+        // Roster update from the server's `vx.names` broadcast.
+        // Last-write-wins per tick: only the latest snapshot is
+        // applied to `player_names` after the match arm closes.
+        let mut names_update: Option<Vec<(u32, String)>> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -2917,6 +2936,28 @@ impl Voxel {
                         inventories.insert(*id, inv);
                     }
                     pending_inv_sends.insert(*id);
+                }
+                // Roster broadcast: whenever the connected set
+                // changes, ship the full id->name table to every
+                // client so nameplates / Tab playerlist stay
+                // current. Host owns id 0 with its own
+                // `player_name`.
+                if !new_ids.is_empty() || !departed_ids.is_empty() {
+                    let mut entries: Vec<(u32, String)> =
+                        vec![(0, self.player_name.clone())];
+                    for cid in server.client_ids() {
+                        let name = server
+                            .client_name(cid)
+                            .unwrap_or_else(|| format!("p{cid}"));
+                        entries.push((cid, name));
+                    }
+                    self.player_names.clear();
+                    for (id, n) in &entries {
+                        self.player_names.insert(*id, n.clone());
+                    }
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&entries, cfg) {
+                        server.broadcast_bytes("vx.names", buf);
+                    }
                 }
                 self.known_client_ids = current_ids;
                 // Validate every incoming edit against the sender's
@@ -3154,6 +3195,15 @@ impl Voxel {
                                 chat_inbox.push(line);
                             }
                         }
+                        "vx.names" => {
+                            if let Ok((entries, _)) = bincode::serde::decode_from_slice::<
+                                Vec<(u32, String)>,
+                                _,
+                            >(&data, cfg)
+                            {
+                                names_update = Some(entries);
+                            }
+                        }
                         "vx.damage" => {
                             if let Ok((d, _)) = bincode::serde::decode_from_slice::<
                                 DamageMsg,
@@ -3247,6 +3297,15 @@ impl Voxel {
             if self.chat_log.len() > max_chat {
                 let drop = self.chat_log.len() - max_chat;
                 self.chat_log.drain(0..drop);
+            }
+        }
+        // Apply the latest names roster (client-side; the server
+        // already updates `player_names` inline when it builds the
+        // broadcast).
+        if let Some(entries) = names_update {
+            self.player_names.clear();
+            for (id, n) in entries {
+                self.player_names.insert(id, n);
             }
         }
         if pvp_self_damage > 0.0 {
@@ -3391,6 +3450,18 @@ impl Voxel {
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             remote_interp: HashMap::new(),
+            player_name: {
+                // Pseudo-random 4-digit suffix so repeat-launch
+                // sessions don't accidentally collide.
+                let n = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos())
+                    .unwrap_or(0)
+                    % 10000;
+                format!("Player{n:04}")
+            },
+            player_names: HashMap::new(),
+            tab_held: false,
             inventory: {
                 // Seed the hotbar with one starter stack per known
                 // block type so the demo is playable from the first
@@ -4173,6 +4244,51 @@ impl Voxel {
                 (m.pos, m.health, max)
             })
             .collect();
+        // Remote nameplate snapshot: world-space pose + display
+        // name for each other player so the egui pass can project
+        // them onto the screen. Skips own_id so the local player
+        // never sees a tag on their own head.
+        let own_id_for_plates: u32 = match &self.net {
+            NetRole::Offline => u32::MAX,
+            NetRole::Server { .. } => 0,
+            NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
+        };
+        let plate_now = std::time::Instant::now();
+        let nameplates: Vec<([f32; 3], String)> = self
+            .remote_interp
+            .iter()
+            .filter(|(id, _)| **id != own_id_for_plates)
+            .map(|(id, r)| {
+                let p = r.sample(plate_now);
+                let name = self
+                    .player_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("p{id}"));
+                (p.pos, name)
+            })
+            .collect();
+        // Tab playerlist snapshot: pairs of (display_name,
+        // is_self). Drawn as a modal centered overlay while Tab
+        // is held.
+        let playerlist_visible = self.tab_held && !matches!(self.net, NetRole::Offline);
+        let playerlist: Vec<(String, bool)> = if playerlist_visible {
+            let mut list: Vec<(String, bool)> = self
+                .player_names
+                .iter()
+                .map(|(id, n)| (n.clone(), *id == own_id_for_plates))
+                .collect();
+            // Self first, then alphabetical so the order is stable
+            // across ticks.
+            list.sort_by(|a, b| match (a.1, b.1) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
+            });
+            list
+        } else {
+            Vec::new()
+        };
         let dbg_player = self.player_pos;
         let dbg_yaw = self.player_yaw;
         let dbg_pitch = self.player_pitch;
@@ -5028,6 +5144,104 @@ impl Voxel {
                         );
                     }
                 }
+                // Floating nameplates above remote players. Same
+                // projection trick as the mob HP bars; rendered
+                // slightly higher than a sheep bar so it sits
+                // clearly above the head cube. Hidden when the
+                // player has toggled the HUD off (F1).
+                if hud_visible && !nameplates.is_empty() {
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_nameplates"),
+                    ));
+                    for (pos, name) in &nameplates {
+                        let world = glam::Vec3::new(pos[0], pos[1] + 0.55, pos[2]);
+                        let clip = hud_view_proj
+                            * glam::Vec4::new(world.x, world.y, world.z, 1.0);
+                        if clip.w <= 0.0 {
+                            continue;
+                        }
+                        let ndc = glam::Vec3::new(
+                            clip.x / clip.w,
+                            clip.y / clip.w,
+                            clip.z / clip.w,
+                        );
+                        if !(0.0..=1.0).contains(&ndc.z) {
+                            continue;
+                        }
+                        let sx = (ndc.x * 0.5 + 0.5) * screen.width()
+                            + screen.min.x;
+                        let sy = (-ndc.y * 0.5 + 0.5) * screen.height()
+                            + screen.min.y;
+                        // Fade text size with depth so far-away
+                        // names don't dominate the screen.
+                        let depth_scale = (1.0 / clip.w * 30.0).clamp(0.4, 1.4);
+                        let font = egui::FontId::proportional(13.0 * depth_scale);
+                        // Draw a 1px black outline by stamping the
+                        // text four times before the foreground
+                        // pass, then the main text on top.
+                        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                            layer.text(
+                                egui::pos2(sx + dx, sy + dy),
+                                egui::Align2::CENTER_BOTTOM,
+                                name,
+                                font.clone(),
+                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220),
+                            );
+                        }
+                        layer.text(
+                            egui::pos2(sx, sy),
+                            egui::Align2::CENTER_BOTTOM,
+                            name,
+                            font,
+                            egui::Color32::from_rgb(245, 245, 245),
+                        );
+                    }
+                }
+                // Tab playerlist overlay: centered modal listing
+                // every known peer (incl. self) while Tab is held.
+                if playerlist_visible && !playerlist.is_empty() {
+                    egui::Area::new(egui::Id::new("voxel_playerlist"))
+                        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
+                        .order(egui::Order::Foreground)
+                        .show(ctx, |ui| {
+                            egui::Frame::popup(ui.style())
+                                .fill(egui::Color32::from_rgba_unmultiplied(
+                                    20, 20, 20, 210,
+                                ))
+                                .show(ui, |ui| {
+                                    ui.set_min_width(180.0);
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Players ({})",
+                                            playerlist.len()
+                                        ))
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(
+                                            255, 220, 100,
+                                        )),
+                                    );
+                                    ui.separator();
+                                    for (name, is_self) in &playerlist {
+                                        let mut txt = egui::RichText::new(name);
+                                        if *is_self {
+                                            txt = txt
+                                                .color(egui::Color32::from_rgb(
+                                                    160, 230, 160,
+                                                ))
+                                                .strong();
+                                        } else {
+                                            txt = txt.color(
+                                                egui::Color32::from_rgb(
+                                                    230, 230, 230,
+                                                ),
+                                            );
+                                        }
+                                        ui.label(txt);
+                                    }
+                                });
+                        });
+                }
                 // Targeted-block label: name + mining progress
                 // (when actively breaking the same voxel). Skipped
                 // when the crosshair already shows a mob label
@@ -5639,6 +5853,11 @@ impl AppHandler for Voxel {
             self.hud_visible = !self.hud_visible;
         }
         self.f1_prev = f1_now;
+        // Tab held = playerlist overlay. Hidden in singleplayer
+        // (the overlay drawer also guards on net role, but the
+        // flag is gated here too so debug panels stay clean).
+        self.tab_held =
+            matches!(self.state, AppState::Playing) && ctx.input.is_pressed(Key::Tab);
 
         let e_now = ctx.input.is_pressed(Key::E);
         let e_just = e_now && !self.e_prev;
