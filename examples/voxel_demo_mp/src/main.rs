@@ -294,6 +294,10 @@ const ZOMBIE_TOUCH_DAMAGE: f32 = 2.5;
 const ZOMBIE_ATTACK_COOLDOWN: f32 = 0.9;
 const ZOMBIE_ATTACK_RANGE: f32 = 1.4;
 const ZOMBIE_SIGHT_RANGE: f32 = 22.0;
+/// Squared distance from the nearest player past which a mob is
+/// despawned. Stops sheep + zombies from piling up in unloaded
+/// chunks the player will never visit again.
+const MOB_DESPAWN_DIST_SQ: f32 = 80.0 * 80.0;
 /// Maximum range (in blocks) for the player's melee attack on a
 /// mob. Same number as voxel break reach so the two interactions
 /// feel symmetric.
@@ -1567,9 +1571,31 @@ impl Voxel {
                 },
             );
         }
-        // Evict mobs whose death fade just finished. Broadcast
-        // `vx.mob_remove` so clients drop them from the render
-        // table at the same moment the local sim does.
+        // Despawn pass: mobs far from every known player get
+        // evicted (no point ticking + broadcasting an entity the
+        // player will never see again). Dying mobs are exempt -
+        // we want to finish their fade even when the player
+        // walked away.
+        for m in &self.mobs {
+            if m.dying > 0.0 {
+                continue;
+            }
+            let nearest = self.nearest_player_pos(m.pos, 1.0e6);
+            if let Some(p) = nearest {
+                let dx = p[0] - m.pos[0];
+                let dy = p[1] - m.pos[1];
+                let dz = p[2] - m.pos[2];
+                if dx * dx + dy * dy + dz * dz > MOB_DESPAWN_DIST_SQ
+                    && !to_remove.contains(&m.id)
+                {
+                    to_remove.push(m.id);
+                }
+            }
+        }
+        // Evict mobs whose death fade just finished, plus anything
+        // the despawn pass flagged. Broadcast `vx.mob_remove` so
+        // clients drop them from the render table at the same
+        // moment the local sim does.
         for id in &to_remove {
             if let Some(pos) = self.mobs.iter().position(|m| m.id == *id) {
                 self.mobs.swap_remove(pos);
