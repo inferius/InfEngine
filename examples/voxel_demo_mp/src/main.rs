@@ -2010,18 +2010,18 @@ impl Voxel {
                         target: pos,
                         yaw: 0.0,
                         retarget_at: (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-                        health: if kind == KIND_ZOMBIE {
-                            ZOMBIE_MAX_HEALTH
-                        } else {
-                            MOB_MAX_HEALTH
+                        health: match kind {
+                            KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
+                            KIND_CHICKEN => 4.0,
+                            _ => MOB_MAX_HEALTH,
                         },
                         dying: 0.0,
                         attack_cd: 0.0,
                     };
-                    let initial_hp = if kind == KIND_ZOMBIE {
-                        ZOMBIE_MAX_HEALTH
-                    } else {
-                        MOB_MAX_HEALTH
+                    let initial_hp = match kind {
+                        KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
+                        KIND_CHICKEN => 4.0,
+                        _ => MOB_MAX_HEALTH,
                     } as u8;
                     self.mobs.push(mob);
                     self.remote_mobs.insert(
@@ -5341,12 +5341,16 @@ impl Voxel {
             .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
             .and_then(|(id, _)| self.remote_mobs.get(&id).copied())
             .map(|m| {
-                let max = if m.kind == KIND_ZOMBIE {
-                    ZOMBIE_MAX_HEALTH as u8
-                } else {
-                    MOB_MAX_HEALTH as u8
+                let max = match m.kind {
+                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
+                    KIND_CHICKEN => 4u8,
+                    _ => MOB_MAX_HEALTH as u8,
                 };
-                let name = if m.kind == KIND_ZOMBIE { "Zombie" } else { "Sheep" };
+                let name = match m.kind {
+                    KIND_ZOMBIE => "Zombie",
+                    KIND_CHICKEN => "Chicken",
+                    _ => "Sheep",
+                };
                 (name, m.health, max)
             });
         let mob_bars: Vec<([f32; 3], u8, u8)> = self
@@ -5354,18 +5358,18 @@ impl Voxel {
             .values()
             .filter(|m| {
                 let dying = self.mob_dying.get(&m.id).copied().unwrap_or(0.0);
-                let max = if m.kind == KIND_ZOMBIE {
-                    ZOMBIE_MAX_HEALTH as u8
-                } else {
-                    MOB_MAX_HEALTH as u8
+                let max = match m.kind {
+                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
+                    KIND_CHICKEN => 4u8,
+                    _ => MOB_MAX_HEALTH as u8,
                 };
                 m.health > 0 && m.health < max && dying <= 0.0
             })
             .map(|m| {
-                let max = if m.kind == KIND_ZOMBIE {
-                    ZOMBIE_MAX_HEALTH as u8
-                } else {
-                    MOB_MAX_HEALTH as u8
+                let max = match m.kind {
+                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
+                    KIND_CHICKEN => 4u8,
+                    _ => MOB_MAX_HEALTH as u8,
                 };
                 (m.pos, m.health, max)
             })
