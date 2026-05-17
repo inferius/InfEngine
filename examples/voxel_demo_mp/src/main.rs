@@ -7616,6 +7616,58 @@ impl Voxel {
                                 handled_locally = true;
                             }
                         }
+                        "randomtp" | "rtp" => {
+                            // Random nearby teleport. Picks a
+                            // direction + 30..120 block hop,
+                            // lands on the surface above that
+                            // column so the player never spawns
+                            // inside terrain.
+                            let mut rng: u32 = std::time::SystemTime::now()
+                                .duration_since(
+                                    std::time::UNIX_EPOCH,
+                                )
+                                .map(|d| d.subsec_nanos())
+                                .unwrap_or(0)
+                                .wrapping_mul(0x9E37_79B1);
+                            rng ^= rng << 13;
+                            rng ^= rng >> 17;
+                            rng ^= rng << 5;
+                            let r1 =
+                                (rng as f32 / u32::MAX as f32).abs();
+                            rng ^= rng << 7;
+                            let r2 =
+                                (rng as f32 / u32::MAX as f32).abs();
+                            let angle = r1 * std::f32::consts::TAU;
+                            let dist = 30.0 + r2 * 90.0;
+                            let nx = self.player_pos.x
+                                + angle.cos() * dist;
+                            let nz = self.player_pos.z
+                                + angle.sin() * dist;
+                            let cs = CHUNK_SIZE as i32;
+                            let ceiling =
+                                cs * VERTICAL_CHUNKS - 1;
+                            let sy = self
+                                .surface_y_below(
+                                    nx.floor() as i32,
+                                    nz.floor() as i32,
+                                    ceiling,
+                                )
+                                .unwrap_or(32);
+                            self.player_pos = Vec3::new(
+                                nx,
+                                sy as f32 + 1.5,
+                                nz,
+                            );
+                            self.player_vel = Vec3::ZERO;
+                            self.fall_start_y = None;
+                            local_lines.push(format!(
+                                "Random TP to ({:.0}, {:.0}, {:.0}).",
+                                nx,
+                                sy as f32 + 1.5,
+                                nz,
+                            ));
+                            handled_locally = true;
+                        }
                         "tppos" | "goto" => {
                             // Teleport to literal coords. Usage:
                             // /tppos <x> <y> <z>. Velocity zeroed
