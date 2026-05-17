@@ -7080,7 +7080,18 @@ impl Voxel {
                                     "/heal <name> is host-only.".to_string(),
                                 );
                             } else {
-                                let target = arg;
+                                // Allow `/heal <name> <amount>`
+                                // so a host can top up a peer by
+                                // an exact value instead of full
+                                // refill.
+                                let mut parts =
+                                    arg.splitn(2, char::is_whitespace);
+                                let target =
+                                    parts.next().unwrap_or("").trim();
+                                let amount: f32 = parts
+                                    .next()
+                                    .and_then(|s| s.parse::<f32>().ok())
+                                    .unwrap_or(100.0);
                                 let target_id = self
                                     .player_names
                                     .iter()
@@ -7093,12 +7104,13 @@ impl Voxel {
                                         "No player named {target}."
                                     )),
                                     Some(0) => {
-                                        self.player_health =
-                                            PLAYER_MAX_HEALTH;
-                                        local_lines.push(
-                                            "Healed self to full."
-                                                .to_string(),
-                                        );
+                                        self.player_health = (self
+                                            .player_health
+                                            + amount)
+                                            .min(PLAYER_MAX_HEALTH);
+                                        local_lines.push(format!(
+                                            "Healed self by {amount}."
+                                        ));
                                     }
                                     Some(id) => {
                                         let cfg =
@@ -7109,7 +7121,7 @@ impl Voxel {
                                             && let Ok(buf) =
                                                 bincode::serde::encode_to_vec(
                                                     DamageMsg {
-                                                        amount: -100.0,
+                                                        amount: -amount,
                                                     },
                                                     cfg,
                                                 )
@@ -7121,7 +7133,7 @@ impl Voxel {
                                             );
                                         }
                                         local_lines.push(format!(
-                                            "Healed {target}."
+                                            "Healed {target} for {amount}."
                                         ));
                                     }
                                 }
