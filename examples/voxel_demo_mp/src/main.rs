@@ -984,6 +984,10 @@ struct Voxel {
     /// Previous-frame state of the F key. Rising edge consumes
     /// one piece of food from the inventory + restores HP.
     f_prev: bool,
+    /// F1 toggles HUD visibility. Useful for clean screenshots
+    /// and stress-testing the renderer without overlay overhead.
+    hud_visible: bool,
+    f1_prev: bool,
     lmb_pending: bool,
     rmb_pending: bool,
     /// Level state of the mouse buttons (set on Pressed events,
@@ -3100,6 +3104,8 @@ impl Voxel {
             esc_prev: false,
             e_prev: false,
             f_prev: false,
+            hud_visible: true,
+            f1_prev: false,
             lmb_pending: false,
             rmb_pending: false,
             lmb_held: false,
@@ -3729,6 +3735,7 @@ impl Voxel {
         let player_health = self.player_health;
         let player_hurt_flash = self.hurt_flash;
         let show_debug = self.show_debug;
+        let hud_visible = self.hud_visible;
         // View-projection for projecting mob HP bars to screen.
         // Built from the same camera state the world pass uses;
         // captured here so the egui closure doesn't need renderer
@@ -4111,6 +4118,7 @@ impl Voxel {
                 });
             }
             AppState::Playing => {
+                if hud_visible {
                 egui::Area::new(egui::Id::new("voxel_hud"))
                     .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
                     .show(ctx, |ui| {
@@ -4154,6 +4162,7 @@ impl Voxel {
                             }
                         });
                     });
+                }
                 // Multiplayer in-game menu. Opens on Esc when a
                 // net role is active. World keeps simulating
                 // underneath (other peers must not see a frozen
@@ -4224,6 +4233,7 @@ impl Voxel {
                 // selection (driven by mouse wheel). Clicks here
                 // change the active slot; drag&drop is wired through
                 // the inventory window.
+                if hud_visible {
                 egui::Area::new(egui::Id::new("voxel_hotbar"))
                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
                     .show(ctx, |ui| {
@@ -4247,6 +4257,7 @@ impl Voxel {
                             });
                         });
                     });
+                }
 
                 // Inventory overlay: 3 extra rows of slots + a hotbar
                 // mirror + a 2x2 crafting grid + a 1-slot output.
@@ -4475,7 +4486,7 @@ impl Voxel {
                 // offset so the bar sits a bit above the head.
                 // We hide bars at full HP + during the death fade.
                 let screen = ctx.content_rect();
-                if !mob_bars.is_empty() {
+                if hud_visible && !mob_bars.is_empty() {
                     let layer = ctx.layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
                         egui::Id::new("voxel_mob_hp"),
@@ -4540,7 +4551,9 @@ impl Voxel {
                 // Targeted-mob label: small text just under the
                 // crosshair when the player is aiming at a mob.
                 // Hidden when no mob is in line of sight.
-                if let Some((name, cur, max)) = targeted_mob_info {
+                if hud_visible
+                    && let Some((name, cur, max)) = targeted_mob_info
+                {
                     let layer = ctx.layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
                         egui::Id::new("voxel_mob_label"),
@@ -4556,27 +4569,30 @@ impl Voxel {
                 }
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
-                let center = screen.center();
-                let painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Foreground,
-                    egui::Id::new("voxel_crosshair"),
-                ));
-                let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 240, 240));
-                let half = 8.0_f32;
-                painter.line_segment(
-                    [
-                        egui::pos2(center.x - half, center.y),
-                        egui::pos2(center.x + half, center.y),
-                    ],
-                    stroke,
-                );
-                painter.line_segment(
-                    [
-                        egui::pos2(center.x, center.y - half),
-                        egui::pos2(center.x, center.y + half),
-                    ],
-                    stroke,
-                );
+                if hud_visible {
+                    let center = screen.center();
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_crosshair"),
+                    ));
+                    let stroke =
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 240, 240));
+                    let half = 8.0_f32;
+                    painter.line_segment(
+                        [
+                            egui::pos2(center.x - half, center.y),
+                            egui::pos2(center.x + half, center.y),
+                        ],
+                        stroke,
+                    );
+                    painter.line_segment(
+                        [
+                            egui::pos2(center.x, center.y - half),
+                            egui::pos2(center.x, center.y + half),
+                        ],
+                        stroke,
+                    );
+                }
             }
         });
 
@@ -5027,6 +5043,13 @@ impl AppHandler for Voxel {
             self.show_debug = !self.show_debug;
         }
         self.f3_prev = f3_now;
+        // F1 hides / shows the entire HUD (hotbar, crosshair,
+        // health, mob bars). Useful for screenshots + benchmarks.
+        let f1_now = ctx.input.is_pressed(Key::F1);
+        if f1_now && !self.f1_prev && matches!(self.state, AppState::Playing) {
+            self.hud_visible = !self.hud_visible;
+        }
+        self.f1_prev = f1_now;
 
         let e_now = ctx.input.is_pressed(Key::E);
         let e_just = e_now && !self.e_prev;
