@@ -5008,22 +5008,51 @@ impl Voxel {
                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                    let resp = slot_with_dnd(
-                                        ui,
-                                        *slot,
-                                        atlas_tex_id,
-                                        SlotKind::Inv(i),
-                                        i == selected_slot,
-                                        i == 0,
-                                        inventory_open,
-                                        &mut inv_actions,
-                                    );
-                                    if resp.clicked() {
-                                        inv_actions.push(InvAction::SelectHotbar(i));
+                            ui.vertical_centered(|ui| {
+                                ui.horizontal(|ui| {
+                                    for (i, slot) in hotbar_snapshot.iter().enumerate() {
+                                        let resp = slot_with_dnd(
+                                            ui,
+                                            *slot,
+                                            atlas_tex_id,
+                                            SlotKind::Inv(i),
+                                            i == selected_slot,
+                                            i == 0,
+                                            inventory_open,
+                                            &mut inv_actions,
+                                        );
+                                        if resp.clicked() {
+                                            inv_actions.push(InvAction::SelectHotbar(i));
+                                        }
                                     }
-                                }
+                                });
+                                // Row of digit hints under each
+                                // slot. Highlights the active slot
+                                // so the player can map their key
+                                // press to the selected stack at a
+                                // glance.
+                                ui.horizontal(|ui| {
+                                    for i in 0..HOTBAR_SLOTS {
+                                        let label = if i < 9 {
+                                            format!("{}", i + 1)
+                                        } else {
+                                            String::new()
+                                        };
+                                        let color = if i == selected_slot {
+                                            egui::Color32::from_rgb(255, 220, 100)
+                                        } else {
+                                            egui::Color32::from_rgb(170, 170, 170)
+                                        };
+                                        ui.add_sized(
+                                            [38.0, 14.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(label)
+                                                    .color(color)
+                                                    .monospace(),
+                                            ),
+                                        );
+                                    }
+                                });
                             });
                         });
                     });
