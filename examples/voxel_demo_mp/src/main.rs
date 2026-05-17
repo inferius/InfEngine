@@ -13363,14 +13363,22 @@ impl AppHandler for Voxel {
         // F3 toggles the debug panel. Mirrors Minecraft's debug
         // overlay: cheap to leave running, off by default.
         let f3_now = ctx.input.is_pressed(Key::F3);
-        if f3_now && !self.f3_prev && matches!(self.state, AppState::Playing) {
+        if f3_now
+            && !self.f3_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
             self.show_debug = !self.show_debug;
         }
         self.f3_prev = f3_now;
         // F1 hides / shows the entire HUD (hotbar, crosshair,
         // health, mob bars). Useful for screenshots + benchmarks.
         let f1_now = ctx.input.is_pressed(Key::F1);
-        if f1_now && !self.f1_prev && matches!(self.state, AppState::Playing) {
+        if f1_now
+            && !self.f1_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
             self.hud_visible = !self.hud_visible;
         }
         self.f1_prev = f1_now;
@@ -13550,7 +13558,10 @@ impl AppHandler for Voxel {
         let e_now = ctx.input.is_pressed(Key::E);
         let e_just = e_now && !self.e_prev;
         self.e_prev = e_now;
-        if e_just && matches!(self.state, AppState::Playing) {
+        if e_just
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
             self.inventory_open = !self.inventory_open;
             // Drop any queued mouse-button edits the click that
             // closes the inventory would otherwise be replayed
@@ -13589,6 +13600,7 @@ impl AppHandler for Voxel {
             && matches!(self.state, AppState::Playing)
             && !self.inventory_open
             && !self.mp_menu_open
+            && !self.chat_open
             && self.player_health < PLAYER_MAX_HEALTH
         {
             // Find first slot holding meat (offline / host path).
