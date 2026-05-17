@@ -223,6 +223,11 @@ struct MobState {
     /// orientation, no longer wanders or collides. On 0 the
     /// server emits `vx.mob_remove` + evicts.
     dying: f32,
+    /// Per-mob attack cooldown timer. Currently used by zombies:
+    /// when the value reaches zero the mob deals contact damage
+    /// to whichever player it's standing next to and resets to
+    /// `ZOMBIE_ATTACK_COOLDOWN`.
+    attack_cd: f32,
 }
 
 /// Length of the death-fade in seconds. Both server and clients
@@ -269,6 +274,18 @@ const MOB_CAP: usize = 12;
 const MOB_SPEED: f32 = 1.2;
 const MOB_MAX_HEALTH: f32 = 8.0;
 const MOB_HIT_DAMAGE: f32 = 2.0;
+/// Mob kind discriminator carried in `MobMsg.kind` + tagged on
+/// every `MobState`. Sheep are passive wanderers, zombies chase
+/// the nearest player and deal contact damage at night.
+const KIND_SHEEP: u8 = 0;
+const KIND_ZOMBIE: u8 = 1;
+/// Per-kind balance knobs.
+const ZOMBIE_SPEED: f32 = 1.8;
+const ZOMBIE_MAX_HEALTH: f32 = 14.0;
+const ZOMBIE_TOUCH_DAMAGE: f32 = 2.5;
+const ZOMBIE_ATTACK_COOLDOWN: f32 = 0.9;
+const ZOMBIE_ATTACK_RANGE: f32 = 1.4;
+const ZOMBIE_SIGHT_RANGE: f32 = 22.0;
 /// Maximum range (in blocks) for the player's melee attack on a
 /// mob. Same number as voxel break reach so the two interactions
 /// feel symmetric.
@@ -1389,6 +1406,27 @@ impl Voxel {
                 );
                 continue;
             }
+            // Per-kind targeting:
+            //  - Sheep wander randomly + retarget on arrival or
+            //    5 s timeout.
+            //  - Zombies pick the nearest player within
+            //    `ZOMBIE_SIGHT_RANGE` and lock onto their pose;
+            //    when no player is in range they fall back to the
+            //    sheep wander logic so they don't freeze in place.
+            let chase_player_pos: Option<[f32; 3]> = if m.kind == KIND_ZOMBIE {
+                self.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
+            } else {
+                None
+            };
+            let speed = if m.kind == KIND_ZOMBIE {
+                ZOMBIE_SPEED
+            } else {
+                MOB_SPEED
+            };
+            if let Some(p) = chase_player_pos {
+                m.target = p;
+                m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+            }
             let dx = m.target[0] - m.pos[0];
             let dz = m.target[2] - m.pos[2];
             let d2 = dx * dx + dz * dz;
@@ -1404,8 +1442,8 @@ impl Voxel {
                 m.retarget_at = (day_time + 5.0).rem_euclid(DAY_LENGTH_S);
             } else {
                 let inv = d2.sqrt().max(1e-3).recip();
-                let vx = dx * inv * MOB_SPEED;
-                let vz = dz * inv * MOB_SPEED;
+                let vx = dx * inv * speed;
+                let vz = dz * inv * speed;
                 // Axis-resolved collision against world voxels so
                 // the sheep can't walk into trees / walls. The body
                 // is one cell tall; we test both the body level
@@ -1466,6 +1504,23 @@ impl Voxel {
             if let Some(sy) = self.surface_y_below(wx, wz, scan_top) {
                 m.pos[1] = sy as f32 + 1.0;
             }
+            // Zombie touch damage: decrement attack cooldown each
+            // frame; when in range of the host + cooldown expired,
+            // hit the local player + reset. Remote-player damage
+            // is server-authoritative but would need a per-id
+            // damage message - skipped for the demo; the host
+            // gets the attack feedback.
+            if m.kind == KIND_ZOMBIE {
+                m.attack_cd = (m.attack_cd - dt).max(0.0);
+                let dx = self.player_pos.x - m.pos[0];
+                let dy = self.player_pos.y - m.pos[1];
+                let dz = self.player_pos.z - m.pos[2];
+                let d2 = dx * dx + dy * dy + dz * dz;
+                if d2 <= ZOMBIE_ATTACK_RANGE * ZOMBIE_ATTACK_RANGE && m.attack_cd <= 0.0 {
+                    m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
+                    self.apply_player_damage(ZOMBIE_TOUCH_DAMAGE);
+                }
+            }
             self.mobs[i] = m;
             self.remote_mobs.insert(
                 m.id,
@@ -1513,25 +1568,41 @@ impl Voxel {
             if let Some(sy) = self.surface_y_below(wx, wz, ceiling) {
                 let top = self.world.get([wx, sy, wz]);
                 if top.0 == 3 {
+                    // Pick kind: zombies only spawn at night
+                    // (sun_dir.y < 0) and crowd out sheep with a
+                    // 60% chance during the dark hours. Daytime is
+                    // sheep-only.
+                    let (sun_dir, _sky) = day_night(day_time);
+                    let is_night = sun_dir.y < 0.0;
+                    let kind = if is_night && rand01() < 0.6 {
+                        KIND_ZOMBIE
+                    } else {
+                        KIND_SHEEP
+                    };
                     let id = next_id;
                     next_id = next_id.wrapping_add(1).max(1);
                     let pos = [wx as f32 + 0.5, sy as f32 + 1.0, wz as f32 + 0.5];
                     let mob = MobState {
                         id,
-                        kind: 0,
+                        kind,
                         pos,
                         target: pos,
                         yaw: 0.0,
                         retarget_at: (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-                        health: MOB_MAX_HEALTH,
+                        health: if kind == KIND_ZOMBIE {
+                            ZOMBIE_MAX_HEALTH
+                        } else {
+                            MOB_MAX_HEALTH
+                        },
                         dying: 0.0,
+                        attack_cd: 0.0,
                     };
                     self.mobs.push(mob);
                     self.remote_mobs.insert(
                         id,
                         MobMsg {
                             id,
-                            kind: 0,
+                            kind,
                             pos,
                             yaw: 0.0,
                         },
@@ -1755,6 +1826,37 @@ impl Voxel {
     /// day-of-cycle to disk in the new versioned `INFV` format.
     /// Called periodically while the server runs (every 30 s) so a
     /// crash loses at most half a minute of state.
+    /// Pick the nearest player position (host + remote pose
+    /// table) within `range` of `from`. Returns `None` if no
+    /// player is in range or there are no players known. Used by
+    /// zombie AI to pick a chase target.
+    fn nearest_player_pos(&self, from: [f32; 3], range: f32) -> Option<[f32; 3]> {
+        let r2 = range * range;
+        let mut best: Option<([f32; 3], f32)> = None;
+        let mut consider = |p: [f32; 3]| {
+            let dx = p[0] - from[0];
+            let dy = p[1] - from[1];
+            let dz = p[2] - from[2];
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 <= r2 && best.is_none_or(|(_, b)| d2 < b) {
+                best = Some((p, d2));
+            }
+        };
+        // Host's own pose is always in play.
+        consider([self.player_pos.x, self.player_pos.y, self.player_pos.z]);
+        // Plus every remote player tracked by the server pose
+        // table (clients don't have other peers' poses authoritatively).
+        if let NetRole::Server { poses, .. } = &self.net {
+            for p in poses.values() {
+                if p.id == 0 {
+                    continue;
+                }
+                consider(p.pos);
+            }
+        }
+        best.map(|(p, _)| p)
+    }
+
     /// Probe the voxel column directly under the player's feet
     /// at world XZ `(wx, wz)` and return true if any cell across
     /// the player's collision footprint is solid. Used by the
@@ -5215,9 +5317,6 @@ impl AppHandler for Voxel {
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
                 // Death-fade progress in `[0, 1]`. Zero = alive.
-                // The tilt rotates around +Z (sheep falls sideways)
-                // and the tint darkens linearly so the body reads
-                // as a corpse before despawn.
                 let dying_t = self
                     .mob_dying
                     .get(&mob.id)
@@ -5229,66 +5328,97 @@ impl AppHandler for Voxel {
                     0.0
                 };
                 let body_brightness = 1.0 - 0.55 * death_progress;
-                // Mix toward red when recently damaged, then dim
-                // for the death fade.
-                let tint = [
-                    (body_tint[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
-                        * body_brightness,
-                    (body_tint[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    (body_tint[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    body_tint[3],
-                ];
                 let tilt = glam::Quat::from_rotation_z(
                     -std::f32::consts::FRAC_PI_2 * death_progress,
                 );
                 let death_sink = 0.18 * death_progress;
+                // Per-kind body proportions + meshes + base colour.
+                // Sheep uses the textured sheep_body + sheep_head
+                // meshes; zombies use the plain player_cube with a
+                // dim green tint stretched into a humanoid box.
+                let is_zombie = mob.kind == KIND_ZOMBIE;
+                let (body_scale, body_y_off, base_body_tint, body_use_mesh) = if is_zombie {
+                    (
+                        Vec3::new(0.65, 1.55, 0.45),
+                        0.78,
+                        [0.30, 0.55, 0.30, 1.0],
+                        player_cube_handle,
+                    )
+                } else {
+                    (
+                        Vec3::new(1.2, 0.8, 0.7),
+                        0.4,
+                        body_tint,
+                        body_mesh,
+                    )
+                };
+                let tint = [
+                    (base_body_tint[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
+                        * body_brightness,
+                    (base_body_tint[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
+                    (base_body_tint[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
+                    base_body_tint[3],
+                ];
                 let body_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
                 let body = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.2, 0.8, 0.7),
+                    body_scale,
                     body_rot,
-                    Vec3::new(mob.pos[0], mob.pos[1] + 0.4 - death_sink, mob.pos[2]),
+                    Vec3::new(
+                        mob.pos[0],
+                        mob.pos[1] + body_y_off - death_sink,
+                        mob.pos[2],
+                    ),
                 );
                 renderer.draw_mesh_pbr(
-                    body_mesh,
+                    body_use_mesh,
                     body.to_cols_array(),
                     tint,
                     0.0,
                     0.9,
                 );
-                // Head: small cube offset along the body's forward
-                // (yaw rotated +X).
-                // Match the rotation-Y convention used by the body
-                // matrix below: +X under that rotation becomes
-                // (cos yaw, 0, -sin yaw).
                 let fwd = Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin());
+                let (head_scale, head_off_y, head_off_fwd, head_mesh_use, base_head_color) =
+                    if is_zombie {
+                        (
+                            Vec3::new(0.55, 0.55, 0.55),
+                            1.85,
+                            0.0,
+                            player_cube_handle,
+                            [0.22, 0.42, 0.22, 1.0],
+                        )
+                    } else {
+                        (
+                            Vec3::new(0.60, 0.45, 0.45),
+                            0.8,
+                            0.45,
+                            head_mesh,
+                            head_color,
+                        )
+                    };
                 let head_pos = Vec3::new(
                     mob.pos[0],
-                    mob.pos[1] + 0.8 - death_sink,
+                    mob.pos[1] + head_off_y - death_sink,
                     mob.pos[2],
-                ) + fwd * 0.45;
+                ) + fwd * head_off_fwd;
                 let head_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
                 let head = Mat4::from_scale_rotation_translation(
-                    // MC sheep head is 6 wide x 6 tall x 8 deep, with
-                    // depth along the forward axis. Our cube faces
-                    // +X forward, so X = depth = 0.60, Y = 0.45,
-                    // Z = 0.45.
-                    Vec3::new(0.60, 0.45, 0.45),
+                    head_scale,
                     head_rot,
                     head_pos,
                 );
                 let head_tint = [
-                    (head_color[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
+                    (base_head_color[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
                         * body_brightness,
-                    (head_color[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                    (base_head_color[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
                         * body_brightness,
-                    (head_color[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                    (base_head_color[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
                         * body_brightness,
-                    head_color[3],
+                    base_head_color[3],
                 ];
                 renderer.draw_mesh_pbr(
-                    head_mesh,
+                    head_mesh_use,
                     head.to_cols_array(),
                     head_tint,
                     0.0,
