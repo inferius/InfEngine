@@ -1620,15 +1620,16 @@ impl Voxel {
     ) -> Option<(u32, f32)> {
         let mut best: Option<(u32, f32)> = None;
         for m in self.remote_mobs.values() {
-            // Centre the AABB on the body centre (body is drawn at
-            // pos.y + 0.4 with extents 1.2 / 2, 0.8 / 2, 0.7 / 2).
-            // Expand vertically to also cover the head.
+            // Per-kind hitbox. Sheep is wide + low, zombie is
+            // tall, chicken is a small cube near the feet.
+            let (hx, hy, hz, cy_off) = match m.kind {
+                KIND_ZOMBIE => (0.45, 1.0, 0.45, 1.0_f32),
+                KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35_f32),
+                _ => (0.7, 0.75, 0.5, 0.55_f32),
+            };
             let cx = m.pos[0];
-            let cy = m.pos[1] + 0.55;
+            let cy = m.pos[1] + cy_off;
             let cz = m.pos[2];
-            let hx = 0.7;
-            let hy = 0.75;
-            let hz = 0.5;
             let min = [cx - hx, cy - hy, cz - hz];
             let max = [cx + hx, cy + hy, cz + hz];
             if let Some(t) = ray_aabb(origin.into(), dir.into(), min, max)
