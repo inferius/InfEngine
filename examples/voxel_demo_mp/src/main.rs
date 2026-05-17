@@ -4565,19 +4565,29 @@ impl Voxel {
             // Free-flight: Space = up, Shift = down. Velocity is
             // replaced (not integrated) so the player stops the
             // instant the key is released, the way Minecraft's
-            // creative fly works.
+            // creative fly works. Ctrl held while flying doubles
+            // the vertical thrust + horizontal speed multiplier
+            // for fast traversal.
+            let boost = input_active
+                && (ctx.input.is_pressed(Key::ControlLeft)
+                    || ctx.input.is_pressed(Key::ControlRight));
             let up = input_active && ctx.input.is_pressed(Key::Space);
             let down = input_active
                 && (ctx.input.is_pressed(Key::ShiftLeft)
                     || ctx.input.is_pressed(Key::ShiftRight));
+            let thrust = if boost { 16.0 } else { 8.0 };
             let v = if up && !down {
-                8.0
+                thrust
             } else if down && !up {
-                -8.0
+                -thrust
             } else {
                 0.0
             };
             self.player_vel.y = v;
+            if boost {
+                self.player_vel.x *= 1.7;
+                self.player_vel.z *= 1.7;
+            }
             self.grounded = false;
         } else {
             if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
