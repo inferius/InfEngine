@@ -6982,6 +6982,15 @@ impl Voxel {
             (self.stamina / STAMINA_MAX).clamp(0.0, 1.0);
         let air_frac =
             (self.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
+        // Underwater / lava view tint. Recomputed here so the HUD
+        // overlay stays in sync with the body's current liquid
+        // without piping a separate field through update.
+        let submerged_tint: Option<[f32; 4]> = if self.fly_mode {
+            None
+        } else {
+            submerged_liquid(&self.world, self.player_pos)
+                .map(|l| l.submerged_tint)
+        };
         let player_hurt_flash = self.hurt_flash;
         let invuln_remaining = self.invuln_remaining;
         let show_debug = self.show_debug;
@@ -8305,6 +8314,27 @@ impl Voxel {
                             0,
                             (110.0 * alpha) as u8,
                         ),
+                    );
+                }
+                // Underwater / lava view tint. Full-screen
+                // composite under the foreground HUD so the
+                // hotbar and bars stay readable. Pulled off the
+                // submerged liquid's `submerged_tint` field so
+                // every liquid kind paints in its own colour.
+                if let Some(tint) = submerged_tint {
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_submerged_tint"),
+                    ));
+                    let rect = ctx.content_rect();
+                    let r = (tint[0].clamp(0.0, 1.0) * 255.0) as u8;
+                    let g = (tint[1].clamp(0.0, 1.0) * 255.0) as u8;
+                    let b = (tint[2].clamp(0.0, 1.0) * 255.0) as u8;
+                    let a = (tint[3].clamp(0.0, 1.0) * 255.0) as u8;
+                    layer.rect_filled(
+                        rect,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(r, g, b, a),
                     );
                 }
                 // Post-respawn invulnerability indicator: small
@@ -15085,6 +15115,10 @@ struct Liquid {
     /// the meter hits zero). Water = true, lava = false (lava
     /// burns directly via `submerged_damage_per_sec`).
     drains_air: bool,
+    /// RGBA tint composited as a full-screen overlay while the
+    /// player is submerged. Water reads as a cool blue haze,
+    /// lava as a bright orange wash. Alpha controls intensity.
+    submerged_tint: [f32; 4],
 }
 
 /// Registry of every flowing liquid. The tick loop iterates this
@@ -15105,6 +15139,7 @@ const LIQUIDS: &[Liquid] = &[
         submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 0.0,
         drains_air: true,
+        submerged_tint: [0.10, 0.30, 0.60, 0.40],
     },
     Liquid {
         block_id: LAVA_ID,
@@ -15119,6 +15154,7 @@ const LIQUIDS: &[Liquid] = &[
         submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 4.0,
         drains_air: false,
+        submerged_tint: [1.00, 0.35, 0.05, 0.55],
     },
 ];
 
