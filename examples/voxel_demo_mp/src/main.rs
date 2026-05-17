@@ -5704,7 +5704,7 @@ impl Voxel {
                     // pile up into the sky.
                     let mut target_y = sy + 1;
                     let mut stacked = 0u32;
-                    while stacked < 4 {
+                    while stacked < 16 {
                         let here = self
                             .world
                             .get([cx, target_y, cz])
@@ -5838,7 +5838,12 @@ impl Voxel {
         // Axis-resolved voxel AABB collision.
         let was_grounded = self.grounded;
         let delta = self.player_vel * dt;
-        let (new_pos, hit_floor, hit_ceiling) = sweep_aabb(&self.world, self.player_pos, delta);
+        let (new_pos, hit_floor, hit_ceiling) = sweep_aabb(
+            &self.world,
+            &self.snow_positions,
+            self.player_pos,
+            delta,
+        );
         self.player_pos = new_pos;
         if hit_floor {
             self.player_vel.y = 0.0;
@@ -6277,7 +6282,11 @@ impl Voxel {
             ),
         };
         let settings_edit = &mut self.settings;
-        let dbg_panel_open = self.show_debug_panel;
+        // Live-edit flag the F6 panel writes back when the user
+        // clicks its window close button. Mirrors back to
+        // `self.show_debug_panel` after the egui closure exits.
+        let mut dbg_panel_open = self.show_debug_panel;
+        let dbg_panel_was_open = dbg_panel_open;
         // Mutable refs the debug panel writes to. Snapshot the
         // weather pre-edit so we can detect changes after the
         // closure and rebroadcast.
@@ -6326,7 +6335,9 @@ impl Voxel {
             .map(|s| icon(*s))
             .collect();
         let inventory_open = self.inventory_open;
+        let mut inv_open_local = self.inventory_open;
         let mp_menu_open = self.mp_menu_open;
+        let mut mp_menu_open_local = self.mp_menu_open;
         let mp_role_label: Option<&'static str> = match &self.net {
             NetRole::Offline => None,
             NetRole::Server { .. } => Some("hosting server"),
@@ -6802,6 +6813,7 @@ impl Voxel {
                     && let Some(role) = mp_role_label
                 {
                     egui::Window::new("Game menu")
+                        .open(&mut mp_menu_open_local)
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -6836,8 +6848,9 @@ impl Voxel {
                 // F6 live debug panel: sliders + toggles for
                 // common runtime tweaks. Lives in its own
                 // resizable window so it's draggable.
-                if dbg_panel_open {
+                if dbg_panel_was_open {
                     egui::Window::new("Debug panel (F6)")
+                        .open(&mut dbg_panel_open)
                         .collapsible(true)
                         .resizable(true)
                         .default_pos([20.0, 180.0])
@@ -7025,6 +7038,7 @@ impl Voxel {
                 if inventory_open {
                     let screen = ctx.content_rect();
                     egui::Window::new("Inventory")
+                        .open(&mut inv_open_local)
                         .collapsible(false)
                         .resizable(false)
                         .default_pos([
@@ -10909,6 +10923,17 @@ impl Voxel {
         {
             server.broadcast_bytes("vx.weather", buf);
         }
+        // Reflect window-close-button clicks back to the state
+        // flags they belong to.
+        if dbg_panel_was_open && !dbg_panel_open {
+            self.show_debug_panel = false;
+        }
+        if self.inventory_open && !inv_open_local {
+            self.inventory_open = false;
+        }
+        if self.mp_menu_open && !mp_menu_open_local {
+            self.mp_menu_open = false;
+        }
         if action_start {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
@@ -14137,14 +14162,42 @@ fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
 }
 
 /// True for "decoration" blocks the player can walk through:
-/// torches, flowers, snow layer. Cactus stays collide-able so
-/// the contact damage matters; glass stays solid.
+/// torches, flowers. Snow layer goes through this path too but
+/// caller queries `voxel_is_solid` so partial-snow voxels are
+/// passable while a full 8-layer voxel is solid.
 fn is_passable(b: BlockId) -> bool {
-    matches!(b.0, 10 | 15 | 20 | 21 | 22)
+    matches!(b.0, 10 | 20 | 21 | 22)
+}
+
+/// Combined solid lookup: world solid AND not in the passable
+/// decoration set AND, when the block is snow, has fewer than
+/// 8 stacked layers (so a fully-buried voxel becomes a solid
+/// block the player can stand on).
+fn voxel_is_solid(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    v: [i32; 3],
+) -> bool {
+    let b = world.get(v);
+    if b.is_air() {
+        return false;
+    }
+    if is_passable(b) {
+        return false;
+    }
+    if b.0 == 15 {
+        let layers = snow.get(&v).copied().unwrap_or(8);
+        return layers >= 8;
+    }
+    true
 }
 
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
-fn aabb_intersects_solid(world: &World, pos: Vec3) -> bool {
+fn aabb_intersects_solid(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    pos: Vec3,
+) -> bool {
     let (min, max) = body_aabb(pos);
     let x0 = min.x.floor() as i32;
     let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
@@ -14155,8 +14208,7 @@ fn aabb_intersects_solid(world: &World, pos: Vec3) -> bool {
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
-                let b = world.get([x, y, z]);
-                if !b.is_air() && !is_passable(b) {
+                if voxel_is_solid(world, snow, [x, y, z]) {
                     return true;
                 }
             }
@@ -14326,14 +14378,19 @@ fn ray_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> Op
     }
 }
 
-fn sweep_aabb(world: &World, pos: Vec3, delta: Vec3) -> (Vec3, bool, bool) {
+fn sweep_aabb(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    pos: Vec3,
+    delta: Vec3,
+) -> (Vec3, bool, bool) {
     let mut new_pos = pos;
     let mut hit_floor = false;
     let mut hit_ceiling = false;
 
     // X axis.
     let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
-    if aabb_intersects_solid(world, candidate) {
+    if aabb_intersects_solid(world, snow, candidate) {
         if delta.x > 0.0 {
             let wall = (candidate.x + PLAYER_RADIUS).floor();
             new_pos.x = wall - PLAYER_RADIUS - COLLISION_EPSILON;
@@ -14347,7 +14404,7 @@ fn sweep_aabb(world: &World, pos: Vec3, delta: Vec3) -> (Vec3, bool, bool) {
 
     // Y axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y + delta.y, new_pos.z);
-    if aabb_intersects_solid(world, candidate) {
+    if aabb_intersects_solid(world, snow, candidate) {
         if delta.y > 0.0 {
             let wall = candidate.y.floor();
             new_pos.y = wall - COLLISION_EPSILON;
@@ -14363,7 +14420,7 @@ fn sweep_aabb(world: &World, pos: Vec3, delta: Vec3) -> (Vec3, bool, bool) {
 
     // Z axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
-    if aabb_intersects_solid(world, candidate) {
+    if aabb_intersects_solid(world, snow, candidate) {
         if delta.z > 0.0 {
             let wall = (candidate.z + PLAYER_RADIUS).floor();
             new_pos.z = wall - PLAYER_RADIUS - COLLISION_EPSILON;
