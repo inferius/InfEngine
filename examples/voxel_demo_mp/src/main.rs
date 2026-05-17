@@ -3750,6 +3750,27 @@ impl Voxel {
         // Mob HP snapshot: (pos, current, max). Only mobs that
         // are damaged + not dying show a bar so the world doesn't
         // get cluttered with full-health bars.
+        // Targeted-mob info shown next to the crosshair: kind name
+        // + current/max HP. Drives a small label so the player can
+        // see how many more hits a sheep / zombie needs.
+        let aim_forward = Vec3::new(
+            self.player_yaw.cos() * self.player_pitch.cos(),
+            self.player_pitch.sin(),
+            -self.player_yaw.sin() * self.player_pitch.cos(),
+        );
+        let aim_origin = self.player_pos;
+        let targeted_mob_info: Option<(&'static str, u8, u8)> = self
+            .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
+            .and_then(|(id, _)| self.remote_mobs.get(&id).copied())
+            .map(|m| {
+                let max = if m.kind == KIND_ZOMBIE {
+                    ZOMBIE_MAX_HEALTH as u8
+                } else {
+                    MOB_MAX_HEALTH as u8
+                };
+                let name = if m.kind == KIND_ZOMBIE { "Zombie" } else { "Sheep" };
+                (name, m.health, max)
+            });
         let mob_bars: Vec<([f32; 3], u8, u8)> = self
             .remote_mobs
             .values()
@@ -4515,6 +4536,23 @@ impl Voxel {
                             egui::StrokeKind::Inside,
                         );
                     }
+                }
+                // Targeted-mob label: small text just under the
+                // crosshair when the player is aiming at a mob.
+                // Hidden when no mob is in line of sight.
+                if let Some((name, cur, max)) = targeted_mob_info {
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_mob_label"),
+                    ));
+                    let center = screen.center();
+                    layer.text(
+                        egui::pos2(center.x, center.y + 22.0),
+                        egui::Align2::CENTER_TOP,
+                        format!("{name}  {cur}/{max}"),
+                        egui::FontId::proportional(14.0),
+                        egui::Color32::from_rgb(240, 240, 240),
+                    );
                 }
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
