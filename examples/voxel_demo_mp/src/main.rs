@@ -1195,6 +1195,12 @@ struct Voxel {
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.
     heartbeat_accum: f32,
+    /// Advancing phase used by the camera head-bob. Increments
+    /// each frame proportionally to the player's horizontal speed
+    /// when grounded; eases back toward zero off-ground. Kept
+    /// separate from `day_time` so a stationary player has a
+    /// stable view.
+    head_bob_phase: f32,
     /// Creative-style fly mode. Toggled by `/fly`. Disables
     /// gravity + fall damage and remaps Space / Shift to vertical
     /// thrust. Off by default so a vanilla session is unchanged.
@@ -3747,6 +3753,7 @@ impl Voxel {
             step_cooldown: 0.0,
             heartbeat_accum: 0.0,
             fly_mode: false,
+            head_bob_phase: 0.0,
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
@@ -4218,6 +4225,18 @@ impl Voxel {
         let speed = (self.player_vel.x * self.player_vel.x
             + self.player_vel.z * self.player_vel.z)
             .sqrt();
+        // Advance the head-bob phase proportionally to horizontal
+        // speed while grounded. Off the ground we let it ease
+        // back to a quiet rest so a jump doesn't freeze the bob
+        // mid-cycle.
+        if self.grounded && speed > 0.5 {
+            self.head_bob_phase += dt * (speed * 1.6 + 1.0);
+        } else {
+            // Bleed phase back to zero so the camera settles flat.
+            self.head_bob_phase = (self.head_bob_phase
+                - dt * std::f32::consts::PI)
+                .max(0.0);
+        }
         if input_active && self.grounded && speed > 0.5 {
             self.step_cooldown -= dt * (speed / PLAYER_SPEED);
             if self.step_cooldown <= 0.0 {
@@ -7147,8 +7166,32 @@ impl AppHandler for Voxel {
         };
         {
             let cam = renderer.camera_3d_mut();
-            cam.position = player_pos;
-            cam.target = player_pos + forward;
+            // Head-bob offset: a small vertical bob + lateral
+            // sway scaled by current horizontal speed so a still
+            // player has a rock-steady camera. Skip while in fly
+            // mode - hovering shouldn't shake the view.
+            let h_speed = (self.player_vel.x * self.player_vel.x
+                + self.player_vel.z * self.player_vel.z)
+                .sqrt();
+            let bob_amount = if self.fly_mode || !self.grounded {
+                0.0
+            } else {
+                (h_speed / PLAYER_SPEED).clamp(0.0, 1.5)
+            };
+            let bob_y = (self.head_bob_phase * 2.0).sin() * 0.05 * bob_amount;
+            let bob_x = self.head_bob_phase.sin() * 0.03 * bob_amount;
+            // Apply the lateral bob along the camera's right
+            // vector so it always feels like a sideways head
+            // tilt regardless of facing direction.
+            let right = Vec3::new(
+                -(-self.player_yaw.sin()),
+                0.0,
+                -self.player_yaw.cos(),
+            )
+            .normalize_or_zero();
+            let bob = Vec3::new(right.x * bob_x, bob_y, right.z * bob_x);
+            cam.position = player_pos + bob;
+            cam.target = player_pos + bob + forward;
             cam.fov_y_rad = self.fov_y_rad;
         }
         // Day/night cycle. `day_time` ramps from 0..DAY_LENGTH_S
