@@ -1650,6 +1650,12 @@ struct Voxel {
     /// day, weather, FOV, render distance, etc.
     show_debug_panel: bool,
     f6_prev: bool,
+    /// Debug toggle for liquid spread bias-toward-drops
+    /// pathfinding. When false, spread is purely radial (every
+    /// air neighbour gets level+1 regardless of downhill
+    /// distance). Useful for visualising the raw cellular
+    /// automaton without the cliff-streaming heuristic.
+    liquid_bias_drops: bool,
     /// F4 cycles weather modes; mirrors /weather. Host
     /// broadcasts the change so peers stay in sync.
     f4_prev: bool,
@@ -2739,8 +2745,9 @@ impl Voxel {
                 }
                 weights[i] = self.distance_to_drop(n, 4);
             }
-            let any_reachable =
-                weights.iter().any(|w| *w != u32::MAX && *w < 1000);
+            let bias = self.liquid_bias_drops;
+            let any_reachable = bias
+                && weights.iter().any(|w| *w != u32::MAX && *w < 1000);
             let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
@@ -3162,6 +3169,13 @@ impl Voxel {
     /// two or more same-kind source neighbours gets promoted to
     /// a source itself (MC's infinite-water trick). Only called
     /// for liquids whose `infinite_source` flag is set.
+    ///
+    /// Mirrors the reference `shouldBecomeSource +
+    /// isStableForSourceConversion` pair: the promotion only
+    /// fires when every NSEW neighbour is either a same-kind
+    /// source or a solid wall - no drop and no open flow path
+    /// out of the pocket. Prevents stray source spawns in
+    /// chaotic configurations.
     fn tick_liquid_merge(&mut self, liquid: &Liquid) {
         if self.liquid_level.is_empty() {
             return;
@@ -3185,16 +3199,31 @@ impl Voxel {
                 [pos[0], pos[1], pos[2] - 1],
             ];
             let mut sources = 0u8;
+            let mut stable = true;
             for n in &horiz {
-                if self.world.get(*n).0 != liquid_id {
-                    continue;
+                let nb = self.world.get(*n);
+                let n_below = self.world.get([n[0], n[1] - 1, n[2]]);
+                if nb.0 == liquid_id {
+                    let nd = self.liquid_level.get(n).copied().unwrap_or(0);
+                    if nd == 0 {
+                        sources += 1;
+                    } else {
+                        // Non-source flow neighbour -> open path
+                        // out of the pocket, not stable.
+                        stable = false;
+                    }
+                } else if nb.is_air() || block_is_washable(nb) {
+                    // Open air neighbour: either a drop (air
+                    // below) or just an open flow path. Either
+                    // way the pocket isn't sealed and the
+                    // promotion would leak water.
+                    let _ = n_below; // referenced for clarity
+                    stable = false;
                 }
-                let nd = self.liquid_level.get(n).copied().unwrap_or(0);
-                if nd == 0 {
-                    sources += 1;
-                }
+                // Solid wall neighbour is fine; doesn't break
+                // stability.
             }
-            if sources >= 2 {
+            if sources >= 2 && stable {
                 self.liquid_level.insert(*pos, 0);
                 self.liquid_mesh_dirty = true;
                 let cfg = bincode::config::standard();
@@ -6405,6 +6434,7 @@ impl Voxel {
             f5_prev: false,
             show_debug_panel: false,
             f6_prev: false,
+            liquid_bias_drops: true,
             f4_prev: false,
             q_prev: false,
             home_pos: None,
@@ -8007,6 +8037,7 @@ impl Voxel {
         let dbg_god_mode = &mut self.god_mode;
         let dbg_mob_cap = &mut self.mob_cap;
         let dbg_snow_rate = &mut self.snow_rate;
+        let dbg_liquid_bias = &mut self.liquid_bias_drops;
         let weather_before = *dbg_weather;
         // Lazy-load the egui atlas texture on first render after
         // on_start has populated the pixel cache. We use NEAREST
@@ -8673,6 +8704,10 @@ impl Voxel {
                             );
                             ui.checkbox(dbg_fly_mode, "Fly mode");
                             ui.checkbox(dbg_god_mode, "Godmode");
+                            ui.checkbox(
+                                dbg_liquid_bias,
+                                "Liquid drop bias (pathfinding)",
+                            );
                             ui.separator();
                             ui.label(
                                 "Hotkeys: F3 stats, F4 weather, F5 camera, G chunk grid",
