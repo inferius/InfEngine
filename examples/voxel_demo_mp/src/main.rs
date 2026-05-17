@@ -1576,6 +1576,10 @@ struct Voxel {
     /// while weather=2 (host-only). Drives the visual snow
     /// blanket that grows on top of nearby grass voxels.
     snow_accum: f32,
+    /// Accumulator for chicken feather laying. Hosts drop one
+    /// feather into the host's inventory every ~12 s per live
+    /// chicken via this timer. MP clients see no effect.
+    chicken_lay_accum: f32,
     /// Seconds until the next lightning strike attempt while
     /// weather=1. Initialised to a positive value so the first
     /// strike isn't instant on /weather rain.
@@ -4863,6 +4867,7 @@ impl Voxel {
             weather: 0,
             lightning_flash: 0.0,
             snow_accum: 0.0,
+            chicken_lay_accum: 0.0,
             next_lightning_at: 6.0,
             muted_players: HashSet::new(),
             head_bob_phase: 0.0,
@@ -5620,6 +5625,21 @@ impl Voxel {
         // through the authoritative replication path. Limits to
         // one cell per fire so the world doesn't snap to a
         // uniform white sheet instantly.
+        // Chicken passive laying: every ~12 s the host adds one
+        // feather to its own inventory if any live chicken
+        // exists. MP clients see the feather pop in via the
+        // next vx.inv snapshot.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+            && self.mobs.iter().any(|m| m.kind == KIND_CHICKEN)
+        {
+            self.chicken_lay_accum += dt;
+            if self.chicken_lay_accum >= 12.0 {
+                self.chicken_lay_accum = 0.0;
+                self.pickup(BlockId(19));
+            }
+        } else {
+            self.chicken_lay_accum = 0.0;
+        }
         if self.weather == 2
             && matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
         {
