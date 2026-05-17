@@ -1817,21 +1817,30 @@ impl Voxel {
         }
         // Any world edit can change a neighbour's air / solid /
         // water status which feeds into the corner-height blend,
-        // so flag the slope mesh dirty whenever water sits next
-        // to the touched voxel. Cheap 4-cell scan keeps the
-        // overhead tiny for the common solid <-> air edit.
-        if !self.liquid_mesh_dirty {
-            let neighbours = [
-                [voxel[0] + 1, voxel[1], voxel[2]],
-                [voxel[0] - 1, voxel[1], voxel[2]],
-                [voxel[0], voxel[1], voxel[2] + 1],
-                [voxel[0], voxel[1], voxel[2] - 1],
-                [voxel[0], voxel[1] + 1, voxel[2]],
-                [voxel[0], voxel[1] - 1, voxel[2]],
-            ];
-            if neighbours.iter().any(|n| self.liquid_positions.contains(n)) {
-                self.liquid_mesh_dirty = true;
+        // so flag the slope mesh dirty whenever a liquid sits
+        // next to the touched voxel. The same neighbour scan also
+        // re-enters those liquid voxels into `liquid_active` -
+        // critical for refill semantics: when a player digs out a
+        // block under a pool, the pool cells that had previously
+        // settled out of the queue need to wake up so the next
+        // fall / spread tick can fill the new hole.
+        let neighbours = [
+            [voxel[0] + 1, voxel[1], voxel[2]],
+            [voxel[0] - 1, voxel[1], voxel[2]],
+            [voxel[0], voxel[1], voxel[2] + 1],
+            [voxel[0], voxel[1], voxel[2] - 1],
+            [voxel[0], voxel[1] + 1, voxel[2]],
+            [voxel[0], voxel[1] - 1, voxel[2]],
+        ];
+        let mut neighbour_liquid = false;
+        for n in &neighbours {
+            if self.liquid_positions.contains(n) {
+                neighbour_liquid = true;
+                self.liquid_active.insert(*n);
             }
+        }
+        if neighbour_liquid {
+            self.liquid_mesh_dirty = true;
         }
     }
 
@@ -6708,8 +6717,12 @@ impl Voxel {
                 self.player_pos.z,
             ];
             if in_water {
+                // Splash synth: a low thud (mass hitting water)
+                // layered with a high noise swish (the spray).
+                // Much more water-like than a single click.
                 self.sfx_at("splash", base, |a, g| {
-                    let _ = a.play_click(280.0, 0.22 * g);
+                    let _ = a.play_thud(140.0, 0.20 * g);
+                    let _ = a.play_swish(0.18 * g);
                 });
                 let mut rng: u32 = ((self.net_tick as u32)
                     .wrapping_mul(0xBEEF_0BAD))
@@ -6737,7 +6750,7 @@ impl Voxel {
                 }
             } else {
                 self.sfx_at("splash_out", base, |a, g| {
-                    let _ = a.play_click(220.0, 0.12 * g);
+                    let _ = a.play_swish(0.14 * g);
                 });
             }
         }
@@ -12198,21 +12211,43 @@ impl AppHandler for Voxel {
                     "mob/sheep",
                     &["step1.ogg", "step2.ogg", "step3.ogg", "step4.ogg", "step5.ogg"],
                 ),
-                // Water splash variants from the Bedrock sound pack
-                // (random/splash*.ogg). Falls back to synthesised
-                // tone via `play_click` when none are present.
+                // Water splash variants. Different packs file
+                // these under different subdirs; the scanner tries
+                // each and keeps whatever loads. Synth fallback
+                // (`play_thud` + `play_swish`) handles the empty
+                // pack case.
                 (
                     "splash",
                     "random",
                     &["splash1.ogg", "splash2.ogg", "splash3.ogg", "splash.ogg"],
                 ),
-                // Liquid ambience (slow water flow). Used as the
-                // "splash_out" cue today but the same pool can drive
-                // a future swim-loop ambient.
+                (
+                    "splash",
+                    "liquid",
+                    &["splash.ogg", "splash1.ogg", "splash2.ogg"],
+                ),
+                (
+                    "splash",
+                    "water",
+                    &["splash.ogg", "splash1.ogg", "splash2.ogg"],
+                ),
+                (
+                    "splash",
+                    "splash",
+                    &["splash1.ogg", "splash2.ogg", "splash3.ogg", "splash.ogg"],
+                ),
+                // Liquid exit ambience. Used as the "splash_out"
+                // cue; same pool can drive a future swim-loop
+                // ambient.
                 (
                     "splash_out",
                     "liquid",
                     &["water.ogg", "lava.ogg"],
+                ),
+                (
+                    "splash_out",
+                    "random",
+                    &["splash.ogg"],
                 ),
             ];
             for (key, subdir, files) in scans {
