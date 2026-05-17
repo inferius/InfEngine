@@ -6795,6 +6795,62 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "recipe" => {
+                            // /recipe <block>: find a recipe that
+                            // produces the named block + print
+                            // its ingredients. Useful when the
+                            // recipe book is closed.
+                            if arg.is_empty() {
+                                local_lines.push(
+                                    "Usage: /recipe <block>".to_string(),
+                                );
+                            } else {
+                                let target_id = BLOCK_TYPES
+                                    .iter()
+                                    .find(|bt| {
+                                        bt.name.eq_ignore_ascii_case(arg)
+                                    })
+                                    .map(|bt| bt.id);
+                                match target_id {
+                                    None => local_lines.push(format!(
+                                        "Unknown block: {arg}"
+                                    )),
+                                    Some(id) => {
+                                        let found: Vec<&Recipe> = RECIPES
+                                            .iter()
+                                            .filter(|r| r.output.0 == id)
+                                            .collect();
+                                        if found.is_empty() {
+                                            local_lines.push(format!(
+                                                "No recipe produces {arg}."
+                                            ));
+                                        } else {
+                                            for r in found {
+                                                let inputs: Vec<String> = r
+                                                    .inputs
+                                                    .iter()
+                                                    .map(|(bid, n)| {
+                                                        let name = BLOCK_TYPES
+                                                            .iter()
+                                                            .find(|bt| bt.id == *bid)
+                                                            .map(|bt| bt.name)
+                                                            .unwrap_or("?");
+                                                        format!("{n}x{name}")
+                                                    })
+                                                    .collect();
+                                                local_lines.push(format!(
+                                                    "{}: {} -> {}x {arg}",
+                                                    r.name,
+                                                    inputs.join(" + "),
+                                                    r.output.1
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "uptime" => {
                             // Session timer formatted as hh:mm:ss.
                             let secs = self
