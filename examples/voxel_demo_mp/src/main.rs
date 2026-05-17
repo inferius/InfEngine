@@ -1095,6 +1095,8 @@ struct Settings {
     /// Invert vertical mouse axis. Some players prefer down=look-up
     /// so leave it toggleable from the Settings panel.
     invert_mouse_y: bool,
+    /// Reverse mouse-wheel hotbar scrolling direction.
+    invert_wheel: bool,
 }
 
 impl Default for Settings {
@@ -1107,6 +1109,7 @@ impl Default for Settings {
             view_distance: VIEW_DISTANCE_CHUNKS as u8,
             head_bob: true,
             invert_mouse_y: false,
+            invert_wheel: false,
         }
     }
 }
@@ -2604,6 +2607,11 @@ impl Voxel {
             "invert_mouse_y={}",
             self.settings.invert_mouse_y
         );
+        let _ = writeln!(
+            text,
+            "invert_wheel={}",
+            self.settings.invert_wheel
+        );
         if let Some(p) = self.home_pos {
             let _ = writeln!(text, "home={},{},{}", p[0], p[1], p[2]);
         }
@@ -2684,6 +2692,10 @@ impl Voxel {
                 }
                 "invert_mouse_y" => {
                     self.settings.invert_mouse_y =
+                        matches!(value, "true" | "1" | "yes");
+                }
+                "invert_wheel" => {
+                    self.settings.invert_wheel =
                         matches!(value, "true" | "1" | "yes");
                 }
                 "home" => {
@@ -4847,7 +4859,8 @@ impl Voxel {
             let wheel = std::mem::take(&mut self.wheel_accum);
             let ticks = wheel.round() as i32;
             if ticks != 0 {
-                let mut slot = self.selected_slot as i32 - ticks;
+                let dir = if self.settings.invert_wheel { 1 } else { -1 };
+                let mut slot = self.selected_slot as i32 + dir * ticks;
                 slot = slot.rem_euclid(HOTBAR_SLOTS as i32);
                 self.selected_slot = slot as usize;
             }
@@ -5967,6 +5980,10 @@ impl Voxel {
                     ui.checkbox(
                         &mut settings_edit.invert_mouse_y,
                         "Invert mouse Y",
+                    );
+                    ui.checkbox(
+                        &mut settings_edit.invert_wheel,
+                        "Invert hotbar scroll",
                     );
                     ui.separator();
                     if ui.button("Back").clicked() {
