@@ -141,7 +141,17 @@ struct MobState {
     /// Current hit points. Reaches zero = mob despawns + drops
     /// loot. Reset on spawn to `MOB_MAX_HEALTH`.
     health: f32,
+    /// Seconds remaining in the death-fade animation. > 0 means
+    /// the mob is dying: rendered with falling tint + tilted
+    /// orientation, no longer wanders or collides. On 0 the
+    /// server emits `vx.mob_remove` + evicts.
+    dying: f32,
 }
+
+/// Length of the death-fade in seconds. Both server and clients
+/// run the same countdown so the animation reads identically on
+/// every peer.
+const MOB_DEATH_FADE: f32 = 0.55;
 
 const MOB_CAP: usize = 12;
 const MOB_SPEED: f32 = 1.2;
@@ -939,6 +949,12 @@ struct Voxel {
     /// attacker + by `vx.mob_event` broadcasts on every other
     /// peer so everyone sees the flash.
     mob_hurt_flash: HashMap<u32, f32>,
+    /// Seconds remaining in the local death-fade animation per
+    /// mob. Server populates from `MobState.dying` when a kill
+    /// fires; client populates on `vx.mob_event { kind: 1 }`. The
+    /// render path tilts + fades the cube while the timer counts
+    /// down to zero.
+    mob_dying: HashMap<u32, f32>,
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
@@ -1034,11 +1050,19 @@ impl Voxel {
         };
         let mob_pos;
         let killed;
+        let already_dying;
         {
             let m = &mut self.mobs[idx];
-            m.health -= MOB_HIT_DAMAGE;
+            already_dying = m.dying > 0.0;
+            if !already_dying {
+                m.health -= MOB_HIT_DAMAGE;
+            }
             mob_pos = m.pos;
-            killed = m.health <= 0.0;
+            killed = m.health <= 0.0 && !already_dying;
+        }
+        // No re-damage during the death fade.
+        if already_dying {
+            return;
         }
         // Local visual flash on every peer that has the mob.
         self.mob_hurt_flash.insert(mob_id, 0.30);
@@ -1061,20 +1085,13 @@ impl Voxel {
         if !killed {
             return;
         }
-        // Death: remove from mob list + remote table + tell every
-        // peer to drop it from their table.
-        self.mobs.swap_remove(idx);
-        self.remote_mobs.remove(&mob_id);
-        self.mob_hurt_flash.remove(&mob_id);
-        self.mob_step_timers.remove(&mob_id);
-        self.mob_say_timers.remove(&mob_id);
-        self.mob_last_xz.remove(&mob_id);
-        if let NetRole::Server { server, .. } = &self.net {
-            let cfg = bincode::config::standard();
-            if let Ok(buf) = bincode::serde::encode_to_vec(mob_id, cfg) {
-                server.broadcast_bytes("vx.mob_remove", buf);
-            }
-        }
+        // Death: start the fade timer. Mob stays in `self.mobs`
+        // (skipping wander logic) until the fade completes, then
+        // `tick_mobs` evicts it + broadcasts `vx.mob_remove`. Loot
+        // drops immediately so the attacker doesn't have to wait
+        // for the animation.
+        self.mobs[idx].dying = MOB_DEATH_FADE;
+        self.mob_dying.insert(mob_id, MOB_DEATH_FADE);
         // Loot: 1-3 wool + 1-2 meat. Quantities seeded from the
         // mob id so a save/replay produces identical drops.
         let seed = mob_id.wrapping_mul(2654435761);
@@ -1197,8 +1214,31 @@ impl Voxel {
         // Walk each mob. Collect a fresh broadcast set in
         // `remote_mobs` so the host's own render path stays in sync.
         let mobs_count = self.mobs.len();
+        let mut to_remove: Vec<u32> = Vec::new();
         for i in 0..mobs_count {
             let mut m = self.mobs[i];
+            // Dying mobs skip wander + collision: they just count
+            // down the fade timer. When it hits zero the body
+            // gets evicted from `mobs` + a `vx.mob_remove` goes
+            // out so every client drops it from `remote_mobs`.
+            if m.dying > 0.0 {
+                m.dying = (m.dying - dt).max(0.0);
+                self.mob_dying.insert(m.id, m.dying);
+                if m.dying <= 0.0 {
+                    to_remove.push(m.id);
+                }
+                self.mobs[i] = m;
+                self.remote_mobs.insert(
+                    m.id,
+                    MobMsg {
+                        id: m.id,
+                        kind: m.kind,
+                        pos: m.pos,
+                        yaw: m.yaw,
+                    },
+                );
+                continue;
+            }
             let dx = m.target[0] - m.pos[0];
             let dz = m.target[2] - m.pos[2];
             let d2 = dx * dx + dz * dz;
@@ -1287,6 +1327,26 @@ impl Voxel {
                 },
             );
         }
+        // Evict mobs whose death fade just finished. Broadcast
+        // `vx.mob_remove` so clients drop them from the render
+        // table at the same moment the local sim does.
+        for id in &to_remove {
+            if let Some(pos) = self.mobs.iter().position(|m| m.id == *id) {
+                self.mobs.swap_remove(pos);
+            }
+            self.remote_mobs.remove(id);
+            self.mob_hurt_flash.remove(id);
+            self.mob_dying.remove(id);
+            self.mob_step_timers.remove(id);
+            self.mob_say_timers.remove(id);
+            self.mob_last_xz.remove(id);
+            if let NetRole::Server { server, .. } = &self.net {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(*id, cfg) {
+                    server.broadcast_bytes("vx.mob_remove", buf);
+                }
+            }
+        }
         // Spawn pass: if below cap + last spawn far enough behind,
         // try once. Pick a column near the origin; require its
         // surface to be grass (id 3).
@@ -1314,6 +1374,7 @@ impl Voxel {
                         yaw: 0.0,
                         retarget_at: (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
                         health: MOB_MAX_HEALTH,
+                        dying: 0.0,
                     };
                     self.mobs.push(mob);
                     self.remote_mobs.insert(
@@ -1356,6 +1417,16 @@ impl Voxel {
         // so the visual tint clears even when SFX are disabled.
         self.mob_hurt_flash.retain(|_, t| {
             *t -= dt;
+            *t > 0.0
+        });
+        // Client-side death fade: server's `tick_mobs` runs the
+        // authoritative copy + broadcasts `vx.mob_remove` when the
+        // timer hits zero, but every peer also runs the decay
+        // locally so the visual fade stays smooth between net
+        // ticks. The eventual `vx.mob_remove` (or pure-client
+        // simulation timeout) clears the entry.
+        self.mob_dying.retain(|_, t| {
+            *t = (*t - dt).max(0.0);
             *t > 0.0
         });
         if self.audio.is_none() {
@@ -2561,6 +2632,14 @@ impl Voxel {
         // it already played them when authoritative damage fired.
         for evt in mob_events {
             self.mob_hurt_flash.insert(evt.id, 0.30);
+            // Death event: start the local fade timer so the
+            // body tilts + fades for `MOB_DEATH_FADE` seconds.
+            // The server emits `vx.mob_remove` after the same
+            // delay, which will evict the entry from
+            // `remote_mobs` at the right moment.
+            if evt.kind == 1 {
+                self.mob_dying.insert(evt.id, MOB_DEATH_FADE);
+            }
             if let Some(mob) = self.remote_mobs.get(&evt.id).copied() {
                 let pos = mob.pos;
                 let say_freq = if evt.kind == 1 { 200.0 } else { 280.0 };
@@ -2574,6 +2653,7 @@ impl Voxel {
         for id in mob_removals {
             self.remote_mobs.remove(&id);
             self.mob_hurt_flash.remove(&id);
+            self.mob_dying.remove(&id);
             self.mob_step_timers.remove(&id);
             self.mob_say_timers.remove(&id);
             self.mob_last_xz.remove(&id);
@@ -2697,6 +2777,7 @@ impl Voxel {
             mob_say_timers: HashMap::new(),
             mob_last_xz: HashMap::new(),
             mob_hurt_flash: HashMap::new(),
+            mob_dying: HashMap::new(),
             master_addr: format!(
                 "91.232.214.139:{}",
                 infengine_net::master::MASTER_PORT
@@ -4707,17 +4788,41 @@ impl AppHandler for Voxel {
                     .copied()
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
-                // Mix toward red when recently damaged.
+                // Death-fade progress in `[0, 1]`. Zero = alive.
+                // The tilt rotates around +Z (sheep falls sideways)
+                // and the tint darkens linearly so the body reads
+                // as a corpse before despawn.
+                let dying_t = self
+                    .mob_dying
+                    .get(&mob.id)
+                    .copied()
+                    .unwrap_or(0.0);
+                let death_progress = if dying_t > 0.0 {
+                    ((MOB_DEATH_FADE - dying_t) / MOB_DEATH_FADE).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let body_brightness = 1.0 - 0.55 * death_progress;
+                // Mix toward red when recently damaged, then dim
+                // for the death fade.
                 let tint = [
-                    body_tint[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash,
-                    body_tint[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash,
-                    body_tint[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash,
+                    (body_tint[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
+                        * body_brightness,
+                    (body_tint[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
+                    (body_tint[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
                     body_tint[3],
                 ];
+                let tilt = glam::Quat::from_rotation_z(
+                    -std::f32::consts::FRAC_PI_2 * death_progress,
+                );
+                let death_sink = 0.18 * death_progress;
+                let body_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
                 let body = Mat4::from_scale_rotation_translation(
                     Vec3::new(1.2, 0.8, 0.7),
-                    glam::Quat::from_rotation_y(mob.yaw),
-                    Vec3::new(mob.pos[0], mob.pos[1] + 0.4, mob.pos[2]),
+                    body_rot,
+                    Vec3::new(mob.pos[0], mob.pos[1] + 0.4 - death_sink, mob.pos[2]),
                 );
                 renderer.draw_mesh_pbr(
                     body_mesh,
@@ -4732,21 +4837,28 @@ impl AppHandler for Voxel {
                 // matrix below: +X under that rotation becomes
                 // (cos yaw, 0, -sin yaw).
                 let fwd = Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin());
-                let head_pos = Vec3::new(mob.pos[0], mob.pos[1] + 0.8, mob.pos[2])
-                    + fwd * 0.45;
+                let head_pos = Vec3::new(
+                    mob.pos[0],
+                    mob.pos[1] + 0.8 - death_sink,
+                    mob.pos[2],
+                ) + fwd * 0.45;
+                let head_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
                 let head = Mat4::from_scale_rotation_translation(
                     // MC sheep head is 6 wide x 6 tall x 8 deep, with
                     // depth along the forward axis. Our cube faces
                     // +X forward, so X = depth = 0.60, Y = 0.45,
                     // Z = 0.45.
                     Vec3::new(0.60, 0.45, 0.45),
-                    glam::Quat::from_rotation_y(mob.yaw),
+                    head_rot,
                     head_pos,
                 );
                 let head_tint = [
-                    head_color[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash,
-                    head_color[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash,
-                    head_color[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash,
+                    (head_color[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
+                        * body_brightness,
+                    (head_color[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
+                    (head_color[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                        * body_brightness,
                     head_color[3],
                 ];
                 renderer.draw_mesh_pbr(
