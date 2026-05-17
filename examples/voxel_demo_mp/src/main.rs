@@ -1254,6 +1254,10 @@ struct Voxel {
     /// advancing so the sun + sky stay frozen. Useful for
     /// screenshots / debugging.
     freeze_time: bool,
+    /// 0 = clear, 1 = rain. Drives per-frame rain particle
+    /// spawning above the player so the demo can have weather
+    /// without actually wiring it into the gameplay.
+    weather: u8,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -4034,6 +4038,7 @@ impl Voxel {
             god_mode: false,
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
+            weather: 0,
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -4597,6 +4602,41 @@ impl Voxel {
             self.step_cooldown = 0.0;
         }
 
+        // Rain spawner. While weather=1 we drop ~30 thin
+        // streak particles per second within a 24-block radius
+        // above the player. They free-fall via gravity and die
+        // after a short lifetime. Cheap and totally visual.
+        if self.weather == 1 {
+            const RAIN_PER_FRAME: u32 = 20;
+            let mut rng: u32 = ((self.net_tick as u32)
+                .wrapping_mul(0x9E37_79B1))
+                ^ 0xCAFE_F00D;
+            let mut rand01 = || -> f32 {
+                rng ^= rng << 13;
+                rng ^= rng >> 17;
+                rng ^= rng << 5;
+                (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+            };
+            let base = [
+                self.player_pos.x,
+                self.player_pos.y + 14.0,
+                self.player_pos.z,
+            ];
+            for _ in 0..RAIN_PER_FRAME {
+                let dx = (rand01() * 2.0 - 1.0) * 22.0;
+                let dz = (rand01() * 2.0 - 1.0) * 22.0;
+                self.particles.particles.push(
+                    infengine_particles::Particle {
+                        position: [base[0] + dx, base[1], base[2] + dz],
+                        velocity: [0.0, -16.0, 0.0],
+                        color: [0.55, 0.65, 0.85, 0.65],
+                        size: 0.05,
+                        age: 0.0,
+                        lifetime: 1.2,
+                    },
+                );
+            }
+        }
         // Low-HP heartbeat thump. Interval shrinks from ~1.2 s
         // at HP=5 down to ~0.5 s at HP=1. Above HP=5 we leave the
         // accumulator at 0 so re-entering the danger zone fires
@@ -6824,6 +6864,32 @@ impl Voxel {
                                 local_lines.push(format!(
                                     "Cannot parse mob cap: {arg}"
                                 ));
+                            }
+                            handled_locally = true;
+                        }
+                        "weather" => {
+                            // /weather clear | rain. Toggles the
+                            // local rain spawner. Stays per-peer
+                            // for now since it's purely visual.
+                            let kind = match arg.to_lowercase().as_str() {
+                                "rain" => Some(1u8),
+                                "clear" | "" => Some(0u8),
+                                _ => None,
+                            };
+                            match kind {
+                                Some(k) => {
+                                    self.weather = k;
+                                    local_lines.push(format!(
+                                        "Weather: {}",
+                                        if k == 1 { "rain" } else { "clear" }
+                                    ));
+                                }
+                                None => {
+                                    local_lines.push(
+                                        "Usage: /weather clear|rain"
+                                            .to_string(),
+                                    );
+                                }
                             }
                             handled_locally = true;
                         }
