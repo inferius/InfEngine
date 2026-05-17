@@ -11746,6 +11746,18 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
     },
+    BlockType {
+        id: 21, name: "flower_yellow", color: [1.00, 0.85, 0.20], transparent: true,
+        top: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 22, name: "flower_blue", color: [0.40, 0.55, 0.95], transparent: true,
+        top: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -12258,7 +12270,16 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             if chunk.get(x as usize, local_y as usize, z as usize).0 != 0 {
                 continue;
             }
-            set_in_chunk(&mut chunk, x, local_y, z, BlockId(20));
+            // Pick one of three flower colours from the cell
+            // hash so the field reads varied without burning a
+            // new noise tap.
+            let h = hash2(wx ^ 0x5FAD, wz ^ 0x9117);
+            let flower_id = match h % 3 {
+                0 => 21u16, // yellow
+                1 => 22,    // blue
+                _ => 20,    // red
+            };
+            set_in_chunk(&mut chunk, x, local_y, z, BlockId(flower_id));
         }
     }
     chunk
