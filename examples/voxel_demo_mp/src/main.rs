@@ -1040,6 +1040,10 @@ struct Voxel {
     /// `REGEN_DELAY`, HP starts ticking up at `REGEN_RATE` HP/s
     /// (capped at `PLAYER_MAX_HEALTH`).
     regen_accum: f32,
+    /// Mobs the local player has killed this session. Bumped in
+    /// `damage_mob` whenever the killing blow is attributed to the
+    /// host (id 0). Surfaced in the HUD + F3 debug panel.
+    kill_count: u32,
     /// Current camera vertical FOV in radians. Smoothly lerps
     /// toward a wider angle while the player sprints, snaps back
     /// when they stop. Read by both the wgpu camera + the egui
@@ -1333,6 +1337,7 @@ impl Voxel {
                 for _ in 0..meat_qty {
                     self.pickup(BlockId(12));
                 }
+                self.kill_count = self.kill_count.saturating_add(1);
             }
             Some(cid) => {
                 if let NetRole::Server {
@@ -3276,6 +3281,7 @@ impl Voxel {
             fall_start_y: None,
             hurt_flash: 0.0,
             regen_accum: 0.0,
+            kill_count: 0,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             remote_interp: HashMap::new(),
@@ -3897,6 +3903,7 @@ impl Voxel {
         let player_hurt_flash = self.hurt_flash;
         let show_debug = self.show_debug;
         let hud_visible = self.hud_visible;
+        let kill_count = self.kill_count;
         // View-projection for projecting mob HP bars to screen.
         // Built from the same camera state the world pass uses;
         // captured here so the egui closure doesn't need renderer
@@ -4294,7 +4301,7 @@ impl Voxel {
                             let hours_total = frac * 24.0;
                             let hh = hours_total.floor() as i32;
                             let mm = ((hours_total - hh as f32) * 60.0) as i32;
-                            ui.label(format!("Time: {hh:02}:{mm:02}"));
+                            ui.label(format!("Time: {hh:02}:{mm:02}    Kills: {kill_count}"));
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,
