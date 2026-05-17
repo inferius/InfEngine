@@ -1500,6 +1500,10 @@ struct Voxel {
     /// person front. Cycled with F5 the way Minecraft does it.
     camera_mode: u8,
     f5_prev: bool,
+    /// F6 toggles a runtime debug panel with sliders for time of
+    /// day, weather, FOV, render distance, etc.
+    show_debug_panel: bool,
+    f6_prev: bool,
     /// F4 cycles weather modes; mirrors /weather. Host
     /// broadcasts the change so peers stay in sync.
     f4_prev: bool,
@@ -4642,6 +4646,8 @@ impl Voxel {
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
+            show_debug_panel: false,
+            f6_prev: false,
             f4_prev: false,
             q_prev: false,
             home_pos: None,
@@ -4892,6 +4898,12 @@ impl Voxel {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
+                // Skip torch submesh: torches render as a small
+                // crossed mesh in the world pass instead of as
+                // full cube voxels.
+                if sub.block.0 == TORCH_ID {
+                    continue;
+                }
                 let handle = renderer.create_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
@@ -4922,6 +4934,12 @@ impl Voxel {
             let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque);
             for sub in subs {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
+                    continue;
+                }
+                // Skip torch submesh: torches render as a small
+                // crossed mesh in the world pass instead of as
+                // full cube voxels.
+                if sub.block.0 == TORCH_ID {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -5825,6 +5843,18 @@ impl Voxel {
             ),
         };
         let settings_edit = &mut self.settings;
+        let dbg_panel_open = self.show_debug_panel;
+        // Mutable refs the debug panel writes to. Snapshot the
+        // weather pre-edit so we can detect changes after the
+        // closure and rebroadcast.
+        let dbg_day_time = &mut self.day_time;
+        let dbg_weather = &mut self.weather;
+        let dbg_fov_rad = &mut self.fov_y_rad;
+        let dbg_freeze_time = &mut self.freeze_time;
+        let dbg_fly_mode = &mut self.fly_mode;
+        let dbg_god_mode = &mut self.god_mode;
+        let dbg_mob_cap = &mut self.mob_cap;
+        let weather_before = *dbg_weather;
         // Lazy-load the egui atlas texture on first render after
         // on_start has populated the pixel cache. We use NEAREST
         // sampling so the 16x16 tiles stay crisp at slot size.
@@ -6368,6 +6398,86 @@ impl Voxel {
                 }
                 // F3 debug panel: top-right corner, lots of state in
                 // one place. Mirrors Minecraft's debug overlay.
+                // F6 live debug panel: sliders + toggles for
+                // common runtime tweaks. Lives in its own
+                // resizable window so it's draggable.
+                if dbg_panel_open {
+                    egui::Window::new("Debug panel (F6)")
+                        .collapsible(true)
+                        .resizable(true)
+                        .default_pos([20.0, 180.0])
+                        .default_size([280.0, 320.0])
+                        .show(ctx, |ui| {
+                            // Time of day slider 0..24h.
+                            let mut hours =
+                                (*dbg_day_time / DAY_LENGTH_S) * 24.0;
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut hours, 0.0..=24.0)
+                                        .text("Time (h)")
+                                        .step_by(0.01),
+                                )
+                                .changed()
+                            {
+                                *dbg_day_time = (hours / 24.0)
+                                    * DAY_LENGTH_S;
+                            }
+                            ui.checkbox(dbg_freeze_time, "Freeze time");
+                            // Weather dropdown.
+                            ui.horizontal(|ui| {
+                                ui.label("Weather:");
+                                ui.selectable_value(
+                                    dbg_weather,
+                                    0,
+                                    "Clear",
+                                );
+                                ui.selectable_value(
+                                    dbg_weather,
+                                    1,
+                                    "Rain",
+                                );
+                                ui.selectable_value(
+                                    dbg_weather,
+                                    2,
+                                    "Snow",
+                                );
+                            });
+                            // FOV slider in degrees.
+                            let mut fov_deg = dbg_fov_rad.to_degrees();
+                            if ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut fov_deg,
+                                        30.0..=110.0,
+                                    )
+                                    .text("FOV"),
+                                )
+                                .changed()
+                            {
+                                *dbg_fov_rad = fov_deg.to_radians();
+                            }
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut settings_edit.view_distance,
+                                    2..=12,
+                                )
+                                .text("Render distance"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    dbg_mob_cap,
+                                    0..=64,
+                                )
+                                .text("Mob cap"),
+                            );
+                            ui.checkbox(dbg_fly_mode, "Fly mode");
+                            ui.checkbox(dbg_god_mode, "Godmode");
+                            ui.separator();
+                            ui.label(
+                                "Hotkeys: F3 stats, F4 weather, F5 camera, G chunk grid",
+                            );
+                        });
+                }
                 if show_debug {
                     egui::Area::new(egui::Id::new("voxel_debug"))
                         .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
@@ -10344,6 +10454,17 @@ impl Voxel {
             }
         }
 
+        // If the debug panel mutated weather, broadcast the new
+        // value to keep clients in sync.
+        if self.weather != weather_before
+            && let NetRole::Server { server, .. } = &mut self.net
+            && let Ok(buf) = bincode::serde::encode_to_vec(
+                self.weather,
+                bincode::config::standard(),
+            )
+        {
+            server.broadcast_bytes("vx.weather", buf);
+        }
         if action_start {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
@@ -10890,6 +11011,16 @@ impl AppHandler for Voxel {
             self.camera_mode = (self.camera_mode + 1) % 3;
         }
         self.f5_prev = f5_now;
+        // F6 toggles the live debug panel.
+        let f6_now = ctx.input.is_pressed(Key::F6);
+        if f6_now
+            && !self.f6_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
+            self.show_debug_panel = !self.show_debug_panel;
+        }
+        self.f6_prev = f6_now;
         // F4 cycles weather: clear -> rain -> snow -> clear.
         // Broadcasts when hosting so peers follow the change.
         let f4_now = ctx.input.is_pressed(Key::F4);
@@ -11770,13 +11901,53 @@ impl AppHandler for Voxel {
             })
             .collect();
         torches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        for (p, _) in torches.into_iter().take(8) {
+        for (p, _) in torches.iter().take(8) {
             renderer.queue_point_light(
                 [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5],
                 [1.0, 0.78, 0.40],
                 3.0,
                 8.0,
             );
+        }
+        // Render every torch as a thin wooden pillar + a small
+        // glowing tip, replacing the previously-meshed full-cube
+        // voxel shape. Uses the player_cube handle scaled into
+        // a torch-shaped box.
+        if !self.torch_positions.is_empty() {
+            let cube = *self
+                .player_cube
+                .get_or_insert_with(|| renderer.cube_handle());
+            for p in self.torch_positions.iter() {
+                let cx = p[0] as f32 + 0.5;
+                let cy = p[1] as f32;
+                let cz = p[2] as f32 + 0.5;
+                // Stick: thin vertical pillar.
+                let stick = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.12, 0.7, 0.12),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy + 0.35, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    stick.to_cols_array(),
+                    [0.55, 0.40, 0.20, 1.0],
+                    0.0,
+                    0.9,
+                );
+                // Flame tip: small emissive-ish orange cube.
+                let tip = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.18, 0.18, 0.18),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy + 0.78, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    tip.to_cols_array(),
+                    [1.0, 0.78, 0.30, 1.0],
+                    0.0,
+                    0.4,
+                );
+            }
         }
         // Render remote players as coloured cubes so each peer is
         // visible. The interpolation buffer (`remote_interp`) is
@@ -13229,6 +13400,13 @@ fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
     )
 }
 
+/// True for "decoration" blocks the player can walk through:
+/// torches, flowers. Cactus stays collide-able so the contact
+/// damage matters; glass stays solid.
+fn is_passable(b: BlockId) -> bool {
+    matches!(b.0, 10 | 20 | 21 | 22)
+}
+
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
 fn aabb_intersects_solid(world: &World, pos: Vec3) -> bool {
     let (min, max) = body_aabb(pos);
@@ -13241,7 +13419,8 @@ fn aabb_intersects_solid(world: &World, pos: Vec3) -> bool {
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
-                if !world.get([x, y, z]).is_air() {
+                let b = world.get([x, y, z]);
+                if !b.is_air() && !is_passable(b) {
                     return true;
                 }
             }
