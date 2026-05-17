@@ -6064,6 +6064,87 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "setblock" => {
+                            // /setblock x y z block: place a
+                            // block at exact world coords. Routes
+                            // through the normal edit path so the
+                            // change persists in the edit history
+                            // + replicates to peers. "air"
+                            // clears the cell.
+                            let parts: Vec<&str> = arg.split_whitespace().collect();
+                            if parts.len() != 4 {
+                                local_lines.push(
+                                    "Usage: /setblock <x> <y> <z> <block>"
+                                        .to_string(),
+                                );
+                            } else {
+                                let x = parts[0].parse::<i32>();
+                                let y = parts[1].parse::<i32>();
+                                let z = parts[2].parse::<i32>();
+                                let block_id: Option<u16> = if parts[3]
+                                    .eq_ignore_ascii_case("air")
+                                {
+                                    Some(0)
+                                } else {
+                                    BLOCK_TYPES
+                                        .iter()
+                                        .find(|bt| {
+                                            bt.name.eq_ignore_ascii_case(
+                                                parts[3],
+                                            )
+                                        })
+                                        .map(|bt| bt.id)
+                                };
+                                match (x, y, z, block_id) {
+                                    (Ok(x), Ok(y), Ok(z), Some(bid)) => {
+                                        let voxel = [x, y, z];
+                                        let block = BlockId(bid);
+                                        let edit = EditMsg {
+                                            x,
+                                            y,
+                                            z,
+                                            block: bid,
+                                        };
+                                        self.world_set_tracked(voxel, block);
+                                        let coords = Self::affected_chunks(voxel);
+                                        self.rebuild_chunks(&coords);
+                                        let cfg = bincode::config::standard();
+                                        match &mut self.net {
+                                            NetRole::Offline => {}
+                                            NetRole::Server { server, .. } => {
+                                                self.edit_history.push(edit);
+                                                if let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        edit, cfg,
+                                                    )
+                                                {
+                                                    server.broadcast_bytes(
+                                                        "vx.edit",
+                                                        buf,
+                                                    );
+                                                }
+                                            }
+                                            NetRole::Client {
+                                                pending_edits, ..
+                                            } => {
+                                                pending_edits.push(edit);
+                                            }
+                                        }
+                                        local_lines.push(format!(
+                                            "Set ({x},{y},{z}) = {}",
+                                            parts[3]
+                                        ));
+                                    }
+                                    _ => {
+                                        local_lines.push(
+                                            "Bad args. Coords must be ints + block must exist."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                                handled_locally = true;
+                            }
+                        }
                         "fly" => {
                             // Toggle the local fly mode flag. The
                             // movement integrator reads it; off
