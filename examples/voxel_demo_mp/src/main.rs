@@ -5042,6 +5042,7 @@ impl Voxel {
         let stamina_frac =
             (self.stamina / STAMINA_MAX).clamp(0.0, 1.0);
         let player_hurt_flash = self.hurt_flash;
+        let invuln_remaining = self.invuln_remaining;
         let show_debug = self.show_debug;
         let hud_visible = self.hud_visible;
         let kill_count = self.kill_count;
@@ -6112,6 +6113,38 @@ impl Voxel {
                             (110.0 * alpha) as u8,
                         ),
                     );
+                }
+                // Post-respawn invulnerability indicator: small
+                // toast at the top centre while the timer is
+                // positive. Pulses so the player knows the
+                // window is finite.
+                if hud_visible && invuln_remaining > 0.0 {
+                    let alpha =
+                        (0.6 + 0.4 * (invuln_remaining * 8.0).sin().abs())
+                            .clamp(0.0, 1.0);
+                    egui::Area::new(egui::Id::new("voxel_invuln"))
+                        .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0])
+                        .show(ctx, |ui| {
+                            egui::Frame::popup(ui.style())
+                                .fill(egui::Color32::from_rgba_unmultiplied(
+                                    20, 20, 60, 220,
+                                ))
+                                .show(ui, |ui| {
+                                    let a = (255.0 * alpha) as u8;
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Invulnerable: {:.1}s",
+                                            invuln_remaining
+                                        ))
+                                        .color(
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                160, 200, 255, a,
+                                            ),
+                                        )
+                                        .strong(),
+                                    );
+                                });
+                        });
                 }
                 // Low-HP vignette: a pulsing red border that
                 // ramps in below 6 HP and intensifies the closer
