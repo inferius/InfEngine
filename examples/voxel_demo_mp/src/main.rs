@@ -2151,16 +2151,20 @@ impl Voxel {
     }
 
     /// Height of a single corner of voxel (vx,vy,vz). `cx`/`cz`
-    /// in `{0,1}` pick which corner. Matches the MC / `crafti`
-    /// algorithm exactly: scan the 4 cells that share the corner;
-    /// if any is a falling-column cell (same liquid above), the
-    /// corner snaps to full height (1.0) so columns stay full
-    /// blocks. Otherwise average the surface heights of every
-    /// same-kind liquid cell - AIR and solid cells are SKIPPED
-    /// (no contribution), which keeps pond edges flat at the
-    /// source height the way vanilla water does. Slopes only
-    /// appear where neighbouring liquid voxels have different
-    /// levels.
+    /// in `{0,1}` pick which corner. Two-phase computation:
+    ///
+    ///   Phase 1: if any of the four touching cells is a falling
+    ///   column (same liquid directly above), the corner snaps
+    ///   to 1.0 - submerged / column voxels render as full
+    ///   blocks, no slope.
+    ///
+    ///   Phase 2 (top-layer surface): average the surface
+    ///   heights of touching cells, counting AIR as 0 height
+    ///   and SKIPPING solid blocks entirely. This gives the
+    ///   top of a pool a sloped lip toward the bank instead of
+    ///   the boxy vanilla MC look. Solid neighbours are
+    ///   ignored so a pond against a stone wall keeps the
+    ///   wall-side corner at the source height.
     fn liquid_corner_height(
         &self,
         vx: i32,
@@ -2176,8 +2180,10 @@ impl Voxel {
             [vx + cx - 1, vy, vz + cz],
             [vx + cx, vy, vz + cz],
         ];
-        // Phase 1: any cell with same liquid directly above is a
-        // column - corner is full height.
+        // Phase 1: column detection - any cell with same liquid
+        // directly above is part of a falling column. Whole
+        // corner snaps full height so the column reads as a
+        // continuous block, never a wedge.
         for t in &touching {
             if self.world.get(*t).0 == liquid_id
                 && self
@@ -2189,17 +2195,18 @@ impl Voxel {
                 return 1.0;
             }
         }
-        // Phase 2: average over water cells only. Air / solid
-        // neighbours skipped so a single source cell against a
-        // bank stays at source height (matches MC vanilla).
+        // Phase 2: top-layer surface blend. Air counts (height 0)
+        // so the edge slopes; solid cells skip so wall-adjacent
+        // corners stay at the source height.
         let mut sum = 0.0_f32;
         let mut count = 0u32;
         for t in &touching {
-            let h = self.liquid_surface_height(*t, liquid_id);
-            if h > 0.0 {
-                sum += h;
-                count += 1;
+            let b = self.world.get(*t);
+            if !b.is_air() && liquid_for(b).is_none() {
+                continue;
             }
+            sum += self.liquid_surface_height(*t, liquid_id);
+            count += 1;
         }
         if count == 0 {
             0.0
