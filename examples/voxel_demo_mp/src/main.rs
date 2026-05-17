@@ -2713,23 +2713,69 @@ impl Voxel {
             let level = self.liquid_level.get(pos).copied().unwrap_or(0);
             let is_source = level == 0;
             let is_falling = level == 8;
-            let push_strength: u8 = if is_source || is_falling {
+            // Push strength = how strong this cell's contribution
+            // is when writing to neighbours. JS uses
+            // `baseStrength` = maxFlow for source, else
+            // `cell.water`. In our level convention (low=strong)
+            // that maps to: source -> 0 (writes level 1), falling
+            // -> 1 (writes level 2; JS falling water = 7, spreads
+            // at 6 = mine level 2), regular flow -> level itself
+            // (writes level+1 = one weaker).
+            let push_strength: u8 = if is_source {
                 0
+            } else if is_falling {
+                1
             } else {
                 level
             };
             let next_level = push_strength.saturating_add(1);
-            // Drop straight down (waterfall).
+            // Drop detection. Two cases:
+            //   a) Direct-below air -> 3D vertical fall. Write
+            //      to (y-1) with falling=true.
+            //   b) Horizontal NSEW neighbour at same y is open
+            //      AND that neighbour's below is also open -> the
+            //      water spills over a cliff. Write to that
+            //      horizontal neighbour with falling=true.
+            // Either path counts as "had drop" - non-source
+            // non-falling cells then skip the regular horizontal
+            // spread (matches JS).
+            let mut had_drop = false;
             let below = [pos[0], pos[1] - 1, pos[2]];
             let below_b = self.world.get(below);
-            let below_open = below_b.is_air() || block_is_washable(below_b);
-            if below_open {
+            if below_b.is_air() || block_is_washable(below_b) {
                 Self::put_water_update(&mut updates, below, 1, true, max_range);
-                if !is_source && !is_falling {
-                    // Non-source non-falling cell focuses on the
-                    // fall - skip horizontal spread.
+                had_drop = true;
+            }
+            let drop_dirs: [[i32; 3]; 4] = [
+                [1, 0, 0],
+                [-1, 0, 0],
+                [0, 0, 1],
+                [0, 0, -1],
+            ];
+            for d in &drop_dirs {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                let nb = self.world.get(n);
+                if !nb.is_air() && !block_is_washable(nb) {
                     continue;
                 }
+                let n_below = self.world.get([n[0], n[1] - 1, n[2]]);
+                if n_below.is_air() || block_is_washable(n_below) {
+                    Self::put_water_update(
+                        &mut updates,
+                        n,
+                        1,
+                        true,
+                        max_range,
+                    );
+                    had_drop = true;
+                    break; // first match wins, per JS
+                }
+            }
+            if had_drop && !is_source && !is_falling {
+                // Non-source non-falling cell drains into the
+                // drop direction; skip the regular horizontal
+                // spread this tick.
+                continue;
             }
             if next_level > max_range {
                 continue;
@@ -2794,9 +2840,10 @@ impl Voxel {
             if updates.contains_key(pos) {
                 continue;
             }
-            // Falling cell that lost its column feed settles into
-            // a regular flow at level 1.
-            let new_level = if level == 8 { 1 } else { level + 1 };
+            // Falling cell that lost its column feed decays by 1
+            // strength step (JS: water 7 -> 6). In our convention
+            // that's level 8 -> level 2 (strength 7 -> 6).
+            let new_level = if level == 8 { 2 } else { level + 1 };
             if new_level > max_range {
                 to_evaporate.push(*pos);
             } else {
@@ -2858,22 +2905,14 @@ impl Voxel {
                 continue;
             }
             let final_level = if *falling { 8 } else { *level };
-            // Don't downgrade an existing flow cell with a weaker
-            // write. The recompute phase already adjusted it; a
-            // stale neighbour's write at higher level shouldn't
-            // push the cell backwards. Sources are caught above.
-            if existing.0 == liquid_id
-                && existing_level != 0
-                && existing_level < final_level
-            {
-                self.liquid_active.insert(*pos);
-                continue;
-            }
-            // No-op skip: if the cell already has this liquid at
-            // the same level, the write would just re-flag the
-            // mesh dirty every tick and produce the visible
-            // "wobble" the user sees in steady-state pools.
-            // Apply-only-on-change keeps a stable pond stable.
+            // No-op skip: if the cell already holds this liquid
+            // at the destination level, the write would just
+            // re-flag the mesh dirty each tick and produce the
+            // visible "wobble" in steady-state pools. Don't fire
+            // world_set_tracked when the value is unchanged.
+            // (Downgrades from weaker writes ARE allowed - JS
+            // decay + apply cascades level upward when sources
+            // disappear.)
             if existing.0 == liquid_id
                 && existing_level == final_level
             {
