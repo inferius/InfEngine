@@ -14347,6 +14347,53 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             set_in_chunk(&mut chunk, x, local_y, z, BlockId(flower_id));
         }
     }
+    // Pond pass: rare small water pools in plains biomes. Each
+    // candidate cell rolls a 1-in-512 hash to seed a pond
+    // centre, then carves a 3-cell radius depression and fills
+    // it with one layer of water at ground level. The
+    // overflowing loop (-3..cs+3) catches ponds centred just
+    // outside the chunk so their basin lands cleanly across
+    // borders.
+    for x in -3..(cs + 3) {
+        for z in -3..(cs + 3) {
+            let wx = origin.x as i32 + x;
+            let wz = origin.z as i32 + z;
+            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            if biome != Biome::Plains {
+                continue;
+            }
+            if hash2(wx ^ 0x0BAD_F00D, wz ^ 0x5EA_5EA) % 512 != 17 {
+                continue;
+            }
+            let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
+            // 3-cell radius circular pond.
+            for dx in -3i32..=3 {
+                for dz in -3i32..=3 {
+                    if dx * dx + dz * dz > 9 {
+                        continue;
+                    }
+                    let surface_wy = ground;
+                    let local_y = surface_wy - origin.y as i32;
+                    set_in_chunk(
+                        &mut chunk,
+                        x + dx,
+                        local_y,
+                        z + dz,
+                        BlockId(WATER_ID),
+                    );
+                    // Carve one block above to make the water
+                    // sit flush with surrounding grass.
+                    set_in_chunk(
+                        &mut chunk,
+                        x + dx,
+                        local_y + 1,
+                        z + dz,
+                        BlockId::AIR,
+                    );
+                }
+            }
+        }
+    }
     // Cactus pass: sparse 2-3 block columns on desert sand. Same
     // surface + air checks as flowers; height varies with the
     // hash so dunes don't look uniform.
