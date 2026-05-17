@@ -5005,6 +5005,10 @@ impl Voxel {
         let kill_count = self.kill_count;
         let chat_open = self.chat_open;
         let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z);
+        let spawn_xz: (f32, f32) = match self.spawn_pos {
+            Some(p) => (p[0], p[2]),
+            None => (0.0, 0.0),
+        };
         let biome_name = match biome_at_player {
             Biome::Plains => "Plains",
             Biome::Mountain => "Mountain",
@@ -5598,6 +5602,37 @@ impl Voxel {
                                 dbg_player.y,
                                 dbg_player.z
                             ));
+                            // Spawn-direction hint: distance to
+                            // the configured respawn point + the
+                            // approximate compass bearing toward
+                            // it. Hidden when standing on spawn.
+                            let sp = spawn_xz;
+                            let dxs = sp.0 - dbg_player.x;
+                            let dzs = sp.1 - dbg_player.z;
+                            let dist_sp = (dxs * dxs + dzs * dzs).sqrt();
+                            if dist_sp > 4.0 {
+                                let yaw_to =
+                                    (-dzs).atan2(dxs).rem_euclid(
+                                        std::f32::consts::TAU,
+                                    );
+                                let oct = (yaw_to
+                                    / std::f32::consts::FRAC_PI_4)
+                                    .round() as i32
+                                    & 7;
+                                let dir_sp = match oct {
+                                    0 => "E",
+                                    1 => "NE",
+                                    2 => "N",
+                                    3 => "NW",
+                                    4 => "W",
+                                    5 => "SW",
+                                    6 => "S",
+                                    _ => "SE",
+                                };
+                                ui.label(format!(
+                                    "Spawn: {dir_sp}  {dist_sp:.0}m"
+                                ));
+                            }
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,
