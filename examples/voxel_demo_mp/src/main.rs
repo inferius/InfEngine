@@ -7459,6 +7459,26 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "listblocks" | "blocks" => {
+                            // Dump every known block name in
+                            // groups of ~8 per line.
+                            let mut chunks: Vec<String> = Vec::new();
+                            let mut buf: Vec<&str> = Vec::new();
+                            for bt in BLOCK_TYPES.iter() {
+                                buf.push(bt.name);
+                                if buf.len() >= 8 {
+                                    chunks.push(buf.join(", "));
+                                    buf.clear();
+                                }
+                            }
+                            if !buf.is_empty() {
+                                chunks.push(buf.join(", "));
+                            }
+                            for line in chunks {
+                                local_lines.push(line);
+                            }
+                            handled_locally = true;
+                        }
                         "recipe" => {
                             // /recipe <block>: find a recipe that
                             // produces the named block + print
