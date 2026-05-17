@@ -12072,7 +12072,9 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             if biome != Biome::Plains {
                 continue;
             }
-            if hash2(wx, wz) % 64 != 7 {
+            // Tree density: roughly 1 tree per 32 cells in plains.
+            // Lower modulus = greener world.
+            if hash2(wx, wz) % 32 != 7 {
                 continue;
             }
             let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
