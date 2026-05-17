@@ -3818,6 +3818,50 @@ impl Voxel {
                 self.sfx_at(&key, pos, |a, g| {
                     let _ = a.play_swish(0.10 * g);
                 });
+                // Sprint dust: a small puff per step matching the
+                // surface colour. Walking sneak / normal speed
+                // skips this so dust is a sprint-only flourish.
+                if self.sprinting {
+                    let color = self
+                        .registry
+                        .get(under)
+                        .map(|d| d.color)
+                        .unwrap_or([0.6, 0.55, 0.45]);
+                    let foot_voxel = foot;
+                    // Tiny burst that fades fast; reuses the
+                    // existing particle system rather than adding
+                    // a dedicated sprint emitter.
+                    let base = [
+                        self.player_pos.x,
+                        self.player_pos.y - PLAYER_HEIGHT,
+                        self.player_pos.z,
+                    ];
+                    let mut rng: u32 = 0xD15D_15D1
+                        ^ ((foot_voxel[0] as u32).wrapping_mul(7))
+                        ^ ((foot_voxel[2] as u32).wrapping_mul(13))
+                        ^ (self.net_tick as u32);
+                    let mut rand01 = || -> f32 {
+                        rng ^= rng << 13;
+                        rng ^= rng >> 17;
+                        rng ^= rng << 5;
+                        (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+                    };
+                    for _ in 0..4 {
+                        let vx = (rand01() * 2.0 - 1.0) * 1.2;
+                        let vy = rand01() * 0.6 + 0.2;
+                        let vz = (rand01() * 2.0 - 1.0) * 1.2;
+                        self.particles.particles.push(
+                            infengine_particles::Particle {
+                                position: base,
+                                velocity: [vx, vy, vz],
+                                color: [color[0], color[1], color[2], 0.85],
+                                size: 0.08,
+                                age: 0.0,
+                                lifetime: 0.30,
+                            },
+                        );
+                    }
+                }
             }
         } else {
             // Reset cooldown so a step doesn't fire instantly the
