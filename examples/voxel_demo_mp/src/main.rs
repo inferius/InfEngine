@@ -5278,6 +5278,12 @@ impl Voxel {
                             ui.label(format!(
                                 "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}    Biome: {biome_name}"
                             ));
+                            ui.label(format!(
+                                "XYZ: {:.0}, {:.0}, {:.0}",
+                                dbg_player.x,
+                                dbg_player.y,
+                                dbg_player.z
+                            ));
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,
