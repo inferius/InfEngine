@@ -7386,8 +7386,13 @@ impl Voxel {
                                 }
                                 _ => "n/a".to_string(),
                             };
+                            let weather_str = match self.weather {
+                                1 => "rain",
+                                2 => "snow",
+                                _ => "clear",
+                            };
                             local_lines.push(format!(
-                                "Server: {host}  Role: {role}  Seed: {}",
+                                "Server: {host}  Role: {role}  Seed: {}  Weather: {weather_str}",
                                 world_seed()
                             ));
                             handled_locally = true;
