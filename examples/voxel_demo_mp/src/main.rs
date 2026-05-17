@@ -6964,6 +6964,37 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "setname" => {
+                            // Change local player_name. In MP
+                            // the server's Hello-registered name
+                            // stays the original (UDP layer
+                            // doesn't expose rename), but the
+                            // chat tag + nameplate use the new
+                            // name and the next vx.names roster
+                            // sync may pick it up.
+                            let trimmed: String = arg
+                                .chars()
+                                .filter(|c| !c.is_control())
+                                .take(24)
+                                .collect();
+                            if trimmed.is_empty() {
+                                local_lines.push(
+                                    "Usage: /setname <name>".to_string(),
+                                );
+                            } else {
+                                self.player_name = trimmed.clone();
+                                if let NetRole::Server { .. } = &self.net
+                                {
+                                    self.player_names
+                                        .insert(0, trimmed.clone());
+                                }
+                                self.save_config();
+                                local_lines.push(format!(
+                                    "Name set to {trimmed}."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "version" | "ver" => {
                             // Print the build's CARGO_PKG_VERSION
                             // plus the active net role so quick
