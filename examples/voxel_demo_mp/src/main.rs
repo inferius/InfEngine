@@ -1819,6 +1819,10 @@ struct Voxel {
     /// Monotonic id source for new drops on the host. Clients
     /// keep at 0; ids come from the server.
     next_drop_id: u32,
+    /// Cooldown timer for the running-water ambient SFX. Ticks
+    /// down each frame the player stands in a flow voxel; the
+    /// running-stream sting fires when it hits zero and resets.
+    flow_sfx_accum: f32,
     /// Dedicated cube mesh for sheep bodies. Has its own
     /// `AlbedoHandle` binding so the texture (loaded from
     /// `assets/textures/entity/sheep/sheep.tga`) doesn't leak onto
@@ -6073,6 +6077,7 @@ impl Voxel {
             liquid_mesh_handles: HashMap::new(),
             dropped_items: Vec::new(),
             next_drop_id: 1,
+            flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
             sheep_mesh: None,
             sheep_head_mesh: None,
@@ -7139,6 +7144,7 @@ impl Voxel {
                 self.player_pos.z.floor() as i32,
             ];
             let foot_block = self.world.get(foot);
+            let mut foot_in_flow = false;
             if foot_block.0 == liquid.block_id
                 && liquid.current_strength > 0.0
             {
@@ -7147,7 +7153,24 @@ impl Voxel {
                     let push = liquid.current_strength * dt * 6.0;
                     self.player_vel.x += dir[0] * push;
                     self.player_vel.z += dir[1] * push;
+                    foot_in_flow = true;
                 }
+            }
+            // Flowing-water ambience: when standing in a flow
+            // voxel, periodically play a soft running-water
+            // sting near the foot position. Source ponds stay
+            // silent (no flow direction).
+            self.flow_sfx_accum -= dt;
+            if foot_in_flow && self.flow_sfx_accum <= 0.0 {
+                self.flow_sfx_accum = 0.55;
+                let center = [
+                    foot[0] as f32 + 0.5,
+                    foot[1] as f32 + 0.5,
+                    foot[2] as f32 + 0.5,
+                ];
+                self.sfx_at("water_flow", center, |a, g| {
+                    let _ = a.play_swish(0.12 * g);
+                });
             }
             if input_active && ctx.input.is_pressed(Key::Space) {
                 self.player_vel.y =
@@ -12801,6 +12824,19 @@ impl AppHandler for Voxel {
                     "splash_out",
                     "random",
                     &["splash.ogg"],
+                ),
+                // Running-water ambient loop. Used by the
+                // periodic `water_flow` sting while a player
+                // stands in a flow voxel.
+                (
+                    "water_flow",
+                    "liquid",
+                    &["water.ogg", "stream.ogg", "flow.ogg"],
+                ),
+                (
+                    "water_flow",
+                    "ambient",
+                    &["water.ogg", "stream.ogg"],
                 ),
             ];
             for (key, subdir, files) in scans {
