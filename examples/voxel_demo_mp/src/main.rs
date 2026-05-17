@@ -1258,6 +1258,11 @@ struct Voxel {
     /// spawning above the player so the demo can have weather
     /// without actually wiring it into the gameplay.
     weather: u8,
+    /// Names the player has muted via /mute. Chat lines whose
+    /// sender tag matches one of these (case-insensitive) are
+    /// dropped before they hit `chat_log`. Stored by lowercased
+    /// name to keep matching trivial.
+    muted_players: HashSet<String>,
     /// Seconds remaining in the current lightning flash. While
     /// positive the sky washes toward white. Decays each frame
     /// via the update tick.
@@ -3787,6 +3792,13 @@ impl Voxel {
         if !chat_inbox.is_empty() {
             let now = std::time::Instant::now();
             for line in chat_inbox {
+                // Mute filter: drop lines whose `<sender>` tag
+                // or `* sender` prefix matches a muted name.
+                if !self.muted_players.is_empty()
+                    && line_is_muted(&line, &self.muted_players)
+                {
+                    continue;
+                }
                 self.chat_log.push((now, line));
             }
             // Cap log length so very long sessions don't grow
@@ -4075,6 +4087,7 @@ impl Voxel {
             weather: 0,
             lightning_flash: 0.0,
             next_lightning_at: 6.0,
+            muted_players: HashSet::new(),
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -7268,6 +7281,45 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "mute" => {
+                            if arg.is_empty() {
+                                if self.muted_players.is_empty() {
+                                    local_lines.push(
+                                        "No one muted.".to_string(),
+                                    );
+                                } else {
+                                    let mut names: Vec<String> = self
+                                        .muted_players
+                                        .iter()
+                                        .cloned()
+                                        .collect();
+                                    names.sort();
+                                    local_lines.push(format!(
+                                        "Muted: {}",
+                                        names.join(", ")
+                                    ));
+                                }
+                            } else {
+                                self.muted_players
+                                    .insert(arg.to_lowercase());
+                                local_lines
+                                    .push(format!("Muted {arg}."));
+                            }
+                            handled_locally = true;
+                        }
+                        "unmute" => {
+                            if arg.is_empty() {
+                                self.muted_players.clear();
+                                local_lines.push(
+                                    "All mutes cleared.".to_string(),
+                                );
+                            } else {
+                                self.muted_players
+                                    .remove(&arg.to_lowercase());
+                                local_lines.push(format!("Unmuted {arg}."));
+                            }
+                            handled_locally = true;
+                        }
                         "wave" | "shrug" | "dance" => {
                             // Built-in emote shortcuts: each one
                             // is a canned /me line broadcast via
@@ -9380,6 +9432,30 @@ fn ore_hash(x: i32, y: i32, z: i32, salt: u32) -> f32 {
 
 /// Cheap, deterministic 2D hash. Used for tree placement so two
 /// peers running the same generator drop trees in the same spots.
+/// Returns true if a chat line's sender tag matches any entry
+/// in the muted set. Recognises both the standard `<sender>`
+/// prefix used by regular chat and the `* sender` prefix used
+/// by /me-style emotes.
+fn line_is_muted(line: &str, muted: &HashSet<String>) -> bool {
+    if let Some(rest) = line.strip_prefix('<')
+        && let Some(end) = rest.find('>')
+    {
+        let sender = &rest[..end];
+        if muted.contains(&sender.to_lowercase()) {
+            return true;
+        }
+    }
+    if let Some(rest) = line.strip_prefix("* ")
+        && let Some(end) = rest.find(' ')
+    {
+        let sender = &rest[..end];
+        if muted.contains(&sender.to_lowercase()) {
+            return true;
+        }
+    }
+    false
+}
+
 fn hash2(wx: i32, wz: i32) -> u32 {
     let mut h = (wx as u32).wrapping_mul(0x27D4_EB2F);
     h ^= (wz as u32).wrapping_mul(0x1656_67B1);
