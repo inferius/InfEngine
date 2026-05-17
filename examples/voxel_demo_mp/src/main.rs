@@ -2374,6 +2374,14 @@ impl Voxel {
         if let Some(p) = self.spawn_pos {
             let _ = writeln!(text, "spawn={},{},{}", p[0], p[1], p[2]);
         }
+        // Optional debug toggles persisted so a dev workflow
+        // doesn't have to retype /fly /godmode each launch.
+        if self.fly_mode {
+            let _ = writeln!(text, "fly_mode=true");
+        }
+        if self.god_mode {
+            let _ = writeln!(text, "god_mode=true");
+        }
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2457,6 +2465,12 @@ impl Voxel {
                     {
                         self.spawn_pos = Some([x, y, z]);
                     }
+                }
+                "fly_mode" => {
+                    self.fly_mode = matches!(value, "true" | "1" | "yes");
+                }
+                "god_mode" => {
+                    self.god_mode = matches!(value, "true" | "1" | "yes");
                 }
                 _ => {}
             }
@@ -7564,6 +7578,7 @@ impl Voxel {
                         }
                         "godmode" | "god" => {
                             self.god_mode = !self.god_mode;
+                            self.save_config();
                             local_lines.push(format!(
                                 "Godmode {}",
                                 if self.god_mode { "ON" } else { "OFF" }
@@ -7576,6 +7591,7 @@ impl Voxel {
                             // by default so a vanilla player
                             // experience is unchanged.
                             self.fly_mode = !self.fly_mode;
+                            self.save_config();
                             if self.fly_mode {
                                 self.player_vel = Vec3::ZERO;
                                 self.fall_start_y = None;
