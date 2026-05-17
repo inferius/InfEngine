@@ -322,6 +322,25 @@ struct MobHitMsg {
     mob_id: u32,
 }
 
+/// Client -> server: request to damage another player. The server
+/// validates the attacker's reach + forwards `DamageMsg` to the
+/// target client.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct PvPHitMsg {
+    target_id: u32,
+}
+
+/// Server -> client: "you took N HP of damage". Sent to a single
+/// target via `send_bytes_to_client`; the client applies it to
+/// their local `player_health` + flashes / plays the hurt SFX.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct DamageMsg {
+    amount: f32,
+}
+
+const PVP_DAMAGE: f32 = 1.5;
+const PVP_REACH: f32 = 5.5;
+
 /// Client -> server inventory intent: a drag-and-drop completion.
 /// Server validates + applies + sends back an `InvSnapshotMsg`.
 /// `split` mirrors the local Drag action and tells the server how
@@ -1894,6 +1913,49 @@ impl Voxel {
     /// day-of-cycle to disk in the new versioned `INFV` format.
     /// Called periodically while the server runs (every 30 s) so a
     /// crash loses at most half a minute of state.
+    /// Raycast against every remote player's AABB. Returns the
+    /// nearest hit `(id, distance)` within `max_dist`, or `None`.
+    /// Skips our own id so we never target ourselves. Uses the
+    /// interpolated render pose so the hit-test matches what the
+    /// player actually sees on screen.
+    fn raycast_remote_player(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        max_dist: f32,
+    ) -> Option<(u32, f32)> {
+        let own_id: u32 = match &self.net {
+            NetRole::Offline => return None,
+            NetRole::Server { .. } => 0,
+            NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
+        };
+        let now = std::time::Instant::now();
+        let mut best: Option<(u32, f32)> = None;
+        for (&id, interp) in self.remote_interp.iter() {
+            if id == own_id {
+                continue;
+            }
+            let p = interp.sample(now);
+            // Use the same body+head extents as the humanoid
+            // render. Box centred at pose - (0, 0.7, 0).
+            let cx = p.pos[0];
+            let cy = p.pos[1] - 0.7;
+            let cz = p.pos[2];
+            let hx = 0.35;
+            let hy = 1.0;
+            let hz = 0.35;
+            let min = [cx - hx, cy - hy, cz - hz];
+            let max = [cx + hx, cy + hy, cz + hz];
+            if let Some(t) = ray_aabb(origin.into(), dir.into(), min, max)
+                && t <= max_dist
+                && best.is_none_or(|(_, bt)| t < bt)
+            {
+                best = Some((id, t));
+            }
+        }
+        best
+    }
+
     /// Pick the nearest player position (host + remote pose
     /// table) within `range` of `from`. Returns `None` if no
     /// player is in range or there are no players known. Used by
@@ -2561,6 +2623,12 @@ impl Voxel {
         // smoothing buffer (`remote_interp`) after the net match
         // arm releases its borrow on `self.net`.
         let mut interp_updates: Vec<PlayerMsg> = Vec::new();
+        // Local damage accumulator drained after the match arm
+        // releases its borrow on `self.net`. Used by:
+        //  - vx.damage (client side): server-pushed PvP damage.
+        //  - vx.pvp_hit (server side, host = target): a remote
+        //    client whacked the host.
+        let mut pvp_self_damage: f32 = 0.0;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -2649,6 +2717,61 @@ impl Voxel {
                                 client_id,
                                 "client requested explicit leave"
                             );
+                        }
+                        "vx.pvp_hit" => {
+                            // Validate the attacker's reach + the
+                            // existence of the target, then forward
+                            // a `vx.damage` to the target client.
+                            // Host (id 0) attacks are handled
+                            // client-side (see the lmb dispatch);
+                            // this path only fires for remote
+                            // clients hitting other peers.
+                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                                PvPHitMsg,
+                                _,
+                            >(&data, cfg)
+                            {
+                                let attacker_pos =
+                                    poses.get(&client_id).copied().map(|p| p.pos);
+                                let target_pos = if m.target_id == 0 {
+                                    Some([
+                                        player_pos.x,
+                                        player_pos.y,
+                                        player_pos.z,
+                                    ])
+                                } else {
+                                    poses.get(&m.target_id).copied().map(|p| p.pos)
+                                };
+                                if let (Some(ap), Some(tp)) =
+                                    (attacker_pos, target_pos)
+                                {
+                                    let dx = ap[0] - tp[0];
+                                    let dy = ap[1] - tp[1];
+                                    let dz = ap[2] - tp[2];
+                                    let d2 = dx * dx + dy * dy + dz * dz;
+                                    if d2 <= (PVP_REACH + 1.0).powi(2) {
+                                        if m.target_id == 0 {
+                                            // Host is the target.
+                                            pvp_self_damage += PVP_DAMAGE;
+                                        } else {
+                                            let dmg = DamageMsg {
+                                                amount: PVP_DAMAGE,
+                                            };
+                                            if let Ok(buf) =
+                                                bincode::serde::encode_to_vec(
+                                                    dmg, cfg,
+                                                )
+                                            {
+                                                server.send_bytes_to_client(
+                                                    m.target_id,
+                                                    "vx.damage",
+                                                    buf,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -2945,6 +3068,15 @@ impl Voxel {
                                 player_removals.push(m.id);
                             }
                         }
+                        "vx.damage" => {
+                            if let Ok((d, _)) = bincode::serde::decode_from_slice::<
+                                DamageMsg,
+                                _,
+                            >(&data, cfg)
+                            {
+                                pvp_self_damage += d.amount;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3014,6 +3146,9 @@ impl Voxel {
                 .entry(p.id)
                 .and_modify(|r| r.push(p))
                 .or_insert_with(|| RemoteInterp::new(p));
+        }
+        if pvp_self_damage > 0.0 {
+            self.apply_player_damage(pvp_self_damage);
         }
         // Drop departed players from the client-side remote table
         // so their cubes stop rendering as soon as the server
@@ -5186,6 +5321,11 @@ impl AppHandler for Voxel {
         } else {
             None
         };
+        let pvp_target = if lmb && !self.inventory_open && !self.mp_menu_open {
+            self.raycast_remote_player(self.player_pos, forward, PVP_REACH)
+        } else {
+            None
+        };
         let voxel_dist = self.target.map(|h| {
             let c = Vec3::new(
                 h.voxel[0] as f32 + 0.5,
@@ -5194,11 +5334,56 @@ impl AppHandler for Voxel {
             );
             (c - self.player_pos).length()
         });
-        let attack_mob = match (mob_target, voxel_dist) {
-            (Some((id, d_mob)), Some(d_vox)) if d_mob <= d_vox => Some(id),
-            (Some((id, _)), None) => Some(id),
-            _ => None,
-        };
+        // Pick whichever attack target is closest: player < mob <
+        // voxel. Voxel break path is suppressed when any combat
+        // target wins.
+        let mut best_dist = f32::INFINITY;
+        let mut attack_player: Option<u32> = None;
+        let mut attack_mob: Option<u32> = None;
+        if let Some((id, d)) = pvp_target
+            && d < best_dist
+        {
+            best_dist = d;
+            attack_player = Some(id);
+            attack_mob = None;
+        }
+        if let Some((id, d)) = mob_target
+            && d < best_dist
+        {
+            best_dist = d;
+            attack_mob = Some(id);
+            attack_player = None;
+        }
+        if let Some(d) = voxel_dist
+            && d < best_dist
+        {
+            attack_mob = None;
+            attack_player = None;
+        }
+        // Player-vs-player attack: dispatch to server-side damage
+        // application. Host applies directly; client sends a
+        // `vx.pvp_hit` request the server can validate.
+        if let Some(target_id) = attack_player {
+            match &self.net {
+                NetRole::Client { client, .. } => {
+                    let cfg = bincode::config::standard();
+                    let msg = PvPHitMsg { target_id };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes("vx.pvp_hit", buf);
+                    }
+                }
+                NetRole::Server { server, .. } => {
+                    // Host is attacker id 0 -> send DamageMsg
+                    // straight to the target.
+                    let cfg = bincode::config::standard();
+                    let dmg = DamageMsg { amount: PVP_DAMAGE };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(dmg, cfg) {
+                        server.send_bytes_to_client(target_id, "vx.damage", buf);
+                    }
+                }
+                NetRole::Offline => {}
+            }
+        }
         if let Some(mob_id) = attack_mob {
             // Consume the LMB so it doesn't also break a voxel.
             if is_client {
@@ -5231,7 +5416,8 @@ impl AppHandler for Voxel {
         let lmb_active = self.lmb_held
             && !self.inventory_open
             && !self.mp_menu_open
-            && attack_mob.is_none();
+            && attack_mob.is_none()
+            && attack_player.is_none();
         let mut mine_break: Option<[i32; 3]> = None;
         if lmb_active && let Some(hit) = self.target {
             let block = self.world.get(hit.voxel);
