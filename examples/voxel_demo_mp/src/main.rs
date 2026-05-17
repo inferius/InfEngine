@@ -28,7 +28,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, ChunkSubmesh, RayHit, World,
-    chunk_mesh_with_atlas, raycast,
+    chunk_mesh_with_atlas, raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -12288,9 +12288,22 @@ impl AppHandler for Voxel {
 
         // Cast a ray from the eye along the look direction so the
         // crosshair / wireframe / edit code can target the voxel the
-        // player is currently aiming at.
+        // player is currently aiming at. Pass-through decorations
+        // (torch, flowers) are skipped so the ray reaches whatever
+        // solid block lives behind them - placing a block adjacent
+        // to a torch no longer fails when the crosshair clips the
+        // torch's full-voxel hitbox.
         self.target = if matches!(self.state, AppState::Playing) {
-            raycast(&self.world, self.player_pos, forward, 6.0)
+            raycast_with(
+                &self.world,
+                self.player_pos,
+                forward,
+                6.0,
+                |b| {
+                    !b.is_air()
+                        && !matches!(b.0, TORCH_ID | 20 | 21 | 22)
+                },
+            )
         } else {
             None
         };
@@ -12722,14 +12735,22 @@ impl AppHandler for Voxel {
                     && min.y < voxel_max[1]
                     && max.z > voxel_min[2]
                     && min.z < voxel_max[2];
+                // Block-occupied check: ray-pass-through decorations
+                // (torch, flowers) sit in the world as non-air voxels
+                // even though the raycast skips them. Treat them as
+                // "occupied" so RMB-place over a torch refuses
+                // instead of silently overwriting the torch.
+                let occupied = !self.world.get(hit.place_at).is_air();
                 // Torches need at least one solid neighbour
-                // (floor or wall) to mount on.
+                // (floor or wall) to mount on. The neighbour
+                // check also rejects the supporting cell being a
+                // torch itself - torches can't hang off torches.
                 let torch_unsupported = block.0 == TORCH_ID && {
                     let q = hit.place_at;
-                    let below = self
-                        .world
-                        .get([q[0], q[1] - 1, q[2]])
-                        .is_air();
+                    let below_blk = self.world.get([q[0], q[1] - 1, q[2]]);
+                    let below_air = below_blk.is_air()
+                        || below_blk.0 == TORCH_ID
+                        || matches!(below_blk.0, 20..=22);
                     let walls_clear = [
                         [q[0] - 1, q[1], q[2]],
                         [q[0] + 1, q[1], q[2]],
@@ -12737,10 +12758,15 @@ impl AppHandler for Voxel {
                         [q[0], q[1], q[2] + 1],
                     ]
                     .iter()
-                    .all(|v| self.world.get(*v).is_air());
-                    below && walls_clear
+                    .all(|v| {
+                        let b = self.world.get(*v);
+                        b.is_air()
+                            || b.0 == TORCH_ID
+                            || matches!(b.0, 20..=22)
+                    });
+                    below_air && walls_clear
                 };
-                if !overlaps && !torch_unsupported {
+                if !overlaps && !torch_unsupported && !occupied {
                     let edit = EditMsg {
                         x: hit.place_at[0],
                         y: hit.place_at[1],

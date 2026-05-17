@@ -502,8 +502,25 @@ pub struct RayHit {
 /// Cast `dir` from `origin` through the voxel grid using the
 /// Amanatides + Woo algorithm. Returns the first solid voxel within
 /// `max_dist` or `None` if the ray exits the world / runs out of
-/// distance.
+/// distance. Treats every non-air voxel as a hit; see
+/// `raycast_with` for a version that lets the caller skip
+/// pass-through decorations (torches, flowers, ...).
 pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<RayHit> {
+    raycast_with(world, origin, dir, max_dist, |b| !b.is_air())
+}
+
+/// Like `raycast` but the caller supplies `is_blocked(block) -> bool`
+/// so non-blocking decorations (torches mounted in air, flowers,
+/// etc.) can be skipped: the ray traverses the voxel even though it
+/// isn't air. The first voxel whose block matches the predicate is
+/// returned.
+pub fn raycast_with<F: Fn(BlockId) -> bool>(
+    world: &World,
+    origin: Vec3,
+    dir: Vec3,
+    max_dist: f32,
+    is_blocked: F,
+) -> Option<RayHit> {
     let dir = dir.normalize_or_zero();
     if dir == Vec3::ZERO {
         return None;
@@ -575,7 +592,7 @@ pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<
 
     // Cap iterations defensively in case of numerical edge cases.
     for _ in 0..1024 {
-        if !world.get(voxel).is_air() {
+        if is_blocked(world.get(voxel)) {
             let normal = if last_axis < 0 {
                 [0, 0, 0]
             } else {
