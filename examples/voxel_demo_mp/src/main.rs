@@ -9652,8 +9652,13 @@ impl AppHandler for Voxel {
                 } else {
                     (h_speed / PLAYER_SPEED).clamp(0.0, 1.5)
                 };
-            let bob_y = (self.head_bob_phase * 2.0).sin() * 0.05 * bob_amount;
-            let bob_x = self.head_bob_phase.sin() * 0.03 * bob_amount;
+            // Sprint widens the bob a little (still subtle) so
+            // running feels heavier than walking.
+            let sprint_boost = if self.sprinting { 1.6 } else { 1.0 };
+            let bob_y =
+                (self.head_bob_phase * 2.0).sin() * 0.05 * bob_amount * sprint_boost;
+            let bob_x =
+                self.head_bob_phase.sin() * 0.03 * bob_amount * sprint_boost;
             let right = Vec3::new(
                 -(-self.player_yaw.sin()),
                 0.0,
