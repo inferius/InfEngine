@@ -929,6 +929,21 @@ const RECIPES: &[Recipe] = &[
         output: (25, 1),
         name: "Iron sword",
     },
+    // 4 coal -> 1 glowstone block. Loose interpretation since
+    // the demo has no nether biome; gives the player a use for
+    // surplus coal beyond torches.
+    Recipe {
+        inputs: &[(13, 1), (13, 1), (13, 1), (13, 1)],
+        output: (28, 1),
+        name: "Glowstone",
+    },
+    // 2 sand + 2 cobble -> 1 sandstone. Distinct from the
+    // 4-sand glass recipe so the matcher resolves cleanly.
+    Recipe {
+        inputs: &[(4, 1), (4, 1), (8, 1), (8, 1)],
+        output: (26, 1),
+        name: "Sandstone",
+    },
 ];
 
 /// Inspect the 2x2 crafting grid and return the recipe output if
