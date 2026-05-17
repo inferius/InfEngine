@@ -2121,6 +2121,19 @@ impl Voxel {
             if dropped > 0 {
                 tracing::info!(dropped, "death penalty: cleared storage stacks");
             }
+            // Local chat toast so the player gets a visible
+            // confirmation matching the audible thud. The line
+            // stays local; in MP the kill/death announcement is
+            // handled separately by the server when it's
+            // implemented.
+            self.chat_log.push((
+                std::time::Instant::now(),
+                if dropped > 0 {
+                    format!("You died. Lost {dropped} storage stacks.")
+                } else {
+                    "You died and respawned at spawn.".to_string()
+                },
+            ));
             if let NetRole::Client { client, .. } = &self.net {
                 let _ = client.send_bytes("vx.fellout", Vec::new());
             }
@@ -4832,6 +4845,7 @@ impl Voxel {
                             ui.label("Mouse aim, WASD move, Space jump");
                             ui.label("Shift sneak, Ctrl sprint");
                             ui.label("LMB break, RMB place, E inventory, F eat, Esc menu");
+                            ui.label("T chat, Tab playerlist, F1 hide HUD, F3 debug");
                             // Day clock - map [0..DAY_LENGTH_S) onto
                             // 24h so the player has a sense of where
                             // the sun is.
