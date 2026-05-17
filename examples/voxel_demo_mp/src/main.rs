@@ -7538,6 +7538,42 @@ impl Voxel {
                             local_lines.push("Boom.".to_string());
                             handled_locally = true;
                         }
+                        "announce" => {
+                            // Host-only system broadcast.
+                            // Prefixed `[SERVER]` so peers can
+                            // distinguish operator messages from
+                            // regular chat. Body is sent through
+                            // vx.chat directly so the recipient
+                            // chat path treats it like any other
+                            // line.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/announce is host-only.".to_string(),
+                                );
+                            } else if arg.is_empty() {
+                                local_lines.push(
+                                    "Usage: /announce <message>"
+                                        .to_string(),
+                                );
+                            } else {
+                                let cfg = bincode::config::standard();
+                                let line = format!("[SERVER] {arg}");
+                                self.chat_log.push((
+                                    std::time::Instant::now(),
+                                    line.clone(),
+                                ));
+                                if let NetRole::Server { server, .. } =
+                                    &mut self.net
+                                    && let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            &line, cfg,
+                                        )
+                                {
+                                    server.broadcast_bytes("vx.chat", buf);
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "clearedits" | "wipe" => {
                             // Host-only: drop the entire edit
                             // history + every cached chunk. Next
