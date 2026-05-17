@@ -1043,6 +1043,15 @@ struct Voxel {
     /// Recent chat lines: `(arrival_instant, formatted_text)`.
     /// Older entries fade out + drop after a few seconds.
     chat_log: Vec<(std::time::Instant, String)>,
+    /// Player's previously sent chat lines (most recent last).
+    /// Used by Up/Down arrow scrolling in the chat input box.
+    /// Capped at 20 entries so very long sessions don't grow it
+    /// unbounded.
+    chat_history: Vec<String>,
+    /// Index of the currently-shown history entry, or `None` when
+    /// the player is typing fresh text. Reset whenever a new line
+    /// is sent.
+    chat_history_idx: Option<usize>,
     /// Previous-frame state of the T key for rising-edge open.
     t_prev: bool,
     lmb_pending: bool,
@@ -3664,6 +3673,8 @@ impl Voxel {
             chat_open: false,
             chat_input: String::new(),
             chat_log: Vec::new(),
+            chat_history: Vec::new(),
+            chat_history_idx: None,
             t_prev: false,
             lmb_pending: false,
             rmb_pending: false,
@@ -4730,6 +4741,8 @@ impl Voxel {
         // (raycast_mob, registry, etc.) finish before this
         // exclusive borrow begins.
         let chat_buf = &mut self.chat_input;
+        let chat_history_ref = &self.chat_history;
+        let chat_history_idx = &mut self.chat_history_idx;
         let player_name_buf = &mut self.player_name;
 
         let Some(ui) = self.ui.as_mut() else {
@@ -5757,6 +5770,44 @@ impl Voxel {
                                         .hint_text("press T to chat, Enter sends"),
                                 );
                                 resp.request_focus();
+                                // History scrolling via Up/Down.
+                                // Older entries are at the start
+                                // of the Vec, newest at the end;
+                                // Up walks backward, Down walks
+                                // forward. Down past the newest
+                                // entry clears the line so the
+                                // player can compose fresh text.
+                                let up_pressed = ui
+                                    .input(|i| i.key_pressed(egui::Key::ArrowUp));
+                                let down_pressed = ui
+                                    .input(|i| i.key_pressed(egui::Key::ArrowDown));
+                                if !chat_history_ref.is_empty() {
+                                    if up_pressed {
+                                        let new_idx = match *chat_history_idx {
+                                            None => chat_history_ref.len() - 1,
+                                            Some(i) => i.saturating_sub(1),
+                                        };
+                                        *chat_history_idx = Some(new_idx);
+                                        *chat_buf =
+                                            chat_history_ref[new_idx].clone();
+                                    } else if down_pressed {
+                                        match *chat_history_idx {
+                                            Some(i)
+                                                if i + 1 < chat_history_ref.len() =>
+                                            {
+                                                *chat_history_idx = Some(i + 1);
+                                                *chat_buf =
+                                                    chat_history_ref[i + 1]
+                                                        .clone();
+                                            }
+                                            Some(_) => {
+                                                *chat_history_idx = None;
+                                                chat_buf.clear();
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                }
                                 if resp.lost_focus()
                                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                                 {
@@ -5804,7 +5855,18 @@ impl Voxel {
             let text = self.chat_input.trim().to_string();
             self.chat_input.clear();
             self.chat_open = false;
+            self.chat_history_idx = None;
             if !text.is_empty() {
+                // Push to history, dedup adjacent repeats so
+                // hitting Up + Enter twice doesn't double-fill
+                // the log.
+                if self.chat_history.last() != Some(&text) {
+                    self.chat_history.push(text.clone());
+                    if self.chat_history.len() > 20 {
+                        let drop = self.chat_history.len() - 20;
+                        self.chat_history.drain(0..drop);
+                    }
+                }
                 // Slash-command dispatch. Commands run locally
                 // (no broadcast); everything else routes to chat
                 // normally below.
