@@ -3817,6 +3817,18 @@ impl Voxel {
         if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
             self.player_vel.y = JUMP_VELOCITY;
             self.grounded = false;
+            // Sprint-jump boost: add forward kick so a moving
+            // jump covers more ground than a stand-still jump.
+            if self.sprinting {
+                let fwd_h = Vec3::new(
+                    self.player_yaw.cos(),
+                    0.0,
+                    -self.player_yaw.sin(),
+                )
+                .normalize_or_zero();
+                self.player_vel.x += fwd_h.x * 3.0;
+                self.player_vel.z += fwd_h.z * 3.0;
+            }
         }
         self.player_vel.y += GRAVITY * dt;
 
