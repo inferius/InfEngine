@@ -538,6 +538,14 @@ struct ServerStateV2 {
     /// to the deterministic seed-0 layout.
     #[serde(default)]
     world_seed: u32,
+    /// Snow voxels with layer counts (1..=8). Saves the partial
+    /// stack so reloading a paused blizzard keeps the drift.
+    #[serde(default)]
+    snow_layers: Vec<([i32; 3], u8)>,
+    /// Sticky torch orientations keyed by voxel. Same encoding
+    /// as the in-memory `torch_orient` map.
+    #[serde(default)]
+    torch_orient: Vec<([i32; 3], u8)>,
 }
 
 fn default_player_health() -> f32 {
@@ -2502,6 +2510,15 @@ impl Voxel {
                     if state.world_seed != 0 {
                         set_world_seed(state.world_seed);
                     }
+                    // Hydrate snow stack + torch orientation
+                    // overrides so a reloaded save matches the
+                    // exact state the host left.
+                    for (v, l) in state.snow_layers {
+                        self.snow_positions.insert(v, l.clamp(1, 8));
+                    }
+                    for (v, o) in state.torch_orient {
+                        self.torch_orient.insert(v, o);
+                    }
                     // Restore inventories into a side map indexed by
                     // client name. They get re-keyed to live client
                     // ids on connect (see `tick_net`).
@@ -2972,6 +2989,16 @@ impl Voxel {
             player_health: self.player_health,
             kill_count: self.kill_count,
             world_seed: world_seed(),
+            snow_layers: self
+                .snow_positions
+                .iter()
+                .map(|(v, l)| (*v, *l))
+                .collect(),
+            torch_orient: self
+                .torch_orient
+                .iter()
+                .map(|(v, o)| (*v, *o))
+                .collect(),
         };
         match bincode::serde::encode_to_vec(&state, cfg) {
             Ok(payload) => {
