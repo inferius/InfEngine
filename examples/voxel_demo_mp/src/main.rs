@@ -11637,6 +11637,15 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
     },
+    // Decorative flower placed sparsely on plains-biome grass.
+    // Transparent + alpha-cutout via the standard atlas path; the
+    // procedural generator only spawns it on top of grass voxels.
+    BlockType {
+        id: 20, name: "flower", color: [0.95, 0.30, 0.30], transparent: true,
+        top: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -12116,6 +12125,40 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
                 let local_y = wy - origin.y as i32;
                 set_in_chunk(&mut chunk, x, local_y, z, BlockId(6));
             }
+        }
+    }
+    // Flower pass: sparse decorations on plains-biome grass.
+    // Uses a different hash salt than trees so the patterns
+    // don't overlap. Each candidate cell only blooms when the
+    // ground voxel is grass + the air block above is empty.
+    for x in 0..cs {
+        for z in 0..cs {
+            let wx = origin.x as i32 + x;
+            let wz = origin.z as i32 + z;
+            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            if biome != Biome::Plains {
+                continue;
+            }
+            if hash2(wx ^ 0x9A75, wz ^ 0x5BA9) % 18 != 3 {
+                continue;
+            }
+            let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
+            let local_y = (ground + 1) - origin.y as i32;
+            // Only place on top of grass + into air.
+            if local_y < 0 || local_y >= cs {
+                continue;
+            }
+            let surface_y = local_y - 1;
+            if surface_y < 0 || surface_y >= cs {
+                continue;
+            }
+            if chunk.get(x as usize, surface_y as usize, z as usize).0 != 3 {
+                continue;
+            }
+            if chunk.get(x as usize, local_y as usize, z as usize).0 != 0 {
+                continue;
+            }
+            set_in_chunk(&mut chunk, x, local_y, z, BlockId(20));
         }
     }
     chunk
