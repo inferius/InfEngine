@@ -1277,6 +1277,10 @@ struct Voxel {
     /// player can recover after a death drop without dying again
     /// instantly to a lingering mob.
     invuln_remaining: f32,
+    /// Tracks the previous tick's is_night state so the host can
+    /// emit chat lines on the day <-> night transitions without
+    /// spamming every frame.
+    was_night: bool,
     /// Maximum concurrent live mob count. Tweakable via /mobcap
     /// so players on slow machines can cut the spawn pressure;
     /// defaults to `MOB_CAP_DEFAULT`.
@@ -4230,6 +4234,7 @@ impl Voxel {
             fly_mode: false,
             god_mode: false,
             invuln_remaining: 0.0,
+            was_night: false,
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
             weather: 0,
@@ -10092,6 +10097,24 @@ impl AppHandler for Voxel {
         // pauses the advance.
         if !self.freeze_time {
             self.day_time = (self.day_time + dt).rem_euclid(DAY_LENGTH_S);
+        }
+        // Day <-> night transition announcer. Fires once per
+        // crossing using the sun elevation so the chat doesn't
+        // spam every frame.
+        let phase_t = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
+        let elev_t = (phase_t * std::f32::consts::TAU).sin();
+        let is_night_now = elev_t < -0.05;
+        if is_night_now != self.was_night {
+            let line = if is_night_now {
+                "* night falls"
+            } else {
+                "* dawn breaks"
+            };
+            self.chat_log.push((
+                std::time::Instant::now(),
+                line.to_string(),
+            ));
+            self.was_night = is_night_now;
         }
 
         let player_pos = self.player_pos;
