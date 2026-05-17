@@ -1253,6 +1253,9 @@ struct Voxel {
     /// pose; /home teleports back. Persisted via the config file
     /// so the location survives across launches.
     home_pos: Option<[f32; 3]>,
+    /// Custom respawn point. None falls back to the origin
+    /// pad. Persisted to the config file like home_pos.
+    spawn_pos: Option<[f32; 3]>,
     /// Wallclock instant the session started running. Used by the
     /// F3 debug overlay to show how long the player has been
     /// playing. Stays None until on_start runs.
@@ -2237,7 +2240,10 @@ impl Voxel {
         });
         if self.player_health <= 0.0 {
             tracing::warn!("player died (HP = 0) - respawning");
-            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+            self.player_pos = match self.spawn_pos {
+                Some(p) => Vec3::new(p[0], p[1], p[2]),
+                None => Vec3::new(0.0, 32.0, 0.0),
+            };
             self.player_vel = Vec3::ZERO;
             self.player_health = PLAYER_MAX_HEALTH;
             let mut dropped = 0usize;
@@ -2337,6 +2343,9 @@ impl Voxel {
         if let Some(p) = self.home_pos {
             let _ = writeln!(text, "home={},{},{}", p[0], p[1], p[2]);
         }
+        if let Some(p) = self.spawn_pos {
+            let _ = writeln!(text, "spawn={},{},{}", p[0], p[1], p[2]);
+        }
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2407,6 +2416,18 @@ impl Voxel {
                         )
                     {
                         self.home_pos = Some([x, y, z]);
+                    }
+                }
+                "spawn" => {
+                    let parts: Vec<&str> = value.split(',').collect();
+                    if parts.len() == 3
+                        && let (Ok(x), Ok(y), Ok(z)) = (
+                            parts[0].trim().parse::<f32>(),
+                            parts[1].trim().parse::<f32>(),
+                            parts[2].trim().parse::<f32>(),
+                        )
+                    {
+                        self.spawn_pos = Some([x, y, z]);
                     }
                 }
                 _ => {}
@@ -4153,6 +4174,7 @@ impl Voxel {
             f5_prev: false,
             q_prev: false,
             home_pos: None,
+            spawn_pos: None,
             session_started: None,
             last_day_broadcast: None,
             show_debug: false,
@@ -4914,7 +4936,10 @@ impl Voxel {
                 pos = ?[self.player_pos.x, self.player_pos.y, self.player_pos.z],
                 "player fell through the world - respawning"
             );
-            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+            self.player_pos = match self.spawn_pos {
+                Some(p) => Vec3::new(p[0], p[1], p[2]),
+                None => Vec3::new(0.0, 32.0, 0.0),
+            };
             self.player_vel = Vec3::ZERO;
             let mut dropped = 0usize;
             for slot in self.inventory[HOTBAR_SLOTS..].iter_mut() {
@@ -8145,12 +8170,28 @@ impl Voxel {
                                 .push("Lifted 3 blocks up.".to_string());
                             handled_locally = true;
                         }
+                        "setspawn" => {
+                            self.spawn_pos = Some([
+                                self.player_pos.x,
+                                self.player_pos.y,
+                                self.player_pos.z,
+                            ]);
+                            self.save_config();
+                            local_lines.push(
+                                "Respawn point updated.".to_string(),
+                            );
+                            handled_locally = true;
+                        }
                         "spawn" => {
-                            // Snap the host back to the origin
-                            // spawn pad. Works in any role since
-                            // the local player's pose is always
+                            // Snap to the configured spawn (or
+                            // the origin pad if nothing set).
+                            // Works in any role since the local
+                            // player's pose is always
                             // authoritative on its own client.
-                            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+                            self.player_pos = match self.spawn_pos {
+                                Some(p) => Vec3::new(p[0], p[1], p[2]),
+                                None => Vec3::new(0.0, 32.0, 0.0),
+                            };
                             self.player_vel = Vec3::ZERO;
                             self.fall_start_y = None;
                             local_lines.push("Teleported to spawn.".to_string());
