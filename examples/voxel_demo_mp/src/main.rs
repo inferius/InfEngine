@@ -8810,6 +8810,26 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "jump" => {
+                            // Launches the local player straight
+                            // up. Default 12 m/s; arg sets the
+                            // vertical velocity directly (clamped
+                            // 1..=50). Fall damage still applies
+                            // on landing - this is a launch, not
+                            // a teleport. Stamina untouched.
+                            let strength: f32 = arg
+                                .parse::<f32>()
+                                .ok()
+                                .unwrap_or(12.0)
+                                .clamp(1.0, 50.0);
+                            self.player_vel.y = strength;
+                            self.grounded = false;
+                            self.fall_start_y = Some(self.player_pos.y);
+                            local_lines.push(format!(
+                                "Launched at {strength:.0} m/s."
+                            ));
+                            handled_locally = true;
+                        }
                         "stuck" | "unstuck" => {
                             // Quick rescue: punch the player 3
                             // blocks straight up + zero velocity.
