@@ -949,6 +949,13 @@ const COLLISION_EPSILON: f32 = 1e-4;
 /// hearts of 2 HP each).
 const PLAYER_MAX_HEALTH: f32 = 20.0;
 const STAMINA_MAX: f32 = 100.0;
+/// Breath capacity in seconds. MC matches this at ~15 s with
+/// the default lung capacity. Drains 1 s/s while submerged in a
+/// liquid that has `drains_air = true`; refills 4x as fast
+/// after surfacing.
+const AIR_MAX_SEC: f32 = 15.0;
+/// Drowning damage rate after the air meter hits zero.
+const DROWN_DAMAGE_PER_SEC: f32 = 2.0;
 const STAMINA_DRAIN: f32 = 20.0;
 const STAMINA_REGEN: f32 = 18.0;
 const STAMINA_REACTIVATE: f32 = 25.0;
@@ -1443,6 +1450,11 @@ struct Voxel {
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     sprinting: bool,
+    /// Breath remaining in seconds (0..=AIR_MAX_SEC). Drains
+    /// while submerged in a `drains_air` liquid; refills 4x as
+    /// fast on the surface. Hitting zero triggers drowning
+    /// damage at `DROWN_DAMAGE_PER_SEC`.
+    player_air: f32,
     /// Sprint stamina in 0..STAMINA_MAX. Drains while sprinting,
     /// regens when not. Reaching zero blocks the sprint speed
     /// bonus until it regens above the small reactivation
@@ -5634,6 +5646,7 @@ impl Voxel {
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             stamina: STAMINA_MAX,
+            player_air: AIR_MAX_SEC,
             remote_interp: HashMap::new(),
             player_name: {
                 // Pseudo-random 4-digit suffix so repeat-launch
@@ -6762,6 +6775,23 @@ impl Voxel {
                     liquid.submerged_damage_per_sec * dt,
                 );
             }
+            // Breath: drain in liquids flagged `drains_air`; hold
+            // steady in others (lava). When the meter empties the
+            // player starts taking drowning damage.
+            if liquid.drains_air {
+                self.player_air = (self.player_air - dt).max(0.0);
+                if self.player_air <= 0.0 {
+                    self.apply_player_damage(
+                        DROWN_DAMAGE_PER_SEC * dt,
+                    );
+                }
+            }
+        } else {
+            // Surfaced: air refills 4x faster than it drains so
+            // a quick breath at the surface buys plenty of dive
+            // time.
+            self.player_air =
+                (self.player_air + dt * 4.0).min(AIR_MAX_SEC);
         }
         let in_water = liquid_under.is_some();
         // Splash on the air -> water transition: short droplet
@@ -6950,6 +6980,8 @@ impl Voxel {
         let player_health = self.player_health;
         let stamina_frac =
             (self.stamina / STAMINA_MAX).clamp(0.0, 1.0);
+        let air_frac =
+            (self.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
         let player_hurt_flash = self.hurt_flash;
         let invuln_remaining = self.invuln_remaining;
         let show_debug = self.show_debug;
@@ -7769,6 +7801,43 @@ impl Voxel {
                                         egui::Color32::from_rgb(220, 180, 60)
                                     } else {
                                         egui::Color32::from_rgb(220, 90, 60)
+                                    };
+                                    painter.rect_filled(fill, 2.0, col);
+                                });
+                            }
+                            // Air bar - only visible while the
+                            // breath meter is below full. Drains
+                            // submerged, refills on the surface.
+                            // Tints from cyan -> orange -> red as
+                            // the meter empties.
+                            if air_frac < 0.999 {
+                                ui.horizontal(|ui| {
+                                    ui.label("Air:");
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(120.0, 8.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let painter = ui.painter();
+                                    painter.rect_filled(
+                                        rect,
+                                        2.0,
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            30, 30, 30, 220,
+                                        ),
+                                    );
+                                    let fill = egui::Rect::from_min_size(
+                                        rect.min,
+                                        egui::vec2(
+                                            rect.width() * air_frac,
+                                            rect.height(),
+                                        ),
+                                    );
+                                    let col = if air_frac > 0.5 {
+                                        egui::Color32::from_rgb(100, 180, 230)
+                                    } else if air_frac > 0.2 {
+                                        egui::Color32::from_rgb(220, 180, 60)
+                                    } else {
+                                        egui::Color32::from_rgb(220, 60, 60)
                                     };
                                     painter.rect_filled(fill, 2.0, col);
                                 });
@@ -15011,6 +15080,11 @@ struct Liquid {
     /// HP damage per second the player takes while submerged.
     /// Water 0.0, lava 4.0.
     submerged_damage_per_sec: f32,
+    /// Whether being submerged in this liquid drains the
+    /// player's air meter (and triggers drowning damage when
+    /// the meter hits zero). Water = true, lava = false (lava
+    /// burns directly via `submerged_damage_per_sec`).
+    drains_air: bool,
 }
 
 /// Registry of every flowing liquid. The tick loop iterates this
@@ -15030,6 +15104,7 @@ const LIQUIDS: &[Liquid] = &[
         swim_buoyancy: 12.0,
         submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 0.0,
+        drains_air: true,
     },
     Liquid {
         block_id: LAVA_ID,
@@ -15043,6 +15118,7 @@ const LIQUIDS: &[Liquid] = &[
         swim_buoyancy: 4.0,
         submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 4.0,
+        drains_air: false,
     },
 ];
 
