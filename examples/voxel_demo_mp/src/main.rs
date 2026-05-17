@@ -947,6 +947,48 @@ const PLAYER_RADIUS: f32 = 0.3;
 const COLLISION_EPSILON: f32 = 1e-4;
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10
 /// hearts of 2 HP each).
+/// Floating drop entity left in the world by a mining break or
+/// a liquid washing a decoration away. Drops bob in place with a
+/// gentle sine wave, get picked up when a player walks within
+/// `DROP_PICKUP_RADIUS`, and despawn after `DROP_DESPAWN_SEC`.
+/// Authoritative on the host; clients receive `vx.drop_spawn` +
+/// `vx.drop_pickup` updates from the server.
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+struct DropItem {
+    id: u32,
+    block: u16,
+    /// Centre of the drop in world coords; `pos[1]` is the body
+    /// origin (not eye height like the player).
+    pos: [f32; 3],
+    /// Linear velocity in m/s. Drops accelerate downward via
+    /// gravity until they hit ground, then bob in place.
+    vel: [f32; 3],
+    /// Seconds since spawn. Drives both the despawn timer and
+    /// the bob phase.
+    age: f32,
+}
+
+/// Net wire message for a fresh drop the host wants every peer
+/// to render. Sent on spawn; clients append to their local
+/// `dropped_items` mirror.
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+struct DropSpawnMsg {
+    id: u32,
+    block: u16,
+    pos: [f32; 3],
+}
+
+/// Drops at the same spawn position spread their initial XZ
+/// velocity around so a single tile that drops two items
+/// doesn't have them perfectly overlapping.
+const DROP_PICKUP_RADIUS: f32 = 1.5;
+const DROP_DESPAWN_SEC: f32 = 90.0;
+/// Pickup-eligible delay: the drop ignores the player for the
+/// first ~0.4 s after spawning so the player isn't insta-
+/// picking-up the block they just broke without time to read
+/// it visually.
+const DROP_PICKUP_DELAY_SEC: f32 = 0.4;
+
 /// Damage source classifier - drives the per-kind hurt SFX
 /// `apply_player_damage_kind` plays on integer heart loss. New
 /// kinds drop in here + add a `match` arm in the SFX selector.
@@ -1769,6 +1811,14 @@ struct Voxel {
     /// / source merge).
     liquid_mesh_handles: HashMap<u16, MeshHandle>,
     liquid_mesh_dirty: bool,
+    /// Floating drop entities the world (host-authoritative).
+    /// Each tick the host steps physics, runs pickup, broadcasts
+    /// spawn / pickup messages. Clients keep a mirrored Vec
+    /// purely for rendering.
+    dropped_items: Vec<DropItem>,
+    /// Monotonic id source for new drops on the host. Clients
+    /// keep at 0; ids come from the server.
+    next_drop_id: u32,
     /// Dedicated cube mesh for sheep bodies. Has its own
     /// `AlbedoHandle` binding so the texture (loaded from
     /// `assets/textures/entity/sheep/sheep.tga`) doesn't leak onto
@@ -2363,6 +2413,144 @@ impl Voxel {
     /// dispatches each liquid's tick passes when the cadence
     /// (`Liquid::tick_period`) matches. Host-only - clients
     /// receive the resulting `vx.edit` traffic.
+    /// Spawn a fresh drop entity at the voxel centre. Host-only
+    /// path: assigns a new id, appends to `dropped_items`, and
+    /// broadcasts a `vx.drop_spawn` so every connected peer
+    /// renders it. Caller passes the source `block` (whatever
+    /// was just broken or washed) - air drops are skipped.
+    fn spawn_drop(&mut self, block: BlockId, voxel: [i32; 3]) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if block.is_air() {
+            return;
+        }
+        let id = self.next_drop_id;
+        self.next_drop_id = self.next_drop_id.wrapping_add(1).max(1);
+        // Slight randomised XZ kick + small upward bounce so
+        // multiple drops at the same voxel scatter visibly.
+        let phase = (id as f32) * 1.732;
+        let kick_x = phase.sin() * 0.6;
+        let kick_z = phase.cos() * 0.6;
+        let drop = DropItem {
+            id,
+            block: block.0,
+            pos: [
+                voxel[0] as f32 + 0.5,
+                voxel[1] as f32 + 0.4,
+                voxel[2] as f32 + 0.5,
+            ],
+            vel: [kick_x, 2.0, kick_z],
+            age: 0.0,
+        };
+        self.dropped_items.push(drop);
+        if let NetRole::Server { server, .. } = &mut self.net {
+            let cfg = bincode::config::standard();
+            let msg = DropSpawnMsg {
+                id: drop.id,
+                block: drop.block,
+                pos: drop.pos,
+            };
+            if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                server.broadcast_bytes("vx.drop_spawn", buf);
+            }
+        }
+    }
+
+    /// Step every drop's physics + pickup logic for one frame.
+    /// Host runs the full simulation. Clients only advance the
+    /// age + apply a simple gravity preview so the bob looks
+    /// right between server snapshots; pickup is host-side.
+    fn tick_drops(&mut self, dt: f32) {
+        // Local player AABB centre for pickup checks. Drops
+        // pulled in via simple radius (no AABB sweep needed for
+        // a cosmetic item collision).
+        let player_pos = self.player_pos;
+        let mut to_pickup: Vec<usize> = Vec::new();
+        let mut to_despawn: Vec<usize> = Vec::new();
+        for (i, drop) in self.dropped_items.iter_mut().enumerate() {
+            drop.age += dt;
+            // Gravity + ground rest. Sample one voxel below the
+            // drop centre; if it's solid (anything other than
+            // air or another liquid) treat as floor.
+            let below_vy = (drop.pos[1] - 0.2).floor() as i32;
+            let below = [
+                drop.pos[0].floor() as i32,
+                below_vy,
+                drop.pos[2].floor() as i32,
+            ];
+            let below_b =
+                if matches!(self.net, NetRole::Client { .. }) {
+                    // Clients have the same world so this works
+                    // on both sides.
+                    self.world.get(below)
+                } else {
+                    self.world.get(below)
+                };
+            let on_ground = !below_b.is_air()
+                && liquid_for(below_b).is_none()
+                && (drop.pos[1] - (below_vy as f32 + 1.0)) <= 0.05;
+            if on_ground {
+                drop.vel[0] *= 0.6;
+                drop.vel[2] *= 0.6;
+                drop.vel[1] = 0.0;
+                drop.pos[1] = below_vy as f32 + 1.0;
+            } else {
+                drop.vel[1] -= 14.0 * dt;
+                drop.vel[1] = drop.vel[1].max(-12.0);
+            }
+            drop.pos[0] += drop.vel[0] * dt;
+            drop.pos[1] += drop.vel[1] * dt;
+            drop.pos[2] += drop.vel[2] * dt;
+            // Despawn after the configured lifetime.
+            if drop.age >= DROP_DESPAWN_SEC {
+                to_despawn.push(i);
+                continue;
+            }
+            // Pickup: host-authoritative, only after the
+            // initial delay so the player doesn't insta-collect
+            // every cell they break.
+            if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+                && drop.age >= DROP_PICKUP_DELAY_SEC
+            {
+                let dx = player_pos.x - drop.pos[0];
+                let dy = player_pos.y - drop.pos[1];
+                let dz = player_pos.z - drop.pos[2];
+                let d2 = dx * dx + dy * dy + dz * dz;
+                if d2 <= DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS {
+                    to_pickup.push(i);
+                }
+            }
+        }
+        // Apply pickups + despawns in reverse so indices stay
+        // valid as we drain.
+        let mut removed_ids: Vec<u32> = Vec::new();
+        let mut picked_blocks: Vec<BlockId> = Vec::new();
+        for &i in to_pickup.iter().chain(to_despawn.iter()).rev() {
+            if i >= self.dropped_items.len() {
+                continue;
+            }
+            let drop = self.dropped_items.swap_remove(i);
+            removed_ids.push(drop.id);
+            if to_pickup.contains(&i) {
+                picked_blocks.push(BlockId(drop.block));
+            }
+        }
+        for b in picked_blocks {
+            self.pickup(b);
+        }
+        if !removed_ids.is_empty()
+            && let NetRole::Server { server, .. } = &mut self.net
+        {
+            let cfg = bincode::config::standard();
+            for id in &removed_ids {
+                if let Ok(buf) = bincode::serde::encode_to_vec(*id, cfg) {
+                    server.broadcast_bytes("vx.drop_remove", buf);
+                }
+            }
+        }
+    }
+
     fn tick_liquids(&mut self) {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
@@ -2433,6 +2621,12 @@ impl Voxel {
                 .get(&parent)
                 .copied()
                 .unwrap_or(0);
+            // Washing a decoration out of the way drops it as
+            // an item the player can pick up.
+            let washed = self.world.get(*below);
+            if !washed.is_air() && block_is_washable(washed) {
+                self.spawn_drop(washed, *below);
+            }
             self.world_set_tracked(*below, BlockId(liquid_id));
             self.liquid_level.insert(*below, level);
             let coords = Self::affected_chunks(*below);
@@ -2552,6 +2746,12 @@ impl Voxel {
             return;
         }
         for (pos, lvl) in &to_spawn {
+            // Drop any washable decoration the liquid is about
+            // to overwrite (flower / torch / snow layer).
+            let washed = self.world.get(*pos);
+            if !washed.is_air() && block_is_washable(washed) {
+                self.spawn_drop(washed, *pos);
+            }
             self.world_set_tracked(*pos, BlockId(liquid_id));
             self.liquid_level.insert(*pos, *lvl);
             let coords = Self::affected_chunks(*pos);
@@ -4446,6 +4646,12 @@ impl Voxel {
         // broadcast is only consumed by clients so their slope
         // mesh matches the host's depth ramp.
         let mut liquid_level_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // Drop entity updates received this tick. Client-only -
+        // the host is the source of truth and never receives
+        // these. Drained into `self.dropped_items` after the
+        // net match arm releases its borrow on `self.net`.
+        let mut drop_spawns: Vec<DropSpawnMsg> = Vec::new();
+        let mut drop_removes: Vec<u32> = Vec::new();
         // Torch lean orientation updates received this tick. Drained
         // into `self.torch_orient` after the net match arm releases
         // its borrow on `self.net`. Server arm also rebroadcasts so
@@ -5327,6 +5533,26 @@ impl Voxel {
                                 liquid_level_updates.push((v, level));
                             }
                         }
+                        "vx.drop_spawn" => {
+                            if let Ok((m, _)) =
+                                bincode::serde::decode_from_slice::<
+                                    DropSpawnMsg,
+                                    _,
+                                >(&data, cfg)
+                            {
+                                drop_spawns.push(m);
+                            }
+                        }
+                        "vx.drop_remove" => {
+                            if let Ok((id, _)) =
+                                bincode::serde::decode_from_slice::<
+                                    u32,
+                                    _,
+                                >(&data, cfg)
+                            {
+                                drop_removes.push(id);
+                            }
+                        }
                         "vx.torch_orient" => {
                             if let Ok(((v, orient), _)) =
                                 bincode::serde::decode_from_slice::<
@@ -5525,6 +5751,18 @@ impl Voxel {
             }
             // New levels reshape the slope mesh.
             self.liquid_mesh_dirty = true;
+        }
+        for m in drop_spawns {
+            self.dropped_items.push(DropItem {
+                id: m.id,
+                block: m.block,
+                pos: m.pos,
+                vel: [0.0, 2.0, 0.0],
+                age: 0.0,
+            });
+        }
+        for id in drop_removes {
+            self.dropped_items.retain(|d| d.id != id);
         }
         if let Some(reason) = kick_reason {
             // Server kicked us. Notify the player + bounce back
@@ -5786,6 +6024,8 @@ impl Voxel {
             net: NetRole::Offline,
             player_cube: None,
             liquid_mesh_handles: HashMap::new(),
+            dropped_items: Vec::new(),
+            next_drop_id: 1,
             liquid_mesh_dirty: true,
             sheep_mesh: None,
             sheep_head_mesh: None,
@@ -13269,7 +13509,10 @@ impl AppHandler for Voxel {
                 // selected slot's tool tier meets the block's
                 // requirement. Player can still swing at higher
                 // tier blocks but gets nothing back, matching
-                // Minecraft's "wrong tool" semantics.
+                // Minecraft's "wrong tool" semantics. The block
+                // spawns as a floating drop the player walks
+                // through to collect, instead of jumping
+                // straight into the inventory.
                 let held = self
                     .inventory
                     .get(self.selected_slot)
@@ -13280,7 +13523,7 @@ impl AppHandler for Voxel {
                 let tier = tool_tier(held);
                 let needed = block_required_tier(broken);
                 if tier >= needed {
-                    self.pickup(broken);
+                    self.spawn_drop(broken, voxel);
                 }
             }
             if broken != BlockId::AIR {
@@ -13729,6 +13972,11 @@ impl AppHandler for Voxel {
         // liquid the host runs fall -> spread -> optional source
         // merge -> decay. Clients skip and rely on `vx.edit`.
         self.tick_liquids();
+        // Step every floating drop entity: gravity, bob,
+        // pickup-on-touch, despawn after lifetime. Host runs
+        // the full sim; clients also tick locally for smooth
+        // motion between server snapshots.
+        self.tick_drops(dt);
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
@@ -14140,6 +14388,41 @@ impl AppHandler for Voxel {
                 0.0,
                 rough,
             );
+        }
+        // Floating drop entities. Each renders as a small cube
+        // (~0.3 voxel) bobbing in place. Pulled off
+        // `dropped_items` so both host + client see the same
+        // set; bob phase comes from the drop's `age` so
+        // neighbouring items don't oscillate in lockstep.
+        if !self.dropped_items.is_empty() {
+            let cube = *self
+                .player_cube
+                .get_or_insert_with(|| renderer.cube_handle());
+            for drop in self.dropped_items.iter() {
+                let bob = (drop.age * 2.4).sin() * 0.08;
+                let block = BlockId(drop.block);
+                let color = self
+                    .registry
+                    .get(block)
+                    .map(|d| d.color)
+                    .unwrap_or([0.75, 0.55, 0.30]);
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.28, 0.28, 0.28),
+                    glam::Quat::from_rotation_y(drop.age * 1.4),
+                    Vec3::new(
+                        drop.pos[0],
+                        drop.pos[1] + 0.14 + bob,
+                        drop.pos[2],
+                    ),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    m.to_cols_array(),
+                    [color[0], color[1], color[2], 1.0],
+                    0.0,
+                    0.7,
+                );
+            }
         }
         // Render remote players as coloured cubes so each peer is
         // visible. The interpolation buffer (`remote_interp`) is
