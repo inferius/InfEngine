@@ -4965,6 +4965,17 @@ impl Voxel {
         }
     }
 
+    /// Returns true while *any* in-game popup / modal is open.
+    /// Central point used by the cursor + input + click gates so
+    /// future popups only need to add one flag here instead of
+    /// fanning out to every guard site.
+    fn any_panel_open(&self) -> bool {
+        self.inventory_open
+            || self.mp_menu_open
+            || self.chat_open
+            || self.show_debug_panel
+    }
+
     fn apply_cursor_settings(&self, window: &EngineWindow) {
         use infengine_window::raw_winit::window::CursorGrabMode;
         let playing = matches!(self.state, AppState::Playing);
@@ -4975,12 +4986,8 @@ impl Voxel {
         // Inventory overlay needs a usable cursor + breaks the
         // lock so the mouse can leave the window without being
         // snapped back to the centre.
-        let active = playing
-            && self.has_focus
-            && !self.inventory_open
-            && !self.mp_menu_open
-            && !self.chat_open
-            && !self.show_debug_panel;
+        let active =
+            playing && self.has_focus && !self.any_panel_open();
         let grab = if active && self.settings.lock_cursor {
             if self.settings.hide_cursor {
                 CursorGrabMode::Locked
@@ -5003,10 +5010,7 @@ impl Voxel {
         // mouse-look, WASD, jump, hotbar wheel. This matches the
         // Minecraft convention - opening the inventory in multiplayer
         // never pauses the world for anyone.
-        let input_active = !self.inventory_open
-            && !self.mp_menu_open
-            && !self.chat_open
-            && !self.show_debug_panel;
+        let input_active = !self.any_panel_open();
 
         if input_active {
             let dx = std::mem::take(&mut self.mouse_dx);
@@ -11301,11 +11305,7 @@ impl AppHandler for Voxel {
         // Mob attack interception: if LMB and a mob is closer than
         // the targeted voxel (or there's no voxel target), route
         // the click as a melee strike instead of a block break.
-        let combat_gate = lmb
-            && !self.inventory_open
-            && !self.mp_menu_open
-            && !self.chat_open
-            && !self.show_debug_panel;
+        let combat_gate = lmb && !self.any_panel_open();
         let mob_target = if combat_gate {
             self.raycast_mob(self.player_pos, forward, MOB_ATTACK_REACH)
         } else {
@@ -11427,10 +11427,7 @@ impl AppHandler for Voxel {
         // toward `total`; on completion, set `mine_break` so the
         // block-edit path below executes the break exactly once.
         let lmb_active = self.lmb_held
-            && !self.inventory_open
-            && !self.mp_menu_open
-            && !self.chat_open
-            && !self.show_debug_panel
+            && !self.any_panel_open()
             && attack_mob.is_none()
             && attack_player.is_none();
         let mut mine_break: Option<[i32; 3]> = None;
@@ -11606,10 +11603,7 @@ impl AppHandler for Voxel {
             });
         }
         // Block place: RMB single click stays instant; no mining.
-        if !self.inventory_open
-            && !self.mp_menu_open
-            && !self.chat_open
-            && !self.show_debug_panel
+        if !self.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
