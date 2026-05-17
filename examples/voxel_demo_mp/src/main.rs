@@ -6685,9 +6685,31 @@ impl Voxel {
                     let mut local_lines: Vec<String> = Vec::new();
                     match cmd.as_str() {
                         "help" | "?" => {
+                            // Split into themed sections so the
+                            // chat log shows them line by line
+                            // instead of one ugly wrap.
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /clearinventory, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /sleep, /heal, /kill, /fly, /home, /sethome, /setblock <x> <y> <z> <block>, /w <name> <msg>"
+                                "Chat: /help /players /clear /me /w /wave /shrug /dance"
                                     .to_string(),
+                            );
+                            local_lines.push(
+                                "Player: /spawn /tp /tppos /home /sethome /setspawn /pos /stuck /heal /kill /stats /uptime /version"
+                                    .to_string(),
+                            );
+                            local_lines.push(
+                                "Creative: /give /clearinventory /resetinventory /fly /godmode /freezetime"
+                                    .to_string(),
+                            );
+                            local_lines.push(
+                                "World: /day /night /time /sleep /weather /seed /setblock /fill /explode /worldgen /clearedits /rd /chunkinfo"
+                                    .to_string(),
+                            );
+                            local_lines.push(
+                                "Host MP: /summon /kick /announce /mute /unmute /save /horde /spawnmob /killmobs /dmg"
+                                    .to_string(),
+                            );
+                            local_lines.push(
+                                "Misc: /fw /recipe /randomtp".to_string(),
                             );
                         }
                         "day" => {
