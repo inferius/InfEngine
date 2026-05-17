@@ -3023,6 +3023,7 @@ impl Voxel {
         // wins so a mid-tick burst doesn't bounce the sky.
         let mut day_time_update: Option<f32> = None;
         let mut seed_update: Option<u32> = None;
+        let mut weather_update: Option<u8> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -3331,6 +3332,19 @@ impl Voxel {
                 {
                     for id in &new_ids {
                         server.send_bytes_to_client(*id, "vx.seed", buf.clone());
+                    }
+                }
+                // Ship current weather to new joiners too.
+                if !new_ids.is_empty()
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec(self.weather, cfg)
+                {
+                    for id in &new_ids {
+                        server.send_bytes_to_client(
+                            *id,
+                            "vx.weather",
+                            buf.clone(),
+                        );
                     }
                 }
                 if !new_ids.is_empty() || !departed_ids.is_empty() {
@@ -3647,6 +3661,15 @@ impl Voxel {
                                 seed_update = Some(seed);
                             }
                         }
+                        "vx.weather" => {
+                            if let Ok((w, _)) =
+                                bincode::serde::decode_from_slice::<u8, _>(
+                                    &data, cfg,
+                                )
+                            {
+                                weather_update = Some(w);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3777,6 +3800,9 @@ impl Voxel {
         }
         if let Some(dt) = day_time_update {
             self.day_time = dt.rem_euclid(DAY_LENGTH_S);
+        }
+        if let Some(w) = weather_update {
+            self.weather = w;
         }
         if let Some(seed) = seed_update
             && seed != world_seed()
@@ -6868,9 +6894,11 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "weather" => {
-                            // /weather clear | rain. Toggles the
-                            // local rain spawner. Stays per-peer
-                            // for now since it's purely visual.
+                            // /weather clear | rain. Sets the
+                            // local state immediately. If we're
+                            // hosting, also broadcast a vx.weather
+                            // packet so connected clients flip
+                            // their visuals to match.
                             let kind = match arg.to_lowercase().as_str() {
                                 "rain" => Some(1u8),
                                 "clear" | "" => Some(0u8),
@@ -6879,6 +6907,16 @@ impl Voxel {
                             match kind {
                                 Some(k) => {
                                     self.weather = k;
+                                    if let NetRole::Server { server, .. } =
+                                        &mut self.net
+                                        && let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                k,
+                                                bincode::config::standard(),
+                                            )
+                                    {
+                                        server.broadcast_bytes("vx.weather", buf);
+                                    }
                                     local_lines.push(format!(
                                         "Weather: {}",
                                         if k == 1 { "rain" } else { "clear" }
