@@ -11934,16 +11934,31 @@ impl AppHandler for Voxel {
                     0.0,
                     0.9,
                 );
-                // Flame tip: small emissive-ish orange cube.
+                // Flame tip: small emissive-ish orange cube
+                // with an id-hashed flicker so neighbouring
+                // torches don't pulse in lockstep.
+                let phase = (p[0] as u32)
+                    .wrapping_mul(2654435761)
+                    ^ ((p[1] as u32).wrapping_mul(0x9E37_79B1))
+                    ^ ((p[2] as u32).wrapping_mul(0x85EB_CA6B));
+                let phase_f =
+                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+                let flicker_t =
+                    (self.day_time * 10.0 + phase_f).sin();
+                let scale = 0.16 + 0.025 * flicker_t;
+                let tip_y = cy + 0.78 + 0.015 * flicker_t;
+                let r = 1.0;
+                let g = (0.72 + 0.10 * flicker_t).clamp(0.0, 1.0);
+                let b = (0.25 + 0.08 * flicker_t).clamp(0.0, 1.0);
                 let tip = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.18, 0.18, 0.18),
+                    Vec3::splat(scale),
                     glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + 0.78, cz),
+                    Vec3::new(cx, tip_y, cz),
                 );
                 renderer.draw_mesh_pbr(
                     cube,
                     tip.to_cols_array(),
-                    [1.0, 0.78, 0.30, 1.0],
+                    [r, g, b, 1.0],
                     0.0,
                     0.4,
                 );
