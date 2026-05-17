@@ -1577,6 +1577,9 @@ struct Voxel {
     /// while weather=2 (host-only). Drives the visual snow
     /// blanket that grows on top of nearby grass voxels.
     snow_accum: f32,
+    /// Seconds between snow paint events while weather=2. Lower
+    /// = denser snowfall. Adjustable from the F6 debug panel.
+    snow_rate: f32,
     /// Accumulator for chicken feather laying. Hosts drop one
     /// feather into the host's inventory every ~12 s per live
     /// chicken via this timer. MP clients see no effect.
@@ -1594,9 +1597,17 @@ struct Voxel {
     /// edit (break clears, place inserts). Used per frame to push
     /// point lights to the renderer near the player.
     torch_positions: HashSet<[i32; 3]>,
-    /// Voxels currently holding a thin snow layer. Rendered as
-    /// a slab in the world pass; chunk mesher skips them.
-    snow_positions: HashSet<[i32; 3]>,
+    /// Sticky torch orientations keyed by voxel. 0 = floor,
+    /// 1 = wall pointing -X (mounted on +X face of a block at
+    /// voxel.x+1), 2 = +X, 3 = -Z, 4 = +Z. Set at placement
+    /// time from the raycast normal so neighbouring builds
+    /// don't reorient an existing torch.
+    torch_orient: HashMap<[i32; 3], u8>,
+    /// Voxels currently holding a thin snow layer + the layer
+    /// count (1..=8). MC-style stacking: each fall raises an
+    /// existing voxel's layer until it tops out, then a fresh
+    /// snow voxel is painted on top.
+    snow_positions: HashMap<[i32; 3], u8>,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1723,11 +1734,18 @@ impl Voxel {
         }
         // Snow layer voxels render as a thin slab in the world
         // pass; tracked separately so the renderer can skip
-        // the full-cube path.
+        // the full-cube path. Inserts default to 1 layer; the
+        // accumulator path bumps the value when more snow lands
+        // on the same voxel.
         if block.0 == 15 {
-            self.snow_positions.insert(voxel);
+            self.snow_positions.entry(voxel).or_insert(1);
         } else {
             self.snow_positions.remove(&voxel);
+        }
+        // Torch removal also clears the sticky orientation
+        // override so a future placement starts fresh.
+        if block.0 != TORCH_ID {
+            self.torch_orient.remove(&voxel);
         }
     }
 
@@ -4876,6 +4894,7 @@ impl Voxel {
             weather: 0,
             lightning_flash: 0.0,
             snow_accum: 0.0,
+            snow_rate: 0.4,
             chicken_lay_accum: 0.0,
             next_lightning_at: 6.0,
             muted_players: HashSet::new(),
@@ -4893,7 +4912,8 @@ impl Voxel {
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
-            snow_positions: HashSet::new(),
+            torch_orient: HashMap::new(),
+            snow_positions: HashMap::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -4948,7 +4968,9 @@ impl Voxel {
                                     origin.z as i32 + lz,
                                 ];
                                 if b.0 == 15 {
-                                    self.snow_positions.insert(v);
+                                    self.snow_positions
+                                        .entry(v)
+                                        .or_insert(1);
                                 } else if b.0 == TORCH_ID
                                     || b.0 == GLOWSTONE_ID
                                 {
@@ -5072,11 +5094,13 @@ impl Voxel {
                             let b = chunk_ref
                                 .get(lx as usize, ly as usize, lz as usize);
                             if b.0 == 15 {
-                                self.snow_positions.insert([
-                                    origin.x as i32 + lx,
-                                    origin.y as i32 + ly,
-                                    origin.z as i32 + lz,
-                                ]);
+                                self.snow_positions
+                                    .entry([
+                                        origin.x as i32 + lx,
+                                        origin.y as i32 + ly,
+                                        origin.z as i32 + lz,
+                                    ])
+                                    .or_insert(1);
                             } else if b.0 == TORCH_ID
                                 || b.0 == GLOWSTONE_ID
                             {
@@ -5653,7 +5677,7 @@ impl Voxel {
             && matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
         {
             self.snow_accum += dt;
-            if self.snow_accum >= 0.4 {
+            if self.snow_accum >= self.snow_rate.max(0.05) {
                 self.snow_accum = 0.0;
                 let r = 12i32;
                 let mut rng = (self.net_tick as u32)
@@ -5673,12 +5697,41 @@ impl Voxel {
                     self.surface_y_below(cx, cz, ceiling)
                 {
                     let surface = self.world.get([cx, sy, cz]).0;
-                    let above = self.world.get([cx, sy + 1, cz]).0;
-                    // Only blanket grass / dirt / sand / cobble;
-                    // air above so we don't overwrite an
-                    // existing block.
-                    if matches!(surface, 2 | 3 | 4 | 8) && above == 0 {
-                        let voxel = [cx, sy + 1, cz];
+                    // Walk upward looking for either an existing
+                    // snow voxel to thicken or the first air cell
+                    // to paint a fresh layer on. Cap stacking at
+                    // 4 voxels per column so deep drifts don't
+                    // pile up into the sky.
+                    let mut target_y = sy + 1;
+                    let mut stacked = 0u32;
+                    while stacked < 4 {
+                        let here = self
+                            .world
+                            .get([cx, target_y, cz])
+                            .0;
+                        if here == 0 {
+                            break;
+                        }
+                        if here == 15 {
+                            if let Some(layers) = self
+                                .snow_positions
+                                .get_mut(&[cx, target_y, cz])
+                                && *layers < 8
+                            {
+                                *layers += 1;
+                                target_y = i32::MIN;
+                                break;
+                            }
+                            target_y += 1;
+                            stacked += 1;
+                            continue;
+                        }
+                        target_y = i32::MIN;
+                        break;
+                    }
+                    let needs_solid_base = matches!(surface, 2 | 3 | 4 | 8 | 15);
+                    if target_y != i32::MIN && needs_solid_base {
+                        let voxel = [cx, target_y, cz];
                         let edit = EditMsg {
                             x: voxel[0],
                             y: voxel[1],
@@ -6235,6 +6288,7 @@ impl Voxel {
         let dbg_fly_mode = &mut self.fly_mode;
         let dbg_god_mode = &mut self.god_mode;
         let dbg_mob_cap = &mut self.mob_cap;
+        let dbg_snow_rate = &mut self.snow_rate;
         let weather_before = *dbg_weather;
         // Lazy-load the egui atlas texture on first render after
         // on_start has populated the pixel cache. We use NEAREST
@@ -6850,6 +6904,13 @@ impl Voxel {
                                     0..=64,
                                 )
                                 .text("Mob cap"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    dbg_snow_rate,
+                                    0.05..=2.0,
+                                )
+                                .text("Snow density (s/layer)"),
                             );
                             ui.checkbox(dbg_fly_mode, "Fly mode");
                             ui.checkbox(dbg_god_mode, "Godmode");
@@ -12122,6 +12183,27 @@ impl AppHandler for Voxel {
                         z: hit.place_at[2],
                         block: block.0,
                     };
+                    // Record sticky torch orientation from the
+                    // ray hit normal so a later neighbour change
+                    // can't flip a floor torch into a wall torch.
+                    if block.0 == TORCH_ID {
+                        let n = hit.normal;
+                        let orient = if n[1] > 0 {
+                            0u8 // floor
+                        } else if n[0] > 0 {
+                            1
+                        } else if n[0] < 0 {
+                            2
+                        } else if n[2] > 0 {
+                            3
+                        } else if n[2] < 0 {
+                            4
+                        } else {
+                            0
+                        };
+                        self.torch_orient
+                            .insert(hit.place_at, orient);
+                    }
                     if is_client {
                         self.world_set_tracked(hit.place_at, block);
                         let coords = Self::affected_chunks(hit.place_at);
@@ -12434,15 +12516,22 @@ impl AppHandler for Voxel {
                     ([p[0], p[1], p[2] - 1], (0, -1)),
                     ([p[0], p[1], p[2] + 1], (0, 1)),
                 ];
-                let (lean_x, lean_z) = if !below.is_air() {
+                let (lean_x, lean_z) = if let Some(orient) =
+                    self.torch_orient.get(p).copied()
+                {
+                    match orient {
+                        1 => (1, 0),
+                        2 => (-1, 0),
+                        3 => (0, 1),
+                        4 => (0, -1),
+                        _ => (0, 0),
+                    }
+                } else if !below.is_air() {
                     (0i32, 0i32)
                 } else {
                     let mut found = (0, 0);
                     for (v, (dx, dz)) in neighbours.iter() {
                         if !self.world.get(*v).is_air() {
-                            // Lean direction points AWAY from
-                            // the wall so the flame ends up on
-                            // the room side.
                             found = (-dx, -dz);
                             break;
                         }
@@ -12549,14 +12638,15 @@ impl AppHandler for Voxel {
             let cube = *self
                 .player_cube
                 .get_or_insert_with(|| renderer.cube_handle());
-            for p in self.snow_positions.iter() {
+            for (p, layers) in self.snow_positions.iter() {
                 let cx = p[0] as f32 + 0.5;
                 let cy = p[1] as f32;
                 let cz = p[2] as f32 + 0.5;
+                let h = (*layers as f32 / 8.0).clamp(0.06, 1.0);
                 let slab = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.0, 0.12, 1.0),
+                    Vec3::new(1.0, h, 1.0),
                     glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + 0.06, cz),
+                    Vec3::new(cx, cy + h * 0.5, cz),
                 );
                 renderer.draw_mesh_pbr(
                     cube,
