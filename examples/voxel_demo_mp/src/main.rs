@@ -5207,6 +5207,56 @@ impl Voxel {
                         ),
                     );
                 }
+                // Low-HP vignette: a pulsing red border that
+                // ramps in below 6 HP and intensifies the closer
+                // the player is to dying. The pulse uses day_time
+                // as a continuous clock so we don't have to plumb
+                // dt into the egui closure.
+                if hud_visible && player_health > 0.0 && player_health < 6.0 {
+                    let danger = ((6.0 - player_health) / 6.0).clamp(0.0, 1.0);
+                    let pulse = 0.55
+                        + 0.45
+                            * (day_time * std::f32::consts::TAU * 1.6).sin()
+                                .abs();
+                    let base_alpha = (40.0 + 110.0 * danger) * pulse;
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_low_hp_vignette"),
+                    ));
+                    let rect = ctx.content_rect();
+                    let thickness = (rect.width().min(rect.height()) * 0.22)
+                        .max(40.0);
+                    // Four edge bands so the centre stays clear -
+                    // a darker corner read than a flat tint.
+                    let top = egui::Rect::from_min_max(
+                        rect.min,
+                        egui::pos2(rect.max.x, rect.min.y + thickness),
+                    );
+                    let bottom = egui::Rect::from_min_max(
+                        egui::pos2(rect.min.x, rect.max.y - thickness),
+                        rect.max,
+                    );
+                    let left = egui::Rect::from_min_max(
+                        rect.min,
+                        egui::pos2(rect.min.x + thickness, rect.max.y),
+                    );
+                    let right = egui::Rect::from_min_max(
+                        egui::pos2(rect.max.x - thickness, rect.min.y),
+                        rect.max,
+                    );
+                    for r in [top, bottom, left, right] {
+                        layer.rect_filled(
+                            r,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(
+                                160,
+                                0,
+                                0,
+                                (base_alpha as u8).min(180),
+                            ),
+                        );
+                    }
+                }
                 // Star field: dimly visible at dusk, brighter at
                 // midnight, gone during the day. Each star sits at
                 // a fixed direction on the celestial sphere; we
