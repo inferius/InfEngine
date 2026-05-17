@@ -7454,6 +7454,111 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "tree" => {
+                            // Host-only: drop a small oak tree
+                            // a few blocks in front of the
+                            // player. Routes every voxel through
+                            // the edit pipeline so the change
+                            // persists + replicates.
+                            if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+                                local_lines.push(
+                                    "/tree is host-only.".to_string(),
+                                );
+                            } else {
+                                let fwd = Vec3::new(
+                                    self.player_yaw.cos(),
+                                    0.0,
+                                    -self.player_yaw.sin(),
+                                )
+                                .normalize_or_zero();
+                                let cx = (self.player_pos.x
+                                    + fwd.x * 4.0)
+                                    .floor()
+                                    as i32;
+                                let cz = (self.player_pos.z
+                                    + fwd.z * 4.0)
+                                    .floor()
+                                    as i32;
+                                let ceiling = (CHUNK_SIZE as i32)
+                                    * VERTICAL_CHUNKS
+                                    - 1;
+                                let sy = self
+                                    .surface_y_below(cx, cz, ceiling)
+                                    .unwrap_or(self.player_pos.y.floor() as i32);
+                                let cfg = bincode::config::standard();
+                                let mut place = |x: i32,
+                                                 y: i32,
+                                                 z: i32,
+                                                 bid: u16| {
+                                    let v = [x, y, z];
+                                    self.world_set_tracked(
+                                        v,
+                                        BlockId(bid),
+                                    );
+                                    let edit = EditMsg {
+                                        x,
+                                        y,
+                                        z,
+                                        block: bid,
+                                    };
+                                    if let NetRole::Server {
+                                        server, ..
+                                    } = &mut self.net
+                                    {
+                                        self.edit_history.push(edit);
+                                        if let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                edit, cfg,
+                                            )
+                                        {
+                                            server.broadcast_bytes(
+                                                "vx.edit",
+                                                buf,
+                                            );
+                                        }
+                                    }
+                                };
+                                // 4-block trunk.
+                                for ty in 1..=4 {
+                                    place(cx, sy + ty, cz, 5);
+                                }
+                                // 2 canopy layers + cap + top.
+                                for layer in 0i32..2 {
+                                    let wy = sy + 3 + layer;
+                                    for dx in -2i32..=2 {
+                                        for dz in -2i32..=2 {
+                                            if dx.abs() == 2
+                                                && dz.abs() == 2
+                                            {
+                                                continue;
+                                            }
+                                            if dx == 0 && dz == 0 && layer == 0 {
+                                                continue;
+                                            }
+                                            place(
+                                                cx + dx,
+                                                wy,
+                                                cz + dz,
+                                                6,
+                                            );
+                                        }
+                                    }
+                                }
+                                for dx in -1i32..=1 {
+                                    for dz in -1i32..=1 {
+                                        place(cx + dx, sy + 5, cz + dz, 6);
+                                    }
+                                }
+                                place(cx, sy + 6, cz, 6);
+                                let coords = Self::affected_chunks(
+                                    [cx, sy + 3, cz],
+                                );
+                                self.rebuild_chunks(&coords);
+                                local_lines
+                                    .push("Planted a tree.".to_string());
+                            }
+                            handled_locally = true;
+                        }
                         "horde" => {
                             // Host-only: spawn N zombies around
                             // the player in one go. Defaults to
