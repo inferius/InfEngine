@@ -5652,6 +5652,15 @@ impl Voxel {
                             .color(egui::Color32::from_rgb(180, 200, 200))
                             .italics(),
                         );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Seed: {}",
+                                world_seed()
+                            ))
+                            .color(egui::Color32::from_rgb(150, 180, 180))
+                            .italics()
+                            .small(),
+                        );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label("Master server:");
