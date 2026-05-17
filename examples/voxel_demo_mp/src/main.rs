@@ -1211,6 +1211,10 @@ struct Voxel {
     /// separate from `day_time` so a stationary player has a
     /// stable view.
     head_bob_phase: f32,
+    /// Last time the server broadcast its authoritative
+    /// `day_time`. Used to throttle the broadcast cadence to
+    /// roughly once per second.
+    last_day_broadcast: Option<std::time::Instant>,
     /// Creative-style fly mode. Toggled by `/fly`. Disables
     /// gravity + fall damage and remaps Space / Shift to vertical
     /// thrust. Off by default so a vanilla session is unchanged.
@@ -2898,6 +2902,9 @@ impl Voxel {
         // Server-pushed teleport. Drained after the net borrow
         // releases so we can write `self.player_pos` directly.
         let mut teleport_request: Option<TeleportMsg> = None;
+        // Latest authoritative day_time from the server. Last
+        // wins so a mid-tick burst doesn't bounce the sky.
+        let mut day_time_update: Option<f32> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -3284,6 +3291,22 @@ impl Voxel {
                         }
                     }
                 }
+                // Authoritative day_time broadcast on a slow
+                // cadence (~once per second). Clients update
+                // their local clock so the sun stays in sync
+                // even if /day or /night was used to skip ahead.
+                let now = std::time::Instant::now();
+                let due = self
+                    .last_day_broadcast
+                    .map(|t| now.duration_since(t).as_secs_f32() >= 1.0)
+                    .unwrap_or(true);
+                if due
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec(self.day_time, cfg)
+                {
+                    server.broadcast_bytes("vx.day", buf);
+                    self.last_day_broadcast = Some(now);
+                }
             }
             NetRole::Client {
                 client,
@@ -3415,6 +3438,15 @@ impl Voxel {
                                 teleport_request = Some(m);
                             }
                         }
+                        "vx.day" => {
+                            if let Ok((dt, _)) =
+                                bincode::serde::decode_from_slice::<f32, _>(
+                                    &data, cfg,
+                                )
+                            {
+                                day_time_update = Some(dt);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3542,6 +3574,9 @@ impl Voxel {
             for (id, n) in entries {
                 self.player_names.insert(id, n);
             }
+        }
+        if let Some(dt) = day_time_update {
+            self.day_time = dt.rem_euclid(DAY_LENGTH_S);
         }
         if let Some(t) = teleport_request {
             self.player_pos = Vec3::new(t.pos[0], t.pos[1], t.pos[2]);
@@ -3772,6 +3807,7 @@ impl Voxel {
             heartbeat_accum: 0.0,
             fly_mode: false,
             head_bob_phase: 0.0,
+            last_day_broadcast: None,
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
