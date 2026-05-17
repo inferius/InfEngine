@@ -1106,6 +1106,11 @@ struct Voxel {
     /// player completed. Surfaced via /stats.
     blocks_broken: u64,
     blocks_placed: u64,
+    /// Recent local placement history (oldest first). Drives the
+    /// Z-key "undo last place" affordance. Capped to a small
+    /// window so a long session doesn't bloat memory.
+    place_history: Vec<[i32; 3]>,
+    z_prev: bool,
     /// Current camera vertical FOV in radians. Smoothly lerps
     /// toward a wider angle while the player sprints, snaps back
     /// when they stop. Read by both the wgpu camera + the egui
@@ -4048,6 +4053,8 @@ impl Voxel {
             kill_count: 0,
             blocks_broken: 0,
             blocks_placed: 0,
+            place_history: Vec::new(),
+            z_prev: false,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             stamina: STAMINA_MAX,
@@ -8697,6 +8704,50 @@ impl AppHandler for Voxel {
             self.spawn_break_particles_tinted(voxel, color);
         }
         self.q_prev = q_now;
+        // Z undoes the last placement. Routes through the edit
+        // pipeline so the air swap replicates + persists. Gated
+        // on chat / inventory so accidental Z while typing
+        // doesn't trash builds.
+        let z_now = ctx.input.is_pressed(Key::Z);
+        if z_now
+            && !self.z_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+            && !self.inventory_open
+            && let Some(voxel) = self.place_history.pop()
+        {
+            let current = self.world.get(voxel);
+            if current != BlockId::AIR {
+                let edit = EditMsg {
+                    x: voxel[0],
+                    y: voxel[1],
+                    z: voxel[2],
+                    block: 0,
+                };
+                self.world_set_tracked(voxel, BlockId::AIR);
+                let coords = Self::affected_chunks(voxel);
+                self.rebuild_chunks(&coords);
+                let cfg = bincode::config::standard();
+                match &mut self.net {
+                    NetRole::Offline => {}
+                    NetRole::Server { server, .. } => {
+                        self.edit_history.push(edit);
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(edit, cfg)
+                        {
+                            server.broadcast_bytes("vx.edit", buf);
+                        }
+                    }
+                    NetRole::Client { pending_edits, .. } => {
+                        pending_edits.push(edit);
+                    }
+                }
+                // Refund: pickup() handles stack merging so the
+                // undone block returns to the inventory.
+                self.pickup(current);
+            }
+        }
+        self.z_prev = z_now;
         // Tab held = playerlist overlay. Hidden in singleplayer
         // (the overlay drawer also guards on net role, but the
         // flag is gated here too so debug panels stay clean).
@@ -9172,6 +9223,11 @@ impl AppHandler for Voxel {
                     self.spawn_place_particles(hit.place_at, color);
                     self.blocks_placed =
                         self.blocks_placed.saturating_add(1);
+                    self.place_history.push(hit.place_at);
+                    if self.place_history.len() > 32 {
+                        let drop = self.place_history.len() - 32;
+                        self.place_history.drain(0..drop);
+                    }
                 }
             }
         }
