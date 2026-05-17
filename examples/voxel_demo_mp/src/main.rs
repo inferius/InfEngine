@@ -390,6 +390,12 @@ struct ServerStateV2 {
     /// Host kill counter persisted across sessions.
     #[serde(default)]
     kill_count: u32,
+    /// World seed used by the noise generators. Older saves
+    /// without this field load with seed 0, which the loader
+    /// upgrades to a fresh random value so terrain doesn't snap
+    /// to the deterministic seed-0 layout.
+    #[serde(default)]
+    world_seed: u32,
 }
 
 fn default_player_health() -> f32 {
@@ -2002,6 +2008,15 @@ impl Voxel {
                     self.player_health =
                         state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
                     self.kill_count = state.kill_count;
+                    // Restore the world seed before the chunk
+                    // stream starts re-meshing so the workers
+                    // pick up the right noise. Older saves with
+                    // seed=0 stay at zero; on_start will fill in
+                    // a random value the first time the loader
+                    // doesn't catch.
+                    if state.world_seed != 0 {
+                        set_world_seed(state.world_seed);
+                    }
                     // Restore inventories into a side map indexed by
                     // client name. They get re-keyed to live client
                     // ids on connect (see `tick_net`).
@@ -2380,6 +2395,7 @@ impl Voxel {
             day_time: self.day_time,
             player_health: self.player_health,
             kill_count: self.kill_count,
+            world_seed: world_seed(),
         };
         match bincode::serde::encode_to_vec(&state, cfg) {
             Ok(payload) => {
