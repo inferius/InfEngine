@@ -6113,6 +6113,79 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "spawnmob" => {
+                            // Host-only: spawn a sheep or zombie
+                            // a few blocks in front of the player.
+                            // Clients can't run this since the
+                            // server owns mob state.
+                            if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+                                local_lines.push(
+                                    "/spawnmob is host-only.".to_string(),
+                                );
+                            } else {
+                                let kind = if arg.eq_ignore_ascii_case("zombie") {
+                                    KIND_ZOMBIE
+                                } else {
+                                    KIND_SHEEP
+                                };
+                                let fwd_h = Vec3::new(
+                                    self.player_yaw.cos(),
+                                    0.0,
+                                    -self.player_yaw.sin(),
+                                )
+                                .normalize_or_zero();
+                                let spawn_at = self.player_pos + fwd_h * 3.0;
+                                let id = self.next_mob_id;
+                                self.next_mob_id =
+                                    self.next_mob_id.wrapping_add(1).max(1);
+                                let pos = [
+                                    spawn_at.x,
+                                    spawn_at.y,
+                                    spawn_at.z,
+                                ];
+                                let mob = MobState {
+                                    id,
+                                    kind,
+                                    pos,
+                                    target: pos,
+                                    yaw: 0.0,
+                                    retarget_at: (self.day_time + 1.0)
+                                        .rem_euclid(DAY_LENGTH_S),
+                                    health: if kind == KIND_ZOMBIE {
+                                        ZOMBIE_MAX_HEALTH
+                                    } else {
+                                        MOB_MAX_HEALTH
+                                    },
+                                    dying: 0.0,
+                                    attack_cd: 0.0,
+                                };
+                                let initial_hp = if kind == KIND_ZOMBIE {
+                                    ZOMBIE_MAX_HEALTH
+                                } else {
+                                    MOB_MAX_HEALTH
+                                } as u8;
+                                self.mobs.push(mob);
+                                self.remote_mobs.insert(
+                                    id,
+                                    MobMsg {
+                                        id,
+                                        kind,
+                                        pos,
+                                        yaw: 0.0,
+                                        health: initial_hp,
+                                    },
+                                );
+                                local_lines.push(format!(
+                                    "Spawned {}.",
+                                    if kind == KIND_ZOMBIE {
+                                        "zombie"
+                                    } else {
+                                        "sheep"
+                                    }
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "clearinventory" | "clearinv" => {
                             // Empty every slot including hotbar
                             // + craft grid. Useful for testing.
