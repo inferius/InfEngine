@@ -298,6 +298,9 @@ const ZOMBIE_SIGHT_RANGE: f32 = 22.0;
 /// despawned. Stops sheep + zombies from piling up in unloaded
 /// chunks the player will never visit again.
 const MOB_DESPAWN_DIST_SQ: f32 = 80.0 * 80.0;
+/// Seconds the zombie body offsets forward after striking. Drives
+/// the lunge animation timer.
+const MOB_LUNGE_TIME: f32 = 0.30;
 /// Maximum range (in blocks) for the player's melee attack on a
 /// mob. Same number as voxel break reach so the two interactions
 /// feel symmetric.
@@ -1194,6 +1197,10 @@ struct Voxel {
     /// render path tilts + fades the cube while the timer counts
     /// down to zero.
     mob_dying: HashMap<u32, f32>,
+    /// Per-mob lunge-animation timer. Set to `MOB_LUNGE_TIME` on
+    /// every melee swing (currently only zombies). Renderer reads
+    /// it to push the body briefly forward + return.
+    mob_lunge: HashMap<u32, f32>,
     /// Cube mesh used to render every remote player as a coloured
     /// 1x1x1 marker. Built lazily once the renderer is up.
     player_cube: Option<MeshHandle>,
@@ -1593,6 +1600,17 @@ impl Voxel {
                 if d2 <= ZOMBIE_ATTACK_RANGE * ZOMBIE_ATTACK_RANGE && m.attack_cd <= 0.0 {
                     m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
                     self.apply_player_damage(ZOMBIE_TOUCH_DAMAGE);
+                    // Visual lunge: bump the local timer + tell
+                    // every other peer to do the same so the
+                    // animation reads identically on each client.
+                    self.mob_lunge.insert(m.id, MOB_LUNGE_TIME);
+                    if let NetRole::Server { server, .. } = &self.net {
+                        let cfg = bincode::config::standard();
+                        let evt = MobEventMsg { id: m.id, kind: 2 };
+                        if let Ok(buf) = bincode::serde::encode_to_vec(evt, cfg) {
+                            server.broadcast_bytes("vx.mob_event", buf);
+                        }
+                    }
                 }
             }
             self.mobs[i] = m;
@@ -1751,6 +1769,10 @@ impl Voxel {
         // ticks. The eventual `vx.mob_remove` (or pure-client
         // simulation timeout) clears the entry.
         self.mob_dying.retain(|_, t| {
+            *t = (*t - dt).max(0.0);
+            *t > 0.0
+        });
+        self.mob_lunge.retain(|_, t| {
             *t = (*t - dt).max(0.0);
             *t > 0.0
         });
@@ -3218,6 +3240,11 @@ impl Voxel {
             if evt.kind == 1 {
                 self.mob_dying.insert(evt.id, MOB_DEATH_FADE);
             }
+            // Attack event: kick off the local lunge timer so the
+            // attacker's body briefly pushes forward.
+            if evt.kind == 2 {
+                self.mob_lunge.insert(evt.id, MOB_LUNGE_TIME);
+            }
             if let Some(mob) = self.remote_mobs.get(&evt.id).copied() {
                 let pos = mob.pos;
                 let say_freq = if evt.kind == 1 { 200.0 } else { 280.0 };
@@ -3374,6 +3401,7 @@ impl Voxel {
             mob_last_xz: HashMap::new(),
             mob_hurt_flash: HashMap::new(),
             mob_dying: HashMap::new(),
+            mob_lunge: HashMap::new(),
             master_addr: format!(
                 "91.232.214.139:{}",
                 infengine_net::master::MASTER_PORT
@@ -5978,13 +6006,29 @@ impl AppHandler for Voxel {
                     base_body_tint[3],
                 ];
                 let body_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
+                // Lunge offset: a brief forward shove on the
+                // attack frame. The timer starts at MOB_LUNGE_TIME
+                // + decays to 0; a sin curve gives a smooth
+                // out-and-back motion within that window.
+                let lunge_t = self
+                    .mob_lunge
+                    .get(&mob.id)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamp(0.0, MOB_LUNGE_TIME);
+                let lunge_phase =
+                    (1.0 - lunge_t / MOB_LUNGE_TIME).clamp(0.0, 1.0);
+                let lunge_amp = 0.35
+                    * (lunge_phase * std::f32::consts::PI).sin().max(0.0);
+                let lunge_fwd =
+                    Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin()) * lunge_amp;
                 let body = Mat4::from_scale_rotation_translation(
                     body_scale,
                     body_rot,
                     Vec3::new(
-                        mob.pos[0],
+                        mob.pos[0] + lunge_fwd.x,
                         mob.pos[1] + body_y_off - death_sink,
-                        mob.pos[2],
+                        mob.pos[2] + lunge_fwd.z,
                     ),
                 );
                 renderer.draw_mesh_pbr(
@@ -6014,9 +6058,9 @@ impl AppHandler for Voxel {
                         )
                     };
                 let head_pos = Vec3::new(
-                    mob.pos[0],
+                    mob.pos[0] + lunge_fwd.x,
                     mob.pos[1] + head_off_y - death_sink,
-                    mob.pos[2],
+                    mob.pos[2] + lunge_fwd.z,
                 ) + fwd * head_off_fwd;
                 let head_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
                 let head = Mat4::from_scale_rotation_translation(
