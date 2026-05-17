@@ -1242,6 +1242,10 @@ struct Voxel {
     /// gravity + fall damage and remaps Space / Shift to vertical
     /// thrust. Off by default so a vanilla session is unchanged.
     fly_mode: bool,
+    /// `/godmode` toggle. When on, apply_player_damage is a
+    /// no-op so the local player can't be hurt. Useful for
+    /// testing the world without dying.
+    god_mode: bool,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -2159,6 +2163,10 @@ impl Voxel {
     /// server's authoritative copy stays in sync.
     fn apply_player_damage(&mut self, amount: f32) {
         if amount <= 0.0 {
+            return;
+        }
+        // Godmode swallows damage entirely. Toggled via /godmode.
+        if self.god_mode {
             return;
         }
         self.player_health = (self.player_health - amount).max(0.0);
@@ -4015,6 +4023,7 @@ impl Voxel {
             step_cooldown: 0.0,
             heartbeat_accum: 0.0,
             fly_mode: false,
+            god_mode: false,
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -6625,6 +6634,14 @@ impl Voxel {
                                 }
                                 handled_locally = true;
                             }
+                        }
+                        "godmode" | "god" => {
+                            self.god_mode = !self.god_mode;
+                            local_lines.push(format!(
+                                "Godmode {}",
+                                if self.god_mode { "ON" } else { "OFF" }
+                            ));
+                            handled_locally = true;
                         }
                         "fly" => {
                             // Toggle the local fly mode flag. The
