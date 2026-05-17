@@ -3161,6 +3161,15 @@ impl Voxel {
                 // Persist their inventory by name (if known) so the
                 // next save flushes it, then evict.
                 for id in &departed_ids {
+                    // Grab the name BEFORE we lose track of the
+                    // mapping below so the broadcast chat line
+                    // reads sensibly.
+                    let depart_name = self
+                        .player_names
+                        .get(id)
+                        .cloned()
+                        .or_else(|| server.client_name(*id))
+                        .unwrap_or_else(|| format!("p{id}"));
                     poses.remove(id);
                     if let Some(inv) = inventories.remove(id)
                         && let Some(name) = server.client_name(*id)
@@ -3173,6 +3182,14 @@ impl Voxel {
                     let msg = PlayerRemoveMsg { id: *id };
                     if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                         server.broadcast_bytes("vx.player_remove", buf);
+                    }
+                    // Public departure notice. Hits the host's
+                    // local log via chat_inbox + broadcasts to
+                    // every still-connected peer.
+                    let line = format!("* {depart_name} left.");
+                    chat_inbox.push(line.clone());
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
+                        server.broadcast_bytes("vx.chat", buf);
                     }
                 }
                 if !new_ids.is_empty() && !self.edit_history.is_empty() {
@@ -3202,6 +3219,19 @@ impl Voxel {
                         inventories.insert(*id, inv);
                     }
                     pending_inv_sends.insert(*id);
+                    // Public arrival notice. Same path as the
+                    // depart line above; the server's broadcast
+                    // pushes to every peer including the new
+                    // joiner, so they immediately see who else
+                    // is around.
+                    let name = server
+                        .client_name(*id)
+                        .unwrap_or_else(|| format!("p{id}"));
+                    let line = format!("* {name} joined.");
+                    chat_inbox.push(line.clone());
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
+                        server.broadcast_bytes("vx.chat", buf);
+                    }
                 }
                 // Roster broadcast: whenever the connected set
                 // changes, ship the full id->name table to every
