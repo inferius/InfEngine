@@ -2131,6 +2131,92 @@ impl Voxel {
         }
     }
 
+    /// Resolve the config file path used for settings persistence.
+    /// Lives next to the exe in release builds so the user can
+    /// nuke the file without finding a hidden appdata directory;
+    /// during `cargo run` it sits next to the workspace target so
+    /// repeated runs share the same file.
+    fn config_path() -> std::path::PathBuf {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            return dir.join("voxel_demo_mp.config");
+        }
+        std::path::PathBuf::from("voxel_demo_mp.config")
+    }
+
+    /// Persist user-facing settings (name, sensitivity, toggles)
+    /// to disk as a tiny key=value text file. Called from the
+    /// Settings panel's Back button + on shutdown so the next run
+    /// keeps the player's identity.
+    fn save_config(&self) {
+        use std::fmt::Write;
+        let mut text = String::new();
+        let _ = writeln!(text, "player_name={}", self.player_name);
+        let _ = writeln!(
+            text,
+            "mouse_sensitivity={}",
+            self.settings.mouse_sensitivity
+        );
+        let _ = writeln!(text, "show_fps={}", self.settings.show_fps);
+        let _ = writeln!(text, "lock_cursor={}", self.settings.lock_cursor);
+        let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
+        let path = Self::config_path();
+        if let Err(err) = std::fs::write(&path, text) {
+            warn!(error = %err, path = %path.display(), "config save failed");
+        }
+    }
+
+    /// Inverse of `save_config`. Silently ignores missing /
+    /// malformed files - first launch just writes defaults the
+    /// next time the user opens Settings.
+    fn load_config(&mut self) {
+        let path = Self::config_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "player_name" => {
+                    let sane: String = value
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(24)
+                        .collect();
+                    if !sane.is_empty() {
+                        self.player_name = sane;
+                    }
+                }
+                "mouse_sensitivity" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        self.settings.mouse_sensitivity = v.clamp(0.05, 4.0);
+                    }
+                }
+                "show_fps" => {
+                    self.settings.show_fps = matches!(value, "true" | "1" | "yes");
+                }
+                "lock_cursor" => {
+                    self.settings.lock_cursor =
+                        matches!(value, "true" | "1" | "yes");
+                }
+                "hide_cursor" => {
+                    self.settings.hide_cursor =
+                        matches!(value, "true" | "1" | "yes");
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn save_server_state(&mut self) {
         if !matches!(self.net, NetRole::Server { .. }) {
             return;
@@ -5515,6 +5601,10 @@ impl Voxel {
             };
         }
         if action_back_settings && let AppState::Settings { back_to } = self.state {
+            // Persist whatever the user just edited so the next
+            // launch picks it up. Cheap (a few dozen bytes), so
+            // doing it on Back is fine.
+            self.save_config();
             self.state = match back_to {
                 BackTo::MainMenu => AppState::MainMenu,
                 BackTo::Pause => AppState::Paused,
@@ -5556,6 +5646,10 @@ impl AppHandler for Voxel {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
         self.viewport = (w, h);
+        // Load persisted settings before any user interaction so
+        // the main menu badge + Settings panel show the last
+        // chosen identity instead of a fresh random Player####.
+        self.load_config();
         info!(width = w, height = h, "voxel_demo started");
         match Renderer::new(window) {
             Ok(r) => {
