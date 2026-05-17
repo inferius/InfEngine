@@ -3116,6 +3116,7 @@ impl Voxel {
         //  - vx.pvp_hit (server side, host = target): a remote
         //    client whacked the host.
         let mut pvp_self_damage: f32 = 0.0;
+        let mut pvp_self_heal: f32 = 0.0;
         // Chat lines received this tick. Appended to `chat_log`
         // after the net match arm releases its borrow on `self.net`.
         let mut chat_inbox: Vec<String> = Vec::new();
@@ -3739,7 +3740,14 @@ impl Voxel {
                                 _,
                             >(&data, cfg)
                             {
-                                pvp_self_damage += d.amount;
+                                // Negative amounts represent
+                                // heals (server uses the same
+                                // channel for both directions).
+                                if d.amount >= 0.0 {
+                                    pvp_self_damage += d.amount;
+                                } else {
+                                    pvp_self_heal += -d.amount;
+                                }
                             }
                         }
                         "vx.teleport" => {
@@ -3977,6 +3985,10 @@ impl Voxel {
                 std::time::Instant::now(),
                 "You were summoned.".to_string(),
             ));
+        }
+        if pvp_self_heal > 0.0 {
+            self.player_health = (self.player_health + pvp_self_heal)
+                .min(PLAYER_MAX_HEALTH);
         }
         if pvp_self_damage > 0.0 {
             self.apply_player_damage(pvp_self_damage);
@@ -6636,14 +6648,69 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "heal" => {
-                            // Refill local HP. Resets the regen
-                            // timer so the player doesn't get a
-                            // double-tick the next frame.
-                            self.player_health = PLAYER_MAX_HEALTH;
-                            self.regen_accum = 0.0;
-                            self.hurt_flash = 0.0;
-                            self.heartbeat_accum = 0.0;
-                            local_lines.push("Healed to full.".to_string());
+                            // Refill HP. Without args heals
+                            // self; with /heal <name> + host
+                            // role, sends a vx.damage with a
+                            // negative amount to that peer's
+                            // client so its HP refills.
+                            if arg.is_empty() {
+                                self.player_health = PLAYER_MAX_HEALTH;
+                                self.regen_accum = 0.0;
+                                self.hurt_flash = 0.0;
+                                self.heartbeat_accum = 0.0;
+                                local_lines
+                                    .push("Healed to full.".to_string());
+                            } else if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/heal <name> is host-only.".to_string(),
+                                );
+                            } else {
+                                let target = arg;
+                                let target_id = self
+                                    .player_names
+                                    .iter()
+                                    .find(|(_, n)| {
+                                        n.eq_ignore_ascii_case(target)
+                                    })
+                                    .map(|(id, _)| *id);
+                                match target_id {
+                                    None => local_lines.push(format!(
+                                        "No player named {target}."
+                                    )),
+                                    Some(0) => {
+                                        self.player_health =
+                                            PLAYER_MAX_HEALTH;
+                                        local_lines.push(
+                                            "Healed self to full."
+                                                .to_string(),
+                                        );
+                                    }
+                                    Some(id) => {
+                                        let cfg =
+                                            bincode::config::standard();
+                                        if let NetRole::Server {
+                                            server, ..
+                                        } = &mut self.net
+                                            && let Ok(buf) =
+                                                bincode::serde::encode_to_vec(
+                                                    DamageMsg {
+                                                        amount: -100.0,
+                                                    },
+                                                    cfg,
+                                                )
+                                        {
+                                            server.send_bytes_to_client(
+                                                id,
+                                                "vx.damage",
+                                                buf,
+                                            );
+                                        }
+                                        local_lines.push(format!(
+                                            "Healed {target}."
+                                        ));
+                                    }
+                                }
+                            }
                             handled_locally = true;
                         }
                         "kill" => {
