@@ -971,6 +971,9 @@ struct Settings {
     /// computed as `view_distance + 2` so the player can wobble on
     /// the boundary without thrashing chunk loads.
     view_distance: u8,
+    /// Camera head bob while walking. Off-by-default-friendly:
+    /// nauseating for some players, polish for others.
+    head_bob: bool,
 }
 
 impl Default for Settings {
@@ -981,6 +984,7 @@ impl Default for Settings {
             hide_cursor: true,
             show_fps: true,
             view_distance: VIEW_DISTANCE_CHUNKS as u8,
+            head_bob: true,
         }
     }
 }
@@ -2221,6 +2225,7 @@ impl Voxel {
         let _ = writeln!(text, "lock_cursor={}", self.settings.lock_cursor);
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
         let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
+        let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2276,6 +2281,10 @@ impl Voxel {
                     if let Ok(v) = value.parse::<u8>() {
                         self.settings.view_distance = v.clamp(2, 12);
                     }
+                }
+                "head_bob" => {
+                    self.settings.head_bob =
+                        matches!(value, "true" | "1" | "yes");
                 }
                 _ => {}
             }
@@ -5004,6 +5013,7 @@ impl Voxel {
                         "Lock cursor in window (Play)",
                     );
                     ui.checkbox(&mut settings_edit.hide_cursor, "Hide cursor (Play)");
+                    ui.checkbox(&mut settings_edit.head_bob, "Camera head bob");
                     ui.separator();
                     if ui.button("Back").clicked() {
                         action_back_settings = true;
@@ -7309,11 +7319,12 @@ impl AppHandler for Voxel {
             let h_speed = (self.player_vel.x * self.player_vel.x
                 + self.player_vel.z * self.player_vel.z)
                 .sqrt();
-            let bob_amount = if self.fly_mode || !self.grounded {
-                0.0
-            } else {
-                (h_speed / PLAYER_SPEED).clamp(0.0, 1.5)
-            };
+            let bob_amount =
+                if !self.settings.head_bob || self.fly_mode || !self.grounded {
+                    0.0
+                } else {
+                    (h_speed / PLAYER_SPEED).clamp(0.0, 1.5)
+                };
             let bob_y = (self.head_bob_phase * 2.0).sin() * 0.05 * bob_amount;
             let bob_x = self.head_bob_phase.sin() * 0.03 * bob_amount;
             let right = Vec3::new(
