@@ -8680,6 +8680,24 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "listmobs" | "mobs" => {
+                            // Print a summary of remote mobs:
+                            // total count + per-kind tally.
+                            let mut sheep = 0u32;
+                            let mut zomb = 0u32;
+                            for m in self.remote_mobs.values() {
+                                if m.kind == KIND_ZOMBIE {
+                                    zomb += 1;
+                                } else {
+                                    sheep += 1;
+                                }
+                            }
+                            local_lines.push(format!(
+                                "Mobs: {} total ({sheep} sheep, {zomb} zombie)",
+                                self.remote_mobs.len()
+                            ));
+                            handled_locally = true;
+                        }
                         "chunkinfo" => {
                             // Diagnostic: chunk count + size +
                             // pending queue + edit history length.
