@@ -5674,9 +5674,70 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn"
                                     .to_string(),
                             );
+                        }
+                        "spawn" => {
+                            // Snap the host back to the origin
+                            // spawn pad. Works in any role since
+                            // the local player's pose is always
+                            // authoritative on its own client.
+                            self.player_pos = Vec3::new(0.0, 32.0, 0.0);
+                            self.player_vel = Vec3::ZERO;
+                            self.fall_start_y = None;
+                            local_lines.push("Teleported to spawn.".to_string());
+                            handled_locally = true;
+                        }
+                        "tp" => {
+                            // /tp <name>: teleport the local
+                            // player to the pose of the named
+                            // peer. Works in any role - the
+                            // server uses `poses`, clients use
+                            // `remote_interp` since `remote`
+                            // mirrors the same data either way.
+                            if arg.is_empty() {
+                                local_lines.push("Usage: /tp <name>".to_string());
+                            } else {
+                                let target_id = self
+                                    .player_names
+                                    .iter()
+                                    .find(|(_, n)| {
+                                        n.eq_ignore_ascii_case(arg)
+                                    })
+                                    .map(|(id, _)| *id);
+                                if let Some(id) = target_id {
+                                    let pose: Option<[f32; 3]> = match &self.net {
+                                        NetRole::Offline => None,
+                                        NetRole::Server { poses, .. } => {
+                                            poses.get(&id).map(|p| p.pos)
+                                        }
+                                        NetRole::Client { remote, .. } => {
+                                            remote.get(&id).map(|p| p.pos)
+                                        }
+                                    };
+                                    if let Some(p) = pose {
+                                        self.player_pos = Vec3::new(
+                                            p[0],
+                                            p[1] + 0.1,
+                                            p[2],
+                                        );
+                                        self.player_vel = Vec3::ZERO;
+                                        self.fall_start_y = None;
+                                        local_lines.push(format!(
+                                            "Teleported to {arg}."
+                                        ));
+                                    } else {
+                                        local_lines.push(format!(
+                                            "No pose known for {arg} yet."
+                                        ));
+                                    }
+                                } else {
+                                    local_lines
+                                        .push(format!("No player named {arg}."));
+                                }
+                                handled_locally = true;
+                            }
                         }
                         "players" | "who" => {
                             let mut names: Vec<&String> =
