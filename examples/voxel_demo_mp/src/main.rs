@@ -5117,16 +5117,21 @@ impl Voxel {
         // Snapshot recent chat lines (newest last) along with their
         // age so the renderer can fade older entries.
         let chat_now = std::time::Instant::now();
-        let chat_lines: Vec<(String, f32)> = self
-            .chat_log
-            .iter()
-            .map(|(t, line)| {
-                (
-                    line.clone(),
-                    chat_now.saturating_duration_since(*t).as_secs_f32(),
-                )
-            })
-            .collect();
+        let chat_lines: Vec<(String, f32, bool)> = {
+            let own_lower = self.player_name.to_lowercase();
+            self.chat_log
+                .iter()
+                .map(|(t, line)| {
+                    let mention =
+                        !own_lower.is_empty() && line.to_lowercase().contains(&own_lower);
+                    (
+                        line.clone(),
+                        chat_now.saturating_duration_since(*t).as_secs_f32(),
+                        mention,
+                    )
+                })
+                .collect()
+        };
         let mut chat_send_now = false;
         // View-projection for projecting mob HP bars to screen.
         // Built from the same camera state the world pass uses;
@@ -6618,18 +6623,26 @@ impl Voxel {
                     egui::Area::new(egui::Id::new("voxel_chat"))
                         .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -90.0])
                         .show(ctx, |ui| {
-                            for (line, age) in &chat_lines {
+                            for (line, age, mention) in &chat_lines {
                                 let alpha = ((10.0 - age) / 2.0).clamp(0.0, 1.0);
                                 if alpha <= 0.0 {
                                     continue;
                                 }
                                 let a = (255.0 * alpha) as u8;
-                                ui.colored_label(
+                                // Mentions of the local player
+                                // name highlight in warm yellow
+                                // so they stand out of the chat
+                                // stream.
+                                let col = if *mention {
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        255, 220, 100, a,
+                                    )
+                                } else {
                                     egui::Color32::from_rgba_unmultiplied(
                                         240, 240, 240, a,
-                                    ),
-                                    line,
-                                );
+                                    )
+                                };
+                                ui.colored_label(col, line);
                             }
                             if chat_open {
                                 let resp = ui.add(
