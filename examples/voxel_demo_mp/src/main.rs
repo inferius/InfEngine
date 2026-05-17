@@ -8343,6 +8343,29 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "fov" => {
+                            // /fov <deg>: clamp 30..=110, set
+                            // base camera FOV. The sprint widen
+                            // adds on top so /fov 100 still
+                            // bumps to ~110 when sprinting.
+                            if arg.is_empty() {
+                                let cur = self.fov_y_rad.to_degrees();
+                                local_lines.push(format!(
+                                    "FOV: {cur:.0} deg"
+                                ));
+                            } else if let Ok(v) = arg.parse::<f32>() {
+                                let deg = v.clamp(30.0, 110.0);
+                                self.fov_y_rad = deg.to_radians();
+                                local_lines.push(format!(
+                                    "FOV set to {deg:.0} deg."
+                                ));
+                            } else {
+                                local_lines.push(format!(
+                                    "Cannot parse FOV: {arg}"
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "rd" | "renderdistance" => {
                             // Without args: report current view
                             // distance. With one arg (2..=12):
