@@ -7173,7 +7173,10 @@ impl AppHandler for Voxel {
             && self.selected_slot < HOTBAR_SLOTS
             && let Some((b, c)) = self.inventory[self.selected_slot]
         {
-            let new_count = c.saturating_sub(1);
+            // Ctrl held = drop the entire stack at once.
+            let drop_all = ctx.input.is_pressed(Key::ControlLeft)
+                || ctx.input.is_pressed(Key::ControlRight);
+            let new_count = if drop_all { 0 } else { c.saturating_sub(1) };
             self.inventory[self.selected_slot] = if new_count == 0 {
                 None
             } else {
