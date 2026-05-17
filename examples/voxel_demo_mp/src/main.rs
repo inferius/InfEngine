@@ -3612,6 +3612,7 @@ impl Voxel {
         let mut day_time_update: Option<f32> = None;
         let mut seed_update: Option<u32> = None;
         let mut weather_update: Option<u8> = None;
+        let mut snow_updates: Vec<([i32; 3], u8)> = Vec::new();
         let mut kick_reason: Option<String> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
@@ -4442,6 +4443,16 @@ impl Voxel {
                                 weather_update = Some(w);
                             }
                         }
+                        "vx.snow" => {
+                            if let Ok(((v, layers), _)) =
+                                bincode::serde::decode_from_slice::<
+                                    ([i32; 3], u8),
+                                    _,
+                                >(&data, cfg)
+                            {
+                                snow_updates.push((v, layers));
+                            }
+                        }
                         "vx.kick" => {
                             if let Ok((reason, _)) =
                                 bincode::serde::decode_from_slice::<String, _>(
@@ -4617,6 +4628,9 @@ impl Voxel {
         }
         if let Some(w) = weather_update {
             self.weather = w;
+        }
+        for (v, layers) in snow_updates {
+            self.snow_positions.insert(v, layers.clamp(1, 8));
         }
         if let Some(reason) = kick_reason {
             // Server kicked us. Notify the player + bounce back
@@ -5740,12 +5754,35 @@ impl Voxel {
                             break;
                         }
                         if here == 15 {
-                            if let Some(layers) = self
+                            let snow_voxel = [cx, target_y, cz];
+                            let bumped = if let Some(layers) = self
                                 .snow_positions
-                                .get_mut(&[cx, target_y, cz])
+                                .get_mut(&snow_voxel)
                                 && *layers < 8
                             {
                                 *layers += 1;
+                                Some(*layers)
+                            } else {
+                                None
+                            };
+                            if let Some(new_layers) = bumped {
+                                // Broadcast layer increment so
+                                // MP peers grow the slab too.
+                                let cfg =
+                                    bincode::config::standard();
+                                if let NetRole::Server {
+                                    server, ..
+                                } = &mut self.net
+                                    && let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            (snow_voxel, new_layers),
+                                            cfg,
+                                        )
+                                {
+                                    server.broadcast_bytes(
+                                        "vx.snow", buf,
+                                    );
+                                }
                                 target_y = i32::MIN;
                                 break;
                             }
