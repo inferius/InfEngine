@@ -9633,6 +9633,21 @@ impl Voxel {
                                 .push("Lifted 3 blocks up.".to_string());
                             handled_locally = true;
                         }
+                        "spawnpoint" => {
+                            // Read-only counterpart to /setspawn:
+                            // print the configured respawn point
+                            // or call out the origin fallback.
+                            match self.spawn_pos {
+                                Some(p) => local_lines.push(format!(
+                                    "Spawn: ({:.1}, {:.1}, {:.1})",
+                                    p[0], p[1], p[2]
+                                )),
+                                None => local_lines.push(
+                                    "Spawn: origin (auto)".to_string(),
+                                ),
+                            }
+                            handled_locally = true;
+                        }
                         "setspawn" => {
                             self.spawn_pos = Some([
                                 self.player_pos.x,
