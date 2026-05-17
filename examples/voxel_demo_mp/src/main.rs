@@ -8650,6 +8650,49 @@ impl Voxel {
                                 .push("Granted one of each block.".to_string());
                             handled_locally = true;
                         }
+                        "healall" => {
+                            // Host-only. Sends a full-heal
+                            // DamageMsg (-100) to every connected
+                            // client and tops the host's HP
+                            // back to max.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/healall is host-only.".to_string(),
+                                );
+                            } else {
+                                self.player_health = PLAYER_MAX_HEALTH;
+                                self.regen_accum = 0.0;
+                                self.hurt_flash = 0.0;
+                                let cfg = bincode::config::standard();
+                                let mut count = 0u32;
+                                if let NetRole::Server {
+                                    server, ..
+                                } = &mut self.net
+                                {
+                                    for cid in server.client_ids() {
+                                        if let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                DamageMsg {
+                                                    amount: -100.0,
+                                                },
+                                                cfg,
+                                            )
+                                        {
+                                            server.send_bytes_to_client(
+                                                cid,
+                                                "vx.damage",
+                                                buf,
+                                            );
+                                            count += 1;
+                                        }
+                                    }
+                                }
+                                local_lines.push(format!(
+                                    "Healed self + {count} clients."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "restock" => {
                             // Host-only. Drops a stack of every
                             // non-tool block into every connected
