@@ -1272,6 +1272,11 @@ struct Voxel {
     /// no-op so the local player can't be hurt. Useful for
     /// testing the world without dying.
     god_mode: bool,
+    /// Brief post-respawn invincibility timer in seconds.
+    /// `apply_player_damage` swallows hits while > 0 so the
+    /// player can recover after a death drop without dying again
+    /// instantly to a lingering mob.
+    invuln_remaining: f32,
     /// Maximum concurrent live mob count. Tweakable via /mobcap
     /// so players on slow machines can cut the spawn pressure;
     /// defaults to `MOB_CAP_DEFAULT`.
@@ -2256,6 +2261,12 @@ impl Voxel {
         if self.god_mode {
             return;
         }
+        // Spawn invuln window. Decrements in update_play; while
+        // positive every damage call is a no-op so a fresh
+        // respawn can't be insta-killed by lingering mobs.
+        if self.invuln_remaining > 0.0 {
+            return;
+        }
         self.player_health = (self.player_health - amount).max(0.0);
         self.hurt_flash = 0.5;
         // Damage resets the regen grace timer.
@@ -2274,6 +2285,7 @@ impl Voxel {
             };
             self.player_vel = Vec3::ZERO;
             self.player_health = PLAYER_MAX_HEALTH;
+            self.invuln_remaining = 3.0;
             let mut dropped = 0usize;
             for slot in self.inventory[HOTBAR_SLOTS..].iter_mut() {
                 if slot.take().is_some() {
@@ -4217,6 +4229,7 @@ impl Voxel {
             heartbeat_accum: 0.0,
             fly_mode: false,
             god_mode: false,
+            invuln_remaining: 0.0,
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
             weather: 0,
@@ -4967,6 +4980,9 @@ impl Voxel {
         // Hurt-flash decay.
         if self.hurt_flash > 0.0 {
             self.hurt_flash = (self.hurt_flash - dt).max(0.0);
+        }
+        if self.invuln_remaining > 0.0 {
+            self.invuln_remaining = (self.invuln_remaining - dt).max(0.0);
         }
         // HP regen: tick the grace timer; once the player has gone
         // `REGEN_DELAY` seconds without damage, drip HP back in at
