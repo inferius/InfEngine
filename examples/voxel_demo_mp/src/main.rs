@@ -8266,6 +8266,93 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "find" => {
+                            // Locates the nearest occurrence of
+                            // a named block within a 48-block
+                            // Chebyshev box around the player.
+                            // Useful for tracking down ore veins
+                            // or rare blocks placed earlier.
+                            if arg.is_empty() {
+                                local_lines.push(
+                                    "Usage: /find <block>".to_string(),
+                                );
+                            } else {
+                                let target_id = BLOCK_TYPES
+                                    .iter()
+                                    .find(|bt| {
+                                        bt.name.eq_ignore_ascii_case(arg)
+                                    })
+                                    .map(|bt| bt.id);
+                                match target_id {
+                                    None => local_lines.push(format!(
+                                        "Unknown block: {arg}"
+                                    )),
+                                    Some(id) => {
+                                        let cx =
+                                            self.player_pos.x.floor() as i32;
+                                        let cy =
+                                            self.player_pos.y.floor() as i32;
+                                        let cz =
+                                            self.player_pos.z.floor() as i32;
+                                        let r = 48i32;
+                                        let mut best: Option<(
+                                            [i32; 3],
+                                            f32,
+                                        )> = None;
+                                        for dy in -r..=r {
+                                            for dz in -r..=r {
+                                                for dx in -r..=r {
+                                                    let v = [
+                                                        cx + dx,
+                                                        cy + dy,
+                                                        cz + dz,
+                                                    ];
+                                                    if self
+                                                        .world
+                                                        .get(v)
+                                                        .0
+                                                        == id
+                                                    {
+                                                        let d = ((dx
+                                                            * dx)
+                                                            + (dy * dy)
+                                                            + (dz * dz))
+                                                            as f32;
+                                                        if best
+                                                            .is_none_or(
+                                                                |(_, bd)| {
+                                                                    d < bd
+                                                                },
+                                                            )
+                                                        {
+                                                            best = Some((
+                                                                v,
+                                                                d,
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        match best {
+                                            None => {
+                                                local_lines.push(format!(
+                                                    "No {arg} within 48 blocks."
+                                                ));
+                                            }
+                                            Some((v, d2)) => {
+                                                let d = d2.sqrt();
+                                                local_lines.push(format!(
+                                                    "Nearest {arg}: ({},{},{}) ~{d:.1}m",
+                                                    v[0], v[1], v[2]
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "whois" => {
                             // Diagnostics for a named peer: id +
                             // last known pose. Useful when
