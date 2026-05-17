@@ -9231,6 +9231,79 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "findbiome" => {
+                            // Locate the nearest tile in the
+                            // named biome via a spiral scan in
+                            // 8-block steps out to 320 blocks.
+                            let target_biome = match arg
+                                .to_lowercase()
+                                .as_str()
+                            {
+                                "plains" => Some(Biome::Plains),
+                                "mountain" | "mountains" => {
+                                    Some(Biome::Mountain)
+                                }
+                                "desert" => Some(Biome::Desert),
+                                _ => None,
+                            };
+                            match target_biome {
+                                None => local_lines.push(
+                                    "Usage: /findbiome plains|mountain|desert"
+                                        .to_string(),
+                                ),
+                                Some(b) => {
+                                    let px = self.player_pos.x as i32;
+                                    let pz = self.player_pos.z as i32;
+                                    let mut best: Option<(
+                                        i32,
+                                        i32,
+                                        f32,
+                                    )> = None;
+                                    for r in (0i32..=40).rev() {
+                                        for dx in
+                                            (-r..=r).step_by(8usize)
+                                        {
+                                            for dz in
+                                                (-r..=r).step_by(8usize)
+                                            {
+                                                let wx =
+                                                    (px + dx * 8) as f32;
+                                                let wz =
+                                                    (pz + dz * 8) as f32;
+                                                if biome_at(wx, wz) == b
+                                                {
+                                                    let d2 = (dx * dx
+                                                        + dz * dz)
+                                                        as f32;
+                                                    if best.is_none_or(
+                                                        |(_, _, bd)| {
+                                                            d2 < bd
+                                                        },
+                                                    ) {
+                                                        best = Some((
+                                                            wx as i32,
+                                                            wz as i32,
+                                                            d2,
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    match best {
+                                        None => local_lines.push(format!(
+                                            "No {arg} found nearby."
+                                        )),
+                                        Some((wx, wz, _)) => {
+                                            local_lines.push(format!(
+                                                "Nearest {arg}: ({wx},?,{wz})"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "find" => {
                             // Locates the nearest occurrence of
                             // a named block within a 48-block
