@@ -3031,7 +3031,10 @@ impl Voxel {
                             // Decode + tag with the sender's
                             // client name, then broadcast so every
                             // peer (including the originator) sees
-                            // the same final line.
+                            // the same final line. The whisper
+                            // marker (\u{1}whisper\u{1}<id>\u{1}<text>)
+                            // is intercepted and re-routed to a
+                            // single client instead.
                             if let Ok((text, _)) = bincode::serde::decode_from_slice::<
                                 String,
                                 _,
@@ -3040,10 +3043,40 @@ impl Voxel {
                                 let sender = server
                                     .client_name(client_id)
                                     .unwrap_or_else(|| format!("p{client_id}"));
-                                let line = format!("<{sender}> {text}");
-                                chat_inbox.push(line.clone());
-                                if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
-                                    server.broadcast_bytes("vx.chat", buf);
+                                if let Some(rest) =
+                                    text.strip_prefix("\u{1}whisper\u{1}")
+                                {
+                                    let mut parts = rest.splitn(2, '\u{1}');
+                                    let tid_str = parts.next().unwrap_or("");
+                                    let body = parts.next().unwrap_or("");
+                                    if let Ok(tid) = tid_str.parse::<u32>()
+                                        && !body.is_empty()
+                                    {
+                                        let line = format!(
+                                            "[whisper from {sender}] {body}"
+                                        );
+                                        if tid == 0 {
+                                            chat_inbox.push(line);
+                                        } else if let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                &line, cfg,
+                                            )
+                                        {
+                                            server.send_bytes_to_client(
+                                                tid, "vx.chat", buf,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    let line = format!("<{sender}> {text}");
+                                    chat_inbox.push(line.clone());
+                                    if let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            &line, cfg,
+                                        )
+                                    {
+                                        server.broadcast_bytes("vx.chat", buf);
+                                    }
                                 }
                             }
                         }
@@ -5970,7 +6003,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /fly"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /fly, /w <name> <msg>"
                                     .to_string(),
                             );
                         }
@@ -6176,6 +6209,82 @@ impl Voxel {
                             self.fall_start_y = None;
                             local_lines.push("Teleported to spawn.".to_string());
                             handled_locally = true;
+                        }
+                        "w" | "whisper" | "tell" | "msg" => {
+                            // Private message routed via the
+                            // server. Host short-circuits to a
+                            // local lookup when whispering itself
+                            // / a local peer.
+                            let mut parts = arg.splitn(2, char::is_whitespace);
+                            let target = parts.next().unwrap_or("").trim();
+                            let body = parts.next().unwrap_or("").trim();
+                            if target.is_empty() || body.is_empty() {
+                                local_lines.push(
+                                    "Usage: /w <name> <message>".to_string(),
+                                );
+                            } else {
+                                let target_id = self
+                                    .player_names
+                                    .iter()
+                                    .find(|(_, n)| {
+                                        n.eq_ignore_ascii_case(target)
+                                    })
+                                    .map(|(id, _)| *id);
+                                match target_id {
+                                    None => {
+                                        local_lines.push(format!(
+                                            "No player named {target}."
+                                        ));
+                                    }
+                                    Some(target_id) => {
+                                        let cfg = bincode::config::standard();
+                                        let line_in = format!(
+                                            "[whisper to {target}] {body}"
+                                        );
+                                        let line_out = format!(
+                                            "[whisper from {}] {body}",
+                                            self.player_name
+                                        );
+                                        self.chat_log.push((
+                                            std::time::Instant::now(),
+                                            line_in,
+                                        ));
+                                        match &mut self.net {
+                                            NetRole::Offline => {
+                                                // No-op offline.
+                                            }
+                                            NetRole::Server { server, .. } => {
+                                                if target_id != 0
+                                                    && let Ok(buf) =
+                                                        bincode::serde::encode_to_vec(
+                                                            &line_out, cfg,
+                                                        )
+                                                {
+                                                    server.send_bytes_to_client(
+                                                        target_id,
+                                                        "vx.chat",
+                                                        buf,
+                                                    );
+                                                }
+                                            }
+                                            NetRole::Client { client, .. } => {
+                                                let payload = format!(
+                                                    "\u{1}whisper\u{1}{target_id}\u{1}{body}"
+                                                );
+                                                if let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        &payload, cfg,
+                                                    )
+                                                {
+                                                    let _ = client
+                                                        .send_bytes("vx.chat", buf);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                handled_locally = true;
+                            }
                         }
                         "tp" => {
                             // /tp <name>: teleport the local
