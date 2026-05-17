@@ -6658,6 +6658,31 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "resetinventory" | "resetinv" => {
+                            // Restore the freshly-seeded starter
+                            // inventory: hotbar slots 1..=N get
+                            // one full stack of each known block,
+                            // slot 0 + storage stays empty. Mostly
+                            // useful after /clearinventory in
+                            // local play.
+                            for s in self.inventory.iter_mut() {
+                                *s = None;
+                            }
+                            for (i, bt) in BLOCK_TYPES.iter().enumerate() {
+                                let slot = i + 1;
+                                if slot < HOTBAR_SLOTS {
+                                    self.inventory[slot] =
+                                        Some((BlockId(bt.id), STACK_MAX));
+                                }
+                            }
+                            for s in self.craft_grid.iter_mut() {
+                                *s = None;
+                            }
+                            local_lines.push(
+                                "Inventory reset to starter.".to_string(),
+                            );
+                            handled_locally = true;
+                        }
                         "clearinventory" | "clearinv" => {
                             // Empty every slot including hotbar
                             // + craft grid. Useful for testing.
