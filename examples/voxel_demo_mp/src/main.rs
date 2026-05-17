@@ -11934,10 +11934,21 @@ impl AppHandler for Voxel {
             .collect();
         torches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         for (p, _) in torches.iter().take(8) {
+            // Subtle flicker on each light's intensity hashed by
+            // position so the room reads as living torchlight,
+            // not a static lamp.
+            let phase = (p[0] as u32)
+                .wrapping_mul(2654435761)
+                ^ ((p[1] as u32).wrapping_mul(0x9E37_79B1))
+                ^ ((p[2] as u32).wrapping_mul(0x85EB_CA6B));
+            let phase_f =
+                (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+            let flicker = (self.day_time * 8.0 + phase_f).sin();
+            let intensity = 2.7 + 0.4 * flicker;
             renderer.queue_point_light(
                 [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5],
                 [1.0, 0.78, 0.40],
-                3.0,
+                intensity,
                 8.0,
             );
         }
