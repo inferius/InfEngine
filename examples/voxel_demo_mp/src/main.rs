@@ -4488,6 +4488,12 @@ impl Voxel {
         let hud_visible = self.hud_visible;
         let kill_count = self.kill_count;
         let chat_open = self.chat_open;
+        let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z);
+        let biome_name = match biome_at_player {
+            Biome::Plains => "Plains",
+            Biome::Mountain => "Mountain",
+            Biome::Desert => "Desert",
+        };
         // Snapshot recent chat lines (newest last) along with their
         // age so the renderer can fade older entries.
         let chat_now = std::time::Instant::now();
@@ -5040,7 +5046,7 @@ impl Voxel {
                                 _ => "SE",
                             };
                             ui.label(format!(
-                                "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}"
+                                "Time: {hh:02}:{mm:02}    Kills: {kill_count}    Facing: {dir}    Biome: {biome_name}"
                             ));
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
