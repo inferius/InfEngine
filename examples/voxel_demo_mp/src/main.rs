@@ -199,6 +199,12 @@ struct MobMsg {
     kind: u8,
     pos: [f32; 3],
     yaw: f32,
+    /// Current HP rounded to the nearest integer. Drives the
+    /// floating health bar render on every peer. `serde(default)`
+    /// keeps the wire format back-compatible with older v1
+    /// snapshots that didn't include health.
+    #[serde(default)]
+    health: u8,
 }
 
 /// Server-side mob state. Not serialised; only `MobMsg` goes over
@@ -1402,6 +1408,7 @@ impl Voxel {
                         kind: m.kind,
                         pos: m.pos,
                         yaw: m.yaw,
+                        health: m.health.max(0.0).round() as u8,
                     },
                 );
                 continue;
@@ -1529,6 +1536,7 @@ impl Voxel {
                     kind: m.kind,
                     pos: m.pos,
                     yaw: m.yaw,
+                    health: m.health.max(0.0).round() as u8,
                 },
             );
         }
@@ -1597,6 +1605,11 @@ impl Voxel {
                         dying: 0.0,
                         attack_cd: 0.0,
                     };
+                    let initial_hp = if kind == KIND_ZOMBIE {
+                        ZOMBIE_MAX_HEALTH
+                    } else {
+                        MOB_MAX_HEALTH
+                    } as u8;
                     self.mobs.push(mob);
                     self.remote_mobs.insert(
                         id,
@@ -1605,6 +1618,7 @@ impl Voxel {
                             kind,
                             pos,
                             yaw: 0.0,
+                            health: initial_hp,
                         },
                     );
                     self.last_mob_spawn_time = day_time;
@@ -1621,6 +1635,7 @@ impl Voxel {
                     kind: m.kind,
                     pos: m.pos,
                     yaw: m.yaw,
+                    health: m.health.max(0.0).round() as u8,
                 };
                 if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                     server.broadcast_bytes("vx.mob", buf);
@@ -3636,6 +3651,48 @@ impl Voxel {
         let player_health = self.player_health;
         let player_hurt_flash = self.hurt_flash;
         let show_debug = self.show_debug;
+        // View-projection for projecting mob HP bars to screen.
+        // Built from the same camera state the world pass uses;
+        // captured here so the egui closure doesn't need renderer
+        // access.
+        let hud_cam_pos = self.player_pos;
+        let hud_forward = Vec3::new(
+            self.player_yaw.cos() * self.player_pitch.cos(),
+            self.player_pitch.sin(),
+            -self.player_yaw.sin() * self.player_pitch.cos(),
+        );
+        let hud_aspect =
+            self.viewport.0.max(1) as f32 / self.viewport.1.max(1) as f32;
+        let hud_view_proj = Mat4::perspective_rh(
+            60_f32.to_radians(),
+            hud_aspect,
+            0.1,
+            500.0,
+        ) * Mat4::look_at_rh(hud_cam_pos, hud_cam_pos + hud_forward, Vec3::Y);
+        // Mob HP snapshot: (pos, current, max). Only mobs that
+        // are damaged + not dying show a bar so the world doesn't
+        // get cluttered with full-health bars.
+        let mob_bars: Vec<([f32; 3], u8, u8)> = self
+            .remote_mobs
+            .values()
+            .filter(|m| {
+                let dying = self.mob_dying.get(&m.id).copied().unwrap_or(0.0);
+                let max = if m.kind == KIND_ZOMBIE {
+                    ZOMBIE_MAX_HEALTH as u8
+                } else {
+                    MOB_MAX_HEALTH as u8
+                };
+                m.health > 0 && m.health < max && dying <= 0.0
+            })
+            .map(|m| {
+                let max = if m.kind == KIND_ZOMBIE {
+                    ZOMBIE_MAX_HEALTH as u8
+                } else {
+                    MOB_MAX_HEALTH as u8
+                };
+                (m.pos, m.health, max)
+            })
+            .collect();
         let dbg_player = self.player_pos;
         let dbg_yaw = self.player_yaw;
         let dbg_pitch = self.player_pitch;
@@ -4314,9 +4371,75 @@ impl Voxel {
                         ),
                     );
                 }
+                // Floating mob HP bars. Projected onto the screen
+                // from each mob's world-space pos + a vertical
+                // offset so the bar sits a bit above the head.
+                // We hide bars at full HP + during the death fade.
+                let screen = ctx.content_rect();
+                if !mob_bars.is_empty() {
+                    let layer = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("voxel_mob_hp"),
+                    ));
+                    for (pos, cur, max) in &mob_bars {
+                        let world = glam::Vec3::new(pos[0], pos[1] + 1.55, pos[2]);
+                        let clip = hud_view_proj
+                            * glam::Vec4::new(world.x, world.y, world.z, 1.0);
+                        if clip.w <= 0.0 {
+                            continue;
+                        }
+                        let ndc = glam::Vec3::new(
+                            clip.x / clip.w,
+                            clip.y / clip.w,
+                            clip.z / clip.w,
+                        );
+                        if !(0.0..=1.0).contains(&ndc.z) {
+                            continue;
+                        }
+                        let sx = (ndc.x * 0.5 + 0.5) * screen.width()
+                            + screen.min.x;
+                        let sy = (-ndc.y * 0.5 + 0.5) * screen.height()
+                            + screen.min.y;
+                        // Scale bar width with depth so close
+                        // enemies get a chunkier readout.
+                        let depth_scale = (1.0 / clip.w * 30.0).clamp(0.25, 1.5);
+                        let w = 50.0 * depth_scale;
+                        let h = 5.0 * depth_scale;
+                        let bg = egui::Rect::from_center_size(
+                            egui::pos2(sx, sy),
+                            egui::vec2(w, h),
+                        );
+                        layer.rect_filled(
+                            bg,
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(40, 0, 0, 200),
+                        );
+                        let frac = (*cur as f32 / *max as f32).clamp(0.0, 1.0);
+                        let fill = egui::Rect::from_min_size(
+                            bg.min,
+                            egui::vec2(bg.width() * frac, bg.height()),
+                        );
+                        let bar_col = if frac > 0.5 {
+                            egui::Color32::from_rgb(100, 200, 80)
+                        } else if frac > 0.25 {
+                            egui::Color32::from_rgb(220, 180, 60)
+                        } else {
+                            egui::Color32::from_rgb(220, 70, 60)
+                        };
+                        layer.rect_filled(fill, 1.0, bar_col);
+                        layer.rect_stroke(
+                            bg,
+                            1.0,
+                            egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200),
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
                 // Crosshair drawn directly on the egui screen layer.
                 // Two thin segments through the screen centre.
-                let screen = ctx.content_rect();
                 let center = screen.center();
                 let painter = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Foreground,
