@@ -7538,6 +7538,47 @@ impl Voxel {
                             local_lines.push("Boom.".to_string());
                             handled_locally = true;
                         }
+                        "clearedits" | "wipe" => {
+                            // Host-only: drop the entire edit
+                            // history + every cached chunk. Next
+                            // streaming pass regenerates from
+                            // scratch under the current seed.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/clearedits is host-only.".to_string(),
+                                );
+                            } else {
+                                let n_edits = self.edit_history.len();
+                                self.edit_history.clear();
+                                self.torch_positions.clear();
+                                let to_unload: Vec<ChunkCoord> = self
+                                    .world
+                                    .iter_chunks()
+                                    .map(|(c, _)| *c)
+                                    .collect();
+                                if !to_unload.is_empty() {
+                                    let renderer = self
+                                        .renderer
+                                        .as_mut()
+                                        .expect("renderer ready");
+                                    for entry in self.chunk_meshes.drain(..) {
+                                        renderer.remove_mesh(entry.2);
+                                    }
+                                    for cc in &to_unload {
+                                        self.world.remove_chunk(*cc);
+                                    }
+                                }
+                                self.pending_chunks.clear();
+                                self.pending_set.clear();
+                                local_lines.push(format!(
+                                    "Wiped {n_edits} edits + regenerating chunks."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "chunkinfo" => {
                             // Diagnostic: chunk count + size +
                             // pending queue + edit history length.
