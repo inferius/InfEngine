@@ -6679,35 +6679,42 @@ impl Voxel {
         // (drag), and let Space push them upward (buoyancy +
         // swim-up). Skipped in fly mode so /fly through water
         // still glides freely.
-        let in_water = !self.fly_mode
-            && aabb_intersects_swim_medium(&self.world, self.player_pos);
-        if in_water {
-            // Cap fall speed - water resistance fights gravity.
-            if self.player_vel.y < -1.8 {
-                self.player_vel.y = -1.8;
+        let liquid_under = if self.fly_mode {
+            None
+        } else {
+            submerged_liquid(&self.world, self.player_pos)
+        };
+        if let Some(liquid) = liquid_under {
+            // Every swim parameter comes from the `Liquid` row -
+            // water reads light + smooth, lava drags + barely
+            // floats. Adding a new liquid means filling these
+            // fields; no fluid-specific code in the swim loop.
+            if self.player_vel.y < liquid.swim_fall_cap {
+                self.player_vel.y = liquid.swim_fall_cap;
             }
-            // Stronger horizontal drag than air. Doesn't fully
-            // stop the player so directed movement still works.
-            self.player_vel.x *= 0.45;
-            self.player_vel.z *= 0.45;
-            // Held Space climbs the column at a steady rate.
-            // Released, the player drifts slowly upward thanks
-            // to gentle buoyancy so heads bob at the surface
-            // rather than sinking like a stone.
+            self.player_vel.x *= liquid.swim_horiz_drag;
+            self.player_vel.z *= liquid.swim_horiz_drag;
             if input_active && ctx.input.is_pressed(Key::Space) {
-                self.player_vel.y = self.player_vel.y.max(2.2);
+                self.player_vel.y =
+                    self.player_vel.y.max(liquid.swim_jump_vel);
             } else {
-                // Tiny upward bias - cancels most of gravity
-                // but not all, so the player still sinks slowly.
-                self.player_vel.y += 12.0 * dt;
+                self.player_vel.y += liquid.swim_buoyancy * dt;
                 if self.player_vel.y > 1.0 {
                     self.player_vel.y = 1.0;
                 }
             }
-            // Reset fall-damage tracker so falling into water
-            // doesn't punish on the next grounded transition.
+            // Reset fall-damage tracker so falling into the
+            // liquid doesn't punish on the next grounded
+            // transition.
             self.fall_start_y = None;
+            // Submerged damage tick (lava burns, future acid).
+            if liquid.submerged_damage_per_sec > 0.0 {
+                self.apply_player_damage(
+                    liquid.submerged_damage_per_sec * dt,
+                );
+            }
         }
+        let in_water = liquid_under.is_some();
         // Splash on the air -> water transition: short droplet
         // burst + click SFX. Quieter cue going the other way.
         if in_water != self.was_in_water {
@@ -12890,8 +12897,16 @@ impl AppHandler for Voxel {
                         .unwrap_or(None)
                         .map(|(b, _)| b)
                         .unwrap_or(BlockId::AIR);
-                    let (mult, _drop_ok) =
+                    let (mut mult, _drop_ok) =
                         tool_effectiveness(held, block);
+                    // Submerged mining: liquid slows the swing.
+                    // Pulled off the `Liquid` row so each fluid
+                    // can tune the penalty independently.
+                    if let Some(l) =
+                        submerged_liquid(&self.world, self.player_pos)
+                    {
+                        mult *= l.submerged_mining_mul;
+                    }
                     self.mining = Some(MiningState {
                         voxel: hit.voxel,
                         progress: 0.0,
@@ -14737,6 +14752,28 @@ struct Liquid {
     /// Whether two adjacent sources promote a flow voxel between
     /// them to a source. MC: water = true, lava = false.
     infinite_source: bool,
+    /// Horizontal velocity multiplier while a player is
+    /// submerged in this liquid. Lower = thicker drag. Water
+    /// = 0.45, lava = 0.20.
+    swim_horiz_drag: f32,
+    /// Y-velocity floor while submerged (negative number = how
+    /// fast the player can sink). Water -1.8, lava -0.5.
+    swim_fall_cap: f32,
+    /// Y-velocity set when the player holds the jump key while
+    /// submerged (active swim-up). Water 2.2, lava 1.0.
+    swim_jump_vel: f32,
+    /// Passive upward acceleration applied every frame (units:
+    /// m/s^2) when the player is submerged without holding
+    /// jump. Models buoyancy: water > gravity = drift up;
+    /// lava < gravity = slow sink. Capped at +1.0 m/s.
+    swim_buoyancy: f32,
+    /// Mining-time multiplier applied to every block the
+    /// player breaks while submerged. Water 5.0, lava 5.0 -
+    /// MC slows underwater mining drastically.
+    submerged_mining_mul: f32,
+    /// HP damage per second the player takes while submerged.
+    /// Water 0.0, lava 4.0.
+    submerged_damage_per_sec: f32,
 }
 
 /// Registry of every flowing liquid. The tick loop iterates this
@@ -14750,6 +14787,12 @@ const LIQUIDS: &[Liquid] = &[
         tick_period: 15,
         fall_period: 3,
         infinite_source: true,
+        swim_horiz_drag: 0.45,
+        swim_fall_cap: -1.8,
+        swim_jump_vel: 2.2,
+        swim_buoyancy: 12.0,
+        submerged_mining_mul: 5.0,
+        submerged_damage_per_sec: 0.0,
     },
     Liquid {
         block_id: LAVA_ID,
@@ -14757,6 +14800,12 @@ const LIQUIDS: &[Liquid] = &[
         tick_period: 90,
         fall_period: 15,
         infinite_source: false,
+        swim_horiz_drag: 0.20,
+        swim_fall_cap: -0.5,
+        swim_jump_vel: 1.0,
+        swim_buoyancy: 4.0,
+        submerged_mining_mul: 5.0,
+        submerged_damage_per_sec: 4.0,
     },
 ];
 
@@ -15515,12 +15564,13 @@ fn push_quad(
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
-/// Returns true if the player's AABB at `pos` overlaps any voxel
-/// flagged `F_SWIM` (the generic "liquid" gate). Drives swim drag
-/// plus buoyancy in the movement loop. Generic so a future lava
-/// or other-liquid block can opt in by setting `F_SWIM` without
-/// touching this function.
-fn aabb_intersects_swim_medium(world: &World, pos: Vec3) -> bool {
+/// Find the liquid the player's AABB overlaps, if any. Returns
+/// the `Liquid` reference so the movement loop can read drag /
+/// buoyancy / damage values per fluid kind without a separate
+/// lookup. Caller picks whichever liquid the body first hits;
+/// mixing two liquids in one body would be unusual and matches
+/// MC's "you're in lava, period" semantics.
+fn submerged_liquid(world: &World, pos: Vec3) -> Option<&'static Liquid> {
     let (min, max) = body_aabb(pos);
     let x0 = min.x.floor() as i32;
     let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
@@ -15531,13 +15581,17 @@ fn aabb_intersects_swim_medium(world: &World, pos: Vec3) -> bool {
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
-                if block_is_swim_medium(world.get([x, y, z])) {
-                    return true;
+                let b = world.get([x, y, z]);
+                if !block_is_swim_medium(b) {
+                    continue;
+                }
+                if let Some(l) = liquid_for(b) {
+                    return Some(l);
                 }
             }
         }
     }
-    false
+    None
 }
 
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
