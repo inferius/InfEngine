@@ -6701,6 +6701,71 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "horde" => {
+                            // Host-only: spawn N zombies around
+                            // the player in one go. Defaults to
+                            // 5; clamped 1..=20. Useful for
+                            // testing combat scenarios. Same
+                            // ring-spawn logic the spawner uses.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/horde is host-only.".to_string(),
+                                );
+                            } else {
+                                let n: usize = arg
+                                    .parse()
+                                    .ok()
+                                    .unwrap_or(5usize)
+                                    .clamp(1, 20);
+                                let mut spawned = 0;
+                                for i in 0..n {
+                                    let angle = (i as f32 / n as f32)
+                                        * std::f32::consts::TAU;
+                                    let radius = 6.0;
+                                    let cx = self.player_pos.x
+                                        + angle.cos() * radius;
+                                    let cz = self.player_pos.z
+                                        + angle.sin() * radius;
+                                    let pos = [cx, self.player_pos.y, cz];
+                                    let id = self.next_mob_id;
+                                    self.next_mob_id = self
+                                        .next_mob_id
+                                        .wrapping_add(1)
+                                        .max(1);
+                                    let mob = MobState {
+                                        id,
+                                        kind: KIND_ZOMBIE,
+                                        pos,
+                                        target: pos,
+                                        yaw: 0.0,
+                                        retarget_at: (self.day_time + 1.0)
+                                            .rem_euclid(DAY_LENGTH_S),
+                                        health: ZOMBIE_MAX_HEALTH,
+                                        dying: 0.0,
+                                        attack_cd: 0.0,
+                                    };
+                                    self.mobs.push(mob);
+                                    self.remote_mobs.insert(
+                                        id,
+                                        MobMsg {
+                                            id,
+                                            kind: KIND_ZOMBIE,
+                                            pos,
+                                            yaw: 0.0,
+                                            health: ZOMBIE_MAX_HEALTH as u8,
+                                        },
+                                    );
+                                    spawned += 1;
+                                }
+                                local_lines.push(format!(
+                                    "Spawned {spawned} zombies."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "spawnmob" => {
                             // Host-only: spawn a sheep or zombie
                             // a few blocks in front of the player.
