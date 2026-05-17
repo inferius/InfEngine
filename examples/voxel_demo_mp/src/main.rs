@@ -1337,6 +1337,8 @@ struct Voxel {
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.
     heartbeat_accum: f32,
+    /// Cactus contact damage interval timer.
+    cactus_damage_accum: f32,
     /// Advancing phase used by the camera head-bob. Increments
     /// each frame proportionally to the player's horizontal speed
     /// when grounded; eases back toward zero off-ground. Kept
@@ -4444,6 +4446,7 @@ impl Voxel {
             sounds_dir: None,
             step_cooldown: 0.0,
             heartbeat_accum: 0.0,
+            cactus_damage_accum: 0.0,
             fly_mode: false,
             god_mode: false,
             invuln_remaining: 0.0,
@@ -5240,6 +5243,35 @@ impl Voxel {
                 self.apply_player_damage(dmg);
                 self.spawn_break_particles(landing);
             }
+        }
+        // Cactus contact damage. Check the 8 voxels around the
+        // player body for cactus id 27; if any overlap, apply 1
+        // HP every 0.6 s.
+        let cactus_touch = {
+            let pos = self.player_pos;
+            let foot_y = (pos.y - PLAYER_HEIGHT - 0.05).floor() as i32;
+            let mid_y = (pos.y - PLAYER_HEIGHT * 0.5).floor() as i32;
+            let px = pos.x.floor() as i32;
+            let pz = pos.z.floor() as i32;
+            (-1..=1).any(|dx| {
+                (-1..=1).any(|dz| {
+                    if dx == 0 && dz == 0 {
+                        return false;
+                    }
+                    let v_lo = [px + dx, foot_y, pz + dz];
+                    let v_hi = [px + dx, mid_y, pz + dz];
+                    self.world.get(v_lo).0 == 27 || self.world.get(v_hi).0 == 27
+                })
+            })
+        };
+        if cactus_touch {
+            self.cactus_damage_accum += dt;
+            if self.cactus_damage_accum >= 0.6 {
+                self.cactus_damage_accum = 0.0;
+                self.apply_player_damage(1.0);
+            }
+        } else {
+            self.cactus_damage_accum = 0.0;
         }
         // Hurt-flash decay.
         if self.hurt_flash > 0.0 {
@@ -11982,6 +12014,14 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["sandstone_bottom.png", "sandstone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["sandstone.png"], keep_alpha: false },
     },
+    // Cactus block. Spawns occasionally in desert biomes. Hurts
+    // the player on contact via the world-side touch check.
+    BlockType {
+        id: 27, name: "cactus", color: [0.30, 0.55, 0.25], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["cactus_top.png", "cactus.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cactus_bottom.png", "cactus.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cactus_side.png", "cactus.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -12504,6 +12544,33 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
                 _ => 20,    // red
             };
             set_in_chunk(&mut chunk, x, local_y, z, BlockId(flower_id));
+        }
+    }
+    // Cactus pass: sparse 2-3 block columns on desert sand. Same
+    // surface + air checks as flowers; height varies with the
+    // hash so dunes don't look uniform.
+    for x in 0..cs {
+        for z in 0..cs {
+            let wx = origin.x as i32 + x;
+            let wz = origin.z as i32 + z;
+            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            if biome != Biome::Desert {
+                continue;
+            }
+            let h = hash2(wx ^ 0xCAC7, wz ^ 0x1A55);
+            if h % 24 != 5 {
+                continue;
+            }
+            let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
+            let height_voxels = 2 + ((h >> 4) % 2) as i32; // 2 or 3
+            for step in 1..=height_voxels {
+                let wy = ground + step;
+                let local_y = wy - origin.y as i32;
+                if local_y < 0 || local_y >= cs {
+                    continue;
+                }
+                set_in_chunk(&mut chunk, x, local_y, z, BlockId(27));
+            }
         }
     }
     chunk
