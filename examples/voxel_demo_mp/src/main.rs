@@ -1219,6 +1219,7 @@ struct Voxel {
     /// person front. Cycled with F5 the way Minecraft does it.
     camera_mode: u8,
     f5_prev: bool,
+    q_prev: bool,
     /// Player's saved home position. /sethome stores the current
     /// pose; /home teleports back. Persisted via the config file
     /// so the location survives across launches.
@@ -3924,6 +3925,7 @@ impl Voxel {
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
+            q_prev: false,
             home_pos: None,
             last_day_broadcast: None,
             show_debug: false,
@@ -5140,7 +5142,7 @@ impl Voxel {
                             ui.label("Mouse aim, WASD move, Space jump");
                             ui.label("Shift sneak, Ctrl sprint");
                             ui.label("LMB break, RMB place, E inventory, F eat, Esc menu");
-                            ui.label("T chat, Tab playerlist, F1 hide HUD, F3 debug");
+                            ui.label("T chat, Tab playerlist, Q drop, F1 hide HUD, F3 debug, F5 camera");
                             // Day clock - map [0..DAY_LENGTH_S) onto
                             // 24h so the player has a sense of where
                             // the sun is.
@@ -7159,6 +7161,40 @@ impl AppHandler for Voxel {
             self.camera_mode = (self.camera_mode + 1) % 3;
         }
         self.f5_prev = f5_now;
+        // Q drops one item from the selected hotbar slot. No
+        // dropped-entity model yet so the item simply
+        // disappears - useful for trimming overstocked stacks.
+        let q_now = ctx.input.is_pressed(Key::Q);
+        if q_now
+            && !self.q_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+            && !self.inventory_open
+            && self.selected_slot < HOTBAR_SLOTS
+            && let Some((b, c)) = self.inventory[self.selected_slot]
+        {
+            let new_count = c.saturating_sub(1);
+            self.inventory[self.selected_slot] = if new_count == 0 {
+                None
+            } else {
+                Some((b, new_count))
+            };
+            // Small puff at the player's feet so the drop is
+            // visible; mirrors the break-particle texture so
+            // identifying the block stays easy.
+            let color = self
+                .registry
+                .get(b)
+                .map(|d| d.color)
+                .unwrap_or([0.8, 0.8, 0.8]);
+            let voxel = [
+                self.player_pos.x.floor() as i32,
+                (self.player_pos.y - PLAYER_HEIGHT - 0.05).floor() as i32,
+                self.player_pos.z.floor() as i32,
+            ];
+            self.spawn_break_particles_tinted(voxel, color);
+        }
+        self.q_prev = q_now;
         // Tab held = playerlist overlay. Hidden in singleplayer
         // (the overlay drawer also guards on net role, but the
         // flag is gated here too so debug panels stay clean).
