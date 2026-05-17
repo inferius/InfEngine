@@ -1211,6 +1211,10 @@ struct Voxel {
     /// separate from `day_time` so a stationary player has a
     /// stable view.
     head_bob_phase: f32,
+    /// 0 = first person, 1 = third person behind, 2 = third
+    /// person front. Cycled with F5 the way Minecraft does it.
+    camera_mode: u8,
+    f5_prev: bool,
     /// Last time the server broadcast its authoritative
     /// `day_time`. Used to throttle the broadcast cadence to
     /// roughly once per second.
@@ -3807,6 +3811,8 @@ impl Voxel {
             heartbeat_accum: 0.0,
             fly_mode: false,
             head_bob_phase: 0.0,
+            camera_mode: 0,
+            f5_prev: false,
             last_day_broadcast: None,
             show_debug: false,
             f3_prev: false,
@@ -6777,6 +6783,19 @@ impl AppHandler for Voxel {
             self.hud_visible = !self.hud_visible;
         }
         self.f1_prev = f1_now;
+        // F5 cycles the camera through first-person and two
+        // third-person poses (behind, then in front). Disabled
+        // while chat is open so accidental F5 mid-typing doesn't
+        // disorient the player.
+        let f5_now = ctx.input.is_pressed(Key::F5);
+        if f5_now
+            && !self.f5_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
+            self.camera_mode = (self.camera_mode + 1) % 3;
+        }
+        self.f5_prev = f5_now;
         // Tab held = playerlist overlay. Hidden in singleplayer
         // (the overlay drawer also guards on net role, but the
         // flag is gated here too so debug panels stay clean).
@@ -7291,9 +7310,6 @@ impl AppHandler for Voxel {
             };
             let bob_y = (self.head_bob_phase * 2.0).sin() * 0.05 * bob_amount;
             let bob_x = self.head_bob_phase.sin() * 0.03 * bob_amount;
-            // Apply the lateral bob along the camera's right
-            // vector so it always feels like a sideways head
-            // tilt regardless of facing direction.
             let right = Vec3::new(
                 -(-self.player_yaw.sin()),
                 0.0,
@@ -7301,8 +7317,26 @@ impl AppHandler for Voxel {
             )
             .normalize_or_zero();
             let bob = Vec3::new(right.x * bob_x, bob_y, right.z * bob_x);
-            cam.position = player_pos + bob;
-            cam.target = player_pos + bob + forward;
+            // Third-person modes pull the camera back along the
+            // view ray (mode 1) or push it in front of the player
+            // looking backward (mode 2). The offset is short
+            // enough that it usually stays inside a 1-chunk view
+            // bubble even on tight walls.
+            const TP_DIST: f32 = 4.5;
+            match self.camera_mode {
+                0 => {
+                    cam.position = player_pos + bob;
+                    cam.target = player_pos + bob + forward;
+                }
+                1 => {
+                    cam.position = player_pos + bob - forward * TP_DIST;
+                    cam.target = player_pos + bob;
+                }
+                _ => {
+                    cam.position = player_pos + bob + forward * TP_DIST;
+                    cam.target = player_pos + bob;
+                }
+            }
             cam.fov_y_rad = self.fov_y_rad;
         }
         // Day/night cycle. `day_time` ramps from 0..DAY_LENGTH_S
@@ -7424,9 +7458,22 @@ impl AppHandler for Voxel {
                 .map(|(_, r)| r.sample(now))
                 .collect()
         };
-        if !remote_iter.is_empty() {
+        // In third-person we draw the local player too so the
+        // pulled-back camera has something to look at. We
+        // synthesize a PlayerMsg from current state and prepend
+        // it to the render list.
+        let mut local_iter = remote_iter;
+        if self.camera_mode != 0 {
+            local_iter.push(PlayerMsg {
+                id: own_id,
+                pos: [player_pos.x, player_pos.y, player_pos.z],
+                yaw: self.player_yaw,
+                pitch: self.player_pitch,
+            });
+        }
+        if !local_iter.is_empty() {
             let cube = self.player_cube.get_or_insert_with(|| renderer.cube_handle());
-            for p in remote_iter {
+            for p in local_iter {
                 // Hash id to a stable colour + a slightly cooler
                 // head tone so the two parts read as separate body
                 // segments instead of a single block.
