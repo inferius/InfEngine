@@ -5612,33 +5612,142 @@ impl Voxel {
             self.chat_input.clear();
             self.chat_open = false;
             if !text.is_empty() {
-                match &self.net {
-                    NetRole::Offline => {
-                        // No-op offline: chat only makes sense in
-                        // MP. Drop the input silently.
-                    }
-                    NetRole::Server { server, .. } => {
-                        // Host prepends its own name + appends to
-                        // the local log, then broadcasts so every
-                        // client renders the same line.
-                        let line = format!("<Host> {text}");
-                        self.chat_log
-                            .push((std::time::Instant::now(), line.clone()));
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(&line, bincode::config::standard())
-                        {
-                            server.broadcast_bytes("vx.chat", buf);
+                // Slash-command dispatch. Commands run locally
+                // (no broadcast); everything else routes to chat
+                // normally below.
+                let mut handled_locally = false;
+                if let Some(rest) = text.strip_prefix('/') {
+                    let mut parts = rest.splitn(2, char::is_whitespace);
+                    let cmd = parts.next().unwrap_or("").to_lowercase();
+                    let arg = parts.next().unwrap_or("").trim();
+                    let mut local_lines: Vec<String> = Vec::new();
+                    match cmd.as_str() {
+                        "help" | "?" => {
+                            local_lines.push(
+                                "Commands: /help, /players, /me <act>, /clear"
+                                    .to_string(),
+                            );
+                        }
+                        "players" | "who" => {
+                            let mut names: Vec<&String> =
+                                self.player_names.values().collect();
+                            names.sort_by(|a, b| {
+                                a.to_lowercase().cmp(&b.to_lowercase())
+                            });
+                            let joined: Vec<String> =
+                                names.into_iter().cloned().collect();
+                            let summary = if joined.is_empty() {
+                                "(no peers known yet)".to_string()
+                            } else {
+                                joined.join(", ")
+                            };
+                            local_lines.push(format!(
+                                "Players ({}): {summary}",
+                                self.player_names.len()
+                            ));
+                        }
+                        "clear" => {
+                            self.chat_log.clear();
+                            handled_locally = true;
+                        }
+                        "me" => {
+                            if !arg.is_empty() {
+                                // /me <action> -> broadcast as
+                                // "* name action" so other players
+                                // see an emote, not a command.
+                                let action = arg.to_string();
+                                match &self.net {
+                                    NetRole::Offline => {
+                                        local_lines.push(format!(
+                                            "* {} {action}",
+                                            self.player_name
+                                        ));
+                                    }
+                                    NetRole::Server { server, .. } => {
+                                        let line = format!(
+                                            "* {} {action}",
+                                            self.player_name
+                                        );
+                                        self.chat_log.push((
+                                            std::time::Instant::now(),
+                                            line.clone(),
+                                        ));
+                                        if let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                &line,
+                                                bincode::config::standard(),
+                                            )
+                                        {
+                                            server.broadcast_bytes("vx.chat", buf);
+                                        }
+                                    }
+                                    NetRole::Client { client, .. } => {
+                                        // Smuggle the emote through
+                                        // the normal chat path so
+                                        // the server tags it; the
+                                        // server doesn't know /me
+                                        // specifically.
+                                        let emote = format!("* {action}");
+                                        if let Ok(buf) =
+                                            bincode::serde::encode_to_vec(
+                                                &emote,
+                                                bincode::config::standard(),
+                                            )
+                                        {
+                                            let _ = client
+                                                .send_bytes("vx.chat", buf);
+                                        }
+                                    }
+                                }
+                                handled_locally = true;
+                            } else {
+                                local_lines
+                                    .push("Usage: /me <action>".to_string());
+                            }
+                        }
+                        _ => {
+                            local_lines.push(format!("Unknown command: /{cmd}"));
                         }
                     }
-                    NetRole::Client { client, .. } => {
-                        // Client sends the raw text; the server
-                        // tags it with the sender name before
-                        // broadcasting back.
-                        if let Ok(buf) = bincode::serde::encode_to_vec(
-                            &text,
-                            bincode::config::standard(),
-                        ) {
-                            let _ = client.send_bytes("vx.chat", buf);
+                    if !local_lines.is_empty() {
+                        let now = std::time::Instant::now();
+                        for l in local_lines {
+                            self.chat_log.push((now, l));
+                        }
+                        handled_locally = true;
+                    }
+                }
+                if !handled_locally {
+                    match &self.net {
+                        NetRole::Offline => {
+                            // No-op offline: chat only makes sense
+                            // in MP. Drop the input silently.
+                        }
+                        NetRole::Server { server, .. } => {
+                            // Host prepends its own name + appends
+                            // to the local log, then broadcasts so
+                            // every client renders the same line.
+                            let line =
+                                format!("<{}> {text}", self.player_name);
+                            self.chat_log
+                                .push((std::time::Instant::now(), line.clone()));
+                            if let Ok(buf) = bincode::serde::encode_to_vec(
+                                &line,
+                                bincode::config::standard(),
+                            ) {
+                                server.broadcast_bytes("vx.chat", buf);
+                            }
+                        }
+                        NetRole::Client { client, .. } => {
+                            // Client sends the raw text; the server
+                            // tags it with the sender name before
+                            // broadcasting back.
+                            if let Ok(buf) = bincode::serde::encode_to_vec(
+                                &text,
+                                bincode::config::standard(),
+                            ) {
+                                let _ = client.send_bytes("vx.chat", buf);
+                            }
                         }
                     }
                 }
