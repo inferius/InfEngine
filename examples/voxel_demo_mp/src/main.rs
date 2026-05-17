@@ -2223,6 +2223,53 @@ impl Voxel {
     ///   the boxy vanilla MC look. Solid neighbours are
     ///   ignored so a pond against a stone wall keeps the
     ///   wall-side corner at the source height.
+    /// Horizontal flow direction at a liquid voxel, returned as
+    /// a unit-ish 2D vector in (x, z). Computed by summing the
+    /// "flow toward lower level" contribution of each NSEW
+    /// neighbour - the cell pushes downhill toward lower-level
+    /// flow cells, off cliffs (cell with air below), and out of
+    /// itself. Source cells with no lower-level neighbour return
+    /// the zero vector (no current).
+    fn liquid_flow_dir(&self, pos: [i32; 3], liquid_id: u16) -> [f32; 2] {
+        let level = self.liquid_level.get(&pos).copied().unwrap_or(0);
+        let mut dx = 0.0_f32;
+        let mut dz = 0.0_f32;
+        let dirs: [([i32; 3], [f32; 2]); 4] = [
+            ([1, 0, 0], [1.0, 0.0]),
+            ([-1, 0, 0], [-1.0, 0.0]),
+            ([0, 0, 1], [0.0, 1.0]),
+            ([0, 0, -1], [0.0, -1.0]),
+        ];
+        for (d, axis) in &dirs {
+            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+            let nb = self.world.get(n);
+            if nb.0 == liquid_id {
+                let nl = self.liquid_level.get(&n).copied().unwrap_or(0);
+                if nl > level {
+                    // Neighbour lower in the surface ramp -> our
+                    // flow vectors toward it.
+                    let weight = (nl - level) as f32;
+                    dx += axis[0] * weight;
+                    dz += axis[1] * weight;
+                }
+            } else if nb.is_air() {
+                // Air neighbour with air below = cliff edge.
+                // Flow points outward.
+                let below_n = [n[0], n[1] - 1, n[2]];
+                if self.world.get(below_n).is_air() {
+                    dx += axis[0];
+                    dz += axis[1];
+                }
+            }
+        }
+        let mag = (dx * dx + dz * dz).sqrt();
+        if mag < 1e-3 {
+            [0.0, 0.0]
+        } else {
+            [dx / mag, dz / mag]
+        }
+    }
+
     fn liquid_corner_height(
         &self,
         vx: i32,
@@ -7082,6 +7129,26 @@ impl Voxel {
             }
             self.player_vel.x *= liquid.swim_horiz_drag;
             self.player_vel.z *= liquid.swim_horiz_drag;
+            // Current: flowing cells push the player downstream
+            // at the liquid's `current_strength`. Source cells
+            // (level 0 with no lower-level neighbour) return a
+            // zero vector so a pond doesn't drag the player.
+            let foot = [
+                self.player_pos.x.floor() as i32,
+                (self.player_pos.y - PLAYER_HEIGHT * 0.5).floor() as i32,
+                self.player_pos.z.floor() as i32,
+            ];
+            let foot_block = self.world.get(foot);
+            if foot_block.0 == liquid.block_id
+                && liquid.current_strength > 0.0
+            {
+                let dir = self.liquid_flow_dir(foot, liquid.block_id);
+                if dir[0] != 0.0 || dir[1] != 0.0 {
+                    let push = liquid.current_strength * dt * 6.0;
+                    self.player_vel.x += dir[0] * push;
+                    self.player_vel.z += dir[1] * push;
+                }
+            }
             if input_active && ctx.input.is_pressed(Key::Space) {
                 self.player_vel.y =
                     self.player_vel.y.max(liquid.swim_jump_vel);
@@ -15498,6 +15565,11 @@ struct Liquid {
     /// player is submerged. Water reads as a cool blue haze,
     /// lava as a bright orange wash. Alpha controls intensity.
     submerged_tint: [f32; 4],
+    /// Horizontal velocity (m/s) the current pushes the player
+    /// in the flow direction while standing in a flow voxel.
+    /// Source cells have no flow so no push. Water 4.0,
+    /// lava 1.5 (sticky).
+    current_strength: f32,
 }
 
 /// Registry of every flowing liquid. The tick loop iterates this
@@ -15519,6 +15591,7 @@ const LIQUIDS: &[Liquid] = &[
         submerged_damage_per_sec: 0.0,
         drains_air: true,
         submerged_tint: [0.10, 0.30, 0.60, 0.40],
+        current_strength: 4.0,
     },
     Liquid {
         block_id: LAVA_ID,
@@ -15534,6 +15607,7 @@ const LIQUIDS: &[Liquid] = &[
         submerged_damage_per_sec: 4.0,
         drains_air: false,
         submerged_tint: [1.00, 0.35, 0.05, 0.55],
+        current_strength: 1.5,
     },
 ];
 
