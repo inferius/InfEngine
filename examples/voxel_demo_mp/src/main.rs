@@ -2462,12 +2462,13 @@ impl Voxel {
                 [0, 0, 1],
                 [0, 0, -1],
             ];
-            // MC pathfinding: for each air neighbour score the
-            // distance to a downward drop (cell with air below)
-            // reachable within 4 steps. Spread only to the
-            // direction(s) with the minimum distance. When no
-            // direction has a reachable drop, every air neighbour
-            // counts.
+            // Pathfinding influences LEVEL only, not which cells
+            // get water. Every air neighbour is filled so a pool
+            // forms radially around a source on flat ground;
+            // directions pointing toward a reachable drop get a
+            // slightly lower level (one less than they would
+            // otherwise) so the flow visibly biases downhill
+            // without leaving gaps to one side.
             let mut weights: [u32; 4] = [u32::MAX; 4];
             for (i, d) in dirs.iter().enumerate() {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
@@ -2484,16 +2485,22 @@ impl Voxel {
                 if !self.world.get(n).is_air() {
                     continue;
                 }
-                // When a drop is reachable, restrict spread to the
-                // best-scoring direction(s). Otherwise spread to
-                // every air neighbour (radial pool fill).
-                if any_reachable && weights[i] != min_w {
-                    continue;
-                }
                 if to_spawn.iter().any(|(p, _)| p == &n) {
                     continue;
                 }
-                to_spawn.push((n, level + 1));
+                // Downhill bias: drop-bound directions get
+                // level+1, every other direction gets level+2 so
+                // the flow visibly streams toward the cliff while
+                // still wetting the back of the pool.
+                let lvl = if any_reachable && weights[i] == min_w {
+                    level.saturating_add(1)
+                } else {
+                    level.saturating_add(2).min(max_range)
+                };
+                if lvl > max_range {
+                    continue;
+                }
+                to_spawn.push((n, lvl));
             }
         }
         if to_spawn.is_empty() {
@@ -6982,13 +6989,16 @@ impl Voxel {
             (self.stamina / STAMINA_MAX).clamp(0.0, 1.0);
         let air_frac =
             (self.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
-        // Underwater / lava view tint. Recomputed here so the HUD
-        // overlay stays in sync with the body's current liquid
-        // without piping a separate field through update.
+        // Underwater / lava view tint. Triggered only when the
+        // EYE voxel is in a liquid (head fully submerged); wading
+        // through ankle-deep water doesn't paint the screen. The
+        // body-AABB swim mechanics still kick in earlier - drag
+        // / buoyancy / air drain react to any overlap, only the
+        // overlay needs full submersion.
         let submerged_tint: Option<[f32; 4]> = if self.fly_mode {
             None
         } else {
-            submerged_liquid(&self.world, self.player_pos)
+            submerged_liquid_eye(&self.world, self.player_pos)
                 .map(|l| l.submerged_tint)
         };
         let player_hurt_flash = self.hurt_flash;
@@ -15920,6 +15930,24 @@ fn push_quad(
     verts.push(MeshVertex::new(v2, normal).with_uv([1.0, 0.0]));
     verts.push(MeshVertex::new(v3, normal).with_uv([0.0, 0.0]));
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// Liquid the player's eye (top of the body AABB) sits in, if
+/// any. Used by the screen-tint overlay so the wash only shows
+/// when the head is actually under the surface - wading
+/// ankle-deep doesn't trigger it. Eye position approximated by
+/// `pos.y` (the camera height in the existing rig), pulled
+/// inward a few centimetres so a perfectly flush waterline
+/// rounds down to "out".
+fn submerged_liquid_eye(world: &World, pos: Vec3) -> Option<&'static Liquid> {
+    let eye_y = (pos.y - 0.1).floor() as i32;
+    let eye_x = pos.x.floor() as i32;
+    let eye_z = pos.z.floor() as i32;
+    let b = world.get([eye_x, eye_y, eye_z]);
+    if !block_is_swim_medium(b) {
+        return None;
+    }
+    liquid_for(b)
 }
 
 /// Find the liquid the player's AABB overlaps, if any. Returns
