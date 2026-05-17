@@ -298,9 +298,9 @@ fn tool_tier(block: BlockId) -> u8 {
 /// needs stone+.
 fn block_required_tier(block: BlockId) -> u8 {
     match block.0 {
-        1 | 8 | 15 => 1, // stone, cobble, snow
-        13 => 1,         // coal ore
-        14 => 2,         // iron ore
+        1 | 8 => 1, // stone, cobble
+        13 => 1,    // coal ore
+        14 => 2,    // iron ore
         _ => 0,
     }
 }
@@ -372,8 +372,8 @@ enum BlockCategory {
 
 fn block_category(block: BlockId) -> BlockCategory {
     match block.0 {
-        1 | 8 | 13 | 14 | 15 | 26 => BlockCategory::Stone,
-        2..=4 => BlockCategory::Soil,
+        1 | 8 | 13 | 14 | 26 => BlockCategory::Stone,
+        2..=4 | 15 => BlockCategory::Soil, // dirt/grass/sand/snow
         5..=7 => BlockCategory::Wood,
         _ => BlockCategory::Other,
     }
@@ -1589,6 +1589,9 @@ struct Voxel {
     /// edit (break clears, place inserts). Used per frame to push
     /// point lights to the renderer near the player.
     torch_positions: HashSet<[i32; 3]>,
+    /// Voxels currently holding a thin snow layer. Rendered as
+    /// a slab in the world pass; chunk mesher skips them.
+    snow_positions: HashSet<[i32; 3]>,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1712,6 +1715,14 @@ impl Voxel {
             self.torch_positions.insert(voxel);
         } else {
             self.torch_positions.remove(&voxel);
+        }
+        // Snow layer voxels render as a thin slab in the world
+        // pass; tracked separately so the renderer can skip
+        // the full-cube path.
+        if block.0 == 15 {
+            self.snow_positions.insert(voxel);
+        } else {
+            self.snow_positions.remove(&voxel);
         }
     }
 
@@ -4868,6 +4879,7 @@ impl Voxel {
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
+            snow_positions: HashSet::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -4905,7 +4917,33 @@ impl Voxel {
             for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
                 for cy in 0..VERTICAL_CHUNKS {
                     let cc: ChunkCoord = [cx, cy, cz];
-                    self.world.insert_chunk(cc, generate_chunk_at(cc));
+                    let chunk = generate_chunk_at(cc);
+                    let origin = World::chunk_world_origin(cc);
+                    let cs = CHUNK_SIZE as i32;
+                    for ly in 0..cs {
+                        for lz in 0..cs {
+                            for lx in 0..cs {
+                                let b = chunk.get(
+                                    lx as usize,
+                                    ly as usize,
+                                    lz as usize,
+                                );
+                                let v = [
+                                    origin.x as i32 + lx,
+                                    origin.y as i32 + ly,
+                                    origin.z as i32 + lz,
+                                ];
+                                if b.0 == 15 {
+                                    self.snow_positions.insert(v);
+                                } else if b.0 == TORCH_ID
+                                    || b.0 == GLOWSTONE_ID
+                                {
+                                    self.torch_positions.insert(v);
+                                }
+                            }
+                        }
+                    }
+                    self.world.insert_chunk(cc, chunk);
                 }
             }
         }
@@ -5006,6 +5044,37 @@ impl Voxel {
             }
             if self.world.chunk(result.coord).is_some() {
                 continue;
+            }
+            // Scan the freshly-generated chunk for snow + torch
+            // voxels so their special render paths pick them up
+            // before the world_set_tracked writes ever fire.
+            {
+                let chunk_ref = &result.chunk;
+                let origin = World::chunk_world_origin(result.coord);
+                let cs = CHUNK_SIZE as i32;
+                for ly in 0..cs {
+                    for lz in 0..cs {
+                        for lx in 0..cs {
+                            let b = chunk_ref
+                                .get(lx as usize, ly as usize, lz as usize);
+                            if b.0 == 15 {
+                                self.snow_positions.insert([
+                                    origin.x as i32 + lx,
+                                    origin.y as i32 + ly,
+                                    origin.z as i32 + lz,
+                                ]);
+                            } else if b.0 == TORCH_ID
+                                || b.0 == GLOWSTONE_ID
+                            {
+                                self.torch_positions.insert([
+                                    origin.x as i32 + lx,
+                                    origin.y as i32 + ly,
+                                    origin.z as i32 + lz,
+                                ]);
+                            }
+                        }
+                    }
+                }
             }
             self.world.insert_chunk(result.coord, result.chunk);
             // Use the worker's submeshes directly for this chunk so
@@ -5109,10 +5178,11 @@ impl Voxel {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
-                // Skip torch submesh: torches render as a small
-                // crossed mesh in the world pass instead of as
-                // full cube voxels.
-                if sub.block.0 == TORCH_ID {
+                // Skip torch + snow submeshes: both render
+                // through dedicated world-pass meshes (thin
+                // torch + thin snow slab) instead of as full
+                // cube voxels.
+                if sub.block.0 == TORCH_ID || sub.block.0 == 15 {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -5147,10 +5217,11 @@ impl Voxel {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
-                // Skip torch submesh: torches render as a small
-                // crossed mesh in the world pass instead of as
-                // full cube voxels.
-                if sub.block.0 == TORCH_ID {
+                // Skip torch + snow submeshes: both render
+                // through dedicated world-pass meshes (thin
+                // torch + thin snow slab) instead of as full
+                // cube voxels.
+                if sub.block.0 == TORCH_ID || sub.block.0 == 15 {
                     continue;
                 }
                 let handle = renderer.create_mesh(
@@ -12436,6 +12507,31 @@ impl AppHandler for Voxel {
                 );
             }
         }
+        // Snow layers: thin 1x0.12x1 slab covering the bottom
+        // of the voxel cell. Atlas-tinted near-white so it
+        // contrasts with whatever sits below.
+        if !self.snow_positions.is_empty() {
+            let cube = *self
+                .player_cube
+                .get_or_insert_with(|| renderer.cube_handle());
+            for p in self.snow_positions.iter() {
+                let cx = p[0] as f32 + 0.5;
+                let cy = p[1] as f32;
+                let cz = p[2] as f32 + 0.5;
+                let slab = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, 0.12, 1.0),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy + 0.06, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    slab.to_cols_array(),
+                    [0.97, 0.98, 1.0, 1.0],
+                    0.0,
+                    0.9,
+                );
+            }
+        }
         // Render remote players as coloured cubes so each peer is
         // visible. The interpolation buffer (`remote_interp`) is
         // populated by every received `vx.player` regardless of
@@ -13177,7 +13273,11 @@ const BLOCK_TYPES: &[BlockType] = &[
         // line in gen_classic; otherwise behaves like a stone-y
         // surface block. Falls back to a near-white solid colour
         // when no snow.png ships with the assets pack.
-        id: 15, name: "snow", color: [0.95, 0.97, 1.00], transparent: false,
+        // Snow renders as a thin layer; the chunk mesher skips
+        // it and the world pass draws a custom slab using these
+        // tile assignments so the texture still gets sourced
+        // from the atlas / asset pack.
+        id: 15, name: "snow", color: [0.97, 0.98, 1.00], transparent: true,
         top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
@@ -13897,10 +13997,10 @@ fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
 }
 
 /// True for "decoration" blocks the player can walk through:
-/// torches, flowers. Cactus stays collide-able so the contact
-/// damage matters; glass stays solid.
+/// torches, flowers, snow layer. Cactus stays collide-able so
+/// the contact damage matters; glass stays solid.
 fn is_passable(b: BlockId) -> bool {
-    matches!(b.0, 10 | 20 | 21 | 22)
+    matches!(b.0, 10 | 15 | 20 | 21 | 22)
 }
 
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
