@@ -1191,6 +1191,10 @@ struct Voxel {
     /// is moving + grounded. Resets to STEP_PERIOD whenever a
     /// step sting fires.
     step_cooldown: f32,
+    /// Seconds since the last heartbeat thump. Drives the low-HP
+    /// audio cue: fires more rapidly the closer the player is to
+    /// dying. Stays at 0 above the threshold.
+    heartbeat_accum: f32,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -3737,6 +3741,7 @@ impl Voxel {
             audio_bank: infengine_audio::AudioBank::new(),
             sounds_dir: None,
             step_cooldown: 0.0,
+            heartbeat_accum: 0.0,
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
@@ -4257,6 +4262,25 @@ impl Voxel {
             // Reset cooldown so a step doesn't fire instantly the
             // moment we re-enter motion (keeps cadence natural).
             self.step_cooldown = 0.0;
+        }
+
+        // Low-HP heartbeat thump. Interval shrinks from ~1.2 s
+        // at HP=5 down to ~0.5 s at HP=1. Above HP=5 we leave the
+        // accumulator at 0 so re-entering the danger zone fires
+        // the first beat promptly.
+        if self.player_health > 0.0 && self.player_health < 5.0 {
+            self.heartbeat_accum += dt;
+            let interval = (0.5 + 0.2 * self.player_health).clamp(0.5, 1.4);
+            if self.heartbeat_accum >= interval {
+                self.heartbeat_accum = 0.0;
+                let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+                let vol_scale = (1.0 - (self.player_health / 5.0)).clamp(0.2, 1.0);
+                self.sfx_at("heartbeat", pos, move |a, _g| {
+                    let _ = a.play_thud(70.0, 0.28 * vol_scale);
+                });
+            }
+        } else {
+            self.heartbeat_accum = 0.0;
         }
 
         // Axis-resolved voxel AABB collision.
