@@ -5606,7 +5606,14 @@ impl Voxel {
         // Targeted-block label: name + (if actively mining) the
         // progress percentage. Hidden when the crosshair isn't on
         // anything breakable.
-        let targeted_block_info: Option<(&'static str, Option<u8>)> =
+        let held_for_label = self
+            .inventory
+            .get(self.selected_slot)
+            .copied()
+            .unwrap_or(None)
+            .map(|(b, _)| b)
+            .unwrap_or(BlockId::AIR);
+        let targeted_block_info: Option<(String, Option<u8>)> =
             self.target.and_then(|hit| {
                 let b = self.world.get(hit.voxel);
                 if b == BlockId::AIR {
@@ -5621,7 +5628,28 @@ impl Voxel {
                         None
                     }
                 });
-                Some((name, pct))
+                // Append a hint about the recommended tool when
+                // the held one doesn't match the block category.
+                let cat = block_category(b);
+                let hint = match cat {
+                    BlockCategory::Stone
+                        if tool_tier(held_for_label) == 0 =>
+                    {
+                        " (need pickaxe)"
+                    }
+                    BlockCategory::Soil
+                        if shovel_tier(held_for_label) == 0 =>
+                    {
+                        " (use shovel)"
+                    }
+                    BlockCategory::Wood
+                        if axe_tier(held_for_label) == 0 =>
+                    {
+                        " (use axe)"
+                    }
+                    _ => "",
+                };
+                Some((format!("{name}{hint}"), pct))
             });
         let targeted_mob_info: Option<(&'static str, u8, u8)> = self
             .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
@@ -6992,7 +7020,7 @@ impl Voxel {
                 // since both would overlap.
                 if hud_visible
                     && targeted_mob_info.is_none()
-                    && let Some((name, pct)) = targeted_block_info
+                    && let Some((name, pct)) = &targeted_block_info
                 {
                     let layer = ctx.layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
