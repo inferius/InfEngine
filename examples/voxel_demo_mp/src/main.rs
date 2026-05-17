@@ -6686,6 +6686,117 @@ impl Voxel {
                                 handled_locally = true;
                             }
                         }
+                        "explode" => {
+                            // Host-only: blast a sphere of voxels
+                            // to air around the player. Default
+                            // radius 4. Routes every cleared cell
+                            // through the normal edit pipeline so
+                            // the change replicates + saves.
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
+                                local_lines.push(
+                                    "/explode is host-only.".to_string(),
+                                );
+                            } else {
+                                let radius: i32 = arg
+                                    .parse()
+                                    .ok()
+                                    .unwrap_or(4i32)
+                                    .clamp(1, 16);
+                                let center = [
+                                    self.player_pos.x.floor() as i32,
+                                    self.player_pos.y.floor() as i32,
+                                    self.player_pos.z.floor() as i32,
+                                ];
+                                let mut cleared = 0u32;
+                                let r2 = radius * radius;
+                                let cfg = bincode::config::standard();
+                                for dy in -radius..=radius {
+                                    for dz in -radius..=radius {
+                                        for dx in -radius..=radius {
+                                            if dx * dx + dy * dy + dz * dz
+                                                > r2
+                                            {
+                                                continue;
+                                            }
+                                            let v = [
+                                                center[0] + dx,
+                                                center[1] + dy,
+                                                center[2] + dz,
+                                            ];
+                                            if v[1] < 1 {
+                                                // Skip the bedrock
+                                                // floor so the
+                                                // crater doesn't
+                                                // open into the
+                                                // void.
+                                                continue;
+                                            }
+                                            if self.world.get(v).0 == 0 {
+                                                continue;
+                                            }
+                                            self.world_set_tracked(
+                                                v,
+                                                BlockId::AIR,
+                                            );
+                                            cleared += 1;
+                                            let edit = EditMsg {
+                                                x: v[0],
+                                                y: v[1],
+                                                z: v[2],
+                                                block: 0,
+                                            };
+                                            if let NetRole::Server {
+                                                server,
+                                                ..
+                                            } = &mut self.net
+                                            {
+                                                self.edit_history.push(edit);
+                                                if let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        edit, cfg,
+                                                    )
+                                                {
+                                                    server.broadcast_bytes(
+                                                        "vx.edit",
+                                                        buf,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Remesh every chunk the
+                                // explosion bounding box touches
+                                // (plus its 1-cell halo).
+                                let cs = CHUNK_SIZE as i32;
+                                let min_cc = [
+                                    (center[0] - radius - 1).div_euclid(cs),
+                                    (center[1] - radius - 1).div_euclid(cs),
+                                    (center[2] - radius - 1).div_euclid(cs),
+                                ];
+                                let max_cc = [
+                                    (center[0] + radius + 1).div_euclid(cs),
+                                    (center[1] + radius + 1).div_euclid(cs),
+                                    (center[2] + radius + 1).div_euclid(cs),
+                                ];
+                                let mut coords: Vec<ChunkCoord> = Vec::new();
+                                for cz in min_cc[2]..=max_cc[2] {
+                                    for cy in min_cc[1]..=max_cc[1] {
+                                        for cx in min_cc[0]..=max_cc[0] {
+                                            coords.push([cx, cy, cz]);
+                                        }
+                                    }
+                                }
+                                self.rebuild_chunks(&coords);
+                                local_lines.push(format!(
+                                    "Exploded {cleared} blocks (r={radius})."
+                                ));
+                            }
+                            handled_locally = true;
+                        }
                         "mobcap" => {
                             // /mobcap reports the cap; /mobcap N
                             // sets it. Hard ceiling at 64 so the
