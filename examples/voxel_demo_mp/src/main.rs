@@ -5235,6 +5235,17 @@ impl Voxel {
         let hud_visible = self.hud_visible;
         let kill_count = self.kill_count;
         let chat_open = self.chat_open;
+        let held_tool_label: Option<&'static str> = self
+            .inventory
+            .get(self.selected_slot)
+            .copied()
+            .unwrap_or(None)
+            .and_then(|(b, _)| match b.0 {
+                16 => Some("Wood pickaxe"),
+                17 => Some("Stone pickaxe"),
+                18 => Some("Iron pickaxe"),
+                _ => None,
+            });
         let weather_label: Option<&'static str> = match self.weather {
             1 => Some("Rain"),
             2 => Some("Snow"),
@@ -5860,6 +5871,16 @@ impl Voxel {
                                 dbg_player.y,
                                 dbg_player.z
                             ));
+                            if let Some(tool) = held_tool_label {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Held: {tool}"
+                                    ))
+                                    .color(egui::Color32::from_rgb(
+                                        200, 230, 255,
+                                    )),
+                                );
+                            }
                             // Spawn-direction hint: distance to
                             // the configured respawn point + the
                             // approximate compass bearing toward
