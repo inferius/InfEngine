@@ -1011,6 +1011,14 @@ struct Voxel {
     /// `REGEN_DELAY`, HP starts ticking up at `REGEN_RATE` HP/s
     /// (capped at `PLAYER_MAX_HEALTH`).
     regen_accum: f32,
+    /// Current camera vertical FOV in radians. Smoothly lerps
+    /// toward a wider angle while the player sprints, snaps back
+    /// when they stop. Read by both the wgpu camera + the egui
+    /// HUD's screen-projection so the two stay in sync.
+    fov_y_rad: f32,
+    /// `true` for the last frame's "are we actually sprinting"
+    /// state - used by the FOV lerp.
+    sprinting: bool,
     /// Per-remote-player interpolation buffer. We keep the
     /// previous + current `PlayerMsg` and their arrival instants
     /// so the render path can lerp between them at `now - delay`,
@@ -3099,6 +3107,8 @@ impl Voxel {
             fall_start_y: None,
             hurt_flash: 0.0,
             regen_accum: 0.0,
+            fov_y_rad: 60_f32.to_radians(),
+            sprinting: false,
             remote_interp: HashMap::new(),
             inventory: {
                 // Seed the hotbar with one starter stack per known
@@ -3507,8 +3517,8 @@ impl Voxel {
         // a player facing east strafing south.
         let right = Vec3::new(-forward_horizontal.z, 0.0, forward_horizontal.x);
 
-        let mut move_axis = 0.0;
-        let mut strafe = 0.0;
+        let mut move_axis: f32 = 0.0;
+        let mut strafe: f32 = 0.0;
         // Movement speed multiplier: Shift = sneak (0.4x), Ctrl =
         // sprint (1.7x), no modifier = normal walk. Modifiers are
         // also gated on `input_active` so the menu doesn't sprint
@@ -3538,8 +3548,28 @@ impl Voxel {
                 || ctx.input.is_pressed(Key::ControlRight)
             {
                 speed_mul *= 1.7;
+                // Counts as sprinting only when actually moving;
+                // standing still + holding Ctrl shouldn't widen
+                // the FOV.
+                self.sprinting = move_axis.abs() + strafe.abs() > 0.0;
+            } else {
+                self.sprinting = false;
             }
+        } else {
+            self.sprinting = false;
         }
+        // Smooth FOV lerp toward the per-state target. 60 deg
+        // baseline, 70 deg while sprinting. The exponential lerp
+        // factor `1 - exp(-rate * dt)` keeps the easing
+        // framerate-independent.
+        let target_fov = if self.sprinting {
+            70_f32.to_radians()
+        } else {
+            60_f32.to_radians()
+        };
+        let lerp_rate = 8.0_f32;
+        let alpha = 1.0 - (-lerp_rate * dt).exp();
+        self.fov_y_rad += (target_fov - self.fov_y_rad) * alpha;
         let horizontal = (forward_horizontal * move_axis + right * strafe)
             .normalize_or_zero()
             * (PLAYER_SPEED * speed_mul);
@@ -3710,7 +3740,7 @@ impl Voxel {
         let hud_aspect =
             self.viewport.0.max(1) as f32 / self.viewport.1.max(1) as f32;
         let hud_view_proj = Mat4::perspective_rh(
-            60_f32.to_radians(),
+            self.fov_y_rad,
             hud_aspect,
             0.1,
             500.0,
@@ -5360,6 +5390,7 @@ impl AppHandler for Voxel {
             let cam = renderer.camera_3d_mut();
             cam.position = player_pos;
             cam.target = player_pos + forward;
+            cam.fov_y_rad = self.fov_y_rad;
         }
         // Day/night cycle. `day_time` ramps from 0..DAY_LENGTH_S
         // and feeds both the sun direction (rotating around the +Z
