@@ -6124,6 +6124,16 @@ impl Voxel {
                         if ui.button("Main Menu").clicked() {
                             action_main_menu = true;
                         }
+                        ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Seed: {}",
+                                world_seed()
+                            ))
+                            .color(egui::Color32::from_rgb(150, 180, 180))
+                            .small()
+                            .italics(),
+                        );
                     });
                 });
             }
