@@ -6033,7 +6033,7 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /fly, /w <name> <msg>"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n], /day, /night, /time <hh>, /heal, /kill, /fly, /w <name> <msg>"
                                     .to_string(),
                             );
                         }
@@ -6052,6 +6052,16 @@ impl Voxel {
                             self.hurt_flash = 0.0;
                             self.heartbeat_accum = 0.0;
                             local_lines.push("Healed to full.".to_string());
+                            handled_locally = true;
+                        }
+                        "kill" => {
+                            // Force the player's HP to zero so
+                            // the existing apply_player_damage
+                            // death path runs (drops, respawn,
+                            // chat broadcast). Useful for testing
+                            // + when stuck in geometry.
+                            let dmg = self.player_health + 1.0;
+                            self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
                         "fly" => {
