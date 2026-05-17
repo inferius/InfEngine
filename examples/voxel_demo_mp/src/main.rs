@@ -5718,9 +5718,71 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>, /give <block> [n]"
                                     .to_string(),
                             );
+                        }
+                        "give" => {
+                            // Add stacks of a named block to the
+                            // local inventory. In MP this only
+                            // affects the host's authoritative
+                            // copy; a connected client running
+                            // /give just edits their predicted
+                            // view (the next vx.inv snapshot
+                            // wipes it). Mostly useful for
+                            // testing + creative play.
+                            if arg.is_empty() {
+                                local_lines.push(
+                                    "Usage: /give <block> [count]"
+                                        .to_string(),
+                                );
+                            } else {
+                                let mut parts = arg.split_whitespace();
+                                let block_name = parts.next().unwrap_or("");
+                                let count: u32 = parts
+                                    .next()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(64);
+                                let block_id = BLOCK_TYPES
+                                    .iter()
+                                    .find(|bt| {
+                                        bt.name.eq_ignore_ascii_case(block_name)
+                                    })
+                                    .map(|bt| bt.id);
+                                if let Some(id) = block_id {
+                                    let bid = BlockId(id);
+                                    let mut added = 0u32;
+                                    while added < count {
+                                        let before = self
+                                            .inventory
+                                            .iter()
+                                            .filter_map(|s| s.map(|(_, c)| c as u32))
+                                            .sum::<u32>();
+                                        self.pickup(bid);
+                                        let after = self
+                                            .inventory
+                                            .iter()
+                                            .filter_map(|s| s.map(|(_, c)| c as u32))
+                                            .sum::<u32>();
+                                        if after <= before {
+                                            // Inventory was
+                                            // full; stop early so
+                                            // we don't infinite
+                                            // loop.
+                                            break;
+                                        }
+                                        added += 1;
+                                    }
+                                    local_lines.push(format!(
+                                        "Gave {added} x {block_name}."
+                                    ));
+                                } else {
+                                    local_lines.push(format!(
+                                        "Unknown block: {block_name}"
+                                    ));
+                                }
+                                handled_locally = true;
+                            }
                         }
                         "summon" => {
                             // Host-only: yank a remote peer to
