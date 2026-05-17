@@ -3505,6 +3505,10 @@ impl Voxel {
         // Drain incoming bytes + edits to apply. Collect first so the
         // borrow on `self.net` releases before we mutate the world.
         let mut to_apply: Vec<EditMsg> = Vec::new();
+        // Validated grass voxels from inbound vx.path requests.
+        // Filled in the Server arm + drained after self.net's
+        // borrow releases.
+        let mut path_apply: Vec<[i32; 3]> = Vec::new();
         // Inventory snapshot the client received this tick. Applied
         // to `self.inventory` / `self.craft_grid` after the
         // `&mut self.net` borrow releases.
@@ -3570,6 +3574,7 @@ impl Voxel {
                 // drain loop so we can validate against the
                 // authoritative inventory.
                 let mut raw_edits: Vec<(u32, EditMsg)> = Vec::new();
+                let mut path_requests: Vec<(u32, [i32; 3])> = Vec::new();
                 let mut raw_drags: Vec<(u32, InvActionMsg)> = Vec::new();
                 for (client_id, kind, data) in server.drain_bytes() {
                     match kind.as_str() {
@@ -3603,6 +3608,114 @@ impl Voxel {
                                 raw_drags.push((client_id, m));
                             }
                         }
+                        "vx.recipe" => {
+                            // Client asked the server to auto-
+                            // fill its craft grid with recipe
+                            // index `idx`. Validate the sender's
+                            // inventory carries every input,
+                            // move them into craft_grid, and
+                            // queue an inv snapshot back.
+                            if let Ok((idx, _)) =
+                                bincode::serde::decode_from_slice::<u32, _>(
+                                    &data, cfg,
+                                )
+                                && let Some(recipe) =
+                                    RECIPES.get(idx as usize)
+                                && let Some(inv) =
+                                    inventories.get_mut(&client_id)
+                            {
+                                let mut taken: Vec<(
+                                    usize,
+                                    (BlockId, u8),
+                                )> = Vec::new();
+                                let mut placed: [Option<(
+                                    BlockId,
+                                    u8,
+                                )>;
+                                    4] = [None; 4];
+                                let mut ok = true;
+                                for (i, (bid, n)) in
+                                    recipe.inputs.iter().enumerate()
+                                {
+                                    if i >= 4 {
+                                        break;
+                                    }
+                                    let need = *n;
+                                    let target = BlockId(*bid);
+                                    let mut found: Option<usize> = None;
+                                    for (si, slot) in
+                                        inv.inventory.iter().enumerate()
+                                    {
+                                        if let Some((b, c)) = slot
+                                            && *b == target
+                                            && *c >= need
+                                        {
+                                            found = Some(si);
+                                            break;
+                                        }
+                                    }
+                                    match found {
+                                        Some(si) => {
+                                            let original = inv
+                                                .inventory[si]
+                                                .expect("verified");
+                                            taken
+                                                .push((si, original));
+                                            let remaining =
+                                                original
+                                                    .1
+                                                    .saturating_sub(
+                                                        need,
+                                                    );
+                                            inv.inventory[si] = if remaining == 0 {
+                                                None
+                                            } else {
+                                                Some((
+                                                    original.0,
+                                                    remaining,
+                                                ))
+                                            };
+                                            placed[i] = Some((
+                                                target, need,
+                                            ));
+                                        }
+                                        None => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if ok {
+                                    // Return any existing
+                                    // craft-grid stacks to the
+                                    // inventory via inv_pickup
+                                    // before overwriting.
+                                    let returns: Vec<(
+                                        BlockId,
+                                        u8,
+                                    )> = inv
+                                        .craft_grid
+                                        .iter_mut()
+                                        .filter_map(|s| s.take())
+                                        .collect();
+                                    for (b, c) in returns {
+                                        for _ in 0..c {
+                                            inv_pickup(
+                                                &mut inv.inventory,
+                                                b,
+                                            );
+                                        }
+                                    }
+                                    inv.craft_grid = placed;
+                                } else {
+                                    for (si, original) in taken {
+                                        inv.inventory[si] =
+                                            Some(original);
+                                    }
+                                }
+                                pending_inv_sends.insert(client_id);
+                            }
+                        }
                         "vx.mob_hit" => {
                             if let Ok((m, _)) = bincode::serde::decode_from_slice::<
                                 MobHitMsg,
@@ -3610,6 +3723,49 @@ impl Voxel {
                             >(&data, cfg)
                             {
                                 mob_hits_to_apply.push((client_id, m.mob_id));
+                            }
+                        }
+                        "vx.sleep" => {
+                            // Client requested a time skip (bed
+                            // RMB). Authoritative side validates
+                            // it's night before honouring; force
+                            // a vx.day broadcast next tick so
+                            // every peer sees the morning jump.
+                            let phase = (self.day_time / DAY_LENGTH_S)
+                                .rem_euclid(1.0);
+                            let elev =
+                                (phase * std::f32::consts::TAU).sin();
+                            if elev < -0.05 {
+                                self.day_time = DAY_LENGTH_S * 0.20;
+                                self.last_day_broadcast = None;
+                                let sender = server
+                                    .client_name(client_id)
+                                    .unwrap_or_else(|| {
+                                        format!("p{client_id}")
+                                    });
+                                let line = format!(
+                                    "* {sender} sleeps through the night"
+                                );
+                                chat_inbox.push(line.clone());
+                                if let Ok(buf) =
+                                    bincode::serde::encode_to_vec(
+                                        &line, cfg,
+                                    )
+                                {
+                                    server.broadcast_bytes("vx.chat", buf);
+                                }
+                            }
+                        }
+                        "vx.path" => {
+                            // Defer processing until the match
+                            // arm releases self.net so we can
+                            // call world_set_tracked + broadcast.
+                            if let Ok((v, _)) = bincode::serde::decode_from_slice::<
+                                [i32; 3],
+                                _,
+                            >(&data, cfg)
+                            {
+                                path_requests.push((client_id, v));
                             }
                         }
                         "vx.fellout" => {
@@ -4009,6 +4165,23 @@ impl Voxel {
                         server.broadcast_bytes("vx.edit", buf);
                     }
                 }
+                // Validate the deferred shovel-path requests
+                // here while `poses` is still in scope; the
+                // filtered voxel list is consumed by the
+                // post-arm world-mutation pass.
+                for (cid, v) in path_requests.iter() {
+                    let pos = poses
+                        .get(cid)
+                        .copied()
+                        .map(|p| p.pos)
+                        .unwrap_or([1e9, 1e9, 1e9]);
+                    let dx = pos[0] - v[0] as f32 - 0.5;
+                    let dy = pos[1] - v[1] as f32 - 0.5;
+                    let dz = pos[2] - v[2] as f32 - 0.5;
+                    if dx * dx + dy * dy + dz * dz <= 49.0 {
+                        path_apply.push(*v);
+                    }
+                }
                 // Push authoritative inventory snapshots to every
                 // client whose state changed this tick.
                 for cid in pending_inv_sends.drain() {
@@ -4249,6 +4422,32 @@ impl Voxel {
             self.world_set_tracked(voxel, BlockId(e.block));
             let coords = Self::affected_chunks(voxel);
             self.rebuild_chunks(&coords);
+        }
+        // Apply validated shovel-path requests (server side):
+        // grass voxels become dirt + broadcast as vx.edit.
+        if !path_apply.is_empty() {
+            let cfg = bincode::config::standard();
+            for v in path_apply.into_iter() {
+                if self.world.get(v).0 != 3 {
+                    continue;
+                }
+                self.world_set_tracked(v, BlockId(2));
+                let coords = Self::affected_chunks(v);
+                self.rebuild_chunks(&coords);
+                let edit = EditMsg {
+                    x: v[0],
+                    y: v[1],
+                    z: v[2],
+                    block: 2,
+                };
+                self.edit_history.push(edit);
+                if let NetRole::Server { server, .. } = &mut self.net
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec(edit, cfg)
+                {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
         }
         // Authoritative inventory snapshot from the server: replace
         // the local view wholesale. Anything the client mispredicted
@@ -10552,7 +10751,21 @@ impl Voxel {
         // from `self.inventory` into the 2x2 craft grid. Returns
         // any earlier withdrawals if the recipe demands more
         // than the player carries.
+        // Clients ship the recipe index to the server which
+        // mutates the authoritative inventory + replies with a
+        // fresh `vx.inv` snapshot. Offline / host runs the
+        // helper locally below.
         if let Some(idx) = prefill_recipe_idx
+            && let NetRole::Client { client, .. } = &self.net
+            && let Ok(buf) = bincode::serde::encode_to_vec(
+                idx as u32,
+                bincode::config::standard(),
+            )
+        {
+            let _ = client.send_bytes("vx.recipe", buf);
+        }
+        if let Some(idx) = prefill_recipe_idx
+            && !matches!(self.net, NetRole::Client { .. })
             && let Some(recipe) = RECIPES.get(idx)
         {
             // Inventory of (slot_idx, original_stack) we may
@@ -11688,20 +11901,23 @@ impl AppHandler for Voxel {
                     shovel_tier(held) > 0
                 }
             {
-                // Shovel-RMB on grass -> degrade to dirt (Minecraft's
-                // "path" shortcut). Routes through the edit pipeline
-                // so the change replicates + persists.
+                // Shovel-RMB on grass -> degrade to dirt
+                // (Minecraft's "path" shortcut). Apply locally
+                // for instant visual feedback then route the
+                // change through the right MP path: host
+                // broadcasts vx.edit, client sends vx.path and
+                // the server replays / rejects.
                 let voxel = hit.voxel;
+                let cfg = bincode::config::standard();
+                self.world_set_tracked(voxel, BlockId(2));
+                let coords = Self::affected_chunks(voxel);
+                self.rebuild_chunks(&coords);
                 let edit = EditMsg {
                     x: voxel[0],
                     y: voxel[1],
                     z: voxel[2],
                     block: 2,
                 };
-                self.world_set_tracked(voxel, BlockId(2));
-                let coords = Self::affected_chunks(voxel);
-                self.rebuild_chunks(&coords);
-                let cfg = bincode::config::standard();
                 match &mut self.net {
                     NetRole::Offline => {}
                     NetRole::Server { server, .. } => {
@@ -11712,14 +11928,20 @@ impl AppHandler for Voxel {
                             server.broadcast_bytes("vx.edit", buf);
                         }
                     }
-                    NetRole::Client { pending_edits, .. } => {
-                        pending_edits.push(edit);
+                    NetRole::Client { client, .. } => {
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(voxel, cfg)
+                        {
+                            let _ =
+                                client.send_bytes("vx.path", buf);
+                        }
                     }
                 }
             } else if rmb && self.world.get(hit.voxel).0 == 35 {
-                // RMB on a bed: trigger /sleep behaviour if it's
-                // night. Skips on host only since the day clock
-                // is authoritative there.
+                // RMB on a bed: night-time, run the local /sleep
+                // logic if we're authoritative; clients ship a
+                // vx.sleep request to the host so the world
+                // clock advances for everyone.
                 let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
                 let elev = (phase * std::f32::consts::TAU).sin();
                 let is_night = elev < -0.05;
@@ -11728,18 +11950,27 @@ impl AppHandler for Voxel {
                         std::time::Instant::now(),
                         "You can only sleep at night.".to_string(),
                     ));
-                } else if matches!(self.net, NetRole::Client { .. }) {
-                    self.chat_log.push((
-                        std::time::Instant::now(),
-                        "Only the host can advance time.".to_string(),
-                    ));
                 } else {
-                    self.day_time = DAY_LENGTH_S * 0.20;
-                    self.last_day_broadcast = None;
-                    self.chat_log.push((
-                        std::time::Instant::now(),
-                        "* sleeps through the night".to_string(),
-                    ));
+                    match &self.net {
+                        NetRole::Offline | NetRole::Server { .. } => {
+                            self.day_time = DAY_LENGTH_S * 0.20;
+                            self.last_day_broadcast = None;
+                            self.chat_log.push((
+                                std::time::Instant::now(),
+                                "* sleeps through the night"
+                                    .to_string(),
+                            ));
+                        }
+                        NetRole::Client { client, .. } => {
+                            let _ = client
+                                .send_bytes("vx.sleep", Vec::new());
+                            self.chat_log.push((
+                                std::time::Instant::now(),
+                                "Asking host to skip the night..."
+                                    .to_string(),
+                            ));
+                        }
+                    }
                 }
             } else if rmb
                 && let Some(block) = selected_block
