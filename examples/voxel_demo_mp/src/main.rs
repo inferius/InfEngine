@@ -7268,6 +7268,22 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "chunkinfo" => {
+                            // Diagnostic: chunk count + size +
+                            // pending queue + edit history length.
+                            let cs = CHUNK_SIZE as i32;
+                            let voxels_per_chunk =
+                                (cs as u64).pow(3);
+                            let total = self.chunk_meshes.len() as u64
+                                * voxels_per_chunk;
+                            local_lines.push(format!(
+                                "Chunks: {}  pending: {}  edits: {}  voxels: {total}",
+                                self.chunk_meshes.len(),
+                                self.pending_chunks.len(),
+                                self.edit_history.len(),
+                            ));
+                            handled_locally = true;
+                        }
                         "spawn" => {
                             // Snap the host back to the origin
                             // spawn pad. Works in any role since
