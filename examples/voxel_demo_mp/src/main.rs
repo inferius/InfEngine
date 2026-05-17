@@ -1755,6 +1755,31 @@ impl Voxel {
     /// day-of-cycle to disk in the new versioned `INFV` format.
     /// Called periodically while the server runs (every 30 s) so a
     /// crash loses at most half a minute of state.
+    /// Probe the voxel column directly under the player's feet
+    /// at world XZ `(wx, wz)` and return true if any cell across
+    /// the player's collision footprint is solid. Used by the
+    /// sneak edge-clamp so a grounded sneaking player can't walk
+    /// off the side of a block.
+    fn has_floor_under(&self, wx: f32, wz: f32) -> bool {
+        let foot_y = (self.player_pos.y - PLAYER_HEIGHT - 0.05).floor() as i32;
+        // The player AABB is `(wx - r, wz - r) -> (wx + r, wz + r)`
+        // at foot height. Check the 4 corner cells (or fewer when
+        // the player straddles fewer voxels) so we don't miss the
+        // diagonal case where the supporting block sits on one
+        // corner only.
+        let r = PLAYER_RADIUS - COLLISION_EPSILON;
+        let xs = [(wx - r).floor() as i32, (wx + r).floor() as i32];
+        let zs = [(wz - r).floor() as i32, (wz + r).floor() as i32];
+        for x in xs {
+            for z in zs {
+                if !self.world.get([x, foot_y, z]).is_air() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Apply HP damage to the local player. Reaches zero = death
     /// = respawn at origin + storage-row wipe + inventory snapshot
     /// fired through the existing `vx.fellout` channel so the
@@ -3337,6 +3362,7 @@ impl Voxel {
         // also gated on `input_active` so the menu doesn't sprint
         // the player while idle.
         let mut speed_mul = 1.0_f32;
+        let mut sneaking = false;
         if input_active {
             if ctx.input.is_pressed(Key::W) {
                 move_axis += 1.0;
@@ -3354,6 +3380,7 @@ impl Voxel {
                 || ctx.input.is_pressed(Key::ShiftRight)
             {
                 speed_mul *= 0.4;
+                sneaking = true;
             }
             if ctx.input.is_pressed(Key::ControlLeft)
                 || ctx.input.is_pressed(Key::ControlRight)
@@ -3364,8 +3391,26 @@ impl Voxel {
         let horizontal = (forward_horizontal * move_axis + right * strafe)
             .normalize_or_zero()
             * (PLAYER_SPEED * speed_mul);
-        self.player_vel.x = horizontal.x;
-        self.player_vel.z = horizontal.z;
+        let mut hvel_x = horizontal.x;
+        let mut hvel_z = horizontal.z;
+        // Sneak edge protection: a grounded sneaking player can't
+        // walk off a block. We probe per-axis along the candidate
+        // delta and zero the component that would land the feet
+        // over thin air. Both axes blocked = no horizontal move
+        // at all (lets the player creep up to the edge safely).
+        if sneaking && self.grounded {
+            let test_step = 0.4;
+            let test_x = self.player_pos.x + hvel_x.signum() * test_step;
+            if hvel_x.abs() > 1e-3 && !self.has_floor_under(test_x, self.player_pos.z) {
+                hvel_x = 0.0;
+            }
+            let test_z = self.player_pos.z + hvel_z.signum() * test_step;
+            if hvel_z.abs() > 1e-3 && !self.has_floor_under(self.player_pos.x, test_z) {
+                hvel_z = 0.0;
+            }
+        }
+        self.player_vel.x = hvel_x;
+        self.player_vel.z = hvel_z;
 
         if input_active && ctx.input.is_pressed(Key::Space) && self.grounded {
             self.player_vel.y = JUMP_VELOCITY;
