@@ -7268,6 +7268,61 @@ impl Voxel {
                             ));
                             handled_locally = true;
                         }
+                        "wave" | "shrug" | "dance" => {
+                            // Built-in emote shortcuts: each one
+                            // is a canned /me line broadcast via
+                            // the existing chat path. Keeps the
+                            // chat log readable + lets remote
+                            // peers see the action.
+                            let line = match cmd.as_str() {
+                                "wave" => "waves",
+                                "shrug" => {
+                                    "shrugs (\\_(\u{30C4})_/)"
+                                }
+                                _ => "dances",
+                            };
+                            let cfg = bincode::config::standard();
+                            match &mut self.net {
+                                NetRole::Offline => {
+                                    self.chat_log.push((
+                                        std::time::Instant::now(),
+                                        format!(
+                                            "* {} {line}",
+                                            self.player_name
+                                        ),
+                                    ));
+                                }
+                                NetRole::Server { server, .. } => {
+                                    let line = format!(
+                                        "* {} {line}",
+                                        self.player_name
+                                    );
+                                    self.chat_log.push((
+                                        std::time::Instant::now(),
+                                        line.clone(),
+                                    ));
+                                    if let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            &line, cfg,
+                                        )
+                                    {
+                                        server.broadcast_bytes("vx.chat", buf);
+                                    }
+                                }
+                                NetRole::Client { client, .. } => {
+                                    let emote = format!("* {line}");
+                                    if let Ok(buf) =
+                                        bincode::serde::encode_to_vec(
+                                            &emote, cfg,
+                                        )
+                                    {
+                                        let _ = client
+                                            .send_bytes("vx.chat", buf);
+                                    }
+                                }
+                            }
+                            handled_locally = true;
+                        }
                         "fw" | "firework" => {
                             // Spawn a vertical rocket trail of
                             // particles from the player's feet
