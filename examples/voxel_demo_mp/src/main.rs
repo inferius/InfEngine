@@ -7743,6 +7743,28 @@ impl Voxel {
                             }
                             handled_locally = true;
                         }
+                        "clearcraft" => {
+                            // Empty the 2x2 crafting grid. Frees
+                            // up materials trapped in the grid
+                            // without forcing the player to drag
+                            // each slot back out manually.
+                            let mut taken: Vec<(BlockId, u8)> = Vec::new();
+                            for s in self.craft_grid.iter_mut() {
+                                if let Some(stack) = s.take() {
+                                    taken.push(stack);
+                                }
+                            }
+                            let count = taken.len() as u32;
+                            for (b, c) in taken {
+                                for _ in 0..c {
+                                    self.pickup(b);
+                                }
+                            }
+                            local_lines.push(format!(
+                                "Returned {count} craft slot(s)."
+                            ));
+                            handled_locally = true;
+                        }
                         "resetinventory" | "resetinv" => {
                             // Restore the freshly-seeded starter
                             // inventory: hotbar slots 1..=N get
