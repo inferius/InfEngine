@@ -3058,6 +3058,7 @@ impl Voxel {
         let mut day_time_update: Option<f32> = None;
         let mut seed_update: Option<u32> = None;
         let mut weather_update: Option<u8> = None;
+        let mut kick_reason: Option<String> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -3704,6 +3705,15 @@ impl Voxel {
                                 weather_update = Some(w);
                             }
                         }
+                        "vx.kick" => {
+                            if let Ok((reason, _)) =
+                                bincode::serde::decode_from_slice::<String, _>(
+                                    &data, cfg,
+                                )
+                            {
+                                kick_reason = Some(reason);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3844,6 +3854,18 @@ impl Voxel {
         }
         if let Some(w) = weather_update {
             self.weather = w;
+        }
+        if let Some(reason) = kick_reason {
+            // Server kicked us. Notify the player + bounce back
+            // to the main menu cleanly. notify_server_leaving
+            // would race the disconnect so we just drop the role.
+            self.chat_log.push((
+                std::time::Instant::now(),
+                format!("Kicked by host: {reason}"),
+            ));
+            self.net = NetRole::Offline;
+            self.state = AppState::MainMenu;
+            self.browser_error = Some(format!("kicked: {reason}"));
         }
         if let Some(seed) = seed_update
             && seed != world_seed()
@@ -7643,6 +7665,95 @@ impl Voxel {
                                 let _ = a.play_thud(180.0, 0.3 * g);
                             });
                             local_lines.push("Boom.".to_string());
+                            handled_locally = true;
+                        }
+                        "kick" => {
+                            // Host-only soft kick: sends a
+                            // vx.kick to the target with a
+                            // reason string. The client treats it
+                            // as a server-initiated disconnect
+                            // and bounces back to the main menu.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/kick is host-only.".to_string(),
+                                );
+                            } else {
+                                let mut parts =
+                                    arg.splitn(2, char::is_whitespace);
+                                let target =
+                                    parts.next().unwrap_or("").trim();
+                                let reason = parts
+                                    .next()
+                                    .unwrap_or("kicked by host")
+                                    .trim();
+                                if target.is_empty() {
+                                    local_lines.push(
+                                        "Usage: /kick <name> [reason]"
+                                            .to_string(),
+                                    );
+                                } else {
+                                    let target_id = self
+                                        .player_names
+                                        .iter()
+                                        .find(|(_, n)| {
+                                            n.eq_ignore_ascii_case(target)
+                                        })
+                                        .map(|(id, _)| *id);
+                                    match target_id {
+                                        None | Some(0) => {
+                                            local_lines.push(format!(
+                                                "Cannot kick {target}."
+                                            ));
+                                        }
+                                        Some(id) => {
+                                            let cfg =
+                                                bincode::config::standard();
+                                            if let NetRole::Server {
+                                                server,
+                                                ..
+                                            } = &mut self.net
+                                                && let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        reason.to_string(),
+                                                        cfg,
+                                                    )
+                                            {
+                                                server
+                                                    .send_bytes_to_client(
+                                                        id, "vx.kick", buf,
+                                                    );
+                                            }
+                                            // Announce in chat so
+                                            // other peers see who
+                                            // bounced.
+                                            let line = format!(
+                                                "* {target} was kicked: {reason}"
+                                            );
+                                            self.chat_log.push((
+                                                std::time::Instant::now(),
+                                                line.clone(),
+                                            ));
+                                            if let NetRole::Server {
+                                                server,
+                                                ..
+                                            } = &mut self.net
+                                                && let Ok(buf) =
+                                                    bincode::serde::encode_to_vec(
+                                                        &line,
+                                                        bincode::config::standard(),
+                                                    )
+                                            {
+                                                server.broadcast_bytes(
+                                                    "vx.chat", buf,
+                                                );
+                                            }
+                                            local_lines.push(format!(
+                                                "Kicked {target}."
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
                             handled_locally = true;
                         }
                         "announce" => {
