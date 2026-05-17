@@ -5127,7 +5127,7 @@ impl Voxel {
             NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
         };
         let plate_now = std::time::Instant::now();
-        let nameplates: Vec<([f32; 3], String, [u8; 3])> = self
+        let mut nameplates: Vec<([f32; 3], String, [u8; 3])> = self
             .remote_interp
             .iter()
             .filter(|(id, _)| **id != own_id_for_plates)
@@ -5155,6 +5155,19 @@ impl Voxel {
                 (p.pos, name, color)
             })
             .collect();
+        // In third-person we also draw the local player's
+        // nameplate so the camera-pull-back body has its label.
+        if self.camera_mode != 0 {
+            nameplates.push((
+                [
+                    self.player_pos.x,
+                    self.player_pos.y,
+                    self.player_pos.z,
+                ],
+                self.player_name.clone(),
+                [180, 230, 180],
+            ));
+        }
         // Pickup toast snapshot: trim entries older than the
         // fade window so the HUD doesn't keep stale text alive.
         // We do the housekeeping here so the egui closure sees a
