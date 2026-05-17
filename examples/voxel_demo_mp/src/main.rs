@@ -13558,11 +13558,13 @@ impl AppHandler for Voxel {
         self.t_prev = t_now;
         if t_just
             && matches!(self.state, AppState::Playing)
-            && !matches!(self.net, NetRole::Offline)
             && !self.inventory_open
             && !self.mp_menu_open
             && !self.chat_open
         {
+            // Chat opens in any net role (including Offline) so
+            // local slash commands like /give work in
+            // singleplayer too.
             self.chat_open = true;
             self.chat_input.clear();
         }
