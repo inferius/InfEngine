@@ -272,6 +272,8 @@ fn block_hardness(block: BlockId) -> f32 {
         10 => 0.1,        // torch
         11 => 0.6,        // wool
         12 => 0.4,        // meat
+        13 => 2.4,        // coal ore
+        14 => 3.2,        // iron ore
         _ => 0.8,
     }
 }
@@ -5878,6 +5880,29 @@ fn biome_at(wx: f32, wz: f32) -> Biome {
     }
 }
 
+/// Cheap, deterministic 3D hash used by the ore generator. Mixes
+/// integer voxel coordinates + a per-ore-kind salt into a [0, 1]
+/// float. Two octaves of bit-rotation give a noticeably "veiny"
+/// distribution rather than salt-and-pepper.
+fn ore_hash(x: i32, y: i32, z: i32, salt: u32) -> f32 {
+    let mut h = (x as u32).wrapping_mul(0x27D4_EB2F);
+    h ^= (y as u32).wrapping_mul(0x9E37_79B1);
+    h ^= (z as u32).wrapping_mul(0x1656_67B1);
+    h ^= salt;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    // Blob softening: average with a neighbour cell so the result
+    // forms small pockets instead of isolated voxels.
+    let mut g = (x as u32 ^ y as u32 ^ z as u32).wrapping_mul(salt | 1);
+    g ^= g >> 17;
+    g = g.wrapping_mul(0xC2B2_AE35);
+    let a = h as f32 / u32::MAX as f32;
+    let b = g as f32 / u32::MAX as f32;
+    (a * 0.7 + b * 0.3).clamp(0.0, 1.0)
+}
+
 /// Cheap, deterministic 2D hash. Used for tree placement so two
 /// peers running the same generator drop trees in the same spots.
 fn hash2(wx: i32, wz: i32) -> u32 {
@@ -6014,6 +6039,18 @@ const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
         sides: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
     },
+    BlockType {
+        id: 13, name: "coal", color: [0.30, 0.30, 0.30], transparent: false,
+        top: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 14, name: "iron", color: [0.75, 0.65, 0.55], transparent: false,
+        top: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 3, row: 3, files: &["iron_ore.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -6074,12 +6111,12 @@ fn block_type(id: u16) -> Option<&'static BlockType> {
 /// surprising thud / step click.
 fn block_material(b: BlockId) -> &'static str {
     match b.0 {
-        1 | 8 => "stone",       // stone, cobble
-        2 => "grass",           // dirt - MC actually uses "gravel"/"grass" mix; grass reads OK
+        1 | 8 | 13 | 14 => "stone", // stone, cobble, coal ore, iron ore
+        2 => "grass",               // dirt - grass-ish sound is fine
         3 => "grass",
         4 => "sand",
-        5 | 7 | 10 => "wood",   // wood, planks, torch
-        6 => "grass",           // leaves - MC has "grass" mapping
+        5 | 7 | 10 => "wood",       // wood, planks, torch
+        6 => "grass",               // leaves
         9 => "glass",
         _ => "stone",
     }
@@ -6395,7 +6432,22 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
         } else if wy >= h - 3 {
             near_surface
         } else {
-            BlockId(1)
+            // Stone interior: roll for ore veins. Two deterministic
+            // 3D hashes seed coal + iron pockets; each is a noise
+            // value that exceeds a threshold rarely. Coal is more
+            // common + can live high; iron is rarer + only deep.
+            let ox = wx as i32;
+            let oy = wy;
+            let oz = wz as i32;
+            let h_coal = ore_hash(ox, oy, oz, 0x9E37_79B9);
+            let h_iron = ore_hash(ox, oy, oz, 0x85EB_CA6B);
+            if h_iron > 0.985 && oy < 14 {
+                BlockId(14)
+            } else if h_coal > 0.94 {
+                BlockId(13)
+            } else {
+                BlockId(1)
+            }
         }
     });
     // Tree pass: in plains biomes drop a small oak with wood pillar
