@@ -2335,6 +2335,16 @@ impl Voxel {
         }
     }
 
+    /// Notify the player visually that an autosave just landed.
+    /// A short-lived chat line is the cheapest path that doesn't
+    /// require a new HUD layer.
+    fn note_save(&mut self) {
+        self.chat_log.push((
+            std::time::Instant::now(),
+            "[autosave] World state saved.".to_string(),
+        ));
+    }
+
     fn save_server_state(&mut self) {
         if !matches!(self.net, NetRole::Server { .. }) {
             return;
@@ -2383,6 +2393,7 @@ impl Voxel {
             Err(err) => warn!(error = %err, "state save encode failed"),
         }
         self.last_state_save = Some(std::time::Instant::now());
+        self.note_save();
     }
 
     /// Push a small burst of debris particles into the system at the
