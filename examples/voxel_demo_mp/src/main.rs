@@ -287,6 +287,7 @@ const MOB_HIT_DAMAGE: f32 = 2.0;
 /// the nearest player and deal contact damage at night.
 const KIND_SHEEP: u8 = 0;
 const KIND_ZOMBIE: u8 = 1;
+const KIND_CHICKEN: u8 = 2;
 /// Per-kind balance knobs.
 const ZOMBIE_SPEED: f32 = 1.8;
 const ZOMBIE_MAX_HEALTH: f32 = 14.0;
@@ -1630,12 +1631,20 @@ impl Voxel {
                         Some(y) => y,
                         None => continue,
                     };
+                    // Need 3 clear air blocks above the surface
+                    // voxel so the player capsule (PLAYER_HEIGHT
+                    // = 1.7 m) has headroom + body room.
                     let above1 = self.world.get([dx, sy + 1, dz]);
                     let above2 = self.world.get([dx, sy + 2, dz]);
-                    if above1.is_air() && above2.is_air() {
+                    let above3 = self.world.get([dx, sy + 3, dz]);
+                    if above1.is_air() && above2.is_air() && above3.is_air() {
+                        // Voxel `sy` is solid with top at world
+                        // y = sy + 1. Foot sits on that surface;
+                        // `player_pos.y` is the eye/cap height so
+                        // it lands at sy + 1 + PLAYER_HEIGHT.
                         return Vec3::new(
                             dx as f32 + 0.5,
-                            sy as f32 + 1.5,
+                            sy as f32 + 1.0 + PLAYER_HEIGHT + 0.05,
                             dz as f32 + 0.5,
                         );
                     }
@@ -1928,8 +1937,13 @@ impl Voxel {
                     // sheep-only.
                     let (sun_dir, _sky) = day_night(day_time);
                     let is_night = sun_dir.y < 0.0;
-                    let kind = if is_night && rand01() < 0.6 {
+                    let roll = rand01();
+                    let kind = if is_night && roll < 0.6 {
                         KIND_ZOMBIE
+                    } else if !is_night && roll < 0.35 {
+                        // Daytime mixes in chickens so plains
+                        // aren't sheep-only.
+                        KIND_CHICKEN
                     } else {
                         KIND_SHEEP
                     };
@@ -5848,7 +5862,7 @@ impl Voxel {
                             // impossible (full + not in use).
                             if stamina_frac < 0.999 || self.sprinting {
                                 ui.horizontal(|ui| {
-                                    ui.label("SP:");
+                                    ui.label("Stamina:");
                                     let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(120.0, 8.0),
                                         egui::Sense::hover(),
@@ -10330,6 +10344,17 @@ impl AppHandler for Voxel {
                                 0.10 * g * (0.5 + 0.5 * progress / total),
                             );
                         });
+                        // Spit a tiny block-tinted puff at each
+                        // dig tick so the mining feedback reads
+                        // visually too, matching the MC "crack"
+                        // particles. Frequency matches the SFX
+                        // cooldown.
+                        let color = self
+                            .registry
+                            .get(block)
+                            .map(|d| d.color)
+                            .unwrap_or([0.7, 0.7, 0.7]);
+                        self.spawn_break_particles_tinted(m.voxel, color);
                     }
                     if done {
                         mine_break = Some(m.voxel);
@@ -10861,11 +10886,21 @@ impl AppHandler for Voxel {
                 // meshes; zombies use the plain player_cube with a
                 // dim green tint stretched into a humanoid box.
                 let is_zombie = mob.kind == KIND_ZOMBIE;
+                let is_chicken = mob.kind == KIND_CHICKEN;
                 let (body_scale, body_y_off, base_body_tint, body_use_mesh) = if is_zombie {
                     (
                         Vec3::new(0.65, 1.55, 0.45),
                         0.78,
                         [0.30, 0.55, 0.30, 1.0],
+                        player_cube_handle,
+                    )
+                } else if is_chicken {
+                    // Small white-feathered box; head bolts on
+                    // top with a red comb tint via head_color.
+                    (
+                        Vec3::new(0.45, 0.55, 0.4),
+                        0.28,
+                        [0.95, 0.95, 0.9, 1.0],
                         player_cube_handle,
                     )
                 } else {
@@ -10927,6 +10962,17 @@ impl AppHandler for Voxel {
                             0.0,
                             player_cube_handle,
                             [0.22, 0.42, 0.22, 1.0],
+                        )
+                    } else if is_chicken {
+                        // Small head, slight forward poke, red
+                        // comb-ish tint so the chicken reads as
+                        // distinct from a tiny sheep.
+                        (
+                            Vec3::new(0.3, 0.3, 0.3),
+                            0.65,
+                            0.25,
+                            player_cube_handle,
+                            [0.95, 0.35, 0.30, 1.0],
                         )
                     } else {
                         (
@@ -11219,14 +11265,17 @@ fn biome_at(wx: f32, wz: f32) -> Biome {
     // Two layered sin/cos waves keep the biome map smooth and
     // deterministic. Range maps roughly to `[-1, 1]` so the cutoffs
     // are easy to reason about. A seed offset shifts the wave so
-    // distinct hosts get different biome maps.
+    // distinct hosts get different biome maps. Cutoffs are tuned
+    // so Plains dominates (~70%) with Mountain + Desert as
+    // accents - looks more like a starter world than a wall of
+    // stone.
     let s = seed_offset();
     let n = ((wx + s) * 0.012).sin() * 0.6
         + ((wz + s) * 0.009).cos() * 0.5
         + (((wx + wz) + s) * 0.004).sin() * 0.3;
-    if n < -0.5 {
+    if n < -0.95 {
         Biome::Desert
-    } else if n > 0.5 {
+    } else if n > 0.95 {
         Biome::Mountain
     } else {
         Biome::Plains
