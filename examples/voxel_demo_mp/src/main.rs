@@ -307,7 +307,7 @@ fn block_required_tier(block: BlockId) -> u8 {
 
 /// True if the block id represents a tool / non-placeable item.
 fn is_tool_block(block: BlockId) -> bool {
-    matches!(block.0, 16..=19 | 23..=25)
+    matches!(block.0, 16..=19 | 23..=25 | 29..=34)
 }
 
 /// Human label for a tool slot, used by the HUD readout.
@@ -319,6 +319,12 @@ fn tool_label(block: BlockId) -> Option<&'static str> {
         23 => Some("Wood sword"),
         24 => Some("Stone sword"),
         25 => Some("Iron sword"),
+        29 => Some("Wood shovel"),
+        30 => Some("Stone shovel"),
+        31 => Some("Iron shovel"),
+        32 => Some("Wood axe"),
+        33 => Some("Stone axe"),
+        34 => Some("Iron axe"),
         _ => None,
     }
 }
@@ -333,6 +339,83 @@ fn weapon_damage_mult(block: BlockId) -> f32 {
         25 => 2.7,
         _ => 1.0,
     }
+}
+
+/// Tier of a shovel slot, 0 = none.
+fn shovel_tier(block: BlockId) -> u8 {
+    match block.0 {
+        29 => 1,
+        30 => 2,
+        31 => 3,
+        _ => 0,
+    }
+}
+
+/// Tier of an axe slot, 0 = none.
+fn axe_tier(block: BlockId) -> u8 {
+    match block.0 {
+        32 => 1,
+        33 => 2,
+        34 => 3,
+        _ => 0,
+    }
+}
+
+/// Mining-speed category for a target block.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum BlockCategory {
+    Stone,
+    Soil,
+    Wood,
+    Other,
+}
+
+fn block_category(block: BlockId) -> BlockCategory {
+    match block.0 {
+        1 | 8 | 13 | 14 | 15 | 26 => BlockCategory::Stone,
+        2..=4 => BlockCategory::Soil,
+        5..=7 => BlockCategory::Wood,
+        _ => BlockCategory::Other,
+    }
+}
+
+/// Returns a (mining_mult, drop_ok) pair for the held tool vs
+/// the block being mined. Lower mult = faster. drop_ok = true
+/// when the player gets the broken block back.
+fn tool_effectiveness(
+    held: BlockId,
+    block: BlockId,
+) -> (f32, bool) {
+    let cat = block_category(block);
+    let needed = block_required_tier(block);
+    let pick = tool_tier(held);
+    let shov = shovel_tier(held);
+    let axe = axe_tier(held);
+    let (matched_tier, matches) = match cat {
+        BlockCategory::Stone => (pick, pick > 0),
+        BlockCategory::Soil => (shov, shov > 0),
+        BlockCategory::Wood => (axe, axe > 0),
+        BlockCategory::Other => (0, false),
+    };
+    let drop_ok = pick >= needed;
+    let mult = if matches {
+        // Right tool category. Each extra tier shaves ~20% off
+        // the time; floor at 0.4 so iron stays distinctly
+        // faster than wood.
+        let base = 0.55;
+        let extra = (matched_tier as i32
+            - block_required_tier(block) as i32)
+            .max(0) as f32;
+        (base - extra * 0.20).max(0.4)
+    } else if pick >= needed {
+        // Sufficient pickaxe tier but wrong category (e.g.
+        // pickaxe on dirt). Normal speed.
+        1.0
+    } else {
+        // Wrong tool entirely; punishing slow.
+        4.0
+    };
+    (mult, drop_ok)
 }
 
 const MOB_CAP_DEFAULT: usize = 12;
@@ -943,6 +1026,40 @@ const RECIPES: &[Recipe] = &[
         inputs: &[(4, 1), (4, 1), (8, 1), (8, 1)],
         output: (26, 1),
         name: "Sandstone",
+    },
+    // Shovels: 1 head material + 2 wood handle.
+    Recipe {
+        inputs: &[(7, 1), (5, 1), (5, 1)],
+        output: (29, 1),
+        name: "Wood shovel",
+    },
+    Recipe {
+        inputs: &[(8, 1), (5, 1), (5, 1)],
+        output: (30, 1),
+        name: "Stone shovel",
+    },
+    Recipe {
+        inputs: &[(14, 1), (5, 1), (5, 1)],
+        output: (31, 1),
+        name: "Iron shovel",
+    },
+    // Axes: 2 head material + 2 wood handle. Distinct counts
+    // from pickaxe (3 head + 1 wood) so the shapeless matcher
+    // resolves cleanly.
+    Recipe {
+        inputs: &[(7, 1), (7, 1), (5, 1), (5, 1)],
+        output: (32, 1),
+        name: "Wood axe",
+    },
+    Recipe {
+        inputs: &[(8, 1), (8, 1), (5, 1), (5, 1)],
+        output: (33, 1),
+        name: "Stone axe",
+    },
+    Recipe {
+        inputs: &[(14, 1), (14, 1), (5, 1), (5, 1)],
+        output: (34, 1),
+        name: "Iron axe",
     },
 ];
 
@@ -8786,6 +8903,12 @@ impl Voxel {
                                 "sword_wood" => Some(23),
                                 "sword_stone" => Some(24),
                                 "sword_iron" => Some(25),
+                                "shovel_wood" => Some(29),
+                                "shovel_stone" => Some(30),
+                                "shovel_iron" => Some(31),
+                                "axe_wood" => Some(32),
+                                "axe_stone" => Some(33),
+                                "axe_iron" => Some(34),
                                 _ => None,
                             };
                             match id_opt {
@@ -11015,12 +11138,10 @@ impl AppHandler for Voxel {
                     None => true,
                 };
                 if restart {
-                    // Mining speed depends on the held tool tier
-                    // vs the block's required tier:
-                    //   tier >= required: 1.0x time (normal)
-                    //   tier <  required: 4.0x time (penalty)
-                    // Tools above the requirement also shave a
-                    // bit per extra tier so iron > stone > wood.
+                    // Tool-class effectiveness drives the
+                    // mining time. Shovels chew dirt fast, axes
+                    // chew wood fast, pickaxes chew stone fast;
+                    // the wrong tool is a 4x penalty.
                     let held = self
                         .inventory
                         .get(self.selected_slot)
@@ -11028,14 +11149,8 @@ impl AppHandler for Voxel {
                         .unwrap_or(None)
                         .map(|(b, _)| b)
                         .unwrap_or(BlockId::AIR);
-                    let tier = tool_tier(held) as i32;
-                    let needed = block_required_tier(block) as i32;
-                    let mult = if tier >= needed {
-                        let extra = (tier - needed).max(0) as f32;
-                        (1.0 - extra * 0.20).max(0.4)
-                    } else {
-                        4.0
-                    };
+                    let (mult, _drop_ok) =
+                        tool_effectiveness(held, block);
                     self.mining = Some(MiningState {
                         voxel: hit.voxel,
                         progress: 0.0,
@@ -12344,6 +12459,46 @@ const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+    },
+    // Shovel + axe tools. Different tool kinds speed up different
+    // block categories: shovels chew dirt / sand / gravel, axes
+    // chew wood / planks / leaves. Like pickaxes they are tool-
+    // slot items rejected by the place path.
+    BlockType {
+        id: 29, name: "shovel_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 30, name: "shovel_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 31, name: "shovel_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 32, name: "axe_wood", color: [0.62, 0.42, 0.20], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 33, name: "axe_stone", color: [0.55, 0.55, 0.55], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 34, name: "axe_iron", color: [0.80, 0.80, 0.85], transparent: false,
+        top: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
     },
 ];
 
