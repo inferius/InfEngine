@@ -4906,6 +4906,7 @@ impl Voxel {
             .session_started
             .map(|t| t.elapsed().as_secs())
             .unwrap_or(0);
+        let dbg_pending = self.pending_chunks.len();
         let dbg_net = match &self.net {
             NetRole::Offline => "offline".to_string(),
             NetRole::Server { server, poses, .. } => {
@@ -5378,6 +5379,7 @@ impl Voxel {
                                     if dbg_grounded { "yes" } else { "no" }
                                 ));
                                 ui.label(format!("chunk meshes: {dbg_chunks}"));
+                                ui.label(format!("pending chunks: {dbg_pending}"));
                                 ui.label(format!("mobs (remote): {dbg_mobs}"));
                                 ui.label(format!("particles: {dbg_particles}"));
                                 ui.label(format!(
@@ -6015,6 +6017,30 @@ impl Voxel {
                         egui::FontId::proportional(14.0),
                         egui::Color32::from_rgb(240, 240, 240),
                     );
+                }
+                // Chunk-loading toast at the top centre while
+                // a non-trivial batch is in flight. Cheaply
+                // signals that the world is streaming in (e.g.
+                // right after spawn or a /seed cycle).
+                if hud_visible && dbg_pending > 8 {
+                    egui::Area::new(egui::Id::new("voxel_loading"))
+                        .anchor(egui::Align2::CENTER_TOP, [0.0, 14.0])
+                        .show(ctx, |ui| {
+                            egui::Frame::popup(ui.style())
+                                .fill(egui::Color32::from_rgba_unmultiplied(
+                                    20, 20, 20, 200,
+                                ))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Generating world... ({dbg_pending} chunks pending)"
+                                        ))
+                                        .color(egui::Color32::from_rgb(
+                                            255, 215, 120,
+                                        )),
+                                    );
+                                });
+                        });
                 }
                 // Pickup toasts on the right edge so the chat
                 // log + hotbar stay readable on the left + bottom.
