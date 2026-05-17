@@ -6251,6 +6251,24 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
         h.round() as i32
     };
     let mut chunk = Chunk::empty();
+    // Cheap procedural cave check: 3D noise made of sin/cos
+    // octaves. Returns true when (wx, wy, wz) sits inside a void
+    // pocket. Tuned so caves only carve into stone (under the
+    // grass / dirt cap) + leave the surface intact, and so two
+    // octaves combine into a "blobby tunnel" shape rather than
+    // single-block holes.
+    let cave_at = |wx: f32, wy: f32, wz: f32| -> bool {
+        if wy < 1.0 {
+            return false; // keep a bedrock floor at y=0
+        }
+        let a = (wx * 0.09).sin() * 0.5
+            + (wz * 0.08).cos() * 0.5
+            + (wy * 0.12).sin() * 0.5;
+        let b = (wx * 0.20 + 17.0).sin() * (wy * 0.16 + 9.0).cos()
+            + (wz * 0.21 + 31.0).sin() * 0.6;
+        let n = a * 0.55 + b * 0.45;
+        n > 0.78
+    };
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
         let wz = origin.z + z as f32;
@@ -6258,6 +6276,11 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
         let h = height_at(wx, wz, biome);
         let wy = origin.y as i32 + y as i32;
         if wy > h {
+            return BlockId::AIR;
+        }
+        // Cave carve: only below the 3-block dirt / grass cap so
+        // we don't punch holes through the surface.
+        if wy < h - 3 && cave_at(wx, wy as f32, wz) {
             return BlockId::AIR;
         }
         let surface = match biome {
