@@ -1258,6 +1258,14 @@ struct Voxel {
     /// spawning above the player so the demo can have weather
     /// without actually wiring it into the gameplay.
     weather: u8,
+    /// Seconds remaining in the current lightning flash. While
+    /// positive the sky washes toward white. Decays each frame
+    /// via the update tick.
+    lightning_flash: f32,
+    /// Seconds until the next lightning strike attempt while
+    /// weather=1. Initialised to a positive value so the first
+    /// strike isn't instant on /weather rain.
+    next_lightning_at: f32,
     /// F3 toggle: show a debug-info panel with player pos, chunk
     /// counts, net status, etc. Default off so the casual HUD
     /// stays clean.
@@ -4065,6 +4073,8 @@ impl Voxel {
             mob_cap: MOB_CAP_DEFAULT,
             freeze_time: false,
             weather: 0,
+            lightning_flash: 0.0,
+            next_lightning_at: 6.0,
             head_bob_phase: 0.0,
             camera_mode: 0,
             f5_prev: false,
@@ -4628,6 +4638,41 @@ impl Voxel {
             self.step_cooldown = 0.0;
         }
 
+        // Lightning state machine. Only fires while raining.
+        // `next_lightning_at` counts down; on zero we trigger a
+        // 0.18s flash + a thud and seed the next interval at a
+        // randomized 10..=30 s window so strikes feel sporadic.
+        if self.weather == 1 {
+            self.next_lightning_at -= dt;
+            if self.next_lightning_at <= 0.0 {
+                self.lightning_flash = 0.18;
+                let mut rng: u32 = ((self.net_tick as u32)
+                    .wrapping_mul(0xC2B2_AE35))
+                    ^ 0xDEAD_BEEF;
+                rng ^= rng << 13;
+                rng ^= rng >> 17;
+                rng ^= rng << 5;
+                let bias = (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0);
+                self.next_lightning_at = 10.0 + bias * 20.0;
+                // Distant thunder + chat note so peers know it
+                // wasn't a graphics glitch.
+                let pos = [
+                    self.player_pos.x,
+                    self.player_pos.y,
+                    self.player_pos.z,
+                ];
+                self.sfx_at("thunder", pos, |a, g| {
+                    let _ = a.play_thud(55.0, 0.7 * g);
+                });
+                self.chat_log.push((
+                    std::time::Instant::now(),
+                    "* lightning flashes overhead".to_string(),
+                ));
+            }
+        }
+        if self.lightning_flash > 0.0 {
+            self.lightning_flash = (self.lightning_flash - dt).max(0.0);
+        }
         // Precipitation spawner. weather=1 = rain (fast falling
         // blue streaks); weather=2 = snow (slow drifting white
         // flakes). Both stay purely visual.
@@ -8555,6 +8600,14 @@ impl AppHandler for Voxel {
         } else if self.weather == 2 {
             let target = [0.70, 0.74, 0.80];
             let t = 0.55;
+            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
+            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
+            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
+        }
+        // Active lightning flash washes the sky toward white.
+        if self.lightning_flash > 0.0 {
+            let t = (self.lightning_flash / 0.18).clamp(0.0, 1.0);
+            let target = [1.0, 1.0, 1.0];
             sky[0] = sky[0] * (1.0 - t) + target[0] * t;
             sky[1] = sky[1] * (1.0 - t) + target[1] * t;
             sky[2] = sky[2] * (1.0 - t) + target[2] * t;
