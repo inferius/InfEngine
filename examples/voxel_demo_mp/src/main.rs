@@ -1111,6 +1111,11 @@ struct Voxel {
     /// window so a long session doesn't bloat memory.
     place_history: Vec<[i32; 3]>,
     z_prev: bool,
+    /// G toggles a wireframe overlay of the chunks immediately
+    /// around the player. Useful for verifying streaming bounds
+    /// + chunk loading patterns.
+    show_chunk_grid: bool,
+    g_prev: bool,
     /// Current camera vertical FOV in radians. Smoothly lerps
     /// toward a wider angle while the player sprints, snaps back
     /// when they stop. Read by both the wgpu camera + the egui
@@ -4055,6 +4060,8 @@ impl Voxel {
             blocks_placed: 0,
             place_history: Vec::new(),
             z_prev: false,
+            show_chunk_grid: false,
+            g_prev: false,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             stamina: STAMINA_MAX,
@@ -8760,6 +8767,18 @@ impl AppHandler for Voxel {
             }
         }
         self.z_prev = z_now;
+        // G toggles the chunk-grid overlay. Cheap debug aid;
+        // only fires when F3 debug is also showing to avoid
+        // cluttering normal play.
+        let g_now = ctx.input.is_pressed(Key::G);
+        if g_now
+            && !self.g_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
+            self.show_chunk_grid = !self.show_chunk_grid;
+        }
+        self.g_prev = g_now;
         // Tab held = playerlist overlay. Hidden in singleplayer
         // (the overlay drawer also guards on net role, but the
         // flag is gated here too so debug panels stay clean).
@@ -9748,6 +9767,40 @@ impl AppHandler for Voxel {
                 m.voxel[2] as f32 + 1.02,
             ];
             renderer.debug_box_3d(min, max, [r, g, b, 1.0]);
+        }
+        // Chunk-grid overlay: wire boxes for the chunk the
+        // player stands in + its 8 horizontal neighbours.
+        // Cheap; only fires when toggled.
+        if self.show_chunk_grid {
+            let cs = CHUNK_SIZE as i32;
+            let pc = [
+                (self.player_pos.x.floor() as i32).div_euclid(cs),
+                (self.player_pos.y.floor() as i32).div_euclid(cs),
+                (self.player_pos.z.floor() as i32).div_euclid(cs),
+            ];
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let cc = [pc[0] + dx, pc[1], pc[2] + dz];
+                    let min = [
+                        (cc[0] * cs) as f32,
+                        (cc[1] * cs) as f32,
+                        (cc[2] * cs) as f32,
+                    ];
+                    let max = [
+                        min[0] + cs as f32,
+                        min[1] + cs as f32,
+                        min[2] + cs as f32,
+                    ];
+                    // Highlight the player's own chunk in
+                    // bright yellow; neighbours dim cyan.
+                    let color = if dx == 0 && dz == 0 {
+                        [1.0, 0.85, 0.1, 0.95]
+                    } else {
+                        [0.2, 0.7, 1.0, 0.6]
+                    };
+                    renderer.debug_box_3d(min, max, color);
+                }
+            }
         }
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
