@@ -2761,6 +2761,19 @@ impl Voxel {
         match NetServer::bind(&bind) {
             Ok(s) => {
                 info!(addr = %bind, "hosting voxel server");
+                // Pick a world seed for this session if one
+                // wasn't restored from the on-disk state. The
+                // nanosecond clock + a fixed mixing constant give
+                // a different terrain layout per cold start.
+                if world_seed() == 0 {
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos())
+                        .unwrap_or(0)
+                        .wrapping_mul(0x9E37_79B1)
+                        | 1;
+                    set_world_seed(seed);
+                }
                 self.net = NetRole::Server {
                     server: s,
                     poses: HashMap::new(),
@@ -2973,6 +2986,7 @@ impl Voxel {
         // Latest authoritative day_time from the server. Last
         // wins so a mid-tick burst doesn't bounce the sky.
         let mut day_time_update: Option<f32> = None;
+        let mut seed_update: Option<u32> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -3273,6 +3287,16 @@ impl Voxel {
                 // client so nameplates / Tab playerlist stay
                 // current. Host owns id 0 with its own
                 // `player_name`.
+                // Send world seed to brand-new joiners so their
+                // chunk workers generate matching terrain.
+                if !new_ids.is_empty()
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec(world_seed(), cfg)
+                {
+                    for id in &new_ids {
+                        server.send_bytes_to_client(*id, "vx.seed", buf.clone());
+                    }
+                }
                 if !new_ids.is_empty() || !departed_ids.is_empty() {
                     let mut entries: Vec<(u32, String)> =
                         vec![(0, self.player_name.clone())];
@@ -3578,6 +3602,15 @@ impl Voxel {
                                 day_time_update = Some(dt);
                             }
                         }
+                        "vx.seed" => {
+                            if let Ok((seed, _)) =
+                                bincode::serde::decode_from_slice::<u32, _>(
+                                    &data, cfg,
+                                )
+                            {
+                                seed_update = Some(seed);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3708,6 +3741,35 @@ impl Voxel {
         }
         if let Some(dt) = day_time_update {
             self.day_time = dt.rem_euclid(DAY_LENGTH_S);
+        }
+        if let Some(seed) = seed_update
+            && seed != world_seed()
+        {
+            // Server picked a new world seed: adopt it and drop
+            // every generated chunk so the next streaming pass
+            // re-runs the workers with the new noise. We can't
+            // mid-flight remap existing chunks since heights /
+            // ore positions / biomes all changed.
+            set_world_seed(seed);
+            let to_unload: Vec<ChunkCoord> = self
+                .world
+                .iter_chunks()
+                .map(|(c, _)| *c)
+                .collect();
+            if !to_unload.is_empty() {
+                let renderer = self
+                    .renderer
+                    .as_mut()
+                    .expect("renderer ready");
+                for entry in self.chunk_meshes.drain(..) {
+                    renderer.remove_mesh(entry.2);
+                }
+                for cc in &to_unload {
+                    self.world.remove_chunk(*cc);
+                }
+            }
+            self.pending_chunks.clear();
+            self.pending_set.clear();
         }
         if let Some(t) = teleport_request {
             self.player_pos = Vec3::new(t.pos[0], t.pos[1], t.pos[2]);
@@ -6124,6 +6186,17 @@ impl Voxel {
                             self.apply_player_damage(dmg);
                             handled_locally = true;
                         }
+                        "seed" => {
+                            // Report the active world seed. Same
+                            // value the workers use when meshing
+                            // chunks; useful when sharing a
+                            // session with a friend.
+                            local_lines.push(format!(
+                                "World seed: {}",
+                                world_seed()
+                            ));
+                            handled_locally = true;
+                        }
                         "version" | "ver" => {
                             // Print the build's CARGO_PKG_VERSION
                             // plus the active net role so quick
@@ -7060,7 +7133,20 @@ impl AppHandler for Voxel {
         // chosen identity instead of a fresh random Player####.
         self.load_config();
         self.session_started = Some(std::time::Instant::now());
-        info!(width = w, height = h, "voxel_demo started");
+        // Pick a default world seed for solo / offline play so
+        // each cold start gets a different layout. Hosts override
+        // via start_hosting; persisted state will eventually load
+        // here once the save format carries a seed field.
+        if world_seed() == 0 {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+                .wrapping_mul(0x9E37_79B1)
+                | 1;
+            set_world_seed(seed);
+        }
+        info!(width = w, height = h, seed = world_seed(), "voxel_demo started");
         match Renderer::new(window) {
             Ok(r) => {
                 let ui = EditorUi::new(r.wgpu_device(), r.surface_format(), window.raw(), 1);
@@ -8513,12 +8599,39 @@ enum Biome {
     Mountain,
 }
 
+/// Global world-generation seed. Mixed into every noise function so
+/// distinct hosts (or /seed-cycled sessions) produce different
+/// terrain + ore distributions while staying deterministic across
+/// workers and clients running the same value. Set on host start
+/// + replicated to clients via `vx.seed`.
+static WORLD_SEED: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+fn world_seed() -> u32 {
+    WORLD_SEED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_world_seed(value: u32) {
+    WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn seed_offset() -> f32 {
+    // Mix the seed into a deterministic float used as a phase
+    // offset for the sin/cos noise stack. Picking a small range
+    // keeps the curves visually similar across seeds while still
+    // producing distinct terrain.
+    (world_seed().wrapping_mul(0x9E37_79B1) as f32 / u32::MAX as f32) * 1000.0
+}
+
 fn biome_at(wx: f32, wz: f32) -> Biome {
     // Two layered sin/cos waves keep the biome map smooth and
     // deterministic. Range maps roughly to `[-1, 1]` so the cutoffs
-    // are easy to reason about.
-    let n = (wx * 0.012).sin() * 0.6 + (wz * 0.009).cos() * 0.5
-        + ((wx + wz) * 0.004).sin() * 0.3;
+    // are easy to reason about. A seed offset shifts the wave so
+    // distinct hosts get different biome maps.
+    let s = seed_offset();
+    let n = ((wx + s) * 0.012).sin() * 0.6
+        + ((wz + s) * 0.009).cos() * 0.5
+        + (((wx + wz) + s) * 0.004).sin() * 0.3;
     if n < -0.5 {
         Biome::Desert
     } else if n > 0.5 {
@@ -8536,7 +8649,7 @@ fn ore_hash(x: i32, y: i32, z: i32, salt: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x27D4_EB2F);
     h ^= (y as u32).wrapping_mul(0x9E37_79B1);
     h ^= (z as u32).wrapping_mul(0x1656_67B1);
-    h ^= salt;
+    h ^= salt ^ world_seed();
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
     h = h.wrapping_mul(0xC2B2_AE35);
@@ -8556,6 +8669,7 @@ fn ore_hash(x: i32, y: i32, z: i32, salt: u32) -> f32 {
 fn hash2(wx: i32, wz: i32) -> u32 {
     let mut h = (wx as u32).wrapping_mul(0x27D4_EB2F);
     h ^= (wz as u32).wrapping_mul(0x1656_67B1);
+    h ^= world_seed();
     h ^= h >> 16;
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
