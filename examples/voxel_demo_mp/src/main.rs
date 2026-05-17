@@ -341,6 +341,15 @@ struct DamageMsg {
     amount: f32,
 }
 
+/// Server -> client: "snap your local position here". Used by
+/// the host's /summon command to drag a remote peer to the
+/// host's location. The receiving client zeroes its velocity to
+/// avoid synthesizing fall damage from the jump.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct TeleportMsg {
+    pos: [f32; 3],
+}
+
 const PVP_DAMAGE: f32 = 1.5;
 const PVP_REACH: f32 = 5.5;
 
@@ -2856,6 +2865,9 @@ impl Voxel {
         // Last-write-wins per tick: only the latest snapshot is
         // applied to `player_names` after the match arm closes.
         let mut names_update: Option<Vec<(u32, String)>> = None;
+        // Server-pushed teleport. Drained after the net borrow
+        // releases so we can write `self.player_pos` directly.
+        let mut teleport_request: Option<TeleportMsg> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
@@ -3364,6 +3376,15 @@ impl Voxel {
                                 pvp_self_damage += d.amount;
                             }
                         }
+                        "vx.teleport" => {
+                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                                TeleportMsg,
+                                _,
+                            >(&data, cfg)
+                            {
+                                teleport_request = Some(m);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3491,6 +3512,15 @@ impl Voxel {
             for (id, n) in entries {
                 self.player_names.insert(id, n);
             }
+        }
+        if let Some(t) = teleport_request {
+            self.player_pos = Vec3::new(t.pos[0], t.pos[1], t.pos[2]);
+            self.player_vel = Vec3::ZERO;
+            self.fall_start_y = None;
+            self.chat_log.push((
+                std::time::Instant::now(),
+                "You were summoned.".to_string(),
+            ));
         }
         if pvp_self_damage > 0.0 {
             self.apply_player_damage(pvp_self_damage);
@@ -5688,9 +5718,70 @@ impl Voxel {
                     match cmd.as_str() {
                         "help" | "?" => {
                             local_lines.push(
-                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn"
+                                "Commands: /help, /players, /me <act>, /clear, /tp <name>, /spawn, /summon <name>"
                                     .to_string(),
                             );
+                        }
+                        "summon" => {
+                            // Host-only: yank a remote peer to
+                            // the host's pose by sending them a
+                            // vx.teleport. Silently ignored on
+                            // any other role to keep clients from
+                            // grabbing each other.
+                            if !matches!(self.net, NetRole::Server { .. }) {
+                                local_lines.push(
+                                    "/summon is host-only.".to_string(),
+                                );
+                            } else if arg.is_empty() {
+                                local_lines
+                                    .push("Usage: /summon <name>".to_string());
+                            } else {
+                                let target_id = self
+                                    .player_names
+                                    .iter()
+                                    .find(|(_, n)| {
+                                        n.eq_ignore_ascii_case(arg)
+                                    })
+                                    .map(|(id, _)| *id);
+                                if let Some(id) = target_id {
+                                    if id == 0 {
+                                        local_lines.push(
+                                            "Can't summon yourself."
+                                                .to_string(),
+                                        );
+                                    } else {
+                                        let msg = TeleportMsg {
+                                            pos: [
+                                                self.player_pos.x,
+                                                self.player_pos.y + 0.1,
+                                                self.player_pos.z,
+                                            ],
+                                        };
+                                        if let NetRole::Server {
+                                            server, ..
+                                        } = &mut self.net
+                                            && let Ok(buf) =
+                                                bincode::serde::encode_to_vec(
+                                                    msg,
+                                                    bincode::config::standard(),
+                                                )
+                                        {
+                                            server.send_bytes_to_client(
+                                                id,
+                                                "vx.teleport",
+                                                buf,
+                                            );
+                                        }
+                                        local_lines.push(format!(
+                                            "Summoned {arg}."
+                                        ));
+                                    }
+                                } else {
+                                    local_lines
+                                        .push(format!("No player named {arg}."));
+                                }
+                                handled_locally = true;
+                            }
                         }
                         "spawn" => {
                             // Snap the host back to the origin
