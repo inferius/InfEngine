@@ -9444,6 +9444,17 @@ impl AppHandler for Voxel {
         // the full sim; clients also tick locally for smooth
         // motion between server snapshots.
         self.tick_drops(dt);
+        // Live furnace cook step. Walks every furnace + advances
+        // fuel + cook progress by `dt_ms` (the frame delta in
+        // milliseconds). The offline catch-up path in
+        // `world_save::timers::catch_up_furnace` handles the
+        // window between save and reload.
+        let dt_ms = (dt * 1000.0).round().max(0.0) as u32;
+        block::furnace::furnace_tick(
+            &mut self.furnaces,
+            &mut self.furnace_runtimes,
+            dt_ms,
+        );
         // Auto-close the chest UI when the player walks more than
         // ~5 blocks from the open chest. Matches MC's "stay close
         // to the container" rule. Done here (per-frame) so the

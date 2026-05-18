@@ -173,6 +173,200 @@ pub(crate) fn drain_drops(furnace: &Container) -> Vec<u16> {
     out
 }
 
+/// Advance every active furnace by `dt_ms` of wall-clock time.
+///
+/// Per-furnace algorithm (mirrors MC's behaviour, simplified):
+/// 1. If input is empty OR has no recipe OR output can't accept
+///    the recipe result -> idle. Clear `fuel_full_ms` once the
+///    current burn finishes so the UI bar shows empty.
+/// 2. If `fuel_left_ms == 0` and fuel slot has fuel -> consume
+///    one fuel item, set `fuel_left_ms = fuel_full_ms =
+///    burn_ticks * TICK_MS`.
+/// 3. Burn `dt_ms.min(fuel_left_ms)` from the fuel + same amount
+///    into `cook_progress_ms`.
+/// 4. When `cook_progress_ms >= FURNACE_COOK_MS_PER_OUTPUT`:
+///    decrement input by 1, push the output into slot 2 (using
+///    the same-id merge path - the runtime bypasses the accept
+///    filter via direct slot writes when the slot is empty).
+///    Preserve the overflow on `cook_progress_ms`.
+///
+/// Decisions per the C.4 brief:
+/// - Fuel does NOT decay when idle (no input or output full).
+/// - Cook progress does NOT decay when fuel runs out mid-cook
+///   (vanilla MC slowly drains it; we defer that nicety).
+///
+/// `dt_ms` is the per-frame wall-clock delta in ms. The caller
+/// supplies the same delta to every furnace.
+pub(crate) fn furnace_tick(
+    furnaces: &mut HashMap<[i32; 3], Container>,
+    runtimes: &mut HashMap<[i32; 3], FurnaceRuntime>,
+    dt_ms: u32,
+) {
+    if dt_ms == 0 {
+        return;
+    }
+    // Walk every furnace by position; the runtime entry for the
+    // same key may be missing (the live runtime is lazy) so we
+    // mint a zero entry on first contact.
+    let positions: Vec<[i32; 3]> = furnaces.keys().copied().collect();
+    for pos in positions {
+        let rt_entry = runtimes.entry(pos).or_default();
+        let Some(furnace) = furnaces.get_mut(&pos) else {
+            continue;
+        };
+        step_one_furnace(furnace, rt_entry, dt_ms);
+    }
+}
+
+/// Single-furnace cook step. Pulled out so the per-frame `for`
+/// loop above stays a short orchestrator + the actual logic is
+/// unit-testable in isolation.
+///
+/// Returns nothing; mutates `furnace` slots and `runtime` in place.
+pub(crate) fn step_one_furnace(
+    furnace: &mut Container,
+    runtime: &mut FurnaceRuntime,
+    dt_ms: u32,
+) {
+    // Gate: idle if input is empty OR has no recipe.
+    let Some((input_id, _input_count)) = furnace.slot(FURNACE_INPUT_SLOT) else {
+        // No input. Let the current fuel finish (so the UI burn
+        // bar drains visibly) but don't accumulate cook progress.
+        drain_fuel_idle(runtime, dt_ms);
+        return;
+    };
+    let Some((output_id, output_count_per)) = smelt_recipe(input_id) else {
+        drain_fuel_idle(runtime, dt_ms);
+        return;
+    };
+    // Output gate: must be empty OR same-id-with-room.
+    if !output_slot_can_accept(furnace, output_id, output_count_per) {
+        drain_fuel_idle(runtime, dt_ms);
+        return;
+    }
+
+    // Light a fresh fuel item if needed.
+    if runtime.fuel_left_ms == 0 {
+        let Some((fuel_id, fuel_count)) = furnace.slot(FURNACE_FUEL_SLOT) else {
+            // No fuel to light. Cook progress stays put (no
+            // decay) but fuel bar stays at zero.
+            runtime.fuel_full_ms = 0;
+            return;
+        };
+        let burn_ticks = fuel_burn_ticks(fuel_id);
+        if burn_ticks == 0 {
+            // Fuel slot somehow contains a non-fuel - bail.
+            runtime.fuel_full_ms = 0;
+            return;
+        }
+        // Consume one fuel item. Same-id stack decrement, or
+        // clear the slot when count drops to 0.
+        let new_count = fuel_count.saturating_sub(1);
+        if new_count == 0 {
+            furnace.set_slot(FURNACE_FUEL_SLOT, None);
+        } else {
+            furnace.set_slot(FURNACE_FUEL_SLOT, Some((fuel_id, new_count)));
+        }
+        runtime.fuel_full_ms = burn_ticks * TICK_MS;
+        runtime.fuel_left_ms = runtime.fuel_full_ms;
+    }
+
+    // Burn fuel + accumulate cook progress in lockstep.
+    let burn_step = dt_ms.min(runtime.fuel_left_ms);
+    runtime.fuel_left_ms -= burn_step;
+    runtime.cook_progress_ms = runtime
+        .cook_progress_ms
+        .saturating_add(burn_step);
+    if runtime.fuel_left_ms == 0 {
+        // Fuel exhausted this tick. Drop the bar's max-burn
+        // reference so the UI reads "no fuel"; cook progress
+        // stays put (we don't decay mid-cook). A fresh fuel item
+        // next tick will set both `fuel_left_ms` and
+        // `fuel_full_ms` from the new burn duration.
+        runtime.fuel_full_ms = 0;
+    }
+
+    // Check for cook completion. A long single-frame delta could
+    // span multiple outputs in theory; in practice dt_ms < 1000
+    // and one output costs 10 000 ms, so the inner check fires at
+    // most once. We still loop defensively so the math holds for
+    // synthetic test deltas.
+    while runtime.cook_progress_ms >= FURNACE_COOK_MS_PER_OUTPUT {
+        // Re-fetch the input slot fresh - the previous iteration
+        // may have emptied it.
+        let Some((cur_in_id, cur_in_count)) = furnace.slot(FURNACE_INPUT_SLOT) else {
+            break;
+        };
+        // Recipe may differ from the original `output_id` if the
+        // player swapped the input mid-cook. Bail in that case;
+        // the next tick re-evaluates.
+        let Some((cur_out_id, cur_out_count)) = smelt_recipe(cur_in_id) else {
+            break;
+        };
+        if !output_slot_can_accept(furnace, cur_out_id, cur_out_count) {
+            break;
+        }
+        runtime.cook_progress_ms -= FURNACE_COOK_MS_PER_OUTPUT;
+        // Decrement input by 1; clear when it hits 0.
+        let new_in = cur_in_count.saturating_sub(1);
+        if new_in == 0 {
+            furnace.set_slot(FURNACE_INPUT_SLOT, None);
+        } else {
+            furnace.set_slot(FURNACE_INPUT_SLOT, Some((cur_in_id, new_in)));
+        }
+        // Push the output. The output slot's accept_nothing
+        // filter blocks `insert_at`, so we update via set_slot:
+        // either start a new stack or grow the existing one.
+        let new_output = match furnace.slot(FURNACE_OUTPUT_SLOT) {
+            None => Some((cur_out_id, cur_out_count)),
+            Some((sid, scount)) if sid == cur_out_id => {
+                Some((cur_out_id, scount.saturating_add(cur_out_count)))
+            }
+            // Mismatched output id - bail out of the cook loop.
+            Some(_) => {
+                // Put progress back so we don't lose it next tick.
+                runtime.cook_progress_ms += FURNACE_COOK_MS_PER_OUTPUT;
+                break;
+            }
+        };
+        furnace.set_slot(FURNACE_OUTPUT_SLOT, new_output);
+    }
+}
+
+/// Drain `fuel_left_ms` by `dt_ms` while the furnace is idle (no
+/// valid input + output combo). The cook progress does NOT advance.
+/// Clears `fuel_full_ms` once the current burn finishes so the UI
+/// fuel bar reads empty.
+fn drain_fuel_idle(runtime: &mut FurnaceRuntime, dt_ms: u32) {
+    if runtime.fuel_left_ms == 0 {
+        runtime.fuel_full_ms = 0;
+        return;
+    }
+    let step = dt_ms.min(runtime.fuel_left_ms);
+    runtime.fuel_left_ms -= step;
+    if runtime.fuel_left_ms == 0 {
+        runtime.fuel_full_ms = 0;
+    }
+}
+
+/// True when the output slot can accept `count` more of `output_id`.
+/// Empty slot accepts; same-id stack with room accepts; different-id
+/// or full same-id slot rejects.
+fn output_slot_can_accept(
+    furnace: &Container,
+    output_id: u16,
+    count: u8,
+) -> bool {
+    match furnace.slot(FURNACE_OUTPUT_SLOT) {
+        None => true,
+        Some((sid, scount)) if sid == output_id => {
+            let cap = crate::item::item_max_stack(output_id);
+            scount.saturating_add(count) <= cap
+        }
+        Some(_) => false,
+    }
+}
+
 /// Recover a cursor-held stack into the furnace when the UI
 /// closes. Returns the per-item leftover Vec the caller spawns as
 /// floor drops at the furnace position. Mirrors
