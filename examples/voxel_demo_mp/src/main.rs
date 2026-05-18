@@ -37,9 +37,9 @@ use serde::{Deserialize, Serialize};
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
-    BUCKET_WATER_ID, BlockCategory, F_NO_PLACE, GLOWSTONE_ID, LAVA_ID,
+    BUCKET_WATER_ID, BlockCategory, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
-    block_category, block_has_flag, block_is_aabb_passable, block_is_liquid,
+    block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_swim_medium, block_is_transparent_render,
     block_is_washable, block_material, block_required_tier,
@@ -60,6 +60,7 @@ use net::{
     PlayerMsg, PlayerRemoveMsg, PvPHitMsg, TeleportMsg,
 };
 mod world_save;
+mod decorations;
 use tracing::{error, info, warn};
 
 /// Two-sample interpolation buffer for one remote player's pose.
@@ -1454,35 +1455,6 @@ impl Voxel {
         v
     }
 
-    /// Set a single voxel in the world + maintain the torch index
-    /// so dynamic point lights track placed/broken torches. Every
-    /// edit-apply path funnels through here so we only have one
-    /// place that knows about torch bookkeeping.
-    /// True when the given position has at least one solid
-    /// non-passable neighbour (below or any NSEW) - i.e. a
-    /// torch or flower placed there would have something to
-    /// mount on. Used both by the placement check and the
-    /// cascade-dislodge pass so the two paths agree on what
-    /// counts as "supported".
-    fn decoration_supported(&self, pos: [i32; 3]) -> bool {
-        let supportive = |p: [i32; 3]| {
-            let b = self.world.get(p);
-            !b.is_air()
-                && !block_is_placement_blocked(b)
-                && !block_is_aabb_passable(b)
-        };
-        if supportive([pos[0], pos[1] - 1, pos[2]]) {
-            return true;
-        }
-        let walls = [
-            [pos[0] + 1, pos[1], pos[2]],
-            [pos[0] - 1, pos[1], pos[2]],
-            [pos[0], pos[1], pos[2] + 1],
-            [pos[0], pos[1], pos[2] - 1],
-        ];
-        walls.iter().any(|p| supportive(*p))
-    }
-
     /// After a block is broken at `removed`, scan the 5 attaching
     /// faces (above + NSEW) and pop off any `F_NO_PLACE`
     /// decoration that no longer has support. Each dislodged
@@ -1490,54 +1462,13 @@ impl Voxel {
     /// `vx.edit` packet, and re-enters the queue so cascades
     /// (torch on torch on dirt) all unwind in one call.
     fn dislodge_unsupported_decorations(&mut self, removed: [i32; 3]) {
-        if matches!(self.net, NetRole::Client { .. }) {
-            return;
-        }
-        let mut queue: std::collections::VecDeque<[i32; 3]> =
-            std::collections::VecDeque::new();
-        queue.push_back(removed);
-        while let Some(v) = queue.pop_front() {
-            let attaching = [
-                [v[0], v[1] + 1, v[2]],
-                [v[0] + 1, v[1], v[2]],
-                [v[0] - 1, v[1], v[2]],
-                [v[0], v[1], v[2] + 1],
-                [v[0], v[1], v[2] - 1],
-            ];
-            for c in attaching {
-                let b = self.world.get(c);
-                if b.is_air() {
-                    continue;
-                }
-                if !block_has_flag(b, F_NO_PLACE) {
-                    continue;
-                }
-                if self.decoration_supported(c) {
-                    continue;
-                }
-                self.world_set_tracked(c, BlockId::AIR);
-                let coords = Self::affected_chunks(c);
-                self.rebuild_chunks(&coords);
-                self.spawn_drop(b, c);
-                let edit = EditMsg {
-                    x: c[0],
-                    y: c[1],
-                    z: c[2],
-                    block: 0,
-                };
-                self.edit_history.push(edit);
-                if let NetRole::Server { server, .. } = &mut self.net {
-                    let cfg = bincode::config::standard();
-                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg)
-                    {
-                        server.broadcast_bytes("vx.edit", buf);
-                    }
-                }
-                queue.push_back(c);
-            }
-        }
+        decorations::dislodge_unsupported(self, removed);
     }
 
+    /// Set a single voxel in the world + maintain the torch index
+    /// so dynamic point lights track placed/broken torches. Every
+    /// edit-apply path funnels through here so we only have one
+    /// place that knows about torch bookkeeping.
     fn world_set_tracked(&mut self, voxel: [i32; 3], block: BlockId) {
         self.world.set(voxel, block);
         // Both torches + glowstone act as point-light emitters.
