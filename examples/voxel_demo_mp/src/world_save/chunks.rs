@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in};
+use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Magic bytes at the head of every chunk file: `"INFC"` (InfEngine
 /// chunk). Distinguishes the new per-chunk format from anything
@@ -113,9 +114,7 @@ impl ChunkVoxels {
                 .checked_add(count as usize)
                 .ok_or_else(|| invalid("RLE run count overflow"))?;
             if end > CHUNK_VOXELS {
-                return Err(invalid(
-                    "RLE run count exceeds CHUNK_VOXELS",
-                ));
+                return Err(invalid("RLE run count exceeds CHUNK_VOXELS"));
             }
             // Air runs leave the empty chunk buffer untouched - a
             // shortcut on the common uniformly-air case.
@@ -128,9 +127,7 @@ impl ChunkVoxels {
             idx = end;
         }
         if idx != CHUNK_VOXELS {
-            return Err(invalid(
-                "RLE run counts do not sum to CHUNK_VOXELS",
-            ));
+            return Err(invalid("RLE run counts do not sum to CHUNK_VOXELS"));
         }
         Ok(chunk)
     }
@@ -175,12 +172,7 @@ pub(crate) fn chunk_path(slug: &str, dim: &str, coord: [i32; 3]) -> PathBuf {
 /// Same as `chunk_path` but rooted at an explicit base path. Used
 /// by tests + the future hosted-server tooling that drives saves
 /// out of a non-default directory.
-pub(crate) fn chunk_path_in_dir(
-    base: &Path,
-    slug: &str,
-    dim: &str,
-    coord: [i32; 3],
-) -> PathBuf {
+pub(crate) fn chunk_path_in_dir(base: &Path, slug: &str, dim: &str, coord: [i32; 3]) -> PathBuf {
     chunk_path_under(&world_dir_in(base, slug), dim, coord)
 }
 
@@ -188,18 +180,11 @@ fn chunk_path_under(world: &Path, dim: &str, coord: [i32; 3]) -> PathBuf {
     world
         .join("chunks")
         .join(dim)
-        .join(format!(
-            "{}_{}_{}.chunk.bin",
-            coord[0], coord[1], coord[2]
-        ))
+        .join(format!("{}_{}_{}.chunk.bin", coord[0], coord[1], coord[2]))
 }
 
 /// Encode + write a chunk payload to its canonical slot.
-pub(crate) fn write_chunk(
-    slug: &str,
-    dim: &str,
-    payload: &ChunkPayload,
-) -> io::Result<()> {
+pub(crate) fn write_chunk(slug: &str, dim: &str, payload: &ChunkPayload) -> io::Result<()> {
     write_chunk_to(&chunk_path(slug, dim, payload.coord), payload)
 }
 
@@ -210,10 +195,7 @@ pub(crate) fn write_chunk_in_dir(
     dim: &str,
     payload: &ChunkPayload,
 ) -> io::Result<()> {
-    write_chunk_to(
-        &chunk_path_in_dir(base, slug, dim, payload.coord),
-        payload,
-    )
+    write_chunk_to(&chunk_path_in_dir(base, slug, dim, payload.coord), payload)
 }
 
 /// Read + decode a chunk payload. Returns `Ok(None)` if the file
@@ -224,7 +206,7 @@ pub(crate) fn read_chunk(
     dim: &str,
     coord: [i32; 3],
 ) -> io::Result<Option<ChunkPayload>> {
-    read_chunk_from(&chunk_path(slug, dim, coord))
+    read_chunk_from(&chunk_path(slug, dim, coord), migrate::default_registry())
 }
 
 /// Test-friendly read variant rooted at an explicit base path.
@@ -234,14 +216,28 @@ pub(crate) fn read_chunk_in_dir(
     dim: &str,
     coord: [i32; 3],
 ) -> io::Result<Option<ChunkPayload>> {
-    read_chunk_from(&chunk_path_in_dir(base, slug, dim, coord))
+    read_chunk_from(
+        &chunk_path_in_dir(base, slug, dim, coord),
+        migrate::default_registry(),
+    )
+}
+
+/// Same as `read_chunk_in_dir` but lets the caller inject a custom
+/// migration registry - the canonical hook for migration unit tests.
+pub(crate) fn read_chunk_in_dir_with_registry(
+    base: &Path,
+    slug: &str,
+    dim: &str,
+    coord: [i32; 3],
+    registry: &MigrationRegistry,
+) -> io::Result<Option<ChunkPayload>> {
+    read_chunk_from(&chunk_path_in_dir(base, slug, dim, coord), registry)
 }
 
 fn write_chunk_to(path: &Path, payload: &ChunkPayload) -> io::Result<()> {
     let cfg = bincode::config::standard();
-    let raw = bincode::serde::encode_to_vec(payload, cfg).map_err(|err| {
-        invalid(format!("chunk payload encode failed: {err}"))
-    })?;
+    let raw = bincode::serde::encode_to_vec(payload, cfg)
+        .map_err(|err| invalid(format!("chunk payload encode failed: {err}")))?;
     let uncompressed_len = raw.len() as u64;
 
     // Try zstd. If the compressor actually shrinks the payload,
@@ -265,56 +261,91 @@ fn write_chunk_to(path: &Path, payload: &ChunkPayload) -> io::Result<()> {
     atomic_save(path, &bytes)
 }
 
-fn read_chunk_from(path: &Path) -> io::Result<Option<ChunkPayload>> {
-    read_with_recovery(path, decode_chunk_bytes)
+fn read_chunk_from(path: &Path, registry: &MigrationRegistry) -> io::Result<Option<ChunkPayload>> {
+    let migrated_at_path = std::cell::Cell::new(false);
+    let migrated_bytes_holder: std::cell::RefCell<Option<Vec<u8>>> = std::cell::RefCell::new(None);
+    let parse = |bytes: &[u8]| -> io::Result<ChunkPayload> {
+        let (payload, did_migrate, new_bytes) = decode_chunk_bytes(bytes, path, registry)?;
+        if did_migrate {
+            migrated_at_path.set(true);
+            *migrated_bytes_holder.borrow_mut() = Some(new_bytes);
+        }
+        Ok(payload)
+    };
+    let opt = read_with_recovery(path, parse)?;
+    if migrated_at_path.get()
+        && let Some(bytes) = migrated_bytes_holder.into_inner()
+    {
+        atomic_save(path, &bytes)?;
+    }
+    Ok(opt)
 }
 
 /// Parse the on-disk envelope + bincode payload. Free fn so both the
 /// primary read and the `.bak` recovery path inside
 /// `atomic::read_with_recovery` run the exact same validation.
-fn decode_chunk_bytes(bytes: &[u8]) -> io::Result<ChunkPayload> {
+///
+/// Returns `(payload, did_migrate, post_migration_bytes)`. The
+/// post-migration bytes equal the input if no migration ran; on a
+/// migrated read the caller writes them back via `atomic_save` so the
+/// next load skips the chain.
+fn decode_chunk_bytes(
+    bytes: &[u8],
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<(ChunkPayload, bool, Vec<u8>)> {
     if bytes.len() < 17 {
         return Err(invalid("chunk file truncated header"));
     }
     if &bytes[..4] != CHUNK_MAGIC {
         return Err(invalid("chunk file magic mismatch"));
     }
-    let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let disk_version = migrate::peek_envelope_version(bytes)?;
+    let did_migrate = disk_version != CHUNK_FORMAT_VERSION;
+    let migrated = migrate::migrate_to(
+        registry,
+        SaveKind::Chunk,
+        CHUNK_FORMAT_VERSION,
+        path,
+        disk_version,
+        bytes,
+    )?;
+    let post = migrated.as_slice();
+    if post.len() < 17 {
+        return Err(invalid("chunk file truncated header (post-migration)"));
+    }
+    if &post[..4] != CHUNK_MAGIC {
+        return Err(invalid("chunk file magic mismatch (post-migration)"));
+    }
+    let version = u32::from_le_bytes([post[4], post[5], post[6], post[7]]);
     if version != CHUNK_FORMAT_VERSION {
         return Err(invalid(format!(
             "chunk format_version {version} not supported (expected {CHUNK_FORMAT_VERSION})"
         )));
     }
-    let kind = bytes[8];
+    let kind = post[8];
     let uncompressed_len = u64::from_le_bytes([
-        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-        bytes[16],
+        post[9], post[10], post[11], post[12], post[13], post[14], post[15], post[16],
     ]) as usize;
-    let body = &bytes[17..];
+    let body = &post[17..];
 
     let raw: Vec<u8> = match kind {
         COMP_NONE => {
             if body.len() != uncompressed_len {
-                return Err(invalid(
-                    "uncompressed chunk body length mismatch",
-                ));
+                return Err(invalid("uncompressed chunk body length mismatch"));
             }
             body.to_vec()
         }
         COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
         other => {
-            return Err(invalid(format!(
-                "unknown chunk compression kind {other}"
-            )));
+            return Err(invalid(format!("unknown chunk compression kind {other}")));
         }
     };
 
     let cfg = bincode::config::standard();
-    let (payload, _read) = bincode::serde::decode_from_slice::<ChunkPayload, _>(
-        &raw, cfg,
-    )
-    .map_err(|err| invalid(format!("chunk payload decode failed: {err}")))?;
-    Ok(payload)
+    let (payload, _read) = bincode::serde::decode_from_slice::<ChunkPayload, _>(&raw, cfg)
+        .map_err(|err| invalid(format!("chunk payload decode failed: {err}")))?;
+    Ok((payload, did_migrate, migrated))
 }
 
 /// Decompress `body` via zstd into a buffer of exactly
@@ -331,9 +362,7 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
             break;
         }
         if out.len() + n > expected_len {
-            return Err(invalid(
-                "zstd decode exceeded uncompressed_payload_len",
-            ));
+            return Err(invalid("zstd decode exceeded uncompressed_payload_len"));
         }
         out.write_all(&buf[..n])?;
     }

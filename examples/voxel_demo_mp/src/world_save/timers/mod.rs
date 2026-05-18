@@ -56,6 +56,7 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in};
+use super::migrate::{self, MigrationRegistry, SaveKind};
 
 pub(crate) mod catch_up;
 
@@ -232,15 +233,22 @@ pub(crate) fn write_timers_in_dir(
 /// "no scheduled timers yet" (fresh world, no furnaces) and must not
 /// surface that as an error.
 pub(crate) fn read_timers(slug: &str) -> io::Result<Option<ScheduledTimers>> {
-    read_timers_from(&timers_path(slug))
+    read_timers_from(&timers_path(slug), migrate::default_registry())
 }
 
 /// Test-friendly read variant rooted at an explicit base path.
-pub(crate) fn read_timers_in_dir(
+pub(crate) fn read_timers_in_dir(base: &Path, slug: &str) -> io::Result<Option<ScheduledTimers>> {
+    read_timers_from(&timers_path_in_dir(base, slug), migrate::default_registry())
+}
+
+/// Same as `read_timers_in_dir` but lets the caller inject a custom
+/// migration registry - the canonical hook for migration unit tests.
+pub(crate) fn read_timers_in_dir_with_registry(
     base: &Path,
     slug: &str,
+    registry: &MigrationRegistry,
 ) -> io::Result<Option<ScheduledTimers>> {
-    read_timers_from(&timers_path_in_dir(base, slug))
+    read_timers_from(&timers_path_in_dir(base, slug), registry)
 }
 
 fn write_timers_to(path: &Path, timers: &ScheduledTimers) -> io::Result<()> {
@@ -270,32 +278,75 @@ fn write_timers_to(path: &Path, timers: &ScheduledTimers) -> io::Result<()> {
     atomic_save(path, &bytes)
 }
 
-fn read_timers_from(path: &Path) -> io::Result<Option<ScheduledTimers>> {
-    read_with_recovery(path, decode_timers_bytes)
+fn read_timers_from(
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<Option<ScheduledTimers>> {
+    let migrated_at_path = std::cell::Cell::new(false);
+    let migrated_bytes_holder: std::cell::RefCell<Option<Vec<u8>>> = std::cell::RefCell::new(None);
+    let parse = |bytes: &[u8]| -> io::Result<ScheduledTimers> {
+        let (payload, did_migrate, new_bytes) = decode_timers_bytes(bytes, path, registry)?;
+        if did_migrate {
+            migrated_at_path.set(true);
+            *migrated_bytes_holder.borrow_mut() = Some(new_bytes);
+        }
+        Ok(payload)
+    };
+    let opt = read_with_recovery(path, parse)?;
+    if migrated_at_path.get()
+        && let Some(bytes) = migrated_bytes_holder.into_inner()
+    {
+        atomic_save(path, &bytes)?;
+    }
+    Ok(opt)
 }
 
 /// Parse the on-disk envelope + bincode payload. Free fn so both the
 /// primary read and the `.bak` recovery path inside
 /// `atomic::read_with_recovery` run the exact same validation.
-fn decode_timers_bytes(bytes: &[u8]) -> io::Result<ScheduledTimers> {
+///
+/// Returns `(payload, did_migrate, post_migration_bytes)`. See
+/// `chunks::decode_chunk_bytes` for the rationale on returning the
+/// post-migration bytes so the outer caller can write them back.
+fn decode_timers_bytes(
+    bytes: &[u8],
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<(ScheduledTimers, bool, Vec<u8>)> {
     if bytes.len() < 17 {
         return Err(invalid("timers file truncated header"));
     }
     if &bytes[..4] != TIMERS_MAGIC {
         return Err(invalid("timers file magic mismatch"));
     }
-    let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let disk_version = migrate::peek_envelope_version(bytes)?;
+    let did_migrate = disk_version != TIMERS_FORMAT_VERSION;
+    let migrated = migrate::migrate_to(
+        registry,
+        SaveKind::Timers,
+        TIMERS_FORMAT_VERSION,
+        path,
+        disk_version,
+        bytes,
+    )?;
+    let post = migrated.as_slice();
+    if post.len() < 17 {
+        return Err(invalid("timers file truncated header (post-migration)"));
+    }
+    if &post[..4] != TIMERS_MAGIC {
+        return Err(invalid("timers file magic mismatch (post-migration)"));
+    }
+    let version = u32::from_le_bytes([post[4], post[5], post[6], post[7]]);
     if version != TIMERS_FORMAT_VERSION {
         return Err(invalid(format!(
             "timers format_version {version} not supported (expected {TIMERS_FORMAT_VERSION})"
         )));
     }
-    let kind = bytes[8];
+    let kind = post[8];
     let uncompressed_len = u64::from_le_bytes([
-        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-        bytes[16],
+        post[9], post[10], post[11], post[12], post[13], post[14], post[15], post[16],
     ]) as usize;
-    let body = &bytes[17..];
+    let body = &post[17..];
 
     let raw: Vec<u8> = match kind {
         COMP_NONE => {
@@ -306,17 +357,14 @@ fn decode_timers_bytes(bytes: &[u8]) -> io::Result<ScheduledTimers> {
         }
         COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
         other => {
-            return Err(invalid(format!(
-                "unknown timers compression kind {other}"
-            )));
+            return Err(invalid(format!("unknown timers compression kind {other}")));
         }
     };
 
     let cfg = bincode::config::standard();
-    let (timers, _read) =
-        bincode::serde::decode_from_slice::<ScheduledTimers, _>(&raw, cfg)
-            .map_err(|err| invalid(format!("timers payload decode failed: {err}")))?;
-    Ok(timers)
+    let (timers, _read) = bincode::serde::decode_from_slice::<ScheduledTimers, _>(&raw, cfg)
+        .map_err(|err| invalid(format!("timers payload decode failed: {err}")))?;
+    Ok((timers, did_migrate, migrated))
 }
 
 /// Decompress `body` via zstd into a buffer of exactly `expected_len`
@@ -333,9 +381,7 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
             break;
         }
         if out.len() + n > expected_len {
-            return Err(invalid(
-                "zstd decode exceeded uncompressed_payload_len",
-            ));
+            return Err(invalid("zstd decode exceeded uncompressed_payload_len"));
         }
         out.write_all(&buf[..n])?;
     }

@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{meta_path, meta_path_in, world_dir, world_dir_in};
+use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Schema version baked into every fresh `meta.json`. Bumped when
 /// the struct fields change in a breaking way; Phase B.6 adds the
@@ -96,22 +97,48 @@ pub(crate) fn create_meta(name: &str, slug: &str) -> WorldMeta {
 
 /// Read `<world_dir(slug)>/meta.json` and parse into `WorldMeta`.
 ///
-/// Refuses unknown `format_version` values with an
-/// `io::ErrorKind::InvalidData`; Phase B.6 wires the migration
-/// registry into this path.
+/// Refuses unknown `format_version` values unless the migration
+/// registry has a chain to `META_FORMAT_VERSION`. Hands off to
+/// `migrate::default_registry`.
 pub(crate) fn read_meta(slug: &str) -> io::Result<WorldMeta> {
-    read_meta_from_path(&meta_path(slug))
+    read_meta_from_path(&meta_path(slug), migrate::default_registry())
 }
 
 /// Test-friendly variant: read from a slot rooted at an explicit
 /// base path instead of the OS data dir.
 pub(crate) fn read_meta_in_dir(base: &Path, slug: &str) -> io::Result<WorldMeta> {
-    read_meta_from_path(&meta_path_in(base, slug))
+    read_meta_from_path(&meta_path_in(base, slug), migrate::default_registry())
 }
 
-fn read_meta_from_path(path: &Path) -> io::Result<WorldMeta> {
-    match read_with_recovery(path, decode_meta)? {
-        Some(meta) => Ok(meta),
+/// Same as `read_meta_in_dir` but lets the caller inject a custom
+/// migration registry - the canonical hook for migration unit tests.
+pub(crate) fn read_meta_in_dir_with_registry(
+    base: &Path,
+    slug: &str,
+    registry: &MigrationRegistry,
+) -> io::Result<WorldMeta> {
+    read_meta_from_path(&meta_path_in(base, slug), registry)
+}
+
+fn read_meta_from_path(path: &Path, registry: &MigrationRegistry) -> io::Result<WorldMeta> {
+    let migrated_at_path = std::cell::Cell::new(false);
+    let parse = |bytes: &[u8]| -> io::Result<WorldMeta> {
+        let (meta, did_migrate) = decode_meta(bytes, path, registry)?;
+        if did_migrate {
+            migrated_at_path.set(true);
+        }
+        Ok(meta)
+    };
+    match read_with_recovery(path, parse)? {
+        Some(meta) => {
+            if migrated_at_path.get() {
+                // Persist the migrated payload at the current version
+                // so subsequent loads don't re-run the chain.
+                let payload = encode_meta(&meta)?;
+                atomic_save(path, &payload)?;
+            }
+            Ok(meta)
+        }
         None => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("meta.json missing at {}", path.display()),
@@ -122,8 +149,28 @@ fn read_meta_from_path(path: &Path) -> io::Result<WorldMeta> {
 /// Parse + version-gate a `meta.json` byte buffer. Pulled out as a
 /// free fn so both the primary read and the `.bak` recovery path
 /// (inside `read_with_recovery`) share the exact same validation.
-fn decode_meta(bytes: &[u8]) -> io::Result<WorldMeta> {
-    let meta: WorldMeta = serde_json::from_slice(bytes).map_err(|err| {
+///
+/// On a `format_version` mismatch the registry plans a migration
+/// chain to `META_FORMAT_VERSION`. No chain -> refusal with a
+/// `.error.<ts>` sidecar via `migrate::migrate_json`. Returns the
+/// parsed struct + a flag indicating whether migration was applied
+/// (the caller writes the new version back when it was).
+fn decode_meta(
+    bytes: &[u8],
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<(WorldMeta, bool)> {
+    let disk_version = migrate::peek_json_version(bytes)?;
+    let did_migrate = disk_version != META_FORMAT_VERSION;
+    let migrated = migrate::migrate_to(
+        registry,
+        SaveKind::Meta,
+        META_FORMAT_VERSION,
+        path,
+        disk_version,
+        bytes,
+    )?;
+    let meta: WorldMeta = serde_json::from_slice(&migrated).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("meta.json parse error: {err}"),
@@ -138,7 +185,19 @@ fn decode_meta(bytes: &[u8]) -> io::Result<WorldMeta> {
             ),
         ));
     }
-    Ok(meta)
+    Ok((meta, did_migrate))
+}
+
+/// Serialise a `WorldMeta` into the same pretty-printed JSON used by
+/// the writer. Used by the migration write-back path so the post-
+/// migration file shape matches a normal `write_meta`.
+fn encode_meta(meta: &WorldMeta) -> io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(meta).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("meta.json encode error: {err}"),
+        )
+    })
 }
 
 /// Write `meta.json` for a slot, creating the world directory if
@@ -152,11 +211,7 @@ pub(crate) fn write_meta(slug: &str, meta: &WorldMeta) -> io::Result<()> {
 
 /// Test-friendly variant: write to a slot rooted at an explicit
 /// base path.
-pub(crate) fn write_meta_in_dir(
-    base: &Path,
-    slug: &str,
-    meta: &WorldMeta,
-) -> io::Result<()> {
+pub(crate) fn write_meta_in_dir(base: &Path, slug: &str, meta: &WorldMeta) -> io::Result<()> {
     let dir = world_dir_in(base, slug);
     let path = meta_path_in(base, slug);
     write_meta_to(&dir, &path, meta)
@@ -179,9 +234,7 @@ fn write_meta_to(dir: &Path, path: &Path, meta: &WorldMeta) -> io::Result<()> {
 /// (not persisted) if the data dir is unwritable - acceptable for
 /// tests + ephemeral environments.
 fn host_machine_id() -> String {
-    let Some(dirs) =
-        directories::ProjectDirs::from("", "InfEngine", "voxel_demo_mp")
-    else {
+    let Some(dirs) = directories::ProjectDirs::from("", "InfEngine", "voxel_demo_mp") else {
         return fresh_id();
     };
     let path = dirs.data_dir().join("host_machine_id");

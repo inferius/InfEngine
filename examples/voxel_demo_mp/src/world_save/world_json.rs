@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in, world_json_path, world_json_path_in};
+use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Schema version baked into every fresh `world.json`. Bumped when
 /// the struct fields change in a breaking way.
@@ -87,20 +88,45 @@ pub(crate) fn create_world(worldgen: &str, seed: u32) -> WorldJson {
 
 /// Read `<world_dir(slug)>/world.json`.
 ///
-/// Refuses unknown `format_version` values with an
-/// `io::ErrorKind::InvalidData`.
+/// Refuses unknown `format_version` values unless the migration
+/// registry has a chain to `WORLD_FORMAT_VERSION`. Hands off to
+/// `migrate::default_registry`.
 pub(crate) fn read_world(slug: &str) -> io::Result<WorldJson> {
-    read_world_from_path(&world_json_path(slug))
+    read_world_from_path(&world_json_path(slug), migrate::default_registry())
 }
 
 /// Test-friendly variant: read from an explicit base path.
 pub(crate) fn read_world_in_dir(base: &Path, slug: &str) -> io::Result<WorldJson> {
-    read_world_from_path(&world_json_path_in(base, slug))
+    read_world_from_path(&world_json_path_in(base, slug), migrate::default_registry())
 }
 
-fn read_world_from_path(path: &Path) -> io::Result<WorldJson> {
-    match read_with_recovery(path, decode_world)? {
-        Some(world) => Ok(world),
+/// Same as `read_world_in_dir` but lets the caller inject a custom
+/// migration registry - the canonical hook for migration unit tests.
+pub(crate) fn read_world_in_dir_with_registry(
+    base: &Path,
+    slug: &str,
+    registry: &MigrationRegistry,
+) -> io::Result<WorldJson> {
+    read_world_from_path(&world_json_path_in(base, slug), registry)
+}
+
+fn read_world_from_path(path: &Path, registry: &MigrationRegistry) -> io::Result<WorldJson> {
+    let migrated_at_path = std::cell::Cell::new(false);
+    let parse = |bytes: &[u8]| -> io::Result<WorldJson> {
+        let (world, did_migrate) = decode_world(bytes, path, registry)?;
+        if did_migrate {
+            migrated_at_path.set(true);
+        }
+        Ok(world)
+    };
+    match read_with_recovery(path, parse)? {
+        Some(world) => {
+            if migrated_at_path.get() {
+                let payload = encode_world(&world)?;
+                atomic_save(path, &payload)?;
+            }
+            Ok(world)
+        }
         None => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("world.json missing at {}", path.display()),
@@ -110,8 +136,22 @@ fn read_world_from_path(path: &Path) -> io::Result<WorldJson> {
 
 /// Parse + version-gate a `world.json` byte buffer. Free fn so the
 /// primary read + the `.bak` recovery path share validation.
-fn decode_world(bytes: &[u8]) -> io::Result<WorldJson> {
-    let world: WorldJson = serde_json::from_slice(bytes).map_err(|err| {
+fn decode_world(
+    bytes: &[u8],
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<(WorldJson, bool)> {
+    let disk_version = migrate::peek_json_version(bytes)?;
+    let did_migrate = disk_version != WORLD_FORMAT_VERSION;
+    let migrated = migrate::migrate_to(
+        registry,
+        SaveKind::WorldJson,
+        WORLD_FORMAT_VERSION,
+        path,
+        disk_version,
+        bytes,
+    )?;
+    let world: WorldJson = serde_json::from_slice(&migrated).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("world.json parse error: {err}"),
@@ -126,7 +166,18 @@ fn decode_world(bytes: &[u8]) -> io::Result<WorldJson> {
             ),
         ));
     }
-    Ok(world)
+    Ok((world, did_migrate))
+}
+
+/// Serialise a `WorldJson` into the same pretty-printed JSON used by
+/// the writer. Used by the migration write-back path.
+fn encode_world(world: &WorldJson) -> io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(world).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json encode error: {err}"),
+        )
+    })
 }
 
 /// Write `world.json` for a slot, creating the world directory if
@@ -138,11 +189,7 @@ pub(crate) fn write_world(slug: &str, world: &WorldJson) -> io::Result<()> {
 }
 
 /// Test-friendly variant: write to an explicit base path.
-pub(crate) fn write_world_in_dir(
-    base: &Path,
-    slug: &str,
-    world: &WorldJson,
-) -> io::Result<()> {
+pub(crate) fn write_world_in_dir(base: &Path, slug: &str, world: &WorldJson) -> io::Result<()> {
     let dir = world_dir_in(base, slug);
     let path = world_json_path_in(base, slug);
     write_world_to(&dir, &path, world)

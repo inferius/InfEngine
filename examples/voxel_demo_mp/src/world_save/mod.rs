@@ -27,9 +27,7 @@ use std::collections::HashMap;
 use infengine_voxel::BlockId;
 use tracing::{info, warn};
 
-use crate::net::{
-    EditMsg, NetRole, PersistedInv, SERVER_STATE_VERSION, ServerStateV2,
-};
+use crate::net::{EditMsg, NetRole, PersistedInv, SERVER_STATE_VERSION, ServerStateV2};
 use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel, set_world_seed, world_seed};
 
 pub(crate) mod atomic;
@@ -37,6 +35,7 @@ pub(crate) mod chunks;
 pub(crate) mod entities;
 pub(crate) mod layout;
 pub(crate) mod meta;
+pub(crate) mod migrate;
 pub(crate) mod players;
 pub(crate) mod timers;
 pub(crate) mod world_json;
@@ -47,6 +46,8 @@ mod atomic_tests;
 mod chunks_tests;
 #[cfg(test)]
 mod entities_tests;
+#[cfg(test)]
+mod migrate_tests;
 #[cfg(test)]
 mod players_tests;
 #[cfg(test)]
@@ -104,8 +105,7 @@ pub(crate) fn load(voxel: &mut Voxel) {
                 }
                 voxel.edit_history = state.edits;
                 voxel.day_time = state.day_time.rem_euclid(DAY_LENGTH_S);
-                voxel.player_health =
-                    state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
+                voxel.player_health = state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
                 voxel.kill_count = state.kill_count;
                 // Restore the world seed before the chunk
                 // stream starts re-meshing so the workers
@@ -212,21 +212,9 @@ pub(crate) fn save(voxel: &mut Voxel) {
         player_health: voxel.player_health,
         kill_count: voxel.kill_count,
         world_seed: world_seed(),
-        snow_layers: voxel
-            .snow_positions
-            .iter()
-            .map(|(v, l)| (*v, *l))
-            .collect(),
-        torch_orient: voxel
-            .torch_orient
-            .iter()
-            .map(|(v, o)| (*v, *o))
-            .collect(),
-        liquid_level: voxel
-            .liquid_level
-            .iter()
-            .map(|(v, d)| (*v, *d))
-            .collect(),
+        snow_layers: voxel.snow_positions.iter().map(|(v, l)| (*v, *l)).collect(),
+        torch_orient: voxel.torch_orient.iter().map(|(v, o)| (*v, *o)).collect(),
+        liquid_level: voxel.liquid_level.iter().map(|(v, d)| (*v, *d)).collect(),
     };
     match bincode::serde::encode_to_vec(&state, cfg) {
         Ok(payload) => {

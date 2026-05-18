@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in};
+use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Magic bytes at the head of every player file: `"INFP"` (InfEngine
 /// player). Distinguishes the format from chunks (`INFC`) + the
@@ -232,7 +233,7 @@ pub(crate) fn write_player_in_dir(
 /// "first time on this server, mint a fresh state" and must not
 /// surface that as an error.
 pub(crate) fn read_player(slug: &str, name: &str) -> io::Result<Option<PlayerSave>> {
-    read_player_from(&player_path(slug, name))
+    read_player_from(&player_path(slug, name), migrate::default_registry())
 }
 
 /// Test-friendly read variant rooted at an explicit base path.
@@ -241,7 +242,21 @@ pub(crate) fn read_player_in_dir(
     slug: &str,
     name: &str,
 ) -> io::Result<Option<PlayerSave>> {
-    read_player_from(&player_path_in_dir(base, slug, name))
+    read_player_from(
+        &player_path_in_dir(base, slug, name),
+        migrate::default_registry(),
+    )
+}
+
+/// Same as `read_player_in_dir` but lets the caller inject a custom
+/// migration registry - the canonical hook for migration unit tests.
+pub(crate) fn read_player_in_dir_with_registry(
+    base: &Path,
+    slug: &str,
+    name: &str,
+    registry: &MigrationRegistry,
+) -> io::Result<Option<PlayerSave>> {
+    read_player_from(&player_path_in_dir(base, slug, name), registry)
 }
 
 /// List every persisted player in a slot. Walks
@@ -310,32 +325,72 @@ fn write_player_to(path: &Path, save: &PlayerSave) -> io::Result<()> {
     atomic_save(path, &bytes)
 }
 
-fn read_player_from(path: &Path) -> io::Result<Option<PlayerSave>> {
-    read_with_recovery(path, decode_player_bytes)
+fn read_player_from(path: &Path, registry: &MigrationRegistry) -> io::Result<Option<PlayerSave>> {
+    let migrated_at_path = std::cell::Cell::new(false);
+    let migrated_bytes_holder: std::cell::RefCell<Option<Vec<u8>>> = std::cell::RefCell::new(None);
+    let parse = |bytes: &[u8]| -> io::Result<PlayerSave> {
+        let (payload, did_migrate, new_bytes) = decode_player_bytes(bytes, path, registry)?;
+        if did_migrate {
+            migrated_at_path.set(true);
+            *migrated_bytes_holder.borrow_mut() = Some(new_bytes);
+        }
+        Ok(payload)
+    };
+    let opt = read_with_recovery(path, parse)?;
+    if migrated_at_path.get()
+        && let Some(bytes) = migrated_bytes_holder.into_inner()
+    {
+        atomic_save(path, &bytes)?;
+    }
+    Ok(opt)
 }
 
 /// Parse the on-disk envelope + bincode payload. Free fn so both the
 /// primary read and the `.bak` recovery path inside
 /// `atomic::read_with_recovery` run the exact same validation.
-fn decode_player_bytes(bytes: &[u8]) -> io::Result<PlayerSave> {
+///
+/// Returns `(payload, did_migrate, post_migration_bytes)`. See
+/// `chunks::decode_chunk_bytes` for the rationale on returning the
+/// post-migration bytes so the outer caller can write them back.
+fn decode_player_bytes(
+    bytes: &[u8],
+    path: &Path,
+    registry: &MigrationRegistry,
+) -> io::Result<(PlayerSave, bool, Vec<u8>)> {
     if bytes.len() < 17 {
         return Err(invalid("player file truncated header"));
     }
     if &bytes[..4] != PLAYER_MAGIC {
         return Err(invalid("player file magic mismatch"));
     }
-    let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let disk_version = migrate::peek_envelope_version(bytes)?;
+    let did_migrate = disk_version != PLAYER_FORMAT_VERSION;
+    let migrated = migrate::migrate_to(
+        registry,
+        SaveKind::Player,
+        PLAYER_FORMAT_VERSION,
+        path,
+        disk_version,
+        bytes,
+    )?;
+    let post = migrated.as_slice();
+    if post.len() < 17 {
+        return Err(invalid("player file truncated header (post-migration)"));
+    }
+    if &post[..4] != PLAYER_MAGIC {
+        return Err(invalid("player file magic mismatch (post-migration)"));
+    }
+    let version = u32::from_le_bytes([post[4], post[5], post[6], post[7]]);
     if version != PLAYER_FORMAT_VERSION {
         return Err(invalid(format!(
             "player format_version {version} not supported (expected {PLAYER_FORMAT_VERSION})"
         )));
     }
-    let kind = bytes[8];
+    let kind = post[8];
     let uncompressed_len = u64::from_le_bytes([
-        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-        bytes[16],
+        post[9], post[10], post[11], post[12], post[13], post[14], post[15], post[16],
     ]) as usize;
-    let body = &bytes[17..];
+    let body = &post[17..];
 
     let raw: Vec<u8> = match kind {
         COMP_NONE => {
@@ -346,16 +401,14 @@ fn decode_player_bytes(bytes: &[u8]) -> io::Result<PlayerSave> {
         }
         COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
         other => {
-            return Err(invalid(format!(
-                "unknown player compression kind {other}"
-            )));
+            return Err(invalid(format!("unknown player compression kind {other}")));
         }
     };
 
     let cfg = bincode::config::standard();
     let (save, _read) = bincode::serde::decode_from_slice::<PlayerSave, _>(&raw, cfg)
         .map_err(|err| invalid(format!("player payload decode failed: {err}")))?;
-    Ok(save)
+    Ok((save, did_migrate, migrated))
 }
 
 /// Decompress `body` via zstd into a buffer of exactly
@@ -372,9 +425,7 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
             break;
         }
         if out.len() + n > expected_len {
-            return Err(invalid(
-                "zstd decode exceeded uncompressed_payload_len",
-            ));
+            return Err(invalid("zstd decode exceeded uncompressed_payload_len"));
         }
         out.write_all(&buf[..n])?;
     }
