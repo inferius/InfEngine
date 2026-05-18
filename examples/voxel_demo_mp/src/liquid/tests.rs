@@ -802,6 +802,76 @@ fn mesh_bottom_face_emitted_only_when_open() {
     );
 }
 
+/// Behavioural test for Bug 5 - source on top of a corner leaf
+/// in a 3x3 canopy. Leaves are solid (no `F_WASHABLE`, no
+/// `F_AABB_PASS`) so the source cannot spread INTO the canopy
+/// cells at its own y-level. But its NSEW at y=source.y are AIR
+/// (the air column above each adjacent leaf, AND the air past
+/// the canopy edge), so spread fires there and cascades down off
+/// the canopy.
+///
+/// This matches MC: water dropped on top of leaves doesn't soak
+/// through, but it still pours off the sides. Locking in the
+/// expected behaviour so a future tweak to `can_hold_liquid` /
+/// the spread gate can't regress to "water trapped in a hole
+/// between leaves".
+#[test]
+fn source_on_canopy_corner_pours_off_the_sides() {
+    let mut sim = LiquidSim::new();
+    // 3x3 leaf canopy at y=5 centred on origin. Leaves are id 6
+    // (flags=0 -> solid, not washable, not aabb-passable).
+    for x in -1..=1 {
+        for z in -1..=1 {
+            sim.world.set([x, 5, z], BlockId(6));
+            sim.positions.insert([x, 5, z]);
+        }
+    }
+    // Floor far below so falling water lands somewhere.
+    sim.fill_floor(-5, -6..=6, -6..=6);
+    // Source on top of the (-1,-1) corner leaf.
+    sim.place_source([-1, 6, -1], water());
+    sim.run(water(), 20);
+    // Source intact.
+    assert_eq!(
+        sim.level_at([-1, 6, -1]),
+        Some(0),
+        "source corrupted"
+    );
+    // Off-canopy NSEW gets water and cascades down.
+    assert!(
+        sim.is([-2, 6, -1], water()),
+        "spread to -x air side missing"
+    );
+    assert!(
+        sim.is([-1, 6, -2], water()),
+        "spread to -z air side missing"
+    );
+    // Cascade reached the cells below the canopy edge.
+    assert!(
+        sim.is([-2, 5, -1], water()),
+        "fall column off -x canopy edge missing"
+    );
+    assert!(
+        sim.is([-1, 5, -2], water()),
+        "fall column off -z canopy edge missing"
+    );
+    // Source CANNOT spread into the canopy itself - leaves are
+    // not washable, not air. Cells at the source's own y above
+    // the other canopy leaves (e.g. (0,6,-1)) MAY get water via
+    // a later spread (their below is leaf so they're not a drop,
+    // but the BFS lets them through as air cells). That's OK -
+    // what we lock in is that the canopy itself stays solid leaf.
+    for x in -1..=1 {
+        for z in -1..=1 {
+            assert_eq!(
+                sim.world.get([x, 5, z]).0,
+                6,
+                "canopy leaf at ({x},5,{z}) got washed away"
+            );
+        }
+    }
+}
+
 #[test]
 fn waterfall_drains_top_down_after_source_removal() {
     // Source on top, water falls off a tall cliff, pools at the
