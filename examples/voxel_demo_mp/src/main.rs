@@ -16164,16 +16164,26 @@ fn liquid_plan_step(
             put_water_update(&mut updates, below, 1, true, max_range);
             continue;
         }
-        // Continuous column: mid-stream cell with same liquid
+        // Continuous column: cell with same liquid directly
         // below is part of a falling column. Refresh below at
-        // falling level (keeps it alive against the decay pass)
-        // and skip horizontal so the column stays 1 voxel wide -
-        // matches MC's vertical stream rendering. Sources on top
-        // of a pool fall through to the regular cliff/spread
-        // path so they still feed neighbours.
-        if below_b.0 == liquid_id && !is_source {
+        // falling level so the decay pass doesn't kill it -
+        // mirrors MC's `getNewLiquid` returning `getFlowing(8,
+        // true)` when same liquid sits above. Without this, a
+        // source on a cliff flickered: tick 1 wrote below as
+        // falling, tick 2 saw water below (so `below_open` was
+        // false, source skipped the below-write), the orphan
+        // below cell decayed and evaporated, tick 3 source
+        // wrote it again, ... cycle every tick.
+        //
+        // Flow cells additionally skip horizontal spread so a
+        // vertical stream stays 1 voxel wide (MC behaviour).
+        // Sources keep going through the cliff / spread path so
+        // they still feed NSEW neighbours.
+        if below_b.0 == liquid_id {
             put_water_update(&mut updates, below, 1, true, max_range);
-            continue;
+            if !is_source {
+                continue;
+            }
         }
         let mut had_drop = false;
         for d in &drop_dirs {
@@ -18111,6 +18121,64 @@ mod water_tests {
                     "{p:?} still water after drain"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn source_on_cliff_no_flicker() {
+        // Bug repro: source perched one voxel above an open
+        // cliff. Tick 1: source's below = air -> writes below
+        // as falling. Tick 2: below = water -> source must keep
+        // refreshing it as falling (column propagation through
+        // source). Before the fix, the orphan cell decayed +
+        // evaporated, source re-placed it next tick, etc -
+        // cell flickered between water and air every tick.
+        //
+        // Run many ticks then verify the column under the
+        // source stays water continuously across a sliding
+        // window of ticks - no single-tick gap.
+        let mut sim = LiquidSim::new();
+        // Solid bedrock far below so the column eventually
+        // pools. Source perched on a 1x1 platform at y=10
+        // with air around and a basin at y=-2.
+        sim.fill_floor(-2, -6..=6, -6..=6);
+        sim.solid([0, 9, 0]); // platform under source
+        sim.place_source([0, 10, 0], water());
+        // Settle.
+        sim.run(water(), 30);
+        // Cell directly below source must stay water across
+        // every tick from here on.
+        for _ in 0..10 {
+            sim.tick(water());
+            assert!(
+                sim.is([0, 10, 0], water()),
+                "source itself vanished"
+            );
+            // [0, 9, 0] is the solid platform; column actually
+            // starts at the source's NSEW cells which fall to
+            // the basin. Pick one and assert it stays water.
+            assert!(
+                sim.is([1, 10, 0], water()),
+                "+x falling cell flickered"
+            );
+        }
+    }
+
+    #[test]
+    fn source_above_air_no_flicker() {
+        // Stricter repro: source at y=5 with NOTHING directly
+        // below until y=-2 floor. The cell at y=4 should stay
+        // water every tick.
+        let mut sim = LiquidSim::new();
+        sim.fill_floor(-2, -6..=6, -6..=6);
+        sim.place_source([0, 5, 0], water());
+        sim.run(water(), 15);
+        for _ in 0..10 {
+            sim.tick(water());
+            assert!(
+                sim.is([0, 4, 0], water()),
+                "cell directly below source flickered (source-on-cliff bug)"
+            );
         }
     }
 
