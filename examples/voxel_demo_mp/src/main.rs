@@ -1417,8 +1417,15 @@ struct Voxel {
     /// remeshing.
     workers: Option<WorkerPool>,
     /// Most recent ray hit while looking around in Play. Drives the
-    /// crosshair / wireframe overlay and the click-to-edit step.
+    /// crosshair / wireframe overlay and the RMB-place step. Skips
+    /// `F_RAY_PASS` decorations (torch, flowers) so the player can
+    /// place a block adjacent to a torch without targeting it.
     target: Option<RayHit>,
+    /// Parallel ray that stops on EVERY non-air voxel, decorations
+    /// included. Drives mining (LMB) so the torch / flower itself
+    /// is breakable when the crosshair sits on it - the regular
+    /// `target` ray would tunnel through and pick the block behind.
+    mine_target: Option<RayHit>,
 
     player_pos: Vec3,
     player_vel: Vec3,
@@ -1933,6 +1940,86 @@ impl Voxel {
     /// so dynamic point lights track placed/broken torches. Every
     /// edit-apply path funnels through here so we only have one
     /// place that knows about torch bookkeeping.
+    /// True when the given position has at least one solid
+    /// non-passable neighbour (below or any NSEW) - i.e. a
+    /// torch or flower placed there would have something to
+    /// mount on. Used both by the placement check and the
+    /// cascade-dislodge pass so the two paths agree on what
+    /// counts as "supported".
+    fn decoration_supported(&self, pos: [i32; 3]) -> bool {
+        let supportive = |p: [i32; 3]| {
+            let b = self.world.get(p);
+            !b.is_air()
+                && !block_is_placement_blocked(b)
+                && !block_is_aabb_passable(b)
+        };
+        if supportive([pos[0], pos[1] - 1, pos[2]]) {
+            return true;
+        }
+        let walls = [
+            [pos[0] + 1, pos[1], pos[2]],
+            [pos[0] - 1, pos[1], pos[2]],
+            [pos[0], pos[1], pos[2] + 1],
+            [pos[0], pos[1], pos[2] - 1],
+        ];
+        walls.iter().any(|p| supportive(*p))
+    }
+
+    /// After a block is broken at `removed`, scan the 5 attaching
+    /// faces (above + NSEW) and pop off any `F_NO_PLACE`
+    /// decoration that no longer has support. Each dislodged
+    /// decoration spawns as a drop entity (pickup), broadcasts a
+    /// `vx.edit` packet, and re-enters the queue so cascades
+    /// (torch on torch on dirt) all unwind in one call.
+    fn dislodge_unsupported_decorations(&mut self, removed: [i32; 3]) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        let mut queue: std::collections::VecDeque<[i32; 3]> =
+            std::collections::VecDeque::new();
+        queue.push_back(removed);
+        while let Some(v) = queue.pop_front() {
+            let attaching = [
+                [v[0], v[1] + 1, v[2]],
+                [v[0] + 1, v[1], v[2]],
+                [v[0] - 1, v[1], v[2]],
+                [v[0], v[1], v[2] + 1],
+                [v[0], v[1], v[2] - 1],
+            ];
+            for c in attaching {
+                let b = self.world.get(c);
+                if b.is_air() {
+                    continue;
+                }
+                if !block_has_flag(b, F_NO_PLACE) {
+                    continue;
+                }
+                if self.decoration_supported(c) {
+                    continue;
+                }
+                self.world_set_tracked(c, BlockId::AIR);
+                let coords = Self::affected_chunks(c);
+                self.rebuild_chunks(&coords);
+                self.spawn_drop(b, c);
+                let edit = EditMsg {
+                    x: c[0],
+                    y: c[1],
+                    z: c[2],
+                    block: 0,
+                };
+                self.edit_history.push(edit);
+                if let NetRole::Server { server, .. } = &mut self.net {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg)
+                    {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                }
+                queue.push_back(c);
+            }
+        }
+    }
+
     fn world_set_tracked(&mut self, voxel: [i32; 3], block: BlockId) {
         self.world.set(voxel, block);
         // Both torches + glowstone act as point-light emitters.
@@ -2433,30 +2520,21 @@ impl Voxel {
                     flow,
                 );
             }
-            // Bottom face: emit only when the cell below is air
-            // AND this cell is NOT a falling-stream cell. A
-            // falling cell with air below is the head of a
-            // descending column - drawing a horizontal floor at
-            // its base produces the "shelf" artifact the user
-            // reported. MC's water similarly skips the bottom
-            // face on falling streams; the side faces alone read
-            // as a continuous flow.
-            let own_level =
-                self.liquid_level.get(&[vx, vy, vz]).copied().unwrap_or(0);
-            let is_falling = own_level >= 8;
-            if !is_falling
-                && self.world.get([vx, vy - 1, vz]).is_air()
-            {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx, fy, fz],
-                    [fx + 1.0, fy, fz],
-                    [fx + 1.0, fy, fz + 1.0],
-                    [fx, fy, fz + 1.0],
-                    [0.0, -1.0, 0.0],
-                    flow,
-                );
-            }
+            // Bottom face: never emitted for liquid cells. A
+            // water voxel with air below is either the head of a
+            // falling stream (renders as continuous side faces -
+            // no horizontal "floor" at the bottom) or a source
+            // sitting on a cliff (anti-pyramid keeps it full
+            // height; the floating-cube look that a bottom face
+            // would add is also a visual glitch). MC's water
+            // mesh likewise has no bottom faces. Underwater
+            // views from below see the layer of air just below
+            // the water as plain air - acceptable trade for the
+            // clean waterfall.
+            //
+            // (Left intentionally empty - kept as a doc anchor so
+            // the next person editing this loop knows we
+            // considered + skipped the bottom face.)
         }
         // Re-borrow renderer now that the `&self.world` /
         // `&self.liquid_level` reads above are done.
@@ -6092,6 +6170,7 @@ impl Voxel {
             pending_set: HashSet::new(),
             workers: None,
             target: None,
+            mine_target: None,
             player_pos: Vec3::new(0.0, 32.0, 0.0),
             player_vel: Vec3::ZERO,
             player_yaw: 0.0,
@@ -6247,7 +6326,12 @@ impl Voxel {
             f5_prev: false,
             show_debug_panel: false,
             f6_prev: false,
-            liquid_bias_drops: true,
+            // Disabled by default: the cliff bias picked sides
+            // over forward when both were viable, which trapped
+            // water on narrow bridges spilling sides instead of
+            // filling forward. Toggle on via F6 if you want MC's
+            // pathfinding behaviour back.
+            liquid_bias_drops: false,
             f4_prev: false,
             q_prev: false,
             home_pos: None,
@@ -13561,6 +13645,22 @@ impl AppHandler for Voxel {
         } else {
             None
         };
+        // Separate ray for mining: stops on the FIRST non-air
+        // voxel, decorations included. The placement-target ray
+        // tunnels through `F_RAY_PASS` blocks so the player can
+        // drop blocks next to a torch without selecting it, but
+        // mining still needs to hit the torch itself.
+        self.mine_target = if matches!(self.state, AppState::Playing) {
+            raycast_with(
+                &self.world,
+                self.player_pos,
+                forward,
+                6.0,
+                |b| !b.is_air(),
+            )
+        } else {
+            None
+        };
 
         // Apply pending mouse-button edits before rendering. LMB
         // always breaks the targeted voxel. RMB places the selected
@@ -13706,7 +13806,7 @@ impl AppHandler for Voxel {
             && attack_mob.is_none()
             && attack_player.is_none();
         let mut mine_break: Option<[i32; 3]> = None;
-        if lmb_active && let Some(hit) = self.target {
+        if lmb_active && let Some(hit) = self.mine_target {
             let block = self.world.get(hit.voxel);
             // Standard ray skips liquid voxels (F_RAY_PASS) so
             // the crosshair targets the solid block past any water
@@ -13878,6 +13978,13 @@ impl AppHandler for Voxel {
                 if tier >= needed {
                     self.spawn_drop(broken, voxel);
                 }
+                // Cascade: dislodge any F_NO_PLACE decoration
+                // (torch, flower, ...) that just lost its support
+                // because we broke this voxel. Each dislodged
+                // block also spawns as a drop, so the player can
+                // pick it up. MC behaviour - mining a dirt block
+                // under a torch makes the torch pop off + drop.
+                self.dislodge_unsupported_decorations(voxel);
             }
             if broken != BlockId::AIR {
                 self.blocks_broken = self.blocks_broken.saturating_add(1);
@@ -14381,7 +14488,14 @@ impl AppHandler for Voxel {
         let player_pos = self.player_pos;
         let chunk_meshes = self.chunk_meshes.clone();
         let registry = &self.registry;
-        let target = self.target;
+        // Wireframe outline follows the mining ray so the player
+        // sees the highlight on a decoration (torch / flower)
+        // that they can break, not on the solid block hidden
+        // behind it. Falls back to the placement target when no
+        // mineable cell is in view (shouldn't happen in
+        // practice since `mine_target` matches every non-air
+        // voxel).
+        let target = self.mine_target.or(self.target);
         let ui = self.ui.as_mut();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -16039,39 +16153,39 @@ fn liquid_corner_height_at(
             return 1.0;
         }
     }
-    // Phase 2: blend the touching same-liquid cells. Solids are
-    // ignored entirely (a wall doesn't slope the water). Air
-    // counts as 0 height so pool edges fade down toward the
-    // bank for a sloped look.
+    // Phase 2: weighted blend - matches MC's
+    // `LiquidBlockRenderer.calculateAverageHeight`. Liquid
+    // contributions count 10x relative to air so a pool edge
+    // sits at ~0.91 (slight slope toward the bank) instead of
+    // crashing down to 0.5. The 0.5 averaging was inverted on
+    // screen: corners shared between two adjacent sources came
+    // out lower than the outer "tip" corners, so the water
+    // surface visibly sloped UP toward air instead of down.
+    // The 10:1 weight keeps liquid-touching corners near full
+    // height while still letting the very outermost tip taper.
     //
-    // Exception (anti-pyramid): if only one touching cell is a
-    // liquid, the corner takes that cell's own surface height
-    // straight - no averaging with the three air corners. A
-    // single source or falling column would otherwise render as
-    // a sharp pyramid (h ~ 0.25) instead of the full cube the
-    // user expects from a standalone water voxel.
-    let mut liquid_sum = 0.0_f32;
-    let mut liquid_count = 0u32;
-    let mut air_count = 0u32;
+    // Solids are ignored entirely (a wall doesn't slope the
+    // water). Air counts with weight 1 and a height of 0.
+    const LIQUID_WEIGHT: f32 = 10.0;
+    const AIR_WEIGHT: f32 = 1.0;
+    let mut weighted_sum = 0.0_f32;
+    let mut weight_total = 0.0_f32;
     for t in &touching {
         let b = world.get(*t);
         if b.0 == liquid_id {
-            liquid_sum += liquid_surface_height_at(world, level_map, *t, liquid_id);
-            liquid_count += 1;
+            let h = liquid_surface_height_at(world, level_map, *t, liquid_id);
+            weighted_sum += h * LIQUID_WEIGHT;
+            weight_total += LIQUID_WEIGHT;
         } else if b.is_air() {
-            air_count += 1;
+            // air contributes height 0 at weight 1
+            weight_total += AIR_WEIGHT;
         }
         // solids: ignored (no slope into a wall)
     }
-    if liquid_count == 0 {
+    if weight_total <= 0.0 {
         return 0.0;
     }
-    if liquid_count == 1 {
-        // Standalone cell: render at its own height, no slope.
-        return liquid_sum;
-    }
-    let total = liquid_count + air_count;
-    liquid_sum / total as f32
+    weighted_sum / weight_total
 }
 
 fn distance_to_drop_at(
@@ -16287,7 +16401,16 @@ fn liquid_plan_step(
                 continue;
             }
         }
-        let mut had_drop = false;
+        // Cliff scan: mark every NSEW neighbour that has an
+        // open cell below as a falling write at the strongest
+        // flow level. Previously this stopped on the first hit
+        // + skipped the regular horizontal spread for flow
+        // cells, which trapped a stream on a narrow bridge - it
+        // would only spill the first side it found and never
+        // reach the cell ahead. Now every cliff side gets its
+        // own falling write in the same tick AND the regular
+        // spread still runs, so a flow cell on a 1-wide bridge
+        // both falls off both sides and propagates forward.
         for d in &drop_dirs {
             let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
             let nb = world.get(n);
@@ -16297,12 +16420,7 @@ fn liquid_plan_step(
             let n_below = world.get([n[0], n[1] - 1, n[2]]);
             if n_below.is_air() || block_is_washable(n_below) {
                 put_water_update(&mut updates, n, 1, true, max_range);
-                had_drop = true;
-                break;
             }
-        }
-        if had_drop && !is_source && !is_falling {
-            continue;
         }
         if next_level > max_range {
             continue;
@@ -18097,11 +18215,11 @@ mod water_tests {
         assert!((h - 1.0).abs() < 1e-4, "got {h}");
     }
     #[test]
-    fn corner_height_isolated_cell_full_height() {
-        // Anti-pyramid rule: a single liquid cell with no
-        // liquid neighbour at the same y renders as a full
-        // cube, not a pointy pyramid. Multi-cell pool edges
-        // still slope (covered by `corner_height_pool_edge_slopes`).
+    fn corner_height_isolated_cell_tapers_slightly() {
+        // Single source + 3 air corners: MC 10:1 liquid:air
+        // weighting -> 10 / 13 ~ 0.77. Slight slope instead of
+        // a sharp 0.25 pyramid OR a flat 1.0 cube; matches MC's
+        // visible "tiny pool" look.
         let mut w = mk_world();
         w.set([5, 5, 5], BlockId(WATER_ID));
         let mut map = HashMap::new();
@@ -18109,7 +18227,10 @@ mod water_tests {
         let h = liquid_corner_height_at(
             &w, &map, 5, 5, 5, 0, 0, WATER_ID,
         );
-        assert!((h - 1.0).abs() < 1e-4, "isolated cell corner: got {h}");
+        assert!(
+            (0.70..0.85).contains(&h),
+            "isolated cell tip corner: got {h}, want ~0.77"
+        );
         let h_far = liquid_corner_height_at(
             &w, &map, 5, 5, 5, 2, 2, WATER_ID,
         );
@@ -18117,11 +18238,14 @@ mod water_tests {
     }
 
     #[test]
-    fn corner_height_pool_edge_slopes_toward_air() {
-        // Two adjacent sources form a tiny pool. The "outside"
-        // corner of the pool (touching 2 source + 2 air) blends
-        // half-and-half, so it sits at ~0.5 height for a sloped
-        // bank.
+    fn corner_height_pool_joint_stays_high() {
+        // Two adjacent sources form a tiny pool. The corner
+        // shared between them (2 source + 2 air) must stay
+        // visibly high - matches MC's 10:1 weighting (20 /
+        // 22 ~ 0.91). Before the weighting fix this corner
+        // came out at 0.5, lower than the outer-tip corners
+        // at 0.25, so the surface visibly sloped UP toward
+        // air instead of down.
         let mut w = mk_world();
         w.set([5, 5, 5], BlockId(WATER_ID));
         w.set([6, 5, 5], BlockId(WATER_ID));
@@ -18129,12 +18253,20 @@ mod water_tests {
         map.insert([5, 5, 5], 0u8);
         map.insert([6, 5, 5], 0u8);
         // Corner shared by (5, 5, 5) and (6, 5, 5): 2 source + 2 air.
-        let h = liquid_corner_height_at(
+        let joint = liquid_corner_height_at(
             &w, &map, 5, 5, 5, 1, 0, WATER_ID,
         );
+        // Outer tip of cell (5,5,5): 1 source + 3 air.
+        let tip = liquid_corner_height_at(
+            &w, &map, 5, 5, 5, 0, 0, WATER_ID,
+        );
         assert!(
-            h > 0.4 && h < 0.6,
-            "pool edge slope expected ~0.5, got {h}"
+            joint > tip,
+            "joint corner ({joint}) should be higher than tip ({tip}) - water slopes DOWN toward air"
+        );
+        assert!(
+            (0.85..0.95).contains(&joint),
+            "joint expected ~0.91, got {joint}"
         );
     }
     #[test]
