@@ -11368,7 +11368,7 @@ fn main() -> ExitCode {
                             .store(g as u8, std::sync::atomic::Ordering::Relaxed);
                     }
                     None => {
-                        warn!(arg = %m, "unknown worldgen mode (classic|flat|islands|amplified)");
+                        warn!(arg = %m, "unknown worldgen mode (classic|flat|islands|amplified|realistic)");
                     }
                 }
             }

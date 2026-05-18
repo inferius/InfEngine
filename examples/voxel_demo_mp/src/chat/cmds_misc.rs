@@ -223,6 +223,37 @@ pub(crate) fn cmd_info(
     true
 }
 
+/// `/biome`. Print the current biome at the player's feet. Reads
+/// `climate_at` if the active generator is `Realistic`, else
+/// falls back to the legacy `biome_at`. Permission level 0.
+pub(crate) fn cmd_biome(
+    voxel: &mut Voxel,
+    _arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
+    use crate::worldgen::WorldGen;
+    let px = voxel.player_pos.x;
+    let pz = voxel.player_pos.z;
+    let biome = match WorldGen::current() {
+        WorldGen::Realistic => {
+            // Pull the biome from the climate map for the
+            // realistic generator. Re-uses the same lookup that
+            // gen_realistic uses so the answer matches what the
+            // player is standing on.
+            let climate = crate::worldgen::climate::climate_at(px, pz);
+            crate::worldgen::biome_table::biome_from_climate(climate)
+        }
+        _ => biome_at(px, pz),
+    };
+    lines.push(format!(
+        "Biome: {} at ({:.0}, {:.0})",
+        biome.label(),
+        px,
+        pz
+    ));
+    true
+}
+
 /// `/findbiome plains|mountain|desert`. Locate the nearest tile
 /// in the named biome via a spiral scan.
 pub(crate) fn cmd_findbiome(

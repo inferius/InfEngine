@@ -40,7 +40,7 @@ pub(crate) fn cmd_help(
         "Host MP: /summon /kick /announce /mute /unmute /save /horde /spawnmob /killmobs /dmg"
             .to_string(),
     );
-    lines.push("Misc: /fw /recipe /randomtp".to_string());
+    lines.push("Misc: /fw /recipe /randomtp /biome /findbiome".to_string());
     false
 }
 

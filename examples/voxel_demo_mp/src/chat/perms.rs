@@ -108,6 +108,7 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "listmobs", level: 0 },
     CmdMeta { name: "mobs", level: 0 },
     CmdMeta { name: "find", level: 0 },
+    CmdMeta { name: "biome", level: 0 },
     CmdMeta { name: "findbiome", level: 0 },
     CmdMeta { name: "whois", level: 0 },
     CmdMeta { name: "recipe", level: 0 },
@@ -238,5 +239,12 @@ mod tests {
                 assert_ne!(a.name, b.name, "duplicate cmd {}", a.name);
             }
         }
+    }
+
+    #[test]
+    fn biome_command_is_level_zero() {
+        // `/biome` shows the current biome at the player's
+        // feet - safe info, no side effects, every player gets it.
+        assert_eq!(cmd_level("biome"), Some(0));
     }
 }

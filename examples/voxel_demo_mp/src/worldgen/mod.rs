@@ -142,3 +142,42 @@ pub static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::
 /// share the same instance.
 #[cfg(test)]
 pub(crate) static TEST_GEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_accepts_realistic() {
+        assert_eq!(WorldGen::from_str("realistic"), Some(WorldGen::Realistic));
+        assert_eq!(WorldGen::from_str("real"), Some(WorldGen::Realistic));
+        assert_eq!(WorldGen::from_str("REALISTIC"), Some(WorldGen::Realistic));
+    }
+
+    #[test]
+    fn from_str_accepts_legacy_profiles() {
+        assert_eq!(WorldGen::from_str("classic"), Some(WorldGen::Classic));
+        assert_eq!(WorldGen::from_str("default"), Some(WorldGen::Classic));
+        assert_eq!(WorldGen::from_str("flat"), Some(WorldGen::Flat));
+        assert_eq!(WorldGen::from_str("islands"), Some(WorldGen::Islands));
+        assert_eq!(WorldGen::from_str("amplified"), Some(WorldGen::Amplified));
+        assert_eq!(WorldGen::from_str("amp"), Some(WorldGen::Amplified));
+    }
+
+    #[test]
+    fn from_str_rejects_unknown() {
+        assert_eq!(WorldGen::from_str("xyzzy"), None);
+        assert_eq!(WorldGen::from_str(""), None);
+    }
+
+    #[test]
+    fn discriminants_match_atomic_layout() {
+        // The atomic stores `as u8`; current() decodes that
+        // mapping. Sanity-check the contract.
+        assert_eq!(WorldGen::Classic as u8, 0);
+        assert_eq!(WorldGen::Flat as u8, 1);
+        assert_eq!(WorldGen::Islands as u8, 2);
+        assert_eq!(WorldGen::Amplified as u8, 3);
+        assert_eq!(WorldGen::Realistic as u8, 4);
+    }
+}

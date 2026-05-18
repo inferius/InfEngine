@@ -572,7 +572,7 @@ pub(crate) fn cmd_worldgen(
         ));
     } else {
         lines.push(
-            "Usage: /worldgen classic|flat|islands|amplified"
+            "Usage: /worldgen classic|flat|islands|amplified|realistic"
                 .to_string(),
         );
     }

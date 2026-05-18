@@ -381,6 +381,10 @@ pub(crate) fn dispatch_as(
                 handled_locally |=
                     cmds_misc::cmd_info(voxel, arg, &mut local_lines);
             }
+            "biome" => {
+                handled_locally |=
+                    cmds_misc::cmd_biome(voxel, arg, &mut local_lines);
+            }
             "findbiome" => {
                 handled_locally |= cmds_misc::cmd_findbiome(
                     voxel,
