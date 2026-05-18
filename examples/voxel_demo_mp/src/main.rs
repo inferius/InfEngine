@@ -8926,6 +8926,16 @@ impl AppHandler for Voxel {
                 // already authoritative on this peer (clients
                 // received the place via `vx.edit` but the C.3
                 // MP wire for chest state is deferred to C.3f).
+                //
+                // TODO(C.3f): when running as `NetRole::Client`,
+                // ship a `vx.chest_open` to the host and treat
+                // subsequent `vx.chest_state` broadcasts as the
+                // authoritative chest contents. Today every peer
+                // mints its own local empty chest on open, so
+                // chest contents only persist + sync on the
+                // peer that placed + filled the chest. The save
+                // round trip still works on the host because
+                // `voxel.chests` lives on the host side.
                 let pos = hit.voxel;
                 self.chests
                     .entry(pos)
