@@ -35,6 +35,13 @@ use std::collections::HashMap;
 use crate::container::Container;
 use crate::smelting::{fuel_burn_ticks, smelt_recipe};
 
+// GridAction <-> furnace mutation helpers live in the sibling
+// `furnace_actions` module so this file stays under the 500-LOC
+// soft cap. Re-export the public surface.
+#[path = "furnace_actions.rs"]
+mod actions;
+pub(crate) use actions::{apply_furnace_action, apply_player_action};
+
 /// Number of slots in a single furnace. Locked at 3 (input / fuel /
 /// output) by MC convention. The slot count is recorded per-
 /// container so a future "blast furnace" variant could ship with a
@@ -427,3 +434,7 @@ pub(crate) fn recover_held_on_close(
 #[cfg(test)]
 #[path = "furnace_tests.rs"]
 mod furnace_tests;
+
+#[cfg(test)]
+#[path = "furnace_tick_tests.rs"]
+mod furnace_tick_tests;

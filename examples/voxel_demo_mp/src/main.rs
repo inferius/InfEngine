@@ -113,6 +113,24 @@ use inventory::{
 };
 use tracing::{error, info, warn};
 
+/// Remap a 1-slot GridAction (always carries idx 0) to a different
+/// slot index. Used by the furnace UI which renders each of its 3
+/// slots as a single-slot grid so the layout can intersperse the
+/// flame + cook bars between them.
+fn remap_action(
+    action: container::ui::GridAction,
+    new_idx: usize,
+) -> container::ui::GridAction {
+    use container::ui::GridAction as G;
+    match action {
+        G::Take(_) => G::Take(new_idx),
+        G::TakeHalf(_) => G::TakeHalf(new_idx),
+        G::Place(_) => G::Place(new_idx),
+        G::PlaceOne(_) => G::PlaceOne(new_idx),
+        G::Transfer(_) => G::Transfer(new_idx),
+    }
+}
+
 /// Two-sample interpolation buffer for one remote player's pose.
 /// The render path samples at `now - INTERP_DELAY` so the most
 /// recent snapshot is one tick "in the future" and we always have
@@ -5587,6 +5605,23 @@ impl Voxel {
         // to clear `chest_open`.
         let mut chest_open_local = chest_open_pos.is_some();
         let chest_held_snapshot = self.chest_held;
+        // Furnace UI snapshot. Same shape as the chest snapshot
+        // above, plus a clone of the live runtime triple so the
+        // panel can draw the fuel + cook bars.
+        let furnace_open_pos = self.furnace_open;
+        let furnace_snapshot: Option<container::Container> = self
+            .furnace_open
+            .as_ref()
+            .and_then(|p| self.furnaces.get(p).cloned());
+        let furnace_runtime_snapshot: block::furnace::FurnaceRuntime = self
+            .furnace_open
+            .as_ref()
+            .and_then(|p| self.furnace_runtimes.get(p).copied())
+            .unwrap_or_default();
+        let mut furnace_open_local = furnace_open_pos.is_some();
+        let furnace_held_snapshot = self.furnace_held;
+        let mut furnace_grid_actions: Vec<(bool, container::ui::GridAction)> = Vec::new();
+        let mut furnace_held_local = furnace_held_snapshot;
         // Plain inventory snapshot as Option<(u16,u8)> for the
         // chest-UI's player-side grid - independent of the
         // existing DnD widget snapshot which carries icon meta.
@@ -6732,6 +6767,152 @@ impl Voxel {
                         });
                 }
 
+                // Furnace UI panel. Three slots laid out as
+                // [input] - flame icon - [fuel] - cook arrow -
+                // [output]. The flame bar shows fuel_left /
+                // fuel_full; the arrow shows cook_progress /
+                // FURNACE_COOK_MS_PER_OUTPUT. The player inv grid
+                // sits below, mirroring the chest panel layout.
+                if let Some(furnace) = &furnace_snapshot {
+                    let screen = ctx.content_rect();
+                    egui::Window::new("Furnace")
+                        .open(&mut furnace_open_local)
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_pos([
+                            screen.center().x - 220.0,
+                            screen.center().y - 240.0,
+                        ])
+                        .default_size([440.0, 380.0])
+                        .show(ctx, |ui| {
+                            ui.label("ESC to close - LMB take/place, RMB half/one, Shift+LMB transfer");
+                            if let Some((id, n)) = furnace_held_local {
+                                ui.label(format!(
+                                    "Holding: item {} x{}",
+                                    crate::item::item_display_name(id),
+                                    n,
+                                ));
+                            }
+                            ui.separator();
+                            // Top row: input slot + fuel slot
+                            // + flame icon + cook arrow + output
+                            // slot. Render the three slots as
+                            // single-slot 1x1 grids so we can
+                            // intersperse the bars.
+                            ui.horizontal(|ui| {
+                                ui.label("Input");
+                                let cfg_input = container::ui::GridConfig {
+                                    cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                };
+                                let mut single = container::Container::with_size(1);
+                                single.set_slot(0, furnace.slot(0));
+                                let acts = container::ui::draw_grid(
+                                    ui, &cfg_input, &single, furnace_held_local, atlas_tex_id,
+                                );
+                                for a in acts {
+                                    // Remap idx 0 -> furnace
+                                    // slot 0 (input).
+                                    furnace_grid_actions.push((false, remap_action(a, 0)));
+                                }
+                                ui.label(" ");
+                                // Fuel bar. Vertical filled rect
+                                // proportional to fuel_left_ms /
+                                // fuel_full_ms.
+                                let fuel_frac = if furnace_runtime_snapshot.fuel_full_ms > 0 {
+                                    furnace_runtime_snapshot.fuel_left_ms as f32
+                                        / furnace_runtime_snapshot.fuel_full_ms as f32
+                                } else {
+                                    0.0
+                                };
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 36.0),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 2.0, egui::Color32::from_gray(40));
+                                let fill_h = rect.height() * fuel_frac.clamp(0.0, 1.0);
+                                let fill_rect = egui::Rect::from_min_max(
+                                    egui::pos2(rect.min.x, rect.max.y - fill_h),
+                                    rect.max,
+                                );
+                                painter.rect_filled(
+                                    fill_rect,
+                                    2.0,
+                                    egui::Color32::from_rgb(220, 110, 30),
+                                );
+                                ui.label("Fuel");
+                                let cfg_fuel = container::ui::GridConfig {
+                                    cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                };
+                                let mut single_f = container::Container::with_size(1);
+                                single_f.set_slot(0, furnace.slot(1));
+                                let acts_f = container::ui::draw_grid(
+                                    ui, &cfg_fuel, &single_f, furnace_held_local, atlas_tex_id,
+                                );
+                                for a in acts_f {
+                                    furnace_grid_actions.push((false, remap_action(a, 1)));
+                                }
+                                // Cook arrow. Horizontal filled
+                                // rect: cook_progress_ms /
+                                // FURNACE_COOK_MS_PER_OUTPUT.
+                                let cook_frac = furnace_runtime_snapshot.cook_progress_ms as f32
+                                    / block::furnace::FURNACE_COOK_MS_PER_OUTPUT as f32;
+                                let (arect, _) = ui.allocate_exact_size(
+                                    egui::vec2(48.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                let apainter = ui.painter_at(arect);
+                                apainter.rect_filled(arect, 2.0, egui::Color32::from_gray(40));
+                                let fill_w = arect.width() * cook_frac.clamp(0.0, 1.0);
+                                let afill_rect = egui::Rect::from_min_max(
+                                    arect.min,
+                                    egui::pos2(arect.min.x + fill_w, arect.max.y),
+                                );
+                                apainter.rect_filled(
+                                    afill_rect,
+                                    2.0,
+                                    egui::Color32::from_rgb(220, 200, 70),
+                                );
+                                ui.label("Out");
+                                let cfg_out = container::ui::GridConfig {
+                                    cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                };
+                                let mut single_o = container::Container::with_size(1);
+                                single_o.set_slot(0, furnace.slot(2));
+                                let acts_o = container::ui::draw_grid(
+                                    ui, &cfg_out, &single_o, furnace_held_local, atlas_tex_id,
+                                );
+                                for a in acts_o {
+                                    furnace_grid_actions.push((false, remap_action(a, 2)));
+                                }
+                            });
+                            ui.separator();
+                            ui.label("Inventory (36)");
+                            let mut inv_view = container::Container::with_size(
+                                inv_plain_snapshot.len(),
+                            );
+                            for (i, s) in inv_plain_snapshot.iter().enumerate() {
+                                inv_view.set_slot(i, *s);
+                            }
+                            let inv_cfg = container::ui::GridConfig {
+                                cols: 9,
+                                rows: 4,
+                                tile_px: 36.0,
+                                title: None,
+                            };
+                            let inv_actions_g = container::ui::draw_grid(
+                                ui,
+                                &inv_cfg,
+                                &inv_view,
+                                furnace_held_local,
+                                atlas_tex_id,
+                            );
+                            for a in inv_actions_g {
+                                furnace_grid_actions.push((true, a));
+                            }
+                        });
+                }
+
                 // Hurt-flash: full-screen red overlay that fades
                 // out over ~0.5 s. Painted on the Foreground layer
                 // so it sits above the world but below the
@@ -7477,6 +7658,10 @@ impl Voxel {
         if chest_open_pos.is_some() && !chest_open_local {
             self.close_chest_ui();
         }
+        // Same close-button handling for the furnace UI.
+        if furnace_open_pos.is_some() && !furnace_open_local {
+            self.close_furnace_ui();
+        }
         // Apply queued chest-UI actions. Each entry is
         // `(true_if_player_side, GridAction)`.
         if let Some(pos) = self.chest_open
@@ -7523,6 +7708,47 @@ impl Voxel {
             // No actions but still surface the latest cursor
             // state for the next frame.
             self.chest_held = chest_held_local;
+        }
+        // Apply queued furnace-UI actions. Mirrors the chest path
+        // but routes through `block::furnace::apply_furnace_action`
+        // / `apply_player_action` so the accept-filter checks fire
+        // before any slot mutation.
+        if let Some(pos) = self.furnace_open
+            && !furnace_grid_actions.is_empty()
+        {
+            if let Some(furnace) = self.furnaces.get_mut(&pos) {
+                let mut inv_u16: Vec<Option<(u16, u8)>> = self
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                for (player_side, action) in furnace_grid_actions {
+                    if player_side {
+                        block::furnace::apply_player_action(
+                            &mut inv_u16,
+                            furnace,
+                            &mut furnace_held_local,
+                            action,
+                        );
+                    } else {
+                        block::furnace::apply_furnace_action(
+                            furnace,
+                            &mut inv_u16,
+                            &mut furnace_held_local,
+                            action,
+                        );
+                    }
+                }
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= self.inventory.len() {
+                        break;
+                    }
+                    self.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
+            }
+            self.furnace_held = furnace_held_local;
+        } else {
+            self.furnace_held = furnace_held_local;
         }
         if action_start {
             self.state = AppState::Playing;
