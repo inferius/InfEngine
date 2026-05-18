@@ -1836,6 +1836,16 @@ struct Voxel {
     /// / source merge).
     liquid_mesh_handles: HashMap<u16, MeshHandle>,
     liquid_mesh_dirty: bool,
+    /// Force an out-of-schedule liquid tick on the next frame.
+    /// Set by `world_set_tracked` whenever a player edit touches
+    /// a voxel adjacent to a liquid - without it, edits that
+    /// reshape the topology (placing a block in front of a
+    /// stream, breaking the pool floor, ...) had to wait up to
+    /// `tick_period` frames before the spread re-evaluated,
+    /// which read on screen as the water visibly "freezing" for
+    /// ~150 ms after every edit. MC handles this with per-cell
+    /// scheduled ticks; this is the small-budget equivalent.
+    liquid_dirty_tick: bool,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different
@@ -1997,6 +2007,10 @@ impl Voxel {
         }
         if neighbour_liquid {
             self.liquid_mesh_dirty = true;
+            // Skip the regular tick_period delay so the spread
+            // sees the new topology on the very next frame
+            // instead of up to 10 frames later.
+            self.liquid_dirty_tick = true;
         }
     }
 
@@ -2627,9 +2641,16 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
+        // Force a single out-of-schedule pass when a recent player
+        // edit re-queued a liquid neighbour. Without this the
+        // spread can sit up to `tick_period` frames before
+        // reacting, which makes block placements next to streams
+        // look like the water "freezes" for ~150 ms.
+        let force = std::mem::take(&mut self.liquid_dirty_tick);
         for liquid in LIQUIDS {
             let nt = self.net_tick as u32;
-            if nt.is_multiple_of(liquid.tick_period.max(1)) {
+            let scheduled = nt.is_multiple_of(liquid.tick_period.max(1));
+            if scheduled || force {
                 self.tick_liquid_step(liquid);
                 if liquid.infinite_source {
                     self.tick_liquid_merge(liquid);
@@ -6170,6 +6191,7 @@ impl Voxel {
             next_drop_id: 1,
             flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
+            liquid_dirty_tick: false,
             sheep_mesh: None,
             sheep_head_mesh: None,
             voxel_atlas: None,
