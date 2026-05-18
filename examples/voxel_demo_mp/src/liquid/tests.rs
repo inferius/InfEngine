@@ -3,12 +3,14 @@
 //! `liquid_corner_height_at`) are exercised directly; the tick loop
 //! is driven through `LiquidSim`, a minimal wrapper around the same
 //! `liquid_plan_step` / `liquid_apply_plan` / `liquid_merge_step`
-//! free fns the live `Voxel::tick_liquid_step` calls. Side effects
+//! free fns the live `Voxel::tick_liquid_cell` calls. Side effects
 //! (renderer / network / drops / edit history) are skipped - we only
 //! care about world state transitions here.
 
 use super::*;
 use super::mesh::{bottom_open, liquid_surface_height_at, side_open};
+use super::plan::liquid_plan_cell;
+use super::schedule::LiquidSchedule;
 use crate::block::WATER_ID;
 use infengine_voxel::{BlockId, Chunk, World};
 use std::collections::{HashMap, HashSet};
@@ -907,4 +909,288 @@ fn waterfall_drains_top_down_after_source_removal() {
             assert!(!sim.is(p, water()), "basin {p:?} still water");
         }
     }
+}
+
+// -----------------------------------------------------------------
+// Schedule-driven sim regression tests. Mirror the live Voxel
+// model: each cell is processed via `liquid_plan_cell` when the
+// schedule says it's due, then placed/decayed cells + their 6
+// neighbours get rescheduled. The 8192 bulk-cap is gone, so the
+// only sane way to verify "no cell is dropped" is to run a fixed
+// budget per frame and count how many cells got ticked.
+// -----------------------------------------------------------------
+
+/// Side-effect-free scheduled sim. Same shape as the live Voxel's
+/// `tick_liquid_cell` loop, minus the network / mesh / drop wiring.
+/// Tracks which cells got ticked via a `HashMap<pos, count>` for
+/// the no-cell-skipped assertions.
+struct ScheduledSim {
+    world: World,
+    level: HashMap<[i32; 3], u8>,
+    positions: HashSet<[i32; 3]>,
+    schedule: LiquidSchedule,
+    clock: u64,
+    /// Per-position tick count - lets a regression test prove every
+    /// cell processed at least once across the run.
+    tick_counts: HashMap<[i32; 3], u32>,
+}
+
+impl ScheduledSim {
+    fn new() -> Self {
+        let mut w = World::new();
+        for cx in -1..=1 {
+            for cy in -1..=1 {
+                for cz in -1..=1 {
+                    w.insert_chunk([cx, cy, cz], Chunk::empty());
+                }
+            }
+        }
+        Self {
+            world: w,
+            level: HashMap::new(),
+            positions: HashSet::new(),
+            schedule: LiquidSchedule::new(),
+            clock: 0,
+            tick_counts: HashMap::new(),
+        }
+    }
+    fn solid(&mut self, p: [i32; 3]) {
+        self.world.set(p, BlockId(1));
+    }
+    fn place_source(&mut self, p: [i32; 3], liquid: &Liquid) {
+        self.world.set(p, BlockId(liquid.block_id));
+        self.level.insert(p, 0);
+        self.positions.insert(p);
+        self.schedule
+            .schedule(p, self.clock + liquid.tick_period.max(1) as u64);
+    }
+    /// Mirror of `Voxel::world_set_tracked` for tests: when the
+    /// edit is liquid, schedule the new cell; either way, wake
+    /// adjacent liquid neighbours with delay 1.
+    fn set_block(&mut self, p: [i32; 3], block: BlockId, liquid: &Liquid) {
+        self.world.set(p, block);
+        if block.0 == liquid.block_id {
+            self.schedule
+                .schedule(p, self.clock + liquid.tick_period.max(1) as u64);
+            self.level.entry(p).or_insert(0);
+            self.positions.insert(p);
+        } else {
+            self.level.remove(&p);
+            self.positions.remove(&p);
+            self.schedule.cancel(p);
+        }
+        // 3x3x3 neighbour wake.
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let n = [p[0] + dx, p[1] + dy, p[2] + dz];
+                    if self.positions.contains(&n) {
+                        self.schedule.schedule(n, self.clock + 1);
+                    }
+                }
+            }
+        }
+    }
+    /// Process all due cells (no per-frame budget here - tests run
+    /// fast enough to drain the schedule every tick).
+    fn step(&mut self, liquid: &Liquid) {
+        self.clock = self.clock.wrapping_add(1);
+        let now = self.clock;
+        let delay = liquid.tick_period.max(1) as u64;
+        let liquid_id = liquid.block_id;
+        let dirs: [[i32; 3]; 6] = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+            [0, 1, 0],
+            [0, -1, 0],
+        ];
+        while let Some(pos) = self.schedule.pop_due(now) {
+            if self.world.get(pos).0 != liquid_id {
+                continue;
+            }
+            *self.tick_counts.entry(pos).or_insert(0) += 1;
+            let mut plan = super::plan::LiquidPlanStep::default();
+            let mut updates: HashMap<[i32; 3], (u8, bool)> = HashMap::new();
+            liquid_plan_cell(
+                &self.world,
+                &self.level,
+                pos,
+                liquid,
+                true,
+                &mut plan,
+                &mut updates,
+            );
+            plan.place = updates.into_iter().map(|(p, (l, f))| (p, l, f)).collect();
+            if plan.evaporate.is_empty()
+                && plan.decay.is_empty()
+                && plan.place.is_empty()
+            {
+                continue;
+            }
+            let mut scratch = HashSet::new();
+            let tape = liquid_apply_plan(
+                &mut self.world,
+                &mut self.level,
+                &mut scratch,
+                &mut self.positions,
+                liquid,
+                plan,
+            );
+            // Re-schedule placed/decayed/evaporated cells + 6
+            // neighbours, mirroring the live tick_liquid_cell.
+            for p in &tape.evaporated {
+                for d in &dirs {
+                    let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                    if self.world.get(n).0 == liquid_id {
+                        self.schedule.schedule(n, now + delay);
+                    }
+                }
+            }
+            for (p, _, _) in &tape.placed {
+                self.schedule.schedule(*p, now + delay);
+                for d in &dirs {
+                    let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                    if self.world.get(n).0 == liquid_id {
+                        self.schedule.schedule(n, now + delay);
+                    }
+                }
+            }
+            for (p, _) in &tape.decayed {
+                self.schedule.schedule(*p, now + delay);
+                for d in &dirs {
+                    let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                    if self.world.get(n).0 == liquid_id {
+                        self.schedule.schedule(n, now + delay);
+                    }
+                }
+            }
+        }
+    }
+    fn run(&mut self, liquid: &Liquid, frames: u32) {
+        for _ in 0..frames {
+            self.step(liquid);
+        }
+    }
+}
+
+/// 1000 source cells in a 32x32-tile pool (plus a flat floor under
+/// them). After 50 schedule sweeps every source must have ticked
+/// at least once - the old 8192 bulk cap got replaced by an
+/// unbounded heap, so no cell is silently skipped any longer.
+#[test]
+fn large_pool_no_cells_skipped() {
+    let mut sim = ScheduledSim::new();
+    // Stone floor under the pool.
+    for x in -16..16 {
+        for z in -16..16 {
+            sim.solid([x, 0, z]);
+        }
+    }
+    let mut placed: Vec<[i32; 3]> = Vec::with_capacity(1024);
+    // 32x32 = 1024 source cells > 1000.
+    for x in -16..16 {
+        for z in -16..16 {
+            let p = [x, 1, z];
+            sim.place_source(p, water());
+            placed.push(p);
+        }
+    }
+    assert!(placed.len() >= 1000, "test setup needs >=1000 cells");
+    sim.run(water(), 50);
+    // Every placed source must have processed at least one tick
+    // across the 50 frames - the schedule has no per-frame cap in
+    // this test rig.
+    for p in &placed {
+        let ticks = sim.tick_counts.get(p).copied().unwrap_or(0);
+        assert!(
+            ticks >= 1,
+            "source cell {p:?} was never ticked across 50 frames \
+             (regression: bulk cap reintroduced?)"
+        );
+    }
+}
+
+/// A small pool ticks until it settles, then the schedule must
+/// drain to zero. The old bulk model kept every cell in the
+/// `liquid_active` set forever and re-processed them every
+/// `tick_period` frames; the new per-cell model lets settled
+/// cells fall off the schedule once nothing changes.
+#[test]
+fn settled_pool_schedule_empty() {
+    let mut sim = ScheduledSim::new();
+    // 9x9 floor + a single source. Source will spread out to
+    // distance 7, settle, and stop scheduling itself.
+    for x in -8..=8 {
+        for z in -8..=8 {
+            sim.solid([x, 0, z]);
+        }
+    }
+    sim.place_source([0, 1, 0], water());
+    // Plenty of frames for the 7-radius pool to fully settle.
+    sim.run(water(), 80);
+    // Sanity: the pool reached the +x edge.
+    assert!(
+        sim.world.get([7, 1, 0]).0 == water().block_id,
+        "pool didn't spread before settling check"
+    );
+    // The schedule must be empty - no cell has a pending tick.
+    assert_eq!(
+        sim.schedule.len(),
+        0,
+        "settled pool left {} cells in the schedule",
+        sim.schedule.len()
+    );
+}
+
+/// A source far from any edit is settled. A `set_block` 4 cells
+/// away on the floor under the pool must wake the adjacent liquid
+/// neighbour cells - matches MC's `scheduleTick(neighbour, fluid,
+/// 1)` on `neighborChanged`. Without this wake, edits to the
+/// world's topology would freeze for a full `tick_period` before
+/// the spread re-evaluates.
+#[test]
+fn edit_near_liquid_wakes_neighbours() {
+    let mut sim = ScheduledSim::new();
+    for x in -8..=8 {
+        for z in -8..=8 {
+            sim.solid([x, 0, z]);
+        }
+    }
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 80);
+    assert_eq!(sim.schedule.len(), 0, "pool never settled before edit");
+    // Pick the liquid cell at distance 4 from the source.
+    let liq_pos = [4, 1, 0];
+    assert!(sim.positions.contains(&liq_pos), "spread didn't reach (4,1,0)");
+    // Edit a cell 1 step further away (5, 1, 0 is also liquid;
+    // edit a *non-liquid* solid block at (4, 0, 0) -- under the
+    // liquid - which is 4 cells away from (0,1,0) in horizontal
+    // distance via the floor edit). The 3x3 neighbour wake on
+    // the edit should pull liq_pos into the schedule.
+    let edit_pos = [4, 0, 0];
+    sim.set_block(edit_pos, BlockId::AIR, water());
+    // The liquid cell at distance 4 (and its neighbours) must
+    // now be scheduled, with a delay of 1..tick_period.
+    assert!(
+        sim.schedule.contains(liq_pos),
+        "edit at {edit_pos:?} didn't wake liquid at {liq_pos:?}"
+    );
+    // Drain the schedule for the next few frames - the wake
+    // schedule was clock+1, so within 1..tick_period (=10)
+    // frames the cell must actually fire.
+    let saved_tick = sim.tick_counts.get(&liq_pos).copied().unwrap_or(0);
+    for _ in 0..5 {
+        sim.step(water());
+    }
+    let new_tick = sim.tick_counts.get(&liq_pos).copied().unwrap_or(0);
+    assert!(
+        new_tick > saved_tick,
+        "liquid at {liq_pos:?} didn't actually tick within 5 frames of \
+         the edit (saved {saved_tick}, got {new_tick})"
+    );
 }
