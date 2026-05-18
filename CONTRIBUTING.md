@@ -14,6 +14,7 @@ By participating in this project you agree to abide by the [Code of Conduct](COD
 - **No `unsafe` without justification.** Any `unsafe` block must be accompanied by a `// SAFETY:` comment explaining the invariants the caller must uphold.
 - **No new top-level dependencies without an ADR.** If you want to add a non-trivial crate (a renderer, a physics lib, a scripting host), open an ADR in `docs/adr/` first.
 - **Public APIs should not re-export types from `wgpu`, `winit`, `bevy_ecs`, etc.** Wrap them. Upstream breaking changes should not cascade through our API.
+- **File-size policy.** New files keep functions under 100 lines, match arms under 20 lines, and the file itself under 500 lines (hard cap 1000). Plan a module folder + sub-modules BEFORE writing code, not after. Pre-existing oversized files are grandfathered but cannot grow further. See [`docs/design/file_size_policy.md`](docs/design/file_size_policy.md) for the per-phase folder layouts the project commits to.
 
 ## Development workflow
 
