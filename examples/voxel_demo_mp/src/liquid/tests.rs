@@ -1,0 +1,438 @@
+//! Behaviour tests for the liquid simulation. The pure helpers
+//! (`liquid_surface_height_at`, `distance_to_drop_at`,
+//! `liquid_corner_height_at`) are exercised directly; the tick loop
+//! is driven through `LiquidSim`, a minimal wrapper around the same
+//! `liquid_plan_step` / `liquid_apply_plan` / `liquid_merge_step`
+//! free fns the live `Voxel::tick_liquid_step` calls. Side effects
+//! (renderer / network / drops / edit history) are skipped - we only
+//! care about world state transitions here.
+
+use super::*;
+use super::mesh::liquid_surface_height_at;
+use crate::block::WATER_ID;
+use infengine_voxel::{BlockId, Chunk, World};
+use std::collections::{HashMap, HashSet};
+
+/// Side-effect-free liquid simulator for tests. Holds the minimal
+/// state set the pure planner/applier need, no renderer / network /
+/// mesh hookups.
+pub(crate) struct LiquidSim {
+    pub(crate) world: World,
+    pub(crate) level: HashMap<[i32; 3], u8>,
+    pub(crate) active: HashSet<[i32; 3]>,
+    pub(crate) positions: HashSet<[i32; 3]>,
+    pub(crate) bias_drops: bool,
+}
+
+impl LiquidSim {
+    pub(crate) fn new() -> Self {
+        // 3x3x3 chunk grid around origin -> writable coords
+        // [-16 .. 32) on each axis. Plenty of room for a 7-radius
+        // pool + a 10-tall pillar.
+        let mut w = World::new();
+        for cx in -1..=1 {
+            for cy in -1..=1 {
+                for cz in -1..=1 {
+                    w.insert_chunk([cx, cy, cz], Chunk::empty());
+                }
+            }
+        }
+        Self {
+            world: w,
+            level: HashMap::new(),
+            active: HashSet::new(),
+            positions: HashSet::new(),
+            bias_drops: true,
+        }
+    }
+    pub(crate) fn solid(&mut self, p: [i32; 3]) {
+        self.world.set(p, BlockId(1));
+    }
+    pub(crate) fn fill_floor(
+        &mut self,
+        y: i32,
+        x: std::ops::RangeInclusive<i32>,
+        z: std::ops::RangeInclusive<i32>,
+    ) {
+        for xx in x {
+            for zz in z.clone() {
+                self.solid([xx, y, zz]);
+            }
+        }
+    }
+    pub(crate) fn place_source(&mut self, p: [i32; 3], liquid: &Liquid) {
+        self.world.set(p, BlockId(liquid.block_id));
+        self.level.insert(p, 0);
+        self.active.insert(p);
+        self.positions.insert(p);
+    }
+    pub(crate) fn remove_voxel(&mut self, p: [i32; 3]) {
+        self.world.set(p, BlockId::AIR);
+        self.level.remove(&p);
+        self.active.remove(&p);
+        self.positions.remove(&p);
+        // Mirror `world_set_tracked` neighbour wake-up so adjacent
+        // liquid is re-queued for the next tick.
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let n = [p[0] + dx, p[1] + dy, p[2] + dz];
+                    if self.positions.contains(&n) {
+                        self.active.insert(n);
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn tick(&mut self, liquid: &Liquid) {
+        let plan = liquid_plan_step(
+            &self.world,
+            &self.level,
+            &self.active,
+            liquid,
+            self.bias_drops,
+        );
+        let _ = liquid_apply_plan(
+            &mut self.world,
+            &mut self.level,
+            &mut self.active,
+            &mut self.positions,
+            liquid,
+            plan,
+        );
+        if liquid.infinite_source {
+            let promoted = liquid_merge_step(&self.world, &self.level, liquid);
+            for p in promoted {
+                self.level.insert(p, 0);
+            }
+        }
+    }
+    pub(crate) fn run(&mut self, liquid: &Liquid, ticks: u32) {
+        for _ in 0..ticks {
+            self.tick(liquid);
+        }
+    }
+    pub(crate) fn is(&self, p: [i32; 3], liquid: &Liquid) -> bool {
+        self.world.get(p).0 == liquid.block_id
+    }
+    pub(crate) fn level_at(&self, p: [i32; 3]) -> Option<u8> {
+        self.level.get(&p).copied()
+    }
+}
+
+pub(crate) fn water() -> &'static Liquid {
+    &LIQUIDS[0]
+}
+fn mk_world() -> World {
+    // Single chunk at the origin so coords [0..16) on each axis are
+    // writable.
+    let mut w = World::new();
+    w.insert_chunk([0, 0, 0], Chunk::empty());
+    w
+}
+
+// -----------------------------------------------------------------
+// Pure helper tests: mesh height + drop BFS.
+// -----------------------------------------------------------------
+
+#[test]
+fn surface_source_is_full_block() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    map.insert([5, 5, 5], 0u8);
+    assert!(
+        (liquid_surface_height_at(&w, &map, [5, 5, 5], WATER_ID) - 1.0).abs()
+            < 1e-4
+    );
+}
+
+#[test]
+fn surface_flow_levels_ramp_down() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    for lvl in 1u8..=7 {
+        map.insert([5, 5, 5], lvl);
+        let h = liquid_surface_height_at(&w, &map, [5, 5, 5], WATER_ID);
+        let expected = (8 - lvl as i32).max(1) as f32 / 9.0;
+        assert!(
+            (h - expected).abs() < 1e-4,
+            "level {} -> {:.3}, want {:.3}",
+            lvl,
+            h,
+            expected
+        );
+    }
+}
+
+#[test]
+fn surface_falling_or_column_full_block() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    w.set([5, 6, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    map.insert([5, 5, 5], 7u8);
+    let h = liquid_surface_height_at(&w, &map, [5, 5, 5], WATER_ID);
+    assert!((h - 1.0).abs() < 1e-4);
+    let mut w2 = mk_world();
+    w2.set([5, 5, 5], BlockId(WATER_ID));
+    let mut map2 = HashMap::new();
+    map2.insert([5, 5, 5], 8u8);
+    let h2 = liquid_surface_height_at(&w2, &map2, [5, 5, 5], WATER_ID);
+    assert!((h2 - 1.0).abs() < 1e-4);
+}
+
+#[test]
+fn distance_to_drop_immediate() {
+    let w = mk_world();
+    assert_eq!(distance_to_drop_at(&w, [5, 5, 5], 4), 0);
+}
+
+#[test]
+fn distance_to_drop_solid_floor_unreachable() {
+    let mut w = mk_world();
+    for x in 0..16 {
+        for z in 0..16 {
+            w.set([x, 4, z], BlockId(1));
+        }
+    }
+    assert_eq!(distance_to_drop_at(&w, [5, 5, 5], 4), u32::MAX);
+}
+
+#[test]
+fn distance_to_drop_steps_to_cliff() {
+    let mut w = mk_world();
+    for x in 0..=8 {
+        for z in 0..16 {
+            w.set([x, 4, z], BlockId(1));
+        }
+    }
+    let d = distance_to_drop_at(&w, [5, 5, 5], 6);
+    assert!(d <= 4, "got {d}");
+    assert!(d > 0);
+}
+
+#[test]
+fn corner_height_all_water_flat() {
+    let mut w = mk_world();
+    for x in 4..=5 {
+        for z in 4..=5 {
+            w.set([x, 5, z], BlockId(WATER_ID));
+        }
+    }
+    let mut map = HashMap::new();
+    for x in 4..=5 {
+        for z in 4..=5 {
+            map.insert([x, 5, z], 0u8);
+        }
+    }
+    let h = liquid_corner_height_at(&w, &map, 4, 5, 4, 1, 1, WATER_ID);
+    assert!((h - 1.0).abs() < 1e-4, "got {h}");
+}
+
+#[test]
+fn corner_height_isolated_cell_tapers_slightly() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    map.insert([5, 5, 5], 0u8);
+    let h = liquid_corner_height_at(&w, &map, 5, 5, 5, 0, 0, WATER_ID);
+    assert!(
+        (0.70..0.85).contains(&h),
+        "isolated cell tip corner: got {h}, want ~0.77"
+    );
+    let h_far = liquid_corner_height_at(&w, &map, 5, 5, 5, 2, 2, WATER_ID);
+    assert!(h_far.abs() < 1e-4, "non-touching corner: got {h_far}");
+}
+
+#[test]
+fn corner_height_pool_joint_stays_high() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    w.set([6, 5, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    map.insert([5, 5, 5], 0u8);
+    map.insert([6, 5, 5], 0u8);
+    let joint = liquid_corner_height_at(&w, &map, 5, 5, 5, 1, 0, WATER_ID);
+    let tip = liquid_corner_height_at(&w, &map, 5, 5, 5, 0, 0, WATER_ID);
+    assert!(
+        joint > tip,
+        "joint corner ({joint}) should be higher than tip ({tip})"
+    );
+    assert!(
+        (0.85..0.95).contains(&joint),
+        "joint expected ~0.91, got {joint}"
+    );
+}
+
+#[test]
+fn corner_height_column_above_locks_full() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    w.set([5, 6, 5], BlockId(WATER_ID));
+    let mut map = HashMap::new();
+    map.insert([5, 5, 5], 7u8);
+    map.insert([5, 6, 5], 0u8);
+    let h = liquid_corner_height_at(&w, &map, 5, 5, 5, 0, 0, WATER_ID);
+    assert!((h - 1.0).abs() < 1e-4, "got {h}");
+}
+
+// -----------------------------------------------------------------
+// Behaviour tests: full sim through LiquidSim.
+// -----------------------------------------------------------------
+
+#[test]
+fn pour_on_flat_spreads_seven_blocks() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -12..=12, -12..=12);
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 30);
+    assert!(sim.is([7, 1, 0], water()), "+x distance 7 missing");
+    assert!(sim.is([-7, 1, 0], water()), "-x distance 7 missing");
+    assert!(sim.is([0, 1, 7], water()), "+z distance 7 missing");
+    assert!(sim.is([0, 1, -7], water()), "-z distance 7 missing");
+    assert!(!sim.is([8, 1, 0], water()), "+x distance 8 should stay air");
+    assert!(!sim.is([0, 1, 8], water()), "+z distance 8 should stay air");
+    assert_eq!(sim.level_at([0, 1, 0]), Some(0), "source corrupted");
+}
+
+#[test]
+fn pour_off_pillar_falls_then_pools() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(-2, -8..=8, -8..=8);
+    for y in -1..=10 {
+        sim.solid([0, y, 0]);
+    }
+    sim.place_source([0, 11, 0], water());
+    sim.run(water(), 60);
+    assert_eq!(sim.level_at([0, 11, 0]), Some(0));
+    assert!(sim.is([1, 5, 0], water()), "+x column gap at y=5");
+    assert!(
+        !sim.is([2, 5, 0], water()),
+        "column fanned out mid-air at +x"
+    );
+    assert!(
+        !sim.is([1, 5, 1], water()),
+        "column fanned out mid-air at +z of +x column"
+    );
+    assert!(sim.is([1, -1, 0], water()), "+x base pool missing");
+    assert!(sim.is([-1, -1, 0], water()), "-x base pool missing");
+    assert!(sim.is([0, -1, 1], water()), "+z base pool missing");
+}
+
+#[test]
+fn two_sources_closed_one_three_make_middle_source() {
+    let mut sim = LiquidSim::new();
+    for x in 0..=2 {
+        sim.solid([x, -1, 0]);
+        sim.solid([x, 0, 1]);
+        sim.solid([x, 0, -1]);
+    }
+    sim.solid([-1, 0, 0]);
+    sim.solid([3, 0, 0]);
+    sim.place_source([0, 0, 0], water());
+    sim.place_source([2, 0, 0], water());
+    sim.run(water(), 10);
+    assert!(sim.is([1, 0, 0], water()), "middle cell didn't fill");
+    assert_eq!(
+        sim.level_at([1, 0, 0]),
+        Some(0),
+        "middle cell didn't promote to source"
+    );
+}
+
+#[test]
+fn two_sources_open_drain_no_middle_source() {
+    let mut sim = LiquidSim::new();
+    for x in 0..=2 {
+        sim.solid([x, -1, 0]);
+        sim.solid([x, 0, -1]);
+    }
+    sim.solid([0, 0, 1]);
+    sim.solid([2, 0, 1]);
+    sim.solid([-1, 0, 0]);
+    sim.solid([3, 0, 0]);
+    sim.place_source([0, 0, 0], water());
+    sim.place_source([2, 0, 0], water());
+    sim.run(water(), 20);
+    assert!(sim.is([1, 0, 0], water()), "middle cell didn't fill");
+    assert_ne!(
+        sim.level_at([1, 0, 0]),
+        Some(0),
+        "middle wrongly promoted despite open drain"
+    );
+}
+
+#[test]
+fn source_removal_drains_gradually() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -10..=10, -10..=10);
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 30);
+    assert!(
+        sim.is([5, 1, 0], water()),
+        "pool didn't fill before source removal"
+    );
+    sim.remove_voxel([0, 1, 0]);
+    sim.run(water(), 80);
+    for x in -8..=8 {
+        for z in -8..=8 {
+            let p = [x, 1, z];
+            assert!(!sim.is(p, water()), "{p:?} still water after drain");
+        }
+    }
+}
+
+#[test]
+fn source_on_cliff_no_flicker() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(-2, -6..=6, -6..=6);
+    sim.solid([0, 9, 0]);
+    sim.place_source([0, 10, 0], water());
+    sim.run(water(), 30);
+    for _ in 0..10 {
+        sim.tick(water());
+        assert!(sim.is([0, 10, 0], water()), "source itself vanished");
+        assert!(
+            sim.is([1, 10, 0], water()),
+            "+x falling cell flickered"
+        );
+    }
+}
+
+#[test]
+fn source_above_air_no_flicker() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(-2, -6..=6, -6..=6);
+    sim.place_source([0, 5, 0], water());
+    sim.run(water(), 15);
+    for _ in 0..10 {
+        sim.tick(water());
+        assert!(
+            sim.is([0, 4, 0], water()),
+            "cell directly below source flickered (source-on-cliff bug)"
+        );
+    }
+}
+
+#[test]
+fn two_streams_meet_strongest_wins() {
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -10..=10, -10..=10);
+    sim.place_source([-3, 1, 0], water());
+    sim.place_source([4, 1, 0], water());
+    sim.run(water(), 30);
+    let lvl = sim.level_at([0, 1, 0]).expect("meeting cell empty");
+    assert_eq!(
+        lvl, 3,
+        "expected stronger (-3) side to win with level 3, got {lvl}"
+    );
+}
+
+// Regression tests for the source-removal cliff drainage bug land
+// in a follow-up commit so the algorithm + split is reviewable in
+// isolation.
