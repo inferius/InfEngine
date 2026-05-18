@@ -340,6 +340,38 @@ fn pour_biases_toward_hole_through_existing_water() {
     }
 }
 
+/// Regression for Bug 2: source on a 1x1 stone perch surrounded
+/// by air must spread sideways onto the perch's NSEW (where below
+/// is air = cliff drop). Those side flows then cascade falling all
+/// the way down. Catches a regression where horizontal spread over
+/// a cliff edge gets dropped because the perch's `below` blocks
+/// but every side is a drop.
+#[test]
+fn source_on_perch_pours_over_every_side() {
+    let mut sim = LiquidSim::new();
+    // Floor far below so falling water lands somewhere.
+    sim.fill_floor(-5, -6..=6, -6..=6);
+    // 1x1 stone perch at (0,0,0). Air everywhere else around the
+    // perch column above the floor.
+    sim.solid([0, 0, 0]);
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 30);
+    assert_eq!(sim.level_at([0, 1, 0]), Some(0), "source vanished");
+    // Every side spawns a falling column from y=0 down to y=-4
+    // (the floor sits at y=-5).
+    let dirs: [[i32; 2]; 4] =
+        [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for d in dirs {
+        for y in -4..=0 {
+            let p = [d[0], y, d[1]];
+            assert!(
+                sim.is(p, water()),
+                "expected water at {p:?} (cliff-edge cascade)"
+            );
+        }
+    }
+}
+
 #[test]
 fn pour_off_pillar_falls_then_pools() {
     let mut sim = LiquidSim::new();
