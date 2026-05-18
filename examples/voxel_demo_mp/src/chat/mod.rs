@@ -19,6 +19,8 @@
 //! `chat_history`, `chat_open`, `chat_history_idx`. This module
 //! is pure logic on top of that state.
 
+mod cmds_chat;
+
 use std::collections::HashSet;
 
 use glam::Vec3;
@@ -83,32 +85,7 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
         let mut local_lines: Vec<String> = Vec::new();
         match cmd.as_str() {
             "help" | "?" => {
-                // Split into themed sections so the
-                // chat log shows them line by line
-                // instead of one ugly wrap.
-                local_lines.push(
-                    "Chat: /help /players /clear /me /w /wave /shrug /dance"
-                        .to_string(),
-                );
-                local_lines.push(
-                    "Player: /spawn /tp /tppos /home /sethome /setspawn /pos /stuck /heal /kill /stats /uptime /version"
-                        .to_string(),
-                );
-                local_lines.push(
-                    "Creative: /give /clearinventory /resetinventory /fly /godmode /freezetime"
-                        .to_string(),
-                );
-                local_lines.push(
-                    "World: /day /night /time /sleep /weather /seed /setblock /fill /explode /worldgen /clearedits /rd /chunkinfo"
-                        .to_string(),
-                );
-                local_lines.push(
-                    "Host MP: /summon /kick /announce /mute /unmute /save /horde /spawnmob /killmobs /dmg"
-                        .to_string(),
-                );
-                local_lines.push(
-                    "Misc: /fw /recipe /randomtp".to_string(),
-                );
+                cmds_chat::cmd_help(voxel, arg, &mut local_lines);
             }
             "day" => {
                 // Snap day_time to mid-morning.
@@ -2393,59 +2370,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "wave" | "shrug" | "dance" => {
-                // Built-in emote shortcuts: each one
-                // is a canned /me line broadcast via
-                // the existing chat path. Keeps the
-                // chat log readable + lets remote
-                // peers see the action.
-                let line = match cmd.as_str() {
-                    "wave" => "waves",
-                    "shrug" => {
-                        "shrugs (\\_(\u{30C4})_/)"
-                    }
-                    _ => "dances",
-                };
-                let cfg = bincode::config::standard();
-                match &mut voxel.net {
-                    NetRole::Offline => {
-                        voxel.chat_log.push((
-                            std::time::Instant::now(),
-                            format!(
-                                "* {} {line}",
-                                voxel.player_name
-                            ),
-                        ));
-                    }
-                    NetRole::Server { server, .. } => {
-                        let line = format!(
-                            "* {} {line}",
-                            voxel.player_name
-                        );
-                        voxel.chat_log.push((
-                            std::time::Instant::now(),
-                            line.clone(),
-                        ));
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(
-                                &line, cfg,
-                            )
-                        {
-                            server.broadcast_bytes("vx.chat", buf);
-                        }
-                    }
-                    NetRole::Client { client, .. } => {
-                        let emote = format!("* {line}");
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(
-                                &emote, cfg,
-                            )
-                        {
-                            let _ = client
-                                .send_bytes("vx.chat", buf);
-                        }
-                    }
-                }
-                handled_locally = true;
+                handled_locally |= cmds_chat::cmd_emote(
+                    voxel,
+                    cmd.as_str(),
+                    &mut local_lines,
+                );
             }
             "fw" | "firework" => {
                 // Spawn a vertical rocket trail of
@@ -2870,80 +2799,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "w" | "whisper" | "tell" | "msg" => {
-                // Private message routed via the
-                // server. Host short-circuits to a
-                // local lookup when whispering itself
-                // / a local peer.
-                let mut parts = arg.splitn(2, char::is_whitespace);
-                let target = parts.next().unwrap_or("").trim();
-                let body = parts.next().unwrap_or("").trim();
-                if target.is_empty() || body.is_empty() {
-                    local_lines.push(
-                        "Usage: /w <name> <message>".to_string(),
-                    );
-                } else {
-                    let target_id = voxel
-                        .player_names
-                        .iter()
-                        .find(|(_, n)| {
-                            n.eq_ignore_ascii_case(target)
-                        })
-                        .map(|(id, _)| *id);
-                    match target_id {
-                        None => {
-                            local_lines.push(format!(
-                                "No player named {target}."
-                            ));
-                        }
-                        Some(target_id) => {
-                            let cfg = bincode::config::standard();
-                            let line_in = format!(
-                                "[whisper to {target}] {body}"
-                            );
-                            let line_out = format!(
-                                "[whisper from {}] {body}",
-                                voxel.player_name
-                            );
-                            voxel.chat_log.push((
-                                std::time::Instant::now(),
-                                line_in,
-                            ));
-                            match &mut voxel.net {
-                                NetRole::Offline => {
-                                    // No-op offline.
-                                }
-                                NetRole::Server { server, .. } => {
-                                    if target_id != 0
-                                        && let Ok(buf) =
-                                            bincode::serde::encode_to_vec(
-                                                &line_out, cfg,
-                                            )
-                                    {
-                                        server.send_bytes_to_client(
-                                            target_id,
-                                            "vx.chat",
-                                            buf,
-                                        );
-                                    }
-                                }
-                                NetRole::Client { client, .. } => {
-                                    let payload = format!(
-                                        "\u{1}whisper\u{1}{target_id}\u{1}{body}"
-                                    );
-                                    if let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            &payload, cfg,
-                                        )
-                                    {
-                                        let _ = client
-                                            .send_bytes("vx.chat", buf);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |= cmds_chat::cmd_whisper(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "tp" => {
                 // /tp <name>: teleport the local
@@ -2996,81 +2856,15 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 }
             }
             "players" | "who" => {
-                let mut names: Vec<&String> =
-                    voxel.player_names.values().collect();
-                names.sort_by(|a, b| {
-                    a.to_lowercase().cmp(&b.to_lowercase())
-                });
-                let joined: Vec<String> =
-                    names.into_iter().cloned().collect();
-                let summary = if joined.is_empty() {
-                    "(no peers known yet)".to_string()
-                } else {
-                    joined.join(", ")
-                };
-                local_lines.push(format!(
-                    "Players ({}): {summary}",
-                    voxel.player_names.len()
-                ));
+                cmds_chat::cmd_players(voxel, arg, &mut local_lines);
             }
             "clear" => {
-                voxel.chat_log.clear();
-                handled_locally = true;
+                handled_locally |=
+                    cmds_chat::cmd_clear(voxel, arg, &mut local_lines);
             }
             "me" => {
-                if !arg.is_empty() {
-                    // /me <action> -> broadcast as
-                    // "* name action" so other players
-                    // see an emote, not a command.
-                    let action = arg.to_string();
-                    match &voxel.net {
-                        NetRole::Offline => {
-                            local_lines.push(format!(
-                                "* {} {action}",
-                                voxel.player_name
-                            ));
-                        }
-                        NetRole::Server { server, .. } => {
-                            let line = format!(
-                                "* {} {action}",
-                                voxel.player_name
-                            );
-                            voxel.chat_log.push((
-                                std::time::Instant::now(),
-                                line.clone(),
-                            ));
-                            if let Ok(buf) =
-                                bincode::serde::encode_to_vec(
-                                    &line,
-                                    bincode::config::standard(),
-                                )
-                            {
-                                server.broadcast_bytes("vx.chat", buf);
-                            }
-                        }
-                        NetRole::Client { client, .. } => {
-                            // Smuggle the emote through
-                            // the normal chat path so
-                            // the server tags it; the
-                            // server doesn't know /me
-                            // specifically.
-                            let emote = format!("* {action}");
-                            if let Ok(buf) =
-                                bincode::serde::encode_to_vec(
-                                    &emote,
-                                    bincode::config::standard(),
-                                )
-                            {
-                                let _ = client
-                                    .send_bytes("vx.chat", buf);
-                            }
-                        }
-                    }
-                    handled_locally = true;
-                } else {
-                    local_lines
-                        .push("Usage: /me <action>".to_string());
-                }
+                handled_locally |=
+                    cmds_chat::cmd_me(voxel, arg, &mut local_lines);
             }
             _ => {
                 local_lines.push(format!("Unknown command: /{cmd}"));
