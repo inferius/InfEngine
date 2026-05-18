@@ -5015,6 +5015,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]

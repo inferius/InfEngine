@@ -215,3 +215,7 @@ fn write_meta_overwrites_existing() {
     assert_eq!(loaded.name, "Second");
     assert_eq!(loaded.play_time_seconds, 99);
 }
+
+// Phase B.2 per-chunk persistence (`chunks.rs`) is exercised by the
+// sibling `chunks_tests.rs` module - kept separate so this file stays
+// under the 500-LOC soft cap.

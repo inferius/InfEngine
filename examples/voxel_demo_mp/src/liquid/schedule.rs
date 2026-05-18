@@ -117,6 +117,7 @@ impl LiquidSchedule {
     }
 
     /// True if `pos` is currently queued for a future tick.
+    #[allow(dead_code)]
     pub(crate) fn contains(&self, pos: [i32; 3]) -> bool {
         self.pending.contains(&pos)
     }
