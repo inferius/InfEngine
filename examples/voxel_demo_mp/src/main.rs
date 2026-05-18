@@ -16334,6 +16334,13 @@ fn liquid_plan_step(
             put_water_update(&mut updates, n, next_level, false, max_range);
         }
     }
+    // Phase 2: for every non-source flow cell not receiving a
+    // fresh push write this tick, run MC's `getNewLiquid` pull
+    // recompute. The cell takes max(neighbour amounts) - drop_off
+    // (i.e. min(neighbour levels) + drop_off in our inverted
+    // convention). If no liquid neighbour exists at all, the cell
+    // evaporates immediately - faster than the old +1 decay,
+    // which leaked a 7-tick tail when a source disappeared.
     for pos in &candidates {
         let level = level_map.get(pos).copied().unwrap_or(0);
         if level == 0 {
@@ -16342,15 +16349,65 @@ fn liquid_plan_step(
         if updates.contains_key(pos) {
             continue;
         }
-        let new_level = if level == 8 { 9 } else { level + 1 };
-        if new_level > max_range {
-            plan.evaporate.push(*pos);
-        } else {
-            plan.decay.push((*pos, new_level));
+        match liquid_get_new_state(world, level_map, *pos, liquid) {
+            Some((new_level, _falling)) if new_level != level => {
+                plan.decay.push((*pos, new_level));
+            }
+            Some(_) => {
+                // Unchanged - skip the write so the mesh stays clean.
+            }
+            None => {
+                plan.evaporate.push(*pos);
+            }
         }
     }
     plan.place = updates.into_iter().map(|(p, (l, f))| (p, l, f)).collect();
     plan
+}
+
+/// MC `FlowingFluid.getNewLiquid` port. Pulls the cell's
+/// "preferred" state from its surroundings: a same-liquid cell
+/// directly above turns this cell into a falling column at
+/// amount 8 (our level 8 marker); otherwise the level is
+/// `min(neighbour_levels) + drop_off`. Returns `None` when the
+/// cell should evaporate (no liquid neighbour + no column
+/// above, or the new level would exceed `max_range`).
+///
+/// Source promotion (neighbourSources >= 2 + below solid /
+/// source) lives in the separate `liquid_merge_step` with our
+/// stricter stability check, so it is NOT replicated here.
+fn liquid_get_new_state(
+    world: &World,
+    level_map: &HashMap<[i32; 3], u8>,
+    pos: [i32; 3],
+    liquid: &Liquid,
+) -> Option<(u8, bool)> {
+    let liquid_id = liquid.block_id;
+    // Above same liquid -> full-height falling stream.
+    if world.get([pos[0], pos[1] + 1, pos[2]]).0 == liquid_id {
+        return Some((8, true));
+    }
+    // Horizontal pull: find the strongest same-liquid neighbour
+    // (lowest level in our convention). Falling neighbours
+    // contribute as level 1 (MC: FALLING override -> amount 7).
+    let dirs: [[i32; 3]; 4] =
+        [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
+    let mut min_n: Option<u8> = None;
+    for d in &dirs {
+        let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+        if world.get(n).0 != liquid_id {
+            continue;
+        }
+        let nl = level_map.get(&n).copied().unwrap_or(0);
+        let effective = if nl >= 8 { 1 } else { nl };
+        min_n = Some(min_n.map_or(effective, |m| m.min(effective)));
+    }
+    let m = min_n?;
+    let new_level = m.saturating_add(liquid.drop_off);
+    if new_level > liquid.max_range {
+        return None;
+    }
+    Some((new_level, false))
 }
 
 /// Apply a `LiquidPlanStep` to the world. Mutates `world`,
