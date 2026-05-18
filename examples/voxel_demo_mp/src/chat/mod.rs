@@ -20,6 +20,7 @@
 //! is pure logic on top of that state.
 
 mod cmds_chat;
+mod cmds_player;
 
 use std::collections::HashSet;
 
@@ -94,92 +95,12 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "heal" => {
-                // Refill HP. Without args heals
-                // self; with /heal <name> + host
-                // role, sends a vx.damage with a
-                // negative amount to that peer's
-                // client so its HP refills.
-                if arg.is_empty() {
-                    voxel.player_health = PLAYER_MAX_HEALTH;
-                    voxel.regen_accum = 0.0;
-                    voxel.hurt_flash = 0.0;
-                    voxel.heartbeat_accum = 0.0;
-                    local_lines
-                        .push("Healed to full.".to_string());
-                } else if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/heal <name> is host-only.".to_string(),
-                    );
-                } else {
-                    // Allow `/heal <name> <amount>`
-                    // so a host can top up a peer by
-                    // an exact value instead of full
-                    // refill.
-                    let mut parts =
-                        arg.splitn(2, char::is_whitespace);
-                    let target =
-                        parts.next().unwrap_or("").trim();
-                    let amount: f32 = parts
-                        .next()
-                        .and_then(|s| s.parse::<f32>().ok())
-                        .unwrap_or(100.0);
-                    let target_id = voxel
-                        .player_names
-                        .iter()
-                        .find(|(_, n)| {
-                            n.eq_ignore_ascii_case(target)
-                        })
-                        .map(|(id, _)| *id);
-                    match target_id {
-                        None => local_lines.push(format!(
-                            "No player named {target}."
-                        )),
-                        Some(0) => {
-                            voxel.player_health = (voxel
-                                .player_health
-                                + amount)
-                                .min(PLAYER_MAX_HEALTH);
-                            local_lines.push(format!(
-                                "Healed self by {amount}."
-                            ));
-                        }
-                        Some(id) => {
-                            let cfg =
-                                bincode::config::standard();
-                            if let NetRole::Server {
-                                server, ..
-                            } = &mut voxel.net
-                                && let Ok(buf) =
-                                    bincode::serde::encode_to_vec(
-                                        DamageMsg {
-                                            amount: -amount,
-                                        },
-                                        cfg,
-                                    )
-                            {
-                                server.send_bytes_to_client(
-                                    id,
-                                    "vx.damage",
-                                    buf,
-                                );
-                            }
-                            local_lines.push(format!(
-                                "Healed {target} for {amount}."
-                            ));
-                        }
-                    }
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_heal(voxel, arg, &mut local_lines);
             }
             "kill" => {
-                // Force the player's HP to zero so
-                // the existing apply_player_damage
-                // death path runs (drops, respawn,
-                // chat broadcast). Useful for testing
-                // + when stuck in geometry.
-                let dmg = voxel.player_health + 1.0;
-                voxel.apply_player_damage(dmg);
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_kill(voxel, arg, &mut local_lines);
             }
             "seed" => {
                 // /seed prints the active value;
@@ -242,17 +163,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "stats" => {
-                // Per-session stats. Pairs naturally
-                // with /uptime + /pos for a quick
-                // status dump.
-                local_lines.push(format!(
-                    "Kills: {}  broke: {}  placed: {}  walked: {:.0} m",
-                    voxel.kill_count,
-                    voxel.blocks_broken,
-                    voxel.blocks_placed,
-                    voxel.distance_walked,
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_stats(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "listblocks" | "blocks" => {
                 // Dump every known block name in
@@ -331,49 +246,18 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "uptime" => {
-                // Session timer formatted as hh:mm:ss.
-                let secs = voxel
-                    .session_started
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
-                let h = secs / 3600;
-                let m = (secs % 3600) / 60;
-                let s = secs % 60;
-                local_lines.push(format!(
-                    "Uptime: {h:02}:{m:02}:{s:02}"
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_uptime(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "setname" => {
-                // Change local player_name. In MP
-                // the server's Hello-registered name
-                // stays the original (UDP layer
-                // doesn't expose rename), but the
-                // chat tag + nameplate use the new
-                // name and the next vx.names roster
-                // sync may pick it up.
-                let trimmed: String = arg
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .take(24)
-                    .collect();
-                if trimmed.is_empty() {
-                    local_lines.push(
-                        "Usage: /setname <name>".to_string(),
-                    );
-                } else {
-                    voxel.player_name = trimmed.clone();
-                    if let NetRole::Server { .. } = &voxel.net
-                    {
-                        voxel.player_names
-                            .insert(0, trimmed.clone());
-                    }
-                    voxel.save_config();
-                    local_lines.push(format!(
-                        "Name set to {trimmed}."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_setname(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "motd" => {
                 let lines = Voxel::motd_lines();
@@ -426,19 +310,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "version" | "ver" => {
-                // Print the build's CARGO_PKG_VERSION
-                // plus the active net role so quick
-                // diagnostic chat doesn't need F3.
-                let role = match &voxel.net {
-                    NetRole::Offline => "offline",
-                    NetRole::Server { .. } => "host",
-                    NetRole::Client { .. } => "client",
-                };
-                local_lines.push(format!(
-                    "voxel_demo_mp v{}  [{role}]",
-                    env!("CARGO_PKG_VERSION")
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_version(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "save" => {
                 // Flush the world state (edit
@@ -913,37 +789,15 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "sethome" => {
-                // Stash the player's current pose for
-                // /home recall. Saved to disk along
-                // with the rest of the config on the
-                // next Settings exit.
-                voxel.home_pos = Some([
-                    voxel.player_pos.x,
-                    voxel.player_pos.y,
-                    voxel.player_pos.z,
-                ]);
-                voxel.save_config();
-                local_lines.push("Home set.".to_string());
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_sethome(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "home" => {
-                // Teleport back to the saved home, if
-                // any. Velocity zeroed so no fall
-                // damage on landing.
-                if let Some(p) = voxel.home_pos {
-                    voxel.player_pos =
-                        Vec3::new(p[0], p[1], p[2]);
-                    voxel.player_vel = Vec3::ZERO;
-                    voxel.fall_start_y = None;
-                    local_lines
-                        .push("Teleported home.".to_string());
-                } else {
-                    local_lines.push(
-                        "No home set. Use /sethome first."
-                            .to_string(),
-                    );
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_home(voxel, arg, &mut local_lines);
             }
             "setblock" => {
                 // /setblock x y z block: place a
@@ -1441,27 +1295,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "fov" => {
-                // /fov <deg>: clamp 30..=110, set
-                // base camera FOV. The sprint widen
-                // adds on top so /fov 100 still
-                // bumps to ~110 when sprinting.
-                if arg.is_empty() {
-                    let cur = voxel.fov_y_rad.to_degrees();
-                    local_lines.push(format!(
-                        "FOV: {cur:.0} deg"
-                    ));
-                } else if let Ok(v) = arg.parse::<f32>() {
-                    let deg = v.clamp(30.0, 110.0);
-                    voxel.fov_y_rad = deg.to_radians();
-                    local_lines.push(format!(
-                        "FOV set to {deg:.0} deg."
-                    ));
-                } else {
-                    local_lines.push(format!(
-                        "Cannot parse FOV: {arg}"
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_fov(voxel, arg, &mut local_lines);
             }
             "rd" | "renderdistance" => {
                 // Without args: report current view
@@ -1606,33 +1441,15 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "godmode" | "god" => {
-                voxel.god_mode = !voxel.god_mode;
-                voxel.save_config();
-                local_lines.push(format!(
-                    "Godmode {}",
-                    if voxel.god_mode { "ON" } else { "OFF" }
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_godmode(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "fly" => {
-                // Toggle the local fly mode flag. The
-                // movement integrator reads it; off
-                // by default so a vanilla player
-                // experience is unchanged.
-                voxel.fly_mode = !voxel.fly_mode;
-                voxel.save_config();
-                if voxel.fly_mode {
-                    voxel.player_vel = Vec3::ZERO;
-                    voxel.fall_start_y = None;
-                    local_lines.push(
-                        "Fly mode ON. Space = up, Shift = down."
-                            .to_string(),
-                    );
-                } else {
-                    local_lines
-                        .push("Fly mode OFF.".to_string());
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_fly(voxel, arg, &mut local_lines);
             }
             "night" => {
                 // Snap day_time to midnight.
@@ -2247,88 +2064,19 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "tppos" | "goto" => {
-                // Teleport to literal coords. Usage:
-                // /tppos <x> <y> <z>. Velocity zeroed
-                // + fall tracker reset so no fall
-                // damage on landing.
-                let coords: Vec<&str> =
-                    arg.split_whitespace().collect();
-                if coords.len() != 3 {
-                    local_lines.push(
-                        "Usage: /tppos <x> <y> <z>".to_string(),
-                    );
-                } else {
-                    match (
-                        coords[0].parse::<f32>(),
-                        coords[1].parse::<f32>(),
-                        coords[2].parse::<f32>(),
-                    ) {
-                        (Ok(x), Ok(y), Ok(z)) => {
-                            voxel.player_pos = Vec3::new(x, y, z);
-                            voxel.player_vel = Vec3::ZERO;
-                            voxel.fall_start_y = None;
-                            local_lines.push(format!(
-                                "Teleported to ({x:.1}, {y:.1}, {z:.1})."
-                            ));
-                        }
-                        _ => {
-                            local_lines.push(
-                                "Coords must be numbers."
-                                    .to_string(),
-                            );
-                        }
-                    }
-                }
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_tppos(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "face" => {
-                // Snap the player yaw to a cardinal
-                // bearing. /face n|e|s|w. yaw=0 ->
-                // +X (east) per the rest of the demo.
-                let yaw = match arg.to_lowercase().as_str() {
-                    "e" | "east" => Some(0.0_f32),
-                    "n" | "north" => {
-                        Some(std::f32::consts::FRAC_PI_2)
-                    }
-                    "w" | "west" => {
-                        Some(std::f32::consts::PI)
-                    }
-                    "s" | "south" => Some(
-                        3.0 * std::f32::consts::FRAC_PI_2,
-                    ),
-                    _ => None,
-                };
-                match yaw {
-                    Some(y) => {
-                        voxel.player_yaw = y;
-                        voxel.player_pitch = 0.0;
-                        local_lines.push(format!(
-                            "Facing {arg}."
-                        ));
-                    }
-                    None => {
-                        local_lines.push(
-                            "Usage: /face n|e|s|w"
-                                .to_string(),
-                        );
-                    }
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_face(voxel, arg, &mut local_lines);
             }
             "pos" => {
-                // Print precise pose. Pairs with the
-                // HUD-line XYZ readout (which is
-                // rounded) for when the player needs
-                // exact coordinates to /tppos back to.
-                local_lines.push(format!(
-                    "Pos: ({:.2}, {:.2}, {:.2})  yaw: {:.2}  pitch: {:.2}",
-                    voxel.player_pos.x,
-                    voxel.player_pos.y,
-                    voxel.player_pos.z,
-                    voxel.player_yaw,
-                    voxel.player_pitch,
-                ));
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_pos(voxel, arg, &mut local_lines);
             }
             "mute" => {
                 if arg.is_empty() {
@@ -2728,75 +2476,36 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "jump" => {
-                // Launches the local player straight
-                // up. Default 12 m/s; arg sets the
-                // vertical velocity directly (clamped
-                // 1..=50). Fall damage still applies
-                // on landing - this is a launch, not
-                // a teleport. Stamina untouched.
-                let strength: f32 = arg
-                    .parse::<f32>()
-                    .ok()
-                    .unwrap_or(12.0)
-                    .clamp(1.0, 50.0);
-                voxel.player_vel.y = strength;
-                voxel.grounded = false;
-                voxel.fall_start_y = Some(voxel.player_pos.y);
-                local_lines.push(format!(
-                    "Launched at {strength:.0} m/s."
-                ));
-                handled_locally = true;
+                handled_locally |=
+                    cmds_player::cmd_jump(voxel, arg, &mut local_lines);
             }
             "stuck" | "unstuck" => {
-                // Quick rescue: punch the player 3
-                // blocks straight up + zero velocity.
-                // Useful when wedged inside geometry
-                // or buried by /explode debris.
-                voxel.player_pos.y += 3.0;
-                voxel.player_vel = Vec3::ZERO;
-                voxel.fall_start_y = None;
-                local_lines
-                    .push("Lifted 3 blocks up.".to_string());
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_stuck(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "spawnpoint" => {
-                // Read-only counterpart to /setspawn:
-                // print the configured respawn point
-                // or call out the origin fallback.
-                match voxel.spawn_pos {
-                    Some(p) => local_lines.push(format!(
-                        "Spawn: ({:.1}, {:.1}, {:.1})",
-                        p[0], p[1], p[2]
-                    )),
-                    None => local_lines.push(
-                        "Spawn: origin (auto)".to_string(),
-                    ),
-                }
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_spawnpoint(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "setspawn" => {
-                voxel.spawn_pos = Some([
-                    voxel.player_pos.x,
-                    voxel.player_pos.y,
-                    voxel.player_pos.z,
-                ]);
-                voxel.save_config();
-                local_lines.push(
-                    "Respawn point updated.".to_string(),
+                handled_locally |= cmds_player::cmd_setspawn(
+                    voxel,
+                    arg,
+                    &mut local_lines,
                 );
-                handled_locally = true;
             }
             "spawn" => {
-                // Snap to the configured spawn or
-                // the terrain-aware fallback. Avoids
-                // dropping the player inside stone
-                // when the seed put a mountain at
-                // the origin column.
-                voxel.player_pos = voxel.safe_spawn();
-                voxel.player_vel = Vec3::ZERO;
-                voxel.fall_start_y = None;
-                local_lines.push("Teleported to spawn.".to_string());
-                handled_locally = true;
+                handled_locally |= cmds_player::cmd_spawn(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "w" | "whisper" | "tell" | "msg" => {
                 handled_locally |= cmds_chat::cmd_whisper(
@@ -2806,54 +2515,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "tp" => {
-                // /tp <name>: teleport the local
-                // player to the pose of the named
-                // peer. Works in any role - the
-                // server uses `poses`, clients use
-                // `remote_interp` since `remote`
-                // mirrors the same data either way.
-                if arg.is_empty() {
-                    local_lines.push("Usage: /tp <name>".to_string());
-                } else {
-                    let target_id = voxel
-                        .player_names
-                        .iter()
-                        .find(|(_, n)| {
-                            n.eq_ignore_ascii_case(arg)
-                        })
-                        .map(|(id, _)| *id);
-                    if let Some(id) = target_id {
-                        let pose: Option<[f32; 3]> = match &voxel.net {
-                            NetRole::Offline => None,
-                            NetRole::Server { poses, .. } => {
-                                poses.get(&id).map(|p| p.pos)
-                            }
-                            NetRole::Client { remote, .. } => {
-                                remote.get(&id).map(|p| p.pos)
-                            }
-                        };
-                        if let Some(p) = pose {
-                            voxel.player_pos = Vec3::new(
-                                p[0],
-                                p[1] + 0.1,
-                                p[2],
-                            );
-                            voxel.player_vel = Vec3::ZERO;
-                            voxel.fall_start_y = None;
-                            local_lines.push(format!(
-                                "Teleported to {arg}."
-                            ));
-                        } else {
-                            local_lines.push(format!(
-                                "No pose known for {arg} yet."
-                            ));
-                        }
-                    } else {
-                        local_lines
-                            .push(format!("No player named {arg}."));
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |=
+                    cmds_player::cmd_tp(voxel, arg, &mut local_lines);
             }
             "players" | "who" => {
                 cmds_chat::cmd_players(voxel, arg, &mut local_lines);
