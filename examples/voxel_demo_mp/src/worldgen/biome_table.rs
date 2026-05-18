@@ -183,4 +183,38 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn realistic_seed_0_produces_every_biome() {
+        use crate::worldgen::climate::climate_at;
+        use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
+        let _g = TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_world_seed(0);
+        let mut seen = [false; 11];
+        // Sweep a 1024x1024 region in 4-cell steps. Realistic's
+        // climate noises move at biome scale so a sparse sweep
+        // covers the same ground as a dense one.
+        for x in (-512..512).step_by(4) {
+            for z in (-512..512).step_by(4) {
+                let c = climate_at(x as f32, z as f32);
+                let idx = match biome_from_climate(c) {
+                    Biome::Desert => 0,
+                    Biome::Plains => 1,
+                    Biome::Mountain => 2,
+                    Biome::Tundra => 3,
+                    Biome::Taiga => 4,
+                    Biome::Forest => 5,
+                    Biome::Jungle => 6,
+                    Biome::Swamp => 7,
+                    Biome::Savanna => 8,
+                    Biome::SnowyMountain => 9,
+                    Biome::Beach => 10,
+                };
+                seen[idx] = true;
+            }
+        }
+        for (i, ok) in seen.iter().enumerate() {
+            assert!(*ok, "biome index {i} never appeared under seed=0");
+        }
+    }
 }
