@@ -26,6 +26,7 @@
 //!   `Flat` / `Islands` flat-noise profiles.
 
 pub(crate) mod biome;
+pub(crate) mod biome_table;
 pub(crate) mod cactus;
 pub(crate) mod chunk;
 pub(crate) mod climate;

@@ -14,7 +14,6 @@ use super::seed_offset;
 /// discriminants stable. The new variants are produced only by
 /// the climate-driven `Realistic` generator (added in Phase E.2 /
 /// E.3 - they're inert under Classic).
-#[allow(dead_code)] // extended variants land in E.3
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Biome {
     // Legacy (Classic / Amplified):

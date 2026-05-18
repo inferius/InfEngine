@@ -103,3 +103,39 @@ pub(crate) fn place_classic_from_coord(chunk: &mut Chunk, coord: infengine_voxel
         amp_scale,
     );
 }
+
+/// Realistic-profile tree pass. Stub for E.2: drops the same
+/// oak template the Classic pass uses, anywhere the climate map
+/// resolves to a forest-like biome. Species dispatch lands in
+/// Phase E.4b.
+pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: infengine_voxel::ChunkCoord) {
+    use super::biome_table::biome_from_climate;
+    use super::climate::{climate_at, realistic_height};
+    let origin = World::chunk_world_origin(coord);
+    let origin_x = origin.x as i32;
+    let origin_y = origin.y as i32;
+    let origin_z = origin.z as i32;
+    let cs = CHUNK_SIZE as i32;
+    for x in -2..(cs + 2) {
+        for z in -2..(cs + 2) {
+            let wx = origin_x + x;
+            let wz = origin_z + z;
+            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            let biome = biome_from_climate(climate);
+            // For E.2 only Forest + Plains qualify; other biomes
+            // get tree species in E.4b.
+            let qualifies = matches!(biome, Biome::Plains | Biome::Forest);
+            if !qualifies {
+                continue;
+            }
+            // Forest = ~2.5x more trees than Classic plains;
+            // Plains keeps the legacy density.
+            let modulus = if biome == Biome::Forest { 12 } else { 32 };
+            if hash2(wx, wz) % modulus != 7 {
+                continue;
+            }
+            let ground = realistic_height(climate, biome);
+            place_oak(chunk, x, z, ground, origin_y);
+        }
+    }
+}
