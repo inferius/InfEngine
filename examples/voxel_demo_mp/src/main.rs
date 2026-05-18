@@ -2724,17 +2724,18 @@ impl Voxel {
             let is_source = level == 0;
             let is_falling = level == 8;
             // Push strength = how strong this cell's contribution
-            // is when writing to neighbours. JS uses
-            // `baseStrength` = maxFlow for source, else
-            // `cell.water`. In our level convention (low=strong)
-            // that maps to: source -> 0 (writes level 1), falling
-            // -> 1 (writes level 2; JS falling water = 7, spreads
-            // at 6 = mine level 2), regular flow -> level itself
-            // (writes level+1 = one weaker).
-            let push_strength: u8 = if is_source {
+            // is when writing to neighbours. Matches MC's
+            // `spreadToSides`:
+            //
+            //   newAmount = state.getAmount() - getDropOff(level);
+            //   if (state.getValue(FALLING)) newAmount = 7;
+            //
+            // Both source (amount 8) and falling (override to 7)
+            // resolve to amount 7 = mine level 1. Regular flow
+            // at amount A spreads at amount A - 1 = mine
+            // level (A-1) -> mine level + 1.
+            let push_strength: u8 = if is_source || is_falling {
                 0
-            } else if is_falling {
-                1
             } else {
                 level
             };
@@ -2863,10 +2864,13 @@ impl Voxel {
             if updates.contains_key(pos) {
                 continue;
             }
-            // Falling cell that lost its column feed decays by 1
-            // strength step (JS: water 7 -> 6). In our convention
-            // that's level 8 -> level 2 (strength 7 -> 6).
-            let new_level = if level == 8 { 2 } else { level + 1 };
+            // MC: an orphan falling cell (column above gone)
+            // gets `getNewLiquid` -> max(neighbour amounts) -
+            // drop_off. If no liquid neighbour at all, the new
+            // state is EMPTY - evaporate immediately. We model
+            // that by jumping `level 8` past max_range so it
+            // lands in `to_evaporate`. Regular flow decays by 1.
+            let new_level = if level == 8 { 9 } else { level + 1 };
             if new_level > max_range {
                 to_evaporate.push(*pos);
             } else {
