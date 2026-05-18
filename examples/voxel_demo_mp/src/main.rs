@@ -36,7 +36,7 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
-    BUCKET_WATER_ID, BlockCategory, CHEST_ID, GLOWSTONE_ID, LAVA_ID,
+    BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
     block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
@@ -885,6 +885,27 @@ struct Voxel {
     /// chest panel uses the generic `container::ui::draw_grid`
     /// click-and-drop flow rather than the legacy DnD widget.
     chest_held: Option<(u16, u8)>,
+    /// Per-furnace 3-slot container state (input / fuel / output),
+    /// keyed by absolute world voxel coords. Parallel to `chests`.
+    /// Entries are inserted on place + removed on break (after the
+    /// drops fall as item entities). The runtime cook progress
+    /// lives in the sibling `furnace_runtimes` map below; splitting
+    /// the slot vec from the live timers keeps the save schema
+    /// tight (the on-disk shape persists both side by side under
+    /// `containers/<dim>.bin` v2).
+    furnaces: HashMap<[i32; 3], container::Container>,
+    /// Per-furnace live runtime: remaining fuel ms + cook progress
+    /// ms + the full fuel duration for the UI bar. Driven by
+    /// `block::furnace::furnace_tick`; persisted alongside the
+    /// slot vec.
+    furnace_runtimes: HashMap<[i32; 3], block::furnace::FurnaceRuntime>,
+    /// Position of the furnace the player has open. Mirrors
+    /// `chest_open`. Cleared by ESC / walking too far / opening
+    /// another panel.
+    furnace_open: Option<[i32; 3]>,
+    /// Cursor-held stack while the furnace UI is open. Mirrors
+    /// `chest_held`.
+    furnace_held: Option<(u16, u8)>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
@@ -3800,6 +3821,10 @@ impl Voxel {
             chests: HashMap::new(),
             chest_open: None,
             chest_held: None,
+            furnaces: HashMap::new(),
+            furnace_runtimes: HashMap::new(),
+            furnace_open: None,
+            furnace_held: None,
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),
@@ -3869,6 +3894,10 @@ impl Voxel {
         self.chests.clear();
         self.chest_open = None;
         self.chest_held = None;
+        self.furnaces.clear();
+        self.furnace_runtimes.clear();
+        self.furnace_open = None;
+        self.furnace_held = None;
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into
@@ -3881,6 +3910,24 @@ impl Voxel {
         if let Some(p) = pos {
             let leftovers = block::chest::recover_held_on_close(
                 self.chests.get_mut(&p),
+                held,
+            );
+            for id in leftovers {
+                self.spawn_drop(BlockId(id), p);
+            }
+        }
+    }
+
+    /// Close the furnace UI. Mirrors `close_chest_ui` but routes
+    /// the held-stack recovery through `block::furnace`; the
+    /// furnace's accept filters mean a held stack of the wrong
+    /// type for input / fuel falls as floor drops.
+    fn close_furnace_ui(&mut self) {
+        let pos = self.furnace_open.take();
+        let held = self.furnace_held.take();
+        if let Some(p) = pos {
+            let leftovers = block::furnace::recover_held_on_close(
+                self.furnaces.get_mut(&p),
                 held,
             );
             for id in leftovers {
@@ -4266,6 +4313,7 @@ impl Voxel {
             || self.chat_open
             || self.show_debug_panel
             || self.chest_open.is_some()
+            || self.furnace_open.is_some()
     }
 
     fn apply_cursor_settings(&self, window: &EngineWindow) {
@@ -8127,6 +8175,8 @@ impl AppHandler for Voxel {
                         self.chat_input.clear();
                     } else if self.chest_open.is_some() {
                         self.close_chest_ui();
+                    } else if self.furnace_open.is_some() {
+                        self.close_furnace_ui();
                     } else if mp {
                         self.mp_menu_open = !self.mp_menu_open;
                     } else {
@@ -8352,11 +8402,12 @@ impl AppHandler for Voxel {
             && matches!(self.state, AppState::Playing)
             && !self.chat_open
         {
-            // Pressing E while a chest UI is open closes the
-            // chest first instead of stacking a second panel on
-            // top of it.
+            // Pressing E while a chest / furnace UI is open closes
+            // it first instead of stacking a second panel on top.
             if self.chest_open.is_some() {
                 self.close_chest_ui();
+            } else if self.furnace_open.is_some() {
+                self.close_furnace_ui();
             } else {
                 self.inventory_open = !self.inventory_open;
             }
@@ -8823,6 +8874,23 @@ impl AppHandler for Voxel {
                         self.spawn_drop(BlockId(id), voxel);
                     }
                 }
+                // Furnace break: drain the 3 slots (input / fuel /
+                // output) as drops, then drop the runtime entry too.
+                // `break_furnace` collapses the two into one call so
+                // a stray runtime entry can't linger after the slot
+                // vec is gone. The Timer::Furnace entry on the
+                // scheduled-timers list ages out naturally on the
+                // next save (no live timer = no entry built).
+                if broken.0 == FURNACE_ID {
+                    let drops = block::furnace::break_furnace(
+                        &mut self.furnaces,
+                        &mut self.furnace_runtimes,
+                        voxel,
+                    );
+                    for id in drops {
+                        self.spawn_drop(BlockId(id), voxel);
+                    }
+                }
                 // Cascade: dislodge any F_NO_PLACE decoration
                 // (torch, flower, ...) that just lost its support
                 // because we broke this voxel. Each dislodged
@@ -8924,6 +8992,20 @@ impl AppHandler for Voxel {
                         }
                     }
                 }
+            } else if rmb && self.world.get(hit.voxel).0 == FURNACE_ID {
+                // RMB on a furnace: open the furnace UI. Mints a
+                // fresh empty 3-slot container + runtime entry on
+                // first open so the offline place-without-open
+                // case still gets a clean state to work against.
+                let pos = hit.voxel;
+                block::furnace::place_furnace(
+                    &mut self.furnaces,
+                    &mut self.furnace_runtimes,
+                    pos,
+                );
+                self.furnace_open = Some(pos);
+                self.lmb_pending = false;
+                self.rmb_pending = false;
             } else if rmb && self.world.get(hit.voxel).0 == CHEST_ID {
                 // RMB on a chest: open the chest UI for the chest
                 // at this voxel. Host-local + offline paths set
@@ -9290,6 +9372,18 @@ impl AppHandler for Voxel {
                             .entry(target_voxel)
                             .or_insert_with(block::chest::new_chest);
                     }
+                    // Furnace place: mint an empty 3-slot container
+                    // + a zeroed FurnaceRuntime entry. Same idempotent
+                    // shape as the chest path (entry().or_insert_with);
+                    // the live cook tick advances the runtime each
+                    // frame, save / load round trip preserves both.
+                    if block.0 == FURNACE_ID {
+                        block::furnace::place_furnace(
+                            &mut self.furnaces,
+                            &mut self.furnace_runtimes,
+                            target_voxel,
+                        );
+                    }
                     // Decrement the active stack now that placement
                     // succeeded. Clients defer this - the server's
                     // `vx.inv` snapshot reflects the decrement.
@@ -9362,6 +9456,20 @@ impl AppHandler for Voxel {
             const CHEST_MAX_DIST: f32 = 5.0;
             if dist_sq > CHEST_MAX_DIST * CHEST_MAX_DIST {
                 self.close_chest_ui();
+            }
+        }
+        // Same 5-block leash for the furnace UI. Mirrors the
+        // chest-close check above so walking away closes the panel
+        // and routes the held stack back to the furnace (or to
+        // floor drops if nothing fits there).
+        if let Some(pos) = self.furnace_open {
+            let dx = self.player_pos.x - (pos[0] as f32 + 0.5);
+            let dy = self.player_pos.y - (pos[1] as f32 + 0.5);
+            let dz = self.player_pos.z - (pos[2] as f32 + 0.5);
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            const FURNACE_MAX_DIST: f32 = 5.0;
+            if dist_sq > FURNACE_MAX_DIST * FURNACE_MAX_DIST {
+                self.close_furnace_ui();
             }
         }
         // Mob audio runs on every peer (host + each client): step
