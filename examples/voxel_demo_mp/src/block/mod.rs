@@ -22,6 +22,8 @@ use infengine_voxel::BlockId;
 
 pub(crate) mod chest;
 pub(crate) mod furnace;
+#[cfg(test)]
+mod phase_f_tests;
 
 // ---------------------------------------------------------------
 // Texture atlas - tile descriptor + dimensions.
@@ -810,7 +812,7 @@ pub(crate) fn axe_tier(block: BlockId) -> u8 {
 }
 
 /// Mining-speed category for a target block.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BlockCategory {
     Stone,
     Soil,

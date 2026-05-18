@@ -73,6 +73,7 @@ fn max_stack_tools_is_one() {
         29, 30, 31, // shovels
         32, 33, 34, // axes
         38, 39, 40, // buckets
+        48,         // flint+steel (Phase F)
     ];
     for &id in one_stack_ids {
         assert_eq!(
@@ -92,6 +93,7 @@ fn max_stack_blocks_is_64() {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, // basic
         26, 27, 28, // sandstone, cactus, glowstone
         35, 36, 37, // bed, water, lava
+        44, 45, 46, // netherrack, bedrock, obsidian (Phase F)
     ];
     for &id in block_stack_ids {
         assert_eq!(
