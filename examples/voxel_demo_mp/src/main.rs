@@ -9457,6 +9457,82 @@ impl AppHandler for Voxel {
                 }
             } else if rmb
                 && let Some(held) = selected_block
+                && held.0 == block::FLINT_AND_STEEL_ID
+            {
+                // Phase F.5: RMB with flint+steel on an obsidian
+                // block ignites a valid portal frame. The hit
+                // cell is the obsidian block itself; the frame
+                // interior is one step away on the clicked face,
+                // which is `hit.place_at`. Pass that to the
+                // ignition routine.
+                let cfg = bincode::config::standard();
+                let res = block::portal::try_ignite(&mut self.world, hit.place_at);
+                if let block::portal::IgniteResult::Ok { interior_count, .. } = res {
+                    // Broadcast the interior changes as standard
+                    // world edits so remote peers see the portal
+                    // appear. The portal block id is set on
+                    // every interior cell; emit one EditMsg per
+                    // cell. The cells form a tight rect around
+                    // hit.place_at so the radius isn't huge.
+                    let center = hit.place_at;
+                    // Re-scan the 3x3x3 around the clicked cell
+                    // to pick up every portal cell we just wrote.
+                    let mut emitted: Vec<EditMsg> = Vec::with_capacity(interior_count as usize);
+                    for dx in -3..=3 {
+                        for dy in -3..=3 {
+                            for dz in -3..=3 {
+                                let p = [center[0] + dx, center[1] + dy, center[2] + dz];
+                                if self.world.get(p).0 == block::PORTAL_ID {
+                                    emitted.push(EditMsg {
+                                        x: p[0],
+                                        y: p[1],
+                                        z: p[2],
+                                        block: block::PORTAL_ID,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    let coords = Self::affected_chunks(hit.place_at);
+                    self.rebuild_chunks(&coords);
+                    match &mut self.net {
+                        NetRole::Offline => {}
+                        NetRole::Server { server, .. } => {
+                            for edit in &emitted {
+                                self.edit_history.push(*edit);
+                                if let Ok(buf) =
+                                    bincode::serde::encode_to_vec(*edit, cfg)
+                                {
+                                    server.broadcast_bytes("vx.edit", buf);
+                                }
+                            }
+                        }
+                        NetRole::Client { pending_edits, .. } => {
+                            for edit in &emitted {
+                                pending_edits.push(*edit);
+                            }
+                        }
+                    }
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "Portal lit.".to_string(),
+                    ));
+                } else if matches!(
+                    res,
+                    block::portal::IgniteResult::NotRectangular
+                        | block::portal::IgniteResult::PerimeterIncomplete
+                ) {
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "Portal frame is invalid.".to_string(),
+                    ));
+                }
+                // Flint+steel doesn't deplete (durability is a
+                // deferred follow-up - see Phase F module docs).
+                self.lmb_pending = false;
+                self.rmb_pending = false;
+            } else if rmb
+                && let Some(held) = selected_block
                 && matches!(
                     held.0,
                     BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID

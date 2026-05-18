@@ -22,6 +22,7 @@ use infengine_voxel::BlockId;
 
 pub(crate) mod chest;
 pub(crate) mod furnace;
+pub(crate) mod portal;
 #[cfg(test)]
 mod phase_f_tests;
 
