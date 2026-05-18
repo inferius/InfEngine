@@ -587,16 +587,19 @@ impl Mesh3DPass {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    // Backface culling on the transparent pass
-                    // too. Without it, a camera sitting inside a
-                    // water cell saw the outward-pointing faces
-                    // of every surrounding water voxel from the
-                    // wrong side - the screen lit up with a grid
-                    // of tiny tile-rectangles. Culling keeps the
-                    // surface readable from outside but
-                    // disappears the noise once the player is
-                    // submerged (MC behaves the same way).
-                    cull_mode: Some(wgpu::Face::Back),
+                    // Transparent pass: no backface cull. Water
+                    // / liquid mesh quads in voxel_demo_mp use a
+                    // mixed CCW/CW winding (push_quad_flow walks
+                    // corners in source-position order, not
+                    // consistently from the outward side), so
+                    // enabling cull made the top face invisible
+                    // when viewed from above + the outer side
+                    // faces invisible from outside the pool. The
+                    // "underwater grid of tiles" issue this
+                    // briefly fixed is recurring; the real fix
+                    // is to normalise the mesh winding in
+                    // voxel_demo_mp, then re-enable cull here.
+                    cull_mode: None,
                     polygon_mode: wgpu::PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
