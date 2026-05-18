@@ -8,7 +8,7 @@
 //! care about world state transitions here.
 
 use super::*;
-use super::mesh::liquid_surface_height_at;
+use super::mesh::{bottom_open, liquid_surface_height_at, side_open};
 use crate::block::WATER_ID;
 use infengine_voxel::{BlockId, Chunk, World};
 use std::collections::{HashMap, HashSet};
@@ -523,6 +523,130 @@ fn two_pools_remove_one_drains_only_that_one() {
     assert!(sim.is([5, 1, 0], water()), "right source vanished!");
     assert!(sim.is([3, 1, 0], water()), "right pool drained spuriously");
     assert!(sim.is([7, 1, 0], water()), "right pool edge drained spuriously");
+}
+
+// -----------------------------------------------------------------
+// Mesh emission tests: `side_open` + `bottom_open` predicates that
+// gate face generation in `Voxel::maybe_rebuild_liquid_mesh`.
+// -----------------------------------------------------------------
+
+/// Count the side faces that would be emitted around a cell at
+/// (vx, vy, vz). Matches the four `side_open` checks in the mesh
+/// build loop. Used to assert "fully exposed cell -> 4 side faces".
+fn count_side_faces(world: &World, p: [i32; 3], liquid_id: u16) -> u32 {
+    let [vx, vy, vz] = p;
+    let mut n = 0;
+    if side_open(world, vx - 1, vy, vz, liquid_id) { n += 1; }
+    if side_open(world, vx + 1, vy, vz, liquid_id) { n += 1; }
+    if side_open(world, vx, vy, vz - 1, liquid_id) { n += 1; }
+    if side_open(world, vx, vy, vz + 1, liquid_id) { n += 1; }
+    n
+}
+
+#[test]
+fn mesh_fully_exposed_cube_emits_four_sides() {
+    // Isolated water cube in open air. All 4 NSEW are air -> all
+    // 4 side faces must be emitted, and the bottom face too
+    // (cliff-edge water below = air -> emit so the underwater
+    // view doesn't see plain sky).
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    assert_eq!(
+        count_side_faces(&w, [5, 5, 5], WATER_ID),
+        4,
+        "exposed cube must emit 4 side faces"
+    );
+    assert!(
+        bottom_open(&w, 5, 4, 5, WATER_ID),
+        "cliff-edge water (air below) must emit bottom face"
+    );
+}
+
+#[test]
+fn mesh_buried_cube_emits_no_sides() {
+    // Water cube surrounded by water on every face. No side
+    // emission - the shared faces sit inside the body.
+    let mut w = mk_world();
+    for x in 4..=6 {
+        for y in 4..=6 {
+            for z in 4..=6 {
+                w.set([x, y, z], BlockId(WATER_ID));
+            }
+        }
+    }
+    assert_eq!(
+        count_side_faces(&w, [5, 5, 5], WATER_ID),
+        0,
+        "buried cube must emit zero side faces"
+    );
+    assert!(
+        !bottom_open(&w, 5, 4, 5, WATER_ID),
+        "same-liquid below cancels the bottom face"
+    );
+}
+
+#[test]
+fn mesh_partial_corner_emits_facing_faces() {
+    // Water cell at (5,5,5) with another water at (5,5,6). The
+    // shared +z face is culled; the other 3 sides emit.
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    w.set([5, 5, 6], BlockId(WATER_ID));
+    let faces = count_side_faces(&w, [5, 5, 5], WATER_ID);
+    assert_eq!(
+        faces, 3,
+        "two-cell pool: outer cell must emit 3 side faces, got {faces}"
+    );
+    // The +z face specifically is the one culled.
+    assert!(
+        !side_open(&w, 5, 5, 6, WATER_ID),
+        "shared +z face must be culled (same liquid neighbour)"
+    );
+    assert!(
+        side_open(&w, 5, 5, 4, WATER_ID),
+        "non-shared -z face must emit"
+    );
+}
+
+#[test]
+fn mesh_solid_neighbour_culls_face() {
+    // Water cube against a stone wall on the +x side. +x face is
+    // culled (wall covers it); other 3 sides emit.
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    w.set([6, 5, 5], BlockId(1)); // dirt = solid, no F_AABB_PASS
+    let faces = count_side_faces(&w, [5, 5, 5], WATER_ID);
+    assert_eq!(
+        faces, 3,
+        "water-vs-wall: expected 3 faces (no +x face), got {faces}"
+    );
+    assert!(
+        !side_open(&w, 6, 5, 5, WATER_ID),
+        "solid neighbour must cull the face"
+    );
+}
+
+#[test]
+fn mesh_bottom_face_emitted_only_when_open() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    // Air below -> emit.
+    assert!(
+        bottom_open(&w, 5, 4, 5, WATER_ID),
+        "air below: emit bottom face"
+    );
+    // Solid below -> skip.
+    w.set([5, 4, 5], BlockId(1));
+    assert!(
+        !bottom_open(&w, 5, 4, 5, WATER_ID),
+        "solid below: no bottom face"
+    );
+    // Same-liquid below -> skip (would be inside body).
+    w.set([5, 4, 5], BlockId(WATER_ID));
+    assert!(
+        !bottom_open(&w, 5, 4, 5, WATER_ID),
+        "same-liquid below: no bottom face"
+    );
 }
 
 #[test]

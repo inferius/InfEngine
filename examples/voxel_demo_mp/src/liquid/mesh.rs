@@ -1,14 +1,16 @@
 //! Liquid mesh helpers - corner heights, BFS-to-cliff distance,
-//! and quad-with-flow-vector emission. Pure functions: the actual
-//! mesh build lives in `main.rs::maybe_rebuild_liquid_mesh` so the
-//! free fns can be unit-tested without a renderer.
+//! quad-with-flow-vector emission, and the `side_open` /
+//! `bottom_open` predicates the renderer uses to gate face
+//! emission. Pure functions: the actual mesh build lives in
+//! `main.rs::maybe_rebuild_liquid_mesh` so the free fns can be
+//! unit-tested without a renderer.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use infengine_render::MeshVertex;
 use infengine_voxel::{BlockId, World};
 
-use crate::block::block_is_washable;
+use crate::block::{block_is_aabb_passable, block_is_washable};
 
 /// Y position of the top of a liquid voxel's slope ramp. Returns 1.0
 /// (full cube) for sources, for cells with the same liquid directly
@@ -132,6 +134,51 @@ pub(crate) fn distance_to_drop_at(
         }
     }
     u32::MAX
+}
+
+/// "Side face is open" predicate: emit a liquid side face only if
+/// the neighbour is air or a passable decoration (flower / torch /
+/// snow layer). A neighbour of the SAME liquid id cancels - their
+/// shared face is fully inside the body.
+///
+/// Extracted out of the mesh build loop so a unit test can verify
+/// face emission against synthetic worlds without spinning up a
+/// renderer.
+pub(crate) fn side_open(
+    world: &World,
+    nx: i32,
+    ny: i32,
+    nz: i32,
+    liquid_id: u16,
+) -> bool {
+    let nb = world.get([nx, ny, nz]);
+    if nb.0 == liquid_id {
+        return false;
+    }
+    nb.is_air() || block_is_aabb_passable(nb)
+}
+
+/// "Bottom face is open": emit the bottom face for a liquid cell
+/// only when there's actually space underneath the player can see
+/// through. Solid block below = no face. Same-liquid below = no
+/// face (would be inside the body). Air / passable decoration =
+/// emit so the underwater air pocket under a cliff doesn't show
+/// up as transparent sky.
+///
+/// MC's `LiquidBlockRenderer.tesselate` emits a bottom face in
+/// the same situation (`shouldRenderFace(level, pos.below(), DOWN)`).
+pub(crate) fn bottom_open(
+    world: &World,
+    nx: i32,
+    ny: i32,
+    nz: i32,
+    liquid_id: u16,
+) -> bool {
+    let nb = world.get([nx, ny, nz]);
+    if nb.0 == liquid_id {
+        return false;
+    }
+    nb.is_air() || block_is_aabb_passable(nb)
 }
 
 /// Append one quad to `verts` / `idx`. Corners must be CCW from

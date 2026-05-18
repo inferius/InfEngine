@@ -30,7 +30,8 @@ use infengine_voxel::BlockId;
 pub(crate) use apply::liquid_apply_plan;
 pub(crate) use merge::liquid_merge_step;
 pub(crate) use mesh::{
-    distance_to_drop_at, liquid_corner_height_at, push_quad_flow,
+    bottom_open, distance_to_drop_at, liquid_corner_height_at,
+    push_quad_flow, side_open,
 };
 pub(crate) use plan::liquid_plan_step;
 

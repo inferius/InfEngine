@@ -38,7 +38,7 @@ use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
     BUCKET_WATER_ID, BlockCategory, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
-    block_category, block_is_aabb_passable, block_is_liquid,
+    block_category, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
     block_is_washable, block_material, block_required_tier,
@@ -48,9 +48,9 @@ use block::{
 };
 mod liquid;
 use liquid::{
-    LIQUIDS, Liquid, distance_to_drop_at, liquid_apply_plan,
-    liquid_corner_height_at, liquid_for, liquid_merge_step,
-    liquid_plan_step, push_quad_flow,
+    LIQUIDS, Liquid, bottom_open, distance_to_drop_at,
+    liquid_apply_plan, liquid_corner_height_at, liquid_for,
+    liquid_merge_step, liquid_plan_step, push_quad_flow, side_open,
 };
 mod net;
 use net::{
@@ -1325,18 +1325,11 @@ impl Voxel {
                     vertices, indices, t0, t1, t2, t3, normal, flow,
                 );
             }
-            // Helper: side face is "open" only against air or
-            // a passable decoration (torch / flower). A neighbour
-            // of the SAME liquid kind cancels - their shared
-            // face is fully inside the body.
-            let side_open = |nx: i32, ny: i32, nz: i32| -> bool {
-                let nb = self.world.get([nx, ny, nz]);
-                if nb.0 == liquid_id {
-                    return false;
-                }
-                nb.is_air() || block_is_aabb_passable(nb)
-            };
-            if side_open(vx - 1, vy, vz) {
+            // Side faces: emit only when the in-plane neighbour is
+            // air or a passable decoration. Same-liquid cancels -
+            // shared face sits inside the body. See `side_open`
+            // in `liquid::mesh` for the predicate definition.
+            if side_open(&self.world, vx - 1, vy, vz, liquid_id) {
                 push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz + 1.0],
@@ -1347,7 +1340,7 @@ impl Voxel {
                     flow,
                 );
             }
-            if side_open(vx + 1, vy, vz) {
+            if side_open(&self.world, vx + 1, vy, vz, liquid_id) {
                 push_quad_flow(
                     vertices, indices,
                     [fx + 1.0, fy, fz],
@@ -1358,7 +1351,7 @@ impl Voxel {
                     flow,
                 );
             }
-            if side_open(vx, vy, vz - 1) {
+            if side_open(&self.world, vx, vy, vz - 1, liquid_id) {
                 push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz],
@@ -1369,7 +1362,7 @@ impl Voxel {
                     flow,
                 );
             }
-            if side_open(vx, vy, vz + 1) {
+            if side_open(&self.world, vx, vy, vz + 1, liquid_id) {
                 push_quad_flow(
                     vertices, indices,
                     [fx + 1.0, fy, fz + 1.0],
@@ -1380,21 +1373,28 @@ impl Voxel {
                     flow,
                 );
             }
-            // Bottom face: never emitted for liquid cells. A
-            // water voxel with air below is either the head of a
-            // falling stream (renders as continuous side faces -
-            // no horizontal "floor" at the bottom) or a source
-            // sitting on a cliff (anti-pyramid keeps it full
-            // height; the floating-cube look that a bottom face
-            // would add is also a visual glitch). MC's water
-            // mesh likewise has no bottom faces. Underwater
-            // views from below see the layer of air just below
-            // the water as plain air - acceptable trade for the
-            // clean waterfall.
+            // Bottom face: emit when the cell below is open (air or
+            // passable decoration). Skipping this when below is air
+            // was a bug - looking up from underneath a cliff-edge
+            // water cell showed the air gap as plain sky instead of
+            // the water bottom. MC's `LiquidBlockRenderer` renders
+            // a bottom face in the same case via its
+            // `shouldRenderFace(DOWN)` gate.
             //
-            // (Left intentionally empty - kept as a doc anchor so
-            // the next person editing this loop knows we
-            // considered + skipped the bottom face.)
+            // Same-liquid below => no face (would be inside the
+            // body). Solid below => no face (covered by the solid's
+            // own top face).
+            if bottom_open(&self.world, vx, vy - 1, vz, liquid_id) {
+                push_quad_flow(
+                    vertices, indices,
+                    [fx, fy, fz],
+                    [fx + 1.0, fy, fz],
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx, fy, fz + 1.0],
+                    [0.0, -1.0, 0.0],
+                    flow,
+                );
+            }
         }
         // Re-borrow renderer now that the `&self.world` /
         // `&self.liquid_level` reads above are done.
