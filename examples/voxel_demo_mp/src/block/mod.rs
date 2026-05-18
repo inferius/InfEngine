@@ -20,6 +20,8 @@
 
 use infengine_voxel::BlockId;
 
+pub(crate) mod chest;
+
 // ---------------------------------------------------------------
 // Texture atlas - tile descriptor + dimensions.
 // ---------------------------------------------------------------
@@ -410,6 +412,19 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
     },
+    // Chest. Opaque cube with per-position 27-slot container state
+    // (lives in `Voxel::chests`). RMB opens the chest UI; breaking
+    // the chest drops its contents as item entities. Atlas falls
+    // back to a brown swatch when no chest.png ships with the
+    // resource pack - the (0,0) placeholder makes the texture pick
+    // up the wood-planks tile + we tint via `color` so the chest
+    // still reads as a distinct block on the world surface.
+    BlockType {
+        id: 41, name: "chest", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chest_top.png", "chest.png", "planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chest_bottom.png", "chest.png", "planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chest_side.png", "chest.png", "planks_oak.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -429,6 +444,11 @@ pub(crate) const LAVA_ID: u16 = 37;
 pub(crate) const BUCKET_EMPTY_ID: u16 = 38;
 pub(crate) const BUCKET_WATER_ID: u16 = 39;
 pub(crate) const BUCKET_LAVA_ID: u16 = 40;
+/// Chest block id. Per-position container state (27 slots) lives
+/// on `Voxel::chests`; RMB opens the chest UI, break drops the
+/// contents as item entities.
+#[allow(dead_code)] // wired up in C.3b+
+pub(crate) const CHEST_ID: u16 = 41;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.

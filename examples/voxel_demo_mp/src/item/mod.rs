@@ -318,6 +318,16 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 1, icon: None,
         category: ItemCategory::Bucket,
     },
+    // ---- Chest (block + container) ----
+    // Stackable building block. RMB-placing the item from a slot
+    // emits the chest block; RMB on an existing chest block opens
+    // the chest UI - that path lives in the world interact chain,
+    // not here.
+    ItemType {
+        id: 41, name: "chest", display: Some("Chest"),
+        places: Some(41), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
 ];
 
 // ---------------------------------------------------------------
