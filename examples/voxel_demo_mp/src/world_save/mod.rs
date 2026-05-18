@@ -38,6 +38,7 @@ pub(crate) mod entities;
 pub(crate) mod layout;
 pub(crate) mod meta;
 pub(crate) mod players;
+pub(crate) mod timers;
 pub(crate) mod world_json;
 
 #[cfg(test)]
@@ -50,6 +51,8 @@ mod entities_tests;
 mod players_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timers_tests;
 
 /// Path of the legacy server-side world delta file. Lives next to
 /// the launch directory so a host can be torn down + brought back
