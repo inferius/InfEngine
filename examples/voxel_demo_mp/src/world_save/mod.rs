@@ -36,6 +36,7 @@ use crate::Voxel;
 
 pub(crate) mod atomic;
 pub(crate) mod chunks;
+pub(crate) mod containers;
 pub(crate) mod entities;
 pub(crate) mod layout;
 pub(crate) mod meta;
@@ -49,6 +50,8 @@ pub(crate) mod world_json;
 mod atomic_tests;
 #[cfg(test)]
 mod chunks_tests;
+#[cfg(test)]
+mod containers_tests;
 #[cfg(test)]
 mod entities_tests;
 #[cfg(test)]

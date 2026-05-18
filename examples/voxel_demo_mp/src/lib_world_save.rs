@@ -20,5 +20,7 @@ pub mod chunks;
 pub mod players;
 #[path = "world_save/entities.rs"]
 pub mod entities;
+#[path = "world_save/containers.rs"]
+pub mod containers;
 #[path = "world_save/timers/mod.rs"]
 pub mod timers;

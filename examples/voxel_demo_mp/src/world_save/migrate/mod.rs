@@ -70,6 +70,10 @@ pub enum SaveKind {
     /// `timers/scheduled.bin` - bincode + zstd envelope around
     /// `ScheduledTimers`.
     Timers,
+    /// `containers/<dim>.bin` - bincode + zstd envelope around
+    /// `DimensionContainers`. Per-position block-state save for
+    /// chests (and future furnaces / signs / ...).
+    Containers,
 }
 
 /// Pure registry. The only mutating call is `register` at startup.
