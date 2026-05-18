@@ -870,6 +870,16 @@ struct Voxel {
     /// a 27-slot `Container` (see `block::chest::CHEST_SLOTS`).
     /// Persisted via `world_save/containers.rs`.
     chests: HashMap<[i32; 3], container::Container>,
+    /// Position of the chest the player has open. `None` means no
+    /// chest UI is visible. Set by an RMB-on-chest interaction +
+    /// cleared by ESC / walking too far / opening another panel.
+    chest_open: Option<[i32; 3]>,
+    /// Cursor-held stack while the chest UI is open. Mirrors how
+    /// the standard inventory UI tracks a half / full stack drag;
+    /// here it's a simple `Option<(item_id, count)>` because the
+    /// chest panel uses the generic `container::ui::draw_grid`
+    /// click-and-drop flow rather than the legacy DnD widget.
+    chest_held: Option<(u16, u8)>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
@@ -3783,6 +3793,8 @@ impl Voxel {
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             chests: HashMap::new(),
+            chest_open: None,
+            chest_held: None,
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),
@@ -3850,6 +3862,26 @@ impl Voxel {
         self.liquid_positions.clear();
         self.liquid_mesh_dirty = true;
         self.chests.clear();
+        self.chest_open = None;
+        self.chest_held = None;
+    }
+
+    /// Close the chest UI. Drops the cursor-held stack back into
+    /// the chest at the first free slot (or onto the floor as a
+    /// drop if the chest is gone / full). Called by ESC, the
+    /// window's close button, and the periodic out-of-range check.
+    fn close_chest_ui(&mut self) {
+        let pos = self.chest_open.take();
+        let held = self.chest_held.take();
+        if let Some(p) = pos {
+            let leftovers = block::chest::recover_held_on_close(
+                self.chests.get_mut(&p),
+                held,
+            );
+            for id in leftovers {
+                self.spawn_drop(BlockId(id), p);
+            }
+        }
     }
 
     /// Synchronously generate the initial chunk grid so the player
@@ -4228,6 +4260,7 @@ impl Voxel {
             || self.mp_menu_open
             || self.chat_open
             || self.show_debug_panel
+            || self.chest_open.is_some()
     }
 
     fn apply_cursor_settings(&self, window: &EngineWindow) {
@@ -5488,6 +5521,27 @@ impl Voxel {
         let mut inv_open_local = self.inventory_open;
         let mp_menu_open = self.mp_menu_open;
         let mut mp_menu_open_local = self.mp_menu_open;
+        // Chest UI snapshot. Cloned here so the egui closure can
+        // render a grid against a stable view; applied actions
+        // mutate `self.chests` after the closure finishes.
+        let chest_open_pos = self.chest_open;
+        let chest_snapshot: Option<container::Container> = self
+            .chest_open
+            .as_ref()
+            .and_then(|p| self.chests.get(p).cloned());
+        // Sentinel that the egui close-button + ESC inside the
+        // chest panel can flip; we read it back after the closure
+        // to clear `chest_open`.
+        let mut chest_open_local = chest_open_pos.is_some();
+        let chest_held_snapshot = self.chest_held;
+        // Plain inventory snapshot as Option<(u16,u8)> for the
+        // chest-UI's player-side grid - independent of the
+        // existing DnD widget snapshot which carries icon meta.
+        let inv_plain_snapshot: Vec<Option<(u16, u8)>> = self
+            .inventory
+            .iter()
+            .map(|s| s.map(|(b, c)| (b.0, c)))
+            .collect();
         let mp_role_label: Option<&'static str> = match &self.net {
             NetRole::Offline => None,
             NetRole::Server { .. } => Some("hosting server"),
@@ -5522,6 +5576,14 @@ impl Voxel {
         // closure can't mutate `self` directly because the renderer
         // already borrowed it).
         let mut inv_actions: Vec<InvAction> = Vec::new();
+        // Chest-UI side channels. The egui closure pushes one
+        // `(side, GridAction)` per click; we drain them post-egui
+        // and route to `block::chest::apply_chest_action` /
+        // `apply_player_action`. `side` = false means a click on
+        // the chest grid, `true` = a click on the player-inv grid.
+        let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
+            Vec::new();
+        let mut chest_held_local = chest_held_snapshot;
         let mut action_start = false;
         let mut action_resume = false;
         // Set by the recipe-book output slot click handler; drained
@@ -6535,6 +6597,88 @@ impl Voxel {
                         });
                 }
 
+                // Chest UI panel. Shows a 27-slot chest grid on
+                // top + the player's 36-slot inventory below.
+                // Click semantics live in `container::ui::draw_grid`:
+                // LMB = take/place, RMB = take half / place one,
+                // Shift+LMB = transfer to partner. The cursor-
+                // held stack is rendered as a small floating
+                // indicator near the cursor; the actual mutation
+                // happens after the egui closure exits so the
+                // borrow checker is happy.
+                if let Some(chest) = &chest_snapshot {
+                    let screen = ctx.content_rect();
+                    egui::Window::new("Chest")
+                        .open(&mut chest_open_local)
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_pos([
+                            screen.center().x - 220.0,
+                            screen.center().y - 240.0,
+                        ])
+                        .default_size([440.0, 460.0])
+                        .show(ctx, |ui| {
+                            ui.label("ESC to close - LMB take/place, RMB half/one, Shift+LMB transfer");
+                            if let Some((id, n)) = chest_held_local {
+                                ui.label(format!(
+                                    "Holding: item {} x{}",
+                                    crate::item::item_display_name(id),
+                                    n
+                                ));
+                            }
+                            ui.separator();
+                            ui.label("Chest (27)");
+                            let chest_cfg = container::ui::GridConfig {
+                                cols: 9,
+                                rows: 3,
+                                tile_px: 36.0,
+                                title: None,
+                            };
+                            let actions = container::ui::draw_grid(
+                                ui,
+                                &chest_cfg,
+                                chest,
+                                chest_held_local,
+                                atlas_tex_id,
+                            );
+                            for a in actions {
+                                chest_grid_actions.push((false, a));
+                            }
+                            ui.separator();
+                            ui.label("Inventory (36)");
+                            // Inventory rendered through an
+                            // on-the-fly Container view so the
+                            // generic widget can drive clicks on
+                            // it too. The on-screen contents come
+                            // straight from `inv_plain_snapshot`,
+                            // mirroring the host's authoritative
+                            // inventory at the start of the frame.
+                            let mut inv_view =
+                                container::Container::with_size(
+                                    inv_plain_snapshot.len(),
+                                );
+                            for (i, s) in inv_plain_snapshot.iter().enumerate() {
+                                inv_view.set_slot(i, *s);
+                            }
+                            let inv_cfg = container::ui::GridConfig {
+                                cols: 9,
+                                rows: 4,
+                                tile_px: 36.0,
+                                title: None,
+                            };
+                            let inv_actions_g = container::ui::draw_grid(
+                                ui,
+                                &inv_cfg,
+                                &inv_view,
+                                chest_held_local,
+                                atlas_tex_id,
+                            );
+                            for a in inv_actions_g {
+                                chest_grid_actions.push((true, a));
+                            }
+                        });
+                }
+
                 // Hurt-flash: full-screen red overlay that fades
                 // out over ~0.5 s. Painted on the Foreground layer
                 // so it sits above the world but below the
@@ -7272,6 +7416,61 @@ impl Voxel {
         if self.mp_menu_open && !mp_menu_open_local {
             self.mp_menu_open = false;
         }
+        // Chest UI close-button reflected back. If the egui window
+        // was closed via its X handle, drop the chest_open + held
+        // state. Also drop the held cursor stack back to the
+        // first free chest slot if the chest is still in range
+        // (the simplest "don't lose items" recovery).
+        if chest_open_pos.is_some() && !chest_open_local {
+            self.close_chest_ui();
+        }
+        // Apply queued chest-UI actions. Each entry is
+        // `(true_if_player_side, GridAction)`.
+        if let Some(pos) = self.chest_open
+            && !chest_grid_actions.is_empty()
+        {
+            if let Some(chest) = self.chests.get_mut(&pos) {
+                // Mirror the actions onto a temp u16-shaped
+                // player-inv buffer so the helpers (which expect
+                // `[Option<(u16, u8)>]`) can mutate freely; then
+                // copy back into the BlockId-shaped real inv.
+                let mut inv_u16: Vec<Option<(u16, u8)>> = self
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                for (player_side, action) in chest_grid_actions {
+                    if player_side {
+                        block::chest::apply_player_action(
+                            &mut inv_u16,
+                            chest,
+                            &mut chest_held_local,
+                            action,
+                        );
+                    } else {
+                        block::chest::apply_chest_action(
+                            chest,
+                            &mut inv_u16,
+                            &mut chest_held_local,
+                            action,
+                        );
+                    }
+                }
+                // Copy mutated inv back. Length matches because
+                // we never resize.
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= self.inventory.len() {
+                        break;
+                    }
+                    self.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
+            }
+            self.chest_held = chest_held_local;
+        } else {
+            // No actions but still surface the latest cursor
+            // state for the next frame.
+            self.chest_held = chest_held_local;
+        }
         if action_start {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
@@ -7915,9 +8114,14 @@ impl AppHandler for Voxel {
                 AppState::Playing => {
                     // Chat input takes priority - Esc just dismisses
                     // it without opening the MP menu underneath.
+                    // The chest UI takes second priority - Esc
+                    // closes it before falling through to the
+                    // mp-menu / pause path.
                     if self.chat_open {
                         self.chat_open = false;
                         self.chat_input.clear();
+                    } else if self.chest_open.is_some() {
+                        self.close_chest_ui();
                     } else if mp {
                         self.mp_menu_open = !self.mp_menu_open;
                     } else {
@@ -8143,7 +8347,14 @@ impl AppHandler for Voxel {
             && matches!(self.state, AppState::Playing)
             && !self.chat_open
         {
-            self.inventory_open = !self.inventory_open;
+            // Pressing E while a chest UI is open closes the
+            // chest first instead of stacking a second panel on
+            // top of it.
+            if self.chest_open.is_some() {
+                self.close_chest_ui();
+            } else {
+                self.inventory_open = !self.inventory_open;
+            }
             // Drop any queued mouse-button edits the click that
             // closes the inventory would otherwise be replayed
             // against the world.
@@ -8708,6 +8919,23 @@ impl AppHandler for Voxel {
                         }
                     }
                 }
+            } else if rmb && self.world.get(hit.voxel).0 == CHEST_ID {
+                // RMB on a chest: open the chest UI for the chest
+                // at this voxel. Host-local + offline paths set
+                // the open-chest flag directly; the chest map is
+                // already authoritative on this peer (clients
+                // received the place via `vx.edit` but the C.3
+                // MP wire for chest state is deferred to C.3f).
+                let pos = hit.voxel;
+                self.chests
+                    .entry(pos)
+                    .or_insert_with(block::chest::new_chest);
+                self.chest_open = Some(pos);
+                // Drop any queued mouse-button edits the click
+                // that opened the chest would otherwise replay
+                // against the world.
+                self.lmb_pending = false;
+                self.rmb_pending = false;
             } else if rmb && self.world.get(hit.voxel).0 == 35 {
                 // RMB on a bed: night-time, run the local /sleep
                 // logic if we're authoritative; clients ship a
@@ -9107,6 +9335,20 @@ impl AppHandler for Voxel {
         // the full sim; clients also tick locally for smooth
         // motion between server snapshots.
         self.tick_drops(dt);
+        // Auto-close the chest UI when the player walks more than
+        // ~5 blocks from the open chest. Matches MC's "stay close
+        // to the container" rule. Done here (per-frame) so the
+        // close fires even while no input lands.
+        if let Some(pos) = self.chest_open {
+            let dx = self.player_pos.x - (pos[0] as f32 + 0.5);
+            let dy = self.player_pos.y - (pos[1] as f32 + 0.5);
+            let dz = self.player_pos.z - (pos[2] as f32 + 0.5);
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            const CHEST_MAX_DIST: f32 = 5.0;
+            if dist_sq > CHEST_MAX_DIST * CHEST_MAX_DIST {
+                self.close_chest_ui();
+            }
+        }
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
