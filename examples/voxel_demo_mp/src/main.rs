@@ -72,6 +72,12 @@ mod inventory;
 // migrate onto them - until then we tolerate dead_code on the bin.
 #[allow(dead_code)]
 mod item;
+// Generic N-slot container backing chests / furnaces / the future
+// migrated player inventory. Phase C.2 lands the API + tests +
+// egui grid widget; C.3 wires it into chest blocks, C.4 into the
+// furnace. Until then the bin tolerates dead_code on this module.
+#[allow(dead_code)]
+mod container;
 mod chat;
 mod mining;
 mod mob_ai;
