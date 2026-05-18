@@ -115,7 +115,7 @@ pub struct VoxelCoord {
 }
 
 /// Cubic block of voxel ids. Stored flat in row-major `[x, y, z]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     data: Vec<BlockId>,
 }

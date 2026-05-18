@@ -4214,7 +4214,9 @@ impl Voxel {
     }
 
     fn save_server_state(&mut self) {
-        if !matches!(self.net, NetRole::Server { .. }) {
+        // Server hosts AND offline singleplayer can save.
+        // Clients can't - the host owns the authoritative state.
+        if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
             return;
         }
         let path = std::path::PathBuf::from(Self::STATE_FILE);
@@ -6133,9 +6135,12 @@ impl Voxel {
         for id in &player_removals {
             self.remote_interp.remove(id);
         }
-        // Periodic state flush on the server so a crash loses at
-        // most ~30 seconds of edits.
-        if matches!(self.net, NetRole::Server { .. })
+        // Periodic state flush. Server hosts AND offline
+        // singleplayer both own the world state, so both auto-
+        // save - a fresh-install user who plays offline and
+        // quits without `/save` previously lost every build on
+        // restart. Now an autosave fires every 30 s.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
             && self
                 .last_state_save
                 .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(30))
@@ -10016,19 +10021,28 @@ impl Voxel {
                             handled_locally = true;
                         }
                         "save" => {
-                            // Host-only: flush the server state
-                            // (edit history + inventories + day
-                            // clock + HP + kill count) to disk
-                            // right now instead of waiting for
-                            // the autosave cadence.
-                            if !matches!(self.net, NetRole::Server { .. }) {
+                            // Flush the world state (edit
+                            // history + inventories + day clock
+                            // + HP + kill count + snow + torch
+                            // orientation + liquid levels) to
+                            // disk right now instead of waiting
+                            // for the autosave cadence.
+                            // Available to whoever owns the
+                            // world: host in MP, the player
+                            // themselves in offline. Clients
+                            // can't save (they don't have the
+                            // authoritative state).
+                            if !matches!(
+                                self.net,
+                                NetRole::Server { .. } | NetRole::Offline
+                            ) {
                                 local_lines.push(
-                                    "/save is host-only.".to_string(),
+                                    "/save is host / offline only.".to_string(),
                                 );
                             } else {
                                 self.save_server_state();
                                 local_lines
-                                    .push("Server state saved.".to_string());
+                                    .push("World saved.".to_string());
                             }
                             handled_locally = true;
                         }
@@ -13167,10 +13181,11 @@ impl AppHandler for Voxel {
                 }
             }
         }
-        // Server resumes any persisted edits so a restart picks up
-        // where the world left off. Clients sync via the catch-up
-        // broadcast on first heartbeat.
-        if matches!(self.net, NetRole::Server { .. }) {
+        // Server hosts AND offline singleplayer resume any
+        // persisted edits so a restart picks up where the world
+        // left off. Clients sync via the catch-up broadcast on
+        // first heartbeat.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
             self.load_server_state();
         }
     }
@@ -13184,6 +13199,9 @@ impl AppHandler for Voxel {
         // other peers. The actual process exit happens on the next
         // `on_update` via `requested_quit`.
         if matches!(event, WindowEvent::CloseRequested) {
+            // Final save before exit so the player doesn't lose
+            // edits made since the last 30 s autosave.
+            self.save_server_state();
             self.notify_server_leaving();
             self.requested_quit = true;
         }
