@@ -41,17 +41,17 @@ use block::{
     block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
-    block_is_washable, block_material, block_required_tier,
+    block_material, block_required_tier,
     block_skips_chunk_mesh, block_type, bucket_liquid_id, is_tool_block,
     liquid_to_bucket_id, shovel_tier, tool_effectiveness, tool_label,
     tool_tier, weapon_damage_mult,
 };
 mod liquid;
 use liquid::{
-    LIQUIDS, Liquid, bottom_open, distance_to_drop_at,
-    liquid_apply_plan, liquid_corner_height_at, liquid_for,
-    liquid_merge_step, liquid_plan_step, push_quad_flow,
-    schedule::LiquidSchedule, side_open,
+    LIQUIDS, Liquid, LiquidPlanStep, bottom_open, liquid_apply_plan,
+    liquid_corner_height_at, liquid_for, liquid_merge_step,
+    liquid_plan_cell, push_quad_flow, schedule::LiquidSchedule,
+    side_open,
 };
 mod net;
 use net::{
@@ -241,6 +241,17 @@ const REGEN_RATE: f32 = 0.5;
 /// see the sun move during a single play session - feel free to
 /// crank up for atmosphere later. 240s = 4 min full cycle.
 pub(crate) const DAY_LENGTH_S: f32 = 600.0;
+
+/// The 6 axis-aligned neighbour offsets (4 NSEW + above + below).
+/// Used by the per-cell liquid tick to fan out re-schedules.
+const SIX_NSEW_UD: [[i32; 3]; 6] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+    [0, 1, 0],
+    [0, -1, 0],
+];
 
 /// Shapeless 2x2 crafting recipe. Each entry is `(BlockId, count)`
 /// the player must place into the 2x2 grid (order doesn't matter).
@@ -836,22 +847,15 @@ struct Voxel {
     /// existing voxel's layer until it tops out, then a fresh
     /// snow voxel is painted on top.
     snow_positions: HashMap<[i32; 3], u8>,
-    /// Liquid voxels (water + lava) the host should re-evaluate
-    /// for fall + spread. Populated on chunk load + on every
-    /// liquid write. Per-tick scheduler pops a bounded slice
-    /// and runs the MC-style update.
-    ///
-    /// Being phased out by `liquid_schedule`: the new model
-    /// schedules per-cell ticks instead of one big sweep over a
-    /// HashSet. Both coexist during the refactor; once the tick
-    /// path consumes the schedule, this set's last reader (the
-    /// planner) goes too.
-    liquid_active: HashSet<[i32; 3]>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
     /// hard cap on the schedule itself - cells that don't fit a
     /// frame keep their slot and tick on the next.
+    ///
+    /// Replaces the old `liquid_active: HashSet` sweep: the
+    /// schedule's `pending` set serves the same "is this cell
+    /// scheduled?" role.
     liquid_schedule: LiquidSchedule,
     /// Game-tick counter for the schedule. +1 per net-tick frame.
     /// Used both as `now` for `pop_due` and as the base for
@@ -923,16 +927,6 @@ struct Voxel {
     /// / source merge).
     liquid_mesh_handles: HashMap<u16, MeshHandle>,
     liquid_mesh_dirty: bool,
-    /// Force an out-of-schedule liquid tick on the next frame.
-    /// Set by `world_set_tracked` whenever a player edit touches
-    /// a voxel adjacent to a liquid - without it, edits that
-    /// reshape the topology (placing a block in front of a
-    /// stream, breaking the pool floor, ...) had to wait up to
-    /// `tick_period` frames before the spread re-evaluated,
-    /// which read on screen as the water visibly "freezing" for
-    /// ~150 ms after every edit. MC handles this with per-cell
-    /// scheduled ticks; this is the small-budget equivalent.
-    liquid_dirty_tick: bool,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different
@@ -1061,7 +1055,6 @@ impl Voxel {
         // the entry so a broken liquid cell doesn't leak into
         // the tracker.
         if let Some(liquid) = liquid_for(block) {
-            self.liquid_active.insert(voxel);
             // MC-style: the freshly placed cell ticks after
             // `tick_period` frames - matches the legacy cadence
             // the planner enforced via `nt % tick_period`.
@@ -1088,7 +1081,7 @@ impl Voxel {
         // anywhere within flow range.
         //
         // Scan a 3x3x3 cube around the touched voxel and pull
-        // adjacent liquid cells back into `liquid_active` so
+        // adjacent liquid cells back into the schedule so
         // the next tick re-evaluates their flow. The wider 5x5x5
         // sweep was overhead-heavy on big pools; the tick's
         // own NSEW propagation handles cells past the 3x3 ring.
@@ -1106,16 +1099,13 @@ impl Voxel {
                     ];
                     if self.liquid_positions.contains(&n) {
                         neighbour_liquid = true;
-                        self.liquid_active.insert(n);
                         // MC-style: re-schedule each adjacent
                         // liquid cell at a short delay so the
                         // spread can react to the new topology
                         // (block placed in front of a stream,
                         // pool floor dug out). MC uses
                         // 1..tickDelay; we use a 1-tick wake so
-                        // the response shows up next frame, the
-                        // closest analogue of the old
-                        // `liquid_dirty_tick` force pass.
+                        // the response shows up next frame.
                         self.liquid_schedule
                             .schedule(n, self.liquid_clock + 1);
                     }
@@ -1124,10 +1114,9 @@ impl Voxel {
         }
         if neighbour_liquid {
             self.liquid_mesh_dirty = true;
-            // Skip the regular tick_period delay so the spread
-            // sees the new topology on the very next frame
-            // instead of up to 10 frames later.
-            self.liquid_dirty_tick = true;
+            // The 1-tick neighbour wake above already gets us
+            // the next-frame response - no separate force flag
+            // needed in the per-cell schedule model.
         }
     }
 
@@ -1483,78 +1472,94 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
-        // Advance the per-cell schedule clock once per frame. The
-        // schedule itself isn't consumed yet (that lands in the
-        // next commit) - this only keeps `liquid_clock` ticking so
-        // `world_set_tracked`'s freshly scheduled cells have a
-        // monotonic reference time.
+        // Advance the per-cell schedule clock once per frame.
         self.liquid_clock = self.liquid_clock.wrapping_add(1);
-        // Force a single out-of-schedule pass when a recent player
-        // edit re-queued a liquid neighbour. Without this the
-        // spread can sit up to `tick_period` frames before
-        // reacting, which makes block placements next to streams
-        // look like the water "freezes" for ~150 ms.
-        let force = std::mem::take(&mut self.liquid_dirty_tick);
+        let now = self.liquid_clock;
+        // Per-frame CPU budget for liquid cell processing. Cells
+        // that don't fit this frame keep their slot in the
+        // schedule and tick next frame - replaces the old hard
+        // 8192 cap on the bulk planner. 4096 leaves plenty of
+        // CPU headroom (4096 * ~20 world.get calls = ~80k reads
+        // per frame, still well under 1 ms on a warm cache) and
+        // lets a wave of 5-10k pending cells drain in 2-3 frames.
+        const MAX_LIQUID_PER_FRAME: usize = 4096;
+        let mut processed = 0usize;
+        while processed < MAX_LIQUID_PER_FRAME {
+            let Some(pos) = self.liquid_schedule.pop_due(now) else {
+                break;
+            };
+            // Identify which liquid owns this cell, if any. The
+            // cell may have been broken since it was scheduled -
+            // skip silently.
+            let b = self.world.get(pos);
+            let Some(liquid) = liquid_for(b) else {
+                continue;
+            };
+            // Snapshot the liquid by value (no &self borrow into
+            // the inner method).
+            let lq = *liquid;
+            self.tick_liquid_cell(pos, &lq, now);
+            processed += 1;
+        }
+        // Source-merge pass: each `infinite_source` liquid gets a
+        // chance to promote flow cells. The merge is rare + fast
+        // (256-cell cap inside `liquid_merge_step`); run it every
+        // frame regardless of schedule state.
         for liquid in LIQUIDS {
-            let nt = self.net_tick as u32;
-            let scheduled = nt.is_multiple_of(liquid.tick_period.max(1));
-            if scheduled || force {
-                self.tick_liquid_step(liquid);
-                if liquid.infinite_source {
-                    self.tick_liquid_merge(liquid);
-                }
+            if liquid.infinite_source {
+                self.tick_liquid_merge(liquid);
             }
         }
     }
 
-    /// Single MC-style liquid update pass per the reference JS
-    /// prototype:
-    /// 1. Every active liquid voxel proposes writes to its
-    ///    neighbours - direct-below for cells with air below
-    ///    (falling), then horizontal spread to chosen
-    ///    directions.
-    /// 2. Every non-source liquid voxel decays by 1 level.
-    ///    Cells past `max_range` evaporate to air.
-    /// 3. Proposed writes overwrite the decayed cells - the
-    ///    strongest level wins each square.
-    ///
-    /// Source-merge (`tick_liquid_merge`) runs after this in
-    /// `tick_liquids`.
-    fn tick_liquid_step(&mut self, liquid: &Liquid) {
-        let plan = liquid_plan_step(
+    /// MC `FlowingFluid.tick(pos)`: pulls `pos` through
+    /// `getNewLiquid`, applies + spreads, then re-schedules every
+    /// neighbour the apply touched (and `pos` itself if still
+    /// active) at `now + tick_period`.
+    fn tick_liquid_cell(&mut self, pos: [i32; 3], liquid: &Liquid, now: u64) {
+        let liquid_id = liquid.block_id;
+        let delay = liquid.tick_period.max(1) as u64;
+        // Build the per-cell plan against the current world snapshot.
+        let mut plan = LiquidPlanStep::default();
+        let mut updates: std::collections::HashMap<[i32; 3], (u8, bool)> =
+            std::collections::HashMap::new();
+        liquid_plan_cell(
             &self.world,
             &self.liquid_level,
-            &self.liquid_active,
+            pos,
             liquid,
             self.liquid_bias_drops,
+            &mut plan,
+            &mut updates,
         );
-        if plan.evaporate.is_empty()
-            && plan.decay.is_empty()
-            && plan.place.is_empty()
-        {
+        plan.place = updates.into_iter().map(|(p, (l, f))| (p, l, f)).collect();
+        if plan.evaporate.is_empty() && plan.decay.is_empty() && plan.place.is_empty() {
+            // Cell is settled. Don't reschedule - it'll only fire
+            // again when a neighbouring edit/spread queues it.
             return;
         }
+        // The schedule replaces the legacy `liquid_active` set;
+        // pass a throwaway HashSet so `liquid_apply_plan` can
+        // still maintain its internal wake-up shape. The
+        // schedule itself catches the same wake via the explicit
+        // re-schedule loop below.
+        let mut scratch_active: HashSet<[i32; 3]> = HashSet::new();
         let tape = liquid_apply_plan(
             &mut self.world,
             &mut self.liquid_level,
-            &mut self.liquid_active,
+            &mut scratch_active,
             &mut self.liquid_positions,
             liquid,
             plan,
         );
         // Drops + registry cleanup for washable replacements.
-        // `liquid_apply_plan` already set the destination voxel
-        // in `World`; we only need to spawn the drop entity and
-        // clear sibling registries that tracked the old block
-        // type (snow layers in particular).
-        for (block, pos) in &tape.washed {
+        for (block, p) in &tape.washed {
             if block.0 == 15 {
-                self.snow_positions.remove(pos);
+                self.snow_positions.remove(p);
             }
-            self.spawn_drop(*block, *pos);
+            self.spawn_drop(*block, *p);
         }
-        // Rebuild chunks once per touched chunk - per-position
-        // rebuild thrashed the GPU mesh when a cascade ran.
+        // Rebuild every chunk the apply touched.
         let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
         for p in &tape.evaporated {
             for c in Self::affected_chunks(*p) {
@@ -1576,13 +1581,14 @@ impl Voxel {
         {
             self.liquid_mesh_dirty = true;
         }
+        // Broadcast edits + level updates over the wire.
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
-            for pos in &tape.evaporated {
+            for p in &tape.evaporated {
                 let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
                     block: 0,
                 };
                 self.edit_history.push(edit);
@@ -1590,277 +1596,65 @@ impl Voxel {
                     server.broadcast_bytes("vx.edit", buf);
                 }
             }
-            for (pos, block_id, level) in &tape.placed {
+            for (p, block_id, level) in &tape.placed {
                 let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
                     block: *block_id,
                 };
                 self.edit_history.push(edit);
                 if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
                     server.broadcast_bytes("vx.edit", buf);
                 }
-                if let Ok(buf) =
-                    bincode::serde::encode_to_vec((*pos, *level), cfg)
+                if let Ok(buf) = bincode::serde::encode_to_vec((*p, *level), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
             }
-            for (pos, lvl) in &tape.decayed {
-                if let Ok(buf) = bincode::serde::encode_to_vec((*pos, *lvl), cfg)
-                {
+            for (p, lvl) in &tape.decayed {
+                if let Ok(buf) = bincode::serde::encode_to_vec((*p, *lvl), cfg) {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
+                }
+            }
+        }
+        // MC: spread schedules the NEXT tick for each cell it
+        // actually wrote into. A cell whose state stayed exactly
+        // the same (apply collapsed the proposal into a no-op
+        // because target was already at that level) doesn't get
+        // re-scheduled - that's how settled pools quiesce.
+        //
+        // We mirror by only scheduling cells the tape ACTUALLY
+        // touched + the 6 neighbours of those, so an outward wave
+        // keeps marching and a settled pool stops ticking.
+        for p in &tape.evaporated {
+            for d in &SIX_NSEW_UD {
+                let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                if self.world.get(n).0 == liquid_id {
+                    self.liquid_schedule.schedule(n, now + delay);
+                }
+            }
+        }
+        for (p, _, _) in &tape.placed {
+            self.liquid_schedule.schedule(*p, now + delay);
+            for d in &SIX_NSEW_UD {
+                let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                if self.world.get(n).0 == liquid_id {
+                    self.liquid_schedule.schedule(n, now + delay);
+                }
+            }
+        }
+        for (p, _) in &tape.decayed {
+            self.liquid_schedule.schedule(*p, now + delay);
+            for d in &SIX_NSEW_UD {
+                let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                if self.world.get(n).0 == liquid_id {
+                    self.liquid_schedule.schedule(n, now + delay);
                 }
             }
         }
     }
 
-    /// Legacy spread pass - retained as a reference for the
-    /// (now-replaced) split fall + spread + decay split. The
-    /// unified `tick_liquid_step` replaces this path. Kept under
-    /// `#[allow(dead_code)]` so the diff stays reviewable.
-    #[allow(dead_code)]
-    fn tick_liquid_spread(&mut self, liquid: &Liquid) {
-        if self.liquid_active.is_empty() {
-            return;
-        }
-        let liquid_id = liquid.block_id;
-        let max_range = liquid.max_range;
-        let candidates: Vec<[i32; 3]> = self
-            .liquid_active
-            .iter()
-            .filter(|p| self.world.get(**p).0 == liquid_id)
-            .take(512)
-            .copied()
-            .collect();
-        // MC-style level recomputation. For every non-source,
-        // non-falling flow cell:
-        //   * If same liquid sits directly above -> become a
-        //     falling column (level 8).
-        //   * Else: new_level = min(NSEW liquid neighbour
-        //     levels) + 1. If no lower neighbour exists OR the
-        //     new level would exceed `max_range`, the cell
-        //     evaporates back to air.
-        // Source cells (level 0) and falling cells (level 8)
-        // skip this phase - sources are permanent, falling cells
-        // settle on the next fall tick.
-        let mut to_set_level: Vec<([i32; 3], u8)> = Vec::new();
-        let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
-        for pos in &candidates {
-            let current = self
-                .liquid_level
-                .get(pos)
-                .copied()
-                .unwrap_or(0);
-            if current == 0 || current == 8 {
-                continue;
-            }
-            let above = self.world.get([pos[0], pos[1] + 1, pos[2]]);
-            if above.0 == liquid_id {
-                to_set_level.push((*pos, 8));
-                continue;
-            }
-            let nsew = [
-                [pos[0] + 1, pos[1], pos[2]],
-                [pos[0] - 1, pos[1], pos[2]],
-                [pos[0], pos[1], pos[2] + 1],
-                [pos[0], pos[1], pos[2] - 1],
-            ];
-            let mut min_n: u8 = u8::MAX;
-            for n in &nsew {
-                if self.world.get(*n).0 != liquid_id {
-                    continue;
-                }
-                let nl = self.liquid_level.get(n).copied().unwrap_or(0);
-                if nl < min_n {
-                    min_n = nl;
-                }
-            }
-            if min_n == u8::MAX {
-                to_evaporate.push(*pos);
-                continue;
-            }
-            let new_level = min_n.saturating_add(1);
-            if new_level > max_range {
-                to_evaporate.push(*pos);
-                continue;
-            }
-            if new_level != current {
-                to_set_level.push((*pos, new_level));
-            }
-        }
-        // Apply recompute + evaporation before the spread pass
-        // reads levels.
-        for (pos, lvl) in &to_set_level {
-            self.liquid_level.insert(*pos, *lvl);
-            self.liquid_mesh_dirty = true;
-        }
-        let cfg_pre = bincode::config::standard();
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for (pos, lvl) in &to_set_level {
-                if let Ok(buf) =
-                    bincode::serde::encode_to_vec((*pos, *lvl), cfg_pre)
-                {
-                    server.broadcast_bytes("vx.liquid_lvl", buf);
-                }
-            }
-        }
-        for pos in &to_evaporate {
-            self.world_set_tracked(*pos, BlockId::AIR);
-            let coords = Self::affected_chunks(*pos);
-            self.rebuild_chunks(&coords);
-        }
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for pos in &to_evaporate {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: 0,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg_pre) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-            }
-        }
-        // Re-snapshot candidates after the evaporation pass so
-        // the spread loop doesn't try to flow out of a cell
-        // that just became air.
-        let candidates: Vec<[i32; 3]> = self
-            .liquid_active
-            .iter()
-            .filter(|p| self.world.get(**p).0 == liquid_id)
-            .take(512)
-            .copied()
-            .collect();
-        let mut to_spawn: Vec<([i32; 3], u8)> = Vec::new();
-        for pos in &candidates {
-            let below = [pos[0], pos[1] - 1, pos[2]];
-            let below_b = self.world.get(below);
-            // Skip spread if the cell below is air or washable -
-            // the fall pass handles that direction first.
-            if below_b.is_air() || block_is_washable(below_b) {
-                continue;
-            }
-            let level = self
-                .liquid_level
-                .get(pos)
-                .copied()
-                .unwrap_or(0);
-            // Falling cells settle (no horizontal spread until
-            // the fall pass converts them).
-            if level == 8 {
-                continue;
-            }
-            if level >= max_range {
-                continue;
-            }
-            let dirs: [[i32; 3]; 4] = [
-                [1, 0, 0],
-                [-1, 0, 0],
-                [0, 0, 1],
-                [0, 0, -1],
-            ];
-            // Spreadable = air OR a washable decoration. Liquid
-            // washes flowers / torches / snow layer out of its
-            // path; F_WASHABLE flag is the gate.
-            let spreadable =
-                |b: BlockId| b.is_air() || block_is_washable(b);
-            // Pathfinding still picks which neighbours get
-            // priority (downhill direction first). When a drop
-            // is reachable within 4 steps, the spread restricts
-            // to those direction(s) so the flow streams toward
-            // the cliff. With no reachable drop, spread is
-            // radial - every air neighbour fills.
-            //
-            // Level assignment is UNIFORM `level + 1` regardless
-            // of direction. The MC-style per-tick recompute
-            // (phase A above) propagates correct levels outward
-            // each frame, so we don't try to bake "drop bias" into
-            // the initial level here.
-            let mut weights: [u32; 4] = [u32::MAX; 4];
-            for (i, d) in dirs.iter().enumerate() {
-                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                if !spreadable(self.world.get(n)) {
-                    continue;
-                }
-                weights[i] = self.distance_to_drop(liquid_id, n, 4);
-            }
-            let any_reachable =
-                weights.iter().any(|w| *w != u32::MAX && *w < 1000);
-            let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
-            let new_lvl = level.saturating_add(1);
-            if new_lvl > max_range {
-                continue;
-            }
-            for (i, d) in dirs.iter().enumerate() {
-                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                if !spreadable(self.world.get(n)) {
-                    continue;
-                }
-                // Downhill restriction: when a drop is in range,
-                // only the minimum-distance direction(s) get
-                // spread - matches MC's flow off ledges.
-                if any_reachable && weights[i] != min_w {
-                    continue;
-                }
-                if to_spawn.iter().any(|(p, _)| p == &n) {
-                    continue;
-                }
-                to_spawn.push((n, new_lvl));
-            }
-        }
-        if to_spawn.is_empty() {
-            return;
-        }
-        for (pos, lvl) in &to_spawn {
-            // Drop any washable decoration the liquid is about
-            // to overwrite (flower / torch / snow layer).
-            let washed = self.world.get(*pos);
-            if !washed.is_air() && block_is_washable(washed) {
-                self.spawn_drop(washed, *pos);
-            }
-            self.world_set_tracked(*pos, BlockId(liquid_id));
-            self.liquid_level.insert(*pos, *lvl);
-            let coords = Self::affected_chunks(*pos);
-            self.rebuild_chunks(&coords);
-            self.liquid_active.insert(*pos);
-        }
-        let cfg = bincode::config::standard();
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for (pos, lvl) in &to_spawn {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: liquid_id,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-                if let Ok(buf) =
-                    bincode::serde::encode_to_vec((*pos, *lvl), cfg)
-                {
-                    server.broadcast_bytes("vx.liquid_lvl", buf);
-                }
-            }
-        }
-    }
-
-    /// MC-style pathfinding helper: BFS from `start` over air
-    /// cells looking for one with an air block directly below
-    /// (i.e. liquid could fall here). Returns the cell distance
-    /// to the nearest such drop, capped at `max_steps`, or
-    /// `u32::MAX` when no drop is reachable. Used by
-    /// `tick_liquid_spread` to bias horizontal flow toward
-    /// downhill paths.
-    #[allow(dead_code)]
-    fn distance_to_drop(&self, liquid_id: u16, start: [i32; 3], max_steps: u32) -> u32 {
-        distance_to_drop_at(&self.world, &self.liquid_level, liquid_id, start, max_steps)
-    }
 
     /// Source-merge pass: a flow voxel of `liquid` adjacent to
     /// two or more same-kind source neighbours gets promoted to
@@ -1891,77 +1685,6 @@ impl Voxel {
                 if let Ok(buf) = bincode::serde::encode_to_vec((*pos, 0u8), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
-                }
-            }
-        }
-    }
-
-    /// Legacy decay pass - replaced by the per-cell decay in
-    /// `tick_liquid_step`. Retained for reference; not called.
-    #[allow(dead_code)]
-    fn tick_liquid_decay(&mut self, liquid: &Liquid) {
-        if self.liquid_level.is_empty() {
-            return;
-        }
-        let liquid_id = liquid.block_id;
-        let candidates: Vec<([i32; 3], u8)> = self
-            .liquid_level
-            .iter()
-            .filter(|(_, d)| **d > 0)
-            .take(256)
-            .map(|(v, d)| (*v, *d))
-            .collect();
-        let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
-        for (pos, level) in &candidates {
-            if self.world.get(*pos).0 != liquid_id {
-                continue;
-            }
-            let mut supported = false;
-            let horiz = [
-                [pos[0] + 1, pos[1], pos[2]],
-                [pos[0] - 1, pos[1], pos[2]],
-                [pos[0], pos[1], pos[2] + 1],
-                [pos[0], pos[1], pos[2] - 1],
-            ];
-            for n in &horiz {
-                if self.world.get(*n).0 == liquid_id {
-                    let nd = self.liquid_level.get(n).copied().unwrap_or(0);
-                    if nd < *level {
-                        supported = true;
-                        break;
-                    }
-                }
-            }
-            if !supported {
-                let above = [pos[0], pos[1] + 1, pos[2]];
-                if self.world.get(above).0 == liquid_id {
-                    supported = true;
-                }
-            }
-            if !supported {
-                to_evaporate.push(*pos);
-            }
-        }
-        if to_evaporate.is_empty() {
-            return;
-        }
-        for pos in &to_evaporate {
-            self.world_set_tracked(*pos, BlockId::AIR);
-            let coords = Self::affected_chunks(*pos);
-            self.rebuild_chunks(&coords);
-        }
-        let cfg = bincode::config::standard();
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for pos in &to_evaporate {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: 0,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
                 }
             }
         }
@@ -3916,7 +3639,6 @@ impl Voxel {
             next_drop_id: 1,
             flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
-            liquid_dirty_tick: false,
             sheep_mesh: None,
             sheep_head_mesh: None,
             voxel_atlas: None,
@@ -3989,7 +3711,6 @@ impl Voxel {
             torch_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
-            liquid_active: HashSet::new(),
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),
@@ -4050,7 +3771,6 @@ impl Voxel {
         self.snow_positions.clear();
         self.torch_positions.clear();
         self.torch_orient.clear();
-        self.liquid_active.clear();
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
         self.liquid_level.clear();
@@ -4091,7 +3811,6 @@ impl Voxel {
                                 {
                                     self.torch_positions.insert(v);
                                 } else if let Some(lq) = liquid_for(b) {
-                                    self.liquid_active.insert(v);
                                     self.liquid_schedule.schedule(
                                         v,
                                         self.liquid_clock
@@ -4242,7 +3961,6 @@ impl Voxel {
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
                                 ];
-                                self.liquid_active.insert(wv);
                                 self.liquid_schedule.schedule(
                                     wv,
                                     self.liquid_clock

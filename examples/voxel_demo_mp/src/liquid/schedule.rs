@@ -87,7 +87,6 @@ impl LiquidSchedule {
     /// stale entries (cancelled positions or duplicates whose
     /// `pending` flag was already consumed). Returns `None` when no
     /// due entry remains.
-    #[allow(dead_code)]
     pub(crate) fn pop_due(&mut self, now: u64) -> Option<[i32; 3]> {
         while let Some(Reverse(top)) = self.heap.peek().copied() {
             if top.due_at_tick > now {
@@ -238,12 +237,12 @@ mod tests {
         // cells with varying due times, then drain a few at a
         // time and assert ordering holds.
         let mut s = LiquidSchedule::new();
-        let n = 1000;
+        let n: i32 = 1000;
         for i in 0..n {
             // Two ticks staggered so pops happen across two
             // "frames".
             let due = if i % 2 == 0 { 5 } else { 10 };
-            s.schedule([i as i32, 0, 0], due);
+            s.schedule([i, 0, 0], due);
         }
         let mut at_5 = 0;
         while s.pop_due(5).is_some() {

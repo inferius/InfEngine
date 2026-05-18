@@ -253,7 +253,93 @@ fn get_spread(
     out
 }
 
-/// MC-faithful planner. See module docs for the algorithm.
+/// Per-cell planner. Direct port of MC's `FlowingFluid.tick(pos)`.
+/// Runs pull-recompute and spread for a single cell using the
+/// world and level snapshot it sees, stages writes into
+/// `updates`. The caller applies the merged plan via
+/// `liquid_apply_plan`.
+///
+/// Each call only proposes writes for `pos` and its NSEW and
+/// below neighbours; the caller is expected to schedule the next
+/// tick for `pos` (if it stays active) and for every neighbour
+/// the plan touches.
+pub(crate) fn liquid_plan_cell(
+    world: &World,
+    level_map: &HashMap<[i32; 3], u8>,
+    pos: [i32; 3],
+    liquid: &Liquid,
+    bias_drops: bool,
+    plan: &mut LiquidPlanStep,
+    updates: &mut HashMap<[i32; 3], (u8, bool)>,
+) {
+    let liquid_id = liquid.block_id;
+    let max_range = liquid.max_range;
+    // Defensive: cell may have been overwritten since it was
+    // scheduled.
+    if world.get(pos).0 != liquid_id {
+        return;
+    }
+    let level = level_map.get(&pos).copied().unwrap_or(0);
+    let is_source = level == 0;
+
+    // Phase 1: pull-recompute non-source cells (see bulk planner
+    // for the rationale on snapshot semantics + steady-state
+    // oscillation).
+    if !is_source {
+        match liquid_get_new_state(world, level_map, pos, liquid) {
+            None => {
+                plan.evaporate.push(pos);
+                return;
+            }
+            Some((new_level, _falling)) if new_level != level => {
+                plan.decay.push((pos, new_level));
+            }
+            Some(_) => {}
+        }
+    }
+
+    // Phase 2: spread. Uses snapshot state, not the decayed level
+    // - matches MC's behaviour where tick() reads fluidState
+    // before applying writes.
+    let is_falling = level == 8;
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let below_passes = can_maybe_pass_through(world, level_map, below, liquid_id);
+    let mut placed_below = false;
+    if below_passes {
+        put_water_update(updates, below, 1, true, max_range);
+        placed_below = true;
+    }
+    let do_spread_sides = if placed_below {
+        source_neighbour_count(world, level_map, pos, liquid_id) >= 3
+    } else {
+        let below_b = world.get(below);
+        let below_blocks = !(below_b.is_air()
+            || block_is_washable(below_b)
+            || below_b.0 == liquid_id);
+        is_source || below_blocks
+    };
+    if !do_spread_sides {
+        return;
+    }
+    let amount: i16 = if is_source || is_falling { 8 } else { 8 - level as i16 };
+    let neighbor_amount: i16 = if is_falling {
+        7
+    } else {
+        amount - liquid.drop_off as i16
+    };
+    if neighbor_amount <= 0 {
+        return;
+    }
+    for (target, lvl, falling) in get_spread(world, level_map, pos, liquid, bias_drops)
+    {
+        put_water_update(updates, target, lvl, falling, max_range);
+    }
+}
+
+/// MC-faithful planner. See module docs for the algorithm. Bulk
+/// variant used by the test sim (`LiquidSim`); the live Voxel
+/// runs per-cell ticks via `liquid_plan_cell` + the schedule.
+#[allow(dead_code)]
 pub(crate) fn liquid_plan_step(
     world: &World,
     level_map: &HashMap<[i32; 3], u8>,
@@ -262,127 +348,24 @@ pub(crate) fn liquid_plan_step(
     bias_drops: bool,
 ) -> LiquidPlanStep {
     let liquid_id = liquid.block_id;
-    let max_range = liquid.max_range;
-    // Per-tick candidate cap. Previously 512 - too small for a
-    // tall waterfall + sprawling pool: a column of >500 cells
-    // exceeded the cap, HashSet iteration order randomly picked
-    // which cells got processed each tick, and the column
-    // visually "froze" partway down because the bottom cells
-    // were skipped. 8192 covers practically any single-pool
-    // scenario the demo produces without blowing per-frame
-    // CPU budget (8192 * 4 NSEW reads ~ 32k world.get calls
-    // every tick_period frames = ~6 fired/sec for water).
+    // No more 8192 cap on the bulk variant either - the schedule
+    // path enforces its budget per frame, and the test sim runs on
+    // small worlds (no risk of huge candidate counts).
     let candidates: Vec<[i32; 3]> = active
         .iter()
         .filter(|p| world.get(**p).0 == liquid_id)
-        .take(8192)
         .copied()
         .collect();
     let mut plan = LiquidPlanStep::default();
     if candidates.is_empty() {
         return plan;
     }
-    // Updates merged from every spread proposal. Min-level wins on
-    // conflict; falling flag sticks if any contributor sets it.
     let mut updates: HashMap<[i32; 3], (u8, bool)> = HashMap::new();
-
     for pos in &candidates {
-        let level = level_map.get(pos).copied().unwrap_or(0);
-        let is_source = level == 0;
-
-        // ----- Phase 1: pull-recompute non-source cells. -----
-        //
-        // Use snapshot state (the planner is pure - no mid-loop
-        // writes to world/level_map). If the recompute differs from
-        // the current level, stage decay; if it empties, stage
-        // evaporate.
-        //
-        // This is the change that fixes the steady-state oscillation
-        // on flat terrain. Previously the planner only decayed cells
-        // that received NO spread write that tick - on a settled
-        // pool every cell got pushed, so nothing decayed and a
-        // removed source's pool persisted forever.
-        if !is_source {
-            match liquid_get_new_state(world, level_map, *pos, liquid) {
-                None => {
-                    plan.evaporate.push(*pos);
-                    // Skip spread for an evaporating cell - it
-                    // shouldn't push water on its way out. (MC's
-                    // tick() also runs spread after setBlock to air,
-                    // but the resulting fluidState.isEmpty() makes
-                    // spread() a no-op anyway.)
-                    continue;
-                }
-                Some((new_level, _falling)) if new_level != level => {
-                    plan.decay.push((*pos, new_level));
-                    // Fall through to spread - MC keeps spreading
-                    // even after a recompute landed.
-                }
-                Some(_) => {
-                    // Unchanged.
-                }
-            }
-        }
-
-        // ----- Phase 2: spread (MC's FlowingFluid.spread). -----
-        //
-        // Use the snapshot fluidState for amount/falling decisions.
-        // Decayed cells will see the new state on the next tick.
-        let is_falling = level == 8;
-
-        let below = [pos[0], pos[1] - 1, pos[2]];
-        let below_passes = can_maybe_pass_through(world, level_map, below, liquid_id);
-        let mut placed_below = false;
-
-        if below_passes {
-            // newBelowFluid = flowing(8, true). MC always writes
-            // falling fluid below a same-liquid spreader because
-            // getNewLiquid(below) sees us at below.above() and
-            // returns flowing(8, true) unconditionally.
-            put_water_update(&mut updates, below, 1, true, max_range);
-            placed_below = true;
-        }
-
-        let do_spread_sides = if placed_below {
-            // MC: only spread sides after a vertical drop when
-            // surrounded by 3+ horizontal sources (rare - sustains
-            // an infinite well from a 4-source spring).
-            source_neighbour_count(world, level_map, *pos, liquid_id) >= 3
-        } else {
-            // MC: spread sides if source OR !isWaterHole(below).
-            // waterHole = below already holds liquid OR is open.
-            // -> equivalent to "below is a non-passable wall".
-            let below_b = world.get(below);
-            let below_blocks = !(below_b.is_air()
-                || block_is_washable(below_b)
-                || below_b.0 == liquid_id);
-            is_source || below_blocks
-        };
-        if !do_spread_sides {
-            continue;
-        }
-
-        // spreadToSides amount gate. MC:
-        //   neighbor = amount - dropOff (or 7 if FALLING)
-        //   if neighbor > 0: spread to getSpread dirs.
-        let amount: i16 = if is_source || is_falling { 8 } else { 8 - level as i16 };
-        let neighbor_amount: i16 = if is_falling {
-            7
-        } else {
-            amount - liquid.drop_off as i16
-        };
-        if neighbor_amount <= 0 {
-            continue;
-        }
-
-        // getSpread (slope-distance bias) + push.
-        for (target, lvl, falling) in
-            get_spread(world, level_map, *pos, liquid, bias_drops)
-        {
-            put_water_update(&mut updates, target, lvl, falling, max_range);
-        }
+        liquid_plan_cell(
+            world, level_map, *pos, liquid, bias_drops, &mut plan, &mut updates,
+        );
     }
-
     plan.place = updates.into_iter().map(|(p, (l, f))| (p, l, f)).collect();
     plan
 }

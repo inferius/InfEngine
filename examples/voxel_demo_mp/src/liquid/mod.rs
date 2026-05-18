@@ -31,9 +31,16 @@ use infengine_voxel::BlockId;
 pub(crate) use apply::liquid_apply_plan;
 pub(crate) use merge::liquid_merge_step;
 pub(crate) use mesh::{
-    bottom_open, distance_to_drop_at, liquid_corner_height_at,
-    push_quad_flow, side_open,
+    bottom_open, liquid_corner_height_at, push_quad_flow, side_open,
 };
+// `distance_to_drop_at` and `liquid_plan_step` are used by the
+// test sim only; re-exporting them under `cfg(test)` keeps the
+// public surface clean while still giving `tests.rs` direct
+// access through `super::*`.
+#[cfg(test)]
+pub(crate) use mesh::distance_to_drop_at;
+pub(crate) use plan::{LiquidPlanStep, liquid_plan_cell};
+#[cfg(test)]
 pub(crate) use plan::liquid_plan_step;
 
 // ---------------------------------------------------------------
