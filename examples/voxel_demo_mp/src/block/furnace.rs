@@ -367,6 +367,42 @@ fn output_slot_can_accept(
     }
 }
 
+/// Apply a `FurnaceOutput` catch-up event to a furnace map. Used
+/// by the save layer's `apply_catch_up_events` to land the offline
+/// cook results back on the live world.
+///
+/// Wire steps:
+/// 1. If `furnaces` has no entry at `pos`, the event is dropped
+///    silently (the player broke the furnace mid-offline).
+/// 2. Otherwise merge `count` of `block` into the output slot
+///    (slot 2). Uses `Container::set_slot` so the accept_nothing
+///    filter never rejects the cook's own product.
+/// 3. If the output slot already holds a different item, the
+///    event is dropped (shouldn't happen in practice - the
+///    catch-up dispatcher checks the same gate - but we guard
+///    defensively).
+///
+/// Returns `true` when the event landed, `false` otherwise.
+pub(crate) fn apply_catch_up_output(
+    furnaces: &mut HashMap<[i32; 3], Container>,
+    pos: [i32; 3],
+    block: u16,
+    count: u8,
+) -> bool {
+    let Some(furnace) = furnaces.get_mut(&pos) else {
+        return false;
+    };
+    let new_output = match furnace.slot(FURNACE_OUTPUT_SLOT) {
+        None => Some((block, count)),
+        Some((sid, scount)) if sid == block => {
+            Some((block, scount.saturating_add(count)))
+        }
+        Some(_) => return false,
+    };
+    furnace.set_slot(FURNACE_OUTPUT_SLOT, new_output);
+    true
+}
+
 /// Recover a cursor-held stack into the furnace when the UI
 /// closes. Returns the per-item leftover Vec the caller spawns as
 /// floor drops at the furnace position. Mirrors

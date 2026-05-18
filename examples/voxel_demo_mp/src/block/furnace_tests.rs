@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use super::{
     FURNACE_COOK_MS_PER_OUTPUT, FURNACE_COOK_TICKS_PER_OUTPUT, FURNACE_FUEL_SLOT,
     FURNACE_INPUT_SLOT, FURNACE_OUTPUT_SLOT, FURNACE_SLOTS, FurnaceRuntime, TICK_MS,
-    accept_fuel, accept_nothing, accept_smeltable, break_furnace, drain_drops,
-    furnace_tick, new_furnace, place_furnace, recover_held_on_close,
-    step_one_furnace,
+    accept_fuel, accept_nothing, accept_smeltable, apply_catch_up_output,
+    break_furnace, drain_drops, furnace_tick, new_furnace, place_furnace,
+    recover_held_on_close, step_one_furnace,
 };
 use crate::container::Container;
 
@@ -464,6 +464,61 @@ fn full_cook_roundtrip_iron_ore_to_ingot() {
     }
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some((43, 1)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some((14, 2)));
+}
+
+// ---- apply_catch_up_output (offline -> live bridge) ----
+
+#[test]
+fn catch_up_output_lands_in_empty_slot() {
+    let mut furnaces: std::collections::HashMap<[i32; 3], Container> =
+        std::collections::HashMap::new();
+    furnaces.insert([1, 1, 1], new_furnace());
+    let landed = apply_catch_up_output(&mut furnaces, [1, 1, 1], 43, 3);
+    assert!(landed);
+    assert_eq!(
+        furnaces.get(&[1, 1, 1]).unwrap().slot(FURNACE_OUTPUT_SLOT),
+        Some((43, 3)),
+    );
+}
+
+#[test]
+fn catch_up_output_merges_into_same_id_stack() {
+    let mut furnaces: std::collections::HashMap<[i32; 3], Container> =
+        std::collections::HashMap::new();
+    let mut f = new_furnace();
+    f.set_slot(FURNACE_OUTPUT_SLOT, Some((43, 4)));
+    furnaces.insert([0, 0, 0], f);
+    let landed = apply_catch_up_output(&mut furnaces, [0, 0, 0], 43, 5);
+    assert!(landed);
+    assert_eq!(
+        furnaces.get(&[0, 0, 0]).unwrap().slot(FURNACE_OUTPUT_SLOT),
+        Some((43, 9)),
+    );
+}
+
+#[test]
+fn catch_up_output_missing_furnace_is_no_op() {
+    let mut furnaces: std::collections::HashMap<[i32; 3], Container> =
+        std::collections::HashMap::new();
+    let landed = apply_catch_up_output(&mut furnaces, [9, 9, 9], 43, 1);
+    assert!(!landed);
+}
+
+#[test]
+fn catch_up_output_mismatched_id_is_dropped() {
+    // Output slot already holds stone (some weird state). The
+    // event is dropped + the slot is left alone.
+    let mut furnaces: std::collections::HashMap<[i32; 3], Container> =
+        std::collections::HashMap::new();
+    let mut f = new_furnace();
+    f.set_slot(FURNACE_OUTPUT_SLOT, Some((1, 1)));
+    furnaces.insert([0, 0, 0], f);
+    let landed = apply_catch_up_output(&mut furnaces, [0, 0, 0], 43, 5);
+    assert!(!landed);
+    assert_eq!(
+        furnaces.get(&[0, 0, 0]).unwrap().slot(FURNACE_OUTPUT_SLOT),
+        Some((1, 1)),
+    );
 }
 
 #[test]
