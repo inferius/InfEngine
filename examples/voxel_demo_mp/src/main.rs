@@ -2320,6 +2320,84 @@ impl Voxel {
         self.spawn_break_particles_tinted(voxel, [0.75, 0.55, 0.30]);
     }
 
+    /// Empty-bucket RMB scoop. Casts a ray that stops at the
+    /// first liquid voxel or solid block, accepts a liquid
+    /// SOURCE (level 0), swaps the bucket to its filled
+    /// variant, clears the source voxel, and broadcasts the
+    /// edit. Returns `true` when the scoop succeeded.
+    ///
+    /// Runs OUTSIDE the placement-target chain because
+    /// `self.target` skips `F_RAY_PASS` liquids - if the player
+    /// aims an empty bucket at a water source with sky behind
+    /// it, the placement ray returns `None` and the chain's
+    /// bucket arm never fires. This dedicated raycast handles
+    /// the scoop independently.
+    fn try_scoop_with_bucket(&mut self, forward: Vec3) -> bool {
+        let liquid_hit = raycast_with(
+            &self.world,
+            self.player_pos,
+            forward,
+            6.0,
+            |b| {
+                !b.is_air()
+                    && (block_is_liquid(b) || !block_is_ray_passable(b))
+            },
+        );
+        let Some(scoop_voxel) = liquid_hit.map(|h| h.voxel) else {
+            return false;
+        };
+        let scoop_block = self.world.get(scoop_voxel);
+        if !block_is_liquid(scoop_block) {
+            return false;
+        }
+        // MC: only source voxels (`isSource()`) can be bottled.
+        // Flow / falling cells pop the bucket back empty.
+        let scoop_level = self
+            .liquid_level
+            .get(&scoop_voxel)
+            .copied()
+            .unwrap_or(0);
+        if scoop_level != 0 {
+            return false;
+        }
+        let Some(filled) = liquid_to_bucket_id(scoop_block.0) else {
+            return false;
+        };
+        let cfg = bincode::config::standard();
+        self.world_set_tracked(scoop_voxel, BlockId::AIR);
+        let coords = Self::affected_chunks(scoop_voxel);
+        self.rebuild_chunks(&coords);
+        self.inventory[self.selected_slot] = Some((BlockId(filled), 1));
+        let edit = EditMsg {
+            x: scoop_voxel[0],
+            y: scoop_voxel[1],
+            z: scoop_voxel[2],
+            block: 0,
+        };
+        match &mut self.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+            NetRole::Client { pending_edits, .. } => {
+                pending_edits.push(edit);
+            }
+        }
+        let center = [
+            scoop_voxel[0] as f32 + 0.5,
+            scoop_voxel[1] as f32 + 0.5,
+            scoop_voxel[2] as f32 + 0.5,
+        ];
+        self.sfx_at("splash", center, |a, g| {
+            let _ = a.play_thud(140.0, 0.18 * g);
+            let _ = a.play_swish(0.16 * g);
+        });
+        true
+    }
+
     /// Tinted variant. `color` is the linear-RGB albedo of the
     /// broken block; the debris cubes pick up that hue with a
     /// small per-particle brightness jitter so they read as
@@ -3851,12 +3929,11 @@ impl Voxel {
             f5_prev: false,
             show_debug_panel: false,
             f6_prev: false,
-            // Disabled by default: the cliff bias picked sides
-            // over forward when both were viable, which trapped
-            // water on narrow bridges spilling sides instead of
-            // filling forward. Toggle on via F6 if you want MC's
-            // pathfinding behaviour back.
-            liquid_bias_drops: false,
+            // Pathfinding enabled by default - matches MC's
+            // `FlowingFluid.getSpread` which always biases toward
+            // the closest hole. Toggle off via F6 for radial
+            // spread (useful when debugging spread bugs).
+            liquid_bias_drops: true,
             f4_prev: false,
             q_prev: false,
             home_pos: None,
@@ -8538,8 +8615,27 @@ impl AppHandler for Voxel {
                 let _ = a.play_thud(freq, 0.30 * g);
             });
         }
+        // Empty-bucket scoop: runs BEFORE the placement-target
+        // chain because `self.target` is the placement ray which
+        // tunnels through `F_RAY_PASS` liquids - if the player
+        // points an empty bucket at a water source with sky
+        // behind it, `self.target` is `None` and the bucket
+        // branch inside the chain below would never fire. This
+        // path runs its own purpose-built raycast that DOES
+        // stop at liquid voxels.
+        let bucket_scooped = if !self.any_panel_open()
+            && attack_mob.is_none()
+            && rmb
+            && let Some(held) = selected_block
+            && held.0 == BUCKET_EMPTY_ID
+        {
+            self.try_scoop_with_bucket(forward)
+        } else {
+            false
+        };
         // Block place: RMB single click stays instant; no mining.
-        if !self.any_panel_open()
+        if !bucket_scooped
+            && !self.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
