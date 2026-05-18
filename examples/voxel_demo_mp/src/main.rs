@@ -2749,13 +2749,29 @@ impl Voxel {
             // Either path counts as "had drop" - non-source
             // non-falling cells then skip the regular horizontal
             // spread (matches JS).
-            let mut had_drop = false;
+            // Direct-below fall takes precedence. A cell with
+            // air below pours straight down; horizontal spread
+            // is skipped this tick so a column doesn't fan out
+            // sideways at every Y while it falls. This is the
+            // 3D-specific case the JS reference doesn't model
+            // (the reference is 2D, where "falling" is a
+            // horizontal direction with terrain drop).
             let below = [pos[0], pos[1] - 1, pos[2]];
             let below_b = self.world.get(below);
-            if below_b.is_air() || block_is_washable(below_b) {
+            let below_open = below_b.is_air() || block_is_washable(below_b);
+            if below_open {
                 Self::put_water_update(&mut updates, below, 1, true, max_range);
-                had_drop = true;
+                // Pure fall: every cell type (source / flow /
+                // falling) skips horizontal spread when the
+                // cell is in mid-air. MC water columns are one
+                // voxel wide, not a fanned cascade.
+                continue;
             }
+            // Cell rests on solid. Horizontal cliff-drop scan
+            // first - find any NSEW neighbour at the same Y
+            // whose own cell-below is air. The flow spills
+            // over that edge as a falling stream.
+            let mut had_drop = false;
             let drop_dirs: [[i32; 3]; 4] = [
                 [1, 0, 0],
                 [-1, 0, 0],
@@ -2778,13 +2794,10 @@ impl Voxel {
                         max_range,
                     );
                     had_drop = true;
-                    break; // first match wins, per JS
+                    break;
                 }
             }
             if had_drop && !is_source && !is_falling {
-                // Non-source non-falling cell drains into the
-                // drop direction; skip the regular horizontal
-                // spread this tick.
                 continue;
             }
             if next_level > max_range {
@@ -13461,7 +13474,13 @@ impl AppHandler for Voxel {
 
     fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.clamp(1e-4, 0.1);
-        self.fps_ema = self.fps_ema * 0.9 + (1.0 / dt) * 0.1;
+        // FPS counter: heavier new-frame weight so the reading
+        // tracks reality under load. The old 0.9/0.1 EMA was so
+        // sticky that a freshly-stalled game still showed the
+        // previous steady-state value for seconds. Clamp the
+        // displayed value to a sensible range too.
+        let inst = (1.0 / dt.max(1e-3)).clamp(1.0, 999.0);
+        self.fps_ema = self.fps_ema * 0.5 + inst * 0.5;
 
         // Pull any pending master-query results back onto the main
         // thread (refresh + announce both run on background workers).
