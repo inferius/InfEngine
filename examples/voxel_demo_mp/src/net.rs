@@ -173,8 +173,16 @@ pub(crate) struct DropSpawnMsg {
 /// Versioned wrapper around the server's persisted state. Stored
 /// at `voxel_server_state.bin` prefixed with the `INFV` magic so
 /// we can evolve the format without breaking older saves.
+///
+/// Pre-B.7a single-file format. The runtime now writes the modular
+/// multi-world layout (`world_save::save_world`); this type stays in
+/// the tree so a future migration arrow can decode a legacy file out
+/// of `voxel_server_state.bin.migrated` and unfold it into the new
+/// shape. Marked `dead_code` to suppress the unused-import noise.
+#[allow(dead_code)]
 pub(crate) const SERVER_STATE_VERSION: u32 = 2;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ServerStateV2 {
     pub(crate) version: u32,
@@ -218,6 +226,7 @@ pub(crate) struct ServerStateV2 {
     pub(crate) liquid_level: Vec<([i32; 3], u8)>,
 }
 
+#[allow(dead_code)]
 fn default_player_health() -> f32 {
     PLAYER_MAX_HEALTH
 }
@@ -226,12 +235,18 @@ fn default_player_health() -> f32 {
 /// tuples mirror the in-memory `[Option<(BlockId, u8)>; N]`
 /// layout but use `u16` for the block so the format doesn't break
 /// if `BlockId` ever grows fields.
+///
+/// Like `ServerStateV2`, kept dead-but-reachable for a future legacy
+/// migration arrow. The B.7a path writes `world_save::players::
+/// PlayerSave` instead.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PersistedInv {
     pub(crate) inventory: Vec<Option<(u16, u8)>>,
     pub(crate) craft: Vec<Option<(u16, u8)>>,
 }
 
+#[allow(dead_code)]
 impl PersistedInv {
     pub(crate) fn from_client_inv(inv: &ClientInv) -> Self {
         Self {

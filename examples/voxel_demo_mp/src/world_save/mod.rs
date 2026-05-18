@@ -1,34 +1,38 @@
 //! Save / load orchestration for the host's authoritative world.
 //!
-//! Owns the on-disk read + write path that used to live as
-//! `Voxel::save_server_state` / `Voxel::load_server_state` in
-//! `main.rs`. The `Voxel` methods stay as thin wrappers so call
-//! sites (autosave timer, shutdown hook, `/save` command) don't
-//! have to know about the relocated implementation.
+//! Phase B.7a wires the multi-world `world_save` layer (`meta.json`,
+//! `world.json`, per-chunk files, per-player files, per-dimension
+//! entities, scheduled timers) into the runtime through
+//! `Voxel::save_server_state` / `Voxel::load_server_state` (still the
+//! thin shims in `main.rs`, now calling `save_world` / `load_world`
+//! here). The legacy single-file `voxel_server_state.bin` flow is
+//! gone; the very first run that still has that file lying around
+//! gets it migrated into a `worlds/legacy/` slot via
+//! `migrate_legacy_if_needed`.
 //!
-//! Two layers live here:
+//! Layout (per the design doc):
 //!
-//! - `save` / `load`: the legacy single-file format. Reads /
-//!   writes `voxel_server_state.bin` in the current working
-//!   directory so existing players keep working across the A4
-//!   refactor. Phase G (Worlds menu) is what flips this over to
-//!   the per-slot path resolved through `layout`.
+//! ```text
+//! <data_dir>/InfEngine/voxel_demo_mp/worlds/<slug>/
+//!   meta.json                        # human-readable header
+//!   world.json                       # worldgen + seed + spawn
+//!   chunks/overworld/cx_cy_cz.chunk.bin
+//!   players/<name>.bin               # per-player save
+//!   entities/overworld.bin           # mobs + dropped items
+//!   timers/scheduled.bin             # furnace / crop / liquid ticks
+//! ```
 //!
-//! - `layout`: cross-platform `worlds/<slug>/` resolver +
-//!   `WorldMeta` schema. Wired up now so Phase B (dedicated
-//!   server) and Phase G (UI) land against a stable disk shape.
-//!
-//! Wire types (`ServerStateV2`, `PersistedInv`) live in
-//! `crate::net` because they share the bincode + serde dependency
-//! tree with the rest of the protocol; we just import them.
+//! The heavy lifting (build PlayerSave / DimensionEntities from
+//! `Voxel`, iterate chunks, decode timers + dispatch catch-up) lives
+//! in `runtime.rs` to keep this file under the 500-LOC soft cap.
+//! Public surface: `save_world`, `load_world`, `LoadedWorld`,
+//! `migrate_legacy_if_needed`.
 
-use std::collections::HashMap;
+use std::io;
 
-use infengine_voxel::BlockId;
 use tracing::{info, warn};
 
-use crate::net::{EditMsg, NetRole, PersistedInv, SERVER_STATE_VERSION, ServerStateV2};
-use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel, set_world_seed, world_seed};
+use crate::Voxel;
 
 pub(crate) mod atomic;
 pub(crate) mod chunks;
@@ -37,6 +41,7 @@ pub(crate) mod layout;
 pub(crate) mod meta;
 pub(crate) mod migrate;
 pub(crate) mod players;
+pub(crate) mod runtime;
 pub(crate) mod timers;
 pub(crate) mod world_json;
 
@@ -55,230 +60,178 @@ mod tests;
 #[cfg(test)]
 mod timers_tests;
 
-/// Path of the legacy server-side world delta file. Lives next to
-/// the launch directory so a host can be torn down + brought back
-/// up without losing the players' edits. The multi-world layout
-/// (`layout::state_path(slug)`) replaces this in Phase G; the
-/// legacy file is migrated into `worlds/legacy/` on first load.
+/// Path of the pre-A4 legacy server-side world delta file. Lives next
+/// to the launch directory; `migrate_legacy_if_needed` relocates it
+/// into `worlds/legacy/` once the multi-world layer takes over.
 pub(crate) const STATE_FILE: &str = "voxel_server_state.bin";
 
-/// Magic bytes at the head of every save: `"INFV"` (InfEngine
-/// Voxel). Distinguishes the new versioned format from the old
-/// raw `Vec<EditMsg>` format - if the first 4 bytes aren't the
-/// magic, the loader treats the whole file as a v1 edit log.
-pub(crate) const STATE_MAGIC: &[u8; 4] = b"INFV";
+/// Default slug used when the runtime has no `current_world_slug`
+/// (e.g. legacy-migrated saves and the very first launch on a fresh
+/// install).
+pub(crate) const DEFAULT_SLUG: &str = "default";
 
-/// Read the on-disk edit log and apply every entry to the local
-/// world. Called once on the server right after the world's
-/// procedural base is generated. Tries the versioned format
-/// first, falls back to the legacy raw edit log on a magic
-/// mismatch so existing save files keep working.
+/// Result bundle returned from `load_world`. Carries the parsed
+/// `meta.json` + `world.json` so the caller can adjust UI state
+/// (Worlds picker selection, last-played sort) and surface the
+/// "playing slot" badge without re-reading the files.
 ///
-/// Also fires the one-shot migration from the pre-A4 single
-/// global file (`voxel_server_state.bin` in CWD) to the new
-/// `worlds/legacy/world/state.bin` slot. The migration is a move,
-/// not a copy: after a successful relocate the legacy file is
-/// gone. The runtime still reads + writes the CWD path for now;
-/// Phase G is what actually drives the new slot.
-pub(crate) fn load(voxel: &mut Voxel) {
-    migrate_legacy_if_needed();
-
-    let path = std::path::PathBuf::from(STATE_FILE);
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    let cfg = bincode::config::standard();
-    // Path A: new versioned format with `INFV` magic.
-    if bytes.len() >= 4 && &bytes[..4] == STATE_MAGIC {
-        match bincode::serde::decode_from_slice::<ServerStateV2, _>(&bytes[4..], cfg) {
-            Ok((state, _)) => {
-                info!(
-                    version = state.version,
-                    edits = state.edits.len(),
-                    clients = state.inventories.len(),
-                    day_time = state.day_time,
-                    path = %path.display(),
-                    "loaded server state (v2)"
-                );
-                for e in &state.edits {
-                    voxel.world_set_tracked([e.x, e.y, e.z], BlockId(e.block));
-                }
-                voxel.edit_history = state.edits;
-                voxel.day_time = state.day_time.rem_euclid(DAY_LENGTH_S);
-                voxel.player_health = state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
-                voxel.kill_count = state.kill_count;
-                // Restore the world seed before the chunk
-                // stream starts re-meshing so the workers
-                // pick up the right noise. Older saves with
-                // seed=0 stay at zero; on_start will fill in
-                // a random value the first time the loader
-                // doesn't catch.
-                if state.world_seed != 0 {
-                    set_world_seed(state.world_seed);
-                }
-                // Hydrate snow stack + torch orientation
-                // overrides so a reloaded save matches the
-                // exact state the host left.
-                for (v, l) in state.snow_layers {
-                    voxel.snow_positions.insert(v, l.clamp(1, 8));
-                }
-                for (v, o) in state.torch_orient {
-                    voxel.torch_orient.insert(v, o);
-                }
-                // Replay the persisted water spread depths so
-                // re-spread doesn't restart on every load. New
-                // saves carry full depth info; older v2 saves
-                // without the field land at depth 0 (treated
-                // as source) which is fine for small pools.
-                for (v, d) in state.liquid_level {
-                    // Clamp at MC's 7-level range so a save
-                    // from an old build with a smaller cap
-                    // still loads cleanly into the new
-                    // generic pipeline.
-                    voxel.liquid_level.insert(v, d.min(7));
-                }
-                // Restore inventories into a side map indexed by
-                // client name. They get re-keyed to live client
-                // ids on connect (see `tick_net`).
-                voxel.saved_inventories = state
-                    .inventories
-                    .into_iter()
-                    .map(|(name, p)| (name, p.into_client_inv()))
-                    .collect();
-                voxel.rebuild_all_meshes();
-                return;
-            }
-            Err(err) => {
-                warn!(error = %err, path = %path.display(), "state load v2 decode failed");
-                return;
-            }
-        }
-    }
-    // Path B: legacy `Vec<EditMsg>` format.
-    let edits: Vec<EditMsg> = match bincode::serde::decode_from_slice(&bytes, cfg) {
-        Ok((e, _)) => e,
-        Err(err) => {
-            warn!(error = %err, path = %path.display(), "state load (legacy) decode failed");
-            return;
-        }
-    };
-    info!(count = edits.len(), path = %path.display(), "loaded server state (legacy v1)");
-    for e in &edits {
-        voxel.world_set_tracked([e.x, e.y, e.z], BlockId(e.block));
-    }
-    voxel.edit_history = edits;
-    voxel.rebuild_all_meshes();
+/// `#[allow(dead_code)]` because the runtime caller currently
+/// discards the bundle - the Worlds picker hook (Phase G follow-up)
+/// is what reads these fields. Keeping the struct populated now
+/// means we don't have to plumb a second loader return path later.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedWorld {
+    pub(crate) meta: meta::WorldMeta,
+    pub(crate) world: world_json::WorldJson,
 }
 
-/// Flush the in-memory edit log + per-client inventories +
-/// day-of-cycle to disk in the new versioned `INFV` format.
-/// Called periodically while the server runs (every 30 s) so a
-/// crash loses at most half a minute of state.
-pub(crate) fn save(voxel: &mut Voxel) {
-    // Server hosts AND offline singleplayer can save.
-    // Clients can't - the host owns the authoritative state.
-    if !matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline) {
-        return;
-    }
-    let path = std::path::PathBuf::from(STATE_FILE);
-    let cfg = bincode::config::standard();
-    // Build a name -> PersistedInv map by joining live client
-    // ids with their reported names (from NetServer) + the
-    // saved_inventories side table (for clients that already
-    // disconnected this run but still have state we want to
-    // preserve across restarts).
-    let mut by_name: HashMap<String, PersistedInv> = voxel
-        .saved_inventories
-        .iter()
-        .map(|(n, inv)| (n.clone(), PersistedInv::from_client_inv(inv)))
-        .collect();
-    if let NetRole::Server {
-        server,
-        inventories,
-        ..
-    } = &voxel.net
-    {
-        for (cid, inv) in inventories.iter() {
-            if let Some(name) = server.client_name(*cid) {
-                by_name.insert(name, PersistedInv::from_client_inv(inv));
-            }
-        }
-    }
-    let state = ServerStateV2 {
-        version: SERVER_STATE_VERSION,
-        edits: voxel.edit_history.clone(),
-        inventories: by_name.into_iter().collect(),
-        day_time: voxel.day_time,
-        player_health: voxel.player_health,
-        kill_count: voxel.kill_count,
-        world_seed: world_seed(),
-        snow_layers: voxel.snow_positions.iter().map(|(v, l)| (*v, *l)).collect(),
-        torch_orient: voxel.torch_orient.iter().map(|(v, o)| (*v, *o)).collect(),
-        liquid_level: voxel.liquid_level.iter().map(|(v, d)| (*v, *d)).collect(),
-    };
-    match bincode::serde::encode_to_vec(&state, cfg) {
-        Ok(payload) => {
-            let mut bytes = Vec::with_capacity(payload.len() + 4);
-            bytes.extend_from_slice(STATE_MAGIC);
-            bytes.extend_from_slice(&payload);
-            if let Err(err) = std::fs::write(&path, &bytes) {
-                warn!(error = %err, path = %path.display(), "state save failed");
-            }
-        }
-        Err(err) => warn!(error = %err, "state save encode failed"),
-    }
-    voxel.last_state_save = Some(std::time::Instant::now());
-    voxel.note_save();
+/// Persist the full world state for `slug`. Idempotent: a follow-up
+/// call writes the same set of files (with updated timestamps + any
+/// dirty chunks since the previous call). Atomic per-file via
+/// `atomic::atomic_save`.
+///
+/// Wiring summary:
+/// - Updates `meta.json` (`last_played` + `play_time_seconds`).
+/// - Creates `world.json` on first save (worldgen + seed pinned at
+///   creation; subsequent saves leave it alone).
+/// - Iterates every loaded chunk + writes its `ChunkPayload`.
+/// - Builds a `PlayerSave` for the local host + writes it under
+///   `players/host.bin`.
+/// - Builds a `DimensionEntities` from mobs + drops + writes
+///   `entities/overworld.bin`.
+/// - Drains the in-memory `LiquidSchedule` into a
+///   `ScheduledTimers` bundle + writes `timers/scheduled.bin`.
+pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
+    runtime::save_world(voxel, slug)
 }
 
-/// One-shot migration: if the pre-A4 single global file
-/// (`voxel_server_state.bin` in CWD) exists and the new
-/// `worlds/legacy/world/state.bin` slot is empty, *copy* the
-/// legacy bytes into the new slot. The runtime keeps reading +
-/// writing the CWD path for now (Phase G flips the switch); this
-/// step is purely about getting the bytes into the new shape so
-/// the Worlds menu can later pick them up. The deliberate copy-
-/// not-move keeps existing players' worlds loading at the CWD
-/// path until Phase G is ready to retire it.
+/// Load `slug` into `voxel`. On a fresh slot (no `meta.json` yet)
+/// the call returns `io::ErrorKind::NotFound` so the caller can
+/// decide whether to mint a new world (default behaviour: yes).
 ///
-/// Idempotent: if the destination already exists OR the legacy
-/// file is missing OR creating the destination dir fails, the
-/// function is a no-op.
-fn migrate_legacy_if_needed() {
-    let legacy = std::path::PathBuf::from(STATE_FILE);
-    if !legacy.exists() {
-        return;
+/// Wiring summary (mirrors `save_world` in reverse):
+/// - Parses `meta.json` + `world.json`. Refuses unsupported
+///   `format_version` values unless a migration is registered.
+/// - Pins the global `WorldGen` + `world_seed` from `world.json`.
+/// - Inserts every chunk file's voxels into `voxel.world`, plus
+///   per-cell liquid level / torch orient / snow layer overrides.
+/// - Loads the host player file into `voxel`.
+/// - Re-hydrates mobs + drops from `entities/overworld.bin`.
+/// - Reads `timers/scheduled.bin`, runs the catch-up dispatch
+///   against wall-now, applies the resulting events, and re-arms
+///   the `LiquidSchedule` from the LiquidScheduled events.
+pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
+    runtime::load_world(voxel, slug)
+}
+
+/// One-shot legacy migration. If `worlds/` does not yet exist as a
+/// directory tree AND a `voxel_server_state.bin` does live in the
+/// current working directory, build a `worlds/legacy/` slot from it.
+///
+/// Steps:
+/// 1. Detect both conditions; bail with `Ok(None)` if either is
+///    missing.
+/// 2. Create the legacy slot directory + write a minimal
+///    `meta.json` + `world.json` so `list_worlds()` surfaces it.
+/// 3. Move the legacy file aside to
+///    `voxel_server_state.bin.migrated` so the next launch doesn't
+///    re-run this path.
+///
+/// The actual contents of the legacy file are not decoded here -
+/// the file format is `INFV`-magic bincode + serde and we treat it
+/// as opaque bytes. A follow-up loader (a registered migration arrow)
+/// can pull data out of it later. For now the migration creates a
+/// fresh slot pointing at a zero-edit baseline so the player sees
+/// the slot in the Worlds picker.
+pub(crate) fn migrate_legacy_if_needed() -> io::Result<Option<String>> {
+    let legacy_file = std::path::PathBuf::from(STATE_FILE);
+    let worlds_root = layout::worlds_dir();
+
+    // Only run on the first launch after Phase B.7a: legacy file
+    // exists AND the new worlds tree is still empty.
+    if !legacy_file.exists() {
+        return Ok(None);
     }
-    let dest = layout::state_path("legacy");
-    if dest.exists() {
-        return;
+    if let Ok(read) = std::fs::read_dir(&worlds_root) {
+        // Treat any pre-existing slot as "migration already happened" -
+        // don't trample a slot the player just created.
+        let has_entry = read.flatten().any(|e| e.path().is_dir());
+        if has_entry {
+            return Ok(None);
+        }
     }
-    let Some(parent) = dest.parent() else {
-        return;
-    };
-    if let Err(err) = std::fs::create_dir_all(parent) {
+
+    let slug = "legacy";
+    let world_dir = layout::world_dir(slug);
+    std::fs::create_dir_all(&world_dir)?;
+
+    // Mint a minimal meta + world.json so the Worlds menu surfaces
+    // the slot. The actual edit history sits in the legacy bin file;
+    // a future migration arrow can decode it into chunks + players.
+    let meta = meta::create_meta("Legacy save", slug);
+    meta::write_meta(slug, &meta)?;
+    let world = world_json::create_world(
+        worldgen_str(crate::worldgen::WorldGen::current()),
+        crate::worldgen::world_seed(),
+    );
+    world_json::write_world(slug, &world)?;
+
+    // Move the old file aside so the next launch doesn't re-trigger
+    // the migration. A rename keeps the bytes around for a future
+    // migration arrow without leaving them on the load path.
+    let aside = legacy_file.with_extension("bin.migrated");
+    if let Err(err) = std::fs::rename(&legacy_file, &aside) {
         warn!(
             error = %err,
-            dir = %parent.display(),
-            "world_save: legacy migration create_dir_all failed - skipping"
+            from = %legacy_file.display(),
+            to = %aside.display(),
+            "migrate_legacy: failed to move legacy file aside"
         );
-        return;
+    } else {
+        info!(
+            from = %legacy_file.display(),
+            to = %aside.display(),
+            slug = slug,
+            "migrate_legacy: moved legacy save into worlds/legacy/"
+        );
     }
-    match std::fs::copy(&legacy, &dest) {
-        Ok(_) => {
-            info!(
-                from = %legacy.display(),
-                to = %dest.display(),
-                "world_save: migrated legacy save -> worlds/legacy/"
-            );
-        }
-        Err(err) => {
-            warn!(
-                error = %err,
-                from = %legacy.display(),
-                to = %dest.display(),
-                "world_save: legacy migration failed"
-            );
-        }
+
+    Ok(Some(slug.to_string()))
+}
+
+/// Stringify a `WorldGen` variant into the tag used inside
+/// `world.json`. Mirror of `WorldGen::from_str` so a round trip
+/// through the on-disk JSON preserves the variant.
+pub(crate) fn worldgen_str(wg: crate::worldgen::WorldGen) -> &'static str {
+    match wg {
+        crate::worldgen::WorldGen::Classic => "classic",
+        crate::worldgen::WorldGen::Flat => "flat",
+        crate::worldgen::WorldGen::Islands => "islands",
+        crate::worldgen::WorldGen::Amplified => "amplified",
     }
+}
+
+/// Apply a `WorldGen` variant to the global atomic so background
+/// worldgen workers pick it up. Inverse of `worldgen_str` paired
+/// with `WorldGen::from_str` on the load path.
+pub(crate) fn set_worldgen(wg: crate::worldgen::WorldGen) {
+    crate::worldgen::WORLDGEN.store(wg as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Best-effort wall-clock now in ms since UNIX epoch. Falls back to
+/// 0 on the (essentially impossible) `SystemTime::now() < UNIX_EPOCH`.
+pub(crate) fn current_wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Probe `worlds/<slug>/` for a `meta.json`. Lighter than
+/// `layout::list_worlds` when the caller only needs the "does the
+/// slot exist?" answer.
+#[allow(dead_code)]
+pub(crate) fn slot_exists(slug: &str) -> bool {
+    layout::meta_path(slug).exists()
 }

@@ -693,12 +693,13 @@ struct Voxel {
     /// a client connects so reconnects pick up the same stacks.
     /// Empty in offline / client modes.
     saved_inventories: HashMap<String, ClientInv>,
-    /// Slug of the world this session is bound to. Defaulted to
-    /// `Some("legacy".to_string())` until Phase G ships the Worlds
-    /// menu; then `world_save::save` / `world_save::load` will
-    /// honour this to swap between save slots. Until then it's
-    /// only written, never read.
-    #[allow(dead_code)]
+    /// Slug of the world this session is bound to. Drives the
+    /// `worlds/<slug>/` directory that `world_save::save_world` /
+    /// `world_save::load_world` use. Defaulted to `Some("legacy")`
+    /// for the cold-start path: the legacy-migration step in
+    /// `load_server_state` overrides it if a pre-A4 single-file save
+    /// is present, and the Worlds picker (Phase G scaffolding in B.7a)
+    /// rewrites it on a New / Load click.
     current_world_slug: Option<String>,
     /// Monotonic tick counter incremented at the start of each
     /// `tick_net` call. Used to throttle pending-edit / pending-
@@ -1001,6 +1002,11 @@ struct Voxel {
     /// Last heartbeat we sent to the master (server mode). Drives
     /// the periodic re-heartbeat in `tick_net`.
     last_heartbeat: Option<std::time::Instant>,
+    /// Buffer for the "New world" name input in the main-menu Worlds
+    /// picker (Phase B.7a scaffolding). The user types a display name
+    /// here; `layout::slug()` canonicalises it before
+    /// `current_world_slug` is set.
+    new_world_name_buf: String,
 }
 
 impl Voxel {
@@ -1742,10 +1748,37 @@ impl Voxel {
     }
 
 
-    /// Thin wrapper around `world_save::load`. The orchestration
-    /// + format details live in the submodule (Phase A4 split).
+    /// Thin wrapper around `world_save::load_world`. Phase B.7a wired
+    /// in the multi-world layer; this shim resolves the current slug,
+    /// runs the optional one-shot legacy migration, then dispatches to
+    /// the typed loader. A `NotFound` from the loader means the slot
+    /// is fresh (no save yet) - in that case we just carry on with the
+    /// procedurally generated world.
     fn load_server_state(&mut self) {
-        world_save::load(self);
+        // First-run legacy migration: if the pre-A4 single-file save
+        // is still in CWD + the new worlds tree is empty, create a
+        // `worlds/legacy/` slot.
+        match world_save::migrate_legacy_if_needed() {
+            Ok(Some(legacy_slug)) => {
+                self.current_world_slug = Some(legacy_slug);
+            }
+            Ok(None) => {}
+            Err(err) => warn!(error = %err, "world_save: legacy migration failed"),
+        }
+        let slug = self
+            .current_world_slug
+            .clone()
+            .unwrap_or_else(|| world_save::DEFAULT_SLUG.to_string());
+        match world_save::load_world(self, &slug) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Fresh slot - no save on disk yet. Carry on with the
+                // procedurally generated world; the autosave loop will
+                // mint the slot on the next save tick.
+                self.current_world_slug = Some(slug);
+            }
+            Err(err) => warn!(error = %err, "world_save: load_world failed"),
+        }
     }
 
     /// Raycast against every remote player's AABB. Returns the
@@ -2071,10 +2104,21 @@ impl Voxel {
         ));
     }
 
-    /// Thin wrapper around `world_save::save`. The orchestration
-    /// + format details live in the submodule (Phase A4 split).
+    /// Thin wrapper around `world_save::save_world`. Phase B.7a wired
+    /// in the multi-world layer; this shim resolves the slug + gates
+    /// on `Server` / `Offline` (clients are never authoritative).
     fn save_server_state(&mut self) {
-        world_save::save(self);
+        // Only the host writes saves; clients see snapshots on join.
+        if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+            return;
+        }
+        let slug = self
+            .current_world_slug
+            .clone()
+            .unwrap_or_else(|| world_save::DEFAULT_SLUG.to_string());
+        if let Err(err) = world_save::save_world(self, &slug) {
+            warn!(error = %err, "world_save: save_world failed");
+        }
     }
 
     /// Push a small burst of debris particles into the system at the
@@ -3503,11 +3547,12 @@ impl Voxel {
         // singleplayer both own the world state, so both auto-
         // save - a fresh-install user who plays offline and
         // quits without `/save` previously lost every build on
-        // restart. Now an autosave fires every 30 s.
+        // restart. The cadence matches the design doc's 60 s
+        // autosave window.
         if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
             && self
                 .last_state_save
-                .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(30))
+                .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(60))
         {
             self.save_server_state();
         }
@@ -3667,7 +3712,11 @@ impl Voxel {
             known_client_ids: HashSet::new(),
             last_state_save: None,
             saved_inventories: HashMap::new(),
-            current_world_slug: Some("legacy".to_string()),
+            // Default slug for the cold-start path. The legacy
+            // migration step overrides this to "legacy" if a pre-A4
+            // save is found; the Worlds picker rewrites it to the
+            // user's pick on New / Load.
+            current_world_slug: Some(world_save::DEFAULT_SLUG.to_string()),
             net_tick: 0,
             audio: None,
             audio_bank: infengine_audio::AudioBank::new(),
@@ -3741,6 +3790,7 @@ impl Voxel {
             announce_query_rx: None,
             master_token: None,
             last_heartbeat: None,
+            new_world_name_buf: String::new(),
         }
     }
 
@@ -5471,6 +5521,18 @@ impl Voxel {
         let mut action_mp_resume = false;
         let mut action_mp_disconnect = false;
         let mut action_mp_quit = false;
+        // Worlds-picker actions (Phase B.7a scaffolding). Drained
+        // after the egui closure exits so the slug rewrite + slot
+        // deletion happen under an exclusive borrow.
+        let mut action_new_world = false;
+        let mut action_load_world: Option<String> = None;
+        let mut action_delete_world: Option<String> = None;
+        let new_world_name = &mut self.new_world_name_buf;
+        // Snapshot the on-disk worlds list once per UI frame; the
+        // picker doesn't need to re-scan on every redraw.
+        let worlds_list: Vec<world_save::layout::WorldSummary> =
+            world_save::layout::list_worlds();
+        let current_slug = self.current_world_slug.clone();
         let direct_buf = &mut self.direct_addr_buf;
         let host_name = &mut self.host_name_buf;
         let host_port = &mut self.host_port_buf;
@@ -5536,6 +5598,62 @@ impl Voxel {
                             wg as u8,
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        // Worlds picker scaffolding (Phase B.7a).
+                        // Final polish lands in Phase G.
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Worlds")
+                                .strong()
+                                .size(15.0),
+                        );
+                        if let Some(slug) = &current_slug {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Active slot: {slug}"
+                                ))
+                                .small()
+                                .italics(),
+                            );
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Name:");
+                            ui.text_edit_singleline(new_world_name);
+                            if ui.button("New").clicked() {
+                                action_new_world = true;
+                            }
+                        });
+                        // Existing slots list. Compact rows so the
+                        // main menu doesn't grow unbounded for users
+                        // with many saves; the proper polished
+                        // picker lands in Phase G.
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                if worlds_list.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "(no saved worlds yet)",
+                                        )
+                                        .italics(),
+                                    );
+                                }
+                                for w in &worlds_list {
+                                    ui.horizontal(|ui| {
+                                        let label = format!(
+                                            "{}  -  {} (seed {})",
+                                            w.name, w.worldgen, w.seed
+                                        );
+                                        ui.label(label);
+                                        if ui.button("Load").clicked() {
+                                            action_load_world = Some(w.slug.clone());
+                                        }
+                                        if ui.button("Delete").clicked() {
+                                            action_delete_world = Some(w.slug.clone());
+                                        }
+                                    });
+                                }
+                            });
+                        ui.add_space(8.0);
                         if ui.button("Play offline").clicked() {
                             action_start = true;
                         }
@@ -7134,12 +7252,13 @@ impl Voxel {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
             self.mouse_dy = 0.0;
-            // Rebuild the world if the main-menu combo picked a
-            // different `WorldGen` variant since the last build.
-            // Drops every loaded chunk + the chunk mesh handles,
-            // then re-runs `build_world` from scratch. Otherwise
-            // skip (cheap) so a quick menu-trip doesn't reset
-            // the world.
+            // If the user picked a Load slot the Worlds picker reset
+            // `last_built_worldgen` to None, which forces this branch
+            // to load the slot's saved chunks (via the legacy
+            // `load_server_state` shim that now dispatches into
+            // world_save). If nothing changed since the last Play,
+            // skip the heavy work so a quick menu round-trip doesn't
+            // reset the world.
             let want_wg = WorldGen::current();
             if self.last_built_worldgen != Some(want_wg) {
                 self.reset_world();
@@ -7148,6 +7267,11 @@ impl Voxel {
                 self.player_pos = spawn;
                 self.player_vel = Vec3::ZERO;
                 self.fall_start_y = None;
+                // Now that the procedural baseline is in place,
+                // overlay the slot's persisted chunks + player. A
+                // missing slot is fine - load_server_state swallows
+                // NotFound and we keep the fresh world.
+                self.load_server_state();
             }
         }
         // Recipe-book auto-fill: try to pull every input stack
@@ -7316,6 +7440,60 @@ impl Voxel {
         }
         if action_host_start {
             self.start_hosting();
+        }
+        // Worlds picker (Phase B.7a scaffolding). Each branch
+        // rewrites `current_world_slug` so the next save / load
+        // operation targets the chosen slot; the actual load happens
+        // lazily on Play offline via `load_server_state` so the user
+        // sees the new world the moment they click Play.
+        if action_new_world {
+            let typed = self.new_world_name_buf.trim().to_string();
+            let slug = if typed.is_empty() {
+                world_save::DEFAULT_SLUG.to_string()
+            } else {
+                world_save::layout::slug(&typed)
+            };
+            // Mint a fresh meta + world.json right away so the slot
+            // shows up in the picker on the next frame, even if the
+            // user closes the app before clicking Play.
+            let display = if typed.is_empty() { slug.clone() } else { typed };
+            let meta = world_save::meta::create_meta(&display, &slug);
+            if let Err(err) = world_save::meta::write_meta(&slug, &meta) {
+                warn!(error = %err, slug = slug, "world_save: write_meta on New failed");
+            }
+            let wj = world_save::world_json::create_world(
+                world_save::worldgen_str(WorldGen::current()),
+                world_seed(),
+            );
+            if let Err(err) = world_save::world_json::write_world(&slug, &wj) {
+                warn!(error = %err, slug = slug, "world_save: write_world on New failed");
+            }
+            self.current_world_slug = Some(slug);
+            self.new_world_name_buf.clear();
+        }
+        if let Some(slug) = action_load_world {
+            self.current_world_slug = Some(slug);
+            // Trigger a fresh load on the next Play click by resetting
+            // the world. `load_server_state` then pulls the slot in.
+            self.reset_world();
+            self.last_built_worldgen = None;
+        }
+        if let Some(slug) = action_delete_world {
+            let dir = world_save::layout::world_dir(&slug);
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {
+                    info!(slug = %slug, "world_save: deleted slot");
+                    if self.current_world_slug.as_deref() == Some(slug.as_str()) {
+                        self.current_world_slug =
+                            Some(world_save::DEFAULT_SLUG.to_string());
+                    }
+                }
+                Err(err) => warn!(
+                    error = %err,
+                    slug = %slug,
+                    "world_save: delete slot failed"
+                ),
+            }
         }
     }
 }
