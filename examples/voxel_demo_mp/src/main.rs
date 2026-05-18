@@ -3626,223 +3626,37 @@ impl Voxel {
             } => {
                 client.poll();
                 let my_id = client.client_id;
-                // Sweep own id out of the remote table - if a
-                // pre-handshake broadcast snuck our pose in before
-                // we knew our own id, drop it now.
-                if let Some(mine) = my_id {
-                    remote.remove(&mine);
-                }
-                for (kind, data) in client.drain_bytes() {
-                    match kind.as_str() {
-                        "vx.edit" => {
-                            if let Ok((e, _)) =
-                                bincode::serde::decode_from_slice::<EditMsg, _>(&data, cfg)
-                            {
-                                // Server-echoed edit: retire any
-                                // pending request that matches it
-                                // by coordinate + block. Idempotent
-                                // dups are cheap; this just stops
-                                // the retry-resend loop.
-                                if let Some(idx) = pending_edits.iter().position(|p| {
-                                    p.x == e.x
-                                        && p.y == e.y
-                                        && p.z == e.z
-                                        && p.block == e.block
-                                }) {
-                                    pending_edits.remove(idx);
-                                }
-                                to_apply.push(e);
-                            }
-                        }
-                        "vx.player" => {
-                            if let Ok((p, _)) =
-                                bincode::serde::decode_from_slice::<PlayerMsg, _>(&data, cfg)
-                                && my_id != Some(p.id)
-                            {
-                                remote.insert(p.id, p);
-                                interp_updates.push(p);
-                            }
-                        }
-                        "vx.inv" => {
-                            if let Ok((s, _)) = bincode::serde::decode_from_slice::<
-                                InvSnapshotMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                // Keep only the freshest snapshot
-                                // this tick (last-write-wins).
-                                client_snapshot = Some(s);
-                                // Server acknowledged our state, so
-                                // any pending drag intents are now
-                                // resolved one way or the other.
-                                pending_inv_actions.clear();
-                            }
-                        }
-                        "vx.mob" => {
-                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                                MobMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                mob_updates.push(m);
-                            }
-                        }
-                        "vx.mob_event" => {
-                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                                MobEventMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                mob_events.push(m);
-                            }
-                        }
-                        "vx.mob_remove" => {
-                            if let Ok((id, _)) =
-                                bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
-                            {
-                                mob_removals.push(id);
-                            }
-                        }
-                        "vx.player_remove" => {
-                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                                PlayerRemoveMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                player_removals.push(m.id);
-                            }
-                        }
-                        "vx.chat" => {
-                            if let Ok((line, _)) = bincode::serde::decode_from_slice::<
-                                String,
-                                _,
-                            >(&data, cfg)
-                            {
-                                chat_inbox.push(line);
-                            }
-                        }
-                        "vx.names" => {
-                            if let Ok((entries, _)) = bincode::serde::decode_from_slice::<
-                                Vec<(u32, String)>,
-                                _,
-                            >(&data, cfg)
-                            {
-                                names_update = Some(entries);
-                            }
-                        }
-                        "vx.damage" => {
-                            if let Ok((d, _)) = bincode::serde::decode_from_slice::<
-                                DamageMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                // Negative amounts represent
-                                // heals (server uses the same
-                                // channel for both directions).
-                                if d.amount >= 0.0 {
-                                    pvp_self_damage += d.amount;
-                                } else {
-                                    pvp_self_heal += -d.amount;
-                                }
-                            }
-                        }
-                        "vx.teleport" => {
-                            if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                                TeleportMsg,
-                                _,
-                            >(&data, cfg)
-                            {
-                                teleport_request = Some(m);
-                            }
-                        }
-                        "vx.day" => {
-                            if let Ok((dt, _)) =
-                                bincode::serde::decode_from_slice::<f32, _>(
-                                    &data, cfg,
-                                )
-                            {
-                                day_time_update = Some(dt);
-                            }
-                        }
-                        "vx.seed" => {
-                            if let Ok((seed, _)) =
-                                bincode::serde::decode_from_slice::<u32, _>(
-                                    &data, cfg,
-                                )
-                            {
-                                seed_update = Some(seed);
-                            }
-                        }
-                        "vx.weather" => {
-                            if let Ok((w, _)) =
-                                bincode::serde::decode_from_slice::<u8, _>(
-                                    &data, cfg,
-                                )
-                            {
-                                weather_update = Some(w);
-                            }
-                        }
-                        "vx.snow" => {
-                            if let Ok(((v, layers), _)) =
-                                bincode::serde::decode_from_slice::<
-                                    ([i32; 3], u8),
-                                    _,
-                                >(&data, cfg)
-                            {
-                                snow_updates.push((v, layers));
-                            }
-                        }
-                        "vx.liquid_lvl" => {
-                            if let Ok(((v, level), _)) =
-                                bincode::serde::decode_from_slice::<
-                                    ([i32; 3], u8),
-                                    _,
-                                >(&data, cfg)
-                            {
-                                liquid_level_updates.push((v, level));
-                            }
-                        }
-                        "vx.drop_spawn" => {
-                            if let Ok((m, _)) =
-                                bincode::serde::decode_from_slice::<
-                                    DropSpawnMsg,
-                                    _,
-                                >(&data, cfg)
-                            {
-                                drop_spawns.push(m);
-                            }
-                        }
-                        "vx.drop_remove" => {
-                            if let Ok((id, _)) =
-                                bincode::serde::decode_from_slice::<
-                                    u32,
-                                    _,
-                                >(&data, cfg)
-                            {
-                                drop_removes.push(id);
-                            }
-                        }
-                        "vx.torch_orient" => {
-                            if let Ok(((v, orient), _)) =
-                                bincode::serde::decode_from_slice::<
-                                    ([i32; 3], u8),
-                                    _,
-                                >(&data, cfg)
-                            {
-                                torch_orient_updates.push((v, orient));
-                            }
-                        }
-                        "vx.kick" => {
-                            if let Ok((reason, _)) =
-                                bincode::serde::decode_from_slice::<String, _>(
-                                    &data, cfg,
-                                )
-                            {
-                                kick_reason = Some(reason);
-                            }
-                        }
-                        _ => {}
-                    }
+                {
+                    let mut inbox = net::ClientInboxCtx {
+                        to_apply: &mut to_apply,
+                        client_snapshot: &mut client_snapshot,
+                        mob_updates: &mut mob_updates,
+                        mob_events: &mut mob_events,
+                        mob_removals: &mut mob_removals,
+                        player_removals: &mut player_removals,
+                        interp_updates: &mut interp_updates,
+                        pvp_self_damage: &mut pvp_self_damage,
+                        pvp_self_heal: &mut pvp_self_heal,
+                        chat_inbox: &mut chat_inbox,
+                        names_update: &mut names_update,
+                        teleport_request: &mut teleport_request,
+                        day_time_update: &mut day_time_update,
+                        seed_update: &mut seed_update,
+                        weather_update: &mut weather_update,
+                        snow_updates: &mut snow_updates,
+                        liquid_level_updates: &mut liquid_level_updates,
+                        drop_spawns: &mut drop_spawns,
+                        drop_removes: &mut drop_removes,
+                        torch_orient_updates: &mut torch_orient_updates,
+                        kick_reason: &mut kick_reason,
+                    };
+                    net::process_client_inbox(
+                        client,
+                        remote,
+                        pending_edits,
+                        pending_inv_actions,
+                        &mut inbox,
+                    );
                 }
                 // Re-send pending edits / inventory drags on a
                 // throttled schedule. Server-applied edits are

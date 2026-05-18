@@ -366,3 +366,254 @@ impl ClientInv {
         }
     }
 }
+
+/// Aggregate of mutable refs to every per-tick collector that
+/// `process_client_inbox` populates while draining the socket. All
+/// fields are `&mut` borrows of locals declared in `tick_net`;
+/// after the inbox drain returns, `tick_net` applies these to the
+/// authoritative game state once the `&mut self.net` borrow has
+/// released.
+///
+/// Lives in `net` because the wire-decode mapping (topic kind
+/// string -> Msg type -> collector field) is part of the protocol
+/// contract, not gameplay logic. The aggregate lets the free fn
+/// operate on split borrows without taking on the full `&mut Voxel`
+/// (which would conflict with the `&mut self.net` borrow held by
+/// the caller).
+pub(crate) struct ClientInboxCtx<'a> {
+    pub to_apply: &'a mut Vec<EditMsg>,
+    pub client_snapshot: &'a mut Option<InvSnapshotMsg>,
+    pub mob_updates: &'a mut Vec<MobMsg>,
+    pub mob_events: &'a mut Vec<MobEventMsg>,
+    pub mob_removals: &'a mut Vec<u32>,
+    pub player_removals: &'a mut Vec<u32>,
+    pub interp_updates: &'a mut Vec<PlayerMsg>,
+    pub pvp_self_damage: &'a mut f32,
+    pub pvp_self_heal: &'a mut f32,
+    pub chat_inbox: &'a mut Vec<String>,
+    pub names_update: &'a mut Option<Vec<(u32, String)>>,
+    pub teleport_request: &'a mut Option<TeleportMsg>,
+    pub day_time_update: &'a mut Option<f32>,
+    pub seed_update: &'a mut Option<u32>,
+    pub weather_update: &'a mut Option<u8>,
+    pub snow_updates: &'a mut Vec<([i32; 3], u8)>,
+    pub liquid_level_updates: &'a mut Vec<([i32; 3], u8)>,
+    pub drop_spawns: &'a mut Vec<DropSpawnMsg>,
+    pub drop_removes: &'a mut Vec<u32>,
+    pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
+    pub kick_reason: &'a mut Option<String>,
+}
+
+/// Drain the client socket's inbound queue, decode each `vx.*`
+/// message, and route its payload into the matching collector on
+/// `ctx`. Server echoes for already-pending edits are retired by
+/// matching coordinates+block against `pending_edits`; the local
+/// remote pose table is kept own-id-free so a pre-handshake
+/// broadcast can't accidentally render a duplicate of the local
+/// player.
+///
+/// The caller is responsible for applying the collected payloads
+/// to the world / inventory / chat state after this returns - the
+/// `&mut self.net` borrow held here prevents us from touching
+/// anything else on the Voxel.
+pub(crate) fn process_client_inbox(
+    client: &mut NetClient,
+    remote: &mut HashMap<u32, PlayerMsg>,
+    pending_edits: &mut Vec<EditMsg>,
+    pending_inv_actions: &mut Vec<InvActionMsg>,
+    ctx: &mut ClientInboxCtx<'_>,
+) {
+    let cfg = bincode::config::standard();
+    let my_id = client.client_id;
+    // Sweep own id out of the remote table - if a
+    // pre-handshake broadcast snuck our pose in before
+    // we knew our own id, drop it now.
+    if let Some(mine) = my_id {
+        remote.remove(&mine);
+    }
+    for (kind, data) in client.drain_bytes() {
+        match kind.as_str() {
+            "vx.edit" => {
+                if let Ok((e, _)) =
+                    bincode::serde::decode_from_slice::<EditMsg, _>(&data, cfg)
+                {
+                    // Server-echoed edit: retire any
+                    // pending request that matches it
+                    // by coordinate + block. Idempotent
+                    // dups are cheap; this just stops
+                    // the retry-resend loop.
+                    if let Some(idx) = pending_edits.iter().position(|p| {
+                        p.x == e.x
+                            && p.y == e.y
+                            && p.z == e.z
+                            && p.block == e.block
+                    }) {
+                        pending_edits.remove(idx);
+                    }
+                    ctx.to_apply.push(e);
+                }
+            }
+            "vx.player" => {
+                if let Ok((p, _)) =
+                    bincode::serde::decode_from_slice::<PlayerMsg, _>(&data, cfg)
+                    && my_id != Some(p.id)
+                {
+                    remote.insert(p.id, p);
+                    ctx.interp_updates.push(p);
+                }
+            }
+            "vx.inv" => {
+                if let Ok((s, _)) = bincode::serde::decode_from_slice::<
+                    InvSnapshotMsg,
+                    _,
+                >(&data, cfg)
+                {
+                    // Keep only the freshest snapshot
+                    // this tick (last-write-wins).
+                    *ctx.client_snapshot = Some(s);
+                    // Server acknowledged our state, so
+                    // any pending drag intents are now
+                    // resolved one way or the other.
+                    pending_inv_actions.clear();
+                }
+            }
+            "vx.mob" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<MobMsg, _>(&data, cfg)
+                {
+                    ctx.mob_updates.push(m);
+                }
+            }
+            "vx.mob_event" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<MobEventMsg, _>(&data, cfg)
+                {
+                    ctx.mob_events.push(m);
+                }
+            }
+            "vx.mob_remove" => {
+                if let Ok((id, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    ctx.mob_removals.push(id);
+                }
+            }
+            "vx.player_remove" => {
+                if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                    PlayerRemoveMsg,
+                    _,
+                >(&data, cfg)
+                {
+                    ctx.player_removals.push(m.id);
+                }
+            }
+            "vx.chat" => {
+                if let Ok((line, _)) =
+                    bincode::serde::decode_from_slice::<String, _>(&data, cfg)
+                {
+                    ctx.chat_inbox.push(line);
+                }
+            }
+            "vx.names" => {
+                if let Ok((entries, _)) = bincode::serde::decode_from_slice::<
+                    Vec<(u32, String)>,
+                    _,
+                >(&data, cfg)
+                {
+                    *ctx.names_update = Some(entries);
+                }
+            }
+            "vx.damage" => {
+                if let Ok((d, _)) =
+                    bincode::serde::decode_from_slice::<DamageMsg, _>(&data, cfg)
+                {
+                    // Negative amounts represent
+                    // heals (server uses the same
+                    // channel for both directions).
+                    if d.amount >= 0.0 {
+                        *ctx.pvp_self_damage += d.amount;
+                    } else {
+                        *ctx.pvp_self_heal += -d.amount;
+                    }
+                }
+            }
+            "vx.teleport" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<TeleportMsg, _>(&data, cfg)
+                {
+                    *ctx.teleport_request = Some(m);
+                }
+            }
+            "vx.day" => {
+                if let Ok((dt, _)) =
+                    bincode::serde::decode_from_slice::<f32, _>(&data, cfg)
+                {
+                    *ctx.day_time_update = Some(dt);
+                }
+            }
+            "vx.seed" => {
+                if let Ok((seed, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    *ctx.seed_update = Some(seed);
+                }
+            }
+            "vx.weather" => {
+                if let Ok((w, _)) =
+                    bincode::serde::decode_from_slice::<u8, _>(&data, cfg)
+                {
+                    *ctx.weather_update = Some(w);
+                }
+            }
+            "vx.snow" => {
+                if let Ok(((v, layers), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.snow_updates.push((v, layers));
+                }
+            }
+            "vx.liquid_lvl" => {
+                if let Ok(((v, level), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.liquid_level_updates.push((v, level));
+                }
+            }
+            "vx.drop_spawn" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<DropSpawnMsg, _>(&data, cfg)
+                {
+                    ctx.drop_spawns.push(m);
+                }
+            }
+            "vx.drop_remove" => {
+                if let Ok((id, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    ctx.drop_removes.push(id);
+                }
+            }
+            "vx.torch_orient" => {
+                if let Ok(((v, orient), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.torch_orient_updates.push((v, orient));
+                }
+            }
+            "vx.kick" => {
+                if let Ok((reason, _)) =
+                    bincode::serde::decode_from_slice::<String, _>(&data, cfg)
+                {
+                    *ctx.kick_reason = Some(reason);
+                }
+            }
+            _ => {}
+        }
+    }
+}
