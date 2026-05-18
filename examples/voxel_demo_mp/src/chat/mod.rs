@@ -20,17 +20,17 @@
 //! is pure logic on top of that state.
 
 mod cmds_chat;
+mod cmds_creative;
 mod cmds_player;
 mod cmds_world;
 
 use std::collections::HashSet;
 
 use glam::Vec3;
-use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
+use infengine_voxel::{BlockId, CHUNK_SIZE};
 
 use crate::block::{BLOCK_TYPES, block_type, is_tool_block};
-use crate::inventory::{HOTBAR_SLOTS, inv_pickup};
-use crate::net::{DamageMsg, EditMsg, MobMsg, NetRole, TeleportMsg};
+use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
     Biome, DAY_LENGTH_S, KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE,
     MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState, PLAYER_HEIGHT, PLAYER_MAX_HEALTH,
@@ -551,54 +551,20 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "resetinventory" | "resetinv" => {
-                // Restore the curated starter bundle
-                // (wood tools + basic blocks). Slot
-                // 0 + storage stay empty.
-                for s in voxel.inventory.iter_mut() {
-                    *s = None;
-                }
-                let seed: &[(u16, u8)] = &[
-                    (16, 1),
-                    (23, 1),
-                    (29, 1),
-                    (32, 1),
-                    (2, 16),
-                    (7, 16),
-                    (8, 16),
-                    (10, 4),
-                ];
-                for (i, (bid, count)) in seed.iter().enumerate()
-                {
-                    let slot = i + 1;
-                    if slot < HOTBAR_SLOTS {
-                        voxel.inventory[slot] =
-                            Some((BlockId(*bid), *count));
-                    }
-                }
-                for s in voxel.craft_grid.iter_mut() {
-                    *s = None;
-                }
-                local_lines.push(
-                    "Inventory reset to starter.".to_string(),
-                );
-                handled_locally = true;
+                handled_locally |=
+                    cmds_creative::cmd_resetinventory(
+                        voxel,
+                        arg,
+                        &mut local_lines,
+                    );
             }
             "clearinventory" | "clearinv" => {
-                // Empty every slot including hotbar
-                // + craft grid. Useful for testing.
-                // In MP this only zeroes the local
-                // predicted view; the next vx.inv
-                // snapshot from the host wipes it.
-                for s in voxel.inventory.iter_mut() {
-                    *s = None;
-                }
-                for s in voxel.craft_grid.iter_mut() {
-                    *s = None;
-                }
-                local_lines.push(
-                    "Inventory cleared.".to_string(),
-                );
-                handled_locally = true;
+                handled_locally |=
+                    cmds_creative::cmd_clearinventory(
+                        voxel,
+                        arg,
+                        &mut local_lines,
+                    );
             }
             "sleep" => {
                 handled_locally |=
@@ -623,144 +589,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "blob" => {
-                // Host-only: fill a sphere of voxels
-                // around the player with the named
-                // block. Usage: /blob <radius> <block>.
-                // Hard radius cap at 12 so a typo
-                // doesn't lock the host.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/blob is host-only.".to_string(),
-                    );
-                } else {
-                    let mut parts = arg.split_whitespace();
-                    let r_str = parts.next().unwrap_or("");
-                    let block_name = parts.next().unwrap_or("");
-                    let r_opt: Option<i32> =
-                        r_str.parse().ok();
-                    let bid_opt: Option<u16> = if block_name
-                        .eq_ignore_ascii_case("air")
-                    {
-                        Some(0)
-                    } else {
-                        BLOCK_TYPES
-                            .iter()
-                            .find(|bt| {
-                                bt.name
-                                    .eq_ignore_ascii_case(
-                                        block_name,
-                                    )
-                            })
-                            .map(|bt| bt.id)
-                    };
-                    match (r_opt, bid_opt) {
-                        (None, _) | (_, None) => {
-                            local_lines.push(
-                                "Usage: /blob <radius> <block>"
-                                    .to_string(),
-                            );
-                        }
-                        (Some(r), Some(bid)) => {
-                            let radius = r.clamp(1, 12);
-                            let block = BlockId(bid);
-                            let center = [
-                                voxel.player_pos.x.floor() as i32,
-                                voxel.player_pos.y.floor() as i32,
-                                voxel.player_pos.z.floor() as i32,
-                            ];
-                            let r2 = radius * radius;
-                            let mut count = 0u32;
-                            let cfg =
-                                bincode::config::standard();
-                            for dy in -radius..=radius {
-                                for dz in -radius..=radius {
-                                    for dx in -radius..=radius
-                                    {
-                                        if dx * dx + dy * dy
-                                            + dz * dz
-                                            > r2
-                                        {
-                                            continue;
-                                        }
-                                        let v = [
-                                            center[0] + dx,
-                                            center[1] + dy,
-                                            center[2] + dz,
-                                        ];
-                                        if v[1] < 1 {
-                                            continue;
-                                        }
-                                        voxel.world_set_tracked(
-                                            v, block,
-                                        );
-                                        count += 1;
-                                        let edit = EditMsg {
-                                            x: v[0],
-                                            y: v[1],
-                                            z: v[2],
-                                            block: bid,
-                                        };
-                                        if let NetRole::Server {
-                                            server,
-                                            ..
-                                        } = &mut voxel.net
-                                        {
-                                            voxel
-                                                .edit_history
-                                                .push(edit);
-                                            if let Ok(buf) =
-                                                bincode::serde::encode_to_vec(
-                                                    edit, cfg,
-                                                )
-                                            {
-                                                server
-                                                    .broadcast_bytes(
-                                                        "vx.edit",
-                                                        buf,
-                                                    );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            let cs = CHUNK_SIZE as i32;
-                            let mn = [
-                                (center[0] - radius - 1)
-                                    .div_euclid(cs),
-                                (center[1] - radius - 1)
-                                    .div_euclid(cs),
-                                (center[2] - radius - 1)
-                                    .div_euclid(cs),
-                            ];
-                            let mx = [
-                                (center[0] + radius + 1)
-                                    .div_euclid(cs),
-                                (center[1] + radius + 1)
-                                    .div_euclid(cs),
-                                (center[2] + radius + 1)
-                                    .div_euclid(cs),
-                            ];
-                            let mut coords: Vec<ChunkCoord> =
-                                Vec::new();
-                            for cz in mn[2]..=mx[2] {
-                                for cy in mn[1]..=mx[1] {
-                                    for cx in mn[0]..=mx[0] {
-                                        coords
-                                            .push([cx, cy, cz]);
-                                    }
-                                }
-                            }
-                            voxel.rebuild_chunks(&coords);
-                            local_lines.push(format!(
-                                "Placed {count} {block_name} (r={radius})."
-                            ));
-                        }
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |= cmds_creative::cmd_blob(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "fill" => {
                 handled_locally |=
@@ -849,16 +682,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "freezetime" | "freeze" => {
-                voxel.freeze_time = !voxel.freeze_time;
-                local_lines.push(format!(
-                    "Time clock {}",
-                    if voxel.freeze_time {
-                        "PAUSED"
-                    } else {
-                        "RUNNING"
-                    }
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_creative::cmd_freezetime(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "godmode" | "god" => {
                 handled_locally |= cmds_player::cmd_godmode(
@@ -938,151 +766,25 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "restock" => {
-                // Host-only. Drops a stack of every
-                // non-tool block into every connected
-                // client's inventory + the host's
-                // own. Useful for co-op MP starts.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/restock is host-only.".to_string(),
-                    );
-                } else {
-                    // Self first.
-                    for bt in BLOCK_TYPES.iter() {
-                        if is_tool_block(BlockId(bt.id)) {
-                            continue;
-                        }
-                        for _ in 0..16 {
-                            voxel.pickup(BlockId(bt.id));
-                        }
-                    }
-                    // Each client.
-                    let mut touched = 0u32;
-                    if let NetRole::Server {
-                        inventories,
-                        pending_inv_sends,
-                        ..
-                    } = &mut voxel.net
-                    {
-                        for (cid, inv) in inventories.iter_mut() {
-                            for bt in BLOCK_TYPES.iter() {
-                                if is_tool_block(BlockId(bt.id)) {
-                                    continue;
-                                }
-                                for _ in 0..16 {
-                                    inv_pickup(
-                                        &mut inv.inventory,
-                                        BlockId(bt.id),
-                                    );
-                                }
-                            }
-                            pending_inv_sends.insert(*cid);
-                            touched += 1;
-                        }
-                    }
-                    local_lines.push(format!(
-                        "Restocked self + {touched} clients."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_creative::cmd_restock(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "tool" => {
-                // Quick pickaxe grant: /tool wood|stone|iron.
-                // Equivalent to /give pickaxe_<tier> 1 but
-                // shorter to type.
-                let id_opt: Option<u16> = match arg
-                    .to_lowercase()
-                    .as_str()
-                {
-                    "wood" | "pickaxe_wood" => Some(16),
-                    "stone" | "pickaxe_stone" => Some(17),
-                    "iron" | "pickaxe_iron" => Some(18),
-                    "sword_wood" => Some(23),
-                    "sword_stone" => Some(24),
-                    "sword_iron" => Some(25),
-                    "shovel_wood" => Some(29),
-                    "shovel_stone" => Some(30),
-                    "shovel_iron" => Some(31),
-                    "axe_wood" => Some(32),
-                    "axe_stone" => Some(33),
-                    "axe_iron" => Some(34),
-                    _ => None,
-                };
-                match id_opt {
-                    None => local_lines.push(
-                        "Usage: /tool wood|stone|iron|sword_wood|sword_stone|sword_iron"
-                            .to_string(),
-                    ),
-                    Some(id) => {
-                        voxel.pickup(BlockId(id));
-                        local_lines.push(format!(
-                            "Granted {arg} pickaxe."
-                        ));
-                    }
-                }
-                handled_locally = true;
+                handled_locally |= cmds_creative::cmd_tool(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "give" => {
-                // Add stacks of a named block to the
-                // local inventory. In MP this only
-                // affects the host's authoritative
-                // copy; a connected client running
-                // /give just edits their predicted
-                // view (the next vx.inv snapshot
-                // wipes it). Mostly useful for
-                // testing + creative play.
-                if arg.is_empty() {
-                    local_lines.push(
-                        "Usage: /give <block> [count]"
-                            .to_string(),
-                    );
-                } else {
-                    let mut parts = arg.split_whitespace();
-                    let block_name = parts.next().unwrap_or("");
-                    let count: u32 = parts
-                        .next()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(64);
-                    let block_id = BLOCK_TYPES
-                        .iter()
-                        .find(|bt| {
-                            bt.name.eq_ignore_ascii_case(block_name)
-                        })
-                        .map(|bt| bt.id);
-                    if let Some(id) = block_id {
-                        let bid = BlockId(id);
-                        let mut added = 0u32;
-                        while added < count {
-                            let before = voxel
-                                .inventory
-                                .iter()
-                                .filter_map(|s| s.map(|(_, c)| c as u32))
-                                .sum::<u32>();
-                            voxel.pickup(bid);
-                            let after = voxel
-                                .inventory
-                                .iter()
-                                .filter_map(|s| s.map(|(_, c)| c as u32))
-                                .sum::<u32>();
-                            if after <= before {
-                                // Inventory was
-                                // full; stop early so
-                                // we don't infinite
-                                // loop.
-                                break;
-                            }
-                            added += 1;
-                        }
-                        local_lines.push(format!(
-                            "Gave {added} x {block_name}."
-                        ));
-                    } else {
-                        local_lines.push(format!(
-                            "Unknown block: {block_name}"
-                        ));
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |= cmds_creative::cmd_give(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "summon" => {
                 // Host-only: yank a remote peer to
