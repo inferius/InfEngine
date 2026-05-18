@@ -3,17 +3,20 @@
 //! Owns the chat log fade rules + history dedup/cap. The
 //! `dispatch` fn is the heart of the module: a giant `match` on
 //! the verb after `/`, routing 70+ commands across player /
-//! creative / world / host paths. Each arm pushes feedback
-//! lines into `local_lines` (drained into `voxel.chat_log` at
-//! the end); the caller checks the returned `bool` to decide
-//! whether to broadcast the raw text as a normal chat message
-//! (`false` means "no slash command handled this, forward to
-//! peers").
+//! creative / world / host paths. Each arm forwards to a free
+//! `cmd_X` fn in one of six sub-modules; the cmd fn pushes
+//! feedback lines into `local_lines` (drained into
+//! `voxel.chat_log` at the end) and returns `true` when the
+//! command consumed the input. A `false` return means "no
+//! slash command handled this, forward to peers".
 //!
-//! The match stays as a single block here rather than being
-//! split into one fn per command because every arm reaches deep
-//! into `Voxel` state - splitting would mostly multiply
-//! signatures without improving readability.
+//! Every command has a permission level in [`CMD_META`]. The
+//! dispatch gate refuses commands whose required level exceeds
+//! the calling [`Sender`]. Offline + host code paths use
+//! [`Sender::host`] (level 4); remote clients reach dispatch
+//! through [`dispatch_as`] with their own sender record so the
+//! gate can distinguish ops from regular players when the
+//! dedicated server lands (Phase B).
 //!
 //! State stays on `Voxel`: `chat_input`, `chat_log`,
 //! `chat_history`, `chat_open`, `chat_history_idx`. This module
@@ -25,6 +28,9 @@ mod cmds_host;
 mod cmds_misc;
 mod cmds_player;
 mod cmds_world;
+
+mod perms;
+pub(crate) use perms::{Sender, cmd_level};
 
 use std::collections::HashSet;
 
@@ -64,19 +70,49 @@ pub(crate) fn line_is_muted(line: &str, muted: &HashSet<String>) -> bool {
     false
 }
 
-/// Dispatch the slash command in `text`. Returns true if a
-/// command was matched + handled locally (caller should NOT
-/// broadcast `text` as normal chat). A `false` return means
-/// either the text wasn't a slash command at all, or the
-/// command's handler explicitly fell through to the broadcast
-/// path.
+/// Dispatch the slash command in `text` as the local host /
+/// offline player (full permission). Convenience wrapper
+/// around [`dispatch_as`] for the common case. Returns the
+/// same `handled_locally` bool.
 pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
+    dispatch_as(voxel, &Sender::host(), text)
+}
+
+/// Same as [`dispatch`] but executed on behalf of `sender`.
+/// Used by the dedicated server / multiplayer path so a
+/// remote client's command runs through the permission gate
+/// with that client's resolved [`Sender::level`] instead of
+/// the host's blanket level-4.
+pub(crate) fn dispatch_as(
+    voxel: &mut Voxel,
+    sender: &Sender,
+    text: &str,
+) -> bool {
     let mut handled_locally = false;
     if let Some(rest) = text.strip_prefix('/') {
         let mut parts = rest.splitn(2, char::is_whitespace);
         let cmd = parts.next().unwrap_or("").to_lowercase();
         let arg = parts.next().unwrap_or("").trim();
         let mut local_lines: Vec<String> = Vec::new();
+        // Permission gate. Unknown commands fall through to
+        // the existing "Unknown command" arm so the user
+        // sees a familiar message rather than "permission
+        // denied" for a typo. Known commands whose required
+        // level exceeds the sender's get a denial line and
+        // the cmd body is never executed.
+        if let Some(required) = cmd_level(&cmd)
+            && sender.level < required
+        {
+            local_lines.push(format!(
+                "/{cmd} requires permission level {required} (you have {})",
+                sender.level
+            ));
+            let now = std::time::Instant::now();
+            for l in local_lines {
+                voxel.chat_log.push((now, l));
+            }
+            return true;
+        }
         match cmd.as_str() {
             "help" | "?" => {
                 cmds_chat::cmd_help(voxel, arg, &mut local_lines);
