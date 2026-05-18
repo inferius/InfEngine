@@ -2607,32 +2607,6 @@ impl Voxel {
         }
     }
 
-    /// Helper for `tick_liquid_step`: stage a write into the
-    /// per-tick update map. Stronger (numerically lower) levels
-    /// win on conflict; the falling flag sticks once set on any
-    /// contributor.
-    fn put_water_update(
-        updates: &mut HashMap<[i32; 3], (u8, bool)>,
-        pos: [i32; 3],
-        level: u8,
-        falling: bool,
-        max_range: u8,
-    ) {
-        if level > max_range && !falling {
-            return;
-        }
-        match updates.get(&pos) {
-            Some((prev_level, prev_falling)) => {
-                let new_lvl = level.min(*prev_level);
-                let new_falling = falling || *prev_falling;
-                updates.insert(pos, (new_lvl, new_falling));
-            }
-            None => {
-                updates.insert(pos, (level, falling));
-            }
-        }
-    }
-
     /// Single MC-style liquid update pass per the reference JS
     /// prototype:
     /// 1. Every active liquid voxel proposes writes to its
@@ -2647,186 +2621,64 @@ impl Voxel {
     /// Source-merge (`tick_liquid_merge`) runs after this in
     /// `tick_liquids`.
     fn tick_liquid_step(&mut self, liquid: &Liquid) {
-        let liquid_id = liquid.block_id;
-        let max_range = liquid.max_range;
-        let candidates: Vec<[i32; 3]> = self
-            .liquid_active
-            .iter()
-            .filter(|p| self.world.get(**p).0 == liquid_id)
-            .take(512)
-            .copied()
-            .collect();
-        if candidates.is_empty() {
+        let plan = liquid_plan_step(
+            &self.world,
+            &self.liquid_level,
+            &self.liquid_active,
+            liquid,
+            self.liquid_bias_drops,
+        );
+        if plan.evaporate.is_empty()
+            && plan.decay.is_empty()
+            && plan.place.is_empty()
+        {
             return;
         }
-        let mut updates: HashMap<[i32; 3], (u8, bool)> = HashMap::new();
-        // Phase 1: collect proposed writes.
-        for pos in &candidates {
-            let level = self.liquid_level.get(pos).copied().unwrap_or(0);
-            let is_source = level == 0;
-            let is_falling = level == 8;
-            // Push strength = how strong this cell's contribution
-            // is when writing to neighbours. Matches MC's
-            // `spreadToSides`:
-            //
-            //   newAmount = state.getAmount() - getDropOff(level);
-            //   if (state.getValue(FALLING)) newAmount = 7;
-            //
-            // Both source (amount 8) and falling (override to 7)
-            // resolve to amount 7 = mine level 1. Regular flow
-            // at amount A spreads at amount A - 1 = mine
-            // level (A-1) -> mine level + 1.
-            let push_strength: u8 = if is_source || is_falling {
-                0
-            } else {
-                level
-            };
-            let next_level = push_strength.saturating_add(1);
-            // Drop detection. Two cases:
-            //   a) Direct-below air -> 3D vertical fall. Write
-            //      to (y-1) with falling=true.
-            //   b) Horizontal NSEW neighbour at same y is open
-            //      AND that neighbour's below is also open -> the
-            //      water spills over a cliff. Write to that
-            //      horizontal neighbour with falling=true.
-            // Either path counts as "had drop" - non-source
-            // non-falling cells then skip the regular horizontal
-            // spread (matches JS).
-            // Direct-below fall takes precedence. A cell with
-            // air below pours straight down; horizontal spread
-            // is skipped this tick so a column doesn't fan out
-            // sideways at every Y while it falls. This is the
-            // 3D-specific case the JS reference doesn't model
-            // (the reference is 2D, where "falling" is a
-            // horizontal direction with terrain drop).
-            let below = [pos[0], pos[1] - 1, pos[2]];
-            let below_b = self.world.get(below);
-            let below_open = below_b.is_air() || block_is_washable(below_b);
-            if below_open {
-                Self::put_water_update(&mut updates, below, 1, true, max_range);
-                // Pure fall: every cell type (source / flow /
-                // falling) skips horizontal spread when the
-                // cell is in mid-air. MC water columns are one
-                // voxel wide, not a fanned cascade.
-                continue;
+        let tape = liquid_apply_plan(
+            &mut self.world,
+            &mut self.liquid_level,
+            &mut self.liquid_active,
+            &mut self.liquid_positions,
+            liquid,
+            plan,
+        );
+        // Drops + registry cleanup for washable replacements.
+        // `liquid_apply_plan` already set the destination voxel
+        // in `World`; we only need to spawn the drop entity and
+        // clear sibling registries that tracked the old block
+        // type (snow layers in particular).
+        for (block, pos) in &tape.washed {
+            if block.0 == 15 {
+                self.snow_positions.remove(pos);
             }
-            // Cell rests on solid. Horizontal cliff-drop scan
-            // first - find any NSEW neighbour at the same Y
-            // whose own cell-below is air. The flow spills
-            // over that edge as a falling stream.
-            let mut had_drop = false;
-            let drop_dirs: [[i32; 3]; 4] = [
-                [1, 0, 0],
-                [-1, 0, 0],
-                [0, 0, 1],
-                [0, 0, -1],
-            ];
-            for d in &drop_dirs {
-                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                let nb = self.world.get(n);
-                if !nb.is_air() && !block_is_washable(nb) {
-                    continue;
-                }
-                let n_below = self.world.get([n[0], n[1] - 1, n[2]]);
-                if n_below.is_air() || block_is_washable(n_below) {
-                    Self::put_water_update(
-                        &mut updates,
-                        n,
-                        1,
-                        true,
-                        max_range,
-                    );
-                    had_drop = true;
-                    break;
-                }
-            }
-            if had_drop && !is_source && !is_falling {
-                continue;
-            }
-            if next_level > max_range {
-                continue;
-            }
-            // Horizontal spread with pathfinding bias.
-            let dirs: [[i32; 3]; 4] = [
-                [1, 0, 0],
-                [-1, 0, 0],
-                [0, 0, 1],
-                [0, 0, -1],
-            ];
-            // Spread destination filter: air, washable, or same
-            // liquid. Same-liquid neighbours need writes too so
-            // the decay phase doesn't starve interior pond cells
-            // - the strongest contributor wins via
-            // `put_water_update`.
-            let spread_dest = |b: BlockId| {
-                b.is_air()
-                    || block_is_washable(b)
-                    || b.0 == liquid_id
-            };
-            let mut weights: [u32; 4] = [u32::MAX; 4];
-            for (i, d) in dirs.iter().enumerate() {
-                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                let nb = self.world.get(n);
-                if !spread_dest(nb) {
-                    continue;
-                }
-                weights[i] = self.distance_to_drop(n, 4);
-            }
-            let bias = self.liquid_bias_drops;
-            let any_reachable = bias
-                && weights.iter().any(|w| *w != u32::MAX && *w < 1000);
-            let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
-            for (i, d) in dirs.iter().enumerate() {
-                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                let nb = self.world.get(n);
-                if !spread_dest(nb) {
-                    continue;
-                }
-                if any_reachable && weights[i] != min_w {
-                    continue;
-                }
-                Self::put_water_update(
-                    &mut updates,
-                    n,
-                    next_level,
-                    false,
-                    max_range,
-                );
+            self.spawn_drop(*block, *pos);
+        }
+        // Rebuild chunks once per touched chunk - per-position
+        // rebuild thrashed the GPU mesh when a cascade ran.
+        let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
+        for p in &tape.evaporated {
+            for c in Self::affected_chunks(*p) {
+                chunk_set.insert(c);
             }
         }
-        // Phase 2: decay every non-source flow cell not receiving
-        // a fresh write.
-        let mut to_evaporate: Vec<[i32; 3]> = Vec::new();
-        let mut to_decay: Vec<([i32; 3], u8)> = Vec::new();
-        for pos in &candidates {
-            let level = self.liquid_level.get(pos).copied().unwrap_or(0);
-            if level == 0 {
-                continue;
-            }
-            if updates.contains_key(pos) {
-                continue;
-            }
-            // MC: an orphan falling cell (column above gone)
-            // gets `getNewLiquid` -> max(neighbour amounts) -
-            // drop_off. If no liquid neighbour at all, the new
-            // state is EMPTY - evaporate immediately. We model
-            // that by jumping `level 8` past max_range so it
-            // lands in `to_evaporate`. Regular flow decays by 1.
-            let new_level = if level == 8 { 9 } else { level + 1 };
-            if new_level > max_range {
-                to_evaporate.push(*pos);
-            } else {
-                to_decay.push((*pos, new_level));
+        for (p, _, _) in &tape.placed {
+            for c in Self::affected_chunks(*p) {
+                chunk_set.insert(c);
             }
         }
-        let cfg = bincode::config::standard();
-        for pos in &to_evaporate {
-            self.world_set_tracked(*pos, BlockId::AIR);
-            let coords = Self::affected_chunks(*pos);
+        if !chunk_set.is_empty() {
+            let coords: Vec<ChunkCoord> = chunk_set.into_iter().collect();
             self.rebuild_chunks(&coords);
         }
+        if !tape.evaporated.is_empty()
+            || !tape.placed.is_empty()
+            || !tape.decayed.is_empty()
+        {
+            self.liquid_mesh_dirty = true;
+        }
+        let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
-            for pos in &to_evaporate {
+            for pos in &tape.evaporated {
                 let edit = EditMsg {
                     x: pos[0],
                     y: pos[1],
@@ -2838,82 +2690,25 @@ impl Voxel {
                     server.broadcast_bytes("vx.edit", buf);
                 }
             }
-        }
-        for (pos, lvl) in &to_decay {
-            self.liquid_level.insert(*pos, *lvl);
-            self.liquid_mesh_dirty = true;
-        }
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for (pos, lvl) in &to_decay {
+            for (pos, block_id, level) in &tape.placed {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: *block_id,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
                 if let Ok(buf) =
-                    bincode::serde::encode_to_vec((*pos, *lvl), cfg)
+                    bincode::serde::encode_to_vec((*pos, *level), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
             }
-        }
-        // Phase 3: apply staged writes (overwrites the decay step
-        // when the cell would have settled out of range).
-        let writes: Vec<([i32; 3], u8, bool)> = updates
-            .into_iter()
-            .map(|(p, (l, f))| (p, l, f))
-            .collect();
-        let mut placed_edits: Vec<EditMsg> = Vec::new();
-        let mut placed_levels: Vec<([i32; 3], u8)> = Vec::new();
-        for (pos, level, falling) in &writes {
-            let existing = self.world.get(*pos);
-            let existing_level =
-                self.liquid_level.get(pos).copied().unwrap_or(0);
-            // Sources are sacred - never overwrite a level-0
-            // voxel with a flow write.
-            if existing.0 == liquid_id && existing_level == 0 {
-                continue;
-            }
-            let washable = block_is_washable(existing);
-            if !existing.is_air() && existing.0 != liquid_id && !washable {
-                continue;
-            }
-            let final_level = if *falling { 8 } else { *level };
-            // No-op skip: if the cell already holds this liquid
-            // at the destination level, the write would just
-            // re-flag the mesh dirty each tick and produce the
-            // visible "wobble" in steady-state pools. Don't fire
-            // world_set_tracked when the value is unchanged.
-            // (Downgrades from weaker writes ARE allowed - JS
-            // decay + apply cascades level upward when sources
-            // disappear.)
-            if existing.0 == liquid_id
-                && existing_level == final_level
-            {
-                self.liquid_active.insert(*pos);
-                continue;
-            }
-            if !existing.is_air() && washable {
-                self.spawn_drop(existing, *pos);
-            }
-            self.world_set_tracked(*pos, BlockId(liquid_id));
-            self.liquid_level.insert(*pos, final_level);
-            self.liquid_active.insert(*pos);
-            let coords = Self::affected_chunks(*pos);
-            self.rebuild_chunks(&coords);
-            placed_edits.push(EditMsg {
-                x: pos[0],
-                y: pos[1],
-                z: pos[2],
-                block: liquid_id,
-            });
-            placed_levels.push((*pos, final_level));
-        }
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for edit in &placed_edits {
-                self.edit_history.push(*edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(*edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-            }
-            for (pos, lvl) in &placed_levels {
-                if let Ok(buf) =
-                    bincode::serde::encode_to_vec((*pos, *lvl), cfg)
+            for (pos, lvl) in &tape.decayed {
+                if let Ok(buf) = bincode::serde::encode_to_vec((*pos, *lvl), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
@@ -3181,56 +2976,18 @@ impl Voxel {
         if self.liquid_level.is_empty() {
             return;
         }
-        let liquid_id = liquid.block_id;
-        let candidates: Vec<[i32; 3]> = self
-            .liquid_level
-            .iter()
-            .filter(|(_, d)| **d > 0)
-            .take(256)
-            .map(|(v, _)| *v)
-            .collect();
-        for pos in &candidates {
-            if self.world.get(*pos).0 != liquid_id {
-                continue;
-            }
-            let horiz = [
-                [pos[0] + 1, pos[1], pos[2]],
-                [pos[0] - 1, pos[1], pos[2]],
-                [pos[0], pos[1], pos[2] + 1],
-                [pos[0], pos[1], pos[2] - 1],
-            ];
-            let mut sources = 0u8;
-            let mut stable = true;
-            for n in &horiz {
-                let nb = self.world.get(*n);
-                let n_below = self.world.get([n[0], n[1] - 1, n[2]]);
-                if nb.0 == liquid_id {
-                    let nd = self.liquid_level.get(n).copied().unwrap_or(0);
-                    if nd == 0 {
-                        sources += 1;
-                    } else {
-                        // Non-source flow neighbour -> open path
-                        // out of the pocket, not stable.
-                        stable = false;
-                    }
-                } else if nb.is_air() || block_is_washable(nb) {
-                    // Open air neighbour: either a drop (air
-                    // below) or just an open flow path. Either
-                    // way the pocket isn't sealed and the
-                    // promotion would leak water.
-                    let _ = n_below; // referenced for clarity
-                    stable = false;
-                }
-                // Solid wall neighbour is fine; doesn't break
-                // stability.
-            }
-            if sources >= 2 && stable {
-                self.liquid_level.insert(*pos, 0);
-                self.liquid_mesh_dirty = true;
-                let cfg = bincode::config::standard();
-                if let NetRole::Server { server, .. } = &mut self.net
-                    && let Ok(buf) =
-                        bincode::serde::encode_to_vec((*pos, 0u8), cfg)
+        let promoted = liquid_merge_step(&self.world, &self.liquid_level, liquid);
+        if promoted.is_empty() {
+            return;
+        }
+        for pos in &promoted {
+            self.liquid_level.insert(*pos, 0);
+        }
+        self.liquid_mesh_dirty = true;
+        let cfg = bincode::config::standard();
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for pos in &promoted {
+                if let Ok(buf) = bincode::serde::encode_to_vec((*pos, 0u8), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
@@ -16247,6 +16004,294 @@ fn distance_to_drop_at(
     u32::MAX
 }
 
+/// Pure MC-style liquid planner. Reads world + level + active set
+/// and returns the writes / decays / evaporations the next tick
+/// should apply. No side effects - intended to be shared between
+/// the live `Voxel::tick_liquid_step` path (which adds
+/// broadcasting + drop spawns on top) and the offline `LiquidSim`
+/// used by behaviour tests.
+///
+/// The algorithm mirrors `FlowingFluid.spread` from MC's
+/// decompiled source:
+///   1. Every active liquid cell with air-below proposes a
+///      level-1 falling write straight down. Falling cells skip
+///      horizontal spread that tick - MC water columns are one
+///      voxel wide.
+///   2. Cells resting on solid scan NSEW for a cliff (neighbour
+///      open + neighbour-below open) and spill there with
+///      level-1 falling. Non-source non-falling cells with a
+///      cliff drop skip the regular horizontal spread.
+///   3. Remaining cells propose level = (own_level + 1) writes
+///      to NSEW neighbours, biased toward neighbours with the
+///      shortest BFS distance to a cliff (Pathfinder).
+///   4. Every non-source flow cell not receiving a fresh write
+///      decays one step (level+1). Cells with level > max_range
+///      evaporate.
+#[derive(Debug, Default, Clone)]
+struct LiquidPlanStep {
+    /// Cells the tick will set to air.
+    evaporate: Vec<[i32; 3]>,
+    /// Cells whose level steps up by one (weaker flow).
+    decay: Vec<([i32; 3], u8)>,
+    /// Proposed liquid writes. `(pos, level, falling)`.
+    place: Vec<([i32; 3], u8, bool)>,
+}
+
+/// Side-effect-free record of what `liquid_apply_plan` did.
+/// Caller (Voxel or test sim) drives mesh-dirty / broadcast /
+/// drop spawns from this.
+#[derive(Debug, Default, Clone)]
+struct LiquidTape {
+    /// `(replaced_block, pos)` for washable cells overwritten by
+    /// liquid. The applier already cleared them from `World`; the
+    /// caller is expected to spawn drops + clean up registries.
+    washed: Vec<(BlockId, [i32; 3])>,
+    /// Cells now holding `liquid_id` at the listed level.
+    /// `(pos, liquid_id, level)`.
+    placed: Vec<([i32; 3], u16, u8)>,
+    /// Cells now air. The applier removed them from level/active.
+    evaporated: Vec<[i32; 3]>,
+    /// Cells whose level changed without changing block.
+    decayed: Vec<([i32; 3], u8)>,
+}
+
+/// Stage a proposed write into the per-tick update map. Stronger
+/// (numerically lower) levels win on conflict; the falling flag
+/// sticks once any contributor sets it.
+fn put_water_update(
+    updates: &mut HashMap<[i32; 3], (u8, bool)>,
+    pos: [i32; 3],
+    level: u8,
+    falling: bool,
+    max_range: u8,
+) {
+    if level > max_range && !falling {
+        return;
+    }
+    match updates.get(&pos) {
+        Some((prev_level, prev_falling)) => {
+            let new_lvl = level.min(*prev_level);
+            let new_falling = falling || *prev_falling;
+            updates.insert(pos, (new_lvl, new_falling));
+        }
+        None => {
+            updates.insert(pos, (level, falling));
+        }
+    }
+}
+
+fn liquid_plan_step(
+    world: &World,
+    level_map: &HashMap<[i32; 3], u8>,
+    active: &HashSet<[i32; 3]>,
+    liquid: &Liquid,
+    bias_drops: bool,
+) -> LiquidPlanStep {
+    let liquid_id = liquid.block_id;
+    let max_range = liquid.max_range;
+    let candidates: Vec<[i32; 3]> = active
+        .iter()
+        .filter(|p| world.get(**p).0 == liquid_id)
+        .take(512)
+        .copied()
+        .collect();
+    let mut plan = LiquidPlanStep::default();
+    if candidates.is_empty() {
+        return plan;
+    }
+    let mut updates: HashMap<[i32; 3], (u8, bool)> = HashMap::new();
+    let drop_dirs: [[i32; 3]; 4] =
+        [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
+    for pos in &candidates {
+        let level = level_map.get(pos).copied().unwrap_or(0);
+        let is_source = level == 0;
+        let is_falling = level == 8;
+        let push_strength: u8 = if is_source || is_falling { 0 } else { level };
+        let next_level = push_strength.saturating_add(1);
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let below_b = world.get(below);
+        let below_open = below_b.is_air() || block_is_washable(below_b);
+        if below_open {
+            put_water_update(&mut updates, below, 1, true, max_range);
+            continue;
+        }
+        // Continuous column: mid-stream cell with same liquid
+        // below is part of a falling column. Refresh below at
+        // falling level (keeps it alive against the decay pass)
+        // and skip horizontal so the column stays 1 voxel wide -
+        // matches MC's vertical stream rendering. Sources on top
+        // of a pool fall through to the regular cliff/spread
+        // path so they still feed neighbours.
+        if below_b.0 == liquid_id && !is_source {
+            put_water_update(&mut updates, below, 1, true, max_range);
+            continue;
+        }
+        let mut had_drop = false;
+        for d in &drop_dirs {
+            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+            let nb = world.get(n);
+            if !nb.is_air() && !block_is_washable(nb) {
+                continue;
+            }
+            let n_below = world.get([n[0], n[1] - 1, n[2]]);
+            if n_below.is_air() || block_is_washable(n_below) {
+                put_water_update(&mut updates, n, 1, true, max_range);
+                had_drop = true;
+                break;
+            }
+        }
+        if had_drop && !is_source && !is_falling {
+            continue;
+        }
+        if next_level > max_range {
+            continue;
+        }
+        let spread_dest = |b: BlockId| {
+            b.is_air() || block_is_washable(b) || b.0 == liquid_id
+        };
+        let mut weights: [u32; 4] = [u32::MAX; 4];
+        for (i, d) in drop_dirs.iter().enumerate() {
+            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+            let nb = world.get(n);
+            if !spread_dest(nb) {
+                continue;
+            }
+            weights[i] = distance_to_drop_at(world, n, 4);
+        }
+        let any_reachable = bias_drops
+            && weights.iter().any(|w| *w != u32::MAX && *w < 1000);
+        let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
+        for (i, d) in drop_dirs.iter().enumerate() {
+            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+            let nb = world.get(n);
+            if !spread_dest(nb) {
+                continue;
+            }
+            if any_reachable && weights[i] != min_w {
+                continue;
+            }
+            put_water_update(&mut updates, n, next_level, false, max_range);
+        }
+    }
+    for pos in &candidates {
+        let level = level_map.get(pos).copied().unwrap_or(0);
+        if level == 0 {
+            continue;
+        }
+        if updates.contains_key(pos) {
+            continue;
+        }
+        let new_level = if level == 8 { 9 } else { level + 1 };
+        if new_level > max_range {
+            plan.evaporate.push(*pos);
+        } else {
+            plan.decay.push((*pos, new_level));
+        }
+    }
+    plan.place = updates.into_iter().map(|(p, (l, f))| (p, l, f)).collect();
+    plan
+}
+
+/// Apply a `LiquidPlanStep` to the world. Mutates `world`,
+/// `level_map`, `active`, `positions`. Returns a `LiquidTape`
+/// describing what actually changed (the apply phase enforces
+/// "sources are sacred" + "no-op write" guards, so not every
+/// proposed place lands).
+fn liquid_apply_plan(
+    world: &mut World,
+    level_map: &mut HashMap<[i32; 3], u8>,
+    active: &mut HashSet<[i32; 3]>,
+    positions: &mut HashSet<[i32; 3]>,
+    liquid: &Liquid,
+    plan: LiquidPlanStep,
+) -> LiquidTape {
+    let liquid_id = liquid.block_id;
+    let mut tape = LiquidTape::default();
+    for pos in plan.evaporate {
+        world.set(pos, BlockId::AIR);
+        level_map.remove(&pos);
+        active.remove(&pos);
+        positions.remove(&pos);
+        tape.evaporated.push(pos);
+    }
+    for (pos, lvl) in plan.decay {
+        level_map.insert(pos, lvl);
+        tape.decayed.push((pos, lvl));
+    }
+    for (pos, level, falling) in plan.place {
+        let existing = world.get(pos);
+        let existing_level = level_map.get(&pos).copied().unwrap_or(0);
+        if existing.0 == liquid_id && existing_level == 0 {
+            continue;
+        }
+        let washable = block_is_washable(existing);
+        if !existing.is_air() && existing.0 != liquid_id && !washable {
+            continue;
+        }
+        let final_level = if falling { 8 } else { level };
+        if existing.0 == liquid_id && existing_level == final_level {
+            active.insert(pos);
+            continue;
+        }
+        if !existing.is_air() && washable {
+            tape.washed.push((existing, pos));
+        }
+        world.set(pos, BlockId(liquid_id));
+        level_map.insert(pos, final_level);
+        active.insert(pos);
+        positions.insert(pos);
+        tape.placed.push((pos, liquid_id, final_level));
+    }
+    tape
+}
+
+/// Pure source-merge pass. Returns positions promoted to source
+/// this tick (caller writes `level = 0` + broadcasts).
+fn liquid_merge_step(
+    world: &World,
+    level_map: &HashMap<[i32; 3], u8>,
+    liquid: &Liquid,
+) -> Vec<[i32; 3]> {
+    let liquid_id = liquid.block_id;
+    let mut promoted: Vec<[i32; 3]> = Vec::new();
+    let candidates: Vec<[i32; 3]> = level_map
+        .iter()
+        .filter(|(_, d)| **d > 0)
+        .take(256)
+        .map(|(v, _)| *v)
+        .collect();
+    for pos in &candidates {
+        if world.get(*pos).0 != liquid_id {
+            continue;
+        }
+        let horiz = [
+            [pos[0] + 1, pos[1], pos[2]],
+            [pos[0] - 1, pos[1], pos[2]],
+            [pos[0], pos[1], pos[2] + 1],
+            [pos[0], pos[1], pos[2] - 1],
+        ];
+        let mut sources = 0u8;
+        let mut stable = true;
+        for n in &horiz {
+            let nb = world.get(*n);
+            if nb.0 == liquid_id {
+                let nd = level_map.get(n).copied().unwrap_or(0);
+                if nd == 0 {
+                    sources += 1;
+                } else {
+                    stable = false;
+                }
+            } else if nb.is_air() || block_is_washable(nb) {
+                stable = false;
+            }
+        }
+        if sources >= 2 && stable {
+            promoted.push(*pos);
+        }
+    }
+    promoted
+}
+
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator
 /// call so background workers stay in sync without plumbing a
@@ -17578,18 +17623,139 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod water_tests {
-    //! Behaviour tests for the rendering / pathfinding helpers
-    //! that the liquid simulation reads each tick. The full
-    //! `tick_liquid_step` loop runs against the live `Voxel`
-    //! struct (renderer + network handles + a dozen other
-    //! peripherals) so end-to-end fluid behaviour tests are
-    //! out of scope here without a `LiquidSim` extraction -
-    //! tracked as TODO. The cases below cover the pure helpers
-    //! the user asked for so refactors don't quietly break
-    //! geometry or the downhill scoring.
+    //! Behaviour tests for the liquid simulation. The pure
+    //! helpers (`liquid_surface_height_at`, `distance_to_drop_at`,
+    //! `liquid_corner_height_at`) are exercised directly; the
+    //! tick loop is driven through `LiquidSim`, a minimal
+    //! wrapper around the same `liquid_plan_step` /
+    //! `liquid_apply_plan` / `liquid_merge_step` free fns the
+    //! live `Voxel::tick_liquid_step` calls. Side effects
+    //! (renderer / network / drops / edit history) are skipped -
+    //! we only care about world state transitions here.
     use super::*;
     use infengine_voxel::{BlockId, Chunk, World};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+
+    /// Side-effect-free liquid simulator for tests. Holds the
+    /// minimal state set the pure planner/applier need, no
+    /// renderer / network / mesh hookups.
+    struct LiquidSim {
+        world: World,
+        level: HashMap<[i32; 3], u8>,
+        active: HashSet<[i32; 3]>,
+        positions: HashSet<[i32; 3]>,
+        bias_drops: bool,
+    }
+
+    impl LiquidSim {
+        fn new() -> Self {
+            // 3x3x3 chunk grid around origin -> writable coords
+            // [-16 .. 32) on each axis. Plenty of room for a
+            // 7-radius pool + a 10-tall pillar.
+            let mut w = World::new();
+            for cx in -1..=1 {
+                for cy in -1..=1 {
+                    for cz in -1..=1 {
+                        w.insert_chunk([cx, cy, cz], Chunk::empty());
+                    }
+                }
+            }
+            Self {
+                world: w,
+                level: HashMap::new(),
+                active: HashSet::new(),
+                positions: HashSet::new(),
+                // Real game runs with bias=true; tests on a flat
+                // floor stay deterministic because no cell can
+                // see a cliff within 4 steps -> bias never fires.
+                bias_drops: true,
+            }
+        }
+        fn solid(&mut self, p: [i32; 3]) {
+            // Plain non-air, non-washable block. `BlockId(1)` is
+            // dirt in the demo's table - flags = F_NONE, fine
+            // for "is a wall".
+            self.world.set(p, BlockId(1));
+        }
+        fn fill_floor(
+            &mut self,
+            y: i32,
+            x: std::ops::RangeInclusive<i32>,
+            z: std::ops::RangeInclusive<i32>,
+        ) {
+            for xx in x {
+                for zz in z.clone() {
+                    self.solid([xx, y, zz]);
+                }
+            }
+        }
+        fn place_source(&mut self, p: [i32; 3], liquid: &Liquid) {
+            self.world.set(p, BlockId(liquid.block_id));
+            self.level.insert(p, 0);
+            self.active.insert(p);
+            self.positions.insert(p);
+        }
+        fn remove_voxel(&mut self, p: [i32; 3]) {
+            self.world.set(p, BlockId::AIR);
+            self.level.remove(&p);
+            self.active.remove(&p);
+            self.positions.remove(&p);
+            // Mirror `world_set_tracked` neighbour wake-up so
+            // adjacent liquid is re-queued for the next tick.
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if dx == 0 && dy == 0 && dz == 0 {
+                            continue;
+                        }
+                        let n = [p[0] + dx, p[1] + dy, p[2] + dz];
+                        if self.positions.contains(&n) {
+                            self.active.insert(n);
+                        }
+                    }
+                }
+            }
+        }
+        fn tick(&mut self, liquid: &Liquid) {
+            let plan = liquid_plan_step(
+                &self.world,
+                &self.level,
+                &self.active,
+                liquid,
+                self.bias_drops,
+            );
+            let _ = liquid_apply_plan(
+                &mut self.world,
+                &mut self.level,
+                &mut self.active,
+                &mut self.positions,
+                liquid,
+                plan,
+            );
+            if liquid.infinite_source {
+                let promoted =
+                    liquid_merge_step(&self.world, &self.level, liquid);
+                for p in promoted {
+                    self.level.insert(p, 0);
+                }
+            }
+        }
+        fn run(&mut self, liquid: &Liquid, ticks: u32) {
+            for _ in 0..ticks {
+                self.tick(liquid);
+            }
+        }
+        fn is(&self, p: [i32; 3], liquid: &Liquid) -> bool {
+            self.world.get(p).0 == liquid.block_id
+        }
+        fn level_at(&self, p: [i32; 3]) -> Option<u8> {
+            self.level.get(&p).copied()
+        }
+    }
+
+    fn water() -> &'static Liquid {
+        &LIQUIDS[0]
+    }
     fn mk_world() -> World {
         // Single chunk at the origin so coords [0..16) on each
         // axis are writable.
@@ -17741,58 +17907,180 @@ mod water_tests {
         );
         assert!((h - 1.0).abs() < 1e-4, "got {h}");
     }
-    // Six behaviour scenarios from the user spec, captured as
-    // `#[ignore]` placeholders. Implementing them requires
-    // extracting the tick step into a `LiquidSim` struct that
-    // can run without the full Voxel app (renderer, network,
-    // edit history). Sketches below document the expected
-    // outcome each test would assert.
+    // Six behaviour scenarios from the user spec, run against
+    // `LiquidSim`. Each test sets up a tiny world, places one
+    // or two sources, ticks for a fixed budget, and asserts a
+    // few cell-state invariants - never on the full pool
+    // contents so the tests stay stable under tweaks to spread
+    // ordering or candidate caps.
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn pour_on_flat_spreads_seven_blocks() {
-        // Source at (0, 5, 0) on a flat platform. After enough
-        // ticks the pool reaches up to 7 cells along each
-        // cardinal direction and stops there (level 7 = weakest
-        // would-be level 8 = evaporate).
+        // Flat solid floor, single source. After enough ticks
+        // the pool reaches the source's NSEW at distance 7 and
+        // never sets distance-8 cells (would-be level 8 =
+        // beyond max_range = evaporate).
+        let mut sim = LiquidSim::new();
+        sim.fill_floor(0, -12..=12, -12..=12);
+        sim.place_source([0, 1, 0], water());
+        sim.run(water(), 20);
+        assert!(sim.is([7, 1, 0], water()), "+x distance 7 missing");
+        assert!(sim.is([-7, 1, 0], water()), "-x distance 7 missing");
+        assert!(sim.is([0, 1, 7], water()), "+z distance 7 missing");
+        assert!(sim.is([0, 1, -7], water()), "-z distance 7 missing");
+        assert!(!sim.is([8, 1, 0], water()), "+x distance 8 should stay air");
+        assert!(!sim.is([0, 1, 8], water()), "+z distance 8 should stay air");
+        assert_eq!(sim.level_at([0, 1, 0]), Some(0), "source corrupted");
     }
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn pour_off_pillar_falls_then_pools() {
-        // Source on top of a 10-tall pillar. Vertical column
-        // stays 1 voxel wide as it falls (per "air below =
-        // pure fall"); at the base it spreads radially up to
-        // 5-6 cells.
+        // Source on top of a 1x1 pillar surrounded by air,
+        // basin floor far below. Vertical columns at the
+        // pillar's NSEW must stay 1 voxel wide while falling -
+        // mid-air cells beside the column stay air. Base pools
+        // out radially.
+        let mut sim = LiquidSim::new();
+        // Basin floor.
+        sim.fill_floor(-2, -8..=8, -8..=8);
+        // Pillar from y=-1 to y=10 at column (0,_,0).
+        for y in -1..=10 {
+            sim.solid([0, y, 0]);
+        }
+        // Source one cell above the pillar's top.
+        sim.place_source([0, 11, 0], water());
+        sim.run(water(), 60);
+        // Source intact.
+        assert_eq!(sim.level_at([0, 11, 0]), Some(0));
+        // Falling column at +x of pillar, mid-air at y=5.
+        assert!(sim.is([1, 5, 0], water()), "+x column gap at y=5");
+        // Column is 1 voxel wide - no horizontal spread mid-air.
+        assert!(
+            !sim.is([2, 5, 0], water()),
+            "column fanned out mid-air at +x"
+        );
+        assert!(
+            !sim.is([1, 5, 1], water()),
+            "column fanned out mid-air at +z of +x column"
+        );
+        // Base pool exists at y=-1 around the drop points.
+        assert!(sim.is([1, -1, 0], water()), "+x base pool missing");
+        assert!(sim.is([-1, -1, 0], water()), "-x base pool missing");
+        assert!(sim.is([0, -1, 1], water()), "+z base pool missing");
     }
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn two_sources_closed_one_three_make_middle_source() {
-        // 1x3 trench fully walled, sources at both ends. After
-        // a few ticks the middle cell promotes to source via
-        // `tick_liquid_merge` (stable pocket = 2+ source
-        // neighbours + every other neighbour solid).
+        // 1x3 sealed trench, sources at both ends. The middle
+        // cell becomes flow on tick 1 and then promotes to
+        // source on the merge pass (stable pocket: 2 source
+        // neighbours, every other neighbour solid wall).
+        let mut sim = LiquidSim::new();
+        for x in 0..=2 {
+            sim.solid([x, -1, 0]); // floor under each trench cell
+            sim.solid([x, 0, 1]); // +z wall
+            sim.solid([x, 0, -1]); // -z wall
+        }
+        sim.solid([-1, 0, 0]); // -x cap
+        sim.solid([3, 0, 0]); // +x cap
+        sim.place_source([0, 0, 0], water());
+        sim.place_source([2, 0, 0], water());
+        sim.run(water(), 10);
+        assert!(
+            sim.is([1, 0, 0], water()),
+            "middle cell didn't fill"
+        );
+        assert_eq!(
+            sim.level_at([1, 0, 0]),
+            Some(0),
+            "middle cell didn't promote to source"
+        );
     }
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn two_sources_open_drain_no_middle_source() {
-        // Same 1x3 layout but one wall replaced with an open
-        // air drop. Stability check refuses promotion - middle
-        // cell stays a regular flow.
+        // Same 1x3 setup but one z-wall has a hole the middle
+        // cell can drain through. Stability check fails (open
+        // air neighbour) so the merge never promotes.
+        let mut sim = LiquidSim::new();
+        for x in 0..=2 {
+            sim.solid([x, -1, 0]);
+            sim.solid([x, 0, -1]); // -z wall intact
+        }
+        // +z wall: hole at the middle cell so water drains.
+        sim.solid([0, 0, 1]);
+        // (no solid at [1, 0, 1]) - that's the drain.
+        sim.solid([2, 0, 1]);
+        // Drain has a deep shaft so water keeps falling and the
+        // drain cell stays a falling flow neighbour of [1,0,0].
+        for y in -8..=-2 {
+            // 3x3 air shaft below the drain - nothing to set,
+            // but we want no floor there.
+            let _ = y;
+        }
+        // Caps.
+        sim.solid([-1, 0, 0]);
+        sim.solid([3, 0, 0]);
+        sim.place_source([0, 0, 0], water());
+        sim.place_source([2, 0, 0], water());
+        sim.run(water(), 20);
+        assert!(
+            sim.is([1, 0, 0], water()),
+            "middle cell didn't fill"
+        );
+        assert_ne!(
+            sim.level_at([1, 0, 0]),
+            Some(0),
+            "middle wrongly promoted despite open drain"
+        );
     }
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn source_removal_drains_gradually() {
-        // Place a 7-radius pool from a single source. Remove
-        // the source. Outer ring evaporates within a couple
-        // ticks; the rest cascades level up by 1 each tick
-        // until everything's gone (~7 spread ticks).
+        // Fill a small pool, remove the source, tick long
+        // enough for every flow cell to evaporate.
+        let mut sim = LiquidSim::new();
+        sim.fill_floor(0, -10..=10, -10..=10);
+        sim.place_source([0, 1, 0], water());
+        sim.run(water(), 20);
+        // Pool exists before removal.
+        assert!(
+            sim.is([5, 1, 0], water()),
+            "pool didn't fill before source removal"
+        );
+        // Remove source.
+        sim.remove_voxel([0, 1, 0]);
+        // Run long enough to drain (max_range=7 -> ~7 decay
+        // steps in the worst case + some slack).
+        sim.run(water(), 50);
+        // Whole pool gone.
+        for x in -8..=8 {
+            for z in -8..=8 {
+                let p = [x, 1, z];
+                assert!(
+                    !sim.is(p, water()),
+                    "{p:?} still water after drain"
+                );
+            }
+        }
     }
+
     #[test]
-    #[ignore = "needs LiquidSim extraction; tracked in #liquid-tests"]
     fn two_streams_meet_strongest_wins() {
-        // Source A at one end, source B at the other, each
-        // spreading inward. The cell where they meet takes
-        // the stronger (lower-level) write because
-        // `put_water_update` keeps the minimum. The neighbour
-        // beyond the meeting cell decays to the higher level.
+        // Asymmetric source distances so the cell where the
+        // streams meet has an unambiguous stronger side.
+        // Source A at x=-3, source B at x=+4. Cell at x=0 is
+        // 3 steps from A, 4 steps from B -> level should be
+        // min(3, 4) = 3 thanks to `put_water_update`.
+        let mut sim = LiquidSim::new();
+        sim.fill_floor(0, -10..=10, -10..=10);
+        sim.place_source([-3, 1, 0], water());
+        sim.place_source([4, 1, 0], water());
+        sim.run(water(), 25);
+        let lvl = sim.level_at([0, 1, 0]).expect("meeting cell empty");
+        assert_eq!(
+            lvl, 3,
+            "expected stronger (-3) side to win with level 3, got {lvl}"
+        );
     }
 }
