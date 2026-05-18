@@ -91,6 +91,8 @@ mod chat;
 #[allow(dead_code)]
 mod dim;
 #[cfg(test)]
+mod dim_save_tests;
+#[cfg(test)]
 mod dim_switch_tests;
 mod mining;
 mod mob_ai;

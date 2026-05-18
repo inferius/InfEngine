@@ -23,15 +23,11 @@
 
 use std::io;
 
-use infengine_voxel::ChunkCoord;
 use tracing::{info, warn};
 
-use crate::worldgen::{WorldGen, set_world_seed, world_seed};
+use crate::worldgen::{self, WorldGen, dim_seed, set_world_seed, world_seed};
 use crate::Voxel;
 
-use super::chunks::{self, CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
-use super::containers::{self, DimensionContainers};
-use super::entities::{self, DimensionEntities};
 use super::layout;
 use super::meta::{self, create_meta};
 use super::players::{self, fresh_player};
@@ -39,13 +35,12 @@ use super::timers::{self, MAX_OFFLINE_MS, ScheduledTimers, catch_up::catch_up};
 use super::world_json::{self, create_world};
 use super::{LoadedWorld, current_wall_ms, set_worldgen, worldgen_str};
 
+pub(crate) mod dims;
 pub(crate) mod helpers;
 
 use helpers::{
-    apply_catch_up_events, apply_chunk_payload, apply_dimension_containers,
-    apply_dimension_entities, apply_player_save, build_dimension_containers,
-    build_dimension_entities, build_player_save, build_timers, collect_for_chunk,
-    hydrate_liquid_schedule, parse_chunk_filename, session_seconds_since_save,
+    apply_catch_up_events, apply_player_save, build_player_save, build_timers,
+    hydrate_liquid_schedule, session_seconds_since_save,
 };
 
 /// Dimension tag used for the host's overworld. Phase F extends this
@@ -59,6 +54,13 @@ pub(super) const HOST_PLAYER: &str = "host";
 
 /// Persist the full world state for `slug`. See `super::save_world`
 /// for the public contract.
+///
+/// Phase F: iterates every dim in `world.json::dimensions`. The
+/// active dim's state lives in the top-level Voxel fields; parked
+/// dims read from `voxel.worlds` + `voxel.entities_by_dim`. The
+/// timers bundle is single-file - each `Timer` carries its own
+/// `dim` tag, so the catch-up dispatcher routes events correctly
+/// on load.
 pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     let world_dir = layout::world_dir(slug);
     std::fs::create_dir_all(&world_dir)?;
@@ -68,8 +70,6 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     let mut meta = match meta::read_meta(slug) {
         Ok(m) => m,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            // Borrow the slug as the display name. The Worlds picker
-            // shows both, so the user can rename later via meta.json.
             create_meta(slug, slug)
         }
         Err(err) => return Err(err),
@@ -82,54 +82,34 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 
     // 2. world.json: write only if missing (worldgen + seed are
     //    pinned at creation).
-    if world_json::read_world(slug).is_err() {
-        // read_world returns Err(NotFound) when the file is missing;
-        // any other error already logged a corruption warning via the
-        // recovery layer, but we still re-mint here so a corrupt
-        // world.json doesn't block the save loop.
-        let wj = create_world(worldgen_str(WorldGen::current()), world_seed());
-        world_json::write_world(slug, &wj)?;
-    }
+    let world_json_value = match world_json::read_world(slug) {
+        Ok(wj) => wj,
+        Err(_) => {
+            // Missing OR corrupt - mint a fresh one. The base seed
+            // comes from `voxel.base_seed` (Phase F populates this
+            // on world creation / load); a 0 there is fine for
+            // legacy code paths that haven't been migrated yet.
+            let wj = create_world(
+                worldgen_str(WorldGen::current()),
+                if voxel.base_seed != 0 {
+                    voxel.base_seed
+                } else {
+                    world_seed()
+                },
+            );
+            world_json::write_world(slug, &wj)?;
+            wj
+        }
+    };
 
-    // 3. Chunks. Iterate every loaded chunk + collect per-chunk
-    //    decoration overrides.
-    let coords: Vec<ChunkCoord> = voxel.world.iter_chunks().map(|(c, _)| *c).collect();
-    let mut chunk_count: usize = 0;
-    for coord in coords {
-        // Borrow split: iter_chunks() holds an immutable borrow; we
-        // need to drop it before we can call write_chunk. Re-fetch
-        // the chunk reference here so each iteration is self-contained.
-        let Some(chunk) = voxel.world.chunk(coord) else {
-            continue;
-        };
-        let payload = ChunkPayload {
-            format_version: CHUNK_PAYLOAD_VERSION,
-            coord,
-            voxels: ChunkVoxels::from_chunk(chunk),
-            liquid_levels: collect_for_chunk(&voxel.liquid_level, coord),
-            torch_orient: collect_for_chunk(&voxel.torch_orient, coord),
-            snow_layers: collect_for_chunk(&voxel.snow_positions, coord),
-        };
-        chunks::write_chunk(slug, OVERWORLD, &payload)?;
-        chunk_count += 1;
-    }
+    // 3. Per-dim chunks + entities + containers.
+    let chunk_count = dims::save_all_dims(voxel, slug, &world_json_value)?;
 
     // 4. Host player.
     let player = build_player_save(voxel);
     players::write_player(slug, HOST_PLAYER, &player)?;
 
-    // 5. Entities (mobs + drops).
-    let dim_entities = build_dimension_entities(voxel);
-    entities::write_entities(slug, OVERWORLD, &dim_entities)?;
-
-    // 6. Per-position block state (chests). One file per dimension;
-    //    a missing file on load means "no chests persisted yet".
-    let dim_containers = build_dimension_containers(voxel);
-    containers::write_containers(slug, OVERWORLD, &dim_containers)?;
-
-    // 7. Timers. Drain the live `LiquidSchedule` into TimerKind::
-    //    LiquidScheduled entries. Furnace + crop timers will join here
-    //    once Phase C lands; the current world has none.
+    // 5. Timers (single file; each Timer carries its own `dim`).
     let timers_bundle = build_timers(voxel);
     timers::write_timers(slug, &timers_bundle)?;
 
@@ -138,9 +118,8 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     info!(
         slug = slug,
         chunks = chunk_count,
-        mobs = dim_entities.mobs.len(),
-        drops = dim_entities.drops.len(),
-        chests = dim_containers.chests.len(),
+        dims = world_json_value.dimensions.len(),
+        active_dim = %voxel.current_dim,
         liquid_timers = timers_bundle.items.len(),
         "world_save: save_world ok"
     );
@@ -149,81 +128,77 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 
 /// Load `slug` into `voxel`. See `super::load_world` for the public
 /// contract.
+///
+/// Phase F: every dimension in `world.json::dimensions` lands either
+/// in the active Voxel slots (the dim matching the player's
+/// `last_dimension`) or in the per-dim parking maps. The base seed
+/// and per-dim worldgen profiles come from `world.json`; the
+/// global `WORLD_SEED` and `WORLDGEN` atomics are pinned to the
+/// active dim's derived values.
 pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
     let meta = meta::read_meta(slug)?;
     let world_meta = world_json::read_world(slug)?;
 
-    // Pin worldgen + seed from the on-disk record.
-    let wg = WorldGen::from_str(&world_meta.worldgen).unwrap_or(WorldGen::Classic);
-    set_worldgen(wg);
-    if world_meta.seed != 0 {
-        set_world_seed(world_meta.seed);
-    }
-
-    // Drop any chunks the runtime had already streamed in (e.g. from
-    // a previous slot in the same session) so we don't end up with a
-    // mix of worldgens. `reset_world` clears renderer handles + the
-    // per-chunk auxiliary maps as well.
+    // Drop any state the runtime had streamed in for a previous
+    // slot.  Also clears the per-dim parking maps so we don't mix
+    // dims from two saves.
     voxel.reset_world();
+    voxel.worlds.clear();
+    voxel.entities_by_dim.clear();
+    voxel.dim_worldgens.clear();
 
-    // Load chunks.
-    let mut chunks_loaded: usize = 0;
-    let chunks_dir = layout::world_dir(slug)
-        .join("chunks")
-        .join(OVERWORLD);
-    if chunks_dir.is_dir() {
-        let read = std::fs::read_dir(&chunks_dir)?;
-        for entry in read.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("bin") {
-                continue;
-            }
-            let Some(coord) = parse_chunk_filename(&path) else {
-                warn!(path = %path.display(), "world_save: skipping unrecognised chunk filename");
-                continue;
-            };
-            let payload = match chunks::read_chunk(slug, OVERWORLD, coord)? {
-                Some(p) => p,
-                None => continue,
-            };
-            apply_chunk_payload(voxel, payload)?;
-            chunks_loaded += 1;
-        }
-    }
+    // Resolve the active dim. The player file is the source of
+    // truth for `last_dimension`; fall back to the world's default
+    // dimension when no player file exists.
+    let player = players::read_player(slug, HOST_PLAYER)?;
+    let last_dim = player
+        .as_ref()
+        .map(|p| p.last_dimension.clone())
+        .unwrap_or_else(|| world_meta.default_dimension.clone());
+    // Reject an active dim that isn't in the declared list - fall
+    // back to the world default so a corrupt player file doesn't
+    // strand the loader.
+    let active_dim = if world_meta.dimensions.contains(&last_dim) {
+        last_dim
+    } else {
+        world_meta.default_dimension.clone()
+    };
+    voxel.current_dim = active_dim.clone();
+    voxel.base_seed = world_meta.seed;
+    // Per-dim worldgens table; populate before per-dim load so
+    // each dim's chunk-gen can see its assigned variant.
+    dims::apply_dim_worldgens(voxel, &world_meta);
 
-    // Load the host player file (or mint a fresh one).
-    let player = players::read_player(slug, HOST_PLAYER)?
-        .unwrap_or_else(|| fresh_player(world_meta.spawn));
-    apply_player_save(voxel, &player);
+    // Pin the global atomics to the ACTIVE dim's effective seed +
+    // worldgen so noise callers (renderer-side decorations,
+    // background workers) see the right per-dim values right away.
+    let active_wg = voxel
+        .dim_worldgens
+        .get(&active_dim)
+        .copied()
+        .unwrap_or_else(|| {
+            WorldGen::from_str(&world_meta.worldgen).unwrap_or(WorldGen::Classic)
+        });
+    set_worldgen(active_wg);
+    set_world_seed(dim_seed(voxel.base_seed, &active_dim));
 
-    // Load entities (mobs + drops).
-    let dim_entities = entities::read_entities(slug, OVERWORLD)?
-        .unwrap_or_else(DimensionEntities::empty);
-    apply_dimension_entities(voxel, dim_entities);
+    // Per-dim chunks + entities + containers.
+    let chunks_loaded = dims::load_all_dims(voxel, slug, &world_meta)?;
 
-    // Load per-position block state (chests). A missing file means
-    // the slot has no chests yet - mint an empty bundle so the
-    // applier can run uniformly.
-    let dim_containers = containers::read_containers(slug, OVERWORLD)?
-        .unwrap_or_else(DimensionContainers::empty);
-    apply_dimension_containers(voxel, dim_containers);
+    // Player pose + inventory + last_dimension.
+    let player_save = player.unwrap_or_else(|| fresh_player(world_meta.spawn));
+    apply_player_save(voxel, &player_save);
 
     // Timers + catch-up.
     let now_ms = current_wall_ms();
     let mut bundle = timers::read_timers(slug)?
         .unwrap_or_else(|| ScheduledTimers::empty(now_ms));
-    // Cap the elapsed window the same way `timers::catch_up` does so
-    // a year-old save doesn't burn minutes simulating. The catch-up
-    // itself enforces the cap; mirroring it here just keeps the
-    // logged elapsed-ms honest.
     let elapsed = now_ms
         .saturating_sub(bundle.last_saved_wall_ms)
         .min(MAX_OFFLINE_MS);
     let events = catch_up(&mut bundle, now_ms);
     apply_catch_up_events(voxel, &events);
     hydrate_liquid_schedule(voxel, &events);
-    // Persist the bumped `last_saved_wall_ms` so the next boot
-    // measures elapsed from `now`, not from the previous save.
     if let Err(err) = timers::write_timers(slug, &bundle) {
         warn!(error = %err, "world_save: write_timers post-catch-up failed");
     }
@@ -234,6 +209,8 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     info!(
         slug = slug,
         chunks = chunks_loaded,
+        dims = world_meta.dimensions.len(),
+        active_dim = %voxel.current_dim,
         elapsed_ms = elapsed,
         catch_up_events = events.len(),
         "world_save: load_world ok"
@@ -242,4 +219,12 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
         meta,
         world: world_meta,
     })
+}
+
+// Keep the `worldgen` import alive even when only its sub-paths
+// are referenced - silences the unused-import lint on the bin
+// crate without forcing a per-call `crate::worldgen::...` rewrite.
+#[allow(dead_code)]
+fn _keep_worldgen_imports() {
+    let _ = worldgen::world_seed();
 }

@@ -65,7 +65,10 @@ pub(super) fn build_player_save(voxel: &Voxel) -> PlayerSave {
         spawn_pos: voxel.spawn_pos,
         permission_level: DEFAULT_HOST_PERMISSION,
         play_time_seconds: 0,
-        last_dimension: OVERWORLD.to_string(),
+        // Phase F: the active dim name is the source of truth on
+        // the runtime; the legacy single-dim path always wrote
+        // OVERWORLD here, which broke cross-dim save / load.
+        last_dimension: voxel.current_dim.clone(),
     }
 }
 
@@ -101,12 +104,17 @@ pub(super) fn apply_player_save(voxel: &mut Voxel, save: &PlayerSave) {
     voxel.day_time = voxel.day_time.rem_euclid(DAY_LENGTH_S);
 }
 
-/// Build a `DimensionEntities` snapshot from `voxel.mobs` +
-/// `voxel.dropped_items`. Both lists are already host-authoritative;
-/// we just translate to the save schema.
-pub(super) fn build_dimension_entities(voxel: &Voxel) -> DimensionEntities {
-    let mobs: Vec<MobSave> = voxel
-        .mobs
+/// Build a `DimensionEntities` snapshot from raw refs. The
+/// per-dim save path (`dims::save_*_dim`) hands in either
+/// `voxel.mobs` / `voxel.dropped_items` (active dim) or the
+/// parking maps (`voxel.entities_by_dim[dim]`).
+pub(super) fn build_dimension_entities_from(
+    mobs: &[MobState],
+    drops: &[DropItem],
+    next_mob_id: u32,
+    next_drop_id: u32,
+) -> DimensionEntities {
+    let mob_saves: Vec<MobSave> = mobs
         .iter()
         .map(|m| MobSave {
             id: m.id,
@@ -118,8 +126,7 @@ pub(super) fn build_dimension_entities(voxel: &Voxel) -> DimensionEntities {
             age_seconds: 0.0,
         })
         .collect();
-    let drops: Vec<DropSave> = voxel
-        .dropped_items
+    let drop_saves: Vec<DropSave> = drops
         .iter()
         .map(|d| DropSave {
             id: d.id,
@@ -131,10 +138,10 @@ pub(super) fn build_dimension_entities(voxel: &Voxel) -> DimensionEntities {
         .collect();
     DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
-        mobs,
-        drops,
-        next_mob_id: voxel.next_mob_id,
-        next_drop_id: voxel.next_drop_id,
+        mobs: mob_saves,
+        drops: drop_saves,
+        next_mob_id,
+        next_drop_id,
     }
 }
 
@@ -185,27 +192,28 @@ pub(super) fn apply_dimension_entities(voxel: &mut Voxel, entities: DimensionEnt
 /// slot-index order. Iteration order is non-deterministic (HashMap)
 /// but `apply_dimension_containers` rebuilds both maps from scratch
 /// so the on-disk order doesn't matter for correctness.
-pub(super) fn build_dimension_containers(voxel: &Voxel) -> DimensionContainers {
-    let chests: Vec<ChestSave> = voxel
-        .chests
+/// Build a `DimensionContainers` snapshot from the chest +
+/// furnace + runtime maps. The per-dim save path hands in either
+/// `voxel.chests` etc. (active dim) or the parked DimWorld maps.
+pub(super) fn build_dimension_containers_from(
+    chests: &std::collections::HashMap<[i32; 3], crate::container::Container>,
+    furnaces: &std::collections::HashMap<[i32; 3], crate::container::Container>,
+    furnace_runtimes: &std::collections::HashMap<
+        [i32; 3],
+        crate::block::furnace::FurnaceRuntime,
+    >,
+) -> DimensionContainers {
+    let chest_saves: Vec<ChestSave> = chests
         .iter()
         .map(|(pos, container)| ChestSave {
             pos: *pos,
             slots: container.slots().to_vec(),
         })
         .collect();
-    let furnaces: Vec<FurnaceSave> = voxel
-        .furnaces
+    let furnace_saves: Vec<FurnaceSave> = furnaces
         .iter()
         .map(|(pos, container)| {
-            // The runtime triple lives in a sibling HashMap; pull
-            // a zeroed default if no runtime entry exists yet
-            // (e.g. a furnace placed but never ticked).
-            let rt = voxel
-                .furnace_runtimes
-                .get(pos)
-                .copied()
-                .unwrap_or_default();
+            let rt = furnace_runtimes.get(pos).copied().unwrap_or_default();
             FurnaceSave {
                 pos: *pos,
                 slots: container.slots().to_vec(),
@@ -217,8 +225,8 @@ pub(super) fn build_dimension_containers(voxel: &Voxel) -> DimensionContainers {
         .collect();
     DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
-        chests,
-        furnaces,
+        chests: chest_saves,
+        furnaces: furnace_saves,
     }
 }
 

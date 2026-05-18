@@ -61,6 +61,8 @@ mod migrate_tests;
 #[cfg(test)]
 mod players_tests;
 #[cfg(test)]
+mod multi_dim_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod timers_tests;
