@@ -565,6 +565,56 @@ fn source_removal_drains_with_cliff_edge_nearby() {
     }
 }
 
+/// Regression for Bug 3: source-removal drain on a plateau with
+/// a cliff drop adjacent. After the source is gone every flow cell
+/// must evaporate, including the cells whose path back to the
+/// origin runs through other flow cells (so the BFS used by spread
+/// must traverse same-liquid, fixed in Bug 1). Catches a stall
+/// where the recompute-pull halted because spread couldn't
+/// re-evaluate the cliff-side cells without that traversal.
+#[test]
+fn source_removal_drains_through_multi_dir_cliff() {
+    let mut sim = LiquidSim::new();
+    // 11x11 plateau at y=0 centred on origin, with a 1-block
+    // cliff drop in +X starting at x=4 (y=0 is air for x in 4..).
+    // Basin floor far below so falling water lands and doesn't
+    // wrap underneath the plateau via a phantom path.
+    for x in -5..=3 {
+        for z in -5..=5 {
+            sim.solid([x, 0, z]);
+        }
+    }
+    for x in 4..=10 {
+        for z in -5..=5 {
+            sim.solid([x, -5, z]);
+        }
+    }
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 30);
+    // Sanity: pool reached the cliff edge.
+    assert!(sim.is([3, 1, 0], water()), "pool didn't reach plateau edge");
+    sim.remove_voxel([0, 1, 0]);
+    sim.run(water(), 100);
+    // Plateau fully drained.
+    for x in -5..=3 {
+        for z in -5..=5 {
+            let p = [x, 1, z];
+            assert!(
+                !sim.is(p, water()),
+                "plateau cell {p:?} still water after drain"
+            );
+        }
+    }
+    // Cliff falling column gone.
+    for y in -4..=0 {
+        let p = [4, y, 0];
+        assert!(
+            !sim.is(p, water()),
+            "cliff falling cell {p:?} still water after drain"
+        );
+    }
+}
+
 #[test]
 fn two_pools_remove_one_drains_only_that_one() {
     // Two independent pools separated by a solid wall. Removing
