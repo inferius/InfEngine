@@ -156,19 +156,28 @@ fn value_noise(p: vec2<f32>) -> f32 {
 // flow direction biases the scrolling so flowing cells stream in
 // their flow direction while pond cells stay isotropic.
 fn water_ripple(world_xz: vec2<f32>, flow: vec2<f32>, t: f32) -> f32 {
-    // Two octaves of scrolling value noise. Coarse layer drifts
-    // along the flow direction; fine layer scrolls at right
-    // angles for a directional crisscross. Static pond cells
-    // (flow == 0) fall back to the rolling-noise default.
-    let speed = 0.35;
+    // Three octaves of scrolling value noise. Coarse layer
+    // drifts along the flow direction; mid layer scrolls
+    // perpendicular for a directional crisscross; fine layer
+    // adds the sparkle. Static pond cells (flow == 0) fall
+    // back to a slower isotropic shimmer.
+    let speed = 0.45;
     let perp = vec2<f32>(-flow.y, flow.x);
-    let coarse_uv = world_xz * 0.85 + flow * t * speed;
-    let fine_uv = world_xz * 1.7 + perp * t * speed * 1.3
-        + vec2<f32>(t * 0.1, t * 0.08);
+    let coarse_uv = world_xz * 0.95 + flow * t * speed;
+    let mid_uv = world_xz * 2.2 + perp * t * speed * 1.4
+        + vec2<f32>(t * 0.12, t * 0.10);
+    let fine_uv = world_xz * 5.5
+        + flow * t * speed * 0.6
+        + vec2<f32>(t * 0.18, -t * 0.13);
     let coarse = value_noise(coarse_uv);
+    let mid = value_noise(mid_uv);
     let fine = value_noise(fine_uv);
-    let n = coarse * 0.65 + fine * 0.35;
-    return 0.82 + n * 0.33;
+    // Bias the layers so caustics read as bright streaks on a
+    // medium-blue base rather than the previous muted noise.
+    let n = coarse * 0.55 + mid * 0.30 + fine * 0.15;
+    // Output range [0.78, 1.55] - same midpoint, much wider
+    // contrast band, MC-style sparkle without blowing out.
+    return 1.05 + (n - 0.5) * 1.0;
 }
 
 @fragment

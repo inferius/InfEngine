@@ -16363,98 +16363,154 @@ fn liquid_plan_step(
     let mut updates: HashMap<[i32; 3], (u8, bool)> = HashMap::new();
     let drop_dirs: [[i32; 3]; 4] =
         [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
+    let _ = bias_drops; // MC's getSpread always bias-min; flag retained
+    // for the F6 debug toggle but ignored by the new spread loop.
     for pos in &candidates {
         let level = level_map.get(pos).copied().unwrap_or(0);
         let is_source = level == 0;
         let is_falling = level == 8;
-        let push_strength: u8 = if is_source || is_falling { 0 } else { level };
-        // MC `FlowingFluid.spreadToSides`:
-        //
-        //   neighbor = state.getAmount() - getDropOff(level);
-        //   if (state.getValue(FALLING)) neighbor = 7;
-        //
-        // We mirror that with our inverted convention: push_strength
-        // is the cell's own level (0 for source/falling, else level)
-        // and we add the liquid's per-ring drop_off to get the
-        // neighbour's level. Water drop_off = 1, overworld lava = 2.
-        let next_level = push_strength.saturating_add(liquid.drop_off);
+        // MC `Fluid.getAmount`: 8 for source / falling-full, else
+        // `8 - my_level`. We reconstruct it here so the
+        // `spreadToSides` neighbour-amount math is literal MC.
+        let amount: u8 = if is_source || is_falling { 8 } else { 8 - level };
+
+        // Step 1: try below. MC `FlowingFluid.spread`:
+        //   if canMaybePassThrough(DOWN, below) {
+        //       newBelowFluid = getNewLiquid(below);
+        //       if below.canBeReplaced + canHoldSpecificFluid {
+        //           spreadTo(below, newBelowFluid);
+        //           if sourceNeighborCount(self) >= 3 {
+        //               spreadToSides(...);
+        //           }
+        //           return;
+        //       }
+        //   }
+        //   if isSource || !isWaterHole(below) {
+        //       spreadToSides(...);
+        //   }
         let below = [pos[0], pos[1] - 1, pos[2]];
         let below_b = world.get(below);
         let below_open = below_b.is_air() || block_is_washable(below_b);
-        if below_open {
+        let below_same_liquid = below_b.0 == liquid_id;
+        // `canMaybePassThrough` simplified: target is not a
+        // same-liquid source AND can hold a liquid. Air,
+        // washable, and same-liquid flow cells all pass.
+        let below_passes = if below_same_liquid {
+            level_map.get(&below).copied().unwrap_or(0) != 0
+        } else {
+            below_open
+        };
+        let mut placed_below = false;
+        if below_passes {
+            // newBelowFluid = falling amount 8 (since above is
+            // same liquid). put_water_update with our level-8
+            // marker + falling flag.
             put_water_update(&mut updates, below, 1, true, max_range);
+            placed_below = true;
+        }
+
+        // Decide whether to spreadToSides.
+        // - Cell that placed below: only when sourceNeighborCount >= 3
+        // - Else (no below path): spreadToSides if source OR
+        //   !waterHole. waterHole = below is open OR same liquid.
+        let do_spread_sides = if placed_below {
+            // Count same-liquid SOURCE neighbours horizontally.
+            let mut sources = 0u8;
+            for d in &drop_dirs {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                if world.get(n).0 == liquid_id
+                    && level_map.get(&n).copied().unwrap_or(0) == 0
+                {
+                    sources += 1;
+                }
+            }
+            sources >= 3
+        } else {
+            let water_hole = below_open || below_same_liquid;
+            is_source || !water_hole
+        };
+        if !do_spread_sides {
             continue;
         }
-        // Continuous column: cell with same liquid directly
-        // below is part of a falling column. Refresh below at
-        // falling level so the decay pass doesn't kill it -
-        // mirrors MC's `getNewLiquid` returning `getFlowing(8,
-        // true)` when same liquid sits above. Without this, a
-        // source on a cliff flickered: tick 1 wrote below as
-        // falling, tick 2 saw water below (so `below_open` was
-        // false, source skipped the below-write), the orphan
-        // below cell decayed and evaporated, tick 3 source
-        // wrote it again, ... cycle every tick.
-        //
-        // Flow cells additionally skip horizontal spread so a
-        // vertical stream stays 1 voxel wide (MC behaviour).
-        // Sources keep going through the cliff / spread path so
-        // they still feed NSEW neighbours.
-        if below_b.0 == liquid_id {
-            put_water_update(&mut updates, below, 1, true, max_range);
-            if !is_source {
-                continue;
-            }
-        }
-        // Cliff scan: mark every NSEW neighbour that has an
-        // open cell below as a falling write at the strongest
-        // flow level. Previously this stopped on the first hit
-        // + skipped the regular horizontal spread for flow
-        // cells, which trapped a stream on a narrow bridge - it
-        // would only spill the first side it found and never
-        // reach the cell ahead. Now every cliff side gets its
-        // own falling write in the same tick AND the regular
-        // spread still runs, so a flow cell on a 1-wide bridge
-        // both falls off both sides and propagates forward.
-        for d in &drop_dirs {
-            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-            let nb = world.get(n);
-            if !nb.is_air() && !block_is_washable(nb) {
-                continue;
-            }
-            let n_below = world.get([n[0], n[1] - 1, n[2]]);
-            if n_below.is_air() || block_is_washable(n_below) {
-                put_water_update(&mut updates, n, 1, true, max_range);
-            }
-        }
-        if next_level > max_range {
+
+        // spreadToSides: neighbour amount = amount - drop_off,
+        // with `FALLING` override clamping to 7. Sources at
+        // amount 8 also resolve to amount 7 here (8 - 1).
+        let neighbor_amount: i16 = if is_falling {
+            7
+        } else {
+            amount as i16 - liquid.drop_off as i16
+        };
+        if neighbor_amount <= 0 {
             continue;
         }
-        let spread_dest = |b: BlockId| {
-            b.is_air() || block_is_washable(b) || b.0 == liquid_id
+        // Convert back to our level convention.
+        let neighbor_level = (8 - neighbor_amount).max(1) as u8;
+
+        // getSpread: pick all NSEW dirs with the minimum
+        // slope-distance to a drop. A "drop" is a cell whose
+        // own below is open. Targets that are non-passable or
+        // same-liquid sources don't count.
+        let spread_dest = |b: BlockId, p: [i32; 3]| -> bool {
+            if !(b.is_air() || block_is_washable(b) || b.0 == liquid_id) {
+                return false;
+            }
+            // Same-liquid source neighbour: can't overwrite.
+            if b.0 == liquid_id
+                && level_map.get(&p).copied().unwrap_or(0) == 0
+            {
+                return false;
+            }
+            true
         };
         let mut weights: [u32; 4] = [u32::MAX; 4];
         for (i, d) in drop_dirs.iter().enumerate() {
             let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
             let nb = world.get(n);
-            if !spread_dest(nb) {
+            if !spread_dest(nb, n) {
                 continue;
             }
             weights[i] = distance_to_drop_at(world, n, 4);
         }
-        let any_reachable = bias_drops
-            && weights.iter().any(|w| *w != u32::MAX && *w < 1000);
         let min_w = *weights.iter().min().unwrap_or(&u32::MAX);
-        for (i, d) in drop_dirs.iter().enumerate() {
-            let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-            let nb = world.get(n);
-            if !spread_dest(nb) {
-                continue;
+        if min_w == u32::MAX {
+            // No reachable drop in 4 steps; spread to every
+            // viable dir (MC: getSpread still includes all
+            // ties at the sentinel distance).
+            for (i, d) in drop_dirs.iter().enumerate() {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                let nb = world.get(n);
+                if !spread_dest(nb, n) {
+                    continue;
+                }
+                if weights[i] != u32::MAX {
+                    continue; // someone had a real drop -> only they
+                }
+                put_water_update(
+                    &mut updates,
+                    n,
+                    neighbor_level,
+                    false,
+                    max_range,
+                );
             }
-            if any_reachable && weights[i] != min_w {
-                continue;
+        } else {
+            // Spread only to min-distance directions. MC
+            // behaviour - water flows toward the nearest cliff
+            // first instead of fanning radially.
+            for (i, d) in drop_dirs.iter().enumerate() {
+                if weights[i] != min_w {
+                    continue;
+                }
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                put_water_update(
+                    &mut updates,
+                    n,
+                    neighbor_level,
+                    false,
+                    max_range,
+                );
             }
-            put_water_update(&mut updates, n, next_level, false, max_range);
         }
     }
     // Phase 2: for every non-source flow cell not receiving a
