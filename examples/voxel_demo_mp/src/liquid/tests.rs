@@ -433,6 +433,131 @@ fn two_streams_meet_strongest_wins() {
     );
 }
 
-// Regression tests for the source-removal cliff drainage bug land
-// in a follow-up commit so the algorithm + split is reviewable in
-// isolation.
+// -----------------------------------------------------------------
+// Regression suite for the source-removal cliff drainage bug. Caught
+// the original push-based oscillation; kept here so a future tweak
+// to the spread / pull logic can't reintroduce it.
+// -----------------------------------------------------------------
+
+#[test]
+fn source_removal_drains_with_cliff_edge_nearby() {
+    // Pool on a plateau with a cliff edge nearby. Player removes
+    // the source; the whole pool must evaporate even though some
+    // cells have an open `below` (cliff edge) and would otherwise
+    // get push-recreated by their non-cliff neighbours.
+    let mut sim = LiquidSim::new();
+    // Plateau floor at y=0, x in [-10..=2], z in [-10..=10]. The +x
+    // edge falls off after x=2 - cliff at x=3, basin floor at y=-5.
+    for x in -10..=2 {
+        for z in -10..=10 {
+            sim.solid([x, 0, z]);
+        }
+    }
+    // Basin floor below the cliff so falling water lands. Side
+    // walls block water from creating a parasitic falling column
+    // off the basin's z edges.
+    for x in 3..=10 {
+        for z in -10..=10 {
+            sim.solid([x, -5, z]);
+        }
+    }
+    for x in 3..=10 {
+        for y in -5..=0 {
+            sim.solid([x, y, -11]);
+            sim.solid([x, y, 11]);
+        }
+    }
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 40);
+    // Sanity: pool reached the plateau edge.
+    assert!(sim.is([2, 1, 0], water()), "pool didn't reach plateau edge");
+    sim.remove_voxel([0, 1, 0]);
+    sim.run(water(), 120);
+    // Plateau drained.
+    for x in -2..=2 {
+        for z in -2..=2 {
+            let p = [x, 1, z];
+            assert!(
+                !sim.is(p, water()),
+                "plateau cell {p:?} still water after drain"
+            );
+        }
+    }
+    // Falling column gone.
+    for y in -4..=0 {
+        let p = [3, y, 0];
+        assert!(
+            !sim.is(p, water()),
+            "cliff falling cell {p:?} still water after drain"
+        );
+    }
+}
+
+#[test]
+fn two_pools_remove_one_drains_only_that_one() {
+    // Two independent pools separated by a solid wall. Removing
+    // the first pool's source must NOT drain the second.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -10..=10, -10..=10);
+    // Wall between them at x=0, full height.
+    for y in 1..=3 {
+        for z in -10..=10 {
+            sim.solid([0, y, z]);
+        }
+    }
+    sim.place_source([-5, 1, 0], water());
+    sim.place_source([5, 1, 0], water());
+    sim.run(water(), 40);
+    assert!(sim.is([-3, 1, 0], water()), "left pool didn't fill");
+    assert!(sim.is([3, 1, 0], water()), "right pool didn't fill");
+    sim.remove_voxel([-5, 1, 0]);
+    sim.run(water(), 80);
+    // Left pool gone.
+    for x in -8..=-1 {
+        for z in -8..=8 {
+            let p = [x, 1, z];
+            assert!(!sim.is(p, water()), "left pool {p:?} still water");
+        }
+    }
+    // Right pool intact.
+    assert!(sim.is([5, 1, 0], water()), "right source vanished!");
+    assert!(sim.is([3, 1, 0], water()), "right pool drained spuriously");
+    assert!(sim.is([7, 1, 0], water()), "right pool edge drained spuriously");
+}
+
+#[test]
+fn waterfall_drains_top_down_after_source_removal() {
+    // Source on top, water falls off a tall cliff, pools at the
+    // base. Remove the top source -> the entire stream + basin
+    // pool must evaporate.
+    let mut sim = LiquidSim::new();
+    sim.solid([0, 4, 0]);
+    sim.fill_floor(-2, -6..=6, -6..=6);
+    sim.place_source([0, 5, 0], water());
+    sim.run(water(), 30);
+    assert!(sim.is([0, 3, 0], water()) || sim.is([1, 3, 0], water()));
+    assert!(
+        sim.is([1, -1, 0], water()) || sim.is([-1, -1, 0], water()),
+        "basin pool didn't form"
+    );
+    sim.remove_voxel([0, 5, 0]);
+    sim.run(water(), 100);
+    // Column gone.
+    for y in 0..=5 {
+        for x in -1..=1 {
+            for z in -1..=1 {
+                let p = [x, y, z];
+                if sim.is(p, water()) {
+                    panic!("waterfall cell {p:?} still water after drain");
+                }
+            }
+        }
+    }
+    // Basin gone.
+    for x in -4..=4 {
+        for z in -4..=4 {
+            let p = [x, -1, z];
+            assert!(!sim.is(p, water()), "basin {p:?} still water");
+        }
+    }
+}
