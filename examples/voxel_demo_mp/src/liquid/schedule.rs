@@ -53,12 +53,7 @@ impl Ord for ScheduledTick {
 /// Heap-backed schedule of pending liquid ticks. Each entry is a
 /// `(due_at_tick, pos)` pair; the parallel `pending` set guards
 /// double-scheduling.
-///
-/// `dead_code` is allowed at the type + method level for this
-/// commit only: the consumer side (`Voxel::tick_liquids` plumbing)
-/// lands in the next commit. Removing the allows there.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub(crate) struct LiquidSchedule {
     heap: BinaryHeap<Reverse<ScheduledTick>>,
     /// Cells currently waiting in `heap`. A cell is "pending" from
@@ -68,7 +63,6 @@ pub(crate) struct LiquidSchedule {
     pending: HashSet<[i32; 3]>,
 }
 
-#[allow(dead_code)]
 impl LiquidSchedule {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -93,6 +87,7 @@ impl LiquidSchedule {
     /// stale entries (cancelled positions or duplicates whose
     /// `pending` flag was already consumed). Returns `None` when no
     /// due entry remains.
+    #[allow(dead_code)]
     pub(crate) fn pop_due(&mut self, now: u64) -> Option<[i32; 3]> {
         while let Some(Reverse(top)) = self.heap.peek().copied() {
             if top.due_at_tick > now {
@@ -117,11 +112,13 @@ impl LiquidSchedule {
     /// number of distinct positions because the heap may carry
     /// stale entries that haven't been popped yet, but the pending
     /// set is the authoritative count.
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.pending.len()
     }
 
     /// True if `pos` is currently queued for a future tick.
+    #[allow(dead_code)]
     pub(crate) fn contains(&self, pos: [i32; 3]) -> bool {
         self.pending.contains(&pos)
     }

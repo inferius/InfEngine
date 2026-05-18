@@ -50,7 +50,8 @@ mod liquid;
 use liquid::{
     LIQUIDS, Liquid, bottom_open, distance_to_drop_at,
     liquid_apply_plan, liquid_corner_height_at, liquid_for,
-    liquid_merge_step, liquid_plan_step, push_quad_flow, side_open,
+    liquid_merge_step, liquid_plan_step, push_quad_flow,
+    schedule::LiquidSchedule, side_open,
 };
 mod net;
 use net::{
@@ -839,7 +840,23 @@ struct Voxel {
     /// for fall + spread. Populated on chunk load + on every
     /// liquid write. Per-tick scheduler pops a bounded slice
     /// and runs the MC-style update.
+    ///
+    /// Being phased out by `liquid_schedule`: the new model
+    /// schedules per-cell ticks instead of one big sweep over a
+    /// HashSet. Both coexist during the refactor; once the tick
+    /// path consumes the schedule, this set's last reader (the
+    /// planner) goes too.
     liquid_active: HashSet<[i32; 3]>,
+    /// MC-style per-cell tick schedule. `world_set_tracked` and
+    /// the tick loop queue cells here with a `due_at_tick`; each
+    /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
+    /// hard cap on the schedule itself - cells that don't fit a
+    /// frame keep their slot and tick on the next.
+    liquid_schedule: LiquidSchedule,
+    /// Game-tick counter for the schedule. +1 per net-tick frame.
+    /// Used both as `now` for `pop_due` and as the base for
+    /// computing `due_at_tick = now + tick_delay`.
+    liquid_clock: u64,
     /// Every liquid voxel currently in the world. Maintained on
     /// every peer (host + clients) so the dedicated slope-mesh
     /// render path can iterate without scanning chunks. The
@@ -1043,14 +1060,23 @@ impl Voxel {
         // propagate flow from a source. Non-liquid writes purge
         // the entry so a broken liquid cell doesn't leak into
         // the tracker.
-        if liquid_for(block).is_some() {
+        if let Some(liquid) = liquid_for(block) {
             self.liquid_active.insert(voxel);
+            // MC-style: the freshly placed cell ticks after
+            // `tick_period` frames - matches the legacy cadence
+            // the planner enforced via `nt % tick_period`.
+            let when = self.liquid_clock + liquid.tick_period.max(1) as u64;
+            self.liquid_schedule.schedule(voxel, when);
             self.liquid_level.entry(voxel).or_insert(0);
             if self.liquid_positions.insert(voxel) {
                 self.liquid_mesh_dirty = true;
             }
         } else if self.liquid_positions.remove(&voxel) {
             self.liquid_level.remove(&voxel);
+            // The cell is no longer liquid - drop its slot in
+            // the schedule. The matching heap entry becomes a
+            // tombstone, popped + skipped on the next sweep.
+            self.liquid_schedule.cancel(voxel);
             self.liquid_mesh_dirty = true;
         } else {
             self.liquid_level.remove(&voxel);
@@ -1081,6 +1107,17 @@ impl Voxel {
                     if self.liquid_positions.contains(&n) {
                         neighbour_liquid = true;
                         self.liquid_active.insert(n);
+                        // MC-style: re-schedule each adjacent
+                        // liquid cell at a short delay so the
+                        // spread can react to the new topology
+                        // (block placed in front of a stream,
+                        // pool floor dug out). MC uses
+                        // 1..tickDelay; we use a 1-tick wake so
+                        // the response shows up next frame, the
+                        // closest analogue of the old
+                        // `liquid_dirty_tick` force pass.
+                        self.liquid_schedule
+                            .schedule(n, self.liquid_clock + 1);
                     }
                 }
             }
@@ -1446,6 +1483,12 @@ impl Voxel {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
+        // Advance the per-cell schedule clock once per frame. The
+        // schedule itself isn't consumed yet (that lands in the
+        // next commit) - this only keeps `liquid_clock` ticking so
+        // `world_set_tracked`'s freshly scheduled cells have a
+        // monotonic reference time.
+        self.liquid_clock = self.liquid_clock.wrapping_add(1);
         // Force a single out-of-schedule pass when a recent player
         // edit re-queued a liquid neighbour. Without this the
         // spread can sit up to `tick_period` frames before
@@ -3947,6 +3990,8 @@ impl Voxel {
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             liquid_active: HashSet::new(),
+            liquid_schedule: LiquidSchedule::new(),
+            liquid_clock: 0,
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
             mobs: Vec::new(),
@@ -4006,6 +4051,8 @@ impl Voxel {
         self.torch_positions.clear();
         self.torch_orient.clear();
         self.liquid_active.clear();
+        self.liquid_schedule.clear();
+        self.liquid_clock = 0;
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.liquid_mesh_dirty = true;
@@ -4043,8 +4090,13 @@ impl Voxel {
                                     || b.0 == GLOWSTONE_ID
                                 {
                                     self.torch_positions.insert(v);
-                                } else if liquid_for(b).is_some() {
+                                } else if let Some(lq) = liquid_for(b) {
                                     self.liquid_active.insert(v);
+                                    self.liquid_schedule.schedule(
+                                        v,
+                                        self.liquid_clock
+                                            + lq.tick_period.max(1) as u64,
+                                    );
                                     if self.liquid_positions.insert(v) {
                                         self.liquid_mesh_dirty = true;
                                     }
@@ -4184,13 +4236,18 @@ impl Voxel {
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
                                 ]);
-                            } else if liquid_for(b).is_some() {
+                            } else if let Some(lq) = liquid_for(b) {
                                 let wv = [
                                     origin.x as i32 + lx,
                                     origin.y as i32 + ly,
                                     origin.z as i32 + lz,
                                 ];
                                 self.liquid_active.insert(wv);
+                                self.liquid_schedule.schedule(
+                                    wv,
+                                    self.liquid_clock
+                                        + lq.tick_period.max(1) as u64,
+                                );
                                 if self.liquid_positions.insert(wv) {
                                     self.liquid_mesh_dirty = true;
                                 }
