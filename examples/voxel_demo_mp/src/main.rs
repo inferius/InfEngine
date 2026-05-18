@@ -2419,7 +2419,20 @@ impl Voxel {
                     flow,
                 );
             }
-            if self.world.get([vx, vy - 1, vz]).is_air() {
+            // Bottom face: emit only when the cell below is air
+            // AND this cell is NOT a falling-stream cell. A
+            // falling cell with air below is the head of a
+            // descending column - drawing a horizontal floor at
+            // its base produces the "shelf" artifact the user
+            // reported. MC's water similarly skips the bottom
+            // face on falling streams; the side faces alone read
+            // as a continuous flow.
+            let own_level =
+                self.liquid_level.get(&[vx, vy, vz]).copied().unwrap_or(0);
+            let is_falling = own_level >= 8;
+            if !is_falling
+                && self.world.get([vx, vy - 1, vz]).is_air()
+            {
                 push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz],
@@ -15993,6 +16006,10 @@ fn liquid_corner_height_at(
         [vx + cx - 1, vy, vz + cz],
         [vx + cx, vy, vz + cz],
     ];
+    // Phase 1: column-above lock. If any touching cell is part
+    // of a falling column (same liquid both at this y and at
+    // y+1), the corner snaps to full height. Mirrors MC's
+    // `hasSameAbove == true -> getHeight = 1`.
     for t in &touching {
         if world.get(*t).0 == liquid_id
             && world.get([t[0], t[1] + 1, t[2]]).0 == liquid_id
@@ -16000,21 +16017,39 @@ fn liquid_corner_height_at(
             return 1.0;
         }
     }
-    let mut sum = 0.0_f32;
-    let mut count = 0u32;
+    // Phase 2: blend the touching same-liquid cells. Solids are
+    // ignored entirely (a wall doesn't slope the water). Air
+    // counts as 0 height so pool edges fade down toward the
+    // bank for a sloped look.
+    //
+    // Exception (anti-pyramid): if only one touching cell is a
+    // liquid, the corner takes that cell's own surface height
+    // straight - no averaging with the three air corners. A
+    // single source or falling column would otherwise render as
+    // a sharp pyramid (h ~ 0.25) instead of the full cube the
+    // user expects from a standalone water voxel.
+    let mut liquid_sum = 0.0_f32;
+    let mut liquid_count = 0u32;
+    let mut air_count = 0u32;
     for t in &touching {
         let b = world.get(*t);
-        if !b.is_air() && liquid_for(b).is_none() {
-            continue;
+        if b.0 == liquid_id {
+            liquid_sum += liquid_surface_height_at(world, level_map, *t, liquid_id);
+            liquid_count += 1;
+        } else if b.is_air() {
+            air_count += 1;
         }
-        sum += liquid_surface_height_at(world, level_map, *t, liquid_id);
-        count += 1;
+        // solids: ignored (no slope into a wall)
     }
-    if count == 0 {
-        0.0
-    } else {
-        sum / count as f32
+    if liquid_count == 0 {
+        return 0.0;
     }
+    if liquid_count == 1 {
+        // Standalone cell: render at its own height, no slope.
+        return liquid_sum;
+    }
+    let total = liquid_count + air_count;
+    liquid_sum / total as f32
 }
 
 fn distance_to_drop_at(
@@ -17983,24 +18018,45 @@ mod water_tests {
         assert!((h - 1.0).abs() < 1e-4, "got {h}");
     }
     #[test]
-    fn corner_height_edge_slopes_toward_air() {
+    fn corner_height_isolated_cell_full_height() {
+        // Anti-pyramid rule: a single liquid cell with no
+        // liquid neighbour at the same y renders as a full
+        // cube, not a pointy pyramid. Multi-cell pool edges
+        // still slope (covered by `corner_height_pool_edge_slopes`).
         let mut w = mk_world();
-        // Single source cell at (5, 5, 5).
         w.set([5, 5, 5], BlockId(WATER_ID));
         let mut map = HashMap::new();
         map.insert([5, 5, 5], 0u8);
-        // Corner at (5, 6, 5) - 1 source + 3 air touching.
-        // Air contributes 0, source contributes 1.0 (source =
-        // full height). Avg = 0.25.
         let h = liquid_corner_height_at(
             &w, &map, 5, 5, 5, 0, 0, WATER_ID,
         );
-        assert!(h < 1.0 && h > 0.0, "got {h}");
-        // Corner that doesn't touch the water -> 0.
+        assert!((h - 1.0).abs() < 1e-4, "isolated cell corner: got {h}");
         let h_far = liquid_corner_height_at(
             &w, &map, 5, 5, 5, 2, 2, WATER_ID,
         );
-        assert!(h_far.abs() < 1e-4, "got {h_far}");
+        assert!(h_far.abs() < 1e-4, "non-touching corner: got {h_far}");
+    }
+
+    #[test]
+    fn corner_height_pool_edge_slopes_toward_air() {
+        // Two adjacent sources form a tiny pool. The "outside"
+        // corner of the pool (touching 2 source + 2 air) blends
+        // half-and-half, so it sits at ~0.5 height for a sloped
+        // bank.
+        let mut w = mk_world();
+        w.set([5, 5, 5], BlockId(WATER_ID));
+        w.set([6, 5, 5], BlockId(WATER_ID));
+        let mut map = HashMap::new();
+        map.insert([5, 5, 5], 0u8);
+        map.insert([6, 5, 5], 0u8);
+        // Corner shared by (5, 5, 5) and (6, 5, 5): 2 source + 2 air.
+        let h = liquid_corner_height_at(
+            &w, &map, 5, 5, 5, 1, 0, WATER_ID,
+        );
+        assert!(
+            h > 0.4 && h < 0.6,
+            "pool edge slope expected ~0.5, got {h}"
+        );
     }
     #[test]
     fn corner_height_column_above_locks_full() {
