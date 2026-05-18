@@ -21,6 +21,7 @@
 
 mod cmds_chat;
 mod cmds_creative;
+mod cmds_host;
 mod cmds_player;
 mod cmds_world;
 
@@ -29,13 +30,11 @@ use std::collections::HashSet;
 use glam::Vec3;
 use infengine_voxel::{BlockId, CHUNK_SIZE};
 
-use crate::block::{BLOCK_TYPES, block_type, is_tool_block};
-use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
+use crate::block::{BLOCK_TYPES, block_type};
+use crate::net::NetRole;
 use crate::{
-    Biome, DAY_LENGTH_S, KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE,
-    MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState, PLAYER_HEIGHT, PLAYER_MAX_HEALTH,
-    RECIPES, Recipe, VERTICAL_CHUNKS, Voxel, ZOMBIE_MAX_HEALTH, biome_at,
-    world_seed,
+    Biome, KIND_ZOMBIE, PLAYER_HEIGHT, RECIPES, Recipe,
+    VERTICAL_CHUNKS, Voxel, biome_at,
 };
 
 /// Chat log retention: lines fade after this many seconds.
@@ -203,54 +202,15 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "motd" => {
-                let lines = Voxel::motd_lines();
-                if lines.is_empty() {
-                    local_lines.push(
-                        "(no motd.txt next to exe)"
-                            .to_string(),
-                    );
-                } else {
-                    for l in lines {
-                        local_lines.push(format!("[MOTD] {l}"));
-                    }
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_motd(voxel, arg, &mut local_lines);
             }
             "serverinfo" => {
-                // Diagnostics dump: host name +
-                // connected client count + active
-                // role. Works in any role.
-                let role = match &voxel.net {
-                    NetRole::Offline => "offline".to_string(),
-                    NetRole::Server { server, .. } => {
-                        format!(
-                            "host ({} clients)",
-                            server.client_count()
-                        )
-                    }
-                    NetRole::Client { client, .. } => {
-                        format!(
-                            "client id={:?}",
-                            client.client_id
-                        )
-                    }
-                };
-                let host = match &voxel.net {
-                    NetRole::Server { .. } => {
-                        voxel.host_name_buf.clone()
-                    }
-                    _ => "n/a".to_string(),
-                };
-                let weather_str = match voxel.weather {
-                    1 => "rain",
-                    2 => "snow",
-                    _ => "clear",
-                };
-                local_lines.push(format!(
-                    "Server: {host}  Role: {role}  Seed: {}  Weather: {weather_str}",
-                    world_seed()
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_serverinfo(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "version" | "ver" => {
                 handled_locally |= cmds_player::cmd_version(
@@ -260,273 +220,34 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "save" => {
-                // Flush the world state (edit
-                // history + inventories + day clock
-                // + HP + kill count + snow + torch
-                // orientation + liquid levels) to
-                // disk right now instead of waiting
-                // for the autosave cadence.
-                // Available to whoever owns the
-                // world: host in MP, the player
-                // themselves in offline. Clients
-                // can't save (they don't have the
-                // authoritative state).
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/save is host / offline only.".to_string(),
-                    );
-                } else {
-                    voxel.save_server_state();
-                    local_lines
-                        .push("World saved.".to_string());
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_save(voxel, arg, &mut local_lines);
             }
             "dmg" | "damage" => {
-                // Host-only: deal damage to a named
-                // peer or voxel. Usage: /dmg <name>
-                // <amount>. Routes through the same
-                // vx.damage path PvP uses.
-                if !matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline) {
-                    local_lines.push(
-                        "/dmg is host-only.".to_string(),
-                    );
-                } else {
-                    let mut parts = arg.split_whitespace();
-                    let target = parts.next().unwrap_or("");
-                    let amount: f32 = parts
-                        .next()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(2.0);
-                    if target.is_empty() {
-                        local_lines.push(
-                            "Usage: /dmg <name> [amount]"
-                                .to_string(),
-                        );
-                    } else {
-                        let target_id = voxel
-                            .player_names
-                            .iter()
-                            .find(|(_, n)| {
-                                n.eq_ignore_ascii_case(target)
-                            })
-                            .map(|(id, _)| *id);
-                        match target_id {
-                            None => {
-                                local_lines.push(format!(
-                                    "No player named {target}."
-                                ));
-                            }
-                            Some(0) => {
-                                voxel.apply_player_damage(amount);
-                                local_lines.push(format!(
-                                    "Self-damaged {amount}."
-                                ));
-                            }
-                            Some(id) => {
-                                let cfg =
-                                    bincode::config::standard();
-                                if let NetRole::Server {
-                                    server,
-                                    ..
-                                } = &mut voxel.net
-                                    && let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            DamageMsg { amount },
-                                            cfg,
-                                        )
-                                {
-                                    server.send_bytes_to_client(
-                                        id,
-                                        "vx.damage",
-                                        buf,
-                                    );
-                                }
-                                local_lines.push(format!(
-                                    "Damaged {target} for {amount}."
-                                ));
-                            }
-                        }
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |=
+                    cmds_host::cmd_dmg(voxel, arg, &mut local_lines);
             }
             "killmobs" => {
-                // Host-only: nuke every live mob.
-                // Pre-bleed HP to one hit so the
-                // damage_mob call triggers the death
-                // path the normal way (drops, remove
-                // broadcast, event).
-                if !matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline) {
-                    local_lines.push(
-                        "/killmobs is host-only.".to_string(),
-                    );
-                } else {
-                    let ids: Vec<u32> =
-                        voxel.mobs.iter().map(|m| m.id).collect();
-                    let n = ids.len();
-                    for id in ids {
-                        if let Some(m) = voxel
-                            .mobs
-                            .iter_mut()
-                            .find(|m| m.id == id)
-                        {
-                            m.health = MOB_HIT_DAMAGE;
-                        }
-                        voxel.damage_mob(id, None);
-                    }
-                    local_lines.push(format!("Killed {n} mobs."));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_killmobs(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "tree" => {
                 handled_locally |=
                     cmds_world::cmd_tree(voxel, arg, &mut local_lines);
             }
             "horde" => {
-                // Host-only: spawn N zombies around
-                // the player in one go. Defaults to
-                // 5; clamped 1..=20. Useful for
-                // testing combat scenarios. Same
-                // ring-spawn logic the spawner uses.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/horde is host-only.".to_string(),
-                    );
-                } else {
-                    let n: usize = arg
-                        .parse()
-                        .ok()
-                        .unwrap_or(5usize)
-                        .clamp(1, 20);
-                    let mut spawned = 0;
-                    for i in 0..n {
-                        let angle = (i as f32 / n as f32)
-                            * std::f32::consts::TAU;
-                        let radius = 6.0;
-                        let cx = voxel.player_pos.x
-                            + angle.cos() * radius;
-                        let cz = voxel.player_pos.z
-                            + angle.sin() * radius;
-                        let pos = [cx, voxel.player_pos.y, cz];
-                        let id = voxel.next_mob_id;
-                        voxel.next_mob_id = voxel
-                            .next_mob_id
-                            .wrapping_add(1)
-                            .max(1);
-                        let mob = MobState {
-                            id,
-                            kind: KIND_ZOMBIE,
-                            pos,
-                            target: pos,
-                            yaw: 0.0,
-                            retarget_at: (voxel.day_time + 1.0)
-                                .rem_euclid(DAY_LENGTH_S),
-                            health: ZOMBIE_MAX_HEALTH,
-                            dying: 0.0,
-                            attack_cd: 0.0,
-                        };
-                        voxel.mobs.push(mob);
-                        voxel.remote_mobs.insert(
-                            id,
-                            MobMsg {
-                                id,
-                                kind: KIND_ZOMBIE,
-                                pos,
-                                yaw: 0.0,
-                                health: ZOMBIE_MAX_HEALTH as u8,
-                            },
-                        );
-                        spawned += 1;
-                    }
-                    local_lines.push(format!(
-                        "Spawned {spawned} zombies."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_horde(voxel, arg, &mut local_lines);
             }
             "spawnmob" => {
-                // Host-only: spawn a sheep or zombie
-                // a few blocks in front of the player.
-                // Clients can't run this since the
-                // server owns mob state.
-                if !matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline) {
-                    local_lines.push(
-                        "/spawnmob is host-only.".to_string(),
-                    );
-                } else {
-                    let kind = if arg.eq_ignore_ascii_case("zombie") {
-                        KIND_ZOMBIE
-                    } else if arg.eq_ignore_ascii_case("chicken") {
-                        KIND_CHICKEN
-                    } else if arg.eq_ignore_ascii_case("pig") {
-                        KIND_PIG
-                    } else {
-                        KIND_SHEEP
-                    };
-                    let fwd_h = Vec3::new(
-                        voxel.player_yaw.cos(),
-                        0.0,
-                        -voxel.player_yaw.sin(),
-                    )
-                    .normalize_or_zero();
-                    let spawn_at = voxel.player_pos + fwd_h * 3.0;
-                    let id = voxel.next_mob_id;
-                    voxel.next_mob_id =
-                        voxel.next_mob_id.wrapping_add(1).max(1);
-                    let pos = [
-                        spawn_at.x,
-                        spawn_at.y,
-                        spawn_at.z,
-                    ];
-                    let mob = MobState {
-                        id,
-                        kind,
-                        pos,
-                        target: pos,
-                        yaw: 0.0,
-                        retarget_at: (voxel.day_time + 1.0)
-                            .rem_euclid(DAY_LENGTH_S),
-                        health: if kind == KIND_ZOMBIE {
-                            ZOMBIE_MAX_HEALTH
-                        } else {
-                            MOB_MAX_HEALTH
-                        },
-                        dying: 0.0,
-                        attack_cd: 0.0,
-                    };
-                    let initial_hp = if kind == KIND_ZOMBIE {
-                        ZOMBIE_MAX_HEALTH
-                    } else {
-                        MOB_MAX_HEALTH
-                    } as u8;
-                    voxel.mobs.push(mob);
-                    voxel.remote_mobs.insert(
-                        id,
-                        MobMsg {
-                            id,
-                            kind,
-                            pos,
-                            yaw: 0.0,
-                            health: initial_hp,
-                        },
-                    );
-                    local_lines.push(format!(
-                        "Spawned {}.",
-                        if kind == KIND_ZOMBIE {
-                            "zombie"
-                        } else {
-                            "sheep"
-                        }
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_spawnmob(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "clearcraft" => {
                 // Empty the 2x2 crafting grid. Frees
@@ -615,29 +336,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_world::cmd_rd(voxel, arg, &mut local_lines);
             }
             "mobcap" => {
-                // /mobcap reports the cap; /mobcap N
-                // sets it. Hard ceiling at 64 so the
-                // server doesn't blow up its tick
-                // budget; floor at 0 to allow a
-                // disabled spawner.
-                if arg.is_empty() {
-                    local_lines.push(format!(
-                        "Mob cap: {} (live: {})",
-                        voxel.mob_cap,
-                        voxel.mobs.len()
-                    ));
-                } else if let Ok(v) = arg.parse::<usize>() {
-                    let new_cap = v.min(64);
-                    voxel.mob_cap = new_cap;
-                    local_lines.push(format!(
-                        "Mob cap set to {new_cap}."
-                    ));
-                } else {
-                    local_lines.push(format!(
-                        "Cannot parse mob cap: {arg}"
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_mobcap(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "weather" => {
                 handled_locally |= cmds_world::cmd_weather(
@@ -647,39 +350,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "lock" => {
-                // Host-only world lock. Blocks any
-                // vx.edit packets arriving from
-                // clients. Host can still edit.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/lock is host-only.".to_string(),
-                    );
-                } else {
-                    voxel.world_locked = !voxel.world_locked;
-                    let line = format!(
-                        "* world {}",
-                        if voxel.world_locked {
-                            "LOCKED"
-                        } else {
-                            "unlocked"
-                        }
-                    );
-                    voxel.chat_log.push((
-                        std::time::Instant::now(),
-                        line.clone(),
-                    ));
-                    if let NetRole::Server { server, .. } =
-                        &mut voxel.net
-                        && let Ok(buf) =
-                            bincode::serde::encode_to_vec(
-                                &line,
-                                bincode::config::standard(),
-                            )
-                    {
-                        server.broadcast_bytes("vx.chat", buf);
-                    }
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_lock(voxel, arg, &mut local_lines);
             }
             "freezetime" | "freeze" => {
                 handled_locally |= cmds_creative::cmd_freezetime(
@@ -708,62 +380,18 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_world::cmd_time(voxel, arg, &mut local_lines);
             }
             "giveall" => {
-                // Drops one of every block type into
-                // the local inventory. Handy for UI
-                // testing or quickly stocking a
-                // builder slot.
-                for bt in BLOCK_TYPES.iter() {
-                    if is_tool_block(BlockId(bt.id)) {
-                        continue;
-                    }
-                    voxel.pickup(BlockId(bt.id));
-                }
-                local_lines
-                    .push("Granted one of each block.".to_string());
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_giveall(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "healall" => {
-                // Host-only. Sends a full-heal
-                // DamageMsg (-100) to every connected
-                // client and tops the host's HP
-                // back to max.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/healall is host-only.".to_string(),
-                    );
-                } else {
-                    voxel.player_health = PLAYER_MAX_HEALTH;
-                    voxel.regen_accum = 0.0;
-                    voxel.hurt_flash = 0.0;
-                    let cfg = bincode::config::standard();
-                    let mut count = 0u32;
-                    if let NetRole::Server {
-                        server, ..
-                    } = &mut voxel.net
-                    {
-                        for cid in server.client_ids() {
-                            if let Ok(buf) =
-                                bincode::serde::encode_to_vec(
-                                    DamageMsg {
-                                        amount: -100.0,
-                                    },
-                                    cfg,
-                                )
-                            {
-                                server.send_bytes_to_client(
-                                    cid,
-                                    "vx.damage",
-                                    buf,
-                                );
-                                count += 1;
-                            }
-                        }
-                    }
-                    local_lines.push(format!(
-                        "Healed self + {count} clients."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_healall(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "restock" => {
                 handled_locally |= cmds_creative::cmd_restock(
@@ -787,65 +415,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 );
             }
             "summon" => {
-                // Host-only: yank a remote peer to
-                // the host's pose by sending them a
-                // vx.teleport. Silently ignored on
-                // any other role to keep clients from
-                // grabbing each other.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/summon is host-only.".to_string(),
-                    );
-                } else if arg.is_empty() {
-                    local_lines
-                        .push("Usage: /summon <name>".to_string());
-                } else {
-                    let target_id = voxel
-                        .player_names
-                        .iter()
-                        .find(|(_, n)| {
-                            n.eq_ignore_ascii_case(arg)
-                        })
-                        .map(|(id, _)| *id);
-                    if let Some(id) = target_id {
-                        if id == 0 {
-                            local_lines.push(
-                                "Can't summon yourvoxel."
-                                    .to_string(),
-                            );
-                        } else {
-                            let msg = TeleportMsg {
-                                pos: [
-                                    voxel.player_pos.x,
-                                    voxel.player_pos.y + 0.1,
-                                    voxel.player_pos.z,
-                                ],
-                            };
-                            if let NetRole::Server {
-                                server, ..
-                            } = &mut voxel.net
-                                && let Ok(buf) =
-                                    bincode::serde::encode_to_vec(
-                                        msg,
-                                        bincode::config::standard(),
-                                    )
-                            {
-                                server.send_bytes_to_client(
-                                    id,
-                                    "vx.teleport",
-                                    buf,
-                                );
-                            }
-                            local_lines.push(format!(
-                                "Summoned {arg}."
-                            ));
-                        }
-                    } else {
-                        local_lines
-                            .push(format!("No player named {arg}."));
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |= cmds_host::cmd_summon(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "randomtp" | "rtp" => {
                 // Random nearby teleport. Picks a
@@ -1176,43 +750,12 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_player::cmd_pos(voxel, arg, &mut local_lines);
             }
             "mute" => {
-                if arg.is_empty() {
-                    if voxel.muted_players.is_empty() {
-                        local_lines.push(
-                            "No one muted.".to_string(),
-                        );
-                    } else {
-                        let mut names: Vec<String> = voxel
-                            .muted_players
-                            .iter()
-                            .cloned()
-                            .collect();
-                        names.sort();
-                        local_lines.push(format!(
-                            "Muted: {}",
-                            names.join(", ")
-                        ));
-                    }
-                } else {
-                    voxel.muted_players
-                        .insert(arg.to_lowercase());
-                    local_lines
-                        .push(format!("Muted {arg}."));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_mute(voxel, arg, &mut local_lines);
             }
             "unmute" => {
-                if arg.is_empty() {
-                    voxel.muted_players.clear();
-                    local_lines.push(
-                        "All mutes cleared.".to_string(),
-                    );
-                } else {
-                    voxel.muted_players
-                        .remove(&arg.to_lowercase());
-                    local_lines.push(format!("Unmuted {arg}."));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_unmute(voxel, arg, &mut local_lines);
             }
             "wave" | "shrug" | "dance" => {
                 handled_locally |= cmds_chat::cmd_emote(
@@ -1306,129 +849,15 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "kick" => {
-                // Host-only soft kick: sends a
-                // vx.kick to the target with a
-                // reason string. The client treats it
-                // as a server-initiated disconnect
-                // and bounces back to the main menu.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/kick is host-only.".to_string(),
-                    );
-                } else {
-                    let mut parts =
-                        arg.splitn(2, char::is_whitespace);
-                    let target =
-                        parts.next().unwrap_or("").trim();
-                    let reason = parts
-                        .next()
-                        .unwrap_or("kicked by host")
-                        .trim();
-                    if target.is_empty() {
-                        local_lines.push(
-                            "Usage: /kick <name> [reason]"
-                                .to_string(),
-                        );
-                    } else {
-                        let target_id = voxel
-                            .player_names
-                            .iter()
-                            .find(|(_, n)| {
-                                n.eq_ignore_ascii_case(target)
-                            })
-                            .map(|(id, _)| *id);
-                        match target_id {
-                            None | Some(0) => {
-                                local_lines.push(format!(
-                                    "Cannot kick {target}."
-                                ));
-                            }
-                            Some(id) => {
-                                let cfg =
-                                    bincode::config::standard();
-                                if let NetRole::Server {
-                                    server,
-                                    ..
-                                } = &mut voxel.net
-                                    && let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            reason.to_string(),
-                                            cfg,
-                                        )
-                                {
-                                    server
-                                        .send_bytes_to_client(
-                                            id, "vx.kick", buf,
-                                        );
-                                }
-                                // Announce in chat so
-                                // other peers see who
-                                // bounced.
-                                let line = format!(
-                                    "* {target} was kicked: {reason}"
-                                );
-                                voxel.chat_log.push((
-                                    std::time::Instant::now(),
-                                    line.clone(),
-                                ));
-                                if let NetRole::Server {
-                                    server,
-                                    ..
-                                } = &mut voxel.net
-                                    && let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            &line,
-                                            bincode::config::standard(),
-                                        )
-                                {
-                                    server.broadcast_bytes(
-                                        "vx.chat", buf,
-                                    );
-                                }
-                                local_lines.push(format!(
-                                    "Kicked {target}."
-                                ));
-                            }
-                        }
-                    }
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_host::cmd_kick(voxel, arg, &mut local_lines);
             }
             "announce" => {
-                // Host-only system broadcast.
-                // Prefixed `[SERVER]` so peers can
-                // distinguish operator messages from
-                // regular chat. Body is sent through
-                // vx.chat directly so the recipient
-                // chat path treats it like any other
-                // line.
-                if !matches!(voxel.net, NetRole::Server { .. }) {
-                    local_lines.push(
-                        "/announce is host-only.".to_string(),
-                    );
-                } else if arg.is_empty() {
-                    local_lines.push(
-                        "Usage: /announce <message>"
-                            .to_string(),
-                    );
-                } else {
-                    let cfg = bincode::config::standard();
-                    let line = format!("[SERVER] {arg}");
-                    voxel.chat_log.push((
-                        std::time::Instant::now(),
-                        line.clone(),
-                    ));
-                    if let NetRole::Server { server, .. } =
-                        &mut voxel.net
-                        && let Ok(buf) =
-                            bincode::serde::encode_to_vec(
-                                &line, cfg,
-                            )
-                    {
-                        server.broadcast_bytes("vx.chat", buf);
-                    }
-                }
-                handled_locally = true;
+                handled_locally |= cmds_host::cmd_announce(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "worldgen" | "gen" => {
                 handled_locally |= cmds_world::cmd_worldgen(
