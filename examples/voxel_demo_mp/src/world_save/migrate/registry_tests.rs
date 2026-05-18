@@ -146,17 +146,21 @@ fn peek_envelope_version_short_input_errors() {
 }
 
 #[test]
-fn default_registry_is_empty_at_phase_b6() {
-    // Locks the "no production migrations yet" state. Bumping any
-    // payload version is a deliberate breaking change that also adds
-    // an arrow.
+fn default_registry_has_only_phase_c_and_f_arrows() {
+    // Locks the production migration arrows.
+    // - Phase C.4: Containers v1 -> v2 (added furnaces).
+    // - Phase F:   WorldJson v1 -> v2 (added dimension_worldgens).
+    // Every other (kind, from) slot must stay empty so a stray
+    // arrow registration would fail this assertion.
     let reg = default_registry();
     assert!(reg.plan(SaveKind::Meta, 1, 2).is_none());
-    assert!(reg.plan(SaveKind::WorldJson, 1, 2).is_none());
+    assert!(reg.plan(SaveKind::WorldJson, 1, 2).is_some());
     assert!(reg.plan(SaveKind::Chunk, 1, 2).is_none());
     assert!(reg.plan(SaveKind::Player, 1, 2).is_none());
     assert!(reg.plan(SaveKind::Entities, 1, 2).is_none());
     assert!(reg.plan(SaveKind::Timers, 1, 2).is_none());
+    // Containers v1 -> v2 (the C.4 arrow) is the other half.
+    assert!(reg.plan(SaveKind::Containers, 1, 2).is_some());
 }
 
 #[test]

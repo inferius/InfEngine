@@ -176,8 +176,11 @@ fn unknown_world_version_refuses_read() {
 fn format_versions_match_design_doc() {
     // Lock the published schema numbers - bumping either of these
     // is a deliberate breaking change that needs a migration.
+    // - meta.json:  v1 (header only; bumped on rename or new key).
+    // - world.json: v2 since Phase F (added dimension_worldgens
+    //   map; v1 saves migrate via the registered v1 -> v2 arrow).
     assert_eq!(META_FORMAT_VERSION, 1);
-    assert_eq!(WORLD_FORMAT_VERSION, 1);
+    assert_eq!(WORLD_FORMAT_VERSION, 2);
 }
 
 #[test]

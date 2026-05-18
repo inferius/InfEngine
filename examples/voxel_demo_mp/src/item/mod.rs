@@ -347,6 +347,45 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 64, icon: None,
         category: ItemCategory::Ingredient,
     },
+    // ---- Phase F: nether + portal blocks ----
+    // Netherrack drops from nether terrain mining. Building
+    // block category so it shows up in the BuildingBlock filter.
+    ItemType {
+        id: 44, name: "netherrack", display: None,
+        places: Some(44), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // Bedrock - placeable in creative for debugging only. The
+    // place path will still gate on permission; for now the
+    // item exists so a hostile / admin-spawned bedrock survives
+    // round-trips through the inventory.
+    ItemType {
+        id: 45, name: "bedrock", display: None,
+        places: Some(45), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // Obsidian - block + portal frame material.
+    ItemType {
+        id: 46, name: "obsidian", display: None,
+        places: Some(46), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // Portal block: cosmetic + cross-dim trigger. Like the
+    // liquid source ids, the item exists for save symmetry but
+    // is NOT user-placeable (places = None). Players ignite a
+    // portal with flint+steel; the place path can't conjure it.
+    ItemType {
+        id: 47, name: "portal", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // Flint and steel. Single-stack tool; RMB ignites a portal
+    // frame. Stacks to 1 like buckets.
+    ItemType {
+        id: 48, name: "flint_and_steel", display: Some("Flint and Steel"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
 ];
 
 // ---------------------------------------------------------------

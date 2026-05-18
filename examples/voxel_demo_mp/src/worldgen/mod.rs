@@ -32,6 +32,7 @@ pub(crate) mod chunk;
 pub(crate) mod climate;
 pub(crate) mod flowers;
 pub(crate) mod height;
+pub(crate) mod nether;
 pub(crate) mod ore;
 pub(crate) mod trees;
 
@@ -46,6 +47,10 @@ pub use chunk::generate_chunk_at;
 /// terrain + ore distributions while staying deterministic across
 /// workers and clients running the same value. Set on host start
 /// + replicated to clients via `vx.seed`.
+///
+/// Phase F: this atomic stores the ACTIVE dimension's effective
+/// seed (`dim_seed(base, current_dim)`). Switching dims rewrites
+/// it; the base seed is the one stored in `world.json::seed`.
 static WORLD_SEED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
@@ -55,6 +60,31 @@ pub fn world_seed() -> u32 {
 
 pub fn set_world_seed(value: u32) {
     WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// FNV-1a 32-bit hash of a dimension name. Deterministic across
+/// platforms + Rust versions (the algorithm is specified, not
+/// implementation-defined). Used by `dim_seed` to fold the dim
+/// name into the per-dim effective seed.
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811C_9DC5;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// Derive a deterministic per-dimension seed from a base seed and
+/// a dimension name. `base XOR FNV1a(dim)`.
+///
+/// The base seed comes from `world.json::seed`; this function
+/// folds in the dim name so the overworld and the nether disagree
+/// on chunk content even though they share the same world.json
+/// seed. Two peers running the same worldgen with the same base
+/// seed + same dim name produce byte-identical chunks.
+pub fn dim_seed(base: u32, dim: &str) -> u32 {
+    base ^ fnv1a32(dim.as_bytes())
 }
 
 /// Mix the seed into a deterministic float used as a phase
@@ -99,6 +129,12 @@ pub enum WorldGen {
     /// per-cell biome; each biome has its own height curve,
     /// surface block, and tree species.
     Realistic = 4,
+    /// Phase F: hellish dimension. Netherrack bulk with bedrock
+    /// floor, glowstone-flecked netherrack ceiling, scattered
+    /// lava lakes + caves. Only meaningful when paired with the
+    /// `nether` dim in a multi-dim save - the worldgen variant
+    /// is per-dim, not a top-level world choice.
+    Nether = 5,
 }
 
 impl WorldGen {
@@ -114,6 +150,7 @@ impl WorldGen {
             "islands" | "island" => Some(Self::Islands),
             "amplified" | "amp" => Some(Self::Amplified),
             "realistic" | "real" => Some(Self::Realistic),
+            "nether" | "hell" => Some(Self::Nether),
             _ => None,
         }
     }
@@ -123,6 +160,7 @@ impl WorldGen {
             2 => Self::Islands,
             3 => Self::Amplified,
             4 => Self::Realistic,
+            5 => Self::Nether,
             _ => Self::Classic,
         }
     }
@@ -179,5 +217,57 @@ mod tests {
         assert_eq!(WorldGen::Islands as u8, 2);
         assert_eq!(WorldGen::Amplified as u8, 3);
         assert_eq!(WorldGen::Realistic as u8, 4);
+        assert_eq!(WorldGen::Nether as u8, 5);
+    }
+
+    #[test]
+    fn from_str_accepts_nether() {
+        assert_eq!(WorldGen::from_str("nether"), Some(WorldGen::Nether));
+        assert_eq!(WorldGen::from_str("hell"), Some(WorldGen::Nether));
+        assert_eq!(WorldGen::from_str("NETHER"), Some(WorldGen::Nether));
+    }
+
+    #[test]
+    fn dim_seed_is_deterministic() {
+        // Same base + dim must always yield the same effective seed
+        // (no time-based or RNG mixing).
+        let a = dim_seed(0, "overworld");
+        let b = dim_seed(0, "overworld");
+        assert_eq!(a, b);
+        let c = dim_seed(12345, "nether");
+        let d = dim_seed(12345, "nether");
+        assert_eq!(c, d);
+    }
+
+    #[test]
+    fn dim_seed_distinguishes_dims() {
+        // The whole point of the per-dim derivation is that two
+        // dims with the same base seed produce different effective
+        // seeds, so the overworld and nether don't pull from the
+        // same noise lattice.
+        assert_ne!(dim_seed(0, "overworld"), dim_seed(0, "nether"));
+        assert_ne!(dim_seed(42, "overworld"), dim_seed(42, "nether"));
+    }
+
+    #[test]
+    fn dim_seed_base_zero_still_distinguishes() {
+        // Base seed 0 (host hasn't picked one yet) must still split
+        // the two dims; the XOR with FNV(dim_name) does the work.
+        let ow = dim_seed(0, "overworld");
+        let nt = dim_seed(0, "nether");
+        assert_ne!(ow, 0);
+        assert_ne!(nt, 0);
+        assert_ne!(ow, nt);
+    }
+
+    #[test]
+    fn fnv1a32_known_vectors() {
+        // Spot-check the FNV-1a 32-bit hash against a known string
+        // so platform-specific surprises (signed/unsigned shifts)
+        // would fail loudly. "" -> offset basis; "a" / "foo" /
+        // "overworld" -> reference values.
+        assert_eq!(fnv1a32(b""), 0x811C_9DC5);
+        assert_eq!(fnv1a32(b"a"), 0xE40C_292C);
+        assert_eq!(fnv1a32(b"foobar"), 0xBF9C_F968);
     }
 }

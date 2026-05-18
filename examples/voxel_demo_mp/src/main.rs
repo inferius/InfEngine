@@ -84,6 +84,14 @@ mod container;
 #[allow(dead_code)]
 mod smelting;
 mod chat;
+// Phase F: per-dim runtime parking maps + the active-dim swap
+// helper. Some items inside the module land their first call site
+// in F.2 (multi-dim save/load); silence the dead-code warnings
+// in the meantime so the bin stays clippy-clean.
+#[allow(dead_code)]
+mod dim;
+#[cfg(test)]
+mod dim_switch_tests;
 mod mining;
 mod mob_ai;
 mod player;
@@ -508,6 +516,38 @@ struct Voxel {
     ui: Option<EditorUi>,
     registry: BlockRegistry,
     world: World,
+    // Phase F per-dim fields. Read sites land in F.2 (multi-dim
+    // save/load) + F.6 (cross-dim teleport); silence the
+    // "field never read" warning so the F.1 commit is clean.
+    /// Phase F: name of the currently-active dimension. Drives
+    /// the chunks file path (`chunks/<current_dim>/...`), the
+    /// per-dim seed (`dim_seed(base_seed, current_dim)`), the
+    /// per-dim worldgen profile, and which entries in the
+    /// `_by_dim` parking maps are "live" vs "parked".
+    #[allow(dead_code)]
+    current_dim: String,
+    /// Base seed (matches `world.json::seed`). The effective
+    /// `WORLD_SEED` atomic equals `dim_seed(base_seed, current_dim)`
+    /// at any moment - rewritten on every `switch_dim` so noise
+    /// callers stay deterministic per-dim.
+    #[allow(dead_code)]
+    base_seed: u32,
+    /// Parking lot for inactive-dim voxel + side-state. The
+    /// active dim's slot is empty - its data lives in the
+    /// top-level fields (`world`, `chests`, `furnaces`, ...).
+    #[allow(dead_code)]
+    worlds: HashMap<String, dim::DimWorld>,
+    /// Parking lot for inactive-dim mobs + drops. Mirrors
+    /// `worlds` - the active dim's `mobs` / `dropped_items` live
+    /// in the top-level fields.
+    #[allow(dead_code)]
+    entities_by_dim: HashMap<String, dim::DimEntities>,
+    /// Per-dim worldgen variant lookup (mirrors
+    /// `WorldJson::dimension_worldgens` so the runtime knows
+    /// which `WorldGen` to pin when switching to a dim that
+    /// hasn't been visited yet this session).
+    #[allow(dead_code)]
+    dim_worldgens: HashMap<String, WorldGen>,
     /// Mesh handles grouped by the chunk that produced them. Lets the
     /// streaming code rebuild / unload only the chunks that change.
     chunk_meshes: Vec<(ChunkCoord, BlockId, MeshHandle)>,
@@ -3655,6 +3695,11 @@ impl Voxel {
             ui: None,
             registry,
             world: World::new(),
+            current_dim: dim::OVERWORLD.to_string(),
+            base_seed: 0,
+            worlds: HashMap::new(),
+            entities_by_dim: HashMap::new(),
+            dim_worldgens: HashMap::new(),
             chunk_meshes: Vec::new(),
             pending_chunks: VecDeque::new(),
             pending_set: HashSet::new(),
@@ -3875,6 +3920,118 @@ impl Voxel {
             last_heartbeat: None,
             new_world_name_buf: String::new(),
         }
+    }
+
+    /// Phase F: swap the active dim to `target`. Parks the
+    /// current dim's voxel + entity state in the `_by_dim` maps,
+    /// pulls the target dim's state back out (minting empty if
+    /// missing), and rewrites the `WORLD_SEED` + `WORLDGEN`
+    /// atomics so noise callers + workers immediately see the
+    /// new dim's seed + generator.
+    ///
+    /// Idempotent if `target == current_dim`. The player's pose
+    /// and inventory are untouched - they carry across dims.
+    /// Mesh handles are NOT rebuilt here; the caller is
+    /// responsible for `rebuild_all_meshes` (or letting the
+    /// streaming code repopulate on the next frame).
+    #[allow(dead_code)]
+    fn switch_dim(&mut self, target: &str) {
+        if target == self.current_dim {
+            return;
+        }
+        // Park the current dim's state in the parking maps.
+        // Move-semantics on `std::mem::take` zeroes the live
+        // fields; we'll fill them back in from the target dim.
+        let parked = dim::DimWorld {
+            world: std::mem::replace(&mut self.world, World::new()),
+            chests: std::mem::take(&mut self.chests),
+            furnaces: std::mem::take(&mut self.furnaces),
+            furnace_runtimes: std::mem::take(&mut self.furnace_runtimes),
+            torch_positions: std::mem::take(&mut self.torch_positions),
+            torch_orient: std::mem::take(&mut self.torch_orient),
+            snow_positions: std::mem::take(&mut self.snow_positions),
+            liquid_schedule: std::mem::replace(
+                &mut self.liquid_schedule,
+                LiquidSchedule::new(),
+            ),
+            liquid_clock: std::mem::take(&mut self.liquid_clock),
+            liquid_level: std::mem::take(&mut self.liquid_level),
+            liquid_positions: std::mem::take(&mut self.liquid_positions),
+        };
+        self.worlds.insert(self.current_dim.clone(), parked);
+        let parked_ents = dim::DimEntities {
+            mobs: std::mem::take(&mut self.mobs),
+            drops: std::mem::take(&mut self.dropped_items),
+            next_mob_id: self.next_mob_id,
+            next_drop_id: self.next_drop_id,
+        };
+        self.entities_by_dim
+            .insert(self.current_dim.clone(), parked_ents);
+
+        // Pull the target dim's state out (mint empty if first
+        // visit this session).
+        let target_world = self
+            .worlds
+            .remove(target)
+            .unwrap_or_default();
+        self.world = target_world.world;
+        self.chests = target_world.chests;
+        self.furnaces = target_world.furnaces;
+        self.furnace_runtimes = target_world.furnace_runtimes;
+        self.torch_positions = target_world.torch_positions;
+        self.torch_orient = target_world.torch_orient;
+        self.snow_positions = target_world.snow_positions;
+        self.liquid_schedule = target_world.liquid_schedule;
+        self.liquid_clock = target_world.liquid_clock;
+        self.liquid_level = target_world.liquid_level;
+        self.liquid_positions = target_world.liquid_positions;
+        let target_ents = self
+            .entities_by_dim
+            .remove(target)
+            .unwrap_or_else(dim::DimEntities::empty);
+        self.mobs = target_ents.mobs;
+        self.dropped_items = target_ents.drops;
+        self.next_mob_id = target_ents.next_mob_id;
+        self.next_drop_id = target_ents.next_drop_id;
+
+        // Rewrite the global atomics so noise callers + workers
+        // immediately switch to the new dim's lattice.
+        self.current_dim = target.to_string();
+        worldgen::set_world_seed(worldgen::dim_seed(
+            self.base_seed,
+            &self.current_dim,
+        ));
+        let wg = self
+            .dim_worldgens
+            .get(target)
+            .copied()
+            .unwrap_or_else(WorldGen::current);
+        worldgen::WORLDGEN
+            .store(wg as u8, std::sync::atomic::Ordering::Relaxed);
+        // Drop renderer mesh handles for the chunks we just
+        // parked - the active dim's chunk list completely
+        // changed.
+        if let Some(renderer) = self.renderer.as_mut() {
+            for entry in self.chunk_meshes.drain(..) {
+                renderer.remove_mesh(entry.2);
+            }
+            for (_, h) in self.liquid_mesh_handles.drain() {
+                renderer.remove_mesh(h);
+            }
+        }
+        // Force the streaming pipeline to forget what was
+        // pending for the previous dim - those coords mean
+        // something different now.
+        self.pending_chunks.clear();
+        self.pending_set.clear();
+        // Open UIs reference position-keyed containers that
+        // belong to the parked dim. Close them on switch so the
+        // player doesn't see a stale chest panel.
+        self.chest_open = None;
+        self.chest_held = None;
+        self.furnace_open = None;
+        self.furnace_held = None;
+        self.liquid_mesh_dirty = true;
     }
 
     /// Drop every loaded chunk + the per-chunk mesh handles +

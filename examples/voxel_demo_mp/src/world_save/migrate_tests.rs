@@ -188,7 +188,7 @@ fn find_sidecar(dir: &std::path::Path, base: &str) -> Option<std::path::PathBuf>
 // ---------------------------------------------------------------
 
 #[test]
-fn world_json_migration_v0_to_v1_round_trip() {
+fn world_json_migration_v0_to_current_round_trip() {
     let tmp = TempDir::new().unwrap();
     let mut world = create_world("classic", 42);
     world.format_version = 0;
@@ -197,10 +197,15 @@ fn world_json_migration_v0_to_v1_round_trip() {
     let path = world_json_path_in(tmp.path(), "legacy");
     std::fs::write(&path, serde_json::to_vec_pretty(&world).unwrap()).unwrap();
 
+    // A test-only step that jumps directly to the current target
+    // version. The production registry uses a v1 -> v2 arrow; this
+    // test exercises the registry framework with a synthetic v0 ->
+    // current arrow so the version bump can sweep over both fields
+    // (format_version + dimension_worldgens default-fills via serde).
     fn bump_world(bytes: &[u8]) -> io::Result<Vec<u8>> {
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        value["format_version"] = serde_json::json!(1);
+        value["format_version"] = serde_json::json!(WORLD_FORMAT_VERSION);
         serde_json::to_vec_pretty(&value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
     let mut registry = MigrationRegistry::new();

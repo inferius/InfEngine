@@ -222,6 +222,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         2,
         super::containers::containers_v1_to_v2,
     );
+    // world.json v1 -> v2: add per-dim worldgen map. v1 saves
+    // (Phase B/C/D/E) lift cleanly by copying the legacy
+    // `worldgen` field into the new `dimension_worldgens` map for
+    // every entry in `dimensions`.
+    reg.register(
+        SaveKind::WorldJson,
+        1,
+        2,
+        super::world_json::world_json_v1_to_v2,
+    );
 }
 
 /// JSON peek struct - decodes just the `format_version` key and

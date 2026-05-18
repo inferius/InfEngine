@@ -446,6 +446,56 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "furnace_front.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["furnace_front.png", "furnace_side.png", "stone.png"], keep_alpha: false },
     },
+    // Netherrack. Bulk material of the nether dimension. Opaque
+    // reddish rock. Mineable with any pickaxe (tier 1+). Atlas
+    // falls back to the stone tile if no netherrack art ships.
+    BlockType {
+        id: 44, name: "netherrack", color: [0.55, 0.18, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["netherrack.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["netherrack.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["netherrack.png", "stone.png"], keep_alpha: false },
+    },
+    // Bedrock. Indestructible floor block. F_NO_PLACE keeps
+    // builders from accidentally stacking it on top of a frame;
+    // tool-tier-4 + the mining hardness path treat it as
+    // unbreakable in practice (no tool tier reaches 4 yet).
+    BlockType {
+        id: 45, name: "bedrock", color: [0.25, 0.25, 0.27], transparent: false,
+        flags: F_NO_PLACE,
+        top: TileSpec { col: 0, row: 0, files: &["bedrock.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bedrock.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bedrock.png", "stone.png"], keep_alpha: false },
+    },
+    // Obsidian. Drops only with a diamond (tier-3-equivalent)
+    // pickaxe. The chosen tier is `block_required_tier(46) = 3`,
+    // matching the iron pickaxe today since diamond tools don't
+    // exist yet. Same purple-black look as MC; renders opaque.
+    BlockType {
+        id: 46, name: "obsidian", color: [0.10, 0.04, 0.16], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["obsidian.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["obsidian.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["obsidian.png", "stone.png"], keep_alpha: false },
+    },
+    // Portal block. Cosmetic-only render today (F_DEDICATED_RENDER
+    // tinted purple); pass-through for ray + AABB so the player
+    // walks into it to trigger the cross-dim teleport.
+    BlockType {
+        id: 47, name: "portal", color: [0.55, 0.20, 0.85], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["portal.png", "water.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["portal.png", "water.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["portal.png", "water.png"], keep_alpha: true },
+    },
+    // Flint and steel. Single-stack tool that ignites a valid
+    // obsidian portal frame on RMB. Not placeable; the right-
+    // click path consumes nothing (durability is a deferred
+    // follow-up - see F.4 module docs).
+    BlockType {
+        id: 48, name: "flint_and_steel", color: [0.78, 0.68, 0.40], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["flint_and_steel.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["flint_and_steel.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["flint_and_steel.png", "iron_ingot.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -489,6 +539,19 @@ pub(crate) const PLANKS_ID: u16 = 7;
 /// has no block form, so the place path treats it like the
 /// pickaxes (not placeable).
 pub(crate) const IRON_INGOT_ID: u16 = 43;
+/// Netherrack: bulk material of the nether dimension. Phase F.
+pub(crate) const NETHERRACK_ID: u16 = 44;
+/// Bedrock: indestructible floor block of the nether. Phase F.
+pub(crate) const BEDROCK_ID: u16 = 45;
+/// Obsidian: portal frame material. Diamond-tier mining (3+).
+/// Phase F.
+pub(crate) const OBSIDIAN_ID: u16 = 46;
+/// Portal block: cosmetic + cross-dim trigger. Phase F.
+#[allow(dead_code)] // wired up in F.5+
+pub(crate) const PORTAL_ID: u16 = 47;
+/// Flint and steel: ignites a valid obsidian portal frame on
+/// RMB. Phase F. Durability is a deferred follow-up.
+pub(crate) const FLINT_AND_STEEL_ID: u16 = 48;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.
@@ -668,19 +731,27 @@ pub(crate) fn tool_tier(block: BlockId) -> u8 {
 /// player can always swing at a block (no hard gate), but the
 /// drop only credits if their selected slot meets this tier.
 /// Coal lets a bare-hand swing succeed; stone needs wood+; iron
-/// needs stone+.
+/// needs stone+. Obsidian needs an iron pickaxe (tier 3) as a
+/// stand-in for MC's diamond requirement; bedrock requires
+/// tier-4 which no shipped tool reaches, making it unbreakable.
 pub(crate) fn block_required_tier(block: BlockId) -> u8 {
     match block.0 {
         1 | 8 => 1, // stone, cobble
         13 => 1,    // coal ore
         14 => 2,    // iron ore
+        NETHERRACK_ID => 1, // any pickaxe drops netherrack
+        OBSIDIAN_ID => 3,   // diamond-tier (iron is our top tier today)
+        BEDROCK_ID => 4,    // unbreakable in practice
         _ => 0,
     }
 }
 
 /// True if the block id represents a tool / non-placeable item.
 pub(crate) fn is_tool_block(block: BlockId) -> bool {
-    matches!(block.0, 16..=19 | 23..=25 | 29..=34 | 38..=40)
+    matches!(
+        block.0,
+        16..=19 | 23..=25 | 29..=34 | 38..=40 | FLINT_AND_STEEL_ID
+    )
 }
 
 /// Human label for a tool slot, used by the HUD readout.
@@ -701,6 +772,7 @@ pub(crate) fn tool_label(block: BlockId) -> Option<&'static str> {
         38 => Some("Bucket"),
         39 => Some("Water bucket"),
         40 => Some("Lava bucket"),
+        FLINT_AND_STEEL_ID => Some("Flint and Steel"),
         _ => None,
     }
 }
@@ -751,6 +823,7 @@ pub(crate) fn block_category(block: BlockId) -> BlockCategory {
         1 | 8 | 13 | 14 | 26 => BlockCategory::Stone,
         2..=4 | 15 => BlockCategory::Soil, // dirt/grass/sand/snow
         5..=7 => BlockCategory::Wood,
+        NETHERRACK_ID | OBSIDIAN_ID | BEDROCK_ID => BlockCategory::Stone,
         _ => BlockCategory::Other,
     }
 }

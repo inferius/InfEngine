@@ -20,6 +20,7 @@ pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
         WorldGen::Flat => gen_flat(coord),
         WorldGen::Islands => gen_islands(coord),
         WorldGen::Realistic => super::climate::gen_realistic(coord),
+        WorldGen::Nether => super::nether::gen_nether(coord),
     }
 }
 

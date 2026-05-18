@@ -22,6 +22,7 @@
 //! deserialising any chunk data.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
@@ -33,7 +34,13 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Schema version baked into every fresh `world.json`. Bumped when
 /// the struct fields change in a breaking way.
-pub const WORLD_FORMAT_VERSION: u32 = 1;
+///
+/// History:
+/// - v1 (Phase B): initial layout (worldgen, seed, spawn, ...).
+/// - v2 (Phase F): added `dimension_worldgens` (per-dim worldgen
+///   map). v1 saves migrate by populating it from the global
+///   `worldgen` field for every entry in `dimensions`.
+pub const WORLD_FORMAT_VERSION: u32 = 2;
 
 /// Vanilla MC's world border default - 60 million blocks across,
 /// 30 million radius from origin. Saves don't typically grow that
@@ -70,11 +77,37 @@ pub struct WorldJson {
     /// All dimensions known to this save. Phase F populates this
     /// from a richer per-dim config table.
     pub dimensions: Vec<String>,
+    /// Per-dimension worldgen variant lookup. Each key is a
+    /// dimension name from `dimensions`, each value is the
+    /// `worldgen` tag (`"classic"` / `"flat"` / `"nether"` / ...)
+    /// used when generating that dim's chunks. New saves (Phase F)
+    /// default to `{"overworld": <worldgen>, "nether": "nether"}`.
+    /// Older saves migrate by copying the legacy `worldgen` field
+    /// into the map for every known dim.
+    #[serde(default)]
+    pub dimension_worldgens: BTreeMap<String, String>,
 }
+
+/// Name of the nether dimension. Phase F's second dimension.
+pub(crate) const NETHER_DIMENSION: &str = "nether";
+
+/// Worldgen tag used for the nether dim by default. Mirrors
+/// `WorldGen::Nether::worldgen_str` so a round trip through the
+/// on-disk JSON keeps producing nether terrain there.
+pub(crate) const NETHER_WORLDGEN: &str = "nether";
 
 /// Build a fresh `WorldJson` for a brand-new slot. Spawn defaults
 /// to `[0, 0, 0]` - worldgen surface fix-up happens on first load.
+///
+/// Phase F: fresh slots now ship with two dimensions out of the
+/// box - overworld (uses `worldgen`) and nether (uses the dedicated
+/// `WorldGen::Nether` profile). The `dimension_worldgens` map keeps
+/// the two assignments side by side so the per-dim chunk-stream
+/// path doesn't have to guess.
 pub fn create_world(worldgen: &str, seed: u32) -> WorldJson {
+    let mut dim_gens = BTreeMap::new();
+    dim_gens.insert(DEFAULT_DIMENSION.to_string(), worldgen.to_string());
+    dim_gens.insert(NETHER_DIMENSION.to_string(), NETHER_WORLDGEN.to_string());
     WorldJson {
         format_version: WORLD_FORMAT_VERSION,
         worldgen: worldgen.to_string(),
@@ -82,7 +115,11 @@ pub fn create_world(worldgen: &str, seed: u32) -> WorldJson {
         spawn: [0, 0, 0],
         world_border_radius: DEFAULT_WORLD_BORDER_RADIUS,
         default_dimension: DEFAULT_DIMENSION.to_string(),
-        dimensions: vec![DEFAULT_DIMENSION.to_string()],
+        dimensions: vec![
+            DEFAULT_DIMENSION.to_string(),
+            NETHER_DIMENSION.to_string(),
+        ],
+        dimension_worldgens: dim_gens,
     }
 }
 
@@ -206,6 +243,63 @@ fn write_world_to(dir: &Path, path: &Path, world: &WorldJson) -> io::Result<()> 
     atomic_save(path, &payload)
 }
 
+/// Migration arrow `world.json` v1 -> v2. Adds the
+/// `dimension_worldgens` field by populating it from the legacy
+/// global `worldgen` field for every entry in `dimensions` that
+/// doesn't already have a per-dim assignment. A v1 save with
+/// `dimensions: ["overworld"]` and `worldgen: "classic"` lifts to
+/// v2 with `dimension_worldgens: {"overworld": "classic"}`.
+pub(crate) fn world_json_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v1 parse failed: {err}"),
+        )
+    })?;
+    let on_disk_v = value
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if on_disk_v != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v1 -> v2 expected v1, got v{on_disk_v}"),
+        ));
+    }
+    let worldgen = value
+        .get("worldgen")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("classic")
+        .to_string();
+    // Pull the dim list out so we can mint a map keyed by every dim.
+    let dims_iter: Vec<String> = value
+        .get("dimensions")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| d.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_else(|| vec![DEFAULT_DIMENSION.to_string()]);
+    let mut dim_map = serde_json::Map::new();
+    for d in dims_iter {
+        dim_map.insert(d, serde_json::Value::String(worldgen.clone()));
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "dimension_worldgens".to_string(),
+            serde_json::Value::Object(dim_map),
+        );
+        obj.insert("format_version".to_string(), serde_json::json!(2));
+    }
+    serde_json::to_vec_pretty(&value).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v2 encode failed: {err}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +313,68 @@ mod tests {
         assert_eq!(w.spawn, [0, 0, 0]);
         assert_eq!(w.world_border_radius, DEFAULT_WORLD_BORDER_RADIUS);
         assert_eq!(w.default_dimension, DEFAULT_DIMENSION);
-        assert_eq!(w.dimensions, vec![DEFAULT_DIMENSION.to_string()]);
+        assert_eq!(
+            w.dimensions,
+            vec![
+                DEFAULT_DIMENSION.to_string(),
+                NETHER_DIMENSION.to_string(),
+            ]
+        );
+        // Phase F: per-dim worldgen map is populated from
+        // create_world directly. Overworld picks up the requested
+        // generator; nether always uses the dedicated profile.
+        assert_eq!(
+            w.dimension_worldgens.get(DEFAULT_DIMENSION).map(String::as_str),
+            Some("classic")
+        );
+        assert_eq!(
+            w.dimension_worldgens.get(NETHER_DIMENSION).map(String::as_str),
+            Some(NETHER_WORLDGEN)
+        );
+    }
+
+    #[test]
+    fn v1_to_v2_migration_populates_dim_worldgens() {
+        // Build a v1-shaped payload (no dimension_worldgens, just
+        // the global worldgen + the legacy single-entry dimensions
+        // list) and run it through the migration arrow.
+        let v1 = serde_json::json!({
+            "format_version": 1,
+            "worldgen": "amplified",
+            "seed": 17,
+            "spawn": [0, 0, 0],
+            "world_border_radius": DEFAULT_WORLD_BORDER_RADIUS,
+            "default_dimension": "overworld",
+            "dimensions": ["overworld"],
+        });
+        let bytes = serde_json::to_vec(&v1).unwrap();
+        let migrated = world_json_v1_to_v2(&bytes).unwrap();
+        let parsed: WorldJson = serde_json::from_slice(&migrated).unwrap();
+        assert_eq!(parsed.format_version, 2);
+        assert_eq!(parsed.dimensions, vec!["overworld".to_string()]);
+        assert_eq!(
+            parsed.dimension_worldgens.get("overworld").map(String::as_str),
+            Some("amplified")
+        );
+        // The migration does NOT auto-add nether to a v1 save - the
+        // user has to opt in by recreating the world.
+        assert!(!parsed.dimension_worldgens.contains_key("nether"));
+    }
+
+    #[test]
+    fn v1_to_v2_migration_refuses_wrong_version() {
+        let v2 = serde_json::json!({
+            "format_version": 2,
+            "worldgen": "classic",
+            "seed": 0,
+            "spawn": [0, 0, 0],
+            "world_border_radius": DEFAULT_WORLD_BORDER_RADIUS,
+            "default_dimension": "overworld",
+            "dimensions": ["overworld"],
+            "dimension_worldgens": {},
+        });
+        let bytes = serde_json::to_vec(&v2).unwrap();
+        let res = world_json_v1_to_v2(&bytes);
+        assert!(res.is_err(), "v2 input must be rejected as not-v1");
     }
 }
