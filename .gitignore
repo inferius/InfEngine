@@ -70,3 +70,7 @@ secrets.toml
 *.dylib
 *.lib
 *.a
+
+# Saved world state (per-installation, not source-controlled)
+voxel_server_state.bin
+/worlds/
