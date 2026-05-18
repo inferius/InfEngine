@@ -245,6 +245,171 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["feather.png"], keep_alpha: false },
     },
+    // Decorative flower placed sparsely on plains-biome grass.
+    // Transparent + alpha-cutout via the standard atlas path; the
+    // procedural generator only spawns it on top of grass voxels.
+    BlockType {
+        id: 20, name: "flower", color: [0.95, 0.30, 0.30], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 21, name: "flower_yellow", color: [1.00, 0.85, 0.20], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower_yellow.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 22, name: "flower_blue", color: [0.40, 0.55, 0.95], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["flower_blue.png"], keep_alpha: true },
+    },
+    // Sword tools. Like pickaxes they live in inventory slots
+    // but reject placement; selected slot's `weapon_tier` boosts
+    // the player's attack damage when fighting mobs / peers.
+    BlockType {
+        id: 23, name: "sword_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 24, name: "sword_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 25, name: "sword_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sword_iron.png"], keep_alpha: false },
+    },
+    // Sandstone block. Generates below the sand surface in
+    // desert biomes so digging through dunes hits a usable
+    // building material instead of bare stone.
+    BlockType {
+        id: 26, name: "sandstone", color: [0.92, 0.85, 0.62], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["sandstone_top.png", "sandstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sandstone_bottom.png", "sandstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sandstone.png"], keep_alpha: false },
+    },
+    // Cactus block. Spawns occasionally in desert biomes. Hurts
+    // the player on contact via the world-side touch check.
+    BlockType {
+        id: 27, name: "cactus", color: [0.30, 0.55, 0.25], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cactus_top.png", "cactus.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cactus_bottom.png", "cactus.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cactus_side.png", "cactus.png"], keep_alpha: false },
+    },
+    // Glowstone-style light block. Acts as a torch-tier point
+    // light: tracked in torch_positions so the shader picks it
+    // up alongside placed torches.
+    BlockType {
+        id: 28, name: "glowstone", color: [1.00, 0.92, 0.60], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["glowstone.png"], keep_alpha: false },
+    },
+    // Shovel + axe tools. Different tool kinds speed up different
+    // block categories: shovels chew dirt / sand / gravel, axes
+    // chew wood / planks / leaves. Like pickaxes they are tool-
+    // slot items rejected by the place path.
+    BlockType {
+        id: 29, name: "shovel_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 30, name: "shovel_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 31, name: "shovel_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shovel_iron.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 32, name: "axe_wood", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_wood.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 33, name: "axe_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 34, name: "axe_iron", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["axe_iron.png"], keep_alpha: false },
+    },
+    // Bed block. Placeable + decorative. Has no special wakeup
+    // behaviour yet - /sleep handles the time skip - but the
+    // distinct texture marks safe-rest spots for builders.
+    BlockType {
+        id: 35, name: "bed", color: [0.85, 0.30, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bed_top.png", "bed.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bed_bottom.png", "bed.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bed_side.png", "bed.png"], keep_alpha: false },
+    },
+    // Water source block. Source-only for now (no flow physics
+    // yet); player walks through, swims while submerged. Marked
+    // transparent so the chunk mesher emits faces against air
+    // neighbours and culls water-water seams. Breaks instantly
+    // with a bare hand.
+    BlockType {
+        id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
+        top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+    },
+    // Lava: second liquid using the same generic flow physics
+    // as water. Slower spread + shorter range follow MC's
+    // overworld lava behaviour. Swim mechanics share the
+    // generic `F_SWIM` gate today; lava damage lives in a
+    // future commit alongside other liquid effects.
+    BlockType {
+        id: 37, name: "lava", color: [1.00, 0.40, 0.10], transparent: true,
+        flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
+        top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+    },
+    // Bucket item ids 38..=40. Tool-class slots (no block place);
+    // RMB on a liquid scoops, RMB on a placement target empties
+    // the bucket into a source block.
+    BlockType {
+        id: 38, name: "bucket", color: [0.80, 0.80, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_empty.png", "iron_ingot.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 39, name: "water_bucket", color: [0.20, 0.45, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_water.png", "iron_ingot.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 40, name: "lava_bucket", color: [1.00, 0.45, 0.10], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bucket_lava.png", "iron_ingot.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
