@@ -13645,18 +13645,23 @@ impl AppHandler for Voxel {
         } else {
             None
         };
-        // Separate ray for mining: stops on the FIRST non-air
-        // voxel, decorations included. The placement-target ray
-        // tunnels through `F_RAY_PASS` blocks so the player can
-        // drop blocks next to a torch without selecting it, but
-        // mining still needs to hit the torch itself.
+        // Separate ray for mining: stops on the FIRST non-air,
+        // non-liquid voxel - decorations included. The
+        // placement-target ray tunnels through `F_RAY_PASS`
+        // blocks so the player can drop blocks next to a torch
+        // without selecting it; this one stops at torches so
+        // they can be mined. Liquids stay invisible to both
+        // rays - they're not directly breakable (the bucket
+        // scoop handles water/lava source pickup), and
+        // wireframe-highlighting a falling stream would just
+        // confuse the player.
         self.mine_target = if matches!(self.state, AppState::Playing) {
             raycast_with(
                 &self.world,
                 self.player_pos,
                 forward,
                 6.0,
-                |b| !b.is_air(),
+                |b| !b.is_air() && !block_is_liquid(b),
             )
         } else {
             None
