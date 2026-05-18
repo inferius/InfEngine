@@ -61,8 +61,15 @@ pub mod container;
 #[path = "smelting.rs"]
 pub mod smelting;
 
-#[path = "worldgen.rs"]
+#[path = "worldgen/mod.rs"]
 pub mod worldgen;
+
+// Pre-split baseline regression: locked-in chunk-fold hashes for
+// every shipped WorldGen profile under seed=0. Compiles into the
+// lib's test binary only.
+#[cfg(test)]
+#[path = "worldgen_baseline_test.rs"]
+mod worldgen_baseline_test;
 
 #[path = "liquid/mod.rs"]
 pub mod liquid;

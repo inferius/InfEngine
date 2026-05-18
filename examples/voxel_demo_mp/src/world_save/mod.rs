@@ -214,6 +214,7 @@ pub(crate) fn worldgen_str(wg: crate::worldgen::WorldGen) -> &'static str {
         crate::worldgen::WorldGen::Flat => "flat",
         crate::worldgen::WorldGen::Islands => "islands",
         crate::worldgen::WorldGen::Amplified => "amplified",
+        crate::worldgen::WorldGen::Realistic => "realistic",
     }
 }
 

@@ -5231,11 +5231,13 @@ impl Voxel {
             Some(p) => (p[0], p[2]),
             None => (0.0, 0.0),
         };
-        let biome_name = match biome_at_player {
-            Biome::Plains => "Plains",
-            Biome::Mountain => "Mountain",
-            Biome::Desert => "Desert",
-        };
+        // `biome_at` only returns Plains/Mountain/Desert under the
+        // Classic + Amplified generators (which are the only path
+        // that reaches this HUD-overlay block today). The extended
+        // biomes the Realistic generator produces still fall back
+        // to a label via `Biome::label()` so future climate-driven
+        // HUD work doesn't have to thread a second enum.
+        let biome_name = biome_at_player.label();
         // Snapshot recent chat lines (newest last) along with their
         // age so the renderer can fade older entries.
         let chat_now = std::time::Instant::now();
