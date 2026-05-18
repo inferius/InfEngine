@@ -10,6 +10,8 @@ struct CameraUniform {
     view_proj: mat4x4<f32>,
     view_proj_inv: mat4x4<f32>,
     camera_pos: vec4<f32>,
+    // x = wall-clock seconds since app start; y/z/w reserved.
+    time: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -127,13 +129,70 @@ fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
     return sum / 9.0;
 }
 
+// Cheap hash-based value noise. Used by the water shader to fake
+// caustic ripples without sampling an animated texture. Returns
+// a smooth scalar in [0, 1].
+fn hash21(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(sin(h) * 43758.5453);
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let a = hash21(i);
+    let b = hash21(i + vec2<f32>(1.0, 0.0));
+    let c = hash21(i + vec2<f32>(0.0, 1.0));
+    let d = hash21(i + vec2<f32>(1.0, 1.0));
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y)
+        + 0.5 * mix(mix(a, b, u.x), mix(c, d, u.x), u.y) - 0.25;
+}
+
+// Animated water surface: takes the world-space XZ position of
+// the fragment, a per-vertex flow direction (already passed via
+// `in.uv`) and the global time. Returns an albedo modulation in
+// [0.8, 1.15] that approximates MC's slow caustic shimmer. The
+// flow direction biases the scrolling so flowing cells stream in
+// their flow direction while pond cells stay isotropic.
+fn water_ripple(world_xz: vec2<f32>, flow: vec2<f32>, t: f32) -> f32 {
+    // Two octaves of scrolling value noise. Coarse layer drifts
+    // along the flow direction; fine layer scrolls at right
+    // angles for a directional crisscross. Static pond cells
+    // (flow == 0) fall back to the rolling-noise default.
+    let speed = 0.35;
+    let perp = vec2<f32>(-flow.y, flow.x);
+    let coarse_uv = world_xz * 0.85 + flow * t * speed;
+    let fine_uv = world_xz * 1.7 + perp * t * speed * 1.3
+        + vec2<f32>(t * 0.1, t * 0.08);
+    let coarse = value_noise(coarse_uv);
+    let fine = value_noise(fine_uv);
+    let n = coarse * 0.65 + fine * 0.35;
+    return 0.82 + n * 0.33;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let metallic = clamp(in.material.x, 0.0, 1.0);
     let roughness = clamp(in.material.y, 0.04, 1.0);
-    let tex = textureSample(albedo_tex, albedo_smp, in.uv);
-    let albedo = in.color.rgb * tex.rgb;
+    // material.w >= 0.5 marks the water-surface meshes - they
+    // skip the albedo texture lookup (uv is hijacked to carry
+    // the per-vertex flow direction) and add an animated
+    // caustic ripple instead.
+    let is_water = in.material.w >= 0.5;
+    var tex: vec4<f32>;
+    if is_water {
+        tex = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    } else {
+        tex = textureSample(albedo_tex, albedo_smp, in.uv);
+    }
+    var albedo = in.color.rgb * tex.rgb;
     let alpha = in.color.a * tex.a;
+    if is_water {
+        let flow = in.uv;
+        let ripple = water_ripple(in.world_pos.xz, flow, camera.time.x);
+        albedo = albedo * ripple;
+    }
     // Simple alpha cutout for foliage / leaves. The default 1x1
     // white texture has alpha=1 so opaque blocks are unaffected;
     // atlas tiles with see-through pixels (e.g. leaves) get the

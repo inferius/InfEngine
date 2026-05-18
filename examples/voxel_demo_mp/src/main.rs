@@ -1393,6 +1393,10 @@ struct Voxel {
     state: AppState,
     settings: Settings,
     requested_quit: bool,
+    /// Wall-clock instant the app started. Subtracted each frame
+    /// to produce `time_seconds` for the camera uniform so shaders
+    /// (animated water) can drive procedural animation.
+    app_start: std::time::Instant,
 
     renderer: Option<Renderer>,
     ui: Option<EditorUi>,
@@ -2338,6 +2342,13 @@ impl Voxel {
             let fx = vx as f32;
             let fy = vy as f32;
             let fz = vz as f32;
+            // Flow vector for this cell (units of voxels/sec on
+            // the XZ plane). Baked into the top/side faces so the
+            // animated water shader scrolls its caustic noise in
+            // the right direction. Sources / still ponds return
+            // zero and the shader falls back to an isotropic
+            // shimmer.
+            let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
             // Top face: emit only when the voxel above isn't
             // the same liquid (i.e. we're not buried inside a
             // falling column).
@@ -2349,7 +2360,9 @@ impl Voxel {
                 let t2 = [fx + 1.0, fy + h11, fz + 1.0];
                 let t3 = [fx, fy + h01, fz + 1.0];
                 let normal = water_face_normal(t0, t1, t2, t3);
-                push_quad(vertices, indices, t0, t1, t2, t3, normal);
+                push_quad_flow(
+                    vertices, indices, t0, t1, t2, t3, normal, flow,
+                );
             }
             // Helper: side face is "open" only against air or
             // a passable decoration (torch / flower). A neighbour
@@ -2363,53 +2376,58 @@ impl Voxel {
                 nb.is_air() || block_is_aabb_passable(nb)
             };
             if side_open(vx - 1, vy, vz) {
-                push_quad(
+                push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz + 1.0],
                     [fx, fy + h01, fz + 1.0],
                     [fx, fy + h00, fz],
                     [fx, fy, fz],
                     [-1.0, 0.0, 0.0],
+                    flow,
                 );
             }
             if side_open(vx + 1, vy, vz) {
-                push_quad(
+                push_quad_flow(
                     vertices, indices,
                     [fx + 1.0, fy, fz],
                     [fx + 1.0, fy + h10, fz],
                     [fx + 1.0, fy + h11, fz + 1.0],
                     [fx + 1.0, fy, fz + 1.0],
                     [1.0, 0.0, 0.0],
+                    flow,
                 );
             }
             if side_open(vx, vy, vz - 1) {
-                push_quad(
+                push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz],
                     [fx, fy + h00, fz],
                     [fx + 1.0, fy + h10, fz],
                     [fx + 1.0, fy, fz],
                     [0.0, 0.0, -1.0],
+                    flow,
                 );
             }
             if side_open(vx, vy, vz + 1) {
-                push_quad(
+                push_quad_flow(
                     vertices, indices,
                     [fx + 1.0, fy, fz + 1.0],
                     [fx + 1.0, fy + h11, fz + 1.0],
                     [fx, fy + h01, fz + 1.0],
                     [fx, fy, fz + 1.0],
                     [0.0, 0.0, 1.0],
+                    flow,
                 );
             }
             if self.world.get([vx, vy - 1, vz]).is_air() {
-                push_quad(
+                push_quad_flow(
                     vertices, indices,
                     [fx, fy, fz],
                     [fx + 1.0, fy, fz],
                     [fx + 1.0, fy, fz + 1.0],
                     [fx, fy, fz + 1.0],
                     [0.0, -1.0, 0.0],
+                    flow,
                 );
             }
         }
@@ -6030,6 +6048,7 @@ impl Voxel {
             state: AppState::MainMenu,
             settings: Settings::default(),
             requested_quit: false,
+            app_start: std::time::Instant::now(),
             renderer: None,
             ui: None,
             registry,
@@ -14334,6 +14353,10 @@ impl AppHandler for Voxel {
         };
         {
             let cam = renderer.camera_3d_mut();
+            // Refresh global shader time. Drives the animated
+            // water surface (caustic noise scrolls along the
+            // baked flow direction).
+            cam.time_seconds = self.app_start.elapsed().as_secs_f32();
             // Head-bob offset: a small vertical bob + lateral
             // sway scaled by current horizontal speed so a still
             // player has a rock-steady camera. Skip while in fly
@@ -14691,13 +14714,27 @@ impl AppHandler for Voxel {
                 LAVA_ID => (0.92, 0.55),
                 _ => (0.75, 0.30),
             };
-            renderer.draw_mesh_pbr(
-                *handle,
-                Mat4::IDENTITY.to_cols_array(),
-                [bt.color[0], bt.color[1], bt.color[2], alpha],
-                0.0,
-                rough,
-            );
+            // Water gets the animated caustic-ripple shader path;
+            // lava (no flow texture authored yet) keeps the plain
+            // PBR path. Both will eventually share a "flowing
+            // surface" pipeline.
+            if *liquid_id == WATER_ID {
+                renderer.draw_mesh_water(
+                    *handle,
+                    Mat4::IDENTITY.to_cols_array(),
+                    [bt.color[0], bt.color[1], bt.color[2], alpha],
+                    0.0,
+                    rough,
+                );
+            } else {
+                renderer.draw_mesh_pbr(
+                    *handle,
+                    Mat4::IDENTITY.to_cols_array(),
+                    [bt.color[0], bt.color[1], bt.color[2], alpha],
+                    0.0,
+                    rough,
+                );
+            }
         }
         // Floating drop entities. Each renders as a small cube
         // (~0.3 voxel) bobbing in place. Pulled off
@@ -17056,7 +17093,11 @@ fn water_face_normal(
 
 /// Append one quad to `verts` / `idx`. Corners must be CCW from
 /// the `normal` side. Two triangles, four vertices, six indices.
-fn push_quad(
+/// Writes a per-cell flow direction into the `uv` slot - water
+/// meshes don't sample the albedo texture so UV is repurposed as
+/// the scroll vector the animated water shader reads.
+#[allow(clippy::too_many_arguments)]
+fn push_quad_flow(
     verts: &mut Vec<MeshVertex>,
     idx: &mut Vec<u32>,
     v0: [f32; 3],
@@ -17064,12 +17105,13 @@ fn push_quad(
     v2: [f32; 3],
     v3: [f32; 3],
     normal: [f32; 3],
+    flow: [f32; 2],
 ) {
     let base = verts.len() as u32;
-    verts.push(MeshVertex::new(v0, normal).with_uv([0.0, 1.0]));
-    verts.push(MeshVertex::new(v1, normal).with_uv([1.0, 1.0]));
-    verts.push(MeshVertex::new(v2, normal).with_uv([1.0, 0.0]));
-    verts.push(MeshVertex::new(v3, normal).with_uv([0.0, 0.0]));
+    verts.push(MeshVertex::new(v0, normal).with_uv(flow));
+    verts.push(MeshVertex::new(v1, normal).with_uv(flow));
+    verts.push(MeshVertex::new(v2, normal).with_uv(flow));
+    verts.push(MeshVertex::new(v3, normal).with_uv(flow));
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 

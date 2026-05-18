@@ -172,6 +172,15 @@ impl MeshInstance {
         ];
         self
     }
+
+    /// Flag this instance as the water-surface mesh. The fragment
+    /// shader switches to the animated-ripple branch (driven by
+    /// `camera.time`) and reads `MeshVertex.uv` as a per-vertex
+    /// flow direction instead of sampling the albedo texture.
+    pub fn with_water_marker(mut self) -> Self {
+        self.material[3] = 1.0;
+        self
+    }
 }
 
 /// Unit cube vertices with per-face normals (24 vertices, 36 indices).

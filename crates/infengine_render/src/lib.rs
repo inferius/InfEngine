@@ -323,6 +323,24 @@ impl Renderer {
         self.mesh3d_queue.push((handle, instance));
     }
 
+    /// Same as [`Renderer::draw_mesh_pbr`] but tags the instance as a
+    /// water-surface mesh - the shader switches to the animated
+    /// caustic-ripple branch and reads the vertex `uv` as a per-vertex
+    /// flow direction instead of sampling an albedo texture.
+    pub fn draw_mesh_water(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+    ) {
+        let instance = MeshInstance::new(model, color)
+            .with_material(metallic, roughness)
+            .with_water_marker();
+        self.mesh3d_queue.push((handle, instance));
+    }
+
     /// Register a new mesh and return its handle. The caller can then
     /// reference the mesh via [`Renderer::draw_mesh`].
     pub fn create_mesh(

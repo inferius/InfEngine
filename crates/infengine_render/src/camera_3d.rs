@@ -14,6 +14,11 @@ pub struct Camera3D {
     pub aspect: f32,
     pub z_near: f32,
     pub z_far: f32,
+    /// Wall-clock seconds since app start. Uploaded into the
+    /// camera uniform so shaders (animated water, eventually
+    /// fire / grass sway, etc.) can drive procedural animation.
+    /// The host is expected to refresh this every frame.
+    pub time_seconds: f32,
 }
 
 impl Camera3D {
@@ -26,6 +31,7 @@ impl Camera3D {
             aspect: viewport_w.max(1) as f32 / viewport_h.max(1) as f32,
             z_near: 0.1,
             z_far: 200.0,
+            time_seconds: 0.0,
         }
     }
 
@@ -46,6 +52,11 @@ pub(crate) struct Camera3DUniform {
     view_proj: [[f32; 4]; 4],
     view_proj_inv: [[f32; 4]; 4],
     camera_pos: [f32; 4],
+    /// `(time_seconds, 0, 0, 0)`. Slot kept as a vec4 so the
+    /// struct stays 16-byte aligned and the y/z/w lanes are
+    /// available for future "global" shader inputs (sky tint,
+    /// wind strength, ...).
+    time: [f32; 4],
 }
 
 impl Camera3DUniform {
@@ -55,6 +66,7 @@ impl Camera3DUniform {
             view_proj: vp.to_cols_array_2d(),
             view_proj_inv: vp.inverse().to_cols_array_2d(),
             camera_pos: [c.position.x, c.position.y, c.position.z, 1.0],
+            time: [c.time_seconds, 0.0, 0.0, 0.0],
         }
     }
 }
