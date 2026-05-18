@@ -66,6 +66,7 @@ mod chat;
 mod mining;
 mod mob_ai;
 mod player;
+mod ui;
 mod worldgen;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
 use mining::{MiningState, block_hardness};
@@ -79,6 +80,7 @@ use player::{
     PLAYER_SPEED, aabb_intersects_solid, body_aabb, submerged_liquid,
     submerged_liquid_eye,
 };
+use ui::{AppState, BackTo, InvAction, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{
     Biome, WORLDGEN, WorldGen, biome_at, generate_chunk_at, set_world_seed,
     world_seed,
@@ -405,110 +407,8 @@ const RECIPES: &[Recipe] = &[
     },
 ];
 
-/// Inspect the 2x2 crafting grid and return the recipe output if
-/// every input is satisfied. The grid is shapeless: order doesn't
-/// matter. Returns `None` when no recipe matches or any required
-/// stack is short.
-fn match_recipe(grid: &[Option<(BlockId, u8)>; 4]) -> Option<(BlockId, u8)> {
-    match_recipe_named(grid).map(|(b, c, _)| (b, c))
-}
-
-/// Same as `match_recipe` but also returns the matching recipe's
-/// human-readable name. Used by the UI to display the result name
-/// as a tooltip on the output slot.
-fn match_recipe_named(
-    grid: &[Option<(BlockId, u8)>; 4],
-) -> Option<(BlockId, u8, &'static str)> {
-    // Aggregate the grid into a (block, count) tally so order
-    // doesn't matter for shapeless matching.
-    let mut tally: Vec<(u16, u8)> = Vec::with_capacity(4);
-    for (b, c) in grid.iter().flatten() {
-        if let Some(slot) = tally.iter_mut().find(|(bb, _)| *bb == b.0) {
-            slot.1 = slot.1.saturating_add(*c);
-        } else {
-            tally.push((b.0, *c));
-        }
-    }
-    for recipe in RECIPES {
-        // Aggregate the recipe inputs the same way.
-        let mut needed: Vec<(u16, u8)> = Vec::with_capacity(recipe.inputs.len());
-        for (b, c) in recipe.inputs {
-            if let Some(slot) = needed.iter_mut().find(|(bb, _)| *bb == *b) {
-                slot.1 = slot.1.saturating_add(*c);
-            } else {
-                needed.push((*b, *c));
-            }
-        }
-        // The match requires the tally to have at least every
-        // (block, count) the recipe needs - and the tally must
-        // contain no other blocks (otherwise the user just stuffed
-        // random extras in).
-        if needed.len() != tally.len() {
-            continue;
-        }
-        let mut ok = true;
-        for (b, n) in &needed {
-            match tally.iter().find(|(bb, _)| bb == b) {
-                Some((_, have)) if *have >= *n => {}
-                _ => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok {
-            return Some((BlockId(recipe.output.0), recipe.output.1, recipe.name));
-        }
-    }
-    None
-}
-
-/// UI intent captured during the egui pass + applied after the
-/// closure exits. Drag operations are the main interaction; the
-/// hotbar still supports a plain click to change the active slot.
-#[derive(Debug, Clone, Copy)]
-enum InvAction {
-    /// Plain click on a hotbar slot: changes the active selection.
-    SelectHotbar(usize),
-    /// Drag&drop finished: move stack from `from` to `to`. The
-    /// `split` field determines how much of the source stack
-    /// transfers - `All` is the standard whole-stack move, `Half`
-    /// shifts the upper half (good for splitting), `One` peels
-    /// off a single item (good for filling craft slots).
-    Drag {
-        from: SlotKind,
-        to: SlotKind,
-        split: SplitMode,
-    },
-}
-
-/// Visual snapshot of one slot, lifted out of the inventory state
-/// for the egui pass. `(color, count, uv_rect, name)` where
-/// `uv_rect` is the atlas tile to paint (we always show the top
-/// face) and `name` is the block's display name used for the
-/// hover tooltip.
-type SlotIcon = ([f32; 3], u8, [f32; 4], &'static str);
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum AppState {
-    MainMenu,
-    /// Direct-IP connect dialog: user types `host:port` and hits Join.
-    DirectConnect,
-    /// Browses servers fetched from the configured master server.
-    ServerBrowser,
-    /// Configures + spawns a host (game server). User can opt to
-    /// announce on the master so others see it in the browser.
-    HostSetup,
-    Playing,
-    Paused,
-    Settings { back_to: BackTo },
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum BackTo {
-    MainMenu,
-    Pause,
-}
+// `match_recipe`, `match_recipe_named`, `InvAction`,
+// `SlotIcon`, `AppState`, `BackTo` moved to `ui.rs`.
 
 #[derive(Debug, Clone)]
 struct Settings {
