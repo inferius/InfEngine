@@ -18,7 +18,7 @@ use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel};
 
 use super::super::chunks::ChunkPayload;
 use super::super::containers::{
-    CONTAINERS_FORMAT_VERSION, ChestSave, DimensionContainers,
+    CONTAINERS_FORMAT_VERSION, ChestSave, DimensionContainers, FurnaceSave,
 };
 use super::super::entities::{DimensionEntities, DropSave, MobSave};
 use super::super::players::{
@@ -180,11 +180,11 @@ pub(super) fn apply_dimension_entities(voxel: &mut Voxel, entities: DimensionEnt
         .max(voxel.dropped_items.iter().map(|d| d.id).max().unwrap_or(0) + 1);
 }
 
-/// Build a `DimensionContainers` snapshot from `voxel.chests`.
-/// One `ChestSave` per entry; slots are emitted in slot-index
-/// order. Iteration order is non-deterministic (HashMap) but
-/// `apply_dimension_containers` rebuilds the map from scratch so
-/// the on-disk order doesn't matter for correctness.
+/// Build a `DimensionContainers` snapshot from `voxel.chests` +
+/// `voxel.furnaces`. One row per entry; slots are emitted in
+/// slot-index order. Iteration order is non-deterministic (HashMap)
+/// but `apply_dimension_containers` rebuilds both maps from scratch
+/// so the on-disk order doesn't matter for correctness.
 pub(super) fn build_dimension_containers(voxel: &Voxel) -> DimensionContainers {
     let chests: Vec<ChestSave> = voxel
         .chests
@@ -194,16 +194,41 @@ pub(super) fn build_dimension_containers(voxel: &Voxel) -> DimensionContainers {
             slots: container.slots().to_vec(),
         })
         .collect();
+    let furnaces: Vec<FurnaceSave> = voxel
+        .furnaces
+        .iter()
+        .map(|(pos, container)| {
+            // The runtime triple lives in a sibling HashMap; pull
+            // a zeroed default if no runtime entry exists yet
+            // (e.g. a furnace placed but never ticked).
+            let rt = voxel
+                .furnace_runtimes
+                .get(pos)
+                .copied()
+                .unwrap_or_default();
+            FurnaceSave {
+                pos: *pos,
+                slots: container.slots().to_vec(),
+                fuel_left_ms: rt.fuel_left_ms,
+                fuel_full_ms: rt.fuel_full_ms,
+                cook_progress_ms: rt.cook_progress_ms,
+            }
+        })
+        .collect();
     DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests,
+        furnaces,
     }
 }
 
-/// Apply a loaded `DimensionContainers` back onto `voxel.chests`.
-/// Replaces the live map - the runtime doesn't keep stale entries
-/// across loads. Each `ChestSave` rebuilds a `Container` with the
-/// recorded slot count + contents.
+/// Apply a loaded `DimensionContainers` back onto `voxel.chests`
+/// + `voxel.furnaces` (+ runtime triples). Replaces the live maps
+/// - the runtime doesn't keep stale entries across loads. Each
+///   `ChestSave` / `FurnaceSave` rebuilds a `Container` with the
+///   recorded slot count + contents. Furnace containers are minted
+///   via `block::furnace::new_furnace` so the accept filters are
+///   wired up before the saved slot contents land.
 pub(super) fn apply_dimension_containers(
     voxel: &mut Voxel,
     containers_bundle: DimensionContainers,
@@ -215,6 +240,30 @@ pub(super) fn apply_dimension_containers(
             c.set_slot(i, *slot);
         }
         voxel.chests.insert(chest.pos, c);
+    }
+    voxel.furnaces.clear();
+    voxel.furnace_runtimes.clear();
+    for furnace in containers_bundle.furnaces {
+        let mut c = crate::block::furnace::new_furnace();
+        // The slot count may differ from FURNACE_SLOTS for a
+        // future blast-furnace variant. Resize bridge: the new_
+        // furnace mints 3 slots; if the save has more, use raw
+        // Container with size + accept filters set ourselves.
+        if furnace.slots.len() != c.len() {
+            c = crate::container::Container::with_size(furnace.slots.len());
+        }
+        for (i, slot) in furnace.slots.iter().enumerate() {
+            c.set_slot(i, *slot);
+        }
+        voxel.furnaces.insert(furnace.pos, c);
+        voxel.furnace_runtimes.insert(
+            furnace.pos,
+            crate::block::furnace::FurnaceRuntime {
+                fuel_left_ms: furnace.fuel_left_ms,
+                fuel_full_ms: furnace.fuel_full_ms,
+                cook_progress_ms: furnace.cook_progress_ms,
+            },
+        );
     }
 }
 

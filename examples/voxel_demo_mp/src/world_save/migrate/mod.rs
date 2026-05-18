@@ -193,12 +193,35 @@ impl MigrationRegistry {
     }
 }
 
-/// Process-wide default registry. Lazily initialised. Production
-/// migration arrows append here at module init (none yet - every
-/// payload is at v1).
+/// Process-wide default registry. Lazily initialised on first read.
+///
+/// Production migration arrows register here from
+/// `register_production_arrows`. Each save kind's migration sits in
+/// its own helper to keep this dispatcher short.
 pub fn default_registry() -> &'static MigrationRegistry {
     static REGISTRY: OnceLock<MigrationRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(MigrationRegistry::new)
+    REGISTRY.get_or_init(|| {
+        let mut reg = MigrationRegistry::new();
+        register_production_arrows(&mut reg);
+        reg
+    })
+}
+
+/// Append the production migration arrows to `reg`. Currently:
+/// - `Containers` v1 -> v2: adds an empty `furnaces` vec to the
+///   payload (the new C.4 field).
+///
+/// Per the design doc, the right place for save-kind-specific
+/// migrations is alongside the on-disk struct definitions. We pull
+/// the v1 -> v2 step in from `super::containers` so the migration
+/// code stays co-located with the schema.
+fn register_production_arrows(reg: &mut MigrationRegistry) {
+    reg.register(
+        SaveKind::Containers,
+        1,
+        2,
+        super::containers::containers_v1_to_v2,
+    );
 }
 
 /// JSON peek struct - decodes just the `format_version` key and

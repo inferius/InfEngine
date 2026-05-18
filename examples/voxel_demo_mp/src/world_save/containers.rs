@@ -42,8 +42,13 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 pub(crate) const CONTAINERS_MAGIC: &[u8; 4] = b"INFB";
 
 /// Envelope + payload format version. Bumped when the on-disk shape
-/// changes in a breaking way. v1 = chest-slots only.
-pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 1;
+/// changes in a breaking way.
+///
+/// - v1: chest-slots only.
+/// - v2: + `furnaces: Vec<FurnaceSave>` (slot vec + runtime triple).
+///   Migration v1 -> v2 lives in `containers_v1_to_v2` and registers
+///   into `default_registry()` at first read.
+pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 2;
 
 /// Default zstd compression level. Matches the sibling save modules.
 const ZSTD_LEVEL: i32 = 3;
@@ -54,20 +59,26 @@ const COMP_ZSTD: u8 = 1;
 
 /// All persistent block-state for one dimension.
 ///
-/// One file per dimension (e.g. `containers/overworld.bin`). Only
-/// chests today; future per-position state lands as new fields
-/// alongside `chests` (and gets a `format_version` bump if the
-/// addition isn't a `#[serde(default)]` compatible extension).
+/// One file per dimension (e.g. `containers/overworld.bin`). Today
+/// the per-position state covers chests + furnaces; future per-pos
+/// state (signs, jukeboxes, ...) lands as new fields alongside
+/// `chests` + `furnaces`. Adding a non-default-compatible field
+/// bumps `format_version` and registers a migration step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct DimensionContainers {
     /// Payload-level format version. Matches the envelope version
-    /// today (both bump together).
+    /// (both bump together).
     pub format_version: u32,
     /// Every chest with non-default state in the dimension. An
     /// empty chest still gets persisted so a freshly-placed empty
     /// chest survives a round trip (the world block alone doesn't
     /// know the slot count it should mint).
     pub chests: Vec<ChestSave>,
+    /// Every furnace with non-default state in the dimension. Each
+    /// entry carries the 3 slots (input / fuel / output) + the live
+    /// runtime triple (fuel_left_ms, fuel_full_ms, cook_progress_ms)
+    /// so a mid-cook save resumes cleanly.
+    pub furnaces: Vec<FurnaceSave>,
 }
 
 impl DimensionContainers {
@@ -76,6 +87,7 @@ impl DimensionContainers {
         Self {
             format_version: CONTAINERS_FORMAT_VERSION,
             chests: Vec::new(),
+            furnaces: Vec::new(),
         }
     }
 }
@@ -93,6 +105,31 @@ pub(crate) struct ChestSave {
     pub pos: [i32; 3],
     /// Slot contents in slot-index order.
     pub slots: Vec<Option<(u16, u8)>>,
+}
+
+/// One persistent furnace entry.
+///
+/// Mirrors `ChestSave` shape but with a fixed 3-slot layout
+/// (input / fuel / output) and the live runtime triple. The slot
+/// vec keeps its `Vec<Option<...>>` shape so a future "blast
+/// furnace" variant can ship with more slots without touching the
+/// schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FurnaceSave {
+    /// Absolute world voxel coords of the furnace block.
+    pub pos: [i32; 3],
+    /// Slot contents in slot-index order: 0 = input, 1 = fuel,
+    /// 2 = output.
+    pub slots: Vec<Option<(u16, u8)>>,
+    /// Remaining burn time on the current fuel item, in
+    /// milliseconds.
+    pub fuel_left_ms: u32,
+    /// Total burn time of the current fuel item, in milliseconds
+    /// (used by the UI fuel bar).
+    pub fuel_full_ms: u32,
+    /// Accumulated cook progress in milliseconds. Reaches
+    /// `FURNACE_COOK_MS_PER_OUTPUT` (10 000) to emit one output.
+    pub cook_progress_ms: u32,
 }
 
 /// Canonical path of a containers file:
@@ -310,6 +347,102 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
 
 fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+// ---------------------------------------------------------------
+// Migration: v1 -> v2 (adds the `furnaces` field).
+// ---------------------------------------------------------------
+
+/// V1 on-disk shape (chest-slots only). Decoded just long enough
+/// to convert into the v2 shape during migration; never used at
+/// runtime past the migration step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionContainersV1 {
+    pub format_version: u32,
+    pub chests: Vec<ChestSave>,
+}
+
+/// One-step v1 -> v2 migration arrow. Takes the raw envelope
+/// (magic + version + comp_kind + uncompressed_len + body) of a
+/// v1 file, returns the raw envelope of an equivalent v2 file.
+///
+/// Wire steps:
+/// 1. Decode the envelope header. Refuse anything that's not a
+///    v1 containers envelope.
+/// 2. Decompress the body (zstd or none).
+/// 3. Bincode-decode the v1 payload (chests only).
+/// 4. Re-encode as a v2 payload with `furnaces: vec![]`.
+/// 5. Re-compress + re-build the envelope at v2.
+///
+/// Mirrors how the existing `*_with_registry` test arrows work,
+/// but production-shaped: real serde decode of the old payload +
+/// re-encode of the new shape, not just a header byte flip.
+pub(crate) fn containers_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    // ---- 1. Envelope header. ----
+    if bytes.len() < 17 {
+        return Err(invalid("containers v1 envelope truncated"));
+    }
+    if &bytes[..4] != CONTAINERS_MAGIC {
+        return Err(invalid("containers v1 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 1 {
+        return Err(invalid(format!(
+            "containers_v1_to_v2 expected v1, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+
+    // ---- 2. Body decompression. ----
+    let raw_v1: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v1 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v1 compression kind {other} during migration"
+            )));
+        }
+    };
+
+    // ---- 3. Decode v1 payload. ----
+    let cfg = bincode::config::standard();
+    let (v1, _read) = bincode::serde::decode_from_slice::<DimensionContainersV1, _>(&raw_v1, cfg)
+        .map_err(|err| invalid(format!("v1 payload decode failed: {err}")))?;
+
+    // ---- 4. Re-encode as v2. ----
+    let v2 = DimensionContainers {
+        // Pin to the literal target version so a future v3 doesn't
+        // accidentally hijack a v1->v2 arrow.
+        format_version: 2,
+        chests: v1.chests,
+        furnaces: Vec::new(),
+    };
+    let raw_v2 = bincode::serde::encode_to_vec(&v2, cfg)
+        .map_err(|err| invalid(format!("v2 payload encode failed: {err}")))?;
+    let uncompressed_len_v2 = raw_v2.len() as u64;
+
+    // ---- 5. Re-compress + re-envelope. ----
+    let (kind_v2, body_v2): (u8, Vec<u8>) = match zstd::encode_all(&raw_v2[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v2.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v2),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v2.len() + 17);
+    out.extend_from_slice(CONTAINERS_MAGIC);
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.push(kind_v2);
+    out.extend_from_slice(&uncompressed_len_v2.to_le_bytes());
+    out.extend_from_slice(&body_v2);
+    Ok(out)
 }
 
 #[cfg(test)]
