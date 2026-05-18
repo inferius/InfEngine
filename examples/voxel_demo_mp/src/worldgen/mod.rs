@@ -33,6 +33,8 @@ pub(crate) mod climate;
 pub(crate) mod flowers;
 pub(crate) mod height;
 pub(crate) mod nether;
+#[cfg(test)]
+mod nether_baseline_test;
 pub(crate) mod ore;
 pub(crate) mod trees;
 

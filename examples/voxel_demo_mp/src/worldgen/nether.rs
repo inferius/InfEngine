@@ -88,9 +88,11 @@ pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32) -> BlockId {
     // above (modulo cave + lava-lake overrides).
     let ground_h = nether_ground_height(wx, wz);
     if wy > ground_h {
-        // Above the surface curve - empty except for lava
-        // lakes pooled at the basin floor.
-        if wy < LAVA_LAKE_Y_MAX && wy == ground_h + 1 && is_lava_lake(wx, wz) {
+        // Above the surface curve - mostly air, plus lava that
+        // pools in basin columns from y=ground_h+1 up to
+        // LAVA_LAKE_Y_MAX. This produces visible lava lakes
+        // rather than a single thin row.
+        if wy <= LAVA_LAKE_Y_MAX && is_lava_lake(wx, wz) {
             return BlockId(LAVA_ID);
         }
         return BlockId::AIR;
