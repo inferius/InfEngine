@@ -17,6 +17,9 @@ use crate::mob_ai::MobState;
 use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel};
 
 use super::super::chunks::ChunkPayload;
+use super::super::containers::{
+    CONTAINERS_FORMAT_VERSION, ChestSave, DimensionContainers,
+};
 use super::super::entities::{DimensionEntities, DropSave, MobSave};
 use super::super::players::{
     DEFAULT_HOST_PERMISSION, PLAYER_FORMAT_VERSION, PlayerSave,
@@ -175,6 +178,44 @@ pub(super) fn apply_dimension_entities(voxel: &mut Voxel, entities: DimensionEnt
     voxel.next_drop_id = entities
         .next_drop_id
         .max(voxel.dropped_items.iter().map(|d| d.id).max().unwrap_or(0) + 1);
+}
+
+/// Build a `DimensionContainers` snapshot from `voxel.chests`.
+/// One `ChestSave` per entry; slots are emitted in slot-index
+/// order. Iteration order is non-deterministic (HashMap) but
+/// `apply_dimension_containers` rebuilds the map from scratch so
+/// the on-disk order doesn't matter for correctness.
+pub(super) fn build_dimension_containers(voxel: &Voxel) -> DimensionContainers {
+    let chests: Vec<ChestSave> = voxel
+        .chests
+        .iter()
+        .map(|(pos, container)| ChestSave {
+            pos: *pos,
+            slots: container.slots().to_vec(),
+        })
+        .collect();
+    DimensionContainers {
+        format_version: CONTAINERS_FORMAT_VERSION,
+        chests,
+    }
+}
+
+/// Apply a loaded `DimensionContainers` back onto `voxel.chests`.
+/// Replaces the live map - the runtime doesn't keep stale entries
+/// across loads. Each `ChestSave` rebuilds a `Container` with the
+/// recorded slot count + contents.
+pub(super) fn apply_dimension_containers(
+    voxel: &mut Voxel,
+    containers_bundle: DimensionContainers,
+) {
+    voxel.chests.clear();
+    for chest in containers_bundle.chests {
+        let mut c = crate::container::Container::with_size(chest.slots.len());
+        for (i, slot) in chest.slots.iter().enumerate() {
+            c.set_slot(i, *slot);
+        }
+        voxel.chests.insert(chest.pos, c);
+    }
 }
 
 /// Build a `ScheduledTimers` bundle from the live `LiquidSchedule`.

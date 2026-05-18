@@ -30,6 +30,7 @@ use crate::worldgen::{WorldGen, set_world_seed, world_seed};
 use crate::Voxel;
 
 use super::chunks::{self, CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+use super::containers::{self, DimensionContainers};
 use super::entities::{self, DimensionEntities};
 use super::layout;
 use super::meta::{self, create_meta};
@@ -41,10 +42,10 @@ use super::{LoadedWorld, current_wall_ms, set_worldgen, worldgen_str};
 pub(crate) mod helpers;
 
 use helpers::{
-    apply_catch_up_events, apply_chunk_payload, apply_dimension_entities,
-    apply_player_save, build_dimension_entities, build_player_save, build_timers,
-    collect_for_chunk, hydrate_liquid_schedule, parse_chunk_filename,
-    session_seconds_since_save,
+    apply_catch_up_events, apply_chunk_payload, apply_dimension_containers,
+    apply_dimension_entities, apply_player_save, build_dimension_containers,
+    build_dimension_entities, build_player_save, build_timers, collect_for_chunk,
+    hydrate_liquid_schedule, parse_chunk_filename, session_seconds_since_save,
 };
 
 /// Dimension tag used for the host's overworld. Phase F extends this
@@ -121,7 +122,12 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     let dim_entities = build_dimension_entities(voxel);
     entities::write_entities(slug, OVERWORLD, &dim_entities)?;
 
-    // 6. Timers. Drain the live `LiquidSchedule` into TimerKind::
+    // 6. Per-position block state (chests). One file per dimension;
+    //    a missing file on load means "no chests persisted yet".
+    let dim_containers = build_dimension_containers(voxel);
+    containers::write_containers(slug, OVERWORLD, &dim_containers)?;
+
+    // 7. Timers. Drain the live `LiquidSchedule` into TimerKind::
     //    LiquidScheduled entries. Furnace + crop timers will join here
     //    once Phase C lands; the current world has none.
     let timers_bundle = build_timers(voxel);
@@ -134,6 +140,7 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
         chunks = chunk_count,
         mobs = dim_entities.mobs.len(),
         drops = dim_entities.drops.len(),
+        chests = dim_containers.chests.len(),
         liquid_timers = timers_bundle.items.len(),
         "world_save: save_world ok"
     );
@@ -193,6 +200,13 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     let dim_entities = entities::read_entities(slug, OVERWORLD)?
         .unwrap_or_else(DimensionEntities::empty);
     apply_dimension_entities(voxel, dim_entities);
+
+    // Load per-position block state (chests). A missing file means
+    // the slot has no chests yet - mint an empty bundle so the
+    // applier can run uniformly.
+    let dim_containers = containers::read_containers(slug, OVERWORLD)?
+        .unwrap_or_else(DimensionContainers::empty);
+    apply_dimension_containers(voxel, dim_containers);
 
     // Timers + catch-up.
     let now_ms = current_wall_ms();

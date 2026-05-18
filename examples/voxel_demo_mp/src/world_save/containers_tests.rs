@@ -289,6 +289,97 @@ fn containers_path_lives_under_containers_subdir() {
 }
 
 #[test]
+fn containers_chest_save_to_container_roundtrip() {
+    // Cross-module conversion: a ChestSave with mixed empty + full
+    // slots round-trips through the generic Container ops. This is
+    // the same conversion `apply_dimension_containers` does at
+    // load time.
+    use crate::container::Container;
+    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
+    slots[0] = Some((ITEM_STONE, 64));
+    slots[10] = Some((ITEM_DIRT, 8));
+    slots[26] = Some((ITEM_PLANKS, 1));
+    let chest = ChestSave {
+        pos: [3, 64, 7],
+        slots: slots.clone(),
+    };
+    // Mint a Container from the ChestSave (mirrors what
+    // apply_dimension_containers does).
+    let mut c = Container::with_size(chest.slots.len());
+    for (i, slot) in chest.slots.iter().enumerate() {
+        c.set_slot(i, *slot);
+    }
+    assert_eq!(c.len(), 27);
+    assert_eq!(c.slot(0), Some((ITEM_STONE, 64)));
+    assert_eq!(c.slot(10), Some((ITEM_DIRT, 8)));
+    assert_eq!(c.slot(26), Some((ITEM_PLANKS, 1)));
+    // And back to a ChestSave (mirrors build_dimension_containers).
+    let round_trip = ChestSave {
+        pos: chest.pos,
+        slots: c.slots().to_vec(),
+    };
+    assert_eq!(round_trip, chest);
+}
+
+#[test]
+fn containers_full_save_load_through_typed_apis() {
+    // End-to-end: build a DimensionContainers from a "virtual"
+    // chest map (mimicking voxel.chests), write -> read -> rebuild
+    // the chest map, assert positions + slot contents survive.
+    let tmp = TempDir::new().unwrap();
+
+    // Phase 1: simulate live state - three chests with mixed
+    // contents at distinct positions.
+    use std::collections::HashMap;
+    let mut live: HashMap<[i32; 3], Vec<Option<(u16, u8)>>> = HashMap::new();
+    live.insert(
+        [10, 64, 10],
+        {
+            let mut s = vec![None; 27];
+            s[0] = Some((ITEM_STONE, 64));
+            s[1] = Some((ITEM_DIRT, 32));
+            s
+        },
+    );
+    live.insert([0, 64, 0], vec![None; 27]); // empty chest
+    live.insert(
+        [-5, 65, 5],
+        {
+            let mut s = vec![None; 27];
+            s[26] = Some((ITEM_SWORD_IRON, 1));
+            s
+        },
+    );
+
+    // Phase 2: build DimensionContainers from the live state.
+    let mut chests: Vec<ChestSave> = live
+        .iter()
+        .map(|(p, s)| ChestSave { pos: *p, slots: s.clone() })
+        .collect();
+    chests.sort_by_key(|c| c.pos);
+    let bundle = DimensionContainers {
+        format_version: CONTAINERS_FORMAT_VERSION,
+        chests,
+    };
+    write_containers_in_dir(tmp.path(), SLUG, DIM, &bundle).unwrap();
+
+    // Phase 3: read back + rebuild the chest map (mirrors
+    // apply_dimension_containers).
+    let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
+    let mut rebuilt: HashMap<[i32; 3], Vec<Option<(u16, u8)>>> = HashMap::new();
+    for chest in &loaded.chests {
+        rebuilt.insert(chest.pos, chest.slots.clone());
+    }
+
+    // Phase 4: verify each live entry survived.
+    assert_eq!(rebuilt.len(), live.len());
+    for (pos, slots) in &live {
+        let got = rebuilt.get(pos).expect("missing chest pos after reload");
+        assert_eq!(got, slots, "slots mismatch at {pos:?}");
+    }
+}
+
+#[test]
 fn containers_two_writes_keep_bak() {
     // The atomic save layer should leave a `.bak` after the second
     // write - matches `entities_recover_from_bak` precondition.
