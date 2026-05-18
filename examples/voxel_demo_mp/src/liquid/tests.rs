@@ -189,7 +189,8 @@ fn surface_falling_or_column_full_block() {
 #[test]
 fn distance_to_drop_immediate() {
     let w = mk_world();
-    assert_eq!(distance_to_drop_at(&w, [5, 5, 5], 4), 0);
+    let lm: HashMap<[i32; 3], u8> = HashMap::new();
+    assert_eq!(distance_to_drop_at(&w, &lm, WATER_ID, [5, 5, 5], 4), 0);
 }
 
 #[test]
@@ -200,7 +201,8 @@ fn distance_to_drop_solid_floor_unreachable() {
             w.set([x, 4, z], BlockId(1));
         }
     }
-    assert_eq!(distance_to_drop_at(&w, [5, 5, 5], 4), u32::MAX);
+    let lm: HashMap<[i32; 3], u8> = HashMap::new();
+    assert_eq!(distance_to_drop_at(&w, &lm, WATER_ID, [5, 5, 5], 4), u32::MAX);
 }
 
 #[test]
@@ -211,7 +213,8 @@ fn distance_to_drop_steps_to_cliff() {
             w.set([x, 4, z], BlockId(1));
         }
     }
-    let d = distance_to_drop_at(&w, [5, 5, 5], 6);
+    let lm: HashMap<[i32; 3], u8> = HashMap::new();
+    let d = distance_to_drop_at(&w, &lm, WATER_ID, [5, 5, 5], 6);
     assert!(d <= 4, "got {d}");
     assert!(d > 0);
 }
@@ -298,6 +301,43 @@ fn pour_on_flat_spreads_seven_blocks() {
     assert!(!sim.is([8, 1, 0], water()), "+x distance 8 should stay air");
     assert!(!sim.is([0, 1, 8], water()), "+z distance 8 should stay air");
     assert_eq!(sim.level_at([0, 1, 0]), Some(0), "source corrupted");
+}
+
+/// Regression for Bug 1: `distance_to_drop_at` used to treat
+/// same-liquid flow cells as walls, so once the source had
+/// surrounded itself with flow water the BFS returned u32::MAX
+/// in every direction. With every distance tied at MAX the bias
+/// collapsed and the source spread radially - eastwards across
+/// flat stone even when an air hole sat 4 cells west.
+#[test]
+fn pour_biases_toward_hole_through_existing_water() {
+    let mut sim = LiquidSim::new();
+    // Flat floor x in [-12..=12], z in [-12..=12], EXCEPT the
+    // tile at (-4, 0, 0) is missing - that's the cliff drop.
+    for x in -12..=12 {
+        for z in -12..=12 {
+            if x == -4 && z == 0 {
+                continue;
+            }
+            sim.solid([x, 0, z]);
+        }
+    }
+    sim.place_source([0, 1, 0], water());
+    sim.run(water(), 30);
+    // Sanity: water reached the hole and fell.
+    assert!(
+        sim.is([-4, 1, 0], water()),
+        "water didn't reach the hole on the west side"
+    );
+    // East side stays dry - the source's east BFS sees no drop
+    // and the west BFS (through existing water) wins.
+    for x in 1..=7 {
+        let p = [x, 1, 0];
+        assert!(
+            !sim.is(p, water()),
+            "east cell {p:?} should stay air with hole-bias active"
+        );
+    }
 }
 
 #[test]

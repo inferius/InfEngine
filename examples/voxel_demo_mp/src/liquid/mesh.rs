@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use infengine_render::MeshVertex;
-use infengine_voxel::{BlockId, World};
+use infengine_voxel::World;
 
 use crate::block::{block_is_aabb_passable, block_is_washable};
 
@@ -95,14 +95,48 @@ pub(crate) fn liquid_corner_height_at(
 /// BFS over walkable cells looking for the nearest "drop" (an
 /// open cell directly below). Used by `plan` to bias horizontal
 /// flow toward the nearest cliff edge (MC's `getSlopeDistance`).
+///
+/// Mirrors MC's `canPassThrough`: traverse air, washable
+/// decorations, AND same-liquid NON-SOURCE flow cells. Sources of
+/// the same liquid block the path (matches MC's
+/// `isSourceBlockOfThisType` gate inside `canMaybePassThrough`).
+/// Without same-liquid traversal a spreader cell whose neighbours
+/// are already flow cells would see u32::MAX in every direction
+/// and the bias would collapse to "spread radially".
 pub(crate) fn distance_to_drop_at(
     world: &World,
+    level_map: &HashMap<[i32; 3], u8>,
+    liquid_id: u16,
     start: [i32; 3],
     max_steps: u32,
 ) -> u32 {
-    let walkable = |b: BlockId| b.is_air() || block_is_washable(b);
-    let drop_at = |p: [i32; 3]| walkable(world.get(p));
-    if !walkable(world.get(start)) {
+    let walkable = |p: [i32; 3]| -> bool {
+        let b = world.get(p);
+        if b.is_air() || block_is_washable(b) {
+            return true;
+        }
+        // Same-liquid flow cell (non-source) is walkable.
+        if b.0 == liquid_id {
+            let lvl = level_map.get(&p).copied().unwrap_or(0);
+            return lvl > 0;
+        }
+        false
+    };
+    // The drop test: cell below is "open" (air / washable / flow).
+    // A same-liquid source below does NOT count as a drop - water
+    // wouldn't fall through it.
+    let drop_at = |p: [i32; 3]| -> bool {
+        let b = world.get(p);
+        if b.is_air() || block_is_washable(b) {
+            return true;
+        }
+        if b.0 == liquid_id {
+            let lvl = level_map.get(&p).copied().unwrap_or(0);
+            return lvl > 0;
+        }
+        false
+    };
+    if !walkable(start) {
         return u32::MAX;
     }
     if drop_at([start[0], start[1] - 1, start[2]]) {
@@ -123,7 +157,7 @@ pub(crate) fn distance_to_drop_at(
             if visited.contains(&n) {
                 continue;
             }
-            if !walkable(world.get(n)) {
+            if !walkable(n) {
                 continue;
             }
             visited.insert(n);

@@ -1743,7 +1743,7 @@ impl Voxel {
                 if !spreadable(self.world.get(n)) {
                     continue;
                 }
-                weights[i] = self.distance_to_drop(n, 4);
+                weights[i] = self.distance_to_drop(liquid_id, n, 4);
             }
             let any_reachable =
                 weights.iter().any(|w| *w != u32::MAX && *w < 1000);
@@ -1814,8 +1814,9 @@ impl Voxel {
     /// `u32::MAX` when no drop is reachable. Used by
     /// `tick_liquid_spread` to bias horizontal flow toward
     /// downhill paths.
-    fn distance_to_drop(&self, start: [i32; 3], max_steps: u32) -> u32 {
-        distance_to_drop_at(&self.world, start, max_steps)
+    #[allow(dead_code)]
+    fn distance_to_drop(&self, liquid_id: u16, start: [i32; 3], max_steps: u32) -> u32 {
+        distance_to_drop_at(&self.world, &self.liquid_level, liquid_id, start, max_steps)
     }
 
     /// Source-merge pass: a flow voxel of `liquid` adjacent to

@@ -221,7 +221,7 @@ fn get_spread(
         // empty-fluid result and the candidate filter below will
         // gate on it. We re-call inside the build below.
         let dist = if bias_drops {
-            distance_to_drop_at(world, n, 4)
+            distance_to_drop_at(world, level_map, liquid_id, n, 4)
         } else {
             // bias disabled (debug toggle): treat every viable dir
             // as equal distance.
