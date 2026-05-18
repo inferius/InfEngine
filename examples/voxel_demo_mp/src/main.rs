@@ -63,6 +63,15 @@ mod world_save;
 mod decorations;
 mod drops;
 mod inventory;
+// Item registry lives in its own module so chest contents / crafting
+// outputs / future non-block items can carry per-stack metadata
+// (max_stack, RMB-place target, icon, category) without piling onto
+// `BlockType`. Phase C.1 lands the registry + helpers; the existing
+// mining + placement + hotbar code still reads `block::*`. The
+// item-module APIs become live in C.2 / C.3 when chest UI + crafting
+// migrate onto them - until then we tolerate dead_code on the bin.
+#[allow(dead_code)]
+mod item;
 mod chat;
 mod mining;
 mod mob_ai;

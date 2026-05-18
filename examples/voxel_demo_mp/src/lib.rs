@@ -52,6 +52,9 @@
 #[path = "block/mod.rs"]
 pub mod block;
 
+#[path = "item/mod.rs"]
+pub mod item;
+
 #[path = "worldgen.rs"]
 pub mod worldgen;
 
