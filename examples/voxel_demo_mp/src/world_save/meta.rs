@@ -17,17 +17,19 @@
 //! }
 //! ```
 //!
-//! All writes go through the local `atomic_write` helper:
-//! write to `<path>.tmp`, then rename onto the destination. Keeps
-//! the file readable from a crashed process. The full `.bak`
-//! rolling backup lands in Phase B.4 (`atomic.rs`).
+//! All writes go through `atomic::atomic_save`: write to
+//! `<path>.tmp`, rename the previous live file into `<path>.bak`,
+//! then atomic-rename `<path>.tmp` onto `<path>`. Reads go through
+//! `atomic::read_with_recovery` so a corrupt `meta.json` falls back
+//! to the `.bak` snapshot without losing the slot.
 #![allow(dead_code)]
 
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{meta_path, meta_path_in, world_dir, world_dir_in};
 
 /// Schema version baked into every fresh `meta.json`. Bumped when
@@ -108,8 +110,20 @@ pub(crate) fn read_meta_in_dir(base: &Path, slug: &str) -> io::Result<WorldMeta>
 }
 
 fn read_meta_from_path(path: &Path) -> io::Result<WorldMeta> {
-    let bytes = std::fs::read(path)?;
-    let meta: WorldMeta = serde_json::from_slice(&bytes).map_err(|err| {
+    match read_with_recovery(path, decode_meta)? {
+        Some(meta) => Ok(meta),
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("meta.json missing at {}", path.display()),
+        )),
+    }
+}
+
+/// Parse + version-gate a `meta.json` byte buffer. Pulled out as a
+/// free fn so both the primary read and the `.bak` recovery path
+/// (inside `read_with_recovery`) share the exact same validation.
+fn decode_meta(bytes: &[u8]) -> io::Result<WorldMeta> {
+    let meta: WorldMeta = serde_json::from_slice(bytes).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("meta.json parse error: {err}"),
@@ -156,36 +170,7 @@ fn write_meta_to(dir: &Path, path: &Path, meta: &WorldMeta) -> io::Result<()> {
             format!("meta.json encode error: {err}"),
         )
     })?;
-    atomic_write(path, &payload)
-}
-
-/// Atomically write `payload` to `path`: serialise to
-/// `<path>.tmp`, fsync, then `rename` over the destination. Phase
-/// B.4 swaps this out for the full `atomic.rs` helper that also
-/// keeps a `.bak` rolling backup.
-pub(super) fn atomic_write(path: &Path, payload: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = tmp_path(path);
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(payload)?;
-        f.sync_all()?;
-    }
-    // Windows `rename` refuses to overwrite by default; remove the
-    // destination first if present. Linux rename is atomic-over-
-    // existing, so the explicit remove is a no-op there.
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
-    std::fs::rename(&tmp, path)
-}
-
-fn tmp_path(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
+    atomic_save(path, &payload)
 }
 
 /// Stable per-installation UUID, persisted at

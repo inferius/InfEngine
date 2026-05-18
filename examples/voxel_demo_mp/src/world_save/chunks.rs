@@ -37,8 +37,8 @@ use std::path::{Path, PathBuf};
 use infengine_voxel::{BlockId, CHUNK_SIZE, CHUNK_VOXELS, Chunk};
 use serde::{Deserialize, Serialize};
 
+use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in};
-use super::meta::atomic_write;
 
 /// Magic bytes at the head of every chunk file: `"INFC"` (InfEngine
 /// chunk). Distinguishes the new per-chunk format from anything
@@ -262,15 +262,17 @@ fn write_chunk_to(path: &Path, payload: &ChunkPayload) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    atomic_write(path, &bytes)
+    atomic_save(path, &bytes)
 }
 
 fn read_chunk_from(path: &Path) -> io::Result<Option<ChunkPayload>> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
+    read_with_recovery(path, decode_chunk_bytes)
+}
+
+/// Parse the on-disk envelope + bincode payload. Free fn so both the
+/// primary read and the `.bak` recovery path inside
+/// `atomic::read_with_recovery` run the exact same validation.
+fn decode_chunk_bytes(bytes: &[u8]) -> io::Result<ChunkPayload> {
     if bytes.len() < 17 {
         return Err(invalid("chunk file truncated header"));
     }
@@ -312,7 +314,7 @@ fn read_chunk_from(path: &Path) -> io::Result<Option<ChunkPayload>> {
         &raw, cfg,
     )
     .map_err(|err| invalid(format!("chunk payload decode failed: {err}")))?;
-    Ok(Some(payload))
+    Ok(payload)
 }
 
 /// Decompress `body` via zstd into a buffer of exactly

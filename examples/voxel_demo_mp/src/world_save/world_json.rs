@@ -27,8 +27,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in, world_json_path, world_json_path_in};
-use super::meta::atomic_write;
 
 /// Schema version baked into every fresh `world.json`. Bumped when
 /// the struct fields change in a breaking way.
@@ -99,8 +99,19 @@ pub(crate) fn read_world_in_dir(base: &Path, slug: &str) -> io::Result<WorldJson
 }
 
 fn read_world_from_path(path: &Path) -> io::Result<WorldJson> {
-    let bytes = std::fs::read(path)?;
-    let world: WorldJson = serde_json::from_slice(&bytes).map_err(|err| {
+    match read_with_recovery(path, decode_world)? {
+        Some(world) => Ok(world),
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("world.json missing at {}", path.display()),
+        )),
+    }
+}
+
+/// Parse + version-gate a `world.json` byte buffer. Free fn so the
+/// primary read + the `.bak` recovery path share validation.
+fn decode_world(bytes: &[u8]) -> io::Result<WorldJson> {
+    let world: WorldJson = serde_json::from_slice(bytes).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("world.json parse error: {err}"),
@@ -145,7 +156,7 @@ fn write_world_to(dir: &Path, path: &Path, world: &WorldJson) -> io::Result<()> 
             format!("world.json encode error: {err}"),
         )
     })?;
-    atomic_write(path, &payload)
+    atomic_save(path, &payload)
 }
 
 #[cfg(test)]

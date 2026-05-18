@@ -32,12 +32,15 @@ use crate::net::{
 };
 use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel, set_world_seed, world_seed};
 
+pub(crate) mod atomic;
 pub(crate) mod chunks;
 pub(crate) mod layout;
 pub(crate) mod meta;
 pub(crate) mod players;
 pub(crate) mod world_json;
 
+#[cfg(test)]
+mod atomic_tests;
 #[cfg(test)]
 mod chunks_tests;
 #[cfg(test)]

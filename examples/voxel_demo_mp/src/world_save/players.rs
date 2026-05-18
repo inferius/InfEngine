@@ -33,8 +33,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::atomic::{atomic_save, read_with_recovery};
 use super::layout::{world_dir, world_dir_in};
-use super::meta::atomic_write;
 
 /// Magic bytes at the head of every player file: `"INFP"` (InfEngine
 /// player). Distinguishes the format from chunks (`INFC`) + the
@@ -307,15 +307,17 @@ fn write_player_to(path: &Path, save: &PlayerSave) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    atomic_write(path, &bytes)
+    atomic_save(path, &bytes)
 }
 
 fn read_player_from(path: &Path) -> io::Result<Option<PlayerSave>> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
+    read_with_recovery(path, decode_player_bytes)
+}
+
+/// Parse the on-disk envelope + bincode payload. Free fn so both the
+/// primary read and the `.bak` recovery path inside
+/// `atomic::read_with_recovery` run the exact same validation.
+fn decode_player_bytes(bytes: &[u8]) -> io::Result<PlayerSave> {
     if bytes.len() < 17 {
         return Err(invalid("player file truncated header"));
     }
@@ -353,7 +355,7 @@ fn read_player_from(path: &Path) -> io::Result<Option<PlayerSave>> {
     let cfg = bincode::config::standard();
     let (save, _read) = bincode::serde::decode_from_slice::<PlayerSave, _>(&raw, cfg)
         .map_err(|err| invalid(format!("player payload decode failed: {err}")))?;
-    Ok(Some(save))
+    Ok(save)
 }
 
 /// Decompress `body` via zstd into a buffer of exactly
