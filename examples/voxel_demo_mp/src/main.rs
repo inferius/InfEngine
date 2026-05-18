@@ -15779,6 +15779,13 @@ struct Liquid {
     /// Horizontal spread distance cap from any source. MC water
     /// = 7, MC overworld lava = 3.
     max_range: u8,
+    /// Per-step level penalty applied each cell when spreading
+    /// horizontally. MC's `FlowingFluid.getDropOff` returns 1
+    /// for water and 2 for overworld lava - the higher drop_off
+    /// makes lava thin out faster (visible as a steeper
+    /// own_height ramp). Source level (0) -> first ring level
+    /// = drop_off; second ring = 2 * drop_off; etc.
+    drop_off: u8,
     /// Net ticks between spread + merge + decay updates. MC
     /// ticks are 50 ms; a net tick is ~16 ms (60 Hz), so water
     /// (every 5 game ticks = 250 ms) maps to ~15 net ticks
@@ -15840,6 +15847,7 @@ const LIQUIDS: &[Liquid] = &[
     Liquid {
         block_id: WATER_ID,
         max_range: 7,
+        drop_off: 1,
         // ~167 ms per tick at 60 fps. Roughly half MC's
         // 250 ms - readable progress without burning CPU on
         // big pools.
@@ -15858,7 +15866,13 @@ const LIQUIDS: &[Liquid] = &[
     },
     Liquid {
         block_id: LAVA_ID,
-        max_range: 3,
+        // MC overworld lava: drop_off = 2, max amount = 7
+        // -> 3 cells of flow before evaporation. In our level
+        // convention (0 = source, level += drop_off per ring),
+        // that's levels 2, 4, 6 -> 3 rings, so max_range = 7
+        // and drop_off = 2 lines up with MC.
+        max_range: 7,
+        drop_off: 2,
         tick_period: 90,
         fall_period: 15,
         infinite_source: false,
@@ -16021,12 +16035,38 @@ fn distance_to_drop_at(
 ///      open + neighbour-below open) and spill there with
 ///      level-1 falling. Non-source non-falling cells with a
 ///      cliff drop skip the regular horizontal spread.
-///   3. Remaining cells propose level = (own_level + 1) writes
-///      to NSEW neighbours, biased toward neighbours with the
-///      shortest BFS distance to a cliff (Pathfinder).
+///   3. Remaining cells propose level = (own_level + drop_off)
+///      writes to NSEW neighbours, biased toward neighbours with
+///      the shortest BFS distance to a cliff (Pathfinder).
 ///   4. Every non-source flow cell not receiving a fresh write
 ///      decays one step (level+1). Cells with level > max_range
 ///      evaporate.
+///
+/// Documented intentional deviations from MC's `FlowingFluid`
+/// (audited against `net.minecraft.world.level.material.FlowingFluid`
+/// from the 1.21.x decomp, post-`getNewLiquid`):
+///   - **Decay**: MC re-evaluates every non-source cell each
+///     tick via `getNewLiquid` = `max(neighbour amounts) -
+///     drop_off`. We do a pure +1 decay when no write lands.
+///     The two converge once spread settles; the pure decay
+///     gives an off-by-N transient when sources disappear.
+///   - **Falling propagation**: MC's `getNewLiquid` returns
+///     `getFlowing(8, true)` when the cell above is the same
+///     liquid. We don't write self - instead the cell above
+///     writes us as falling when it sees same-liquid-below.
+///     Equivalent outcome.
+///   - **Source merge stability**: MC promotes when
+///     `neighbourSources >= 2 && below is solid OR source`.
+///     We add a "no open NSEW neighbour" check on top so a
+///     pocket with a side drain doesn't promote. Intentional -
+///     user-spec quirk that prevents surprise infinite pools.
+///   - **`sourceNeighborCount >= 3` post-vertical-drop**: MC
+///     spreads sides even after spreading down when surrounded
+///     by 3+ sources. We never do. Edge case.
+///   - **`canPassThroughWall`**: MC checks VoxelShape so water
+///     can drip past stair shapes. We treat any non-air, non-
+///     washable block as a solid wall. Fine for the demo's
+///     block palette.
 #[derive(Debug, Default, Clone)]
 struct LiquidPlanStep {
     /// Cells the tick will set to air.
@@ -16107,7 +16147,16 @@ fn liquid_plan_step(
         let is_source = level == 0;
         let is_falling = level == 8;
         let push_strength: u8 = if is_source || is_falling { 0 } else { level };
-        let next_level = push_strength.saturating_add(1);
+        // MC `FlowingFluid.spreadToSides`:
+        //
+        //   neighbor = state.getAmount() - getDropOff(level);
+        //   if (state.getValue(FALLING)) neighbor = 7;
+        //
+        // We mirror that with our inverted convention: push_strength
+        // is the cell's own level (0 for source/falling, else level)
+        // and we add the liquid's per-ring drop_off to get the
+        // neighbour's level. Water drop_off = 1, overworld lava = 2.
+        let next_level = push_strength.saturating_add(liquid.drop_off);
         let below = [pos[0], pos[1] - 1, pos[2]];
         let below_b = world.get(below);
         let below_open = below_b.is_air() || block_is_washable(below_b);
