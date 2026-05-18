@@ -35,11 +35,11 @@ pub(crate) enum Biome {
 static WORLD_SEED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
-pub(crate) fn world_seed() -> u32 {
+pub fn world_seed() -> u32 {
     WORLD_SEED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-pub(crate) fn set_world_seed(value: u32) {
+pub fn set_world_seed(value: u32) {
     WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn hash2(wx: i32, wz: i32) -> u32 {
 /// call so background workers stay in sync without plumbing a
 /// shared param through every call. Loaded into `WORLDGEN`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorldGen {
+pub enum WorldGen {
     /// Default rolling biomes (Plains / Mountain / Desert) with
     /// small oak trees in plains.
     Classic = 0,
@@ -127,7 +127,12 @@ pub(crate) enum WorldGen {
 }
 
 impl WorldGen {
-    pub(crate) fn from_str(s: &str) -> Option<Self> {
+    // Named `from_str` for legibility on call sites. Doesn't
+    // implement `std::str::FromStr` because the trait expects
+    // `Result`, not `Option`, and we'd lose the "unknown variant"
+    // signal that the callers rely on.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "classic" | "default" => Some(Self::Classic),
             "flat" => Some(Self::Flat),
@@ -136,7 +141,7 @@ impl WorldGen {
             _ => None,
         }
     }
-    pub(crate) fn current() -> Self {
+    pub fn current() -> Self {
         match WORLDGEN.load(std::sync::atomic::Ordering::Relaxed) {
             1 => Self::Flat,
             2 => Self::Islands,
@@ -149,11 +154,11 @@ impl WorldGen {
 /// Shared world-gen mode. Set once on startup, read from every
 /// worker thread that generates chunks. `Relaxed` is fine because
 /// the value never changes mid-run.
-pub(crate) static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Top-level chunk generator. Dispatches to the per-profile
 /// implementation based on the currently-loaded `WORLDGEN`.
-pub(crate) fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
+pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
     match WorldGen::current() {
         WorldGen::Classic => gen_classic(coord, 1.0),
         WorldGen::Amplified => gen_classic(coord, 2.5),

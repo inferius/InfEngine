@@ -11,6 +11,10 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "voxel_demo_mp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "voxel_demo_mp"
 path = "src/main.rs"

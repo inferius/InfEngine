@@ -36,7 +36,7 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 /// Schema version baked into every fresh `meta.json`. Bumped when
 /// the struct fields change in a breaking way; Phase B.6 adds the
 /// migration registry that lets older slots upgrade in place.
-pub(crate) const META_FORMAT_VERSION: u32 = 1;
+pub const META_FORMAT_VERSION: u32 = 1;
 
 /// Hand-readable save header serialised next to the world payload.
 ///
@@ -45,42 +45,42 @@ pub(crate) const META_FORMAT_VERSION: u32 = 1;
 /// slots loadable; structurally breaking changes bump
 /// `META_FORMAT_VERSION` instead.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct WorldMeta {
+pub struct WorldMeta {
     /// User-typed display name. Free-form UTF-8.
-    pub(crate) name: String,
+    pub name: String,
     /// Filesystem-safe identifier derived via `layout::slug()`.
-    pub(crate) slug: String,
+    pub slug: String,
     /// `META_FORMAT_VERSION` at the time this slot was written.
-    pub(crate) format_version: u32,
+    pub format_version: u32,
     /// UTC timestamp of the world creation.
-    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
     /// UTC timestamp of the last `world_save::save` call. Drives
     /// the "sort by last played" order in the Worlds menu and the
     /// time-warp catch-up.
-    pub(crate) last_played: chrono::DateTime<chrono::Utc>,
+    pub last_played: chrono::DateTime<chrono::Utc>,
     /// Aggregate wall-clock seconds the slot has been actively
     /// played. Incremented by the autosave loop.
-    pub(crate) play_time_seconds: u64,
+    pub play_time_seconds: u64,
     /// Stable per-installation UUID. Lets the migration framework
     /// detect "this save came from a different machine" and
     /// surface a warning before we touch it. Persisted to
     /// `<data_dir>/host_machine_id` so it survives reinstalls of
     /// the binary.
-    pub(crate) host_machine_id: String,
+    pub host_machine_id: String,
     /// `CARGO_PKG_VERSION` at the time of the write. Pure
     /// telemetry - the migration framework keys off
     /// `format_version`, not this string.
-    pub(crate) engine_version: String,
+    pub engine_version: String,
     /// Relative path (under `world_dir`) of a 320x180 PNG taken
     /// on the most recent quit. `None` until Phase G adds the
     /// capture step.
-    pub(crate) thumbnail_path: Option<String>,
+    pub thumbnail_path: Option<String>,
 }
 
 /// Build a fresh `WorldMeta` for a brand-new slot. `created_at` /
 /// `last_played` are set to `now()`, `play_time_seconds` is zero,
 /// `host_machine_id` is loaded from the per-installation file.
-pub(crate) fn create_meta(name: &str, slug: &str) -> WorldMeta {
+pub fn create_meta(name: &str, slug: &str) -> WorldMeta {
     let now = chrono::Utc::now();
     WorldMeta {
         name: name.to_string(),
@@ -100,19 +100,19 @@ pub(crate) fn create_meta(name: &str, slug: &str) -> WorldMeta {
 /// Refuses unknown `format_version` values unless the migration
 /// registry has a chain to `META_FORMAT_VERSION`. Hands off to
 /// `migrate::default_registry`.
-pub(crate) fn read_meta(slug: &str) -> io::Result<WorldMeta> {
+pub fn read_meta(slug: &str) -> io::Result<WorldMeta> {
     read_meta_from_path(&meta_path(slug), migrate::default_registry())
 }
 
 /// Test-friendly variant: read from a slot rooted at an explicit
 /// base path instead of the OS data dir.
-pub(crate) fn read_meta_in_dir(base: &Path, slug: &str) -> io::Result<WorldMeta> {
+pub fn read_meta_in_dir(base: &Path, slug: &str) -> io::Result<WorldMeta> {
     read_meta_from_path(&meta_path_in(base, slug), migrate::default_registry())
 }
 
 /// Same as `read_meta_in_dir` but lets the caller inject a custom
 /// migration registry - the canonical hook for migration unit tests.
-pub(crate) fn read_meta_in_dir_with_registry(
+pub fn read_meta_in_dir_with_registry(
     base: &Path,
     slug: &str,
     registry: &MigrationRegistry,
@@ -203,7 +203,7 @@ fn encode_meta(meta: &WorldMeta) -> io::Result<Vec<u8>> {
 /// Write `meta.json` for a slot, creating the world directory if
 /// missing. Uses `atomic_write` (tmp + rename) so a crashed write
 /// never lands a half-flushed file on disk.
-pub(crate) fn write_meta(slug: &str, meta: &WorldMeta) -> io::Result<()> {
+pub fn write_meta(slug: &str, meta: &WorldMeta) -> io::Result<()> {
     let dir = world_dir(slug);
     let path = meta_path(slug);
     write_meta_to(&dir, &path, meta)
@@ -211,7 +211,7 @@ pub(crate) fn write_meta(slug: &str, meta: &WorldMeta) -> io::Result<()> {
 
 /// Test-friendly variant: write to a slot rooted at an explicit
 /// base path.
-pub(crate) fn write_meta_in_dir(base: &Path, slug: &str, meta: &WorldMeta) -> io::Result<()> {
+pub fn write_meta_in_dir(base: &Path, slug: &str, meta: &WorldMeta) -> io::Result<()> {
     let dir = world_dir_in(base, slug);
     let path = meta_path_in(base, slug);
     write_meta_to(&dir, &path, meta)

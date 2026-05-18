@@ -69,7 +69,7 @@ pub(crate) fn worlds_dir() -> PathBuf {
 /// - Leading / trailing dashes trimmed.
 /// - Empty result becomes `"world"` so an all-symbol name still
 ///   produces a usable slot.
-pub(crate) fn slug(name: &str) -> String {
+pub fn slug(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut last_dash = true; // start "after a dash" so leading
     // non-ascii characters don't emit a leading `-`
@@ -94,14 +94,14 @@ pub(crate) fn slug(name: &str) -> String {
 }
 
 /// Per-slot directory: `worlds_dir()/<slug>/`.
-pub(crate) fn world_dir(slug: &str) -> PathBuf {
+pub fn world_dir(slug: &str) -> PathBuf {
     worlds_dir().join(slug)
 }
 
 /// Same as `world_dir` but rooted at an explicit base path - used
 /// by the integration tests to redirect save I/O at a `tempfile`
 /// directory.
-pub(crate) fn world_dir_in(base: &Path, slug: &str) -> PathBuf {
+pub fn world_dir_in(base: &Path, slug: &str) -> PathBuf {
     base.join(slug)
 }
 

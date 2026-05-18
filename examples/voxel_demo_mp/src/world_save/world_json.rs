@@ -33,7 +33,7 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 
 /// Schema version baked into every fresh `world.json`. Bumped when
 /// the struct fields change in a breaking way.
-pub(crate) const WORLD_FORMAT_VERSION: u32 = 1;
+pub const WORLD_FORMAT_VERSION: u32 = 1;
 
 /// Vanilla MC's world border default - 60 million blocks across,
 /// 30 million radius from origin. Saves don't typically grow that
@@ -48,33 +48,33 @@ pub(crate) const DEFAULT_DIMENSION: &str = "overworld";
 /// Per-save worldgen + dimension configuration. Immutable after
 /// world creation - edits would invalidate every persisted chunk.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct WorldJson {
+pub struct WorldJson {
     /// `WORLD_FORMAT_VERSION` at the time this slot was written.
-    pub(crate) format_version: u32,
+    pub format_version: u32,
     /// Worldgen variant tag ("classic" / "flat" / "amplified" / ...).
     /// Read by the chunk-source pick on load.
-    pub(crate) worldgen: String,
+    pub worldgen: String,
     /// Noise seed for the worldgen. 0 = the loader picks a fresh
     /// random value on first load.
-    pub(crate) seed: u32,
+    pub seed: u32,
     /// Initial player spawn in world coordinates. Defaults to
     /// `[0, 0, 0]` on creation; the worldgen surface code re-pins
     /// this to the surface on first start.
-    pub(crate) spawn: [i32; 3],
+    pub spawn: [i32; 3],
     /// World border radius from origin, in blocks. See
     /// `DEFAULT_WORLD_BORDER_RADIUS`.
-    pub(crate) world_border_radius: u32,
+    pub world_border_radius: u32,
     /// Dimension the player spawns into when no explicit
     /// dimension is selected.
-    pub(crate) default_dimension: String,
+    pub default_dimension: String,
     /// All dimensions known to this save. Phase F populates this
     /// from a richer per-dim config table.
-    pub(crate) dimensions: Vec<String>,
+    pub dimensions: Vec<String>,
 }
 
 /// Build a fresh `WorldJson` for a brand-new slot. Spawn defaults
 /// to `[0, 0, 0]` - worldgen surface fix-up happens on first load.
-pub(crate) fn create_world(worldgen: &str, seed: u32) -> WorldJson {
+pub fn create_world(worldgen: &str, seed: u32) -> WorldJson {
     WorldJson {
         format_version: WORLD_FORMAT_VERSION,
         worldgen: worldgen.to_string(),
@@ -91,18 +91,18 @@ pub(crate) fn create_world(worldgen: &str, seed: u32) -> WorldJson {
 /// Refuses unknown `format_version` values unless the migration
 /// registry has a chain to `WORLD_FORMAT_VERSION`. Hands off to
 /// `migrate::default_registry`.
-pub(crate) fn read_world(slug: &str) -> io::Result<WorldJson> {
+pub fn read_world(slug: &str) -> io::Result<WorldJson> {
     read_world_from_path(&world_json_path(slug), migrate::default_registry())
 }
 
 /// Test-friendly variant: read from an explicit base path.
-pub(crate) fn read_world_in_dir(base: &Path, slug: &str) -> io::Result<WorldJson> {
+pub fn read_world_in_dir(base: &Path, slug: &str) -> io::Result<WorldJson> {
     read_world_from_path(&world_json_path_in(base, slug), migrate::default_registry())
 }
 
 /// Same as `read_world_in_dir` but lets the caller inject a custom
 /// migration registry - the canonical hook for migration unit tests.
-pub(crate) fn read_world_in_dir_with_registry(
+pub fn read_world_in_dir_with_registry(
     base: &Path,
     slug: &str,
     registry: &MigrationRegistry,
@@ -182,14 +182,14 @@ fn encode_world(world: &WorldJson) -> io::Result<Vec<u8>> {
 
 /// Write `world.json` for a slot, creating the world directory if
 /// missing. Atomic (tmp + rename) - see `meta::atomic_write`.
-pub(crate) fn write_world(slug: &str, world: &WorldJson) -> io::Result<()> {
+pub fn write_world(slug: &str, world: &WorldJson) -> io::Result<()> {
     let dir = world_dir(slug);
     let path = world_json_path(slug);
     write_world_to(&dir, &path, world)
 }
 
 /// Test-friendly variant: write to an explicit base path.
-pub(crate) fn write_world_in_dir(base: &Path, slug: &str, world: &WorldJson) -> io::Result<()> {
+pub fn write_world_in_dir(base: &Path, slug: &str, world: &WorldJson) -> io::Result<()> {
     let dir = world_dir_in(base, slug);
     let path = world_json_path_in(base, slug);
     write_world_to(&dir, &path, world)

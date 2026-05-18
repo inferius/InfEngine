@@ -73,7 +73,7 @@ const COMP_ZSTD: u8 = 1;
 /// well under the raw `Vec<BlockId>` size thanks to the back-end
 /// compressor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct ChunkVoxels {
+pub struct ChunkVoxels {
     pub runs: Vec<(u16, u16)>,
 }
 
@@ -139,7 +139,7 @@ impl ChunkVoxels {
 /// B's `vx.chunk_snapshot` message - one struct, two codecs (disk
 /// adds zstd on top, wire keeps raw bincode).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct ChunkPayload {
+pub struct ChunkPayload {
     /// Payload-level format version. Independent of the envelope
     /// version so we can add fields here without rewriting every
     /// chunk file's outer header.
@@ -161,7 +161,7 @@ pub(crate) struct ChunkPayload {
 
 /// Payload-version constant. See `CHUNK_FORMAT_VERSION` for the
 /// rationale on the two-version split.
-pub(crate) const CHUNK_PAYLOAD_VERSION: u32 = 1;
+pub const CHUNK_PAYLOAD_VERSION: u32 = 1;
 
 /// Path to one chunk file:
 /// `<world_dir>/chunks/<dim>/<cx>_<cy>_<cz>.chunk.bin`.
@@ -184,12 +184,12 @@ fn chunk_path_under(world: &Path, dim: &str, coord: [i32; 3]) -> PathBuf {
 }
 
 /// Encode + write a chunk payload to its canonical slot.
-pub(crate) fn write_chunk(slug: &str, dim: &str, payload: &ChunkPayload) -> io::Result<()> {
+pub fn write_chunk(slug: &str, dim: &str, payload: &ChunkPayload) -> io::Result<()> {
     write_chunk_to(&chunk_path(slug, dim, payload.coord), payload)
 }
 
 /// Test-friendly write variant rooted at an explicit base path.
-pub(crate) fn write_chunk_in_dir(
+pub fn write_chunk_in_dir(
     base: &Path,
     slug: &str,
     dim: &str,
@@ -201,7 +201,7 @@ pub(crate) fn write_chunk_in_dir(
 /// Read + decode a chunk payload. Returns `Ok(None)` if the file
 /// does not exist - the streaming layer treats a missing chunk as
 /// "regenerate from worldgen" and that path must not be an error.
-pub(crate) fn read_chunk(
+pub fn read_chunk(
     slug: &str,
     dim: &str,
     coord: [i32; 3],
@@ -210,7 +210,7 @@ pub(crate) fn read_chunk(
 }
 
 /// Test-friendly read variant rooted at an explicit base path.
-pub(crate) fn read_chunk_in_dir(
+pub fn read_chunk_in_dir(
     base: &Path,
     slug: &str,
     dim: &str,

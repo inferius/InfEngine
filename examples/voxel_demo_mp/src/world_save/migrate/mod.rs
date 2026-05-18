@@ -53,7 +53,7 @@ pub(crate) type MigrationStep = fn(&[u8]) -> io::Result<Vec<u8>>;
 /// registry keep separate chains per file kind so a `WorldMeta` v1->v2
 /// arrow doesn't accidentally fire on a `ChunkPayload` v1 file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum SaveKind {
+pub enum SaveKind {
     /// `meta.json` - JSON header.
     Meta,
     /// `world.json` - JSON worldgen config.
@@ -79,8 +79,23 @@ pub(crate) enum SaveKind {
 /// chain is unambiguous - register fires a debug-assert if two arrows
 /// would compete for the same `(kind, from)` pair.
 #[derive(Default)]
-pub(crate) struct MigrationRegistry {
+pub struct MigrationRegistry {
     steps: HashMap<(SaveKind, u32), (u32, MigrationStep)>,
+}
+
+// Manual `Debug` impl: `MigrationStep` is a `fn` pointer and the
+// derive macro emits a name expression that doesn't compile against
+// the workspace `missing_debug_implementations = warn` rule when the
+// struct goes `pub`. Reporting just the count + the entry keys is
+// enough for diagnostic dumps; the step pointer itself isn't useful
+// to print.
+impl std::fmt::Debug for MigrationRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys: Vec<_> = self.steps.keys().collect();
+        f.debug_struct("MigrationRegistry")
+            .field("registered", &keys)
+            .finish()
+    }
 }
 
 impl MigrationRegistry {
@@ -177,7 +192,7 @@ impl MigrationRegistry {
 /// Process-wide default registry. Lazily initialised. Production
 /// migration arrows append here at module init (none yet - every
 /// payload is at v1).
-pub(crate) fn default_registry() -> &'static MigrationRegistry {
+pub fn default_registry() -> &'static MigrationRegistry {
     static REGISTRY: OnceLock<MigrationRegistry> = OnceLock::new();
     REGISTRY.get_or_init(MigrationRegistry::new)
 }
