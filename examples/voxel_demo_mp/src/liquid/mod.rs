@@ -19,6 +19,7 @@ pub(crate) mod apply;
 pub(crate) mod merge;
 pub(crate) mod mesh;
 pub(crate) mod plan;
+pub(crate) mod schedule;
 
 #[cfg(test)]
 mod tests;
