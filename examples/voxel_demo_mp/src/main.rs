@@ -36,7 +36,7 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
-    BUCKET_WATER_ID, BlockCategory, GLOWSTONE_ID, LAVA_ID,
+    BUCKET_WATER_ID, BlockCategory, CHEST_ID, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
     block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
@@ -863,6 +863,13 @@ struct Voxel {
     /// existing voxel's layer until it tops out, then a fresh
     /// snow voxel is painted on top.
     snow_positions: HashMap<[i32; 3], u8>,
+    /// Per-chest container state, keyed by absolute world voxel
+    /// coords. An entry is inserted when the player places a
+    /// chest block + removed when the chest is broken (after the
+    /// contents drop as item entities). The container itself is
+    /// a 27-slot `Container` (see `block::chest::CHEST_SLOTS`).
+    /// Persisted via `world_save/containers.rs`.
+    chests: HashMap<[i32; 3], container::Container>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
@@ -3775,6 +3782,7 @@ impl Voxel {
             torch_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
+            chests: HashMap::new(),
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),
@@ -3841,6 +3849,7 @@ impl Voxel {
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.liquid_mesh_dirty = true;
+        self.chests.clear();
     }
 
     /// Synchronously generate the initial chunk grid so the player
@@ -8582,6 +8591,22 @@ impl AppHandler for Voxel {
                 if tier >= needed {
                     self.spawn_drop(broken, voxel);
                 }
+                // Chest break: drain the per-position container's
+                // contents as item drops at the same voxel, then
+                // remove the container entry. We do this even when
+                // the chest itself can't be picked up (e.g. wrong
+                // tier) so the player never loses stored items.
+                // `spawn_drop` emits one item entity per call, so
+                // a stack of N produces N drops at the same voxel
+                // (each gets a randomised XZ kick from `drops::spawn`,
+                // so the cluster reads as a small pile).
+                if broken.0 == CHEST_ID
+                    && let Some(chest_inv) = self.chests.remove(&voxel)
+                {
+                    for id in block::chest::drain_drops(&chest_inv) {
+                        self.spawn_drop(BlockId(id), voxel);
+                    }
+                }
                 // Cascade: dislodge any F_NO_PLACE decoration
                 // (torch, flower, ...) that just lost its support
                 // because we broke this voxel. Each dislodged
@@ -9010,6 +9035,17 @@ impl AppHandler for Voxel {
                             }
                         }
                         self.edit_history.push(edit);
+                    }
+                    // Chest place: mint an empty 27-slot container
+                    // at the placed voxel so a follow-up RMB open
+                    // sees a clean state. Host-authoritative; a
+                    // client's local copy gets the empty container
+                    // too so the offline path works, but the wire
+                    // sync of mutations is host-driven.
+                    if block.0 == CHEST_ID {
+                        self.chests
+                            .entry(target_voxel)
+                            .or_insert_with(block::chest::new_chest);
                     }
                     // Decrement the active stack now that placement
                     // succeeded. Clients defer this - the server's

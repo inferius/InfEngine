@@ -36,6 +36,21 @@ pub(crate) fn new_chest() -> Container {
     Container::with_size(CHEST_SLOTS)
 }
 
+/// Flatten a chest's contents into the per-item drop list emitted
+/// on break. Each slot of `(id, count)` expands to `count` copies
+/// of `id` so the caller can spawn one drop entity per item -
+/// matching the rest of the game's "one drop per item" convention.
+/// Returns an empty vec for an empty chest.
+pub(crate) fn drain_drops(chest: &Container) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for (id, count) in chest.slots().iter().flatten() {
+        for _ in 0..*count {
+            out.push(*id);
+        }
+    }
+    out
+}
+
 /// Apply one `GridAction` against the chest container. Returns the
 /// next held-stack value (mirroring how `inv_apply_drag` returns
 /// the next cursor state).
@@ -406,5 +421,45 @@ mod tests {
         apply_chest_action(&mut chest, &mut inv, &mut held, GridAction::Place(0));
         assert_eq!(held, None);
         assert_slot(&chest, 0, Some((1, 4)));
+    }
+
+    #[test]
+    fn drain_drops_empty_chest_yields_no_drops() {
+        let chest = new_chest();
+        assert!(drain_drops(&chest).is_empty());
+    }
+
+    #[test]
+    fn drain_drops_expands_each_stack_to_per_item_drops() {
+        let mut chest = new_chest();
+        chest.set_slot(0, Some((1, 3)));
+        chest.set_slot(5, Some((2, 1)));
+        chest.set_slot(26, Some((1, 2)));
+        let drops = drain_drops(&chest);
+        // 3 + 1 + 2 = 6 drops total.
+        assert_eq!(drops.len(), 6);
+        // 5 of id 1 + 1 of id 2.
+        let ones = drops.iter().filter(|d| **d == 1).count();
+        let twos = drops.iter().filter(|d| **d == 2).count();
+        assert_eq!(ones, 5);
+        assert_eq!(twos, 1);
+    }
+
+    #[test]
+    fn place_then_break_drops_contents() {
+        // Mimic the world place->fill->break flow: mint a chest,
+        // fill some slots, drain - the resulting drop list should
+        // match the filled contents (per-item).
+        let mut chest = new_chest();
+        // Three slots filled: 4 stone, 1 sword, 2 stone.
+        chest.set_slot(2, Some((1, 4)));
+        chest.set_slot(7, Some((23, 1)));
+        chest.set_slot(20, Some((1, 2)));
+        let drops = drain_drops(&chest);
+        assert_eq!(drops.len(), 7);
+        // One sword in the result.
+        assert!(drops.contains(&23));
+        // 6 stone copies.
+        assert_eq!(drops.iter().filter(|d| **d == 1).count(), 6);
     }
 }
