@@ -328,6 +328,25 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: Some(41), max_stack: 64, icon: None,
         category: ItemCategory::Decoration,
     },
+    // ---- Furnace (block + 3-slot container) ----
+    // Stackable building block. RMB-placing emits the furnace
+    // block; RMB on an existing furnace opens the furnace UI via
+    // the world-interact chain (not here). The cook step runs on
+    // `Voxel::furnaces` + the `block::furnace::furnace_tick` path.
+    ItemType {
+        id: 42, name: "furnace", display: Some("Furnace"),
+        places: Some(42), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- Iron Ingot (smelt output, no block form) ----
+    // Item-only: places = None. Output of the iron-ore smelt
+    // recipe. Stacks to 64 like other ingredients. Icon falls
+    // back to the tinted swatch until an explicit IconSpec lands.
+    ItemType {
+        id: 43, name: "iron_ingot", display: Some("Iron Ingot"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
 ];
 
 // ---------------------------------------------------------------

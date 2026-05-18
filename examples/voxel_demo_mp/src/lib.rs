@@ -58,6 +58,9 @@ pub mod item;
 #[path = "container/mod.rs"]
 pub mod container;
 
+#[path = "smelting.rs"]
+pub mod smelting;
+
 #[path = "worldgen.rs"]
 pub mod worldgen;
 

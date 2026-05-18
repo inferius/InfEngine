@@ -42,11 +42,17 @@ fn item_type_for_every_block_with_inventory_slot() {
 }
 
 #[test]
-fn item_count_matches_block_count() {
-    // Currently 1:1 with the block table. Future non-block items
-    // will grow ITEM_TYPES past this, but the mirror direction
-    // (every block -> some item) stays the contract.
-    assert_eq!(ITEM_TYPES.len(), BLOCK_TYPES.len());
+fn item_count_at_least_block_count() {
+    // Every block has an ItemType (the 1:1 mirror checked above)
+    // but ITEM_TYPES is allowed to grow with non-block items
+    // (ingredients, smelt outputs, ...). C.4 lands `iron_ingot`
+    // as the first item-only row.
+    assert!(
+        ITEM_TYPES.len() >= BLOCK_TYPES.len(),
+        "ITEM_TYPES ({}) must mirror BLOCK_TYPES ({}) at minimum",
+        ITEM_TYPES.len(),
+        BLOCK_TYPES.len(),
+    );
 }
 
 // ---------------------------------------------------------------

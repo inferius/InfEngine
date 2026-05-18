@@ -21,6 +21,7 @@
 use infengine_voxel::BlockId;
 
 pub(crate) mod chest;
+pub(crate) mod furnace;
 
 // ---------------------------------------------------------------
 // Texture atlas - tile descriptor + dimensions.
@@ -425,6 +426,26 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["chest_bottom.png", "chest.png", "planks_oak.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["chest_side.png", "chest.png", "planks_oak.png"], keep_alpha: false },
     },
+    // Furnace. Opaque cube with a 3-slot Container (input / fuel /
+    // output) stored on `Voxel::furnaces` keyed by absolute world
+    // voxel coords. RMB opens the furnace UI; breaking the furnace
+    // drops all 3 slots as item entities. The cook step runs in
+    // real time via `block::furnace::furnace_tick` and via the
+    // offline catch-up dispatcher in `world_save::timers`.
+    //
+    // Texture: top + front + sides fall back through MC-style file
+    // names ("furnace_top", "furnace_front", "furnace_side") then
+    // to the stone tile so the block remains visible on resource
+    // packs without dedicated furnace art. The (0,0) atlas slot
+    // doubles as the placeholder; the `color` tint nudges it grey.
+    // Per-face orientation is cosmetic and deferred - C.4 ships a
+    // single side texture across all four lateral faces.
+    BlockType {
+        id: 42, name: "furnace", color: [0.55, 0.55, 0.58], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "furnace_front.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "furnace_front.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["furnace_front.png", "furnace_side.png", "stone.png"], keep_alpha: false },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -449,6 +470,25 @@ pub(crate) const BUCKET_LAVA_ID: u16 = 40;
 /// contents as item entities.
 #[allow(dead_code)] // wired up in C.3b+
 pub(crate) const CHEST_ID: u16 = 41;
+/// Furnace block id. Per-position 3-slot container (input / fuel /
+/// output) lives on `Voxel::furnaces`. RMB opens the furnace UI;
+/// break drops the 3 slots as item entities. The live cook step
+/// runs in `block::furnace::furnace_tick`; offline catch-up uses
+/// `Timer::Furnace` from the save layer.
+pub(crate) const FURNACE_ID: u16 = 42;
+/// Coal item id. Re-exported here so the smelting fuel table can
+/// reference a single source of truth instead of a bare literal.
+pub(crate) const COAL_ID: u16 = 13;
+/// Iron-ore block id (raw form, smelts into IRON_INGOT_ID).
+pub(crate) const IRON_ORE_ID: u16 = 14;
+/// Wood / log id. Doubles as a fuel for the furnace.
+pub(crate) const WOOD_ID: u16 = 5;
+/// Planks item id. Doubles as a fuel (mirrors MC's planks burn).
+pub(crate) const PLANKS_ID: u16 = 7;
+/// Iron ingot item id. Output of smelting iron ore. Pure item -
+/// has no block form, so the place path treats it like the
+/// pickaxes (not placeable).
+pub(crate) const IRON_INGOT_ID: u16 = 43;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.

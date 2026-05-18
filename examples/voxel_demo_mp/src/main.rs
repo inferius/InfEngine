@@ -78,6 +78,11 @@ mod item;
 // furnace. Until then the bin tolerates dead_code on this module.
 #[allow(dead_code)]
 mod container;
+// Smelt-recipe + fuel-table lookup. Furnace logic in `block::furnace`
+// (live tick) and `world_save::timers::catch_up_furnace` (offline)
+// both query this module. Phase C.4 ships the seed entries.
+#[allow(dead_code)]
+mod smelting;
 mod chat;
 mod mining;
 mod mob_ai;
