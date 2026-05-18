@@ -748,6 +748,37 @@ fn mesh_solid_neighbour_culls_face() {
     );
 }
 
+/// Regression for Bug 4: water side face against a snow layer
+/// (or any `F_DEDICATED_RENDER` neighbour without `F_AABB_PASS`)
+/// must still emit. Otherwise the pool's edge above a snow layer
+/// renders as a hard cull where the player expects the water's
+/// outer face.
+#[test]
+fn mesh_side_face_against_snow_and_torch_open() {
+    let mut w = mk_world();
+    w.set([5, 5, 5], BlockId(WATER_ID));
+    // Snow (id 15) has F_DEDICATED_RENDER but not F_AABB_PASS.
+    w.set([6, 5, 5], BlockId(15));
+    assert!(
+        side_open(&w, 6, 5, 5, WATER_ID),
+        "side face against snow must emit (dedicated render path)"
+    );
+    // Torch (id 10) has F_AABB_PASS - was already covered before
+    // the fix, but locks in regression coverage so a future tweak
+    // can't drop decorations alongside snow.
+    w.set([4, 5, 5], BlockId(10));
+    assert!(
+        side_open(&w, 4, 5, 5, WATER_ID),
+        "side face against torch must emit"
+    );
+    // Flower (id 20) - also passable decoration.
+    w.set([5, 5, 6], BlockId(20));
+    assert!(
+        side_open(&w, 5, 5, 6, WATER_ID),
+        "side face against flower must emit"
+    );
+}
+
 #[test]
 fn mesh_bottom_face_emitted_only_when_open() {
     let mut w = mk_world();

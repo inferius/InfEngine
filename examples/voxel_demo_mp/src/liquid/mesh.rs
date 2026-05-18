@@ -10,7 +10,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use infengine_render::MeshVertex;
 use infengine_voxel::World;
 
-use crate::block::{block_is_aabb_passable, block_is_washable};
+use crate::block::{
+    block_is_aabb_passable, block_is_washable, block_skips_chunk_mesh,
+};
 
 /// Y position of the top of a liquid voxel's slope ramp. Returns 1.0
 /// (full cube) for sources, for cells with the same liquid directly
@@ -171,9 +173,15 @@ pub(crate) fn distance_to_drop_at(
 }
 
 /// "Side face is open" predicate: emit a liquid side face only if
-/// the neighbour is air or a passable decoration (flower / torch /
-/// snow layer). A neighbour of the SAME liquid id cancels - their
-/// shared face is fully inside the body.
+/// the neighbour is air, a passable decoration (flower / torch),
+/// or a dedicated-render block (snow layer). A neighbour of the
+/// SAME liquid id cancels - their shared face is fully inside the
+/// body.
+///
+/// The `F_DEDICATED_RENDER` opt-in catches the snow layer (no
+/// `F_AABB_PASS`, custom slab render) - the water cell next to a
+/// snow voxel still needs its side face so the player sees the
+/// pool's edge above the snow ramp instead of a hard cull.
 ///
 /// Extracted out of the mesh build loop so a unit test can verify
 /// face emission against synthetic worlds without spinning up a
@@ -189,15 +197,17 @@ pub(crate) fn side_open(
     if nb.0 == liquid_id {
         return false;
     }
-    nb.is_air() || block_is_aabb_passable(nb)
+    nb.is_air()
+        || block_is_aabb_passable(nb)
+        || block_skips_chunk_mesh(nb)
 }
 
 /// "Bottom face is open": emit the bottom face for a liquid cell
 /// only when there's actually space underneath the player can see
 /// through. Solid block below = no face. Same-liquid below = no
-/// face (would be inside the body). Air / passable decoration =
-/// emit so the underwater air pocket under a cliff doesn't show
-/// up as transparent sky.
+/// face (would be inside the body). Air / passable decoration /
+/// dedicated-render block (snow) = emit so the underwater air
+/// pocket under a cliff doesn't show up as transparent sky.
 ///
 /// MC's `LiquidBlockRenderer.tesselate` emits a bottom face in
 /// the same situation (`shouldRenderFace(level, pos.below(), DOWN)`).
@@ -212,7 +222,9 @@ pub(crate) fn bottom_open(
     if nb.0 == liquid_id {
         return false;
     }
-    nb.is_air() || block_is_aabb_passable(nb)
+    nb.is_air()
+        || block_is_aabb_passable(nb)
+        || block_skips_chunk_mesh(nb)
 }
 
 /// Append one quad to `verts` / `idx`. Corners must be CCW from
