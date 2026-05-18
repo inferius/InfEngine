@@ -63,7 +63,9 @@ mod decorations;
 mod drops;
 mod inventory;
 mod chat;
+mod mining;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
+use mining::{MiningState, block_hardness};
 use drops::{DROP_ATTRACT_RADIUS, DropItem};
 use inventory::{
     HOTBAR_SLOTS, INVENTORY_COLS, INVENTORY_ROWS, INVENTORY_SLOTS,
@@ -182,43 +184,7 @@ struct MobState {
 /// every peer.
 const MOB_DEATH_FADE: f32 = 0.55;
 
-/// In-progress mining session. The player has been holding LMB on
-/// `voxel` for `progress` seconds; the block falls once `progress`
-/// reaches `total`. Tracking the original block lets us reset the
-/// session if someone else breaks it first or if the target shifts.
-#[derive(Debug, Clone, Copy)]
-struct MiningState {
-    voxel: [i32; 3],
-    progress: f32,
-    total: f32,
-    block: BlockId,
-    /// Time (seconds) since the last dig sound + crack particle
-    /// burst. Reset to 0 each time the periodic effect fires.
-    fx_cooldown: f32,
-}
-
-/// Seconds required to fully mine each block kind. Higher = tougher
-/// material. Air falls through to a tiny "miss" delay so the swing
-/// still produces feedback.
-fn block_hardness(block: BlockId) -> f32 {
-    match block.0 {
-        0 => 0.05,        // air (no-op swing)
-        1 | 8 => 1.6,     // stone, cobble
-        2 | 3 => 0.55,    // dirt, grass
-        4 => 0.5,         // sand
-        5 => 1.0,         // wood log
-        6 => 0.25,        // leaves
-        7 => 0.9,         // planks
-        9 => 0.45,        // glass
-        10 => 0.1,        // torch
-        11 => 0.6,        // wool
-        12 => 0.4,        // meat
-        13 => 2.4,        // coal ore
-        14 => 3.2,        // iron ore
-        15 => 0.4,        // snow
-        _ => 0.8,
-    }
-}
+// `MiningState` + `block_hardness` moved to `mining.rs`.
 
 const MOB_CAP_DEFAULT: usize = 12;
 const MOB_SPEED: f32 = 1.2;
