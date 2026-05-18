@@ -1961,17 +1961,15 @@ impl Voxel {
         // needs to wake up the moment the player digs out a hole
         // anywhere within flow range.
         //
-        // Scan a 5x5x5 cube around the touched voxel and pull
-        // every liquid cell in range back into `liquid_active`.
-        // That covers MC's typical 7-block horizontal flow and
-        // any vertical column with room to spare. 125 hash
-        // lookups per world write is cheap; the upside is that
-        // an entire pool snaps awake the moment its basin
-        // changes shape, without per-frame full-chunk rescans.
+        // Scan a 3x3x3 cube around the touched voxel and pull
+        // adjacent liquid cells back into `liquid_active` so
+        // the next tick re-evaluates their flow. The wider 5x5x5
+        // sweep was overhead-heavy on big pools; the tick's
+        // own NSEW propagation handles cells past the 3x3 ring.
         let mut neighbour_liquid = false;
-        for dx in -2..=2 {
-            for dy in -2..=2 {
-                for dz in -2..=2 {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
                     if dx == 0 && dy == 0 && dz == 0 {
                         continue;
                     }
@@ -8245,6 +8243,43 @@ impl Voxel {
                         ui.add_space(60.0);
                         ui.heading("InfEngine - Voxel Demo");
                         ui.add_space(20.0);
+                        // Worldgen picker. Drives the WORLDGEN
+                        // atomic on Play; same combo also affects
+                        // Host server. Persists across menu visits
+                        // via the chosen variant stored as the
+                        // current atomic value.
+                        let mut wg = WorldGen::current();
+                        ui.horizontal(|ui| {
+                            ui.label("World:");
+                            egui::ComboBox::from_id_salt("world_pick")
+                                .selected_text(format!("{wg:?}"))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut wg,
+                                        WorldGen::Classic,
+                                        "Classic",
+                                    );
+                                    ui.selectable_value(
+                                        &mut wg,
+                                        WorldGen::Flat,
+                                        "Flat (debug)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut wg,
+                                        WorldGen::Islands,
+                                        "Islands",
+                                    );
+                                    ui.selectable_value(
+                                        &mut wg,
+                                        WorldGen::Amplified,
+                                        "Amplified",
+                                    );
+                                });
+                        });
+                        WORLDGEN.store(
+                            wg as u8,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                         if ui.button("Play offline").clicked() {
                             action_start = true;
                         }
@@ -16070,11 +16105,11 @@ const LIQUIDS: &[Liquid] = &[
     Liquid {
         block_id: WATER_ID,
         max_range: 7,
-        // ~83 ms per tick at 60 fps. Slightly faster than MC's
-        // 250 ms so the cascade after a source removal drains
-        // a 7-radius pool in roughly a second instead of three.
-        tick_period: 5,
-        fall_period: 3,
+        // ~167 ms per tick at 60 fps. Roughly half MC's
+        // 250 ms - readable progress without burning CPU on
+        // big pools.
+        tick_period: 10,
+        fall_period: 5,
         infinite_source: true,
         swim_horiz_drag: 0.45,
         swim_fall_cap: -1.8,
@@ -16710,53 +16745,9 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
             set_in_chunk(&mut chunk, x, local_y, z, BlockId(flower_id));
         }
     }
-    // Pond pass: rare small water pools in plains biomes. Each
-    // candidate cell rolls a 1-in-512 hash to seed a pond
-    // centre, then carves a 3-cell radius depression and fills
-    // it with one layer of water at ground level. The
-    // overflowing loop (-3..cs+3) catches ponds centred just
-    // outside the chunk so their basin lands cleanly across
-    // borders.
-    for x in -3..(cs + 3) {
-        for z in -3..(cs + 3) {
-            let wx = origin.x as i32 + x;
-            let wz = origin.z as i32 + z;
-            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
-            if biome != Biome::Plains {
-                continue;
-            }
-            if hash2(wx ^ 0x0BAD_F00D, wz ^ 0x5EA_5EA) % 512 != 17 {
-                continue;
-            }
-            let ground = height_at(wx as f32 + 0.5, wz as f32 + 0.5, biome);
-            // 3-cell radius circular pond.
-            for dx in -3i32..=3 {
-                for dz in -3i32..=3 {
-                    if dx * dx + dz * dz > 9 {
-                        continue;
-                    }
-                    let surface_wy = ground;
-                    let local_y = surface_wy - origin.y as i32;
-                    set_in_chunk(
-                        &mut chunk,
-                        x + dx,
-                        local_y,
-                        z + dz,
-                        BlockId(WATER_ID),
-                    );
-                    // Carve one block above to make the water
-                    // sit flush with surrounding grass.
-                    set_in_chunk(
-                        &mut chunk,
-                        x + dx,
-                        local_y + 1,
-                        z + dz,
-                        BlockId::AIR,
-                    );
-                }
-            }
-        }
-    }
+    // Pond pass disabled: removed from worldgen while the
+    // fluid sim is under debugging. Sources are placed only by
+    // bucket pours; the worldgen no longer seeds standing water.
     // Cactus pass: sparse 2-3 block columns on desert sand. Same
     // surface + air checks as flowers; height varies with the
     // hash so dunes don't look uniform.
