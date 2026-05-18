@@ -1,0 +1,30 @@
+[package]
+name = "voxel_demo_server"
+description = "Headless dedicated server for the voxel demo. Hosts a world authoritatively without any rendering / UI / audio."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "voxel_demo_server"
+path = "src/main.rs"
+
+[dependencies]
+voxel_demo_mp = { path = "../voxel_demo_mp" }
+infengine_voxel = { path = "../../crates/infengine_voxel" }
+infengine_net = { path = "../../crates/infengine_net" }
+clap = { workspace = true }
+ctrlc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

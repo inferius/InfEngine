@@ -22,6 +22,7 @@ members = [
     "examples/demo_game",
     "examples/voxel_demo",
     "examples/voxel_demo_mp",
+    "examples/voxel_demo_server",
     "examples/showcase",
 ]
 
@@ -92,6 +93,10 @@ rapier2d = "0.28"
 rapier3d = "0.28"
 gltf = "1"
 netcorehost = "0.18"
+
+# CLI / signals
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
 
 [profile.release]
 opt-level = 3
