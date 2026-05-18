@@ -263,10 +263,19 @@ pub(crate) fn liquid_plan_step(
 ) -> LiquidPlanStep {
     let liquid_id = liquid.block_id;
     let max_range = liquid.max_range;
+    // Per-tick candidate cap. Previously 512 - too small for a
+    // tall waterfall + sprawling pool: a column of >500 cells
+    // exceeded the cap, HashSet iteration order randomly picked
+    // which cells got processed each tick, and the column
+    // visually "froze" partway down because the bottom cells
+    // were skipped. 8192 covers practically any single-pool
+    // scenario the demo produces without blowing per-frame
+    // CPU budget (8192 * 4 NSEW reads ~ 32k world.get calls
+    // every tick_period frames = ~6 fired/sec for water).
     let candidates: Vec<[i32; 3]> = active
         .iter()
         .filter(|p| world.get(**p).0 == liquid_id)
-        .take(512)
+        .take(8192)
         .copied()
         .collect();
     let mut plan = LiquidPlanStep::default();

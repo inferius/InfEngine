@@ -38,7 +38,7 @@ use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
     BUCKET_WATER_ID, BlockCategory, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
-    block_category, block_is_liquid,
+    block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
     block_is_washable, block_material, block_required_tier,
@@ -5320,6 +5320,24 @@ impl Voxel {
             0.1,
             500.0,
         ) * Mat4::look_at_rh(hud_cam_pos, hud_cam_pos + hud_forward, Vec3::Y);
+        // Sky visibility for the star field: the stars are 2D egui
+        // circles on the Background layer (no depth test) so they
+        // would otherwise render through stone / ceilings inside
+        // caves or enclosed builds. Compute once here against
+        // `self.world` so the egui closure doesn't need a world
+        // capture. Looks for a non-passable solid voxel within
+        // 64 cells directly above the player.
+        let sky_blocked = (1..=64).any(|dy| {
+            let above = [
+                self.player_pos.x.floor() as i32,
+                (self.player_pos.y as i32) + dy,
+                self.player_pos.z.floor() as i32,
+            ];
+            let b = self.world.get(above);
+            !b.is_air()
+                && !block_is_ray_passable(b)
+                && !block_is_aabb_passable(b)
+        });
         // Star field: fades in as the sun drops below the horizon.
         // The raw sun elevation (un-clamped) gives a smooth
         // night-factor in [0, 1] when the sun is below the horizon.
@@ -6733,7 +6751,11 @@ impl Voxel {
                 // world point relative to the player) through the
                 // HUD view-projection so the field rotates with
                 // the camera but doesn't slide with translation.
-                if night_factor > 0.0 && hud_visible {
+                //
+                // `sky_blocked` was computed before the closure
+                // against `self.world` since the closure has no
+                // world capture.
+                if night_factor > 0.0 && hud_visible && !sky_blocked {
                     const STAR_COUNT: u32 = 90;
                     const STAR_DIST: f32 = 250.0;
                     let layer = ctx.layer_painter(egui::LayerId::new(
