@@ -40,7 +40,7 @@ use block::{
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
     block_category, block_is_aabb_passable, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
-    block_is_replaceable, block_is_swim_medium, block_is_transparent_render,
+    block_is_replaceable, block_is_transparent_render,
     block_is_washable, block_material, block_required_tier,
     block_skips_chunk_mesh, block_type, bucket_liquid_id, is_tool_block,
     liquid_to_bucket_id, shovel_tier, tool_effectiveness, tool_label,
@@ -64,8 +64,14 @@ mod drops;
 mod inventory;
 mod chat;
 mod mining;
+mod player;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
 use mining::{MiningState, block_hardness};
+use player::{
+    COLLISION_EPSILON, GRAVITY, JUMP_VELOCITY, PLAYER_HEIGHT, PLAYER_RADIUS,
+    PLAYER_SPEED, aabb_intersects_solid, body_aabb, submerged_liquid,
+    submerged_liquid_eye,
+};
 use drops::{DROP_ATTRACT_RADIUS, DropItem};
 use inventory::{
     HOTBAR_SLOTS, INVENTORY_COLS, INVENTORY_ROWS, INVENTORY_SLOTS,
@@ -236,15 +242,9 @@ const VIEW_DISTANCE_CHUNKS: i32 = 4;
 const RESULTS_PER_FRAME: usize = 4;
 /// Number of background worker threads generating + meshing chunks.
 const NUM_WORKERS: usize = 2;
-const PLAYER_SPEED: f32 = 6.0;
-/// Initial upward velocity on jump. Peak height = `v^2 / (2 * |g|)`,
-/// so 8.0 ^ 2 / 36 ≈ 1.78 voxels - enough to clear a one-block step
-/// with margin, similar to Minecraft's 1.25-block jump.
-const JUMP_VELOCITY: f32 = 8.0;
-const GRAVITY: f32 = -18.0;
-const PLAYER_HEIGHT: f32 = 1.7;
-const PLAYER_RADIUS: f32 = 0.3;
-const COLLISION_EPSILON: f32 = 1e-4;
+// `PLAYER_SPEED`, `JUMP_VELOCITY`, `GRAVITY`, `PLAYER_HEIGHT`,
+// `PLAYER_RADIUS`, `COLLISION_EPSILON` moved to `player.rs` and
+// re-imported below.
 
 /// Damage source classifier - drives the per-kind hurt SFX
 /// `apply_player_damage_kind` plays on integer heart loss. New
@@ -2790,123 +2790,17 @@ impl Voxel {
         false
     }
 
-    /// Apply HP damage to the local player. Reaches zero = death
-    /// = respawn at origin + storage-row wipe + inventory snapshot
-    /// fired through the existing `vx.fellout` channel so the
-    /// server's authoritative copy stays in sync.
+    /// Apply HP damage to the local player. Thin wrapper around
+    /// `player::apply_damage` so existing call sites
+    /// (`self.apply_player_damage(...)`) keep working.
     fn apply_player_damage(&mut self, amount: f32) {
-        self.apply_player_damage_kind(amount, DamageKind::Generic);
+        player::apply_damage(self, amount);
     }
 
-    /// Variant that tags the source of the damage so the SFX
-    /// layer can pick a fitting synth (gurgle for drown, sizzle
-    /// for lava, thud for everything else). Sound fires only on
-    /// integer health crossings so a fractional per-frame drain
-    /// doesn't spam the player's ears at 60 Hz.
+    /// Variant that tags the source of the damage. Thin wrapper
+    /// around `player::apply_damage_kind`.
     fn apply_player_damage_kind(&mut self, amount: f32, kind: DamageKind) {
-        if amount <= 0.0 {
-            return;
-        }
-        // Godmode swallows damage entirely. Toggled via /godmode.
-        if self.god_mode {
-            return;
-        }
-        // Spawn invuln window. Decrements in update_play; while
-        // positive every damage call is a no-op so a fresh
-        // respawn can't be insta-killed by lingering mobs.
-        if self.invuln_remaining > 0.0 {
-            return;
-        }
-        let prev_int = self.player_health.ceil() as i32;
-        self.player_health = (self.player_health - amount).max(0.0);
-        let cur_int = self.player_health.ceil() as i32;
-        self.hurt_flash = 0.5;
-        // Damage resets the regen grace timer.
-        self.regen_accum = 0.0;
-        // SFX fires only when an integer heart slot tips over,
-        // not every fractional tick. Per-kind synth so drown +
-        // burn don't share the loud "hurt" thud.
-        if cur_int < prev_int {
-            let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
-            match kind {
-                DamageKind::Generic => {
-                    self.sfx_at("hurt", pos, |a, g| {
-                        let _ = a.play_thud(140.0, 0.35 * g);
-                    });
-                }
-                DamageKind::Drown => {
-                    // Soft bubble + airy swish for the breath-out
-                    // moment. Volume capped so the player can
-                    // hear themselves think.
-                    self.sfx_at("drown", pos, |a, g| {
-                        let _ = a.play_click(95.0, 0.10 * g);
-                        let _ = a.play_swish(0.08 * g);
-                    });
-                }
-                DamageKind::Burn => {
-                    self.sfx_at("burn", pos, |a, g| {
-                        let _ = a.play_swish(0.18 * g);
-                    });
-                }
-            }
-        }
-        if self.player_health <= 0.0 {
-            tracing::warn!("player died (HP = 0) - respawning");
-            self.player_pos = self.safe_spawn();
-            self.player_vel = Vec3::ZERO;
-            self.player_health = PLAYER_MAX_HEALTH;
-            self.invuln_remaining = 3.0;
-            let mut dropped = 0usize;
-            for slot in self.inventory[HOTBAR_SLOTS..].iter_mut() {
-                if slot.take().is_some() {
-                    dropped += 1;
-                }
-            }
-            for slot in self.craft_grid.iter_mut() {
-                if slot.take().is_some() {
-                    dropped += 1;
-                }
-            }
-            if dropped > 0 {
-                tracing::info!(dropped, "death penalty: cleared storage stacks");
-            }
-            // Local chat toast so the player gets a visible
-            // confirmation matching the audible thud. The line
-            // stays local; in MP the kill/death announcement is
-            // handled separately by the server when it's
-            // implemented.
-            self.chat_log.push((
-                std::time::Instant::now(),
-                if dropped > 0 {
-                    format!("You died. Lost {dropped} storage stacks.")
-                } else {
-                    "You died and respawned at spawn.".to_string()
-                },
-            ));
-            // Broadcast a public death notice in MP so peers see
-            // the event. Host tags it with `self.player_name`;
-            // clients send the raw line and the server's chat
-            // path wraps it with the sender's identity.
-            let public = "* I just died!".to_string();
-            let cfg = bincode::config::standard();
-            match &mut self.net {
-                NetRole::Offline => {}
-                NetRole::Server { server, .. } => {
-                    let line = format!("* {} died.", self.player_name);
-                    self.chat_log
-                        .push((std::time::Instant::now(), line.clone()));
-                    if let Ok(buf) = bincode::serde::encode_to_vec(&line, cfg) {
-                        server.broadcast_bytes("vx.chat", buf);
-                    }
-                }
-                NetRole::Client { client, .. } => {
-                    if let Ok(buf) = bincode::serde::encode_to_vec(&public, cfg) {
-                        let _ = client.send_bytes("vx.chat", buf);
-                    }
-                    let _ = client.send_bytes("vx.fellout", Vec::new());
-                }
-            }
-        }
+        player::apply_damage_kind(self, amount, kind);
     }
 
     /// Fire-and-forget `vx.leave` to the server (if any). Called
@@ -11927,50 +11821,9 @@ fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
     chunk
 }
 
-/// Player AABB at `pos`, where `pos.y` is the eye (head) height.
-fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
-    (
-        Vec3::new(
-            pos.x - PLAYER_RADIUS,
-            pos.y - PLAYER_HEIGHT,
-            pos.z - PLAYER_RADIUS,
-        ),
-        Vec3::new(pos.x + PLAYER_RADIUS, pos.y, pos.z + PLAYER_RADIUS),
-    )
-}
-
-/// True for blocks the player walks through (collision-wise).
-/// Delegates to the generic `F_AABB_PASS` flag so decorations
-/// (torch, flowers) and liquids (water) are handled by their
-/// `BlockType` row rather than a hard-coded id list. Snow goes
-/// through `voxel_is_solid` because its passable / solid state
-/// depends on the runtime layer count.
-fn is_passable(b: BlockId) -> bool {
-    block_is_aabb_passable(b)
-}
-
-/// Combined solid lookup: world solid AND not in the passable
-/// decoration set AND, when the block is snow, has fewer than
-/// 8 stacked layers (so a fully-buried voxel becomes a solid
-/// block the player can stand on).
-fn voxel_is_solid(
-    world: &World,
-    snow: &HashMap<[i32; 3], u8>,
-    v: [i32; 3],
-) -> bool {
-    let b = world.get(v);
-    if b.is_air() {
-        return false;
-    }
-    if is_passable(b) {
-        return false;
-    }
-    if b.0 == 15 {
-        let layers = snow.get(&v).copied().unwrap_or(8);
-        return layers >= 8;
-    }
-    true
-}
+// `body_aabb`, `is_passable`, `voxel_is_solid`,
+// `submerged_liquid_eye`, `submerged_liquid`, and
+// `aabb_intersects_solid` moved to `player.rs`.
 
 /// Approximate face normal from 4 corners (used by the sloped
 /// water top quad where the corner heights differ). Cross product
@@ -11998,78 +11851,8 @@ fn water_face_normal(
 }
 
 
-/// Liquid the player's eye (top of the body AABB) sits in, if
-/// any. Used by the screen-tint overlay so the wash only shows
-/// when the head is actually under the surface - wading
-/// ankle-deep doesn't trigger it. Eye position approximated by
-/// `pos.y` (the camera height in the existing rig), pulled
-/// inward a few centimetres so a perfectly flush waterline
-/// rounds down to "out".
-fn submerged_liquid_eye(world: &World, pos: Vec3) -> Option<&'static Liquid> {
-    let eye_y = (pos.y - 0.1).floor() as i32;
-    let eye_x = pos.x.floor() as i32;
-    let eye_z = pos.z.floor() as i32;
-    let b = world.get([eye_x, eye_y, eye_z]);
-    if !block_is_swim_medium(b) {
-        return None;
-    }
-    liquid_for(b)
-}
-
-/// Find the liquid the player's AABB overlaps, if any. Returns
-/// the `Liquid` reference so the movement loop can read drag /
-/// buoyancy / damage values per fluid kind without a separate
-/// lookup. Caller picks whichever liquid the body first hits;
-/// mixing two liquids in one body would be unusual and matches
-/// MC's "you're in lava, period" semantics.
-fn submerged_liquid(world: &World, pos: Vec3) -> Option<&'static Liquid> {
-    let (min, max) = body_aabb(pos);
-    let x0 = min.x.floor() as i32;
-    let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
-    let y0 = min.y.floor() as i32;
-    let y1 = (max.y - COLLISION_EPSILON).floor() as i32;
-    let z0 = min.z.floor() as i32;
-    let z1 = (max.z - COLLISION_EPSILON).floor() as i32;
-    for y in y0..=y1 {
-        for z in z0..=z1 {
-            for x in x0..=x1 {
-                let b = world.get([x, y, z]);
-                if !block_is_swim_medium(b) {
-                    continue;
-                }
-                if let Some(l) = liquid_for(b) {
-                    return Some(l);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Returns true if `pos`'s AABB overlaps any solid voxel.
-fn aabb_intersects_solid(
-    world: &World,
-    snow: &HashMap<[i32; 3], u8>,
-    pos: Vec3,
-) -> bool {
-    let (min, max) = body_aabb(pos);
-    let x0 = min.x.floor() as i32;
-    let x1 = (max.x - COLLISION_EPSILON).floor() as i32;
-    let y0 = min.y.floor() as i32;
-    let y1 = (max.y - COLLISION_EPSILON).floor() as i32;
-    let z0 = min.z.floor() as i32;
-    let z1 = (max.z - COLLISION_EPSILON).floor() as i32;
-    for y in y0..=y1 {
-        for z in z0..=z1 {
-            for x in x0..=x1 {
-                if voxel_is_solid(world, snow, [x, y, z]) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
+// `submerged_liquid_eye`, `submerged_liquid`, and
+// `aabb_intersects_solid` moved to `player.rs`.
 
 /// Move the player AABB by `delta`, resolving collision with solid
 /// voxels along each axis separately. Returns the new position, plus
