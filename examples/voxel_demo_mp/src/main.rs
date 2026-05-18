@@ -1832,6 +1832,12 @@ struct Voxel {
     /// / source merge).
     liquid_mesh_handles: HashMap<u16, MeshHandle>,
     liquid_mesh_dirty: bool,
+    /// Worldgen variant the current chunks were generated from.
+    /// Compared against `WorldGen::current()` on `Play offline`
+    /// so the world rebuilds when the user picks a different
+    /// variant in the main-menu combo. `None` until first
+    /// `build_world` runs.
+    last_built_worldgen: Option<WorldGen>,
     /// Floating drop entities the world (host-authoritative).
     /// Each tick the host steps physics, runs pickup, broadcasts
     /// spawn / pickup messages. Clients keep a mirrored Vec
@@ -6455,6 +6461,7 @@ impl Voxel {
             net: NetRole::Offline,
             player_cube: None,
             liquid_mesh_handles: HashMap::new(),
+            last_built_worldgen: None,
             dropped_items: Vec::new(),
             next_drop_id: 1,
             flow_sfx_accum: 0.0,
@@ -6558,6 +6565,39 @@ impl Voxel {
         }
     }
 
+    /// Drop every loaded chunk + the per-chunk mesh handles +
+    /// tracker sets that the regenerated world will repopulate.
+    /// Used by `Play offline` when the menu picks a different
+    /// `WorldGen` variant, so the new world isn't a mix of the
+    /// old + new chunk layouts.
+    fn reset_world(&mut self) {
+        let coords: Vec<ChunkCoord> = self
+            .world
+            .iter_chunks()
+            .map(|(c, _)| *c)
+            .collect();
+        if let Some(renderer) = self.renderer.as_mut() {
+            for entry in self.chunk_meshes.drain(..) {
+                renderer.remove_mesh(entry.2);
+            }
+            for (_, h) in self.liquid_mesh_handles.drain() {
+                renderer.remove_mesh(h);
+            }
+        }
+        for cc in coords {
+            self.world.remove_chunk(cc);
+        }
+        self.pending_chunks.clear();
+        self.pending_set.clear();
+        self.snow_positions.clear();
+        self.torch_positions.clear();
+        self.torch_orient.clear();
+        self.liquid_active.clear();
+        self.liquid_level.clear();
+        self.liquid_positions.clear();
+        self.liquid_mesh_dirty = true;
+    }
+
     /// Synchronously generate the initial chunk grid so the player
     /// drops into a non-empty world. Streaming workers take over once
     /// the player starts moving.
@@ -6604,9 +6644,11 @@ impl Voxel {
             }
         }
         self.rebuild_all_meshes();
+        self.last_built_worldgen = Some(WorldGen::current());
         info!(
             chunks = self.world.iter_chunks().count(),
             submeshes = self.chunk_meshes.len(),
+            worldgen = ?WorldGen::current(),
             "initial world built"
         );
     }
@@ -12872,6 +12914,21 @@ impl Voxel {
             self.state = AppState::Playing;
             self.mouse_dx = 0.0;
             self.mouse_dy = 0.0;
+            // Rebuild the world if the main-menu combo picked a
+            // different `WorldGen` variant since the last build.
+            // Drops every loaded chunk + the chunk mesh handles,
+            // then re-runs `build_world` from scratch. Otherwise
+            // skip (cheap) so a quick menu-trip doesn't reset
+            // the world.
+            let want_wg = WorldGen::current();
+            if self.last_built_worldgen != Some(want_wg) {
+                self.reset_world();
+                self.build_world();
+                let spawn = self.safe_spawn();
+                self.player_pos = spawn;
+                self.player_vel = Vec3::ZERO;
+                self.fall_start_y = None;
+            }
         }
         // Recipe-book auto-fill: try to pull every input stack
         // from `self.inventory` into the 2x2 craft grid. Returns
