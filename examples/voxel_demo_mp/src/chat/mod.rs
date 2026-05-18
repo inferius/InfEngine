@@ -21,6 +21,7 @@
 
 mod cmds_chat;
 mod cmds_player;
+mod cmds_world;
 
 use std::collections::HashSet;
 
@@ -33,8 +34,8 @@ use crate::net::{DamageMsg, EditMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
     Biome, DAY_LENGTH_S, KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE,
     MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState, PLAYER_HEIGHT, PLAYER_MAX_HEALTH,
-    RECIPES, Recipe, VERTICAL_CHUNKS, Voxel, WORLDGEN, WorldGen,
-    ZOMBIE_MAX_HEALTH, biome_at, set_world_seed, world_seed,
+    RECIPES, Recipe, VERTICAL_CHUNKS, Voxel, ZOMBIE_MAX_HEALTH, biome_at,
+    world_seed,
 };
 
 /// Chat log retention: lines fade after this many seconds.
@@ -89,10 +90,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 cmds_chat::cmd_help(voxel, arg, &mut local_lines);
             }
             "day" => {
-                // Snap day_time to mid-morning.
-                voxel.day_time = DAY_LENGTH_S * 0.25;
-                local_lines.push("Time set to morning.".to_string());
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_day(voxel, arg, &mut local_lines);
             }
             "heal" => {
                 handled_locally |=
@@ -103,64 +102,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_player::cmd_kill(voxel, arg, &mut local_lines);
             }
             "seed" => {
-                // /seed prints the active value;
-                // /seed <n> (host-only) re-rolls the
-                // world. Adopting a new seed drops
-                // every generated chunk + broadcasts
-                // vx.seed so connected clients follow
-                // suit on the next net tick.
-                if arg.is_empty() {
-                    local_lines.push(format!(
-                        "World seed: {}",
-                        world_seed()
-                    ));
-                } else if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/seed <n> is host-only.".to_string(),
-                    );
-                } else if let Ok(new_seed) = arg.parse::<u32>() {
-                    set_world_seed(new_seed);
-                    let to_unload: Vec<ChunkCoord> = voxel
-                        .world
-                        .iter_chunks()
-                        .map(|(c, _)| *c)
-                        .collect();
-                    if !to_unload.is_empty() {
-                        let renderer = voxel
-                            .renderer
-                            .as_mut()
-                            .expect("renderer ready");
-                        for entry in voxel.chunk_meshes.drain(..) {
-                            renderer.remove_mesh(entry.2);
-                        }
-                        for cc in &to_unload {
-                            voxel.world.remove_chunk(*cc);
-                        }
-                    }
-                    voxel.pending_chunks.clear();
-                    voxel.pending_set.clear();
-                    if let NetRole::Server { server, .. } =
-                        &mut voxel.net
-                        && let Ok(buf) =
-                            bincode::serde::encode_to_vec(
-                                new_seed,
-                                bincode::config::standard(),
-                            )
-                    {
-                        server.broadcast_bytes("vx.seed", buf);
-                    }
-                    local_lines.push(format!(
-                        "World seed set to {new_seed}; chunks regenerating."
-                    ));
-                } else {
-                    local_lines.push(format!(
-                        "Cannot parse seed: {arg}"
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_seed(voxel, arg, &mut local_lines);
             }
             "stats" => {
                 handled_locally |= cmds_player::cmd_stats(
@@ -440,109 +383,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "tree" => {
-                // Host-only: drop a small oak tree
-                // a few blocks in front of the
-                // player. Routes every voxel through
-                // the edit pipeline so the change
-                // persists + replicates.
-                if !matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline) {
-                    local_lines.push(
-                        "/tree is host-only.".to_string(),
-                    );
-                } else {
-                    let fwd = Vec3::new(
-                        voxel.player_yaw.cos(),
-                        0.0,
-                        -voxel.player_yaw.sin(),
-                    )
-                    .normalize_or_zero();
-                    let cx = (voxel.player_pos.x
-                        + fwd.x * 4.0)
-                        .floor()
-                        as i32;
-                    let cz = (voxel.player_pos.z
-                        + fwd.z * 4.0)
-                        .floor()
-                        as i32;
-                    let ceiling = (CHUNK_SIZE as i32)
-                        * VERTICAL_CHUNKS
-                        - 1;
-                    let sy = voxel
-                        .surface_y_below(cx, cz, ceiling)
-                        .unwrap_or(voxel.player_pos.y.floor() as i32);
-                    let cfg = bincode::config::standard();
-                    let mut place = |x: i32,
-                                     y: i32,
-                                     z: i32,
-                                     bid: u16| {
-                        let v = [x, y, z];
-                        voxel.world_set_tracked(
-                            v,
-                            BlockId(bid),
-                        );
-                        let edit = EditMsg {
-                            x,
-                            y,
-                            z,
-                            block: bid,
-                        };
-                        if let NetRole::Server {
-                            server, ..
-                        } = &mut voxel.net
-                        {
-                            voxel.edit_history.push(edit);
-                            if let Ok(buf) =
-                                bincode::serde::encode_to_vec(
-                                    edit, cfg,
-                                )
-                            {
-                                server.broadcast_bytes(
-                                    "vx.edit",
-                                    buf,
-                                );
-                            }
-                        }
-                    };
-                    // 4-block trunk.
-                    for ty in 1..=4 {
-                        place(cx, sy + ty, cz, 5);
-                    }
-                    // 2 canopy layers + cap + top.
-                    for layer in 0i32..2 {
-                        let wy = sy + 3 + layer;
-                        for dx in -2i32..=2 {
-                            for dz in -2i32..=2 {
-                                if dx.abs() == 2
-                                    && dz.abs() == 2
-                                {
-                                    continue;
-                                }
-                                if dx == 0 && dz == 0 && layer == 0 {
-                                    continue;
-                                }
-                                place(
-                                    cx + dx,
-                                    wy,
-                                    cz + dz,
-                                    6,
-                                );
-                            }
-                        }
-                    }
-                    for dx in -1i32..=1 {
-                        for dz in -1i32..=1 {
-                            place(cx + dx, sy + 5, cz + dz, 6);
-                        }
-                    }
-                    place(cx, sy + 6, cz, 6);
-                    let coords = Voxel::affected_chunks(
-                        [cx, sy + 3, cz],
-                    );
-                    voxel.rebuild_chunks(&coords);
-                    local_lines
-                        .push("Planted a tree.".to_string());
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_tree(voxel, arg, &mut local_lines);
             }
             "horde" => {
                 // Host-only: spawn N zombies around
@@ -759,34 +601,8 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "sleep" => {
-                // Skip the night: if the sun is below
-                // the horizon, fast-forward day_time
-                // to morning. Daytime use is a no-op
-                // (matches the MC bed rule). Host-only
-                // in MP so the night gets skipped for
-                // every connected player via the
-                // existing day_time broadcast.
-                let phase = (voxel.day_time / DAY_LENGTH_S)
-                    .rem_euclid(1.0);
-                let raw_elev =
-                    (phase * std::f32::consts::TAU).sin();
-                let is_night = raw_elev < -0.05;
-                if !is_night {
-                    local_lines.push(
-                        "You can only sleep at night.".to_string(),
-                    );
-                } else if matches!(voxel.net, NetRole::Client { .. }) {
-                    local_lines.push(
-                        "Only the host can advance time.".to_string(),
-                    );
-                } else {
-                    voxel.day_time = DAY_LENGTH_S * 0.20;
-                    voxel.last_day_broadcast = None; // force resend
-                    local_lines.push(
-                        "You slept until morning.".to_string(),
-                    );
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_sleep(voxel, arg, &mut local_lines);
             }
             "sethome" => {
                 handled_locally |= cmds_player::cmd_sethome(
@@ -800,85 +616,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_player::cmd_home(voxel, arg, &mut local_lines);
             }
             "setblock" => {
-                // /setblock x y z block: place a
-                // block at exact world coords. Routes
-                // through the normal edit path so the
-                // change persists in the edit history
-                // + replicates to peers. "air"
-                // clears the cell.
-                let parts: Vec<&str> = arg.split_whitespace().collect();
-                if parts.len() != 4 {
-                    local_lines.push(
-                        "Usage: /setblock <x> <y> <z> <block>"
-                            .to_string(),
-                    );
-                } else {
-                    let x = parts[0].parse::<i32>();
-                    let y = parts[1].parse::<i32>();
-                    let z = parts[2].parse::<i32>();
-                    let block_id: Option<u16> = if parts[3]
-                        .eq_ignore_ascii_case("air")
-                    {
-                        Some(0)
-                    } else {
-                        BLOCK_TYPES
-                            .iter()
-                            .find(|bt| {
-                                bt.name.eq_ignore_ascii_case(
-                                    parts[3],
-                                )
-                            })
-                            .map(|bt| bt.id)
-                    };
-                    match (x, y, z, block_id) {
-                        (Ok(x), Ok(y), Ok(z), Some(bid)) => {
-                            let coord = [x, y, z];
-                            let block = BlockId(bid);
-                            let edit = EditMsg {
-                                x,
-                                y,
-                                z,
-                                block: bid,
-                            };
-                            voxel.world_set_tracked(coord, block);
-                            let coords = Voxel::affected_chunks(coord);
-                            voxel.rebuild_chunks(&coords);
-                            let cfg = bincode::config::standard();
-                            match &mut voxel.net {
-                                NetRole::Offline => {}
-                                NetRole::Server { server, .. } => {
-                                    voxel.edit_history.push(edit);
-                                    if let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            edit, cfg,
-                                        )
-                                    {
-                                        server.broadcast_bytes(
-                                            "vx.edit",
-                                            buf,
-                                        );
-                                    }
-                                }
-                                NetRole::Client {
-                                    pending_edits, ..
-                                } => {
-                                    pending_edits.push(edit);
-                                }
-                            }
-                            local_lines.push(format!(
-                                "Set ({x},{y},{z}) = {}",
-                                parts[3]
-                            ));
-                        }
-                        _ => {
-                            local_lines.push(
-                                "Bad args. Coords must be ints + block must exist."
-                                    .to_string(),
-                            );
-                        }
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |= cmds_world::cmd_setblock(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "blob" => {
                 // Host-only: fill a sphere of voxels
@@ -1021,309 +763,23 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 }
             }
             "fill" => {
-                // Host-only: fill a box defined by
-                // (x1 y1 z1 x2 y2 z2 block) with the
-                // named block. "air" clears. Routes
-                // every cell through the edit
-                // pipeline so the change persists +
-                // replicates. Hard cap at 64^3
-                // voxels per call.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/fill is host-only.".to_string(),
-                    );
-                } else {
-                    let parts: Vec<&str> =
-                        arg.split_whitespace().collect();
-                    if parts.len() != 7 {
-                        local_lines.push(
-                            "Usage: /fill x1 y1 z1 x2 y2 z2 block"
-                                .to_string(),
-                        );
-                    } else if let (
-                        Ok(x1),
-                        Ok(y1),
-                        Ok(z1),
-                        Ok(x2),
-                        Ok(y2),
-                        Ok(z2),
-                    ) = (
-                        parts[0].parse::<i32>(),
-                        parts[1].parse::<i32>(),
-                        parts[2].parse::<i32>(),
-                        parts[3].parse::<i32>(),
-                        parts[4].parse::<i32>(),
-                        parts[5].parse::<i32>(),
-                    ) {
-                        let block_id: Option<u16> = if parts[6]
-                            .eq_ignore_ascii_case("air")
-                        {
-                            Some(0)
-                        } else {
-                            BLOCK_TYPES
-                                .iter()
-                                .find(|bt| {
-                                    bt.name
-                                        .eq_ignore_ascii_case(
-                                            parts[6],
-                                        )
-                                })
-                                .map(|bt| bt.id)
-                        };
-                        let mn = [
-                            x1.min(x2),
-                            y1.min(y2),
-                            z1.min(z2),
-                        ];
-                        let mx = [
-                            x1.max(x2),
-                            y1.max(y2),
-                            z1.max(z2),
-                        ];
-                        let span = [
-                            (mx[0] - mn[0]).unsigned_abs() as u64
-                                + 1,
-                            (mx[1] - mn[1]).unsigned_abs() as u64
-                                + 1,
-                            (mx[2] - mn[2]).unsigned_abs() as u64
-                                + 1,
-                        ];
-                        let total =
-                            span[0] * span[1] * span[2];
-                        let bid_opt = block_id;
-                        if bid_opt.is_none() {
-                            local_lines.push(format!(
-                                "Unknown block: {}",
-                                parts[6]
-                            ));
-                        } else if total > 64 * 64 * 64 {
-                            local_lines.push(
-                                "Too large: cap is 64^3 voxels.".to_string(),
-                            );
-                        } else if let Some(bid) = bid_opt {
-                            let block = BlockId(bid);
-                            let cfg =
-                                bincode::config::standard();
-                            let mut count = 0u64;
-                            for y in mn[1]..=mx[1] {
-                                for z in mn[2]..=mx[2] {
-                                    for x in mn[0]..=mx[0] {
-                                        let v = [x, y, z];
-                                        voxel.world_set_tracked(
-                                            v, block,
-                                        );
-                                        count += 1;
-                                        let edit = EditMsg {
-                                            x,
-                                            y,
-                                            z,
-                                            block: bid,
-                                        };
-                                        if let NetRole::Server {
-                                            server,
-                                            ..
-                                        } = &mut voxel.net
-                                        {
-                                            voxel
-                                                .edit_history
-                                                .push(edit);
-                                            if let Ok(buf) =
-                                                bincode::serde::encode_to_vec(
-                                                    edit, cfg,
-                                                )
-                                            {
-                                                server
-                                                    .broadcast_bytes(
-                                                        "vx.edit",
-                                                        buf,
-                                                    );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Remesh all touched
-                            // chunks at once.
-                            let cs = CHUNK_SIZE as i32;
-                            let min_cc = [
-                                mn[0].div_euclid(cs),
-                                mn[1].div_euclid(cs),
-                                mn[2].div_euclid(cs),
-                            ];
-                            let max_cc = [
-                                mx[0].div_euclid(cs),
-                                mx[1].div_euclid(cs),
-                                mx[2].div_euclid(cs),
-                            ];
-                            let mut coords: Vec<ChunkCoord> =
-                                Vec::new();
-                            for cz in min_cc[2]..=max_cc[2] {
-                                for cy in min_cc[1]..=max_cc[1] {
-                                    for cx in
-                                        min_cc[0]..=max_cc[0]
-                                    {
-                                        coords
-                                            .push([cx, cy, cz]);
-                                    }
-                                }
-                            }
-                            voxel.rebuild_chunks(&coords);
-                            local_lines.push(format!(
-                                "Filled {count} blocks."
-                            ));
-                        }
-                    } else {
-                        local_lines.push(
-                            "Coords must be ints.".to_string(),
-                        );
-                    }
-                    handled_locally = true;
-                }
+                handled_locally |=
+                    cmds_world::cmd_fill(voxel, arg, &mut local_lines);
             }
             "explode" => {
-                // Host-only: blast a sphere of voxels
-                // to air around the player. Default
-                // radius 4. Routes every cleared cell
-                // through the normal edit pipeline so
-                // the change replicates + saves.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/explode is host-only.".to_string(),
-                    );
-                } else {
-                    let radius: i32 = arg
-                        .parse()
-                        .ok()
-                        .unwrap_or(4i32)
-                        .clamp(1, 16);
-                    let center = [
-                        voxel.player_pos.x.floor() as i32,
-                        voxel.player_pos.y.floor() as i32,
-                        voxel.player_pos.z.floor() as i32,
-                    ];
-                    let mut cleared = 0u32;
-                    let r2 = radius * radius;
-                    let cfg = bincode::config::standard();
-                    for dy in -radius..=radius {
-                        for dz in -radius..=radius {
-                            for dx in -radius..=radius {
-                                if dx * dx + dy * dy + dz * dz
-                                    > r2
-                                {
-                                    continue;
-                                }
-                                let v = [
-                                    center[0] + dx,
-                                    center[1] + dy,
-                                    center[2] + dz,
-                                ];
-                                if v[1] < 1 {
-                                    // Skip the bedrock
-                                    // floor so the
-                                    // crater doesn't
-                                    // open into the
-                                    // void.
-                                    continue;
-                                }
-                                if voxel.world.get(v).0 == 0 {
-                                    continue;
-                                }
-                                voxel.world_set_tracked(
-                                    v,
-                                    BlockId::AIR,
-                                );
-                                cleared += 1;
-                                let edit = EditMsg {
-                                    x: v[0],
-                                    y: v[1],
-                                    z: v[2],
-                                    block: 0,
-                                };
-                                if let NetRole::Server {
-                                    server,
-                                    ..
-                                } = &mut voxel.net
-                                {
-                                    voxel.edit_history.push(edit);
-                                    if let Ok(buf) =
-                                        bincode::serde::encode_to_vec(
-                                            edit, cfg,
-                                        )
-                                    {
-                                        server.broadcast_bytes(
-                                            "vx.edit",
-                                            buf,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Remesh every chunk the
-                    // explosion bounding box touches
-                    // (plus its 1-cell halo).
-                    let cs = CHUNK_SIZE as i32;
-                    let min_cc = [
-                        (center[0] - radius - 1).div_euclid(cs),
-                        (center[1] - radius - 1).div_euclid(cs),
-                        (center[2] - radius - 1).div_euclid(cs),
-                    ];
-                    let max_cc = [
-                        (center[0] + radius + 1).div_euclid(cs),
-                        (center[1] + radius + 1).div_euclid(cs),
-                        (center[2] + radius + 1).div_euclid(cs),
-                    ];
-                    let mut coords: Vec<ChunkCoord> = Vec::new();
-                    for cz in min_cc[2]..=max_cc[2] {
-                        for cy in min_cc[1]..=max_cc[1] {
-                            for cx in min_cc[0]..=max_cc[0] {
-                                coords.push([cx, cy, cz]);
-                            }
-                        }
-                    }
-                    voxel.rebuild_chunks(&coords);
-                    local_lines.push(format!(
-                        "Exploded {cleared} blocks (r={radius})."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_world::cmd_explode(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "fov" => {
                 handled_locally |=
                     cmds_player::cmd_fov(voxel, arg, &mut local_lines);
             }
             "rd" | "renderdistance" => {
-                // Without args: report current view
-                // distance. With one arg (2..=12):
-                // set it. Routes through the same
-                // settings field the Settings panel
-                // slider drives, so the change takes
-                // effect on the next stream pass.
-                if arg.is_empty() {
-                    local_lines.push(format!(
-                        "Render distance: {}",
-                        voxel.settings.view_distance
-                    ));
-                } else if let Ok(v) = arg.parse::<u8>() {
-                    voxel.settings.view_distance =
-                        v.clamp(2, 12);
-                    voxel.save_config();
-                    local_lines.push(format!(
-                        "Render distance set to {}.",
-                        voxel.settings.view_distance
-                    ));
-                } else {
-                    local_lines.push(format!(
-                        "Cannot parse distance: {arg}"
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_rd(voxel, arg, &mut local_lines);
             }
             "mobcap" => {
                 // /mobcap reports the cap; /mobcap N
@@ -1351,47 +807,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "weather" => {
-                // /weather clear | rain. Sets the
-                // local state immediately. If we're
-                // hosting, also broadcast a vx.weather
-                // packet so connected clients flip
-                // their visuals to match.
-                let kind = match arg.to_lowercase().as_str() {
-                    "rain" => Some(1u8),
-                    "snow" => Some(2u8),
-                    "clear" | "" => Some(0u8),
-                    _ => None,
-                };
-                match kind {
-                    Some(k) => {
-                        voxel.weather = k;
-                        if let NetRole::Server { server, .. } =
-                            &mut voxel.net
-                            && let Ok(buf) =
-                                bincode::serde::encode_to_vec(
-                                    k,
-                                    bincode::config::standard(),
-                                )
-                        {
-                            server.broadcast_bytes("vx.weather", buf);
-                        }
-                        local_lines.push(format!(
-                            "Weather: {}",
-                            match k {
-                                1 => "rain",
-                                2 => "snow",
-                                _ => "clear",
-                            }
-                        ));
-                    }
-                    None => {
-                        local_lines.push(
-                            "Usage: /weather clear|rain"
-                                .to_string(),
-                        );
-                    }
-                }
-                handled_locally = true;
+                handled_locally |= cmds_world::cmd_weather(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "lock" => {
                 // Host-only world lock. Blocks any
@@ -1452,37 +872,12 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                     cmds_player::cmd_fly(voxel, arg, &mut local_lines);
             }
             "night" => {
-                // Snap day_time to midnight.
-                voxel.day_time = DAY_LENGTH_S * 0.75;
-                local_lines.push("Time set to night.".to_string());
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_night(voxel, arg, &mut local_lines);
             }
             "time" => {
-                // /time <hh>: jump to a specific
-                // 24-hour mark. Accepts 0..24, wraps
-                // anything else.
-                if arg.is_empty() {
-                    let frac = (voxel.day_time / DAY_LENGTH_S)
-                        .rem_euclid(1.0);
-                    let hours = frac * 24.0;
-                    let hh = hours.floor() as i32;
-                    let mm = ((hours - hh as f32) * 60.0) as i32;
-                    local_lines.push(format!(
-                        "Current time: {hh:02}:{mm:02}"
-                    ));
-                } else if let Ok(hour) = arg.parse::<f32>() {
-                    let h = hour.rem_euclid(24.0);
-                    voxel.day_time = DAY_LENGTH_S * (h / 24.0);
-                    local_lines.push(format!(
-                        "Time set to {:.1}h.",
-                        h
-                    ));
-                } else {
-                    local_lines.push(format!(
-                        "Cannot parse hour: {arg}"
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |=
+                    cmds_world::cmd_time(voxel, arg, &mut local_lines);
             }
             "giveall" => {
                 // Drops one of every block type into
@@ -2334,100 +1729,18 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "worldgen" | "gen" => {
-                // /worldgen with no arg prints the
-                // current mode; with classic / flat /
-                // islands / amplified it switches +
-                // regenerates every cached chunk.
-                // Host-only since the workers share
-                // the WORLDGEN atomic.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/worldgen is host-only.".to_string(),
-                    );
-                } else if arg.is_empty() {
-                    local_lines.push(format!(
-                        "Worldgen: {:?}",
-                        WorldGen::current()
-                    ));
-                } else if let Some(g) = WorldGen::from_str(arg) {
-                    WORLDGEN.store(
-                        g as u8,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    let to_unload: Vec<ChunkCoord> = voxel
-                        .world
-                        .iter_chunks()
-                        .map(|(c, _)| *c)
-                        .collect();
-                    if !to_unload.is_empty() {
-                        let renderer = voxel
-                            .renderer
-                            .as_mut()
-                            .expect("renderer ready");
-                        for entry in voxel.chunk_meshes.drain(..)
-                        {
-                            renderer.remove_mesh(entry.2);
-                        }
-                        for cc in &to_unload {
-                            voxel.world.remove_chunk(*cc);
-                        }
-                    }
-                    voxel.pending_chunks.clear();
-                    voxel.pending_set.clear();
-                    local_lines.push(format!(
-                        "Worldgen set to {g:?}; chunks regenerating."
-                    ));
-                } else {
-                    local_lines.push(
-                        "Usage: /worldgen classic|flat|islands|amplified"
-                            .to_string(),
-                    );
-                }
-                handled_locally = true;
+                handled_locally |= cmds_world::cmd_worldgen(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "clearedits" | "wipe" => {
-                // Host-only: drop the entire edit
-                // history + every cached chunk. Next
-                // streaming pass regenerates from
-                // scratch under the current seed.
-                if !matches!(
-                    voxel.net,
-                    NetRole::Server { .. } | NetRole::Offline
-                ) {
-                    local_lines.push(
-                        "/clearedits is host-only.".to_string(),
-                    );
-                } else {
-                    let n_edits = voxel.edit_history.len();
-                    voxel.edit_history.clear();
-                    voxel.torch_positions.clear();
-                    let to_unload: Vec<ChunkCoord> = voxel
-                        .world
-                        .iter_chunks()
-                        .map(|(c, _)| *c)
-                        .collect();
-                    if !to_unload.is_empty() {
-                        let renderer = voxel
-                            .renderer
-                            .as_mut()
-                            .expect("renderer ready");
-                        for entry in voxel.chunk_meshes.drain(..) {
-                            renderer.remove_mesh(entry.2);
-                        }
-                        for cc in &to_unload {
-                            voxel.world.remove_chunk(*cc);
-                        }
-                    }
-                    voxel.pending_chunks.clear();
-                    voxel.pending_set.clear();
-                    local_lines.push(format!(
-                        "Wiped {n_edits} edits + regenerating chunks."
-                    ));
-                }
-                handled_locally = true;
+                handled_locally |= cmds_world::cmd_clearedits(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "grid" => {
                 voxel.show_chunk_grid = !voxel.show_chunk_grid;
@@ -2460,20 +1773,11 @@ pub(crate) fn dispatch(voxel: &mut Voxel, text: &str) -> bool {
                 handled_locally = true;
             }
             "chunkinfo" => {
-                // Diagnostic: chunk count + size +
-                // pending queue + edit history length.
-                let cs = CHUNK_SIZE as i32;
-                let voxels_per_chunk =
-                    (cs as u64).pow(3);
-                let total = voxel.chunk_meshes.len() as u64
-                    * voxels_per_chunk;
-                local_lines.push(format!(
-                    "Chunks: {}  pending: {}  edits: {}  voxels: {total}",
-                    voxel.chunk_meshes.len(),
-                    voxel.pending_chunks.len(),
-                    voxel.edit_history.len(),
-                ));
-                handled_locally = true;
+                handled_locally |= cmds_world::cmd_chunkinfo(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
             }
             "jump" => {
                 handled_locally |=
