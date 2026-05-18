@@ -57,9 +57,9 @@ mod net;
 use net::{
     ClientInv, DamageMsg, DropSpawnMsg, EditMsg, InvActionMsg,
     InvSnapshotMsg, MobEventMsg, MobHitMsg, MobMsg, NetRole, NetSlot,
-    PersistedInv, PlayerMsg, PlayerRemoveMsg, PvPHitMsg,
-    SERVER_STATE_VERSION, ServerStateV2, TeleportMsg,
+    PlayerMsg, PlayerRemoveMsg, PvPHitMsg, TeleportMsg,
 };
+mod world_save;
 use tracing::{error, info, warn};
 
 /// Two-sample interpolation buffer for one remote player's pose.
@@ -564,7 +564,7 @@ const STACK_MAX: u8 = 64;
 /// Length of one full day/night cycle in seconds. Short enough to
 /// see the sun move during a single play session - feel free to
 /// crank up for atmosphere later. 240s = 4 min full cycle.
-const DAY_LENGTH_S: f32 = 600.0;
+pub(crate) const DAY_LENGTH_S: f32 = 600.0;
 
 /// Shapeless 2x2 crafting recipe. Each entry is `(BlockId, count)`
 /// the player must place into the 2x2 grid (order doesn't matter).
@@ -1136,6 +1136,13 @@ struct Voxel {
     /// a client connects so reconnects pick up the same stacks.
     /// Empty in offline / client modes.
     saved_inventories: HashMap<String, ClientInv>,
+    /// Slug of the world this session is bound to. Defaulted to
+    /// `Some("legacy".to_string())` until Phase G ships the Worlds
+    /// menu; then `world_save::save` / `world_save::load` will
+    /// honour this to swap between save slots. Until then it's
+    /// only written, never read.
+    #[allow(dead_code)]
+    current_world_slug: Option<String>,
     /// Monotonic tick counter incremented at the start of each
     /// `tick_net` call. Used to throttle pending-edit / pending-
     /// inventory-action resends so we don't spam UDP every frame.
@@ -3186,115 +3193,12 @@ impl Voxel {
     }
 
 
-    /// Path of the server-side world delta file. Lives next to the
-    /// launch directory so a host can be torn down + brought back up
-    /// without losing the players' edits.
-    const STATE_FILE: &'static str = "voxel_server_state.bin";
-
-    /// Magic bytes at the head of every save: `"INFV"` (InfEngine
-    /// Voxel). Distinguishes the new versioned format from the old
-    /// raw `Vec<EditMsg>` format - if the first 4 bytes aren't the
-    /// magic, the loader treats the whole file as a v1 edit log.
-    const STATE_MAGIC: &'static [u8; 4] = b"INFV";
-
-    /// Read the on-disk edit log and apply every entry to the local
-    /// world. Called once on the server right after the world's
-    /// procedural base is generated. Tries the versioned format
-    /// first, falls back to the legacy raw edit log on a magic
-    /// mismatch so existing save files keep working.
+    /// Thin wrapper around `world_save::load`. The orchestration
+    /// + format details live in the submodule (Phase A4 split).
     fn load_server_state(&mut self) {
-        let path = std::path::PathBuf::from(Self::STATE_FILE);
-        let Ok(bytes) = std::fs::read(&path) else {
-            return;
-        };
-        let cfg = bincode::config::standard();
-        // Path A: new versioned format with `INFV` magic.
-        if bytes.len() >= 4 && &bytes[..4] == Self::STATE_MAGIC {
-            match bincode::serde::decode_from_slice::<ServerStateV2, _>(&bytes[4..], cfg) {
-                Ok((state, _)) => {
-                    info!(
-                        version = state.version,
-                        edits = state.edits.len(),
-                        clients = state.inventories.len(),
-                        day_time = state.day_time,
-                        path = %path.display(),
-                        "loaded server state (v2)"
-                    );
-                    for e in &state.edits {
-                        self.world_set_tracked([e.x, e.y, e.z], BlockId(e.block));
-                    }
-                    self.edit_history = state.edits;
-                    self.day_time = state.day_time.rem_euclid(DAY_LENGTH_S);
-                    self.player_health =
-                        state.player_health.clamp(0.0, PLAYER_MAX_HEALTH);
-                    self.kill_count = state.kill_count;
-                    // Restore the world seed before the chunk
-                    // stream starts re-meshing so the workers
-                    // pick up the right noise. Older saves with
-                    // seed=0 stay at zero; on_start will fill in
-                    // a random value the first time the loader
-                    // doesn't catch.
-                    if state.world_seed != 0 {
-                        set_world_seed(state.world_seed);
-                    }
-                    // Hydrate snow stack + torch orientation
-                    // overrides so a reloaded save matches the
-                    // exact state the host left.
-                    for (v, l) in state.snow_layers {
-                        self.snow_positions.insert(v, l.clamp(1, 8));
-                    }
-                    for (v, o) in state.torch_orient {
-                        self.torch_orient.insert(v, o);
-                    }
-                    // Replay the persisted water spread depths so
-                    // re-spread doesn't restart on every load. New
-                    // saves carry full depth info; older v2 saves
-                    // without the field land at depth 0 (treated
-                    // as source) which is fine for small pools.
-                    for (v, d) in state.liquid_level {
-                        // Clamp at MC's 7-level range so a save
-                        // from an old build with a smaller cap
-                        // still loads cleanly into the new
-                        // generic pipeline.
-                        self.liquid_level.insert(v, d.min(7));
-                    }
-                    // Restore inventories into a side map indexed by
-                    // client name. They get re-keyed to live client
-                    // ids on connect (see `tick_net`).
-                    self.saved_inventories = state
-                        .inventories
-                        .into_iter()
-                        .map(|(name, p)| (name, p.into_client_inv()))
-                        .collect();
-                    self.rebuild_all_meshes();
-                    return;
-                }
-                Err(err) => {
-                    warn!(error = %err, path = %path.display(), "state load v2 decode failed");
-                    return;
-                }
-            }
-        }
-        // Path B: legacy `Vec<EditMsg>` format.
-        let edits: Vec<EditMsg> = match bincode::serde::decode_from_slice(&bytes, cfg) {
-            Ok((e, _)) => e,
-            Err(err) => {
-                warn!(error = %err, path = %path.display(), "state load (legacy) decode failed");
-                return;
-            }
-        };
-        info!(count = edits.len(), path = %path.display(), "loaded server state (legacy v1)");
-        for e in &edits {
-            self.world_set_tracked([e.x, e.y, e.z], BlockId(e.block));
-        }
-        self.edit_history = edits;
-        self.rebuild_all_meshes();
+        world_save::load(self);
     }
 
-    /// Flush the in-memory edit log + per-client inventories +
-    /// day-of-cycle to disk in the new versioned `INFV` format.
-    /// Called periodically while the server runs (every 30 s) so a
-    /// crash loses at most half a minute of state.
     /// Raycast against every remote player's AABB. Returns the
     /// nearest hit `(id, distance)` within `max_dist`, or `None`.
     /// Skips our own id so we never target ourselves. Uses the
@@ -3724,73 +3628,10 @@ impl Voxel {
         ));
     }
 
+    /// Thin wrapper around `world_save::save`. The orchestration
+    /// + format details live in the submodule (Phase A4 split).
     fn save_server_state(&mut self) {
-        // Server hosts AND offline singleplayer can save.
-        // Clients can't - the host owns the authoritative state.
-        if !matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
-            return;
-        }
-        let path = std::path::PathBuf::from(Self::STATE_FILE);
-        let cfg = bincode::config::standard();
-        // Build a name -> PersistedInv map by joining live client
-        // ids with their reported names (from NetServer) + the
-        // saved_inventories side table (for clients that already
-        // disconnected this run but still have state we want to
-        // preserve across restarts).
-        let mut by_name: HashMap<String, PersistedInv> = self
-            .saved_inventories
-            .iter()
-            .map(|(n, inv)| (n.clone(), PersistedInv::from_client_inv(inv)))
-            .collect();
-        if let NetRole::Server {
-            server,
-            inventories,
-            ..
-        } = &self.net
-        {
-            for (cid, inv) in inventories.iter() {
-                if let Some(name) = server.client_name(*cid) {
-                    by_name.insert(name, PersistedInv::from_client_inv(inv));
-                }
-            }
-        }
-        let state = ServerStateV2 {
-            version: SERVER_STATE_VERSION,
-            edits: self.edit_history.clone(),
-            inventories: by_name.into_iter().collect(),
-            day_time: self.day_time,
-            player_health: self.player_health,
-            kill_count: self.kill_count,
-            world_seed: world_seed(),
-            snow_layers: self
-                .snow_positions
-                .iter()
-                .map(|(v, l)| (*v, *l))
-                .collect(),
-            torch_orient: self
-                .torch_orient
-                .iter()
-                .map(|(v, o)| (*v, *o))
-                .collect(),
-            liquid_level: self
-                .liquid_level
-                .iter()
-                .map(|(v, d)| (*v, *d))
-                .collect(),
-        };
-        match bincode::serde::encode_to_vec(&state, cfg) {
-            Ok(payload) => {
-                let mut bytes = Vec::with_capacity(payload.len() + 4);
-                bytes.extend_from_slice(Self::STATE_MAGIC);
-                bytes.extend_from_slice(&payload);
-                if let Err(err) = std::fs::write(&path, &bytes) {
-                    warn!(error = %err, path = %path.display(), "state save failed");
-                }
-            }
-            Err(err) => warn!(error = %err, "state save encode failed"),
-        }
-        self.last_state_save = Some(std::time::Instant::now());
-        self.note_save();
+        world_save::save(self);
     }
 
     /// Push a small burst of debris particles into the system at the
@@ -5815,6 +5656,7 @@ impl Voxel {
             known_client_ids: HashSet::new(),
             last_state_save: None,
             saved_inventories: HashMap::new(),
+            current_world_slug: Some("legacy".to_string()),
             net_tick: 0,
             audio: None,
             audio_bank: infengine_audio::AudioBank::new(),
@@ -15006,11 +14848,11 @@ enum Biome {
 static WORLD_SEED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
-fn world_seed() -> u32 {
+pub(crate) fn world_seed() -> u32 {
     WORLD_SEED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_world_seed(value: u32) {
+pub(crate) fn set_world_seed(value: u32) {
     WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
