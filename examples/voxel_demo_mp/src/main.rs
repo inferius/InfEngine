@@ -7287,22 +7287,30 @@ impl Voxel {
                     DamageKind::Burn,
                 );
             }
-            // Breath: drain in liquids flagged `drains_air`; hold
-            // steady in others (lava). When the meter empties the
-            // player starts taking drowning damage.
-            if liquid.drains_air {
-                self.player_air = (self.player_air - dt).max(0.0);
-                if self.player_air <= 0.0 {
-                    self.apply_player_damage_kind(
-                        DROWN_DAMAGE_PER_SEC * dt,
-                        DamageKind::Drown,
-                    );
-                }
+        }
+        // Breath: only the eye-submerged check drains air -
+        // mirrors MC's `getEyeInFluid() == WATER`. Wading
+        // ankle- or waist-deep doesn't suffocate the player;
+        // only fully-under does. Refill 4x as fast on the
+        // surface so a quick breath buys plenty of dive time.
+        // Independent of `liquid_under` so the surfacing
+        // transition fires even when feet are still wet.
+        let eye_liquid = if self.fly_mode {
+            None
+        } else {
+            submerged_liquid_eye(&self.world, self.player_pos)
+        };
+        if let Some(eye_liq) = eye_liquid
+            && eye_liq.drains_air
+        {
+            self.player_air = (self.player_air - dt).max(0.0);
+            if self.player_air <= 0.0 {
+                self.apply_player_damage_kind(
+                    DROWN_DAMAGE_PER_SEC * dt,
+                    DamageKind::Drown,
+                );
             }
         } else {
-            // Surfaced: air refills 4x faster than it drains so
-            // a quick breath at the surface buys plenty of dive
-            // time.
             self.player_air =
                 (self.player_air + dt * 4.0).min(AIR_MAX_SEC);
         }
