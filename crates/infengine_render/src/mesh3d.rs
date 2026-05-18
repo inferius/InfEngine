@@ -587,7 +587,16 @@ impl Mesh3DPass {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
+                    // Backface culling on the transparent pass
+                    // too. Without it, a camera sitting inside a
+                    // water cell saw the outward-pointing faces
+                    // of every surrounding water voxel from the
+                    // wrong side - the screen lit up with a grid
+                    // of tiny tile-rectangles. Culling keeps the
+                    // surface readable from outside but
+                    // disappears the noise once the player is
+                    // submerged (MC behaves the same way).
+                    cull_mode: Some(wgpu::Face::Back),
                     polygon_mode: wgpu::PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
