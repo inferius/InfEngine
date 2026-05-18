@@ -1,19 +1,22 @@
 //! Cross-platform on-disk layout for multi-world saves.
 //!
-//! Resolves the per-user `worlds/` directory and builds the
-//! `meta.json` + `state.bin` paths for each save slot. The layout
-//! is plumbed in this phase but the runtime still drives the
-//! legacy single-file save (see `super::save` / `super::load`);
-//! Phase G ("Worlds" menu) is what actually creates / lists slots
-//! through these helpers.
+//! Resolves the per-user `worlds/` directory and builds the paths
+//! for each save slot. The layout is plumbed in this phase but the
+//! runtime still drives the legacy single-file save
+//! (see `super::save` / `super::load`); Phase G ("Worlds" menu) is
+//! what actually creates / lists slots through these helpers.
 //!
 //! Target shape (Windows):
 //!
 //! ```text
 //! %APPDATA%/InfEngine/voxel_demo_mp/worlds/<slug>/
 //!   meta.json
-//!   world/
-//!     state.bin
+//!   world.json
+//!   chunks/<dim>/cx_cy_cz.chunk.bin
+//!   entities/<dim>.bin
+//!   players/<name>.bin
+//!   timers/scheduled.bin
+//!   history/edits.log
 //! ```
 //!
 //! On Linux: `~/.local/share/infengine/voxel_demo_mp/worlds/<slug>/`.
@@ -25,16 +28,17 @@
 //!
 //! Most of this module is dead code right now: only
 //! `state_path("legacy")` is reached, by the legacy-save migration
-//! in `super::load`. The rest (`slug`, `meta_path`, `WorldMeta`,
-//! ...) is what Phase G's Worlds menu will reach for. Silenced
+//! in `super::load`. The rest is what Phase B (`meta.rs`,
+//! `world_json.rs`) and Phase G (Worlds menu) reach for. Silenced
 //! with `#[allow(dead_code)]` rather than `#[cfg(test)]`-fenced so
 //! the next phase can wire it up without juggling cfg gates.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
+
+use super::meta::{WorldMeta, read_meta_in_dir};
 
 /// Project-dir qualifier triple passed to `ProjectDirs::from`.
 ///
@@ -45,11 +49,6 @@ use serde::{Deserialize, Serialize};
 const PROJECT_QUALIFIER: &str = "";
 const PROJECT_ORG: &str = "InfEngine";
 const PROJECT_APP: &str = "voxel_demo_mp";
-
-/// Schema version baked into every fresh `meta.json`. Bumped when
-/// the struct fields change; Phase G's load path refuses (or
-/// migrates) older slots.
-pub(crate) const META_FORMAT_VERSION: u32 = 1;
 
 /// Root of the per-user worlds tree, e.g.
 /// `%APPDATA%/InfEngine/voxel_demo_mp/worlds/`. Falls back to
@@ -99,11 +98,18 @@ pub(crate) fn world_dir(slug: &str) -> PathBuf {
     worlds_dir().join(slug)
 }
 
+/// Same as `world_dir` but rooted at an explicit base path - used
+/// by the integration tests to redirect save I/O at a `tempfile`
+/// directory.
+pub(crate) fn world_dir_in(base: &Path, slug: &str) -> PathBuf {
+    base.join(slug)
+}
+
 /// On-disk world payload path: `<world_dir>/world/state.bin`.
 ///
-/// Mirrors the eventual Phase B / G layout where chunks land
-/// under a `world/` sub-dir alongside `mobs.bin`, `timers.bin`,
-/// `history/edits.log`, etc.
+/// Legacy layout from the pre-multi-world era. Kept reachable for
+/// the one-shot migration in `super::load`; the new layout writes
+/// chunks under `<world_dir>/chunks/<dim>/...` instead.
 pub(crate) fn state_path(slug: &str) -> PathBuf {
     world_dir(slug).join("world").join("state.bin")
 }
@@ -113,35 +119,105 @@ pub(crate) fn meta_path(slug: &str) -> PathBuf {
     world_dir(slug).join("meta.json")
 }
 
-/// Hand-readable save header serialised next to `world/state.bin`.
-///
-/// Lives as JSON so the user can inspect a slot without us writing
-/// a viewer. Future fields (worldgen variant struct, mods list, ...)
-/// add to this with `#[serde(default)]` to keep older slots loadable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WorldMeta {
-    /// User-typed display name. Free-form UTF-8.
+/// Same as `meta_path` but rooted at an explicit base path.
+pub(crate) fn meta_path_in(base: &Path, slug: &str) -> PathBuf {
+    world_dir_in(base, slug).join("meta.json")
+}
+
+/// World configuration path: `<world_dir>/world.json`.
+pub(crate) fn world_json_path(slug: &str) -> PathBuf {
+    world_dir(slug).join("world.json")
+}
+
+/// Same as `world_json_path` but rooted at an explicit base path.
+pub(crate) fn world_json_path_in(base: &Path, slug: &str) -> PathBuf {
+    world_dir_in(base, slug).join("world.json")
+}
+
+/// One row in the Worlds menu list - flattened projection of
+/// `WorldMeta` + `WorldJson` so the UI doesn't have to open both
+/// files itself.
+#[derive(Debug, Clone)]
+pub(crate) struct WorldSummary {
+    /// Display name from `meta.json`.
     pub(crate) name: String,
-    /// Filesystem-safe identifier derived via `slug()`.
+    /// Filesystem slug (directory name).
     pub(crate) slug: String,
-    /// Worldgen variant tag (e.g. "classic", "flat", "amplified").
-    /// Read by the chunk-source pick on load.
+    /// Worldgen variant from `world.json` (empty string if missing
+    /// so a half-created slot still shows up in the list).
     pub(crate) worldgen: String,
-    /// Noise seed for the worldgen. 0 = the loader picks a fresh
-    /// random value on first load.
+    /// Worldgen seed from `world.json` (0 if missing).
     pub(crate) seed: u32,
-    /// RFC-3339 timestamp of the world creation (UTC). Stored as a
-    /// string so a human can read it without parsing serde-output
-    /// integer epoch seconds.
-    pub(crate) created_at: String,
-    /// RFC-3339 timestamp of the last `world_save::save` call.
-    /// Drives the "sort by last played" order in the Worlds menu.
-    pub(crate) last_played: String,
-    /// Aggregate wall-clock seconds the slot has been actively
-    /// played. Incremented by the autosave loop.
+    /// Last-played timestamp (UTC). Drives the sort order.
+    pub(crate) last_played: chrono::DateTime<chrono::Utc>,
+    /// Aggregate wall-clock play time across all sessions.
     pub(crate) play_time_seconds: u64,
-    /// `META_FORMAT_VERSION` at the time this slot was written.
-    pub(crate) format_version: u32,
+}
+
+impl WorldSummary {
+    /// Build from a parsed `WorldMeta`. `worldgen` / `seed` come
+    /// from `world.json` if present; otherwise default to
+    /// `("", 0)` so the slot still lists.
+    fn from_meta(meta: WorldMeta, worldgen: String, seed: u32) -> Self {
+        Self {
+            name: meta.name,
+            slug: meta.slug,
+            worldgen,
+            seed,
+            last_played: meta.last_played,
+            play_time_seconds: meta.play_time_seconds,
+        }
+    }
+}
+
+/// Scan `worlds_dir()` and return one entry per directory that
+/// contains a parseable `meta.json`. Sorted by `last_played`
+/// descending (newest first), matching the Worlds menu order.
+///
+/// Silent on per-slot errors - a corrupt `meta.json` in slot A
+/// must not hide slots B + C. Errors land in the log instead.
+pub(crate) fn list_worlds() -> Vec<WorldSummary> {
+    list_worlds_in(&worlds_dir())
+}
+
+/// Like `list_worlds` but rooted at an explicit base path.
+pub(crate) fn list_worlds_in(base: &Path) -> Vec<WorldSummary> {
+    let read = match std::fs::read_dir(base) {
+        Ok(r) => r,
+        // Missing root = no worlds yet. Not an error.
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<WorldSummary> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(slug) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let meta = match read_meta_in_dir(base, slug) {
+            Ok(m) => m,
+            Err(err) => {
+                tracing::warn!(
+                    slug = slug,
+                    error = %err,
+                    "list_worlds: skipping unreadable slot"
+                );
+                continue;
+            }
+        };
+        // world.json is best-effort - a slot mid-creation may not
+        // have it yet, but we still want to surface the entry.
+        let (worldgen, seed) =
+            match super::world_json::read_world_in_dir(base, slug) {
+                Ok(w) => (w.worldgen, w.seed),
+                Err(_) => (String::new(), 0),
+            };
+        out.push(WorldSummary::from_meta(meta, worldgen, seed));
+    }
+    out.sort_by_key(|s| std::cmp::Reverse(s.last_played));
+    out
 }
 
 #[cfg(test)]
@@ -176,7 +252,9 @@ mod tests {
         let s = slug("First World");
         let sp = state_path(&s);
         let mp = meta_path(&s);
+        let wp = world_json_path(&s);
         assert!(sp.ends_with(std::path::Path::new("first-world/world/state.bin")));
         assert!(mp.ends_with(std::path::Path::new("first-world/meta.json")));
+        assert!(wp.ends_with(std::path::Path::new("first-world/world.json")));
     }
 }

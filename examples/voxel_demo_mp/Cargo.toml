@@ -31,4 +31,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true, features = ["serde"] }
 directories = { workspace = true }
+chrono = { workspace = true }
 image = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

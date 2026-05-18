@@ -33,6 +33,11 @@ use crate::net::{
 use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel, set_world_seed, world_seed};
 
 pub(crate) mod layout;
+pub(crate) mod meta;
+pub(crate) mod world_json;
+
+#[cfg(test)]
+mod tests;
 
 /// Path of the legacy server-side world delta file. Lives next to
 /// the launch directory so a host can be torn down + brought back
