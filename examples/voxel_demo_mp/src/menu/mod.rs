@@ -176,6 +176,11 @@ pub(crate) enum MenuAction {
     /// Apply options-screen changes back to `Voxel::settings` +
     /// persist via the existing `save_config`.
     ApplyOptions { snapshot: OptionsSnapshot },
+    /// W9.7: re-run resource-pack discovery using the path in
+    /// `OptionsSnapshot::mc_assets_path` (or the discovered
+    /// default when that field is empty). Rebuilds the atlas +
+    /// re-uploads it to the GPU.
+    ReloadResourcePack { path: String },
 }
 
 /// Editable mirror of the runtime settings that the Options
@@ -196,6 +201,17 @@ pub(crate) struct OptionsSnapshot {
     pub(crate) invert_wheel: bool,
     pub(crate) lock_cursor: bool,
     pub(crate) hide_cursor: bool,
+    /// W9.7: optional override for the MC resource pack location.
+    /// Empty string = use the discovered default. Set via the
+    /// Options screen's "Resource Pack" section + persisted to
+    /// the config so the setting survives a restart.
+    pub(crate) mc_assets_path: String,
+    /// W9.7: read-only display of the path the loader actually
+    /// resolved to + a flag for whether it loaded real MC textures
+    /// vs the synthetic placeholder. The Options screen surfaces
+    /// these via labels; the user can't edit them directly.
+    pub(crate) mc_assets_resolved: String,
+    pub(crate) mc_assets_is_fallback: bool,
 }
 
 impl OptionsSnapshot {

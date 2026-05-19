@@ -54,6 +54,40 @@ pub(crate) fn draw(
     ui.checkbox(&mut ctx.options.lock_cursor, "Zamknout kurzor");
     ui.checkbox(&mut ctx.options.hide_cursor, "Skryt kurzor");
 
+    // W9.7: resource pack section. Shows the discovered path +
+    // a Reload button. The "Cesta" field is a free-form text
+    // input; an empty value falls back to the auto-discovered
+    // default. The "Aktivni" line is read-only.
+    ui.separator();
+    ui.label("Resource pack (Minecraft 26.1.x)");
+    ui.horizontal(|ui| {
+        ui.label("Cesta:");
+        ui.add_sized(
+            Vec2::new(360.0, 20.0),
+            egui::TextEdit::singleline(&mut ctx.options.mc_assets_path)
+                .hint_text("auto (z %APPDATA%/.minecraft)"),
+        );
+    });
+    let status_label = if ctx.options.mc_assets_is_fallback {
+        format!("Aktivni: (placeholder) {}", ctx.options.mc_assets_resolved)
+    } else {
+        format!("Aktivni: {}", ctx.options.mc_assets_resolved)
+    };
+    ui.label(status_label);
+    ui.horizontal(|ui| {
+        if shared::small_button(ui, "Znovu nacist") {
+            actions.push(MenuAction::ReloadResourcePack {
+                path: ctx.options.mc_assets_path.clone(),
+            });
+        }
+        if shared::small_button(ui, "Vychozi") {
+            ctx.options.mc_assets_path.clear();
+            actions.push(MenuAction::ReloadResourcePack {
+                path: String::new(),
+            });
+        }
+    });
+
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if shared::big_button(ui, "Pouzit", true) {

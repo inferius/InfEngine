@@ -524,6 +524,12 @@ struct Settings {
     invert_mouse_y: bool,
     /// Reverse mouse-wheel hotbar scrolling direction.
     invert_wheel: bool,
+    /// W9.7: optional override for the MC resource pack location.
+    /// `None` = use the auto-discovered default (env var ->
+    /// %APPDATA%/.minecraft -> placeholder). When set + the path
+    /// resolves to a usable `assets/minecraft/` tree, the engine
+    /// loads textures + sounds from there instead.
+    mc_assets_path: Option<String>,
 }
 
 impl Default for Settings {
@@ -537,6 +543,7 @@ impl Default for Settings {
             head_bob: true,
             invert_mouse_y: false,
             invert_wheel: false,
+            mc_assets_path: None,
         }
     }
 }
@@ -2653,6 +2660,11 @@ impl Voxel {
         // ServerStateV2's own seed field. W5.1: written from
         // voxel.base_seed; per-dim split happens at gen time.
         let _ = writeln!(text, "world_seed={}", self.base_seed);
+        // W9.7: resource pack override path. Skip the key entirely
+        // when None so the auto-discovery path stays the default.
+        if let Some(p) = self.settings.mc_assets_path.as_deref() {
+            let _ = writeln!(text, "mc_assets_path={p}");
+        }
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2720,6 +2732,12 @@ impl Voxel {
                 "invert_wheel" => {
                     self.settings.invert_wheel =
                         matches!(value, "true" | "1" | "yes");
+                }
+                "mc_assets_path" if !value.is_empty() => {
+                    // W9.7: persisted resource-pack override. Skip
+                    // when empty so a manually-cleared config falls
+                    // back to auto-discovery.
+                    self.settings.mc_assets_path = Some(value.to_string());
                 }
                 "home" => {
                     let parts: Vec<&str> = value.split(',').collect();
@@ -5077,6 +5095,11 @@ impl Voxel {
                 invert_wheel: false,
                 lock_cursor: true,
                 hide_cursor: true,
+                // W9.7: filled by `sync_menu_options` from the live
+                // resource pack before each render.
+                mc_assets_path: String::new(),
+                mc_assets_resolved: String::new(),
+                mc_assets_is_fallback: true,
             }),
             plugins: Some(plugin::PluginRegistry::new()),
             plugin_blocks: Vec::new(),
@@ -9543,10 +9566,56 @@ impl Voxel {
                 self.settings.invert_wheel = snapshot.invert_wheel;
                 self.settings.lock_cursor = snapshot.lock_cursor;
                 self.settings.hide_cursor = snapshot.hide_cursor;
+                // W9.7: persist the resource-pack override path so a
+                // restart picks up the same MC install. An empty
+                // path resets to auto-discovery.
+                let trimmed = snapshot.mc_assets_path.trim();
+                self.settings.mc_assets_path = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
                 // Mirror back so the screen keeps showing the
                 // clamped values on the next redraw.
                 self.menu.options = snapshot;
                 self.save_config();
+            }
+            MenuAction::ReloadResourcePack { path } => {
+                // W9.7: re-run discovery + atlas rebuild. If `path`
+                // is empty we restart auto-discovery; otherwise we
+                // route the explicit path through
+                // `load_with_override`.
+                let trimmed = path.trim();
+                let override_path = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(trimmed))
+                };
+                self.resource_pack =
+                    resource_pack::ResourcePack::load_with_override(override_path);
+                self.settings.mc_assets_path = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+                // Re-upload the atlas to the GPU + invalidate the
+                // egui texture handle so the next inventory render
+                // re-uploads from the new RGBA buffer.
+                if let Some(r) = self.renderer.as_mut() {
+                    let (w, h) = self.resource_pack.atlas_size;
+                    let new_handle =
+                        r.make_mesh_albedo(w, h, &self.resource_pack.atlas_rgba);
+                    self.voxel_atlas = Some(new_handle);
+                    self.atlas_rgba =
+                        Some((w, h, self.resource_pack.atlas_rgba.clone()));
+                }
+                self.egui_atlas = None;
+                self.save_config();
+                tracing::info!(
+                    source = %self.resource_pack.source.display(),
+                    fallback = self.resource_pack.is_fallback,
+                    "resource pack reloaded",
+                );
             }
         }
     }
@@ -9567,6 +9636,18 @@ impl Voxel {
         self.menu.options.invert_wheel = self.settings.invert_wheel;
         self.menu.options.lock_cursor = self.settings.lock_cursor;
         self.menu.options.hide_cursor = self.settings.hide_cursor;
+        // W9.7: surface the live resource-pack state. `mc_assets_path`
+        // is the user-typed override (mirrored back from
+        // self.settings if set); the resolved + fallback fields are
+        // read-only labels.
+        self.menu.options.mc_assets_path = self
+            .settings
+            .mc_assets_path
+            .clone()
+            .unwrap_or_default();
+        self.menu.options.mc_assets_resolved =
+            self.resource_pack.source.display().to_string();
+        self.menu.options.mc_assets_is_fallback = self.resource_pack.is_fallback;
     }
 
     /// Refresh the menu's worlds + saved-servers caches if they've
@@ -9602,6 +9683,16 @@ impl AppHandler for Voxel {
         // the main menu badge + Settings panel show the last
         // chosen identity instead of a fresh random Player####.
         self.load_config();
+        // W9.7: now that the config has been read, honour any
+        // user-stored MC resource pack override path. Rebuilds the
+        // pack (cheap when no MC install is present + the loader
+        // hits the same placeholder). The GPU upload below picks
+        // up whichever atlas this leaves us with.
+        if let Some(override_path) = self.settings.mc_assets_path.clone() {
+            self.resource_pack = resource_pack::ResourcePack::load_with_override(
+                Some(std::path::PathBuf::from(override_path)),
+            );
+        }
         self.session_started = Some(std::time::Instant::now());
         // Drop the MOTD lines into the local chat log on
         // startup so the player sees the host's welcome banner

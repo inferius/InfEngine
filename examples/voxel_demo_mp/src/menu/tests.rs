@@ -17,6 +17,9 @@ fn fresh_options() -> OptionsSnapshot {
         invert_wheel: false,
         lock_cursor: true,
         hide_cursor: true,
+        mc_assets_path: String::new(),
+        mc_assets_resolved: String::new(),
+        mc_assets_is_fallback: true,
     }
 }
 
@@ -62,6 +65,44 @@ fn esc_on_main_is_a_noop_for_the_menu_module() {
     // the menu module reports it didn't consume the key.
     assert!(!handled);
     assert!(matches!(menu.screen, MenuScreen::Main));
+}
+
+#[test]
+fn options_snapshot_round_trips_mc_assets_path() {
+    // W9.7: ApplyOptions persists `mc_assets_path` via Settings; the
+    // round-trip on the snapshot itself just verifies the field is
+    // preserved across clone + clamp.
+    let mut opts = fresh_options();
+    opts.mc_assets_path = "C:/some/mc/assets".to_string();
+    opts.clamp();
+    assert_eq!(opts.mc_assets_path, "C:/some/mc/assets");
+    // Clamp on the snapshot must not strip the resource path.
+    let clone = opts.clone();
+    assert_eq!(clone.mc_assets_path, "C:/some/mc/assets");
+}
+
+#[test]
+fn reload_resource_pack_action_carries_path() {
+    // W9.7: the Options screen emits a ReloadResourcePack action
+    // with the current path. Direct equality check on the variant.
+    let action = MenuAction::ReloadResourcePack {
+        path: "Z:/test/mc".to_string(),
+    };
+    match action {
+        MenuAction::ReloadResourcePack { path } => {
+            assert_eq!(path, "Z:/test/mc");
+        }
+        _ => panic!("expected ReloadResourcePack variant"),
+    }
+}
+
+#[test]
+fn default_mc_assets_field_is_empty_string() {
+    // W9.7: a fresh OptionsSnapshot starts with an empty
+    // `mc_assets_path` so the auto-discovery path is the default.
+    let opts = fresh_options();
+    assert_eq!(opts.mc_assets_path, "");
+    assert!(opts.mc_assets_is_fallback);
 }
 
 #[test]
