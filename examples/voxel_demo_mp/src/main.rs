@@ -174,7 +174,7 @@ use player::{
     PLAYER_SPEED, aabb_intersects_solid, body_aabb, submerged_liquid,
     submerged_liquid_eye,
 };
-use ui::{AppState, BackTo, HighlightMode, InvAction, SlotIcon, match_recipe, match_recipe_named};
+use ui::{AppState, BackTo, HighlightMode, InvAction, LoadingPhase, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{Biome, WorldGen, biome_at};
 use drops::{DROP_ATTRACT_RADIUS, DropItem};
 use inventory::{
@@ -1426,28 +1426,30 @@ impl Voxel {
         if self.world_loaded {
             return;
         }
+        // L.2: spin up workers first so `build_world` can push into
+        // pending_chunks immediately.
         self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
-        self.build_world();
-        // Place the player on top of the actual terrain so the
-        // hardcoded (0, 32, 0) origin doesn't drop them inside a
-        // stone column when the seed happens to put a mountain at
-        // the world origin.
-        let spawn = self.safe_spawn();
-        self.player_pos = spawn;
-        self.player_vel = Vec3::ZERO;
-        self.fall_start_y = None;
-        // Server hosts AND offline singleplayer resume any
-        // persisted edits so a re-enter picks up where the world
-        // left off. Clients sync via the catch-up broadcast on
-        // first heartbeat.
-        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
-            self.load_server_state();
-        }
-        self.world_loaded = true;
+        // L.2: enqueue the initial chunks (returns immediately - no
+        // generation happens on the main thread). Actual generation
+        // runs via the worker pool as the loading-state tick drains
+        // `pending_chunks` through `stream_chunks`.
+        let target_chunks = self.build_world();
+        // L.2: enter Loading state. The loading tick (on_update)
+        // advances loaded_chunks + transitions to Playing once all
+        // chunks are in + lighting/mesh passes finish.
+        self.state = AppState::Loading {
+            target_chunks,
+            loaded_chunks: 0,
+            phase: LoadingPhase::GeneratingChunks,
+            started_at: std::time::Instant::now(),
+        };
+        // Ensure the menu is out of the way while loading.
+        self.menu.apply_switch(menu::MenuScreen::InGame);
         info!(
             slug = ?self.current_world_slug,
             net = %self.net.label(),
-            "voxel: entered world"
+            target_chunks,
+            "voxel: entering world (async)"
         );
     }
 
@@ -3880,12 +3882,10 @@ impl Voxel {
                     pending_edits: Vec::new(),
                     pending_inv_actions: Vec::new(),
                 };
-                self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
-                // W8.1: switch the menu off the lobby + enter the
-                // world so the renderer + tick paths spin up.
-                self.menu.apply_switch(menu::MenuScreen::InGame);
+                // L.2: enter_world now sets AppState::Loading and
+                // switches the menu to InGame itself.
                 self.enter_world();
             }
             Err(err) => {
@@ -5683,81 +5683,42 @@ impl Voxel {
         }
     }
 
-    /// Synchronously generate the initial chunk grid so the player
-    /// drops into a non-empty world. Streaming workers take over once
-    /// the player starts moving.
+    /// L.2: enqueue every initial chunk coord into `pending_chunks` +
+    /// `pending_set` so the worker pool can generate them
+    /// asynchronously. Returns the total number of coords enqueued
+    /// (= the `target_chunks` value the Loading state needs).
     ///
-    /// F.2d: builds a `WorldgenCtx` snapshot once before the loop
-    /// and passes it through `generate_chunk_at_ctx`. Pure-fn path,
-    /// no atomic reads.
-    fn build_world(&mut self) {
-        let ctx = self.current_worldgen_ctx();
+    /// Previously this function generated all chunks synchronously on
+    /// the main thread (10-30 s for the Realistic worldgen). Now it
+    /// just pushes coords and returns immediately; the loading-state
+    /// tick calls `stream_chunks` each frame to drain the queue via
+    /// the worker pool.
+    fn build_world(&mut self) -> u32 {
+        // Clear any stale queue from a previous session.
+        self.pending_chunks.clear();
+        self.pending_set.clear();
+        let mut enqueued: u32 = 0;
         for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
             for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
                 for cy in 0..VERTICAL_CHUNKS {
                     let cc: ChunkCoord = [cx, cy, cz];
-                    let chunk = worldgen::generate_chunk_at_ctx(cc, &ctx);
-                    let origin = World::chunk_world_origin(cc);
-                    let cs = CHUNK_SIZE as i32;
-                    for ly in 0..cs {
-                        for lz in 0..cs {
-                            for lx in 0..cs {
-                                let b = chunk.get(
-                                    lx as usize,
-                                    ly as usize,
-                                    lz as usize,
-                                );
-                                let v = [
-                                    origin.x as i32 + lx,
-                                    origin.y as i32 + ly,
-                                    origin.z as i32 + lz,
-                                ];
-                                if b.0 == 15 {
-                                    self.snow_positions
-                                        .entry(v)
-                                        .or_insert(1);
-                                } else if b.0 == TORCH_ID
-                                    || b.0 == GLOWSTONE_ID
-                                {
-                                    self.torch_positions.insert(v);
-                                    self.emitter_positions.insert(v, b.0);
-                                } else if block::light_emission::light_emission_for_id(b.0)
-                                    > 0
-                                {
-                                    // Generic MC emitter (lava, fire,
-                                    // soul_torch, sea_lantern, ...).
-                                    // Don't double-insert torch/glowstone;
-                                    // those go through the branch above.
-                                    self.emitter_positions.insert(v, b.0);
-                                }
-                                if let Some(lq) = liquid_for(b) {
-                                    self.liquid_schedule.schedule(
-                                        v,
-                                        self.liquid_clock
-                                            + lq.tick_period.max(1) as u64,
-                                    );
-                                    if self.liquid_positions.insert(v) {
-                                        self.liquid_mesh_dirty = true;
-                                    }
-                                }
-                            }
-                        }
+                    if self.pending_set.insert(cc) {
+                        self.pending_chunks.push_back(cc);
+                        enqueued += 1;
                     }
-                    self.world.insert_chunk(cc, chunk);
                 }
             }
         }
-        self.rebuild_all_meshes();
-        // W5.1: read profile from per-dim ctx, not the deleted
-        // global atomic.
+        // Pin the worldgen profile snapshot so the loading tick can
+        // later record it in `last_built_worldgen` once done.
         let active_wg = self.current_worldgen_ctx().profile;
         self.last_built_worldgen = Some(active_wg);
         info!(
-            chunks = self.world.iter_chunks().count(),
-            submeshes = self.chunk_meshes.len(),
+            target_chunks = enqueued,
             worldgen = ?active_wg,
-            "initial world built"
+            "voxel: initial chunk coords enqueued (async build)"
         );
+        enqueued
     }
 
     /// Streaming step: queue missing chunks within `VIEW_DISTANCE`
@@ -7904,6 +7865,38 @@ impl Voxel {
                             menu_screen_ref,
                             &mut mctx,
                             &mut menu_actions,
+                        );
+                    });
+            }
+            // L.3: loading screen. Same Area approach as the main
+            // menu (CentralPanel causes a blank-frame artefact with
+            // this egui version + window setup).
+            AppState::Loading {
+                target_chunks,
+                loaded_chunks,
+                phase,
+                started_at,
+            } => {
+                let screen = ctx.content_rect();
+                let bg_layer = egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("loading_bg"),
+                );
+                ctx.layer_painter(bg_layer).rect_filled(
+                    screen,
+                    0.0,
+                    egui::Color32::from_rgb(10, 13, 23),
+                );
+                egui::Area::new(egui::Id::new("loading_area"))
+                    .anchor(egui::Align2::CENTER_TOP, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.set_min_width(480.0);
+                        menu::loading::draw(
+                            ui,
+                            target_chunks,
+                            loaded_chunks,
+                            phase,
+                            started_at,
                         );
                     });
             }
@@ -10164,12 +10157,10 @@ impl Voxel {
                 self.current_world_slug = Some(slug);
                 self.reset_world();
                 self.last_built_worldgen = None;
-                self.menu.apply_switch(menu::MenuScreen::InGame);
-                self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
-                // W8.1: explicit entry point. Spins workers, builds
-                // chunks, loads persisted edits + auto-pin spawn.
+                // L.2: enter_world sets AppState::Loading + switches
+                // the menu to InGame; no need to do it here.
                 self.enter_world();
             }
             MenuAction::NewWorld { name, worldgen, seed, game_mode } => {
@@ -10235,10 +10226,10 @@ impl Voxel {
                 self.menu.invalidate_caches();
                 // W8.1 + W8.2: jump straight into the freshly-created
                 // world. Mirrors PlayOffline.
+                // L.2: enter_world sets AppState::Loading + switches
+                // the menu to InGame; no need to do it here.
                 self.reset_world();
                 self.last_built_worldgen = None;
-                self.menu.apply_switch(menu::MenuScreen::InGame);
-                self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
                 self.enter_world();
@@ -10934,6 +10925,9 @@ impl AppHandler for Voxel {
                     // hierarchy is a no-op (no quit-on-Esc).
                     let _ = self.menu.on_escape();
                 }
+                // L.1: ESC during loading is intentionally a no-op
+                // (cancel support is a deferred follow-up).
+                AppState::Loading { .. } => {}
             }
         }
 
@@ -12365,19 +12359,89 @@ impl AppHandler for Voxel {
         // with a MC-style panorama; for now we pin a neutral dark
         // navy so the menu reads cleanly.
         if !self.world_loaded {
+            // L.4: if we are in the Loading state, drive the async
+            // world bootstrap each frame: tick the worker pool via
+            // stream_chunks, update the loaded_chunks counter, and
+            // transition to Playing once all chunks are in.
+            if matches!(self.state, AppState::Loading { .. }) {
+                // stream_chunks dispatches pending coords to workers
+                // and drains finished results into self.world each
+                // frame - this is the same path used during normal
+                // gameplay streaming.
+                self.stream_chunks();
+                // Count how many chunks the world holds now.
+                let live = self.world.iter_chunks().count() as u32;
+                // Update the counter. Extract target + phase as Copy
+                // values so we can call &mut self methods below
+                // without holding a borrow into self.state.
+                let (target, phase) =
+                    if let AppState::Loading {
+                        target_chunks,
+                        ref mut loaded_chunks,
+                        phase,
+                        ..
+                    } = self.state
+                    {
+                        *loaded_chunks = live;
+                        (target_chunks, phase)
+                    } else {
+                        // matches!() guard above means this is
+                        // unreachable, but the else branch
+                        // satisfies the compiler.
+                        unreachable!()
+                    };
+                // Once all chunks are in, run the post-load passes.
+                if live >= target && phase == LoadingPhase::GeneratingChunks {
+                    // Phase: BuildingLighting.
+                    if let AppState::Loading { ref mut phase, .. } = self.state {
+                        *phase = LoadingPhase::BuildingLighting;
+                    }
+                    // Lighting BFS is sub-second for 196 chunks.
+                    self.rebuild_all_lighting();
+                    // Phase: BuildingMeshes.
+                    if let AppState::Loading { ref mut phase, .. } = self.state {
+                        *phase = LoadingPhase::BuildingMeshes;
+                    }
+                    self.rebuild_all_meshes();
+                    // Phase: Finalising - post-load bookkeeping.
+                    if let AppState::Loading { ref mut phase, .. } = self.state {
+                        *phase = LoadingPhase::Finalising;
+                    }
+                    // Pin player on the surface of the generated
+                    // terrain. Can only run now that chunks exist.
+                    let spawn = self.safe_spawn();
+                    self.player_pos = spawn;
+                    self.player_vel = Vec3::ZERO;
+                    self.fall_start_y = None;
+                    // Load persisted server state (edits, timers,
+                    // containers). Clients skip - they sync via the
+                    // catch-up broadcast on first heartbeat.
+                    if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+                        self.load_server_state();
+                    }
+                    self.world_loaded = true;
+                    self.state = AppState::Playing;
+                    info!(
+                        slug = ?self.current_world_slug,
+                        net = %self.net.label(),
+                        chunks = live,
+                        "voxel: world loaded - entering Playing"
+                    );
+                }
+            }
             // W8.1 + bila-screen fix: no world simulation, but the
             // renderer + egui pass below MUST still run so the main
-            // menu actually paints. The legacy `return` here skipped
-            // the entire on_update tail (including renderer.render
-            // + the egui overlay callback) - that's what produced
-            // the all-white screen for ~30 minutes of debugging.
+            // menu / loading screen actually paints. The legacy
+            // `return` here skipped the entire on_update tail
+            // (including renderer.render + the egui overlay callback)
+            // - that's what produced the all-white screen.
             self.particles.tick(dt);
             if let Some(r) = self.renderer.as_mut() {
                 r.set_clear_color(0.04, 0.05, 0.09, 1.0);
             }
             // Run the renderer directly here and short-circuit the
             // world-side work below; renderer.render() still gets the
-            // egui callback so menu UI paints.
+            // egui callback so menu / loading UI paints.
             let ui = self.ui.as_mut();
             if let Some(renderer) = self.renderer.as_mut() {
                 let _ = if let Some(ui) = ui {
