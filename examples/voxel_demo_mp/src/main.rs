@@ -1235,6 +1235,11 @@ struct Voxel {
     /// `on_start` tries to load the atlas from there before
     /// falling back to the procedural builder.
     texture_dir: Option<std::path::PathBuf>,
+    /// W9: MC resource pack loaded at startup. Carries the atlas
+    /// uv lookup, item icons, sound event registry + the source
+    /// path (shown on the settings page). Always present; uses
+    /// the placeholder pack when no MC install was discovered.
+    resource_pack: resource_pack::ResourcePack,
     /// Master-server endpoint the in-game browser queries. Settable
     /// via `--master <addr>` argv; defaults to the configured
     /// public master.
@@ -4826,6 +4831,7 @@ impl Voxel {
             atlas_rgba: None,
             egui_atlas: None,
             texture_dir: None,
+            resource_pack: resource_pack::ResourcePack::load(),
             particles: {
                 // Particle system starts with one "ambient" emitter
                 // (rate=0, max=0) that only contributes its gravity
@@ -9508,11 +9514,25 @@ impl AppHandler for Voxel {
         // creates its mesh handle so the GPU only pays the upload
         // cost once at startup.
         if let Some(r) = self.renderer.as_mut() {
-            let (aw, ah, atlas_rgba) = self
-                .texture_dir
-                .as_ref()
-                .and_then(|d| load_block_atlas_from_dir(d))
-                .unwrap_or_else(build_block_atlas);
+            // W9.2: prefer the MC resource-pack atlas when available.
+            // The pack always carries a valid atlas (real MC pixels
+            // if MC 26.1.x is installed, the synthetic placeholder
+            // otherwise). The legacy `--textures <dir>` path still
+            // runs first when set so the existing dev workflow
+            // (point at a folder of PNGs next to the bin) stays
+            // intact.
+            let (aw, ah, atlas_rgba) = if self.resource_pack.is_fallback {
+                self.texture_dir
+                    .as_ref()
+                    .and_then(|d| load_block_atlas_from_dir(d))
+                    .unwrap_or_else(|| {
+                        let (w, h) = self.resource_pack.atlas_size;
+                        (w, h, self.resource_pack.atlas_rgba.clone())
+                    })
+            } else {
+                let (w, h) = self.resource_pack.atlas_size;
+                (w, h, self.resource_pack.atlas_rgba.clone())
+            };
             self.voxel_atlas = Some(r.make_mesh_albedo(aw, ah, &atlas_rgba));
             // Keep the pixel data around for the egui inventory UI.
             self.atlas_rgba = Some((aw, ah, atlas_rgba));
@@ -12694,6 +12714,11 @@ fn day_night(time: f32) -> (Vec3, [f32; 3]) {
     (sun, sky)
 }
 
+// W9.2: superseded by `resource_pack::fallback::placeholder_pack`,
+// kept around for callers that haven't been migrated to the new
+// API + so the legacy `--textures <dir>` flag still has a
+// procedural fallback when its dir lookup misses.
+#[allow(dead_code)]
 fn build_block_atlas() -> (u32, u32, Vec<u8>) {
     let w = ATLAS_COLS * TILE_PX;
     let h = ATLAS_ROWS * TILE_PX;

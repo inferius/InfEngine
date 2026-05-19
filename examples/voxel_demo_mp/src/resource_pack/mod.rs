@@ -35,6 +35,7 @@ pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod name_map;
 pub(crate) mod paths;
+pub(crate) mod textures;
 
 #[cfg(test)]
 mod tests;
@@ -119,19 +120,39 @@ impl ResourcePack {
     /// The override takes priority over the env-var + well-known
     /// locations.
     pub(crate) fn load_with_override(override_path: Option<PathBuf>) -> Self {
-        let discovered =
-            override_path.and_then(paths::canonicalize_assets_root).or_else(paths::discover_assets_root);
+        let discovered = override_path
+            .and_then(paths::canonicalize_assets_root)
+            .or_else(paths::discover_assets_root);
         match discovered {
             Some(root) => {
                 tracing::info!(path = %root.display(), "MC resource pack discovered");
-                // W9.2+ will read PNG/.mcmeta/JSON files under `root`.
-                // For W9.1 we still return the placeholder atlas but
-                // record the discovered source so the settings page
-                // can show it.
-                let mut pack = fallback::placeholder_pack();
-                pack.source = root;
-                pack.is_fallback = true;
-                pack
+                match textures::load_atlas(&root) {
+                    Some(atlas) => {
+                        tracing::info!(
+                            size = atlas.atlas_size.0,
+                            count = atlas.textures.len(),
+                            "MC resource pack atlas built",
+                        );
+                        ResourcePack {
+                            textures: atlas.textures,
+                            item_icons: atlas.item_icons,
+                            sounds: HashMap::new(),
+                            source: root,
+                            is_fallback: false,
+                            atlas_size: atlas.atlas_size,
+                            atlas_rgba: atlas.atlas_rgba,
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            path = %root.display(),
+                            "MC resource pack contains no textures - falling back",
+                        );
+                        let mut pack = fallback::placeholder_pack();
+                        pack.source = root;
+                        pack
+                    }
+                }
             }
             None => {
                 tracing::info!("no MC resource pack found - using placeholder atlas");
@@ -157,4 +178,50 @@ impl ResourcePack {
     pub(crate) fn item_icon(&self, name: &str) -> Option<&TextureRef> {
         self.item_icons.get(name)
     }
+
+    /// Resolve a block face (top / bottom / sides) for an infengine
+    /// block id to a `TextureRef` in this pack. Falls through the
+    /// per-face override -> shared block name -> `None` (caller
+    /// keeps its placeholder atlas tile alive).
+    pub(crate) fn block_face_ref(
+        &self,
+        infengine_id: u16,
+        face: BlockFace,
+    ) -> Option<&TextureRef> {
+        let map = name_map::lookup_block(infengine_id)?;
+        let face_name = match face {
+            BlockFace::Top => map.top,
+            BlockFace::Bottom => map.bottom,
+            BlockFace::Sides => map.sides,
+        };
+        let primary = if !face_name.is_empty() {
+            self.block_texture(face_name)
+        } else {
+            None
+        };
+        primary.or_else(|| self.block_texture(map.block))
+    }
+
+    /// Resolve the inventory icon for an infengine item id. Block-form
+    /// items return the block's top-face entry (matches MC inventory
+    /// behaviour). Tools / buckets / ingots / food resolve through
+    /// the item-name override table.
+    pub(crate) fn icon_ref(&self, infengine_id: u16) -> Option<&TextureRef> {
+        // Tool / ingredient / bucket / food: dedicated item icon.
+        if let Some(item_name) = name_map::lookup_item(infengine_id)
+            && let Some(r) = self.item_icon(item_name)
+        {
+            return Some(r);
+        }
+        // Block form: use the top face.
+        self.block_face_ref(infengine_id, BlockFace::Top)
+    }
+}
+
+/// Which face of a cube the renderer asks the pack to resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockFace {
+    Top,
+    Bottom,
+    Sides,
 }
