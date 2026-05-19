@@ -9608,6 +9608,16 @@ impl Voxel {
                     self.voxel_atlas = Some(new_handle);
                     self.atlas_rgba =
                         Some((w, h, self.resource_pack.atlas_rgba.clone()));
+                    // Wave 9.y: refresh the GPU animation table.
+                    // Reload may add / drop animated tiles; the
+                    // new slot ids stay deterministic across
+                    // loads (see build_anim_index) but stale
+                    // anim_id values in already-built chunk
+                    // meshes are caught by the dirty-chunk
+                    // rebuild path in W9.y.6.
+                    r.upload_tile_anims(
+                        &self.resource_pack.build_tile_anims_uniform(),
+                    );
                 }
                 self.egui_atlas = None;
                 self.save_config();
@@ -9762,6 +9772,14 @@ impl AppHandler for Voxel {
             self.voxel_atlas = Some(r.make_mesh_albedo(aw, ah, &atlas_rgba));
             // Keep the pixel data around for the egui inventory UI.
             self.atlas_rgba = Some((aw, ah, atlas_rgba));
+            // Wave 9.y: push the per-tile animation table to the
+            // GPU so the mesh3d shader's animated_uv() branch
+            // can scroll water_still / lava_still / fire_0
+            // through their frame strips. Empty registries
+            // upload an all-zero uniform; the shader short-
+            // circuits on anim_id == 0 so static tiles are
+            // unaffected.
+            r.upload_tile_anims(&self.resource_pack.build_tile_anims_uniform());
             // Sheep body texture: a plain wool tile. We deliberately
             // don't use the Minecraft entity `sheep.tga` here -
             // that's a UV-mapped atlas for a multi-cube model

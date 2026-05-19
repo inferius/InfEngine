@@ -199,6 +199,8 @@ mod tests {
             is_fallback: false,
             atlas_size: (256, 256),
             atlas_rgba: vec![0u8; 256 * 256 * 4],
+            anim_registry: crate::resource_pack::anim_registry::AnimRegistry::new(),
+            anim_slots: HashMap::new(),
         }
     }
 

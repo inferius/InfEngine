@@ -280,3 +280,100 @@ fn icon_ref_for_non_block_item_resolves_under_placeholder() {
         assert!(r.atlas_uv[0] >= 0.0 && r.atlas_uv[2] <= 1.0);
     }
 }
+
+// ---------------------------------------------------------------
+// W9.y.3: AnimRegistry wiring into pack load.
+// ---------------------------------------------------------------
+
+#[test]
+fn pack_load_registers_animated_tiles() {
+    // The synthetic pack staged above already includes
+    // water_still with frames > 1; that texture should land in
+    // the anim registry.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    assert!(!pack.is_fallback);
+    assert!(!pack.anim_registry.is_empty(), "expected at least one anim slot");
+    // The water_still entry MUST have a non-zero slot in the
+    // reverse map.
+    let key = TextureKey::Block("water_still".to_string());
+    let slot = pack.anim_slot(&key);
+    assert!(slot >= 1, "water_still slot = {slot}");
+}
+
+#[test]
+fn static_tile_gets_slot_zero() {
+    // Stone is a static tile; its anim_slot resolves to 0
+    // (the STATIC_SLOT sentinel) so the shader's anim_id == 0
+    // fast path applies.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    let key = TextureKey::Block("stone".to_string());
+    assert_eq!(pack.anim_slot(&key), 0);
+}
+
+#[test]
+fn placeholder_pack_has_empty_anim_registry() {
+    // The placeholder pack ships zero animated tiles.
+    let pack = ResourcePack::load();
+    assert!(pack.is_fallback);
+    assert!(pack.anim_registry.is_empty());
+    assert!(pack.anim_slots.is_empty());
+}
+
+#[test]
+fn build_tile_anims_uniform_matches_registry_order() {
+    // The renderer-facing uniform must align with `entries()` -
+    // slot 1 maps to entries[0], slot 2 to entries[1], ...
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    let uni = pack.build_tile_anims_uniform();
+    // Slot 1 in the registry should match entries[0] in the
+    // uniform body.
+    let reg_entries = pack.anim_registry.entries();
+    if !reg_entries.is_empty() {
+        let s = &reg_entries[0];
+        assert_eq!(uni.entries[0].frame_count, s.frame_count);
+        assert_eq!(uni.entries[0].frametime_ms, s.frametime_ms);
+        assert!((uni.entries[0].v_step - s.v_step).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn anim_slot_for_ref_returns_static_for_static_texture() {
+    // The TextureRef-based lookup path must report 0 for
+    // tiles without an animation strip.
+    let pack = ResourcePack::load();
+    let stone = pack.block_texture("stone").unwrap();
+    assert_eq!(pack.anim_slot_for_ref(stone), 0);
+}
+
+#[test]
+fn anim_slot_for_ref_finds_animated_slot() {
+    // The reverse-lookup path must find the registered slot for
+    // an animated tile we hold a TextureRef for.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    let water = pack.block_texture("water_still").unwrap();
+    assert!(water.is_animated());
+    let slot = pack.anim_slot_for_ref(water);
+    assert!(slot >= 1, "expected animated slot, got {slot}");
+}
+
+#[test]
+fn reload_assigns_stable_slot_ids() {
+    // Loading the same pack twice MUST give every animated tile
+    // the same slot id - the deterministic-key sort in
+    // `build_anim_index` guarantees this so chunks rebuilt
+    // after a reload sample the right uniform row.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack_a = ResourcePack::load_with_override(Some(mc.clone()));
+    let pack_b = ResourcePack::load_with_override(Some(mc));
+    let key = TextureKey::Block("water_still".to_string());
+    assert_eq!(pack_a.anim_slot(&key), pack_b.anim_slot(&key));
+}

@@ -135,6 +135,19 @@ pub(crate) struct ResourcePack {
     pub(crate) atlas_size: (u32, u32),
     /// Atlas RGBA pixels (4 bytes per pixel, row-major).
     pub(crate) atlas_rgba: Vec<u8>,
+    /// Wave 9.y: animation registry. Built from every animated
+    /// `TextureRef` after the atlas lands - holds up to 32 slots
+    /// keyed by `(v0, v_step, frame_count, frametime_ms)`. The
+    /// renderer's `TileAnimsUniform` is filled from this; the
+    /// chunk mesher looks up each tile's slot via
+    /// `anim_slot_for_texture` and writes it into the vertex's
+    /// `anim_id` field.
+    pub(crate) anim_registry: anim_registry::AnimRegistry,
+    /// Wave 9.y: reverse lookup from a texture entry to its
+    /// animation slot id. Static tiles aren't in the table; the
+    /// helper returns `STATIC_SLOT` (0) for those. Keyed by the
+    /// same `TextureKey` shape as `textures`.
+    pub(crate) anim_slots: HashMap<TextureKey, u8>,
 }
 
 impl ResourcePack {
@@ -171,6 +184,13 @@ impl ResourcePack {
                             count = atlas.textures.len(),
                             "MC resource pack atlas built",
                         );
+                        let (reg, slots) = build_anim_index(&atlas.textures);
+                        if !reg.is_empty() {
+                            tracing::info!(
+                                slots = reg.len(),
+                                "MC animated tiles registered",
+                            );
+                        }
                         ResourcePack {
                             textures: atlas.textures,
                             item_icons: atlas.item_icons,
@@ -179,6 +199,8 @@ impl ResourcePack {
                             is_fallback: false,
                             atlas_size: atlas.atlas_size,
                             atlas_rgba: atlas.atlas_rgba,
+                            anim_registry: reg,
+                            anim_slots: slots,
                         }
                     }
                     None => {
@@ -283,4 +305,89 @@ pub(crate) enum BlockFace {
     Top,
     Bottom,
     Sides,
+}
+
+impl ResourcePack {
+    /// Wave 9.y: resolve a texture entry to its animation slot
+    /// id. Static tiles + entries not in the pack return
+    /// `STATIC_SLOT` (0). Animated tiles return a 1-based slot
+    /// the renderer's `tile_anim` uniform array reads.
+    pub(crate) fn anim_slot(&self, key: &TextureKey) -> u8 {
+        self.anim_slots.get(key).copied().unwrap_or(0)
+    }
+
+    /// Wave 9.y: convenience for the chunk mesher - given a
+    /// `TextureRef` (already resolved into the atlas), search the
+    /// reverse map for its slot. Returns 0 for static tiles.
+    /// Used when the mesher emits a face with a `TextureRef` it
+    /// has on hand but no `TextureKey`.
+    pub(crate) fn anim_slot_for_ref(&self, tex: &TextureRef) -> u8 {
+        if !tex.is_animated() {
+            return 0;
+        }
+        // Walk the textures map to find a matching entry. This is
+        // cheap because the atlas has O(hundreds) entries and the
+        // mesher caches the slot per-face downstream.
+        for (k, v) in &self.textures {
+            if v.atlas_uv == tex.atlas_uv
+                && v.frames == tex.frames
+                && v.frametime_ms == tex.frametime_ms
+            {
+                return self.anim_slot(k);
+            }
+        }
+        0
+    }
+
+    /// Wave 9.y: snapshot the registry into the renderer's
+    /// uniform body. Called on pack load + reload so the GPU
+    /// table mirrors `self.anim_registry`.
+    pub(crate) fn build_tile_anims_uniform(
+        &self,
+    ) -> infengine_render::TileAnimsUniform {
+        let entries: Vec<infengine_render::TileAnimEntry> = self
+            .anim_registry
+            .entries()
+            .iter()
+            .map(|s| infengine_render::TileAnimEntry {
+                frame_count: s.frame_count,
+                frametime_ms: s.frametime_ms,
+                v_step: s.v_step,
+                _pad: 0.0,
+            })
+            .collect();
+        infengine_render::TileAnimsUniform::from_sequential(&entries)
+    }
+}
+
+/// Wave 9.y: walk every entry in `textures` and register the
+/// animated ones (frames > 1, frametime_ms > 0) into a fresh
+/// `AnimRegistry`. Returns the registry + a reverse map keyed by
+/// `TextureKey` so the chunk mesher can resolve a tile to its
+/// slot id without re-scanning the textures map per face.
+fn build_anim_index(
+    textures: &HashMap<TextureKey, TextureRef>,
+) -> (anim_registry::AnimRegistry, HashMap<TextureKey, u8>) {
+    let mut reg = anim_registry::AnimRegistry::new();
+    let mut slots: HashMap<TextureKey, u8> = HashMap::new();
+    // Iterate in deterministic order: collect keys, sort, then
+    // register. This keeps the slot ids stable across loads so
+    // a reload assigns the same slot to the same animated tile
+    // (water_still always -> slot 1 once the loader sees it
+    // first).
+    let mut keys: Vec<&TextureKey> = textures.keys().collect();
+    keys.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    for key in keys {
+        let Some(tex) = textures.get(key) else {
+            continue;
+        };
+        if !tex.is_animated() {
+            continue;
+        }
+        let slot = reg.register(tex);
+        if slot != 0 {
+            slots.insert(key.clone(), slot);
+        }
+    }
+    (reg, slots)
 }

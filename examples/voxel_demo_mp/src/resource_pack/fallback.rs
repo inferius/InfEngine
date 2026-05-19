@@ -69,6 +69,12 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         is_fallback: true,
         atlas_size: (w, h),
         atlas_rgba: rgba,
+        // Wave 9.y: the placeholder pack has no animated tiles -
+        // every entry is a static colour swatch. An empty
+        // registry keeps the GPU uniform fully zeroed and the
+        // shader's anim_id == 0 fast path holds.
+        anim_registry: super::anim_registry::AnimRegistry::new(),
+        anim_slots: HashMap::new(),
     }
 }
 
