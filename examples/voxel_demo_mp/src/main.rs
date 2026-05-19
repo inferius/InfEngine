@@ -4392,6 +4392,10 @@ impl Voxel {
                 format!("Kicked by host: {reason}"),
             ));
             self.net = NetRole::Offline;
+            // Kicked -> bounce to the top menu (Wave 4 decoupled
+            // AppState from menu.screen so an explicit reset is
+            // needed; otherwise the menu shows the last sub-screen).
+            self.menu.screen = menu::MenuScreen::Main;
             self.state = AppState::MainMenu;
             self.browser_error = Some(format!("kicked: {reason}"));
         }
@@ -9169,6 +9173,10 @@ impl Voxel {
             self.notify_server_leaving();
             self.net = NetRole::Offline;
             self.mp_menu_open = false;
+            // Same fix as `action_main_menu`: bounce the menu state
+            // back to the top screen so the user actually sees the
+            // main menu after disconnecting.
+            self.menu.screen = menu::MenuScreen::Main;
             self.state = AppState::MainMenu;
             self.remote_mobs.clear();
             self.mobs.clear();
@@ -9196,6 +9204,12 @@ impl Voxel {
             };
         }
         if action_main_menu {
+            // Reset the menu state machine too. Wave 4 (G.x) decoupled
+            // AppState from `menu::MenuScreen`; flipping AppState alone
+            // would leave the menu showing whatever sub-screen the user
+            // last visited (Singleplayer / Multiplayer / Options) so
+            // the Pause panel "Main Menu" button appeared to do nothing.
+            self.menu.screen = menu::MenuScreen::Main;
             self.state = AppState::MainMenu;
         }
         // Wave 4 (Phase G.6 + G.7): the legacy `action_to_direct /
