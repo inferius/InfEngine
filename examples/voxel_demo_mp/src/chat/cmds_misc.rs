@@ -234,16 +234,21 @@ pub(crate) fn cmd_biome(
     use crate::worldgen::WorldGen;
     let px = voxel.player_pos.x;
     let pz = voxel.player_pos.z;
-    let biome = match WorldGen::current() {
+    // W5.1: build a fresh WorldgenCtx from voxel state instead of
+    // peeking at the (now-deleted) global atomics. The ctx already
+    // knows the active dim's profile + effective seed.
+    let ctx = voxel.current_worldgen_ctx();
+    let seed = ctx.effective_seed();
+    let biome = match ctx.profile {
         WorldGen::Realistic => {
             // Pull the biome from the climate map for the
             // realistic generator. Re-uses the same lookup that
             // gen_realistic uses so the answer matches what the
             // player is standing on.
-            let climate = crate::worldgen::climate::climate_at(px, pz, crate::worldgen::world_seed());
+            let climate = crate::worldgen::climate::climate_at(px, pz, seed);
             crate::worldgen::biome_table::biome_from_climate(climate)
         }
-        _ => biome_at(px, pz, crate::worldgen::world_seed()),
+        _ => biome_at(px, pz, seed),
     };
     lines.push(format!(
         "Biome: {} at ({:.0}, {:.0})",
@@ -278,13 +283,15 @@ pub(crate) fn cmd_findbiome(
         Some(b) => {
             let px = voxel.player_pos.x as i32;
             let pz = voxel.player_pos.z as i32;
+            // W5.1: ctx-driven seed lookup; no atomic reads.
+            let seed = voxel.current_worldgen_ctx().effective_seed();
             let mut best: Option<(i32, i32, f32)> = None;
             for r in (0i32..=40).rev() {
                 for dx in (-r..=r).step_by(8usize) {
                     for dz in (-r..=r).step_by(8usize) {
                         let wx = (px + dx * 8) as f32;
                         let wz = (pz + dz * 8) as f32;
-                        if biome_at(wx, wz, crate::worldgen::world_seed()) == b {
+                        if biome_at(wx, wz, seed) == b {
                             let d2 =
                                 (dx * dx + dz * dz) as f32;
                             if best.is_none_or(|(_, _, bd)| d2 < bd)

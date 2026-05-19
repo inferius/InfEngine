@@ -180,9 +180,13 @@ pub(crate) fn migrate_legacy_if_needed() -> io::Result<Option<String>> {
     // a future migration arrow can decode it into chunks + players.
     let meta = meta::create_meta("Legacy save", slug);
     meta::write_meta(slug, &meta)?;
+    // W5.1: legacy save migration lands with safe defaults
+    // (Classic + seed 0). The runtime's load path will overwrite
+    // voxel.base_seed + dim_worldgens from the world.json the next
+    // time the slot opens.
     let world = world_json::create_world(
-        worldgen_str(crate::worldgen::WorldGen::current()),
-        crate::worldgen::world_seed(),
+        worldgen_str(crate::worldgen::WorldGen::Classic),
+        0,
     );
     world_json::write_world(slug, &world)?;
 
@@ -223,12 +227,9 @@ pub(crate) fn worldgen_str(wg: crate::worldgen::WorldGen) -> &'static str {
     }
 }
 
-/// Apply a `WorldGen` variant to the global atomic so background
-/// worldgen workers pick it up. Inverse of `worldgen_str` paired
-/// with `WorldGen::from_str` on the load path.
-pub(crate) fn set_worldgen(wg: crate::worldgen::WorldGen) {
-    crate::worldgen::WORLDGEN.store(wg as u8, std::sync::atomic::Ordering::Relaxed);
-}
+// W5.1: `set_worldgen` removed alongside the WORLDGEN atomic.
+// Worldgen state now lives in `Voxel::dim_worldgens` and is
+// passed by reference via `WorldgenCtx`.
 
 /// Best-effort wall-clock now in ms since UNIX epoch. Falls back to
 /// 0 on the (essentially impossible) `SystemTime::now() < UNIX_EPOCH`.

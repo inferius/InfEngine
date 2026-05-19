@@ -15,7 +15,7 @@ use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
     DAY_LENGTH_S, KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE,
     MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState, PLAYER_MAX_HEALTH,
-    ZOMBIE_MAX_HEALTH, world_seed,
+    ZOMBIE_MAX_HEALTH,
 };
 
 /// `/motd`. Print the MOTD file next to the binary (if any).
@@ -63,9 +63,11 @@ pub(crate) fn cmd_serverinfo(
         2 => "snow",
         _ => "clear",
     };
+    // W5.1: ctx-driven seed; reports the active dim's effective
+    // seed instead of the (now-deleted) global atomic.
+    let seed = voxel.current_worldgen_ctx().effective_seed();
     lines.push(format!(
-        "Server: {host}  Role: {role}  Seed: {}  Weather: {weather_str}",
-        world_seed()
+        "Server: {host}  Role: {role}  Seed: {seed}  Weather: {weather_str}"
     ));
     true
 }

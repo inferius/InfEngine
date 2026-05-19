@@ -13,10 +13,7 @@ use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
 use crate::Voxel;
 use crate::block::BLOCK_TYPES;
 use crate::net::{EditMsg, NetRole};
-use crate::{
-    DAY_LENGTH_S, VERTICAL_CHUNKS, WORLDGEN, WorldGen,
-    set_world_seed, world_seed,
-};
+use crate::{DAY_LENGTH_S, VERTICAL_CHUNKS, WorldGen};
 
 /// `/day`. Snap day_time to mid-morning.
 pub(crate) fn cmd_day(
@@ -154,14 +151,18 @@ pub(crate) fn cmd_seed(
     // vx.seed so connected clients follow
     // suit on the next net tick.
     if arg.is_empty() {
-        lines.push(format!("World seed: {}", world_seed()));
+        // W5.1: report from voxel state, not the deleted atomic.
+        let seed = voxel.current_worldgen_ctx().effective_seed();
+        lines.push(format!("World seed: {seed}"));
     } else if !matches!(
         voxel.net,
         NetRole::Server { .. } | NetRole::Offline
     ) {
         lines.push("/seed <n> is host-only.".to_string());
     } else if let Ok(new_seed) = arg.parse::<u32>() {
-        set_world_seed(new_seed);
+        // W5.1: write the per-world base_seed; worldgen ctx is
+        // re-derived each call from this field + the active dim.
+        voxel.base_seed = new_seed;
         let to_unload: Vec<ChunkCoord> =
             voxel.world.iter_chunks().map(|(c, _)| *c).collect();
         if !to_unload.is_empty() {
@@ -533,26 +534,26 @@ pub(crate) fn cmd_worldgen(
     lines: &mut Vec<String>,
 ) -> bool {
     // /worldgen with no arg prints the
-    // current mode; with classic / flat /
-    // islands / amplified it switches +
-    // regenerates every cached chunk.
-    // Host-only since the workers share
-    // the WORLDGEN atomic.
+    // current dim's mode; with classic /
+    // flat / islands / amplified it switches
+    // the active dim's profile +
+    // regenerates every cached chunk in it.
+    // Host-only since the workers run
+    // server-side.
     if !matches!(
         voxel.net,
         NetRole::Server { .. } | NetRole::Offline
     ) {
         lines.push("/worldgen is host-only.".to_string());
     } else if arg.is_empty() {
-        lines.push(format!(
-            "Worldgen: {:?}",
-            WorldGen::current()
-        ));
+        // W5.1: report the active dim's profile from voxel state.
+        let profile = voxel.current_worldgen_ctx().profile;
+        lines.push(format!("Worldgen: {:?}", profile));
     } else if let Some(g) = WorldGen::from_str(arg) {
-        WORLDGEN.store(
-            g as u8,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        // W5.1: write the per-dim worldgen variant; the ctx
+        // resolves to this map on next chunk-gen call.
+        let dim = voxel.current_dim.clone();
+        voxel.dim_worldgens.insert(dim, g);
         let to_unload: Vec<ChunkCoord> =
             voxel.world.iter_chunks().map(|(c, _)| *c).collect();
         if !to_unload.is_empty() {

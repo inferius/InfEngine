@@ -25,7 +25,7 @@ use std::io;
 
 use tracing::{info, warn};
 
-use crate::worldgen::{self, WorldGen, dim_seed, set_world_seed, world_seed};
+use crate::worldgen::WorldGen;
 use crate::Voxel;
 
 use super::layout;
@@ -33,7 +33,7 @@ use super::meta::{self, create_meta};
 use super::players::{self, fresh_player};
 use super::timers::{self, MAX_OFFLINE_MS, ScheduledTimers, catch_up::catch_up};
 use super::world_json::{self, create_world};
-use super::{LoadedWorld, current_wall_ms, set_worldgen, worldgen_str};
+use super::{LoadedWorld, current_wall_ms, worldgen_str};
 
 pub(crate) mod dims;
 pub(crate) mod helpers;
@@ -86,16 +86,16 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
         Ok(wj) => wj,
         Err(_) => {
             // Missing OR corrupt - mint a fresh one. The base seed
-            // comes from `voxel.base_seed` (Phase F populates this
-            // on world creation / load); a 0 there is fine for
-            // legacy code paths that haven't been migrated yet.
+            // and active dim's profile come straight from voxel
+            // state (W5.1: no global atomics in the call graph).
+            let active_wg = voxel
+                .dim_worldgens
+                .get(&voxel.current_dim)
+                .copied()
+                .unwrap_or(WorldGen::Classic);
             let wj = create_world(
-                worldgen_str(WorldGen::current()),
-                if voxel.base_seed != 0 {
-                    voxel.base_seed
-                } else {
-                    world_seed()
-                },
+                worldgen_str(active_wg),
+                voxel.base_seed,
             );
             world_json::write_world(slug, &wj)?;
             wj
@@ -132,9 +132,10 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 /// Phase F: every dimension in `world.json::dimensions` lands either
 /// in the active Voxel slots (the dim matching the player's
 /// `last_dimension`) or in the per-dim parking maps. The base seed
-/// and per-dim worldgen profiles come from `world.json`; the
-/// global `WORLD_SEED` and `WORLDGEN` atomics are pinned to the
-/// active dim's derived values.
+/// and per-dim worldgen profiles come from `world.json` and land in
+/// `voxel.base_seed` + `voxel.dim_worldgens`. W5.1: no global
+/// atomics are touched - every gen call rebuilds a `WorldgenCtx`
+/// from these fields.
 pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
     let meta = meta::read_meta(slug)?;
     let world_meta = world_json::read_world(slug)?;
@@ -169,18 +170,16 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     // each dim's chunk-gen can see its assigned variant.
     dims::apply_dim_worldgens(voxel, &world_meta);
 
-    // Pin the global atomics to the ACTIVE dim's effective seed +
-    // worldgen so noise callers (renderer-side decorations,
-    // background workers) see the right per-dim values right away.
-    let active_wg = voxel
-        .dim_worldgens
-        .get(&active_dim)
-        .copied()
-        .unwrap_or_else(|| {
-            WorldGen::from_str(&world_meta.worldgen).unwrap_or(WorldGen::Classic)
-        });
-    set_worldgen(active_wg);
-    set_world_seed(dim_seed(voxel.base_seed, &active_dim));
+    // W5.1: the dim_worldgens map (above) is the single source of
+    // truth for the active dim's profile; no atomics to pin.
+    // Apply the world.json fallback into the map when the map
+    // lacks an entry so future ctx reads pick up a sensible
+    // default rather than landing on Classic by accident.
+    if !voxel.dim_worldgens.contains_key(&active_dim) {
+        let fallback = WorldGen::from_str(&world_meta.worldgen)
+            .unwrap_or(WorldGen::Classic);
+        voxel.dim_worldgens.insert(active_dim.clone(), fallback);
+    }
 
     // Per-dim chunks + entities + containers.
     let chunks_loaded = dims::load_all_dims(voxel, slug, &world_meta)?;
@@ -221,10 +220,5 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     })
 }
 
-// Keep the `worldgen` import alive even when only its sub-paths
-// are referenced - silences the unused-import lint on the bin
-// crate without forcing a per-call `crate::worldgen::...` rewrite.
-#[allow(dead_code)]
-fn _keep_worldgen_imports() {
-    let _ = worldgen::world_seed();
-}
+// W5.1: the world_seed() / WORLDGEN atomics are gone; the
+// re-export shim that used to keep the import alive is removed.

@@ -147,6 +147,11 @@ pub fn world_seed() -> u32 {
     WORLD_SEED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+// W5.1a: production callers gone; only sibling worldgen tests
+// still reach for `set_world_seed` to seed the legacy
+// `generate_chunk_at` bridge. The atomic + this setter both
+// disappear in W5.1b.
+#[allow(dead_code)]
 pub fn set_world_seed(value: u32) {
     WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
 }

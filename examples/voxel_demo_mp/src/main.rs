@@ -127,9 +127,7 @@ use player::{
     submerged_liquid_eye,
 };
 use ui::{AppState, BackTo, HighlightMode, InvAction, SlotIcon, match_recipe, match_recipe_named};
-use worldgen::{
-    Biome, WORLDGEN, WorldGen, biome_at, set_world_seed, world_seed,
-};
+use worldgen::{Biome, WorldGen, biome_at};
 use drops::{DROP_ATTRACT_RADIUS, DropItem};
 use inventory::{
     HOTBAR_SLOTS, INVENTORY_COLS, INVENTORY_ROWS, INVENTORY_SLOTS,
@@ -2447,8 +2445,9 @@ impl Voxel {
         }
         // World seed persists for solo play so re-runs share
         // the same terrain. Hosted sessions still rely on
-        // ServerStateV2's own seed field.
-        let _ = writeln!(text, "world_seed={}", world_seed());
+        // ServerStateV2's own seed field. W5.1: written from
+        // voxel.base_seed; per-dim split happens at gen time.
+        let _ = writeln!(text, "world_seed={}", self.base_seed);
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -2551,7 +2550,8 @@ impl Voxel {
                     if let Ok(v) = value.parse::<u32>()
                         && v != 0
                     {
-                        set_world_seed(v);
+                        // W5.1: load into voxel.base_seed.
+                        self.base_seed = v;
                     }
                 }
                 _ => {}
@@ -3039,14 +3039,16 @@ impl Voxel {
                 // wasn't restored from the on-disk state. The
                 // nanosecond clock + a fixed mixing constant give
                 // a different terrain layout per cold start.
-                if world_seed() == 0 {
+                // W5.1: writes voxel.base_seed instead of the
+                // (deleted) global atomic.
+                if self.base_seed == 0 {
                     let seed = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.subsec_nanos())
                         .unwrap_or(0)
                         .wrapping_mul(0x9E37_79B1)
                         | 1;
-                    set_world_seed(seed);
+                    self.base_seed = seed;
                 }
                 self.net = NetRole::Server {
                     server: s,
@@ -3457,9 +3459,12 @@ impl Voxel {
                 // `player_name`.
                 // Send world seed to brand-new joiners so their
                 // chunk workers generate matching terrain.
+                // W5.1: ship the base seed; clients derive
+                // per-dim values via dim_seed() the same way the
+                // host does.
                 if !new_ids.is_empty()
                     && let Ok(buf) =
-                        bincode::serde::encode_to_vec(world_seed(), cfg)
+                        bincode::serde::encode_to_vec(self.base_seed, cfg)
                 {
                     for id in &new_ids {
                         server.send_bytes_to_client(*id, "vx.seed", buf.clone());
@@ -3908,14 +3913,16 @@ impl Voxel {
             self.browser_error = Some(format!("kicked: {reason}"));
         }
         if let Some(seed) = seed_update
-            && seed != world_seed()
+            && seed != self.base_seed
         {
             // Server picked a new world seed: adopt it and drop
             // every generated chunk so the next streaming pass
             // re-runs the workers with the new noise. We can't
             // mid-flight remap existing chunks since heights /
             // ore positions / biomes all changed.
-            set_world_seed(seed);
+            // W5.1: writes voxel.base_seed; per-dim splitting
+            // happens inside current_worldgen_ctx().
+            self.base_seed = seed;
             let to_unload: Vec<ChunkCoord> = self
                 .world
                 .iter_chunks()
@@ -4700,11 +4707,14 @@ impl Voxel {
             }
         }
         self.rebuild_all_meshes();
-        self.last_built_worldgen = Some(WorldGen::current());
+        // W5.1: read profile from per-dim ctx, not the deleted
+        // global atomic.
+        let active_wg = self.current_worldgen_ctx().profile;
+        self.last_built_worldgen = Some(active_wg);
         info!(
             chunks = self.world.iter_chunks().count(),
             submeshes = self.chunk_meshes.len(),
-            worldgen = ?WorldGen::current(),
+            worldgen = ?active_wg,
             "initial world built"
         );
     }
@@ -6094,7 +6104,10 @@ impl Voxel {
             2 => Some("Snow"),
             _ => None,
         };
-        let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z, world_seed());
+        // W5.1: ctx-driven seed lookup so the HUD label tracks the
+        // active dim's effective seed without a global atomic.
+        let biome_seed = self.current_worldgen_ctx().effective_seed();
+        let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z, biome_seed);
         let spawn_xz: (f32, f32) = match self.spawn_pos {
             Some(p) => (p[0], p[2]),
             None => (0.0, 0.0),
@@ -6382,6 +6395,9 @@ impl Voxel {
             .session_started
             .map(|t| t.elapsed().as_secs())
             .unwrap_or(0);
+        // W5.1: capture the effective seed for the F3 HUD label so
+        // the egui closure doesn't have to borrow &self.
+        let dbg_seed = self.current_worldgen_ctx().effective_seed();
         let dbg_pending = self.pending_chunks.len();
         let dbg_net = match &self.net {
             NetRole::Offline => "offline".to_string(),
@@ -6413,6 +6429,10 @@ impl Voxel {
         // &mut self to work with.
         self.refresh_menu_caches();
         self.sync_menu_options();
+        // W5.1: snapshot the active dim's effective seed BEFORE the
+        // `&mut self.settings` capture so the immutable borrow on
+        // self doesn't collide with the mutable capture chain.
+        let active_world_seed = self.current_worldgen_ctx().effective_seed();
         let settings_edit = &mut self.settings;
         // Live-edit flag the F6 panel writes back when the user
         // clicks its window close button. Mirrors back to
@@ -6572,7 +6592,8 @@ impl Voxel {
         // (form buffers, screen variant) + pushes actions into
         // `menu_actions` for the outer apply pass.
         let mut menu_actions: Vec<menu::MenuAction> = Vec::new();
-        let menu_world_seed = world_seed();
+        // W5.1: menu HUD shows the active world's effective seed.
+        let menu_world_seed = active_world_seed;
         let menu_engine_version = env!("CARGO_PKG_VERSION");
         // Snapshot the menu's caches as locals so the closure can
         // borrow them alongside the disjoint `&mut menu.screen` +
@@ -6655,7 +6676,7 @@ impl Voxel {
                         ui.label(
                             egui::RichText::new(format!(
                                 "Seed: {}",
-                                world_seed()
+                                menu_world_seed
                             ))
                             .color(egui::Color32::from_rgb(150, 180, 180))
                             .small()
@@ -7067,7 +7088,7 @@ impl Voxel {
                                 let m = (dbg_playtime % 3600) / 60;
                                 let s = dbg_playtime % 60;
                                 ui.label(format!("session: {h:02}:{m:02}:{s:02}"));
-                                ui.label(format!("seed: {}", world_seed()));
+                                ui.label(format!("seed: {dbg_seed}"));
                             });
                         });
                 }
@@ -8589,7 +8610,8 @@ impl Voxel {
                 self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
-                let want_wg = WorldGen::current();
+                // W5.1: read per-dim ctx instead of the global atomic.
+                let want_wg = self.current_worldgen_ctx().profile;
                 if self.last_built_worldgen != Some(want_wg) {
                     self.reset_world();
                     self.build_world();
@@ -8616,9 +8638,26 @@ impl Voxel {
                         "world_save: write_meta on NewWorld failed"
                     );
                 }
+                // W5.1: pick a fresh seed if we don't yet have one
+                // pinned in voxel state, then derive worldgen from
+                // the active dim's profile (defaulting to Classic).
+                if self.base_seed == 0 {
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos())
+                        .unwrap_or(0)
+                        .wrapping_mul(0x9E37_79B1)
+                        | 1;
+                    self.base_seed = seed;
+                }
+                let active_wg = self
+                    .dim_worldgens
+                    .get(&self.current_dim)
+                    .copied()
+                    .unwrap_or(WorldGen::Classic);
                 let wj = world_save::world_json::create_world(
-                    world_save::worldgen_str(WorldGen::current()),
-                    world_seed(),
+                    world_save::worldgen_str(active_wg),
+                    self.base_seed,
                 );
                 if let Err(err) = world_save::world_json::write_world(&slug, &wj) {
                     warn!(
@@ -8752,17 +8791,23 @@ impl AppHandler for Voxel {
         // Pick a default world seed for solo / offline play so
         // each cold start gets a different layout. Hosts override
         // via start_hosting; persisted state will eventually load
-        // here once the save format carries a seed field.
-        if world_seed() == 0 {
+        // here once the save format carries a seed field. W5.1:
+        // writes voxel.base_seed (no global atomic).
+        if self.base_seed == 0 {
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0)
                 .wrapping_mul(0x9E37_79B1)
                 | 1;
-            set_world_seed(seed);
+            self.base_seed = seed;
         }
-        info!(width = w, height = h, seed = world_seed(), "voxel_demo started");
+        info!(
+            width = w,
+            height = h,
+            seed = self.base_seed,
+            "voxel_demo started"
+        );
         match Renderer::new(window) {
             Ok(r) => {
                 let ui = EditorUi::new(r.wgpu_device(), r.surface_format(), window.raw(), 1);
@@ -12254,6 +12299,10 @@ fn main() -> ExitCode {
     let mut title_suffix = String::new();
     let mut texture_dir: Option<std::path::PathBuf> = None;
     let mut sounds_dir: Option<std::path::PathBuf> = None;
+    // W5.1: collect the CLI worldgen flag and stamp it onto the
+    // Voxel after construction (the global WORLDGEN atomic is
+    // gone).
+    let mut cli_worldgen: Option<WorldGen> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--textures" => {
@@ -12269,8 +12318,7 @@ fn main() -> ExitCode {
                 match WorldGen::from_str(&m) {
                     Some(g) => {
                         info!(mode = ?g, "worldgen mode set");
-                        WORLDGEN
-                            .store(g as u8, std::sync::atomic::Ordering::Relaxed);
+                        cli_worldgen = Some(g);
                     }
                     None => {
                         warn!(arg = %m, "unknown worldgen mode (classic|flat|islands|amplified|realistic)");
@@ -12331,6 +12379,12 @@ fn main() -> ExitCode {
         resizable: true,
     };
     let mut voxel = Voxel::new_with_net(net);
+    // W5.1: apply the CLI --worldgen flag to the active dim's
+    // per-dim worldgen entry. Replaces the deleted global atomic.
+    if let Some(g) = cli_worldgen {
+        let dim = voxel.current_dim.clone();
+        voxel.dim_worldgens.insert(dim, g);
+    }
     // Default asset resolution. We probe two locations in order:
     //
     //   1. `<exe-dir>/assets/...` - ships next to the binary in
