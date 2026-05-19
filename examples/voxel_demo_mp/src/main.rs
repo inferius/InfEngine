@@ -102,6 +102,8 @@ mod dim_teleport_tests;
 mod debug_tests;
 #[cfg(test)]
 mod flint_durability_tests;
+#[cfg(test)]
+mod chest_mp_wire_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -1005,6 +1007,20 @@ struct Voxel {
     /// chest UI is visible. Set by an RMB-on-chest interaction +
     /// cleared by ESC / walking too far / opening another panel.
     chest_open: Option<[i32; 3]>,
+    /// W5.3a: server-side viewer registration. Maps chest pos to
+    /// the client id currently looking at it. Single-viewer for
+    /// Wave 5; opening from a new client replaces the entry. Used
+    /// by `apply_chest_action_*` paths to fan out `ChestStateMsg`
+    /// updates only to the active viewer. Empty on clients.
+    chest_viewers: HashMap<[i32; 3], u32>,
+    /// W5.3b: mirror of `chest_viewers` for furnaces. Same single-
+    /// viewer contract.
+    furnace_viewers: HashMap<[i32; 3], u32>,
+    /// W5.3b: per-viewer throttle timestamps for furnace state
+    /// snapshots. Keyed by chest/furnace pos. Furnaces tick fast
+    /// (cook progress changes every frame), so we cap broadcast
+    /// frequency at ~5 Hz while a viewer is registered.
+    furnace_state_last_sent_ms: HashMap<[i32; 3], u64>,
     /// Cursor-held stack while the chest UI is open. Mirrors how
     /// the standard inventory UI tracks a half / full stack drag;
     /// here it's a simple `Option<(item_id, count)>` because the
@@ -2810,6 +2826,243 @@ impl Voxel {
         }
     }
 
+    /// W5.3a: handle a batch of `vx.chest_open` requests. Each
+    /// open registers the sender as the chest's viewer (single-
+    /// viewer for Wave 5: a new opener displaces the previous)
+    /// and ships an immediate `ChestStateMsg` so the client paints
+    /// the host's contents instead of an empty grid.
+    fn apply_chest_open_msgs(&mut self, msgs: &[(u32, crate::net::ChestOpenMsg)]) {
+        for (client_id, m) in msgs {
+            // Mint an empty chest if the slot doesn't exist yet -
+            // matches the host-side RMB-on-chest path.
+            self.chests
+                .entry(m.pos)
+                .or_insert_with(block::chest::new_chest);
+            self.chest_viewers.insert(m.pos, *client_id);
+            self.broadcast_chest_state(m.pos);
+        }
+    }
+
+    /// W5.3a: handle a batch of `vx.chest_act` requests. Validates
+    /// the sender is the registered viewer; mutates the live chest
+    /// + sender's inventory; re-broadcasts the new state.
+    fn apply_chest_act_msgs(&mut self, msgs: &[(u32, crate::net::ChestActMsg)]) {
+        for (client_id, m) in msgs {
+            // Validate the viewer; ignore stray acts from clients
+            // that didn't go through the open handshake.
+            if self.chest_viewers.get(&m.pos).copied() != Some(*client_id) {
+                continue;
+            }
+            let Some(chest) = self.chests.get_mut(&m.pos) else {
+                continue;
+            };
+            // Mutate against the per-client inventory in the
+            // NetRole::Server inventories map. Pull it out, mutate,
+            // put it back. The host doesn't yet track per-viewer
+            // cursors; a transient local cursor lives for the
+            // duration of the apply call.
+            let mut cursor: Option<(u16, u8)> = None;
+            if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut self.net
+                && let Some(inv) = inventories.get_mut(client_id)
+            {
+                let mut inv_u16: Vec<Option<(u16, u8)>> = inv
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                let action = m.action.to_grid_action();
+                if m.player_side {
+                    block::chest::apply_player_action(
+                        &mut inv_u16,
+                        chest,
+                        &mut cursor,
+                        action,
+                    );
+                } else {
+                    block::chest::apply_chest_action(
+                        chest,
+                        &mut inv_u16,
+                        &mut cursor,
+                        action,
+                    );
+                }
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= inv.inventory.len() {
+                        break;
+                    }
+                    inv.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
+                pending_inv_sends.insert(*client_id);
+            }
+            // Pos is needed beyond the borrow scope above.
+            let pos = m.pos;
+            self.broadcast_chest_state(pos);
+        }
+    }
+
+    /// W5.3a: handle a batch of `vx.chest_close` requests. Clears
+    /// the viewer registration so subsequent host-side mutations
+    /// stop fanning out a `ChestStateMsg` to the previous viewer.
+    fn apply_chest_close_msgs(&mut self, msgs: &[(u32, crate::net::ChestCloseMsg)]) {
+        for (client_id, m) in msgs {
+            if self.chest_viewers.get(&m.pos).copied() == Some(*client_id) {
+                self.chest_viewers.remove(&m.pos);
+            }
+        }
+    }
+
+    /// W5.3b: mirror of `apply_chest_open_msgs` for furnaces.
+    fn apply_furnace_open_msgs(&mut self, msgs: &[(u32, crate::net::FurnaceOpenMsg)]) {
+        for (client_id, m) in msgs {
+            self.furnaces
+                .entry(m.pos)
+                .or_insert_with(block::furnace::new_furnace);
+            self.furnace_viewers.insert(m.pos, *client_id);
+            // Open emits an immediate state snapshot (not subject
+            // to the 5 Hz throttle; that gate only applies to the
+            // cook-progress steady-state broadcasts).
+            self.broadcast_furnace_state(m.pos);
+        }
+    }
+
+    /// W5.3b: mirror of `apply_chest_act_msgs` for furnaces.
+    fn apply_furnace_act_msgs(&mut self, msgs: &[(u32, crate::net::FurnaceActMsg)]) {
+        for (client_id, m) in msgs {
+            if self.furnace_viewers.get(&m.pos).copied() != Some(*client_id) {
+                continue;
+            }
+            let Some(furnace) = self.furnaces.get_mut(&m.pos) else {
+                continue;
+            };
+            let mut cursor: Option<(u16, u8)> = None;
+            if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut self.net
+                && let Some(inv) = inventories.get_mut(client_id)
+            {
+                let mut inv_u16: Vec<Option<(u16, u8)>> = inv
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                let action = m.action.to_grid_action();
+                if m.player_side {
+                    block::furnace::apply_player_action(
+                        &mut inv_u16,
+                        furnace,
+                        &mut cursor,
+                        action,
+                    );
+                } else {
+                    block::furnace::apply_furnace_action(
+                        furnace,
+                        &mut inv_u16,
+                        &mut cursor,
+                        action,
+                    );
+                }
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= inv.inventory.len() {
+                        break;
+                    }
+                    inv.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
+                pending_inv_sends.insert(*client_id);
+            }
+            let pos = m.pos;
+            self.broadcast_furnace_state(pos);
+        }
+    }
+
+    /// W5.3b: mirror of `apply_chest_close_msgs` for furnaces.
+    fn apply_furnace_close_msgs(&mut self, msgs: &[(u32, crate::net::FurnaceCloseMsg)]) {
+        for (client_id, m) in msgs {
+            if self.furnace_viewers.get(&m.pos).copied() == Some(*client_id) {
+                self.furnace_viewers.remove(&m.pos);
+                // Clear the throttle stamp so a re-open later
+                // doesn't sit out the residual 200ms.
+                self.furnace_state_last_sent_ms.remove(&m.pos);
+            }
+        }
+    }
+
+    /// W5.3a: send a fresh `ChestStateMsg` snapshot for `pos` to
+    /// the registered viewer (if any). Called by the server-side
+    /// chest mutation paths so a remote viewer sees the host's
+    /// updated contents.
+    fn broadcast_chest_state(&mut self, pos: [i32; 3]) {
+        let Some(&viewer) = self.chest_viewers.get(&pos) else {
+            return;
+        };
+        let Some(chest) = self.chests.get(&pos) else {
+            return;
+        };
+        let slots: Vec<Option<(u16, u8)>> = chest.slots().to_vec();
+        // Host's `chest_held` is the cursor; on a remote viewer
+        // the host doesn't track per-viewer cursors today, so we
+        // pass `None` here. The next iteration of W5.3 can
+        // promote `chest_held` to a per-viewer map; for Wave 5
+        // the simpler shape ships.
+        let msg = crate::net::ChestStateMsg {
+            pos,
+            slots,
+            cursor: None,
+        };
+        if let NetRole::Server { server, .. } = &mut self.net {
+            let cfg = bincode::config::standard();
+            if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
+                server.send_bytes_to_client(viewer, "vx.chest_state", buf);
+            }
+        }
+    }
+
+    /// W5.3b: same as `broadcast_chest_state` but for furnaces.
+    /// Includes the live `FurnaceRuntime` triple so the client UI
+    /// can render fuel + cook progress bars without a separate
+    /// message. Caller is responsible for the 5 Hz throttle via
+    /// `should_send_furnace_state`.
+    fn broadcast_furnace_state(&mut self, pos: [i32; 3]) {
+        let Some(&viewer) = self.furnace_viewers.get(&pos) else {
+            return;
+        };
+        let Some(furnace) = self.furnaces.get(&pos) else {
+            return;
+        };
+        let runtime = self
+            .furnace_runtimes
+            .get(&pos)
+            .copied()
+            .unwrap_or_default();
+        let slots: Vec<Option<(u16, u8)>> = furnace.slots().to_vec();
+        let msg = crate::net::FurnaceStateMsg {
+            pos,
+            slots,
+            fuel_left_ms: runtime.fuel_left_ms,
+            fuel_full_ms: runtime.fuel_full_ms,
+            cook_progress_ms: runtime.cook_progress_ms,
+            cursor: None,
+        };
+        if let NetRole::Server { server, .. } = &mut self.net {
+            let cfg = bincode::config::standard();
+            if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
+                server.send_bytes_to_client(viewer, "vx.furnace_state", buf);
+            }
+        }
+    }
+
+    /// W5.3b: 5 Hz throttle decision for furnace state broadcasts.
+    /// Returns `true` when the previous broadcast was > 200ms ago
+    /// (or never) and stamps `furnace_state_last_sent_ms[pos]` to
+    /// the supplied `now_ms`.
+    fn should_send_furnace_state(&mut self, pos: [i32; 3], now_ms: u64) -> bool {
+        let last = self.furnace_state_last_sent_ms.get(&pos).copied();
+        match last {
+            Some(t) if now_ms.saturating_sub(t) < 200 => false,
+            _ => {
+                self.furnace_state_last_sent_ms.insert(pos, now_ms);
+                true
+            }
+        }
+    }
+
     /// W5.2b: decrement the currently-held flint+steel's durability
     /// after a successful ignition (portal frame OR fire block).
     /// When the counter hits 0, empty the slot + drop the parallel
@@ -3416,12 +3669,27 @@ impl Voxel {
         // its borrow on `self.net`. Server arm also rebroadcasts so
         // every peer renders the matching wall mount.
         let mut torch_orient_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // W5.3a/b: incoming chest + furnace state snapshots from
+        // the host. Applied below to refresh the local chest /
+        // furnace maps so the open UI mirrors the authoritative
+        // contents.
+        let mut chest_state_updates: Vec<net::ChestStateMsg> = Vec::new();
+        let mut furnace_state_updates: Vec<net::FurnaceStateMsg> = Vec::new();
         let mut kick_reason: Option<String> = None;
         // Mob damage requests + events to process after the match
         // arm closes (damage_mob borrows the whole `&mut self`).
         let mut mob_hits_to_apply: Vec<(u32, u32)> = Vec::new();
         let mut mob_events: Vec<MobEventMsg> = Vec::new();
         let mut mob_removals: Vec<u32> = Vec::new();
+        // W5.3a/b: chest + furnace messages are collected here so
+        // the apply pass can re-borrow `&mut self` after the
+        // `match &mut self.net` block closes.
+        let mut chest_opens_outer: Vec<(u32, net::ChestOpenMsg)> = Vec::new();
+        let mut chest_acts_outer: Vec<(u32, net::ChestActMsg)> = Vec::new();
+        let mut chest_closes_outer: Vec<(u32, net::ChestCloseMsg)> = Vec::new();
+        let mut furnace_opens_outer: Vec<(u32, net::FurnaceOpenMsg)> = Vec::new();
+        let mut furnace_acts_outer: Vec<(u32, net::FurnaceActMsg)> = Vec::new();
+        let mut furnace_closes_outer: Vec<(u32, net::FurnaceCloseMsg)> = Vec::new();
         let cfg = bincode::config::standard();
         match &mut self.net {
             NetRole::Offline => return,
@@ -3449,6 +3717,8 @@ impl Voxel {
                 let mut raw_edits: Vec<(u32, EditMsg)> = Vec::new();
                 let mut path_requests: Vec<(u32, [i32; 3])> = Vec::new();
                 let mut raw_drags: Vec<(u32, InvActionMsg)> = Vec::new();
+                // W5.3a/b: borrow the outer-scope collectors so
+                // the apply pass after the match has data to act on.
                 {
                     let mut inbox = net::ServerInboxCtx {
                         day_time: &mut self.day_time,
@@ -3467,6 +3737,12 @@ impl Voxel {
                         torch_orient_updates: &mut torch_orient_updates,
                         chat_inbox: &mut chat_inbox,
                         pvp_self_damage: &mut pvp_self_damage,
+                        chest_opens: &mut chest_opens_outer,
+                        chest_acts: &mut chest_acts_outer,
+                        chest_closes: &mut chest_closes_outer,
+                        furnace_opens: &mut furnace_opens_outer,
+                        furnace_acts: &mut furnace_acts_outer,
+                        furnace_closes: &mut furnace_closes_outer,
                     };
                     net::process_server_inbox(
                         server,
@@ -3480,6 +3756,11 @@ impl Voxel {
                         &mut inbox,
                     );
                 }
+                // W5.3a/b: chest + furnace messages are applied
+                // AFTER the match arm closes so the apply path can
+                // re-borrow `&mut self.net` to send state snapshots.
+                // The vars are visible outside the match because
+                // they're declared in this scope's prelude (above).
                 // Roster snapshot: use the authoritative connection
                 // list (`server.client_ids`) rather than the pose
                 // table, so dropped clients are detected as soon as
@@ -3820,6 +4101,8 @@ impl Voxel {
                         drop_removes: &mut drop_removes,
                         torch_orient_updates: &mut torch_orient_updates,
                         kick_reason: &mut kick_reason,
+                        chest_state_updates: &mut chest_state_updates,
+                        furnace_state_updates: &mut furnace_state_updates,
                     };
                     net::process_client_inbox(
                         client,
@@ -4141,6 +4424,58 @@ impl Voxel {
                 });
             }
         }
+        // W5.3a/b: apply queued chest + furnace messages. Each
+        // open registers the sender as the viewer + ships an
+        // immediate state snapshot. Each act mutates the live
+        // container + re-broadcasts. Each close clears the viewer.
+        // Called HERE - outside the `match &mut self.net` arm above
+        // - so the borrow checker is happy with `&mut self`.
+        self.apply_chest_open_msgs(&chest_opens_outer);
+        self.apply_chest_act_msgs(&chest_acts_outer);
+        self.apply_chest_close_msgs(&chest_closes_outer);
+        self.apply_furnace_open_msgs(&furnace_opens_outer);
+        self.apply_furnace_act_msgs(&furnace_acts_outer);
+        self.apply_furnace_close_msgs(&furnace_closes_outer);
+        // W5.3a/b: client-side - apply incoming state snapshots
+        // from the host. Each snapshot overwrites the local
+        // chest/furnace contents so the open UI mirrors the
+        // authoritative state. The `chest_held` cursor mirrors the
+        // host-tracked value (always None for Wave 5; the host
+        // doesn't yet track per-viewer cursors).
+        for state in chest_state_updates {
+            let mut c = block::chest::new_chest();
+            for (i, slot) in state.slots.iter().enumerate() {
+                if i >= c.len() {
+                    break;
+                }
+                c.set_slot(i, *slot);
+            }
+            self.chests.insert(state.pos, c);
+            if self.chest_open == Some(state.pos) {
+                self.chest_held = state.cursor;
+            }
+        }
+        for state in furnace_state_updates {
+            let mut f = block::furnace::new_furnace();
+            for (i, slot) in state.slots.iter().enumerate() {
+                if i >= f.len() {
+                    break;
+                }
+                f.set_slot(i, *slot);
+            }
+            self.furnaces.insert(state.pos, f);
+            self.furnace_runtimes.insert(
+                state.pos,
+                block::furnace::FurnaceRuntime {
+                    fuel_left_ms: state.fuel_left_ms,
+                    fuel_full_ms: state.fuel_full_ms,
+                    cook_progress_ms: state.cook_progress_ms,
+                },
+            );
+            if self.furnace_open == Some(state.pos) {
+                self.furnace_held = state.cursor;
+            }
+        }
         // Removals: clean up local mob bookkeeping mirroring what
         // damage_mob does server-side.
         for id in mob_removals {
@@ -4389,6 +4724,9 @@ impl Voxel {
             snow_positions: HashMap::new(),
             chests: HashMap::new(),
             chest_open: None,
+            chest_viewers: HashMap::new(),
+            furnace_viewers: HashMap::new(),
+            furnace_state_last_sent_ms: HashMap::new(),
             chest_held: None,
             furnaces: HashMap::new(),
             furnace_runtimes: HashMap::new(),
@@ -4761,6 +5099,16 @@ impl Voxel {
             for id in leftovers {
                 self.spawn_drop(BlockId(id), p);
             }
+            // W5.3a: notify the host we're no longer viewing this
+            // chest. Host clears the viewer registration so further
+            // mutations stop fanning out a state snapshot to us.
+            if let NetRole::Client { client, .. } = &mut self.net {
+                let cfg = bincode::config::standard();
+                let msg = crate::net::ChestCloseMsg { pos: p };
+                if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                    let _ = client.send_bytes("vx.chest_close", buf);
+                }
+            }
         }
     }
 
@@ -4776,6 +5124,15 @@ impl Voxel {
                 self.furnaces.get_mut(&p),
                 held,
             );
+            // W5.3b: notify the host so the viewer registration
+            // clears + state broadcasts stop.
+            if let NetRole::Client { client, .. } = &mut self.net {
+                let cfg = bincode::config::standard();
+                let msg = crate::net::FurnaceCloseMsg { pos: p };
+                if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                    let _ = client.send_bytes("vx.furnace_close", buf);
+                }
+            }
             for id in leftovers {
                 self.spawn_drop(BlockId(id), p);
             }
@@ -8482,6 +8839,24 @@ impl Voxel {
         if let Some(pos) = self.chest_open
             && !chest_grid_actions.is_empty()
         {
+            // W5.3a: as a client, forward each grid action to the
+            // host. The local mutation below STILL runs so the
+            // client UI stays responsive (optimistic apply); the
+            // next `vx.chest_state` broadcast reconciles by
+            // overwriting both the chest and the local inv slot.
+            if let NetRole::Client { client, .. } = &mut self.net {
+                let cfg = bincode::config::standard();
+                for (player_side, action) in &chest_grid_actions {
+                    let msg = crate::net::ChestActMsg {
+                        pos,
+                        player_side: *player_side,
+                        action: crate::net::ChestAct::from_grid_action(*action),
+                    };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes("vx.chest_act", buf);
+                    }
+                }
+            }
             if let Some(chest) = self.chests.get_mut(&pos) {
                 // Mirror the actions onto a temp u16-shaped
                 // player-inv buffer so the helpers (which expect
@@ -8531,6 +8906,22 @@ impl Voxel {
         if let Some(pos) = self.furnace_open
             && !furnace_grid_actions.is_empty()
         {
+            // W5.3b: forward each grid action to the host (client
+            // role). Local optimistic apply still runs below for
+            // UI responsiveness; reconcile on next state msg.
+            if let NetRole::Client { client, .. } = &mut self.net {
+                let cfg = bincode::config::standard();
+                for (player_side, action) in &furnace_grid_actions {
+                    let msg = crate::net::FurnaceActMsg {
+                        pos,
+                        player_side: *player_side,
+                        action: crate::net::ChestAct::from_grid_action(*action),
+                    };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes("vx.furnace_act", buf);
+                    }
+                }
+            }
             if let Some(furnace) = self.furnaces.get_mut(&pos) {
                 let mut inv_u16: Vec<Option<(u16, u8)>> = self
                     .inventory
@@ -10175,30 +10566,35 @@ impl AppHandler for Voxel {
                     pos,
                 );
                 self.furnace_open = Some(pos);
+                // W5.3b: notify host so we get state snapshots.
+                if let NetRole::Client { client, .. } = &mut self.net {
+                    let cfg = bincode::config::standard();
+                    let msg = crate::net::FurnaceOpenMsg { pos };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes("vx.furnace_open", buf);
+                    }
+                }
                 self.lmb_pending = false;
                 self.rmb_pending = false;
             } else if rmb && self.world.get(hit.voxel).0 == CHEST_ID {
                 // RMB on a chest: open the chest UI for the chest
-                // at this voxel. Host-local + offline paths set
-                // the open-chest flag directly; the chest map is
-                // already authoritative on this peer (clients
-                // received the place via `vx.edit` but the C.3
-                // MP wire for chest state is deferred to C.3f).
-                //
-                // TODO(C.3f): when running as `NetRole::Client`,
-                // ship a `vx.chest_open` to the host and treat
-                // subsequent `vx.chest_state` broadcasts as the
-                // authoritative chest contents. Today every peer
-                // mints its own local empty chest on open, so
-                // chest contents only persist + sync on the
-                // peer that placed + filled the chest. The save
-                // round trip still works on the host because
-                // `voxel.chests` lives on the host side.
+                // at this voxel. W5.3a wires the MP path: when
+                // running as `NetRole::Client`, ship a
+                // `vx.chest_open` to the host; subsequent
+                // `vx.chest_state` broadcasts paint the
+                // authoritative contents into the local map.
                 let pos = hit.voxel;
                 self.chests
                     .entry(pos)
                     .or_insert_with(block::chest::new_chest);
                 self.chest_open = Some(pos);
+                if let NetRole::Client { client, .. } = &mut self.net {
+                    let cfg = bincode::config::standard();
+                    let msg = crate::net::ChestOpenMsg { pos };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes("vx.chest_open", buf);
+                    }
+                }
                 // Drop any queued mouse-button edits the click
                 // that opened the chest would otherwise replay
                 // against the world.
@@ -10730,6 +11126,23 @@ impl AppHandler for Voxel {
             &mut self.furnace_runtimes,
             dt_ms,
         );
+        // W5.3b: broadcast furnace state snapshots to registered
+        // viewers at ~5 Hz so a remote client sees the cook
+        // progress + fuel bar move smoothly. The throttle gate
+        // avoids spamming a snapshot every frame.
+        if matches!(self.net, NetRole::Server { .. }) {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let viewer_positions: Vec<[i32; 3]> =
+                self.furnace_viewers.keys().copied().collect();
+            for pos in viewer_positions {
+                if self.should_send_furnace_state(pos, now_ms) {
+                    self.broadcast_furnace_state(pos);
+                }
+            }
+        }
         // Q.4c: fire random-tick. Runs server-side; clients pick
         // up the resulting `vx.edit` traffic. Cheap when
         // `self.fires` is empty (early return).

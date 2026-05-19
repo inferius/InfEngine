@@ -36,7 +36,7 @@ fn sixty_four_uses_empties_a_fresh_flint() {
         "64th use should empty the slot"
     );
     assert!(
-        v.item_durability.get(&slot).is_none(),
+        !v.item_durability.contains_key(&slot),
         "64th use should remove the durability tracker"
     );
 }
@@ -88,7 +88,7 @@ fn drag_moves_durability_with_stack() {
     assert!(v.inventory[from].is_none(), "from slot should be empty");
     assert_eq!(v.inventory[to], Some((BlockId(FLINT_AND_STEEL_ID), 1)));
     assert!(
-        v.item_durability.get(&from).is_none(),
+        !v.item_durability.contains_key(&from),
         "old slot's durability entry should be cleared"
     );
     assert_eq!(
@@ -121,7 +121,7 @@ fn drag_swap_with_unrelated_preserves_flint_durability() {
     assert_eq!(v.inventory[a], Some((BlockId(1), 16)));
     assert_eq!(v.inventory[b], Some((BlockId(FLINT_AND_STEEL_ID), 1)));
     // Durability follows the flint+steel.
-    assert!(v.item_durability.get(&a).is_none());
+    assert!(!v.item_durability.contains_key(&a));
     assert_eq!(v.item_durability.get(&b).copied(), Some(10));
 }
 

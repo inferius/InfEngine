@@ -160,6 +160,125 @@ pub(crate) struct InvActionMsg {
     pub(crate) split: SplitMode,
 }
 
+/// W5.3a: client -> host. "I just opened the chest at `pos`."
+/// Host registers the sender as the chest's viewer + ships an
+/// immediate `ChestStateMsg` so the client paints real contents
+/// instead of an empty grid. Single-viewer for Wave 5; the next
+/// client that opens the same chest displaces the previous viewer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct ChestOpenMsg {
+    pub(crate) pos: [i32; 3],
+}
+
+/// W5.3a: host -> client (snapshot). Full chest contents at `pos`.
+/// Sent on open + on every mutation while the client is registered
+/// as the viewer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChestStateMsg {
+    pub(crate) pos: [i32; 3],
+    pub(crate) slots: Vec<Option<(u16, u8)>>,
+    /// Cursor-held stack on the host's behalf for this viewer.
+    /// `None` means the client's cursor should be empty. Mirrors
+    /// the host's `chest_held` field; on every host-side mutation
+    /// the snapshot bundles the new cursor state so the client
+    /// re-renders without a separate round-trip.
+    pub(crate) cursor: Option<(u16, u8)>,
+}
+
+/// W5.3a: client -> host. Replay one GridAction against the
+/// chest at `pos`. Host validates + applies + sends back a
+/// `ChestStateMsg` with the new slot contents.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct ChestActMsg {
+    pub(crate) pos: [i32; 3],
+    /// `true` = the player-side action (player inventory grid
+    /// pulls from / pushes to the chest); `false` = the chest-side
+    /// action (chest grid).
+    pub(crate) player_side: bool,
+    pub(crate) action: ChestAct,
+}
+
+/// W5.3a: serde-friendly mirror of `container::ui::GridAction`.
+/// Stays in net.rs so the GridAction enum can keep its internal
+/// `pub(crate)` visibility without leaking serde into the container
+/// module.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) enum ChestAct {
+    Take(u32),
+    Place(u32),
+    TakeHalf(u32),
+    PlaceOne(u32),
+    Transfer(u32),
+}
+
+/// W5.3a: client -> host. "I just closed the chest." Host clears
+/// the viewer registration; subsequent mutations no longer fan
+/// out a `ChestStateMsg` to this client.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct ChestCloseMsg {
+    pub(crate) pos: [i32; 3],
+}
+
+/// W5.3b: same shape as `ChestOpenMsg` but for furnaces.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct FurnaceOpenMsg {
+    pub(crate) pos: [i32; 3],
+}
+
+/// W5.3b: host -> client. Furnace contents + the runtime triple
+/// (fuel + cook progress) so the client renders live bars.
+/// Throttled to ~5 Hz while open on the host side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FurnaceStateMsg {
+    pub(crate) pos: [i32; 3],
+    pub(crate) slots: Vec<Option<(u16, u8)>>,
+    pub(crate) fuel_left_ms: u32,
+    pub(crate) fuel_full_ms: u32,
+    pub(crate) cook_progress_ms: u32,
+    pub(crate) cursor: Option<(u16, u8)>,
+}
+
+/// W5.3b: client -> host. Mirror of `ChestActMsg` for furnaces.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct FurnaceActMsg {
+    pub(crate) pos: [i32; 3],
+    pub(crate) player_side: bool,
+    pub(crate) action: ChestAct,
+}
+
+/// W5.3b: client -> host. Mirror of `ChestCloseMsg` for furnaces.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct FurnaceCloseMsg {
+    pub(crate) pos: [i32; 3],
+}
+
+impl ChestAct {
+    /// Map this wire-level enum to the internal `container::ui::
+    /// GridAction`. Inverse of `from_grid_action`.
+    pub(crate) fn to_grid_action(self) -> crate::container::ui::GridAction {
+        use crate::container::ui::GridAction as G;
+        match self {
+            ChestAct::Take(i) => G::Take(i as usize),
+            ChestAct::Place(i) => G::Place(i as usize),
+            ChestAct::TakeHalf(i) => G::TakeHalf(i as usize),
+            ChestAct::PlaceOne(i) => G::PlaceOne(i as usize),
+            ChestAct::Transfer(i) => G::Transfer(i as usize),
+        }
+    }
+
+    /// Map an internal `GridAction` into the wire variant.
+    pub(crate) fn from_grid_action(action: crate::container::ui::GridAction) -> Self {
+        use crate::container::ui::GridAction as G;
+        match action {
+            G::Take(i) => ChestAct::Take(i as u32),
+            G::Place(i) => ChestAct::Place(i as u32),
+            G::TakeHalf(i) => ChestAct::TakeHalf(i as u32),
+            G::PlaceOne(i) => ChestAct::PlaceOne(i as u32),
+            G::Transfer(i) => ChestAct::Transfer(i as u32),
+        }
+    }
+}
+
 /// Net wire message for a fresh drop the host wants every peer
 /// to render. Sent on spawn; clients append to their local
 /// `dropped_items` mirror.
@@ -418,6 +537,11 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub drop_removes: &'a mut Vec<u32>,
     pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
     pub kick_reason: &'a mut Option<String>,
+    /// W5.3a/b: incoming chest + furnace state snapshots from the
+    /// host. Applied by the main loop to overwrite the local
+    /// chest/furnace contents + runtime triple.
+    pub chest_state_updates: &'a mut Vec<ChestStateMsg>,
+    pub furnace_state_updates: &'a mut Vec<FurnaceStateMsg>,
 }
 
 /// Drain the client socket's inbound queue, decode each `vx.*`
@@ -491,6 +615,20 @@ pub(crate) fn process_client_inbox(
                     // any pending drag intents are now
                     // resolved one way or the other.
                     pending_inv_actions.clear();
+                }
+            }
+            "vx.chest_state" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<ChestStateMsg, _>(&data, cfg)
+                {
+                    ctx.chest_state_updates.push(m);
+                }
+            }
+            "vx.furnace_state" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<FurnaceStateMsg, _>(&data, cfg)
+                {
+                    ctx.furnace_state_updates.push(m);
                 }
             }
             "vx.mob" => {
@@ -671,6 +809,16 @@ pub(crate) struct ServerInboxCtx<'a> {
     pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
     pub chat_inbox: &'a mut Vec<String>,
     pub pvp_self_damage: &'a mut f32,
+    /// W5.3a: pending chest open / act / close events for the
+    /// host's main loop to apply against the live `chests` map +
+    /// `chest_viewers` registration.
+    pub chest_opens: &'a mut Vec<(u32, ChestOpenMsg)>,
+    pub chest_acts: &'a mut Vec<(u32, ChestActMsg)>,
+    pub chest_closes: &'a mut Vec<(u32, ChestCloseMsg)>,
+    /// W5.3b: same for furnaces.
+    pub furnace_opens: &'a mut Vec<(u32, FurnaceOpenMsg)>,
+    pub furnace_acts: &'a mut Vec<(u32, FurnaceActMsg)>,
+    pub furnace_closes: &'a mut Vec<(u32, FurnaceCloseMsg)>,
 }
 
 /// Drain the server socket's inbound queue and dispatch each
@@ -730,6 +878,48 @@ pub(crate) fn process_server_inbox(
                     bincode::serde::decode_from_slice::<InvActionMsg, _>(&data, cfg)
                 {
                     ctx.raw_drags.push((client_id, m));
+                }
+            }
+            "vx.chest_open" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<ChestOpenMsg, _>(&data, cfg)
+                {
+                    ctx.chest_opens.push((client_id, m));
+                }
+            }
+            "vx.chest_act" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<ChestActMsg, _>(&data, cfg)
+                {
+                    ctx.chest_acts.push((client_id, m));
+                }
+            }
+            "vx.chest_close" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<ChestCloseMsg, _>(&data, cfg)
+                {
+                    ctx.chest_closes.push((client_id, m));
+                }
+            }
+            "vx.furnace_open" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<FurnaceOpenMsg, _>(&data, cfg)
+                {
+                    ctx.furnace_opens.push((client_id, m));
+                }
+            }
+            "vx.furnace_act" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<FurnaceActMsg, _>(&data, cfg)
+                {
+                    ctx.furnace_acts.push((client_id, m));
+                }
+            }
+            "vx.furnace_close" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<FurnaceCloseMsg, _>(&data, cfg)
+                {
+                    ctx.furnace_closes.push((client_id, m));
                 }
             }
             "vx.recipe" => {
