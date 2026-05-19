@@ -36,6 +36,8 @@ mod phase_f_tests;
 mod split_tests;
 #[cfg(test)]
 mod w11_emitter_tests;
+#[cfg(test)]
+mod w12_blocks_tests;
 
 // Re-export every type + constant the rest of the engine consumes.
 // New call sites should `use crate::block::*` (or the specific

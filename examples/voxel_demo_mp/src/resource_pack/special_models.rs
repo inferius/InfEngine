@@ -59,7 +59,13 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
         "block/fence_post" | "fence_post" => Some(build_fence_post()),
         "block/door_lower" | "door_lower" => Some(build_door_lower()),
+        "block/door_upper" | "door_upper" => Some(build_door_upper()),
         "block/bed_foot" | "bed_foot" => Some(build_bed_foot()),
+        // W12.2 - stairs / pane / bars / wall.
+        "block/stairs" | "stairs" => Some(build_stairs()),
+        "block/glass_pane" | "glass_pane" => Some(build_thin_pane()),
+        "block/iron_bars" | "iron_bars" => Some(build_thin_pane()),
+        "block/wall_post" | "wall_post" => Some(build_wall_post()),
         _ => None,
     }
 }
@@ -69,14 +75,35 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
 /// cube emission for known specials. Today this is consumed only
 /// by tests + by W9.x.3's `model_for_block` resolver.
 pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
-    use crate::block::TORCH_ID;
+    use crate::block::{
+        COBBLESTONE_SLAB_ID, COBBLESTONE_STAIRS_ID, COBBLESTONE_WALL_ID, GLASS_PANE_ID,
+        IRON_BARS_ID, IRON_DOOR_ID, NETHER_BRICK_FENCE_ID, OAK_DOOR_ID,
+        OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID, OAK_SLAB_TOP_ID, OAK_STAIRS_ID,
+        STONE_SLAB_ID, STONE_STAIRS_ID, TORCH_ID,
+    };
     match id {
         x if x == TORCH_ID => Some("block/torch"),
-        // Wave 9.x scope: only torch ships as a routed special.
-        // Slabs / fences / doors / beds live in the engine as full
-        // cubes today - this registry holds the geometry so a
-        // future block-id assignment can route to them with one
-        // line per id added to this match.
+        // W12.2 - slab / fence / door / stairs / pane / bars / wall.
+        x if x == OAK_SLAB_ID
+            || x == STONE_SLAB_ID
+            || x == COBBLESTONE_SLAB_ID =>
+        {
+            Some("block/slab")
+        }
+        x if x == OAK_SLAB_TOP_ID => Some("block/slab_top"),
+        x if x == OAK_STAIRS_ID
+            || x == STONE_STAIRS_ID
+            || x == COBBLESTONE_STAIRS_ID =>
+        {
+            Some("block/stairs")
+        }
+        x if x == OAK_FENCE_ID || x == NETHER_BRICK_FENCE_ID => {
+            Some("block/fence_post")
+        }
+        x if x == OAK_DOOR_ID || x == IRON_DOOR_ID => Some("block/door_lower"),
+        x if x == OAK_DOOR_UPPER_ID => Some("block/door_upper"),
+        x if x == GLASS_PANE_ID || x == IRON_BARS_ID => Some("block/glass_pane"),
+        x if x == COBBLESTONE_WALL_ID => Some("block/wall_post"),
         _ => None,
     }
 }
@@ -280,6 +307,108 @@ pub(crate) fn build_door_lower() -> BlockModel {
     }
 }
 
+/// Door upper half. Cite: `door_top_left.json` - mirror of the
+/// lower half with the texture sampled from the upper door image
+/// (the engine resolves `door_oak_upper.png` per the W12.2
+/// BlockType row's `top`/`bottom`/`sides` tile spec).
+pub(crate) fn build_door_upper() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [0.0, 0.0, 0.0],
+            to: [3.0, 16.0, 16.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#bottom", None)),
+                up: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#top", None)),
+                north: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#side", None)),
+                south: Some(uv_face([13.0, 0.0, 16.0, 16.0], "#side", None)),
+                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// Stairs (east-facing default). Cite: `models/block/stairs.json`.
+///
+/// 2 elements:
+/// - bottom slab `[0,0,0]->[16,8,16]`
+/// - upper half step `[8,8,0]->[16,16,16]` (visible east-side step).
+pub(crate) fn build_stairs() -> BlockModel {
+    let bottom = ModelElement {
+        from: [0.0, 0.0, 0.0],
+        to: [16.0, 8.0, 16.0],
+        rotation: None,
+        shade: true,
+        faces: ElementFaces {
+            down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", Some(CubeFace::Down))),
+            up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+            north: Some(uv_face([0.0, 8.0, 16.0, 16.0], "#side", Some(CubeFace::North))),
+            south: Some(uv_face([0.0, 8.0, 16.0, 16.0], "#side", Some(CubeFace::South))),
+            west: Some(uv_face([0.0, 8.0, 16.0, 16.0], "#side", Some(CubeFace::West))),
+            east: Some(uv_face([0.0, 8.0, 16.0, 16.0], "#side", Some(CubeFace::East))),
+        },
+    };
+    let step = ModelElement {
+        from: [8.0, 8.0, 0.0],
+        to: [16.0, 16.0, 16.0],
+        rotation: None,
+        shade: true,
+        faces: ElementFaces {
+            down: Some(uv_face([8.0, 0.0, 16.0, 16.0], "#top", None)),
+            up: Some(uv_face([8.0, 0.0, 16.0, 16.0], "#top", Some(CubeFace::Up))),
+            north: Some(uv_face([0.0, 0.0, 8.0, 8.0], "#side", Some(CubeFace::North))),
+            south: Some(uv_face([0.0, 0.0, 8.0, 8.0], "#side", Some(CubeFace::South))),
+            west: Some(uv_face([0.0, 0.0, 16.0, 8.0], "#side", None)),
+            east: Some(uv_face([0.0, 0.0, 16.0, 8.0], "#side", Some(CubeFace::East))),
+        },
+    };
+    BlockModel {
+        elements: vec![bottom, step],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// Thin pane / iron bars centre post. Cite:
+/// `models/block/glass_pane_post.json` + `models/block/iron_bars_post.json`.
+/// 2x16x2 centre column; the 4 connection arms are a follow-up
+/// (multipart blockstate). Glass pane and iron bars share the
+/// same post geometry; only the texture differs.
+pub(crate) fn build_thin_pane() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [7.0, 0.0, 7.0],
+            to: [9.0, 16.0, 9.0],
+            rotation: None,
+            shade: true,
+            faces: cube_all_faces("#texture"),
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// Cobblestone wall post. Cite: `models/block/template_wall_post.json`
+/// -> centre 8x16x8 column. Side arms (`template_wall_side.json`)
+/// are a follow-up tied to the multipart blockstate dispatch.
+pub(crate) fn build_wall_post() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [4.0, 0.0, 4.0],
+            to: [12.0, 16.0, 12.0],
+            rotation: None,
+            shade: true,
+            faces: cube_all_faces("#texture"),
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
 /// Bed foot. Cite: `bed_foot.json` (simplified to one cuboid -
 /// the real MC bed splits foot vs head into two voxels with
 /// shared `bed.json` textures).
@@ -421,6 +550,142 @@ mod tests {
         let m = model_for_block(TORCH_ID).expect("torch model");
         assert_eq!(m.elements.len(), 1);
         assert_eq!(m.elements[0].from, [7.0, 0.0, 7.0]);
+    }
+
+    // ---------------------------------------------------------------
+    // W12.2 - Slab / fence / door / stairs / pane / wall routing.
+    // ---------------------------------------------------------------
+
+    fn w12_ids() -> &'static [u16] {
+        use crate::block::{
+            COBBLESTONE_SLAB_ID, COBBLESTONE_STAIRS_ID, COBBLESTONE_WALL_ID,
+            GLASS_PANE_ID, IRON_BARS_ID, IRON_DOOR_ID, NETHER_BRICK_FENCE_ID,
+            OAK_DOOR_ID, OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID,
+            OAK_SLAB_TOP_ID, OAK_STAIRS_ID, STONE_SLAB_ID, STONE_STAIRS_ID,
+        };
+        // Boxed to a 'static via `Box::leak`. Cheap; runs once.
+        static IDS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+        IDS.get_or_init(|| {
+            vec![
+                OAK_SLAB_ID, STONE_SLAB_ID, COBBLESTONE_SLAB_ID,
+                OAK_SLAB_TOP_ID, OAK_STAIRS_ID, STONE_STAIRS_ID,
+                COBBLESTONE_STAIRS_ID, OAK_FENCE_ID, NETHER_BRICK_FENCE_ID,
+                OAK_DOOR_ID, OAK_DOOR_UPPER_ID, IRON_DOOR_ID,
+                GLASS_PANE_ID, IRON_BARS_ID, COBBLESTONE_WALL_ID,
+            ]
+        })
+    }
+
+    #[test]
+    fn slab_bottom_routes_to_block_slab() {
+        use crate::block::{COBBLESTONE_SLAB_ID, OAK_SLAB_ID, STONE_SLAB_ID};
+        assert_eq!(name_for_block(OAK_SLAB_ID), Some("block/slab"));
+        assert_eq!(name_for_block(STONE_SLAB_ID), Some("block/slab"));
+        assert_eq!(name_for_block(COBBLESTONE_SLAB_ID), Some("block/slab"));
+    }
+
+    #[test]
+    fn slab_top_routes_to_block_slab_top() {
+        use crate::block::OAK_SLAB_TOP_ID;
+        assert_eq!(name_for_block(OAK_SLAB_TOP_ID), Some("block/slab_top"));
+    }
+
+    #[test]
+    fn slab_bottom_emits_top_face_at_y_0_5() {
+        use crate::block::OAK_SLAB_ID;
+        // Slab model: `to[1] = 8.0`, which means top face sits
+        // at y = 8/16 = 0.5 in voxel-local space.
+        let m = model_for_block(OAK_SLAB_ID).expect("oak slab routes");
+        let e = &m.elements[0];
+        let y_top_frac = e.to[1] / 16.0;
+        assert!(
+            (y_top_frac - 0.5).abs() < 1e-3,
+            "slab bottom top-face at y = {y_top_frac}, want 0.5",
+        );
+    }
+
+    #[test]
+    fn door_lower_emits_thin_slab_quad() {
+        use crate::block::OAK_DOOR_ID;
+        let m = model_for_block(OAK_DOOR_ID).expect("oak door routes");
+        let e = &m.elements[0];
+        assert!((e.to[0] - 3.0).abs() < 1e-3, "door not 3/16 thick");
+        assert_eq!(e.to[1], 16.0);
+        assert_eq!(e.to[2], 16.0);
+    }
+
+    #[test]
+    fn fence_post_visible_in_chunk_mesh() {
+        use crate::block::OAK_FENCE_ID;
+        let m = model_for_block(OAK_FENCE_ID).expect("oak fence routes");
+        let e = &m.elements[0];
+        assert_eq!(e.from, [6.0, 0.0, 6.0]);
+        assert_eq!(e.to, [10.0, 16.0, 10.0]);
+    }
+
+    #[test]
+    fn stairs_emits_two_elements() {
+        use crate::block::OAK_STAIRS_ID;
+        let m = model_for_block(OAK_STAIRS_ID).expect("oak stairs routes");
+        assert_eq!(m.elements.len(), 2);
+        assert_eq!(m.elements[0].to, [16.0, 8.0, 16.0]);
+        assert_eq!(m.elements[1].from, [8.0, 8.0, 0.0]);
+    }
+
+    #[test]
+    fn glass_pane_and_iron_bars_share_post_shape() {
+        use crate::block::{GLASS_PANE_ID, IRON_BARS_ID};
+        let gp = model_for_block(GLASS_PANE_ID).expect("glass pane routes");
+        let ib = model_for_block(IRON_BARS_ID).expect("iron bars routes");
+        assert_eq!(gp.elements[0].from, [7.0, 0.0, 7.0]);
+        assert_eq!(gp.elements[0].to, [9.0, 16.0, 9.0]);
+        assert_eq!(ib.elements[0].from, [7.0, 0.0, 7.0]);
+        assert_eq!(ib.elements[0].to, [9.0, 16.0, 9.0]);
+    }
+
+    #[test]
+    fn cobblestone_wall_post_centre_only() {
+        use crate::block::COBBLESTONE_WALL_ID;
+        let m = model_for_block(COBBLESTONE_WALL_ID).expect("wall routes");
+        let e = &m.elements[0];
+        assert_eq!(e.from, [4.0, 0.0, 4.0]);
+        assert_eq!(e.to, [12.0, 16.0, 12.0]);
+    }
+
+    #[test]
+    fn door_upper_distinct_from_door_lower() {
+        use crate::block::{OAK_DOOR_ID, OAK_DOOR_UPPER_ID};
+        assert_eq!(name_for_block(OAK_DOOR_ID), Some("block/door_lower"));
+        assert_eq!(
+            name_for_block(OAK_DOOR_UPPER_ID),
+            Some("block/door_upper"),
+        );
+    }
+
+    #[test]
+    fn iron_door_shares_lower_geometry() {
+        use crate::block::{IRON_DOOR_ID, OAK_DOOR_ID};
+        assert_eq!(name_for_block(IRON_DOOR_ID), name_for_block(OAK_DOOR_ID));
+    }
+
+    #[test]
+    fn every_w12_block_resolves_a_model() {
+        for &id in w12_ids() {
+            assert!(
+                model_for_block(id).is_some(),
+                "id {id} has no resolvable special model",
+            );
+        }
+    }
+
+    #[test]
+    fn nether_brick_fence_uses_post_geometry() {
+        use crate::block::NETHER_BRICK_FENCE_ID;
+        let m = model_for_block(NETHER_BRICK_FENCE_ID).expect("nb fence routes");
+        let e = &m.elements[0];
+        // Same fence-post 4x16x4 centre as oak.
+        assert_eq!(e.from, [6.0, 0.0, 6.0]);
+        assert_eq!(e.to, [10.0, 16.0, 10.0]);
     }
 
     #[test]

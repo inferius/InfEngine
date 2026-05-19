@@ -167,3 +167,44 @@ pub(crate) const LIT_REDSTONE_ORE_ID: u16 = 66;
 /// the debug stick; our engine exposes it the same way.
 #[allow(dead_code)]
 pub(crate) const LIGHT_BLOCK_ID: u16 = 67;
+
+// ---------------------------------------------------------------
+// W12.2 - Slab / fence / door / stairs / wall ids (68..=82).
+// ---------------------------------------------------------------
+//
+// Each id has a `BlockType` row in `registry.rs` with the
+// `F_DEDICATED_RENDER` flag set + a matching `name_for_block`
+// routing in `resource_pack::special_models`. Per the W12 design
+// decision the slabs split into top + bottom ids, stairs default
+// east-facing, doors split into lower + upper ids.
+
+#[allow(dead_code)]
+pub(crate) const OAK_SLAB_ID: u16 = 68;
+#[allow(dead_code)]
+pub(crate) const STONE_SLAB_ID: u16 = 69;
+#[allow(dead_code)]
+pub(crate) const COBBLESTONE_SLAB_ID: u16 = 70;
+#[allow(dead_code)]
+pub(crate) const OAK_SLAB_TOP_ID: u16 = 71;
+#[allow(dead_code)]
+pub(crate) const OAK_STAIRS_ID: u16 = 72;
+#[allow(dead_code)]
+pub(crate) const STONE_STAIRS_ID: u16 = 73;
+#[allow(dead_code)]
+pub(crate) const COBBLESTONE_STAIRS_ID: u16 = 74;
+#[allow(dead_code)]
+pub(crate) const OAK_FENCE_ID: u16 = 75;
+#[allow(dead_code)]
+pub(crate) const NETHER_BRICK_FENCE_ID: u16 = 76;
+#[allow(dead_code)]
+pub(crate) const OAK_DOOR_ID: u16 = 77;
+#[allow(dead_code)]
+pub(crate) const OAK_DOOR_UPPER_ID: u16 = 78;
+#[allow(dead_code)]
+pub(crate) const IRON_DOOR_ID: u16 = 79;
+#[allow(dead_code)]
+pub(crate) const GLASS_PANE_ID: u16 = 80;
+#[allow(dead_code)]
+pub(crate) const IRON_BARS_ID: u16 = 81;
+#[allow(dead_code)]
+pub(crate) const COBBLESTONE_WALL_ID: u16 = 82;

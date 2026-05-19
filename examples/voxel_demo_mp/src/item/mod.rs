@@ -490,6 +490,82 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: Some(67), max_stack: 64, icon: None,
         category: ItemCategory::Decoration,
     },
+    // ---- W12.2 - Slab / fence / door / stairs / pane / wall ----
+    ItemType {
+        id: 68, name: "oak_slab", display: Some("Oak Slab"),
+        places: Some(68), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 69, name: "stone_slab", display: Some("Stone Slab"),
+        places: Some(69), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 70, name: "cobblestone_slab", display: Some("Cobblestone Slab"),
+        places: Some(70), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 71, name: "oak_slab_top", display: Some("Oak Slab (Top)"),
+        places: Some(71), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 72, name: "oak_stairs", display: Some("Oak Stairs"),
+        places: Some(72), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 73, name: "stone_stairs", display: Some("Stone Stairs"),
+        places: Some(73), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 74, name: "cobblestone_stairs", display: Some("Cobblestone Stairs"),
+        places: Some(74), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 75, name: "oak_fence", display: Some("Oak Fence"),
+        places: Some(75), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 76, name: "nether_brick_fence", display: Some("Nether Brick Fence"),
+        places: Some(76), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 77, name: "oak_door", display: Some("Oak Door"),
+        places: Some(77), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 78, name: "oak_door_upper", display: Some("Oak Door (Top)"),
+        places: Some(78), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 79, name: "iron_door", display: Some("Iron Door"),
+        places: Some(79), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 80, name: "glass_pane", display: Some("Glass Pane"),
+        places: Some(80), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 81, name: "iron_bars", display: Some("Iron Bars"),
+        places: Some(81), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 82, name: "cobblestone_wall", display: Some("Cobblestone Wall"),
+        places: Some(82), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
 ];
 
 // ---------------------------------------------------------------

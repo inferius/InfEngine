@@ -602,4 +602,146 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["light_15.png", "glowstone.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["light_15.png", "glowstone.png"], keep_alpha: true },
     },
+    // ---------------------------------------------------------------
+    // W12.2 - Slab + Fence + Door + Stairs + Wall.
+    //
+    // ids 68..=82. Each carries F_DEDICATED_RENDER so the chunk
+    // mesher routes them through `special_models::model_for_block`
+    // instead of emitting a default cube. Texture file lists fall
+    // back to the matching full-cube texture so the BlockType row
+    // still renders if the special model can't resolve a mesh.
+    //
+    // Per W12 design decisions: slabs ship one id per top/bottom
+    // half (state-driven dual-mesh is a follow-up). Stairs default
+    // east-facing; rotation states are a follow-up. Doors split
+    // lower + upper ids; auto-pair logic is a follow-up.
+
+    // Oak slab (bottom half). Cite: `models/block/oak_slab.json`
+    // -> `template = block/slab` (lower-half cuboid).
+    BlockType {
+        id: 68, name: "oak_slab", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+    },
+    // Stone slab. Cite: `models/block/stone_slab.json`.
+    BlockType {
+        id: 69, name: "stone_slab", color: [0.50, 0.50, 0.55], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+    },
+    // Cobblestone slab. Cite: `models/block/cobblestone_slab.json`.
+    BlockType {
+        id: 70, name: "cobblestone_slab", color: [0.42, 0.42, 0.45], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        sides: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+    },
+    // Oak slab top-half. Cite: `models/block/oak_slab_top.json`.
+    BlockType {
+        id: 71, name: "oak_slab_top", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+    },
+    // Oak stairs. Cite: `models/block/oak_stairs.json`. W12.2 ships
+    // default east-facing only; rotation states are a follow-up.
+    BlockType {
+        id: 72, name: "oak_stairs", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+    },
+    // Stone stairs. Cite: `models/block/stone_stairs.json`.
+    BlockType {
+        id: 73, name: "stone_stairs", color: [0.50, 0.50, 0.55], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+    },
+    // Cobblestone stairs. Cite: `models/block/cobblestone_stairs.json`.
+    BlockType {
+        id: 74, name: "cobblestone_stairs", color: [0.42, 0.42, 0.45], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        sides: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+    },
+    // Oak fence. Cite: `models/block/oak_fence_post.json` plus 4
+    // connection arms (deferred to a follow-up that needs
+    // neighbour-aware multipart blockstate dispatch).
+    BlockType {
+        id: 75, name: "oak_fence", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+    },
+    // Nether brick fence. Cite: `models/block/nether_brick_fence_post.json`.
+    BlockType {
+        id: 76, name: "nether_brick_fence", color: [0.35, 0.18, 0.20], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
+    },
+    // Oak door (lower half). Cite: `models/block/oak_door_bottom.json`
+    // -> `template = block/door_bottom_left`.
+    BlockType {
+        id: 77, name: "oak_door", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
+    },
+    // Oak door (upper half). Cite: `models/block/oak_door_top.json`.
+    // Manual placement only in W12.2 - the chat /setblock places one
+    // half at a time; auto-pair-on-place is a follow-up.
+    BlockType {
+        id: 78, name: "oak_door_upper", color: [0.78, 0.60, 0.36], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
+    },
+    // Iron door (lower half). Cite: `models/block/iron_door_bottom.json`.
+    BlockType {
+        id: 79, name: "iron_door", color: [0.80, 0.80, 0.85], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+    },
+    // Glass pane. Cite: `models/block/glass_pane_post.json` - thin
+    // 2x2 centre post + 4 connection arms.
+    BlockType {
+        id: 80, name: "glass_pane", color: [0.85, 0.92, 0.98], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
+        bottom: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
+        sides: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
+    },
+    // Iron bars. Cite: `models/block/iron_bars_post.json`.
+    BlockType {
+        id: 81, name: "iron_bars", color: [0.55, 0.55, 0.60], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+    },
+    // Cobblestone wall. Cite: `models/block/cobblestone_wall_post.json`.
+    BlockType {
+        id: 82, name: "cobblestone_wall", color: [0.42, 0.42, 0.45], transparent: true,
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+        sides: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
+    },
 ];
