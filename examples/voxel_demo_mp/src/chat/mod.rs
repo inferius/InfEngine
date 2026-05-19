@@ -22,6 +22,7 @@
 //! `chat_history`, `chat_open`, `chat_history_idx`. This module
 //! is pure logic on top of that state.
 
+pub(crate) mod autocomplete;
 mod cmds_chat;
 mod cmds_creative;
 mod cmds_dim;
