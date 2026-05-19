@@ -56,6 +56,7 @@ pub(crate) const SPAWN_RING_OUTER: f32 = 32.0;
 
 /// Pluggable RNG: caller threads a counter-based xorshift through
 /// the AI tick so spawn + wander share entropy.
+#[derive(Debug)]
 pub(crate) struct SpawnRng<'a> {
     state: &'a mut u32,
 }
