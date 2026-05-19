@@ -224,3 +224,97 @@ asserts:
 Any change to either MC-fidelity table must bump the row count
 + recompute the checksum here AND in the per-module test, so a
 silent regression trips both layers.
+
+## W12.1 - block/mod.rs split
+
+`block/mod.rs` was 1181 LOC, over the 1000 hard cap. Split into
+`types.rs` (TileSpec + flags + BlockType), `ids.rs` (every
+`*_ID` constant), `registry.rs` (the BLOCK_TYPES static slice),
+`mod.rs` (re-exports + lookup helpers). External call sites
+unchanged.
+
+## W12.2 - Slab + fence + door + stairs + pane + wall
+
+New block ids 68..=82 (15 entries), each carrying
+`F_DEDICATED_RENDER` so the chunk mesher routes through
+`resource_pack::special_models::model_for_block`:
+
+| id | name | model |
+|----|------|-------|
+| 68 | oak_slab | block/slab |
+| 69 | stone_slab | block/slab |
+| 70 | cobblestone_slab | block/slab |
+| 71 | oak_slab_top | block/slab_top |
+| 72 | oak_stairs | block/stairs |
+| 73 | stone_stairs | block/stairs |
+| 74 | cobblestone_stairs | block/stairs |
+| 75 | oak_fence | block/fence_post |
+| 76 | nether_brick_fence | block/fence_post |
+| 77 | oak_door | block/door_lower |
+| 78 | oak_door_upper | block/door_upper |
+| 79 | iron_door | block/door_lower |
+| 80 | glass_pane | block/glass_pane |
+| 81 | iron_bars | block/glass_pane |
+| 82 | cobblestone_wall | block/wall_post |
+
+Per W12 design: slab top + bottom are separate ids, stairs
+default east-facing, doors split into lower + upper.
+
+## W12.3 - Textured particle pass plumbing
+
+New `particle_pass`: EmitterKind (Smoke / BigSmoke / Flame /
+Lava), ParticleInstance, ParticleAtlas. Frame index =
+`(age / lifetime) * frame_count` clamped to last (no wrap).
+Cite: SmokeParticle.pickSprite (8-frame cycle).
+
+## W12.4 - Sun + moon position math
+
+New `sky`: `sun_direction(phase)` / `moon_direction(phase)`
+(unit + antipodal), `moon_phase_for_day` (8-day cycle),
+`moon_phase_uv` (4x2 atlas). 5 deg angular diameter per spec.
+Cite: DimensionSpecialEffects + LevelRenderer.renderSky.
+
+## W12.5 - Emitter point-light halo
+
+New `emitter_lights` picks the 8 nearest emitter voxels with
+warm RGB per kind. Feeds the existing
+`mesh3d.wgsl::lights: array<PointLight, 8>` uniform.
+
+## W12.6 - Menu panorama backdrop
+
+New `panorama`: discover_panorama_faces walks
+`textures/gui/title/background/panorama_0..5.png`, 1 RPM
+rotation, dark-navy fallback. Cite: PanoramaRenderer.
+
+## W12.7 - .jar auto-extraction cache
+
+New `jar_cache`: CacheStatus { Fresh, Stale, Missing },
+`jar_cache_dir = <data>/cache/mc_assets/<ver>/`, sentinel-mtime
+freshness check. Extraction itself gated on adding the zip
+crate (separate decision).
+
+## W12.8 - Mob skin discovery
+
+New `mob_skin`: `mob_skin_path(root, MobKind)` resolves
+`textures/entity/<mob>/<mob>.png`. Renderer falls back to the
+hard-coded mob colour when missing.
+
+## W12.9 - Creative tab categories
+
+CreativeCategory { All, Blocks, Decoration, Tools, Combat,
+Food, Misc } + filter helpers. Partition is total (every item
+lands in exactly one non-All tab). Cite: CreativeModeTab.
+
+## Wave 12 lock test
+
+`examples/voxel_demo_mp/src/wave12_audit_tests.rs::wave_12_locked`
+asserts:
+1. W12.2 block ids 68..=82 are contiguous + present in BLOCK_TYPES.
+2. Every W12.2 id has a `name_for_block` -> `model_for_block`
+   routing in `resource_pack::special_models`.
+3. block/mod.rs is below the 500 LOC soft cap.
+4. CreativeCategory partition is total.
+
+Any addition to the W12.2 slab/fence/door/stairs family must
+bump the contiguous range AND extend the routing assertion so
+a silent regression trips the lock.
