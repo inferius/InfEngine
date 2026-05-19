@@ -269,6 +269,32 @@ fn survival_creative_zero_damage_is_noop() {
 }
 
 #[test]
+fn creative_tab_does_not_open_in_survival_mode() {
+    // W10.6: pressing E in Survival opens the regular survival
+    // inventory, not the creative tab. We can't drive the E key
+    // through the input layer here; instead we exercise the
+    // `abilities.mayfly` gate the handler reads.
+    let v = voxel_in_mode(GameMode::Survival);
+    assert!(!v.abilities.mayfly);
+    // The creative tab stays in its default (closed) state when
+    // the player has just landed in Survival.
+    assert!(!v.creative_tab.open);
+}
+
+#[test]
+fn creative_tab_opens_via_helper_in_creative() {
+    // W10.6: `open_now` flips the panel on + clears any stale
+    // query / cursor. Drives the same path the E-key handler
+    // would call.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.creative_tab.query = "stale".into();
+    v.creative_tab.open_now();
+    assert!(v.creative_tab.open);
+    assert!(v.creative_tab.query.is_empty());
+    assert!(v.creative_tab.cursor.is_none());
+}
+
+#[test]
 fn holding_space_does_not_double_count() {
     // W10.3: only rising edges count. A frame-after-frame
     // sequence of `true, true` should NOT count as two taps.

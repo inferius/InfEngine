@@ -119,6 +119,10 @@ mod portal_swirl_tests;
 #[allow(dead_code)]
 mod lighting;
 mod game_mode;
+// W10.6: Creative-mode searchable inventory tab. The state +
+// filter helpers live here; the egui rendering of the panel
+// itself stays inline in `render_ui` for now.
+mod creative_tab;
 mod menu;
 mod mining;
 mod mob;
@@ -899,6 +903,12 @@ struct Voxel {
     /// the double-tap-Space detector mutates - other flags are
     /// pure functions of `game_mode`.
     abilities: game_mode::Abilities,
+    /// W10.6: Creative-mode searchable inventory tab state.
+    /// Separate from `inventory_open` (the survival inventory)
+    /// so opening one closes the other. The tab is gated on
+    /// `abilities.mayfly = true` indirectly via the E-key
+    /// handler in `update_play`.
+    creative_tab: creative_tab::CreativeTabState,
     /// W8.1: gate for the world simulation tick. Set to `true` only
     /// after the user explicitly enters a world via
     /// PlayOffline/NewWorld+enter/DirectConnect/JoinServer; the bin
@@ -5125,6 +5135,9 @@ impl Voxel {
             // W10.1: cached ability bundle. Recomputed at world
             // load + on every `/gamemode` switch.
             abilities: game_mode::Abilities::for_mode(game_mode::GameMode::Survival),
+            // W10.6: creative tab starts closed. Opens on E key
+            // press in Creative mode.
+            creative_tab: creative_tab::CreativeTabState::default(),
             // W8.1: bootstrap state has NO world loaded. The user
             // opts into world simulation by picking Singleplayer >
             // Hrat / Vytvorit or Multiplayer > Connect.
@@ -6174,6 +6187,8 @@ impl Voxel {
             || self.show_debug_panel
             || self.chest_open.is_some()
             || self.furnace_open.is_some()
+            // W10.6: the creative tab also captures input.
+            || self.creative_tab.open
     }
 
     fn apply_cursor_settings(&self, window: &EngineWindow) {
@@ -7517,6 +7532,16 @@ impl Voxel {
         };
         let inventory_open = self.inventory_open;
         let mut inv_open_local = self.inventory_open;
+        // W10.6: snapshot the creative tab state so the egui
+        // closure can paint the panel + mutate `query` + record
+        // click intents. We re-apply the mutations after the
+        // closure exits.
+        let creative_tab_open = self.creative_tab.open;
+        let mut creative_query_local = self.creative_tab.query.clone();
+        let mut creative_close_clicked = false;
+        // Pending pick-up intents queued from the grid. Each
+        // entry is the (block, count) to drop into the hotbar.
+        let mut creative_picks: Vec<(BlockId, u8)> = Vec::new();
         let mp_menu_open = self.mp_menu_open;
         let mut mp_menu_open_local = self.mp_menu_open;
         // Chest UI snapshot. Cloned here so the egui closure can
@@ -8390,6 +8415,78 @@ impl Voxel {
                                     }
                                 });
                         });
+                }
+
+                // W10.6: Creative-mode searchable tab. Opens on E
+                // when `abilities.mayfly = true`. Layout: search
+                // box at the top, scrollable grid of every item
+                // below, a row of hotbar previews at the bottom.
+                if creative_tab_open {
+                    let screen = ctx.content_rect();
+                    let mut open_local = true;
+                    egui::Window::new("Creative")
+                        .open(&mut open_local)
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_pos([
+                            screen.center().x - 230.0,
+                            screen.center().y - 240.0,
+                        ])
+                        .default_size([460.0, 480.0])
+                        .min_width(420.0)
+                        .min_height(360.0)
+                        .show(ctx, |ui| {
+                            ui.label("E or Esc to close - klik na polozku ji vlozi do hotbaru");
+                            ui.horizontal(|ui| {
+                                ui.label("Hledat:");
+                                ui.text_edit_singleline(&mut creative_query_local);
+                            });
+                            ui.separator();
+                            let entries = creative_tab::available_items();
+                            let filtered = creative_tab::filter_items(
+                                &entries,
+                                &creative_query_local,
+                            );
+                            egui::ScrollArea::vertical()
+                                .max_height(360.0)
+                                .show(ui, |ui| {
+                                    let mut col = 0;
+                                    ui.horizontal_wrapped(|ui| {
+                                        for entry in filtered.iter() {
+                                            let name =
+                                                crate::item::item_display_name(entry.id);
+                                            let resp = ui
+                                                .add_sized(
+                                                    [44.0, 44.0],
+                                                    egui::Button::new(
+                                                        egui::RichText::new(format!(
+                                                            "{}",
+                                                            entry.id
+                                                        ))
+                                                        .monospace(),
+                                                    ),
+                                                )
+                                                .on_hover_text(format!(
+                                                    "{} (max stack {})",
+                                                    name, entry.max_stack
+                                                ));
+                                            if resp.clicked() {
+                                                creative_picks.push((
+                                                    BlockId(entry.id),
+                                                    entry.max_stack,
+                                                ));
+                                            }
+                                            col += 1;
+                                            if col % 9 == 0 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                                });
+                        });
+                    if !open_local {
+                        creative_close_clicked = true;
+                    }
                 }
 
                 // Chest UI panel. Shows a 27-slot chest grid on
@@ -9286,6 +9383,32 @@ impl Voxel {
         }
         if self.mp_menu_open && !mp_menu_open_local {
             self.mp_menu_open = false;
+        }
+        // W10.6: re-apply creative tab mutations captured during
+        // the egui closure. The X button closes the panel; clicks
+        // on grid tiles produced (block, count) intents that we
+        // deposit into the hotbar here.
+        self.creative_tab.query = creative_query_local;
+        if creative_close_clicked {
+            self.creative_tab.close();
+        }
+        if !creative_picks.is_empty() {
+            // Slice off the first 9 inventory entries as the
+            // hotbar view + run the deposit policy on it.
+            let mut hotbar_view: [Option<(BlockId, u8)>; HOTBAR_SLOTS] =
+                [None; HOTBAR_SLOTS];
+            hotbar_view.copy_from_slice(&self.inventory[..HOTBAR_SLOTS]);
+            for pick in creative_picks {
+                let (block, max_stack) = pick;
+                let stack = (block, max_stack);
+                let _ = creative_tab::deposit_in_hotbar(
+                    &mut hotbar_view,
+                    stack,
+                    max_stack,
+                );
+            }
+            self.inventory[..HOTBAR_SLOTS]
+                .copy_from_slice(&hotbar_view[..HOTBAR_SLOTS]);
         }
         // Chest UI close-button reflected back. If the egui window
         // was closed via its X handle, drop the chest_open + held
@@ -10626,6 +10749,19 @@ impl AppHandler for Voxel {
                 self.close_chest_ui();
             } else if self.furnace_open.is_some() {
                 self.close_furnace_ui();
+            } else if self.creative_tab.open {
+                // W10.6: E closes the creative tab when it's open.
+                self.creative_tab.close();
+            } else if self.abilities.mayfly {
+                // W10.6: Creative-mode E opens the searchable
+                // creative tab instead of the survival
+                // inventory. `mayfly` is the canonical
+                // "creative-ish abilities active" proxy (today
+                // Creative is the only mode with mayfly=true).
+                // Close the survival inventory if it happened
+                // to be open from a mode switch.
+                self.inventory_open = false;
+                self.creative_tab.open_now();
             } else {
                 self.inventory_open = !self.inventory_open;
             }
