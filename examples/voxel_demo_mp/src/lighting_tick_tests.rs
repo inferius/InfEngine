@@ -145,6 +145,82 @@ fn tick_lighting_sky_layer_uncovers_on_break() {
 }
 
 #[test]
+fn rebuild_all_lighting_seeds_empty_state_from_block_grid() {
+    // Phase L.7 entry point: re-derive both light layers across
+    // every loaded chunk from scratch. Used after load_world +
+    // switch_dim. Simulates a save round-trip by setting up a
+    // torch via the world directly (not world_set_tracked) and
+    // confirming `rebuild_all_lighting` puts the torch's light
+    // back on the next read.
+    let mut v = fresh_voxel_with_one_chunk();
+    v.world.set([5, 5, 5], BlockId(TORCH_ID));
+    // No dirty marks, no ticks - lighting state is empty.
+    assert!(v.lighting.get(ZERO_CHUNK).is_none());
+    v.rebuild_all_lighting();
+    let g = v.lighting.get(ZERO_CHUNK).unwrap();
+    assert_eq!(g.get_block([5, 5, 5]), 14);
+    assert_eq!(g.get_block([6, 5, 5]), 13);
+}
+
+#[test]
+fn rebuild_all_lighting_seeds_sky_layer_too() {
+    let mut v = fresh_voxel_with_one_chunk();
+    v.rebuild_all_lighting();
+    let g = v.lighting.get(ZERO_CHUNK).unwrap();
+    // Open chunk -> every cell at sky=15.
+    assert_eq!(g.get_sky([0, 0, 0]), 15);
+    assert_eq!(g.get_sky([15, 15, 15]), 15);
+}
+
+#[test]
+fn rebuild_all_lighting_clears_dirty_set() {
+    let mut v = fresh_voxel_with_one_chunk();
+    v.lighting.mark_dirty([1, 2, 3]);
+    v.rebuild_all_lighting();
+    // After full re-derive the dirty set is empty (the
+    // re-derive already covered every loaded chunk - no point
+    // queuing them again).
+    let drained = v.lighting.take_dirty();
+    assert!(drained.is_empty());
+}
+
+#[test]
+fn rebuild_all_lighting_idempotent_when_no_chunks_loaded() {
+    let mut v = Voxel::new();
+    // No chunks at all.
+    v.rebuild_all_lighting();
+    // No panic, no grids created.
+    assert!(v.lighting.get(ZERO_CHUNK).is_none());
+}
+
+#[test]
+fn rebuild_all_lighting_recovers_after_save_round_trip_shape() {
+    // Smoke test for the "save -> reload -> derive" shape.
+    // Stamp a torch (with tracker), simulate a save by snapshot-
+    // ting the block grid, then simulate load by wiping the
+    // light state + calling rebuild_all_lighting. Light values
+    // must match what we'd see immediately after the place.
+    let mut v = fresh_voxel_with_one_chunk();
+    v.world_set_tracked([3, 8, 7], BlockId(TORCH_ID));
+    let _ = v.tick_lighting();
+    let before = v
+        .lighting
+        .get(ZERO_CHUNK)
+        .unwrap()
+        .get_block([3, 8, 7]);
+    // Simulate save -> reload: drop the lighting state, keep
+    // the block grid.
+    v.lighting.clear();
+    v.rebuild_all_lighting();
+    let after = v
+        .lighting
+        .get(ZERO_CHUNK)
+        .unwrap()
+        .get_block([3, 8, 7]);
+    assert_eq!(before, after);
+}
+
+#[test]
 fn multiple_dirty_voxels_coalesce_into_single_chunk_re_flood() {
     // Edit two cells in the same chunk - the affected set should
     // contain the chunk once (HashSet dedup).

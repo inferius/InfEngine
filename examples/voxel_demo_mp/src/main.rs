@@ -2220,6 +2220,12 @@ impl Voxel {
             }
             Err(err) => warn!(error = %err, "world_save: load_world failed"),
         }
+        // Phase L.7: lighting is never persisted - derive it from
+        // the freshly-loaded block grid. After this every loaded
+        // chunk has its block + sky light populated and the next
+        // frame's `rebuild_all_meshes` pass picks the values up
+        // into the GPU buffers.
+        self.rebuild_all_lighting();
     }
 
     /// Raycast against every remote player's AABB. Returns the
@@ -4385,9 +4391,11 @@ impl Voxel {
             }
         }
         // Lighting is per-dim + not persisted - drop every grid
-        // on swap. The next save-load or world-stream tick will
-        // re-derive it from the target dim's block grid.
+        // on swap. We then re-derive from the target dim's
+        // freshly-swapped block grid so the next frame's mesh
+        // build already has correct light values.
         self.lighting.clear();
+        self.rebuild_all_lighting();
         // Force the streaming pipeline to forget what was
         // pending for the previous dim - those coords mean
         // something different now.
@@ -4846,6 +4854,18 @@ impl Voxel {
                 [cc[0], cc[1], cc[2] + 1],
             ];
             self.rebuild_chunks(&neighbours);
+            // Phase L.7: stamp a dirty voxel in the new chunk so
+            // the next lighting tick re-floods it (the worker's
+            // submeshes shipped with the default `[0.0, 1.0]`
+            // light placeholder). One mark per chunk is enough -
+            // the 3x3 halo around the chunk centre subsumes the
+            // whole new chunk.
+            let cs = CHUNK_SIZE as i32;
+            self.lighting.mark_dirty([
+                cc[0] * cs + cs / 2,
+                cc[1] * cs + cs / 2,
+                cc[2] * cs + cs / 2,
+            ]);
         }
     }
 
@@ -4941,6 +4961,35 @@ impl Voxel {
                 }
             },
         )
+    }
+
+    /// Phase L.7: derive both light layers from scratch over
+    /// every loaded chunk. Used after `load_world` populates the
+    /// block grid + after `switch_dim` (when the active dim's
+    /// chunks completely change). Lighting is never persisted on
+    /// disk - same convention as MC, which re-derives sky-light
+    /// on chunk load via `LayerLightEngine` + block-light from
+    /// emitter blocks.
+    fn rebuild_all_lighting(&mut self) {
+        let coords: Vec<ChunkCoord> =
+            self.world.iter_chunks().map(|(c, _)| *c).collect();
+        if coords.is_empty() {
+            return;
+        }
+        lighting::block_engine::propagate_block_light(
+            &self.world,
+            &mut self.lighting,
+            &coords,
+        );
+        lighting::sky_engine::propagate_sky_light(
+            &self.world,
+            &mut self.lighting,
+            &coords,
+        );
+        // Clear the dirty set: a full re-derive has subsumed
+        // every pending per-voxel mark, no need to re-flood
+        // anything on the next tick.
+        let _ = self.lighting.take_dirty();
     }
 
     /// Drain the lighting dirty-set + run the conservative
