@@ -33,6 +33,8 @@ mod grid_tests;
 mod engine_tests;
 #[cfg(test)]
 mod day_factor_tests;
+#[cfg(test)]
+mod mesh_integration_tests;
 
 pub(crate) use grid::LightGrid;
 

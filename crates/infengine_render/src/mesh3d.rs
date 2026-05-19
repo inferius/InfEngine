@@ -13,13 +13,23 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 /// Vertex format used by `Mesh3DPass`. Includes UV coordinates so the
-/// mesh shader can sample an albedo texture.
+/// mesh shader can sample an albedo texture, plus a `light` channel
+/// (Phase L): two normalised values (block, sky) in `[0, 1]` that
+/// drive the per-voxel lighting modulation. Non-voxel meshes (gltf
+/// loads, cube_demo) leave `light = [0.0, 1.0]` so they default to
+/// "no block light, full sky" which mirrors today's unlit behaviour
+/// when the shader picks `max(block, sky * day_factor)`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct MeshVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    /// `(block_light_norm, sky_light_norm)` in `[0, 1]`. Wave 3
+    /// L.4 plumbs this from per-chunk `LightGrid`s; everything
+    /// else keeps the default `[0.0, 1.0]` ("no block light, full
+    /// sky") so day-time lighting is unchanged on legacy meshes.
+    pub light: [f32; 2],
 }
 
 impl MeshVertex {
@@ -28,11 +38,23 @@ impl MeshVertex {
             position,
             normal,
             uv: [0.0, 0.0],
+            light: [0.0, 1.0],
         }
     }
 
     pub fn with_uv(mut self, uv: [f32; 2]) -> Self {
         self.uv = uv;
+        self
+    }
+
+    /// Override the per-vertex `(block, sky)` light values. Inputs
+    /// are clamped to `[0, 1]`. The shader takes `max(block, sky *
+    /// day_factor)` and folds it into the final color, so a vertex
+    /// with `light = [0.0, 0.0]` renders pitch black (subject to
+    /// the shader's small minimum floor) while `[1.0, 1.0]` renders
+    /// at full brightness regardless of the day/night ramp.
+    pub fn with_light(mut self, block: f32, sky: f32) -> Self {
+        self.light = [block.clamp(0.0, 1.0), sky.clamp(0.0, 1.0)];
         self
     }
 }
@@ -76,6 +98,7 @@ impl Mesh3DRegistry {
             position: [0.0; 3],
             normal: [0.0; 3],
             uv: [0.0; 2],
+            light: [0.0, 1.0],
         }];
         let fallback_i: [u32; 1] = [0];
         let (vsrc, isrc) = if vertices.is_empty() || indices.is_empty() {
@@ -269,6 +292,7 @@ fn cube_geometry() -> (Vec<MeshVertex>, Vec<u16>) {
                 position: *c,
                 normal,
                 uv: FACE_UVS[i],
+                light: [0.0, 1.0],
             });
         }
         // Two triangles per face wound CCW when viewed from the
@@ -457,6 +481,17 @@ impl Mesh3DPass {
             wgpu::VertexAttribute {
                 offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
                 shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            // Phase L.4: per-vertex (block_light, sky_light) in [0,1].
+            // Sits right after the UV pair; the instance attrs at
+            // location 3..=8 are in a separate buffer slot so this
+            // is free to live at location 9.
+            wgpu::VertexAttribute {
+                offset: (std::mem::size_of::<[f32; 3]>() * 2
+                    + std::mem::size_of::<[f32; 2]>())
+                    as wgpu::BufferAddress,
+                shader_location: 9,
                 format: wgpu::VertexFormat::Float32x2,
             },
         ];

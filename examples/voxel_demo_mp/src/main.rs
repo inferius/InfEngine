@@ -1046,6 +1046,11 @@ struct Voxel {
     /// (source) so loaders from old saves treat existing fluid
     /// as a source.
     liquid_level: HashMap<[i32; 3], u8>,
+    /// Phase L (Wave 3): per-chunk nibble-packed light grids
+    /// (block + sky) plus the dirty-voxel set drained by the
+    /// lighting tick. Re-derived from the block grid on world
+    /// load + dim switch - never persisted.
+    lighting: lighting::LightingState,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -4207,6 +4212,7 @@ impl Voxel {
             liquid_clock: 0,
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
+            lighting: lighting::LightingState::new(),
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -4357,6 +4363,10 @@ impl Voxel {
                 renderer.remove_mesh(h);
             }
         }
+        // Lighting is per-dim + not persisted - drop every grid
+        // on swap. The next save-load or world-stream tick will
+        // re-derive it from the target dim's block grid.
+        self.lighting.clear();
         // Force the streaming pipeline to forget what was
         // pending for the previous dim - those coords mean
         // something different now.
@@ -4856,6 +4866,62 @@ impl Voxel {
         out
     }
 
+    /// Build per-block submeshes for `coord` with per-vertex
+    /// lighting baked in. Reads `self.lighting` for the
+    /// `(block_light, sky_light)` pair on each emitted face -
+    /// missing chunks fall back to "no block light, full sky" so
+    /// brand-new chunks render as if they're fully daylit until
+    /// the next lighting tick catches up.
+    fn build_lit_submeshes(
+        &self,
+        coord: ChunkCoord,
+    ) -> Vec<infengine_voxel::ChunkSubmesh> {
+        let Some(chunk) = self.world.chunk(coord) else {
+            return Vec::new();
+        };
+        let origin = World::chunk_world_origin(coord);
+        // The `light_at` closure receives the air-side cell's
+        // world voxel coord + the face normal. We look the cell
+        // up in `self.lighting` (which is keyed by world voxel
+        // coord internally via `split`).
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let world_origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
+        let lighting = &self.lighting;
+        infengine_voxel::chunk_mesh_with_atlas_and_light(
+            chunk,
+            origin,
+            atlas_uv_rect,
+            block_is_opaque,
+            |air_local, _normal| {
+                // Convert in-chunk local to world coord then back
+                // to the owning chunk's local. `air_local` may be
+                // outside `0..16` for boundary faces.
+                let world = [
+                    world_origin[0] + air_local[0],
+                    world_origin[1] + air_local[1],
+                    world_origin[2] + air_local[2],
+                ];
+                let other_cc = [
+                    world[0].div_euclid(cs),
+                    world[1].div_euclid(cs),
+                    world[2].div_euclid(cs),
+                ];
+                let other_lc = [
+                    world[0].rem_euclid(cs) as u32,
+                    world[1].rem_euclid(cs) as u32,
+                    world[2].rem_euclid(cs) as u32,
+                ];
+                match lighting.get(other_cc) {
+                    Some(g) => [
+                        g.get_block(other_lc) as f32 / 15.0,
+                        g.get_sky(other_lc) as f32 / 15.0,
+                    ],
+                    None => [0.0, 1.0], // no lighting yet -> full sky
+                }
+            },
+        )
+    }
+
     fn rebuild_chunks(&mut self, coords: &[ChunkCoord]) {
         let renderer = self.renderer.as_mut().expect("renderer ready");
         // Release old mesh handles for the affected chunks so the
@@ -4871,11 +4937,12 @@ impl Voxel {
         self.chunk_meshes = keep;
         let atlas = self.voxel_atlas.clone();
         for coord in coords {
-            let Some(chunk) = self.world.chunk(*coord) else {
+            let subs = self.build_lit_submeshes(*coord);
+            if subs.is_empty() {
                 continue;
-            };
-            let origin = World::chunk_world_origin(*coord);
-            for sub in chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque) {
+            }
+            let renderer = self.renderer.as_mut().expect("renderer ready");
+            for sub in subs {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
@@ -4908,12 +4975,13 @@ impl Voxel {
     fn rebuild_all_meshes(&mut self) {
         self.chunk_meshes.clear();
         let atlas = self.voxel_atlas.clone();
-        let renderer = self.renderer.as_mut().expect("renderer ready");
         let coords: Vec<ChunkCoord> = self.world.iter_chunks().map(|(c, _)| *c).collect();
         for coord in coords {
-            let chunk = self.world.chunk(coord).expect("chunk present");
-            let origin = World::chunk_world_origin(coord);
-            let subs = chunk_mesh_with_atlas(chunk, origin, atlas_uv_rect, block_is_opaque);
+            let subs = self.build_lit_submeshes(coord);
+            if subs.is_empty() {
+                continue;
+            }
+            let renderer = self.renderer.as_mut().expect("renderer ready");
             for sub in subs {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
@@ -11761,6 +11829,12 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
                 position: corners[i],
                 normal,
                 uv: uvs[i],
+                // Water meshes (this code path) get the default
+                // "no block light, full sky" tint. The shader's
+                // water branch handles its own animated tint and
+                // sees `light = [0.0, 1.0]` so day/night still
+                // dims it via `day_factor` like every other voxel.
+                light: [0.0, 1.0],
             });
         }
         // Engine cube pipeline uses CCW front-face but the

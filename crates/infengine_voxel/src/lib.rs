@@ -205,6 +205,11 @@ pub fn chunk_mesh(chunk: &Chunk, origin: Vec3) -> Vec<ChunkSubmesh> {
 /// of getting occluded. A pair of touching identical transparent
 /// blocks still culls the shared face to avoid in-cluster
 /// over-draw.
+///
+/// The lighting attribute on every emitted vertex stays at the
+/// `MeshVertex::new` default (`[0.0, 1.0]` = no block light, full
+/// sky). Phase L wires up a `_with_light` variant that overrides
+/// this from a per-chunk `LightGrid`.
 pub fn chunk_mesh_with_atlas<F, O>(
     chunk: &Chunk,
     origin: Vec3,
@@ -214,6 +219,33 @@ pub fn chunk_mesh_with_atlas<F, O>(
 where
     F: Fn(BlockId, [i8; 3]) -> [f32; 4],
     O: Fn(BlockId) -> bool,
+{
+    chunk_mesh_with_atlas_and_light(chunk, origin, uv_rect, is_opaque, |_, _| [0.0, 1.0])
+}
+
+/// Like `chunk_mesh_with_atlas` but each emitted face samples the
+/// `light_at(local_air_cell, normal)` closure to produce a
+/// `(block_light_norm, sky_light_norm)` pair written into every
+/// vertex of that face.
+///
+/// `local_air_cell` is the local-chunk-coord of the air cell the
+/// face is FACING (i.e. the cell on the OUTSIDE of the solid voxel,
+/// where the player's camera looks at). For boundary faces against
+/// a non-existent chunk-outside neighbour, the closure is invoked
+/// with the in-chunk cell address even though the resulting light
+/// will be ambient at best - callers that want correct boundary
+/// lighting have to fold in neighbour chunks themselves.
+pub fn chunk_mesh_with_atlas_and_light<F, O, L>(
+    chunk: &Chunk,
+    origin: Vec3,
+    uv_rect: F,
+    is_opaque: O,
+    light_at: L,
+) -> Vec<ChunkSubmesh>
+where
+    F: Fn(BlockId, [i8; 3]) -> [f32; 4],
+    O: Fn(BlockId) -> bool,
+    L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
 {
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
@@ -263,7 +295,14 @@ where
                         }
                     }
                     let rect = uv_rect(block, face.normal);
-                    emit_quad(&mut entry.0, &mut entry.1, p, face, rect);
+                    // Sample light at the AIR-SIDE cell (nx, ny,
+                    // nz). For boundary faces the air-side falls
+                    // outside the chunk's `CHUNK_SIZE` range; pass
+                    // the raw signed coord through so callers
+                    // that have a world-space `LightGrid` lookup
+                    // can route across chunk borders.
+                    let light = light_at([nx, ny, nz], face.normal);
+                    emit_quad_lit(&mut entry.0, &mut entry.1, p, face, rect, light);
                 }
             }
         }
@@ -352,12 +391,16 @@ const FACES: &[Face] = &[
     },
 ];
 
-fn emit_quad(
+/// Emit one quad with per-vertex `light` `(block, sky)`. All 4
+/// corners of the quad share the same values - the 4-corner AO
+/// smoothing pass is a follow-up.
+fn emit_quad_lit(
     vertices: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
     origin: Vec3,
     face: &Face,
     uv_rect: [f32; 4],
+    light: [f32; 2],
 ) {
     let normal = [
         face.normal[0] as f32,
@@ -365,8 +408,6 @@ fn emit_quad(
         face.normal[2] as f32,
     ];
     let base = vertices.len() as u32;
-    // Standard quad UVs mapped into the supplied atlas tile rect.
-    // Rect layout = [u0, v0, u1, v1] (top-left, bottom-right).
     let [u0, v0, u1, v1] = uv_rect;
     let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
     for (i, corner) in face.corners.iter().enumerate() {
@@ -379,12 +420,10 @@ fn emit_quad(
                 ],
                 normal,
             )
-            .with_uv(uvs[i]),
+            .with_uv(uvs[i])
+            .with_light(light[0], light[1]),
         );
     }
-    // Two triangles, CCW from outside: 0-2-1 and 0-3-2 - matches the
-    // engine's cube_geometry winding so back-face culling keeps the
-    // outward face visible.
     indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
 }
 
@@ -699,5 +738,78 @@ mod tests {
         let w = World::new();
         let hit = raycast(&w, Vec3::ZERO, Vec3::X, 100.0);
         assert!(hit.is_none());
+    }
+
+    #[test]
+    fn chunk_mesh_with_light_bakes_per_face_values() {
+        // Single solid voxel: 6 faces, each with a sampled light
+        // value. The closure returns `(block, sky)` for the air
+        // cell on the OUTSIDE of each face.
+        let mut chunk = Chunk::empty();
+        chunk.set(8, 8, 8, BlockId(1));
+        let subs = chunk_mesh_with_atlas_and_light(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |air_local, _normal| {
+                // Encode the air-side coord into the light pair
+                // so we can assert which face the vertex belongs
+                // to. block_light = (x - 7) / 15, sky = (y - 7).
+                let x = air_local[0] as f32;
+                let y = air_local[1] as f32;
+                [(x - 7.0) / 15.0, (y - 7.0).clamp(0.0, 15.0) / 15.0]
+            },
+        );
+        assert_eq!(subs.len(), 1);
+        let verts = &subs[0].vertices;
+        // 6 faces * 4 verts each = 24 vertices.
+        assert_eq!(verts.len(), 24);
+        // Every vertex `light.x` (block_light) sits in [0, 1].
+        for v in verts {
+            assert!(v.light[0] >= 0.0 && v.light[0] <= 1.0);
+            assert!(v.light[1] >= 0.0 && v.light[1] <= 1.0);
+        }
+        // Pick the +X face: air-side cell is (9, 8, 8) -> block
+        // light = (9 - 7) / 15 = 2 / 15.
+        let expected_block = 2.0 / 15.0;
+        let plus_x_verts: Vec<_> = verts
+            .iter()
+            .filter(|v| (v.normal[0] - 1.0).abs() < 0.5)
+            .collect();
+        assert_eq!(plus_x_verts.len(), 4);
+        for v in plus_x_verts {
+            assert!((v.light[0] - expected_block).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn chunk_mesh_default_light_is_no_block_full_sky() {
+        // `chunk_mesh_with_atlas` (no light variant) must leave
+        // every vertex at `light = [0.0, 1.0]` so legacy callers
+        // see the unlit-day default.
+        let mut chunk = Chunk::empty();
+        chunk.set(4, 4, 4, BlockId(1));
+        let subs = chunk_mesh_with_atlas(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+        );
+        for sub in subs {
+            for v in &sub.vertices {
+                assert_eq!(v.light, [0.0, 1.0]);
+            }
+        }
+    }
+
+    #[test]
+    fn mesh_vertex_with_light_clamps_inputs() {
+        // `with_light` clamps both inputs to [0, 1] regardless of
+        // raw call-site values.
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(-1.0, 2.5);
+        assert_eq!(v.light, [0.0, 1.0]);
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(0.5, 0.25);
+        assert_eq!(v.light, [0.5, 0.25]);
     }
 }
