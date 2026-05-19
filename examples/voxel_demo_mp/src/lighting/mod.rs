@@ -24,9 +24,12 @@ use std::collections::{HashMap, HashSet};
 use infengine_voxel::ChunkCoord;
 
 pub(crate) mod grid;
+pub(crate) mod block_engine;
 
 #[cfg(test)]
 mod grid_tests;
+#[cfg(test)]
+mod engine_tests;
 #[cfg(test)]
 mod day_factor_tests;
 
