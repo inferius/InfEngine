@@ -2878,7 +2878,21 @@ impl Voxel {
             spawn_flame_particle(&mut self.particles, pos, &mut frame_seed, [1.0, 0.55, 0.20]);
             // Fire also coughs a smoke wisp at ~1/3 the flame rate.
             if accumulator_fires(&mut frame_seed, 0.33) {
-                spawn_smoke_particle(&mut self.particles, pos, &mut frame_seed);
+                // W9.y.5: sample the MC smoke_0..7 sprite set
+                // for the spawn-time tint so smoke wisps match
+                // the MC pack's grey palette. Falls through to
+                // the helper's hardcoded swatch when no MC pack
+                // is loaded.
+                let mc_tint = resource_pack::particles::smoke_tint_at(
+                    &self.resource_pack,
+                    0.0,
+                );
+                spawn_smoke_particle(
+                    &mut self.particles,
+                    pos,
+                    &mut frame_seed,
+                    mc_tint,
+                );
             }
             spawned += 1;
         }
@@ -13063,11 +13077,16 @@ fn spawn_flame_particle(
     });
 }
 
-/// Spawn one slow-rising smoke wisp above `pos`.
+/// Spawn one slow-rising smoke wisp above `pos`. `mc_tint`, when
+/// supplied, overrides the hardcoded grey with the average pixel
+/// colour sampled from the MC `particle/smoke_0..7` sprite set
+/// (W9.y.5). Falls back to the legacy grey when no MC pack is
+/// loaded so the placeholder atlas still reads as smoke.
 fn spawn_smoke_particle(
     sys: &mut infengine_particles::ParticleSystem,
     pos: &[i32; 3],
     seed: &mut u32,
+    mc_tint: Option<[f32; 4]>,
 ) {
     let rand = |s: &mut u32| {
         *s ^= *s << 13;
@@ -13077,6 +13096,15 @@ fn spawn_smoke_particle(
     };
     let jitter_x = (rand(seed) - 0.5) * 0.5;
     let jitter_z = (rand(seed) - 0.5) * 0.5;
+    // Default to the W9.5 grey when MC isn't installed. When MC
+    // smoke sprites resolved, blend the alpha back to 0.7 so
+    // every smoke wisp keeps the translucent look (the MC PNG
+    // ships fully opaque; particle rendering is what makes it
+    // wispy).
+    let color = match mc_tint {
+        Some(t) => [t[0], t[1], t[2], 0.7],
+        None => [0.35, 0.35, 0.35, 0.7],
+    };
     sys.particles.push(infengine_particles::Particle {
         position: [
             pos[0] as f32 + 0.5 + jitter_x,
@@ -13084,7 +13112,7 @@ fn spawn_smoke_particle(
             pos[2] as f32 + 0.5 + jitter_z,
         ],
         velocity: [0.0, 0.3 + rand(seed) * 0.2, 0.0],
-        color: [0.35, 0.35, 0.35, 0.7],
+        color,
         size: 0.10,
         age: 0.0,
         lifetime: 1.8,
@@ -13973,7 +14001,7 @@ mod ambient_particle_tests {
         let mut seed = 0x11223344;
         spawn_flame_particle(&mut sys, &[0, 0, 0], &mut seed, [1.0, 0.8, 0.4]);
         let flame_vy = sys.particles.last().unwrap().velocity[1];
-        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed);
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, None);
         let smoke_vy = sys.particles.last().unwrap().velocity[1];
         // Flame range: 0.4..0.9. Smoke range: 0.3..0.5. They can
         // technically overlap, but the smoke ceiling (0.5) is
@@ -13996,5 +14024,36 @@ mod ambient_particle_tests {
             spawn_flame_particle(&mut sys, &[0, 0, 0], &mut seed, [1.0, 0.8, 0.4]);
         }
         assert_eq!(sys.particles.len(), start + 10);
+    }
+
+    #[test]
+    fn smoke_particle_uses_mc_tint_when_provided() {
+        // W9.y.5: the spawn helper takes an optional MC tint
+        // sampled from the smoke_0..7 sprite set. When supplied,
+        // the emitted Particle's color must use the MC RGB
+        // (alpha forced to 0.7 so the wisp keeps its translucent
+        // look).
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x42424242;
+        let mc = Some([0.2, 0.21, 0.22, 1.0]);
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, mc);
+        let p = sys.particles.last().unwrap();
+        assert!((p.color[0] - 0.2).abs() < 1e-3);
+        assert!((p.color[1] - 0.21).abs() < 1e-3);
+        assert!((p.color[2] - 0.22).abs() < 1e-3);
+        assert!((p.color[3] - 0.7).abs() < 1e-3);
+    }
+
+    #[test]
+    fn smoke_particle_falls_back_to_grey_without_mc_tint() {
+        // No MC pack (placeholder atlas): the smoke wisp uses
+        // the legacy grey swatch so the visual stays stable.
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x42424242;
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, None);
+        let p = sys.particles.last().unwrap();
+        assert!((p.color[0] - 0.35).abs() < 1e-3);
+        assert!((p.color[1] - 0.35).abs() < 1e-3);
+        assert!((p.color[2] - 0.35).abs() < 1e-3);
     }
 }

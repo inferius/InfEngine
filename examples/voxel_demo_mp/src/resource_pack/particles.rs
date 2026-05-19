@@ -36,6 +36,60 @@ pub(crate) struct ParticleSprite {
     pub(crate) atlas_uv: [f32; 4],
 }
 
+impl ParticleSprite {
+    /// Compute an average RGBA color across the sprite's pixel
+    /// rect inside the atlas. The W9.y particle render path
+    /// uses this as the per-particle tint so smoke wisps read
+    /// as MC's grey palette rather than a hardcoded swatch.
+    /// Returns `None` when the atlas is empty or the sprite
+    /// rect resolves to zero pixels.
+    pub(crate) fn average_color(
+        &self,
+        atlas_w: u32,
+        atlas_h: u32,
+        atlas_rgba: &[u8],
+    ) -> Option<[f32; 4]> {
+        if atlas_w == 0 || atlas_h == 0 || atlas_rgba.is_empty() {
+            return None;
+        }
+        let x0 = (self.atlas_uv[0] * atlas_w as f32).floor() as i64;
+        let y0 = (self.atlas_uv[1] * atlas_h as f32).floor() as i64;
+        let x1 = (self.atlas_uv[2] * atlas_w as f32).ceil() as i64;
+        let y1 = (self.atlas_uv[3] * atlas_h as f32).ceil() as i64;
+        let x0 = x0.clamp(0, atlas_w as i64) as u32;
+        let y0 = y0.clamp(0, atlas_h as i64) as u32;
+        let x1 = x1.clamp(0, atlas_w as i64) as u32;
+        let y1 = y1.clamp(0, atlas_h as i64) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let mut sum = [0u64; 4];
+        let mut count: u64 = 0;
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let idx = ((py * atlas_w + px) * 4) as usize;
+                if idx + 3 >= atlas_rgba.len() {
+                    continue;
+                }
+                sum[0] += atlas_rgba[idx] as u64;
+                sum[1] += atlas_rgba[idx + 1] as u64;
+                sum[2] += atlas_rgba[idx + 2] as u64;
+                sum[3] += atlas_rgba[idx + 3] as u64;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        Some([
+            (sum[0] as f32 / count as f32) / 255.0,
+            (sum[1] as f32 / count as f32) / 255.0,
+            (sum[2] as f32 / count as f32) / 255.0,
+            (sum[3] as f32 / count as f32) / 255.0,
+        ])
+    }
+}
+
 /// A named bag of particle sprites the emitter cycles through.
 /// The index range is `0..frames.len()` - emitters can pick a
 /// random sprite, pick by lifetime fraction, or step through
@@ -122,6 +176,38 @@ pub(crate) fn big_smoke_set(pack: &ResourcePack) -> SpriteSet {
             "big_smoke_8", "big_smoke_9", "big_smoke_10", "big_smoke_11",
         ],
     )
+}
+
+/// Wave 9.y.5: derive the colour tint for a smoke particle at
+/// `lifetime_frac` from the MC `smoke_0..7` sprite set. Walks
+/// the set with `pick_by_lifetime`, averages the picked sprite's
+/// pixels in `pack.atlas_rgba`, and returns the RGBA tint
+/// downstream particle code feeds into `Particle::color`. Returns
+/// `None` when the pack has no smoke frames (placeholder pack -
+/// the caller's existing fallback colour applies).
+pub(crate) fn smoke_tint_at(
+    pack: &ResourcePack,
+    lifetime_frac: f32,
+) -> Option<[f32; 4]> {
+    let set = smoke_set(pack);
+    let sprite = set.pick_by_lifetime(lifetime_frac)?;
+    let (w, h) = pack.atlas_size;
+    sprite.average_color(w, h, &pack.atlas_rgba)
+}
+
+/// Wave 9.y.5: spawn-time flame tint sampled from the MC flame
+/// strip. The per-particle render pass still cycles the orange
+/// hardcoded palette over the lifetime (matches W9.5 look) but
+/// this lets callers sync the initial colour to whichever frame
+/// the MC pack actually ships.
+pub(crate) fn flame_tint_at(
+    pack: &ResourcePack,
+    lifetime_frac: f32,
+) -> Option<[f32; 4]> {
+    let set = flame_set(pack);
+    let sprite = set.pick_by_lifetime(lifetime_frac)?;
+    let (w, h) = pack.atlas_size;
+    sprite.average_color(w, h, &pack.atlas_rgba)
 }
 
 /// Build a sprite set from a list of named particle stems. The
@@ -379,6 +465,197 @@ mod tests {
         // Last frame.
         let last = set.frames[7].atlas_uv;
         assert_eq!(last, [0.0, 0.875, 1.0, 1.0]);
+    }
+
+    // ----- W9.y.5: sprite -> atlas-tint helpers -----
+
+    fn synth_pack_with_rgba(
+        particles: &[(&str, [f32; 4], u32)],
+        atlas_w: u32,
+        atlas_h: u32,
+        atlas_rgba: Vec<u8>,
+    ) -> ResourcePack {
+        let mut textures = HashMap::new();
+        for (name, uv, frames) in particles {
+            textures.insert(
+                TextureKey::Particle((*name).into()),
+                TextureRef {
+                    atlas_uv: *uv,
+                    frames: *frames,
+                    frametime_ms: if *frames > 1 { 100 } else { 0 },
+                    interpolate: false,
+                },
+            );
+        }
+        ResourcePack {
+            textures,
+            item_icons: HashMap::new(),
+            sounds: HashMap::new(),
+            source: PathBuf::from("<test>"),
+            is_fallback: false,
+            atlas_size: (atlas_w, atlas_h),
+            atlas_rgba,
+            anim_registry: crate::resource_pack::anim_registry::AnimRegistry::new(),
+            anim_slots: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn average_color_matches_uniform_atlas() {
+        // 4x4 atlas, all pixels (128, 0, 64, 255). The sprite
+        // covering the full atlas must average to those values.
+        let w = 4u32;
+        let h = 4u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = 128;
+            px[1] = 0;
+            px[2] = 64;
+            px[3] = 255;
+        }
+        let s = ParticleSprite {
+            atlas_uv: [0.0, 0.0, 1.0, 1.0],
+        };
+        let c = s.average_color(w, h, &rgba).expect("avg");
+        assert!((c[0] - 128.0 / 255.0).abs() < 1e-3);
+        assert!((c[1] - 0.0).abs() < 1e-3);
+        assert!((c[2] - 64.0 / 255.0).abs() < 1e-3);
+        assert!((c[3] - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn average_color_zero_size_atlas_returns_none() {
+        let s = ParticleSprite {
+            atlas_uv: [0.0, 0.0, 1.0, 1.0],
+        };
+        assert!(s.average_color(0, 0, &[]).is_none());
+    }
+
+    #[test]
+    fn average_color_handles_subrect() {
+        // 4x4 atlas. Upper-left quad (0,0)..(2,2) = (200, 0, 0).
+        // Other pixels = 0. UV (0,0)..(0.5,0.5) -> averages to
+        // (200, 0, 0).
+        let w = 4u32;
+        let h = 4u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for py in 0..2 {
+            for px in 0..2 {
+                let idx = ((py * w + px) * 4) as usize;
+                rgba[idx] = 200;
+                rgba[idx + 3] = 255;
+            }
+        }
+        let s = ParticleSprite {
+            atlas_uv: [0.0, 0.0, 0.5, 0.5],
+        };
+        let c = s.average_color(w, h, &rgba).expect("avg");
+        assert!((c[0] - 200.0 / 255.0).abs() < 1e-3);
+        assert!((c[1] - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn particle_pass_loads_smoke_variants_via_tint_helper() {
+        // The W9.y.5 smoke_tint_at helper resolves through the
+        // smoke set (W9.x.5) + samples the atlas pixels. Pack
+        // with smoke_0 covering the entire atlas (grey 80) -
+        // tint at frac 0.0 must read that grey.
+        let w = 16u32;
+        let h = 16u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = 80;
+            px[1] = 80;
+            px[2] = 80;
+            px[3] = 255;
+        }
+        let pack = synth_pack_with_rgba(
+            &[("smoke_0", [0.0, 0.0, 1.0, 1.0], 1)],
+            w,
+            h,
+            rgba,
+        );
+        let tint = smoke_tint_at(&pack, 0.0).expect("tint");
+        assert!((tint[0] - 80.0 / 255.0).abs() < 1e-3);
+        assert!((tint[3] - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn particle_uv_advances_with_time_for_smoke_tint() {
+        // Different smoke frames have different colors; the
+        // lifetime-frac picker must walk through them, so the
+        // returned tint shifts as the particle ages.
+        let w = 8u32;
+        let h = 16u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        // smoke_0 occupies (0..8, 0..8); paint it dark grey.
+        for py in 0..8 {
+            for px in 0..8 {
+                let idx = ((py * w + px) * 4) as usize;
+                rgba[idx] = 50;
+                rgba[idx + 1] = 50;
+                rgba[idx + 2] = 50;
+                rgba[idx + 3] = 255;
+            }
+        }
+        // smoke_1 occupies (0..8, 8..16); paint it light grey.
+        for py in 8..16 {
+            for px in 0..8 {
+                let idx = ((py * w + px) * 4) as usize;
+                rgba[idx] = 200;
+                rgba[idx + 1] = 200;
+                rgba[idx + 2] = 200;
+                rgba[idx + 3] = 255;
+            }
+        }
+        let pack = synth_pack_with_rgba(
+            &[
+                ("smoke_0", [0.0, 0.0, 1.0, 0.5], 1),
+                ("smoke_1", [0.0, 0.5, 1.0, 1.0], 1),
+            ],
+            w,
+            h,
+            rgba,
+        );
+        let early = smoke_tint_at(&pack, 0.0).expect("early");
+        let late = smoke_tint_at(&pack, 0.99).expect("late");
+        // Early reads the dark frame, late reads the light frame.
+        assert!(early[0] < 0.5);
+        assert!(late[0] > 0.5);
+    }
+
+    #[test]
+    fn smoke_tint_returns_none_on_empty_pack() {
+        // The placeholder pack ships no MC particles; the helper
+        // must return None so callers fall back to their
+        // hardcoded swatch.
+        let pack = synth_pack_with_rgba(&[], 16, 16, vec![0u8; 16 * 16 * 4]);
+        assert!(smoke_tint_at(&pack, 0.5).is_none());
+    }
+
+    #[test]
+    fn flame_tint_resolves_from_pack() {
+        // Flame ships as a vertical strip; the W9.x.5 helper
+        // expands the strip into N sprites. Verify the tint
+        // helper resolves through that.
+        let w = 4u32;
+        let h = 16u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = 255;
+            px[1] = 120;
+            px[2] = 0;
+            px[3] = 255;
+        }
+        let pack = synth_pack_with_rgba(
+            &[("flame", [0.0, 0.0, 1.0, 0.25], 4)],
+            w,
+            h,
+            rgba,
+        );
+        let tint = flame_tint_at(&pack, 0.5).expect("flame tint");
+        assert!(tint[0] > 0.9);
+        assert!(tint[1] > 0.4);
     }
 
     #[test]
