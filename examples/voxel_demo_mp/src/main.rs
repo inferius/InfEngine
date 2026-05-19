@@ -7848,79 +7848,64 @@ impl Voxel {
             | AppState::DirectConnect
             | AppState::ServerBrowser
             | AppState::HostSetup => {
-                // W12.6: paint the stitched MC panorama as the menu
-                // backdrop. Scroll the UV horizontally at the MC
-                // 1-RPM rate so the sky reads as a slow rotation.
+                // Menu backdrop + draw. Use a background-layer painter
+                // for the dark fill + panorama, then an egui Area to
+                // host the menu widgets. CentralPanel produced an
+                // empty-area ui under this egui version + window
+                // setup; Area paints reliably.
                 let panorama_tex = panorama_egui_tex;
                 let scroll = panorama_scroll_local;
-                // W12.6: dark backdrop. Paint via context layer below
-                // the CentralPanel so the default panel frame stays
-                // out of the way + we know the egui draw list reaches
-                // the screen.
                 let screen = ctx.content_rect();
                 let bg_layer = egui::LayerId::new(
                     egui::Order::Background,
                     egui::Id::new("menu_bg"),
                 );
-                let painter = ctx.layer_painter(bg_layer);
-                painter.rect_filled(
+                let bg_painter = ctx.layer_painter(bg_layer);
+                bg_painter.rect_filled(
                     screen,
                     0.0,
                     egui::Color32::from_rgb(13, 15, 26),
                 );
-                // DIAGNOSTIC: bright red square top-left.
-                painter.rect_filled(
-                    egui::Rect::from_min_size(
-                        screen.min + egui::vec2(10.0, 10.0),
-                        egui::vec2(60.0, 60.0),
-                    ),
-                    0.0,
-                    egui::Color32::from_rgb(255, 0, 0),
-                );
-                let menu_frame = egui::Frame::NONE;
-                egui::CentralPanel::default().frame(menu_frame).show(ctx, |ui| {
-                    let rect = ui.max_rect();
-                    if let Some(tex_id) = panorama_tex {
-                        // Scroll U over time; V fixed. The strip is
-                        // 4x wider than 1 face so a `1.0` shift = a
-                        // full quarter-turn.
-                        let u0 = scroll.rem_euclid(1.0);
-                        let uv = egui::Rect::from_min_max(
-                            egui::pos2(u0, 0.0),
-                            egui::pos2(u0 + 0.25, 1.0),
-                        );
-                        ui.painter().image(
-                            tex_id,
-                            rect,
-                            uv,
-                            egui::Color32::WHITE,
-                        );
-                        // Subtle dark vignette so the buttons stand
-                        // out against the panorama.
-                        ui.painter().rect_filled(
-                            rect,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 110),
-                        );
-                    }
-                    let mut mctx = menu::MenuContext {
-                        worlds: &worlds_snapshot,
-                        browser_servers,
-                        browser_error: browser_error.as_deref(),
-                        saved_servers: &saved_servers_snapshot,
-                        options: menu_options_ref,
-                        current_slug: current_slug.as_deref(),
-                        world_seed: menu_world_seed,
-                        engine_version: menu_engine_version,
-                        browser_querying,
-                    };
-                    menu::draw(
-                        ui,
-                        menu_screen_ref,
-                        &mut mctx,
-                        &mut menu_actions,
+                if let Some(tex_id) = panorama_tex {
+                    let u0 = scroll.rem_euclid(1.0);
+                    let uv = egui::Rect::from_min_max(
+                        egui::pos2(u0, 0.0),
+                        egui::pos2(u0 + 0.25, 1.0),
                     );
-                });
+                    bg_painter.image(
+                        tex_id,
+                        screen,
+                        uv,
+                        egui::Color32::WHITE,
+                    );
+                    bg_painter.rect_filled(
+                        screen,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 110),
+                    );
+                }
+                egui::Area::new(egui::Id::new("menu_root_area"))
+                    .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+                    .show(ctx, |ui| {
+                        ui.set_min_width(420.0);
+                        let mut mctx = menu::MenuContext {
+                            worlds: &worlds_snapshot,
+                            browser_servers,
+                            browser_error: browser_error.as_deref(),
+                            saved_servers: &saved_servers_snapshot,
+                            options: menu_options_ref,
+                            current_slug: current_slug.as_deref(),
+                            world_seed: menu_world_seed,
+                            engine_version: menu_engine_version,
+                            browser_querying,
+                        };
+                        menu::draw(
+                            ui,
+                            menu_screen_ref,
+                            &mut mctx,
+                            &mut menu_actions,
+                        );
+                    });
             }
             AppState::Paused => {
                 egui::CentralPanel::default().show(ctx, |ui| {
