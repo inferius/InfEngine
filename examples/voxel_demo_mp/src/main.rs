@@ -7160,6 +7160,28 @@ impl Voxel {
 
     fn render_ui(&mut self, window: &EngineWindow) {
         let state = self.state;
+        // DEBUG: log AppState + world_loaded + menu screen on the
+        // very first frame + every 2s after so we can diagnose the
+        // white-screen-at-startup. Cheap; remove when fixed.
+        static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
+            std::sync::Mutex::new(None);
+        if let Ok(mut g) = LAST_LOG.lock() {
+            let now = std::time::Instant::now();
+            let due = g
+                .map(|t| now.duration_since(t) > std::time::Duration::from_secs(2))
+                .unwrap_or(true);
+            if due {
+                *g = Some(now);
+                tracing::warn!(
+                    state = ?state,
+                    world_loaded = self.world_loaded,
+                    menu_screen = ?self.menu.screen,
+                    ui_some = self.ui.is_some(),
+                    renderer_some = self.renderer.is_some(),
+                    "render_ui debug"
+                );
+            }
+        }
         let fps = self.fps_ema;
         let show_fps = self.settings.show_fps;
         let dim = self.current_dim.clone();
@@ -7831,11 +7853,31 @@ impl Voxel {
                 // 1-RPM rate so the sky reads as a slow rotation.
                 let panorama_tex = panorama_egui_tex;
                 let scroll = panorama_scroll_local;
-                // W12.6: dark backdrop unconditionally so a missing
-                // panorama doesn't leak egui's default light frame
-                // through. Panorama (if loaded) renders on top.
-                let menu_frame = egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(13, 15, 26));
+                // W12.6: dark backdrop. Paint via context layer below
+                // the CentralPanel so the default panel frame stays
+                // out of the way + we know the egui draw list reaches
+                // the screen.
+                let screen = ctx.content_rect();
+                let bg_layer = egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("menu_bg"),
+                );
+                let painter = ctx.layer_painter(bg_layer);
+                painter.rect_filled(
+                    screen,
+                    0.0,
+                    egui::Color32::from_rgb(13, 15, 26),
+                );
+                // DIAGNOSTIC: bright red square top-left.
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        screen.min + egui::vec2(10.0, 10.0),
+                        egui::vec2(60.0, 60.0),
+                    ),
+                    0.0,
+                    egui::Color32::from_rgb(255, 0, 0),
+                );
+                let menu_frame = egui::Frame::NONE;
                 egui::CentralPanel::default().frame(menu_frame).show(ctx, |ui| {
                     let rect = ui.max_rect();
                     if let Some(tex_id) = panorama_tex {
@@ -12338,9 +12380,29 @@ impl AppHandler for Voxel {
         // with a MC-style panorama; for now we pin a neutral dark
         // navy so the menu reads cleanly.
         if !self.world_loaded {
+            // W8.1 + bila-screen fix: no world simulation, but the
+            // renderer + egui pass below MUST still run so the main
+            // menu actually paints. The legacy `return` here skipped
+            // the entire on_update tail (including renderer.render
+            // + the egui overlay callback) - that's what produced
+            // the all-white screen for ~30 minutes of debugging.
             self.particles.tick(dt);
             if let Some(r) = self.renderer.as_mut() {
                 r.set_clear_color(0.04, 0.05, 0.09, 1.0);
+            }
+            // Run the renderer directly here and short-circuit the
+            // world-side work below; renderer.render() still gets the
+            // egui callback so menu UI paints.
+            let ui = self.ui.as_mut();
+            if let Some(renderer) = self.renderer.as_mut() {
+                let _ = if let Some(ui) = ui {
+                    renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
+                } else {
+                    renderer.render(|_, _, _, _, _| {})
+                };
+            }
+            if self.requested_quit {
+                std::process::exit(0);
             }
             return;
         }
@@ -13538,8 +13600,45 @@ impl AppHandler for Voxel {
                 }
             }
         }
+        // DIAGNOSTIC: log right before renderer.render() call so we
+        // know we even got to it. If we don't see "about to render"
+        // the bin is panicking / returning earlier in on_update.
+        {
+            static LAST: std::sync::Mutex<Option<std::time::Instant>> =
+                std::sync::Mutex::new(None);
+            if let Ok(mut g) = LAST.lock() {
+                let now = std::time::Instant::now();
+                let due = g
+                    .map(|t| now.duration_since(t).as_secs() > 2)
+                    .unwrap_or(true);
+                if due {
+                    *g = Some(now);
+                    tracing::warn!(
+                        ui_is_some = ui.is_some(),
+                        "about to render"
+                    );
+                }
+            }
+        }
         let render_result = if let Some(ui) = ui {
-            renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
+            renderer.render(|d, q, e, v, s| {
+                static LAST: std::sync::Mutex<Option<std::time::Instant>> =
+                    std::sync::Mutex::new(None);
+                if let Ok(mut g) = LAST.lock() {
+                    let now = std::time::Instant::now();
+                    let due = g
+                        .map(|t| now.duration_since(t).as_secs() > 2)
+                        .unwrap_or(true);
+                    if due {
+                        *g = Some(now);
+                        tracing::warn!(
+                            size = ?s,
+                            "egui overlay fired"
+                        );
+                    }
+                }
+                ui.render(d, q, e, v, s)
+            })
         } else {
             renderer.render(|_, _, _, _, _| {})
         };
