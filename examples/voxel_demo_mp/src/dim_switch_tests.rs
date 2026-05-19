@@ -62,21 +62,35 @@ fn switch_dim_preserves_overworld_voxel_state() {
 }
 
 #[test]
-fn switch_dim_updates_world_seed_atomic() {
+fn switch_dim_does_not_stomp_world_seed_atomic_in_flight() {
+    // F.2e: switch_dim no longer writes the WORLD_SEED atomic.
+    // A worker job enqueued before the swap holds its own
+    // WorldgenCtx clone, so the atomic doesn't drive chunk gen
+    // anymore. Validating the no-write contract here keeps the
+    // pure-fn guarantee from quietly regressing.
     let _g = lock_gen();
     let mut v = Voxel::new();
     v.base_seed = 0xDEAD_BEEF;
     v.current_dim = OVERWORLD.to_string();
-    // Force a known starting seed so we can detect the swap.
-    worldgen::set_world_seed(0);
+    let before = 0x1234_5678;
+    worldgen::set_world_seed(before);
     v.switch_dim(NETHER);
-    assert_eq!(worldgen::world_seed(), dim_seed(0xDEAD_BEEF, NETHER));
+    assert_eq!(
+        worldgen::world_seed(),
+        before,
+        "switch_dim must not write WORLD_SEED",
+    );
     v.switch_dim(OVERWORLD);
-    assert_eq!(worldgen::world_seed(), dim_seed(0xDEAD_BEEF, OVERWORLD));
+    assert_eq!(
+        worldgen::world_seed(),
+        before,
+        "switch_dim must not write WORLD_SEED",
+    );
 }
 
 #[test]
-fn switch_dim_updates_worldgen_atomic_from_map() {
+fn switch_dim_does_not_stomp_worldgen_atomic_in_flight() {
+    // Mirror test for the WORLDGEN atomic. Same rationale.
     let _g = lock_gen();
     let mut v = Voxel::new();
     v.base_seed = 42;
@@ -85,13 +99,95 @@ fn switch_dim_updates_worldgen_atomic_from_map() {
         .insert(OVERWORLD.to_string(), WorldGen::Realistic);
     v.dim_worldgens
         .insert(NETHER.to_string(), WorldGen::Nether);
-    // Park the WORLDGEN atomic at Classic; switch_dim should
-    // rewrite it from the per-dim map.
     WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
     v.switch_dim(NETHER);
-    assert_eq!(WorldGen::current(), WorldGen::Nether);
+    assert_eq!(
+        WorldGen::current(),
+        WorldGen::Classic,
+        "switch_dim must not write WORLDGEN",
+    );
     v.switch_dim(OVERWORLD);
-    assert_eq!(WorldGen::current(), WorldGen::Realistic);
+    assert_eq!(
+        WorldGen::current(),
+        WorldGen::Classic,
+        "switch_dim must not write WORLDGEN",
+    );
+}
+
+#[test]
+fn switch_dim_updates_current_dim_for_ctx_consumers() {
+    // F.2e replaces the atomic-write contract with this: after
+    // `switch_dim(target)`, `current_worldgen_ctx()` returns a
+    // ctx that describes the TARGET dim. Pure-fn callers (the
+    // worker pool) build their jobs from this and so see the
+    // right seed + profile.
+    let _g = lock_gen();
+    let mut v = Voxel::new();
+    v.base_seed = 0xDEAD_BEEF;
+    v.current_dim = OVERWORLD.to_string();
+    v.dim_worldgens
+        .insert(OVERWORLD.to_string(), WorldGen::Classic);
+    v.dim_worldgens
+        .insert(NETHER.to_string(), WorldGen::Nether);
+    v.switch_dim(NETHER);
+    let ctx = v.current_worldgen_ctx();
+    assert_eq!(ctx.dim, NETHER);
+    assert_eq!(ctx.profile, WorldGen::Nether);
+    assert_eq!(ctx.effective_seed(), dim_seed(0xDEAD_BEEF, NETHER));
+    v.switch_dim(OVERWORLD);
+    let ctx = v.current_worldgen_ctx();
+    assert_eq!(ctx.dim, OVERWORLD);
+    assert_eq!(ctx.profile, WorldGen::Classic);
+    assert_eq!(ctx.effective_seed(), dim_seed(0xDEAD_BEEF, OVERWORLD));
+}
+
+#[test]
+fn two_dim_round_trip_byte_identical_overworld_chunks() {
+    // F.2e integration: gen 3 overworld chunks, jump to nether
+    // and back, re-gen the same 3 overworld chunks. They must be
+    // byte-identical the second time around.
+    let _g = lock_gen();
+    let mut v = Voxel::new();
+    v.base_seed = 0xDEAD_BEEF;
+    v.current_dim = OVERWORLD.to_string();
+    v.dim_worldgens
+        .insert(OVERWORLD.to_string(), WorldGen::Classic);
+    v.dim_worldgens
+        .insert(NETHER.to_string(), WorldGen::Nether);
+
+    let coords: [ChunkCoord; 3] = [[0, 0, 0], [1, 0, 0], [-1, 0, -1]];
+    let ctx_ow = v.current_worldgen_ctx();
+    let before: Vec<Chunk> = coords
+        .iter()
+        .map(|c| worldgen::generate_chunk_at_ctx(*c, &ctx_ow))
+        .collect();
+
+    // Jump to nether, gen some chunks, jump back.
+    v.switch_dim(NETHER);
+    let ctx_nt = v.current_worldgen_ctx();
+    let _ = worldgen::generate_chunk_at_ctx([0, 0, 0], &ctx_nt);
+    let _ = worldgen::generate_chunk_at_ctx([1, 0, 0], &ctx_nt);
+    v.switch_dim(OVERWORLD);
+
+    let ctx_ow2 = v.current_worldgen_ctx();
+    let after: Vec<Chunk> = coords
+        .iter()
+        .map(|c| worldgen::generate_chunk_at_ctx(*c, &ctx_ow2))
+        .collect();
+
+    for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+        for x in 0..16 {
+            for y in 0..16 {
+                for z in 0..16 {
+                    assert_eq!(
+                        b.get(x, y, z).0,
+                        a.get(x, y, z).0,
+                        "chunk {i} differs at ({x},{y},{z})",
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

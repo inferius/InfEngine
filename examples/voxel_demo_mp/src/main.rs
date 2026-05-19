@@ -3960,11 +3960,16 @@ impl Voxel {
     }
 
     /// Phase F: swap the active dim to `target`. Parks the
-    /// current dim's voxel + entity state in the `_by_dim` maps,
-    /// pulls the target dim's state back out (minting empty if
-    /// missing), and rewrites the `WORLD_SEED` + `WORLDGEN`
-    /// atomics so noise callers + workers immediately see the
-    /// new dim's seed + generator.
+    /// current dim's voxel + entity state in the `_by_dim` maps
+    /// and pulls the target dim's state back out (minting empty
+    /// if missing).
+    ///
+    /// F.2e: NO LONGER writes the global `WORLD_SEED` /
+    /// `WORLDGEN` atomics. Chunk gen now goes through
+    /// `current_worldgen_ctx()` -> `generate_chunk_at_ctx()` so
+    /// the per-dim seed + profile are passed by value into every
+    /// worker job, race-free against any other thread or future
+    /// dim swap.
     ///
     /// Idempotent if `target == current_dim`. The player's pose
     /// and inventory are untouched - they carry across dims.
@@ -4031,20 +4036,17 @@ impl Voxel {
         self.next_mob_id = target_ents.next_mob_id;
         self.next_drop_id = target_ents.next_drop_id;
 
-        // Rewrite the global atomics so noise callers + workers
-        // immediately switch to the new dim's lattice.
+        // F.2e: switch_dim no longer touches the worldgen
+        // atomics. Chunk gen reads the per-dim ctx via
+        // `current_worldgen_ctx()`, which derives directly from
+        // `current_dim` + `base_seed` + `dim_worldgens[target]`.
+        // The atomics survive only as a "last-used" cache for UI
+        // (HUD biome label, /biome chat command, the picker
+        // dropdown); leaving them alone here means a worker job
+        // already in-flight with a captured ctx finishes against
+        // the dim it was enqueued against, not the one we just
+        // swapped to.
         self.current_dim = target.to_string();
-        worldgen::set_world_seed(worldgen::dim_seed(
-            self.base_seed,
-            &self.current_dim,
-        ));
-        let wg = self
-            .dim_worldgens
-            .get(target)
-            .copied()
-            .unwrap_or_else(WorldGen::current);
-        worldgen::WORLDGEN
-            .store(wg as u8, std::sync::atomic::Ordering::Relaxed);
         // Drop renderer mesh handles for the chunks we just
         // parked - the active dim's chunk list completely
         // changed.

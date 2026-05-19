@@ -1,18 +1,32 @@
 //! World-generation module: biome lookup, height curves, ore +
 //! tree + flower + cactus decorations, and the generator profile
-//! enum (Classic / Flat / Islands / Amplified / Realistic).
+//! enum (Classic / Flat / Islands / Amplified / Realistic /
+//! Nether).
 //!
-//! Determinism: every noise function mixes `world_seed()` into
-//! its hash. Two peers running the same generator with the
-//! same seed produce byte-identical chunks, so the workers +
-//! the host + every client all agree on the world without
-//! shipping the bulk terrain over the wire.
+//! Architecture (Phase F.2): ctx-first, pure-function. Every
+//! noise / gen / decoration function takes the seed as an
+//! explicit parameter (`seed: u32`) or, when it needs the full
+//! per-dim picture, a `&WorldgenCtx`. Two calls with the same
+//! ctx + same coord produce byte-identical chunks regardless of
+//! what the global `WORLD_SEED` / `WORLDGEN` atomics say.
 //!
-//! The shared seed + generator profile sit in atomic statics
-//! (`WORLD_SEED`, `WORLDGEN`) so background worker threads can
-//! read them lock-free. They're set once on host start (or
-//! after `/seed` / `/worldgen`) and replicated to clients via
-//! `vx.seed`.
+//! Pure-fn entry point: `generate_chunk_at_ctx(coord, &ctx)`.
+//! The bin's chunk worker pool builds a `WorldgenCtx` snapshot
+//! on the main thread at enqueue time and ships a clone with
+//! each job, so a `switch_dim` between enqueue and worker
+//! pickup no longer poisons the gen (Phase F.2 user-reported
+//! bug: "snow floating where the mountain used to be after a
+//! dim swap").
+//!
+//! Legacy bridge: `generate_chunk_at(coord)` reads the active
+//! atomic state into a ctx and delegates - kept for the headless
+//! lib + tests that build chunks against "the active world", not
+//! a specific dim.
+//!
+//! Atomics: `WORLD_SEED` + `WORLDGEN` are UI-cache only since
+//! F.2e. The HUD biome label, `/biome` chat command, and the
+//! worldgen-picker dropdown read them; nothing in the gen call
+//! tree does. `switch_dim` no longer writes them.
 //!
 //! Module layout (Phase E split):
 //! - `biome`: Biome enum + classic 3-biome map noise.
@@ -117,15 +131,15 @@ impl Default for WorldgenCtx {
     }
 }
 
-/// Global world-generation seed. Mixed into every noise function so
-/// distinct hosts (or /seed-cycled sessions) produce different
-/// terrain + ore distributions while staying deterministic across
-/// workers and clients running the same value. Set on host start
-/// + replicated to clients via `vx.seed`.
+/// Global world-generation seed.
 ///
-/// Phase F: this atomic stores the ACTIVE dimension's effective
-/// seed (`dim_seed(base, current_dim)`). Switching dims rewrites
-/// it; the base seed is the one stored in `world.json::seed`.
+/// Phase F.2: UI-CACHE ONLY. The chunk-gen call tree no longer
+/// reads this atomic; it lives here for HUD + chat-command
+/// consumers (the biome label, `/biome`, the worldgen-picker
+/// dropdown) that don't have the luxury of a `WorldgenCtx` on
+/// hand. `switch_dim` no longer touches it; the load path keeps
+/// pinning it to `dim_seed(base, active_dim)` so the UI cache
+/// reflects "active dim" at session boot.
 static WORLD_SEED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
@@ -257,9 +271,11 @@ impl WorldGen {
     }
 }
 
-/// Shared world-gen mode. Set once on startup, read from every
-/// worker thread that generates chunks. `Relaxed` is fine because
-/// the value never changes mid-run.
+/// Shared world-gen mode.
+///
+/// Phase F.2: UI-CACHE ONLY. Mirrors `WORLD_SEED`'s contract -
+/// the gen pipeline reads `ctx.profile` instead, so this atomic
+/// only survives for HUD + chat-command consumers.
 pub static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Test-only mutex shared by every test that touches the global
