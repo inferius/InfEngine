@@ -52,6 +52,12 @@
 #[path = "block/mod.rs"]
 pub mod block;
 
+// W8.2: per-world + per-player game mode enum. Headless-safe
+// (pure serde + tags) so the save layer can read/write it
+// without dragging in the Voxel struct.
+#[path = "game_mode.rs"]
+pub mod game_mode;
+
 #[path = "item/mod.rs"]
 pub mod item;
 

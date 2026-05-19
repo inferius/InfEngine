@@ -246,11 +246,28 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         2,
         super::world_json::world_json_v1_to_v2,
     );
+    // W8.2: world.json v2 -> v3 adds the `default_game_mode` tag
+    // (Survival / Creative). Old saves migrate to "survival".
+    reg.register(
+        SaveKind::WorldJson,
+        2,
+        3,
+        super::world_json::world_json_v2_to_v3,
+    );
     reg.register(
         SaveKind::Player,
         1,
         2,
         super::players::player_v1_to_v2,
+    );
+    // W8.2: player.bin v2 -> v3 appends `game_mode: u8`. Old
+    // saves migrate to `0` (= Survival), mirroring the v1 -> v2
+    // arrow's strategy for the highlight_mode field.
+    reg.register(
+        SaveKind::Player,
+        2,
+        3,
+        super::players::player_v2_to_v3,
     );
 }
 

@@ -40,7 +40,16 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 /// - v2 (Phase F): added `dimension_worldgens` (per-dim worldgen
 ///   map). v1 saves migrate by populating it from the global
 ///   `worldgen` field for every entry in `dimensions`.
-pub const WORLD_FORMAT_VERSION: u32 = 2;
+/// - v3 (Wave 8.2): added `default_game_mode` (Survival / Creative
+///   tag). v2 saves migrate by defaulting it to `"survival"`.
+pub const WORLD_FORMAT_VERSION: u32 = 3;
+
+/// Default game-mode tag baked into every fresh `world.json`. Matches
+/// `GameMode::Survival::as_tag` - kept as a literal here so the
+/// world_save module stays free of the `game_mode` import (the lib
+/// crate re-mounts this file via `#[path]` and doesn't pull the bin's
+/// `game_mode` module in).
+pub(crate) const DEFAULT_GAME_MODE_TAG: &str = "survival";
 
 /// Vanilla MC's world border default - 60 million blocks across,
 /// 30 million radius from origin. Saves don't typically grow that
@@ -86,6 +95,18 @@ pub struct WorldJson {
     /// into the map for every known dim.
     #[serde(default)]
     pub dimension_worldgens: BTreeMap<String, String>,
+    /// W8.2: default game mode for new joiners. Persisted as a free
+    /// string tag so future GameMode variants land without touching
+    /// the schema version. Recognised values: `"survival"`,
+    /// `"creative"`. Unknown values round to Survival on load.
+    /// v2 saves migrate by defaulting this field to `"survival"`.
+    #[serde(default = "default_game_mode_tag")]
+    pub default_game_mode: String,
+}
+
+/// `serde(default = ...)` hook for the `default_game_mode` field.
+fn default_game_mode_tag() -> String {
+    DEFAULT_GAME_MODE_TAG.to_string()
 }
 
 /// Name of the nether dimension. Phase F's second dimension.
@@ -105,6 +126,19 @@ pub(crate) const NETHER_WORLDGEN: &str = "nether";
 /// the two assignments side by side so the per-dim chunk-stream
 /// path doesn't have to guess.
 pub fn create_world(worldgen: &str, seed: u32) -> WorldJson {
+    create_world_with_mode(worldgen, seed, DEFAULT_GAME_MODE_TAG)
+}
+
+/// W8.2: variant of `create_world` that lets the caller pin a
+/// non-default game mode (e.g. the user selected Creative on the
+/// new-world screen). The mode is stored as a free string tag - see
+/// `GameMode::as_tag` / `GameMode::from_tag` for the canonical
+/// encoding.
+pub fn create_world_with_mode(
+    worldgen: &str,
+    seed: u32,
+    default_game_mode: &str,
+) -> WorldJson {
     let mut dim_gens = BTreeMap::new();
     dim_gens.insert(DEFAULT_DIMENSION.to_string(), worldgen.to_string());
     dim_gens.insert(NETHER_DIMENSION.to_string(), NETHER_WORLDGEN.to_string());
@@ -120,6 +154,7 @@ pub fn create_world(worldgen: &str, seed: u32) -> WorldJson {
             NETHER_DIMENSION.to_string(),
         ],
         dimension_worldgens: dim_gens,
+        default_game_mode: default_game_mode.to_string(),
     }
 }
 
@@ -300,6 +335,40 @@ pub(crate) fn world_json_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
     })
 }
 
+/// Migration arrow `world.json` v2 -> v3. Adds the
+/// `default_game_mode` field with the literal `"survival"` value
+/// so worlds created before Wave 8 land in Survival when reopened.
+pub(crate) fn world_json_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v2 parse failed: {err}"),
+        )
+    })?;
+    let on_disk_v = value
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if on_disk_v != 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v2 -> v3 expected v2, got v{on_disk_v}"),
+        ));
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.entry("default_game_mode").or_insert_with(|| {
+            serde_json::Value::String(DEFAULT_GAME_MODE_TAG.to_string())
+        });
+        obj.insert("format_version".to_string(), serde_json::json!(3));
+    }
+    serde_json::to_vec_pretty(&value).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("world.json v3 encode failed: {err}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +400,67 @@ mod tests {
             w.dimension_worldgens.get(NETHER_DIMENSION).map(String::as_str),
             Some(NETHER_WORLDGEN)
         );
+        // W8.2: fresh world defaults the game mode to Survival.
+        assert_eq!(w.default_game_mode, DEFAULT_GAME_MODE_TAG);
+    }
+
+    #[test]
+    fn create_world_with_mode_persists_creative() {
+        // W8.2: when the user picks Creative on the new-world
+        // screen, the WorldJson must store the tag verbatim.
+        let w = create_world_with_mode("realistic", 7, "creative");
+        assert_eq!(w.default_game_mode, "creative");
+        assert_eq!(w.format_version, WORLD_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn world_json_round_trips_game_mode_through_serde() {
+        // W8.2: serialise + deserialise a Creative world and
+        // confirm the field survives unchanged.
+        let w = create_world_with_mode("classic", 12345, "creative");
+        let payload = serde_json::to_vec_pretty(&w).unwrap();
+        let parsed: WorldJson = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(parsed.default_game_mode, "creative");
+        assert_eq!(parsed.seed, 12345);
+    }
+
+    #[test]
+    fn v2_to_v3_migration_defaults_game_mode_to_survival() {
+        // W8.2: v2 saves lift cleanly by populating
+        // `default_game_mode` with the literal "survival" tag.
+        let v2 = serde_json::json!({
+            "format_version": 2,
+            "worldgen": "classic",
+            "seed": 99,
+            "spawn": [0, 0, 0],
+            "world_border_radius": DEFAULT_WORLD_BORDER_RADIUS,
+            "default_dimension": "overworld",
+            "dimensions": ["overworld", "nether"],
+            "dimension_worldgens": {"overworld": "classic", "nether": "nether"},
+        });
+        let bytes = serde_json::to_vec(&v2).unwrap();
+        let migrated = world_json_v2_to_v3(&bytes).unwrap();
+        let parsed: WorldJson = serde_json::from_slice(&migrated).unwrap();
+        assert_eq!(parsed.format_version, 3);
+        assert_eq!(parsed.default_game_mode, "survival");
+    }
+
+    #[test]
+    fn v2_to_v3_migration_refuses_wrong_version() {
+        let v3 = serde_json::json!({
+            "format_version": 3,
+            "worldgen": "classic",
+            "seed": 0,
+            "spawn": [0, 0, 0],
+            "world_border_radius": DEFAULT_WORLD_BORDER_RADIUS,
+            "default_dimension": "overworld",
+            "dimensions": ["overworld"],
+            "dimension_worldgens": {},
+            "default_game_mode": "survival",
+        });
+        let bytes = serde_json::to_vec(&v3).unwrap();
+        let res = world_json_v2_to_v3(&bytes);
+        assert!(res.is_err(), "v3 input must be rejected as not-v2");
     }
 
     #[test]
