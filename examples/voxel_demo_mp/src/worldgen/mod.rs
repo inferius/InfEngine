@@ -189,23 +189,14 @@ pub(crate) fn hash2_for(wx: i32, wz: i32, seed: u32) -> u32 {
     h.wrapping_mul(0xC2B2_AE35)
 }
 
-/// Legacy seed_offset that still reads the `WORLD_SEED` atomic.
-/// Phased out as F.2c migrates each call site to the ctx-driven
-/// `seed_offset_for`; left here for the noise functions that
-/// haven't been touched yet.
-#[allow(dead_code)]
-pub(crate) fn seed_offset() -> f32 {
-    seed_offset_for(world_seed())
-}
-
-/// Legacy 2D hash that still reads the `WORLD_SEED` atomic. Phased
-/// out as F.2c migrates each call site to the ctx-driven
-/// `hash2_for`; left here for the decoration passes that haven't
-/// been rewritten yet.
-#[allow(dead_code)]
-pub(crate) fn hash2(wx: i32, wz: i32) -> u32 {
-    hash2_for(wx, wz, world_seed())
-}
+// F.2c-3: legacy `hash2(wx, wz)` + `seed_offset()` (atomic
+// readers) deleted. Every call site now reads
+// `ctx.effective_seed()` and goes through `hash2_for` /
+// `seed_offset_for`. The remaining `world_seed()` accessor is
+// kept for UI-only consumers (HUD biome label, /biome chat
+// command, the worldgen-picker dropdown) and the legacy
+// `generate_chunk_at` bridge; nothing inside the gen call tree
+// reaches for it.
 
 /// World-generation profile. Selected once at startup (via the
 /// `--worldgen=<name>` CLI flag) and read by every chunk-generator

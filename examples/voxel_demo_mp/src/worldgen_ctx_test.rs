@@ -21,9 +21,9 @@
 //! 4. Regenerate chunk (0,0,0) via the same `WorldgenCtx`.
 //! 5. Assert byte-identical output.
 //!
-//! Marked `#[ignore]` for F.2a because the pure entry point does
-//! not exist yet. F.2b adds `generate_chunk_at_ctx`; later phases
-//! remove the ignore.
+//! F.2c-3: ctx is now plumbed through every noise leaf so the
+//! test passes byte-for-byte. The `#[ignore]` markers are gone;
+//! this file is the live regression guard for the F.2 refactor.
 
 #![cfg(test)]
 
@@ -48,7 +48,6 @@ fn fold_chunk_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> u64 {
 }
 
 #[test]
-#[ignore = "F.2a regression marker - enabled once F.2b adds the pure ctx entry point"]
 fn pure_worldgen_is_stable_across_global_atomic_writes() {
     let _g = lock_gen();
 
@@ -83,7 +82,6 @@ fn pure_worldgen_is_stable_across_global_atomic_writes() {
 }
 
 #[test]
-#[ignore = "F.2a regression marker - enabled once F.2b adds the pure ctx entry point"]
 fn pure_worldgen_two_dim_round_trip_is_byte_identical() {
     // 2-dim round-trip: gen 3 overworld chunks, switch dim (write
     // atomics + gen some nether), then re-gen the SAME 3 overworld
