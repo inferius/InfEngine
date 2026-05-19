@@ -10,7 +10,10 @@ struct CameraUniform {
     view_proj: mat4x4<f32>,
     view_proj_inv: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    // x = wall-clock seconds since app start; y/z/w reserved.
+    // x = wall-clock seconds since app start.
+    // y = Phase L day_factor: sky-light multiplier in [0, 1]
+    //     (1.0 noon, 0.04 midnight, smoothstep through dawn/dusk).
+    // z/w = reserved.
     time: vec4<f32>,
 };
 
@@ -53,6 +56,11 @@ struct VertexInput {
     @location(6) inst_row3: vec4<f32>,
     @location(7) inst_color: vec4<f32>,
     @location(8) inst_material: vec4<f32>,
+    // Phase L.4: per-vertex (block_light, sky_light) in [0, 1].
+    // Voxel meshes bake these in from the per-chunk LightGrid;
+    // legacy non-voxel meshes leave it at (0.0, 1.0) so they
+    // render as if they sit under open sky.
+    @location(9) light: vec2<f32>,
 };
 
 struct VertexOutput {
@@ -62,6 +70,7 @@ struct VertexOutput {
     @location(2) color: vec4<f32>,
     @location(3) material: vec4<f32>,
     @location(4) uv: vec2<f32>,
+    @location(5) light: vec2<f32>,
 };
 
 @vertex
@@ -77,6 +86,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.color = in.inst_color;
     out.material = in.inst_material;
     out.uv = in.uv;
+    out.light = in.light;
     return out;
 }
 
@@ -279,5 +289,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let amb_t = (n.y * 0.5) + 0.5;
     let ambient = mix(ambient_down, ambient_up, amb_t) * albedo;
 
-    return vec4<f32>(direct + ambient, alpha);
+    // Phase L.5: fold per-voxel light into the final color.
+    // `light.x` is the block-emitter-propagated value (torch/
+    // glowstone/lava/fire flood), `light.y * day_factor` is the
+    // daylight-modulated sky-light value. Take the max so torches
+    // stay bright at night and sky-lit cells dim with the day
+    // clock. A small `0.05` floor keeps cells visible in pitch
+    // black so the player isn't truly blinded.
+    let day_factor = clamp(camera.time.y, 0.0, 1.0);
+    let block_light_norm = clamp(in.light.x, 0.0, 1.0);
+    let sky_light_norm = clamp(in.light.y, 0.0, 1.0);
+    let effective_light = max(block_light_norm, sky_light_norm * day_factor);
+    let light_mult = 0.05 + 0.95 * effective_light;
+    return vec4<f32>((direct + ambient) * light_mult, alpha);
 }

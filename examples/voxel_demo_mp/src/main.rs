@@ -10593,6 +10593,14 @@ impl AppHandler for Voxel {
             // water surface (caustic noise scrolls along the
             // baked flow direction).
             cam.time_seconds = self.app_start.elapsed().as_secs_f32();
+            // Phase L.5: sky-light multiplier for the day/night
+            // cycle. Read by the mesh3d shader as `camera.time.y`
+            // and folded into the per-vertex `light.y` (sky)
+            // value via `max(block, sky * day_factor)`.
+            cam.day_factor = lighting::compute_day_factor(
+                self.day_time,
+                DAY_LENGTH_S,
+            );
             // Head-bob offset: a small vertical bob + lateral
             // sway scaled by current horizontal speed so a still
             // player has a rock-steady camera. Skip while in fly

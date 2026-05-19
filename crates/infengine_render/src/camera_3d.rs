@@ -19,6 +19,14 @@ pub struct Camera3D {
     /// fire / grass sway, etc.) can drive procedural animation.
     /// The host is expected to refresh this every frame.
     pub time_seconds: f32,
+    /// Phase L (Wave 3): sky-light multiplier in `[0, 1]` keyed
+    /// by the host's day clock. The mesh3d shader reads it as
+    /// `time.y` of the camera uniform and uses
+    /// `effective_light = max(block_light, sky_light * day_factor)`
+    /// to dim outdoor cells at night while keeping torch-lit cells
+    /// bright. Defaults to 1.0 (full daylight); hosts without a
+    /// day cycle can leave it alone.
+    pub day_factor: f32,
 }
 
 impl Camera3D {
@@ -32,6 +40,7 @@ impl Camera3D {
             z_near: 0.1,
             z_far: 200.0,
             time_seconds: 0.0,
+            day_factor: 1.0,
         }
     }
 
@@ -52,10 +61,11 @@ pub(crate) struct Camera3DUniform {
     view_proj: [[f32; 4]; 4],
     view_proj_inv: [[f32; 4]; 4],
     camera_pos: [f32; 4],
-    /// `(time_seconds, 0, 0, 0)`. Slot kept as a vec4 so the
-    /// struct stays 16-byte aligned and the y/z/w lanes are
-    /// available for future "global" shader inputs (sky tint,
-    /// wind strength, ...).
+    /// `(time_seconds, day_factor, 0, 0)`. Slot kept as a vec4 so
+    /// the struct stays 16-byte aligned. `time.y` carries the
+    /// Phase L sky-light multiplier; remaining lanes reserved
+    /// for future "global" shader inputs (sky tint, wind
+    /// strength, ...).
     time: [f32; 4],
 }
 
@@ -66,7 +76,7 @@ impl Camera3DUniform {
             view_proj: vp.to_cols_array_2d(),
             view_proj_inv: vp.inverse().to_cols_array_2d(),
             camera_pos: [c.position.x, c.position.y, c.position.z, 1.0],
-            time: [c.time_seconds, 0.0, 0.0, 0.0],
+            time: [c.time_seconds, c.day_factor.clamp(0.0, 1.0), 0.0, 0.0],
         }
     }
 }
@@ -116,5 +126,43 @@ impl Camera3DResource {
     pub fn upload(&self, queue: &wgpu::Queue, camera: &Camera3D) {
         let uniform = Camera3DUniform::from_camera(camera);
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&uniform));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_day_factor_is_one() {
+        let c = Camera3D::new(1, 1);
+        assert_eq!(c.day_factor, 1.0);
+    }
+
+    #[test]
+    fn uniform_time_y_carries_day_factor() {
+        let mut c = Camera3D::new(1, 1);
+        c.day_factor = 0.42;
+        let u = Camera3DUniform::from_camera(&c);
+        assert!((u.time[1] - 0.42).abs() < 1e-5);
+    }
+
+    #[test]
+    fn uniform_clamps_day_factor_into_unit_range() {
+        let mut c = Camera3D::new(1, 1);
+        c.day_factor = 2.5;
+        let u = Camera3DUniform::from_camera(&c);
+        assert!((u.time[1] - 1.0).abs() < 1e-5);
+        c.day_factor = -0.5;
+        let u = Camera3DUniform::from_camera(&c);
+        assert!((u.time[1] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn uniform_time_x_still_carries_seconds() {
+        let mut c = Camera3D::new(1, 1);
+        c.time_seconds = 7.5;
+        let u = Camera3DUniform::from_camera(&c);
+        assert!((u.time[0] - 7.5).abs() < 1e-5);
     }
 }
