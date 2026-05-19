@@ -731,8 +731,6 @@ struct Voxel {
     /// fade out after a couple of seconds; consecutive picks of
     /// the same block collapse into a single counter.
     pickup_toasts: Vec<(std::time::Instant, BlockId, u8)>,
-    /// `None` = break slot (empty hand). `Some(block)` = place that
-    /// block. Indexed by `selected_slot`.
     /// Flat slot array. Indices `0..HOTBAR_SLOTS` are the hotbar
     /// row (visible at the bottom of the screen, scrollable via
     /// mouse wheel); indices `HOTBAR_SLOTS..INVENTORY_SLOTS` are
@@ -3780,10 +3778,11 @@ impl Voxel {
             tab_held: false,
             pickup_toasts: Vec::new(),
             inventory: {
-                // Curated starter hotbar: empty hand + a small
-                // basic-block bundle + the four wood tools so
-                // the player can immediately mine across every
-                // category without crafting first.
+                // Curated starter hotbar: slot 0 left empty so the
+                // player has a free hand for picked-up items; slots
+                // 1..8 hold the four wood tools + four basic block
+                // bundles so the player can immediately mine across
+                // every category without crafting first.
                 let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
                     [None; INVENTORY_SLOTS];
                 let seed: &[(u16, u8)] = &[
@@ -6749,11 +6748,12 @@ impl Voxel {
                             });
                         });
                 }
-                // Bottom hotbar - empty slot (= break) + one slot per
-                // registered block. Highlighted slot is the active
-                // selection (driven by mouse wheel). Clicks here
-                // change the active slot; drag&drop is wired through
-                // the inventory window.
+                // Bottom hotbar - 9 normal slots. Mining is driven
+                // by LMB regardless of what's held; the held tool
+                // only affects mining speed + drops. Highlighted
+                // slot is the active selection (driven by mouse
+                // wheel). Clicks here change the active slot;
+                // drag&drop is wired through the inventory window.
                 if hud_visible {
                 egui::Area::new(egui::Id::new("voxel_hotbar"))
                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
@@ -6768,7 +6768,6 @@ impl Voxel {
                                             atlas_tex_id,
                                             SlotKind::Inv(i),
                                             i == selected_slot,
-                                            i == 0,
                                             inventory_open,
                                             &mut inv_actions,
                                         );
@@ -6844,7 +6843,6 @@ impl Voxel {
                                             atlas_tex_id,
                                             SlotKind::Inv(inv_idx),
                                             false,
-                                            false,
                                             true,
                                             &mut inv_actions,
                                         );
@@ -6864,7 +6862,6 @@ impl Voxel {
                                         atlas_tex_id,
                                         SlotKind::Inv(i),
                                         i == selected_slot,
-                                        i == 0,
                                         true,
                                         &mut inv_actions,
                                     );
@@ -6887,7 +6884,6 @@ impl Voxel {
                                                     atlas_tex_id,
                                                     SlotKind::Craft(idx),
                                                     false,
-                                                    false,
                                                     true,
                                                     &mut inv_actions,
                                                 );
@@ -6906,7 +6902,6 @@ impl Voxel {
                                         craft_output_snapshot,
                                         atlas_tex_id,
                                         SlotKind::CraftOut,
-                                        false,
                                         false,
                                         true,
                                         &mut inv_actions,
@@ -6974,7 +6969,6 @@ impl Voxel {
                                                     icon,
                                                     atlas_tex_id,
                                                     false,
-                                                    false,
                                                     egui::Sense::hover(),
                                                 );
                                             }
@@ -7000,7 +6994,6 @@ impl Voxel {
                                                 ui,
                                                 out_icon,
                                                 atlas_tex_id,
-                                                false,
                                                 false,
                                                 egui::Sense::click(),
                                             )
@@ -9104,13 +9097,13 @@ impl AppHandler for Voxel {
         // Apply pending mouse-button edits before rendering. LMB
         // always breaks the targeted voxel. RMB places the selected
         // hotbar block at the adjacent empty cell, but is ignored
-        // when the empty (break) slot is selected.
+        // when the selected slot is empty or holds a tool/weapon.
         let lmb = self.lmb_pending;
         let rmb = self.rmb_pending;
         self.lmb_pending = false;
         self.rmb_pending = false;
         // The currently-held block: contents of the selected hotbar
-        // slot. `None` = break / empty hand (or 0-count remnant).
+        // slot. `None` = empty hand (or 0-count remnant).
         let selected_block = self.inventory[self.selected_slot].map(|(b, _)| b);
         // Net mode flag: clients defer block edits to the server +
         // wait for the server echo before applying. Offline + server
@@ -11587,14 +11580,12 @@ fn sweep_aabb(
 ///   appended to `actions` for the post-pass to apply.
 /// - Returns the underlying widget response so callers can layer
 ///   click handlers / tooltips on top.
-#[allow(clippy::too_many_arguments)]
 fn slot_with_dnd(
     ui: &mut egui::Ui,
     slot: Option<SlotIcon>,
     atlas: Option<egui::TextureId>,
     kind: SlotKind,
     selected: bool,
-    is_break_slot: bool,
     draggable: bool,
     actions: &mut Vec<InvAction>,
 ) -> egui::Response {
@@ -11605,25 +11596,11 @@ fn slot_with_dnd(
     let id = ui.make_persistent_id(("inv_slot", kind));
     let resp = if draggable && slot.is_some() {
         ui.dnd_drag_source(id, kind, |ui| {
-            draw_slot_widget(
-                ui,
-                slot,
-                atlas,
-                selected,
-                is_break_slot,
-                egui::Sense::click_and_drag(),
-            )
+            draw_slot_widget(ui, slot, atlas, selected, egui::Sense::click_and_drag())
         })
         .response
     } else {
-        draw_slot_widget(
-            ui,
-            slot,
-            atlas,
-            selected,
-            is_break_slot,
-            egui::Sense::click(),
-        )
+        draw_slot_widget(ui, slot, atlas, selected, egui::Sense::click())
     };
     if let Some(from) = resp.dnd_release_payload::<SlotKind>() {
         let from = *from;
@@ -11670,17 +11647,13 @@ fn slot_with_dnd(
 ///   set the slot paints the matching tile; when `None` it falls
 ///   back to a flat color swatch from `slot.0`.
 /// - `selected`: outlines the cell in gold (active hotbar slot).
-/// - `is_break_slot`: draws the white "X" overlay marking the
-///   creative break tool (only meaningful for hotbar slot 0).
 /// - `sense`: the egui interaction model (click, click_and_drag,
 ///   etc.) the underlying response should report.
-#[allow(clippy::too_many_arguments)]
 fn draw_slot_widget(
     ui: &mut egui::Ui,
     slot: Option<SlotIcon>,
     atlas: Option<egui::TextureId>,
     selected: bool,
-    is_break_slot: bool,
     sense: egui::Sense,
 ) -> egui::Response {
     let size = egui::vec2(40.0, 40.0);
@@ -11718,25 +11691,6 @@ fn draw_slot_widget(
         egui::Stroke::new(1.0, egui::Color32::from_gray(120))
     };
     painter.rect_stroke(rect, 4.0, outline, egui::StrokeKind::Inside);
-    if slot.is_none() && is_break_slot {
-        // Draw an "X" to mark the break (empty hand) slot.
-        let pad = 10.0;
-        let stroke = egui::Stroke::new(2.0, egui::Color32::from_gray(190));
-        painter.line_segment(
-            [
-                egui::pos2(rect.min.x + pad, rect.min.y + pad),
-                egui::pos2(rect.max.x - pad, rect.max.y - pad),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(rect.max.x - pad, rect.min.y + pad),
-                egui::pos2(rect.min.x + pad, rect.max.y - pad),
-            ],
-            stroke,
-        );
-    }
     if let Some((_, count, _, _)) = slot {
         // Stack count badge in the bottom-right corner. Hide for
         // singletons because Minecraft does the same.

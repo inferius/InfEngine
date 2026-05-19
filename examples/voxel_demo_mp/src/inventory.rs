@@ -32,11 +32,11 @@ use serde::{Deserialize, Serialize};
 use crate::match_recipe;
 use crate::net::{ClientInv, NetSlot};
 
-/// Hotbar slots: index 0 is the "break" slot (empty hand), the rest
-/// hold the block ids in `Self::HOTBAR_BLOCKS`.
 /// Hotbar occupies the first row of the inventory grid; the
 /// remaining `INVENTORY_ROWS - 1` rows are the open-inventory
-/// extension Minecraft players expect.
+/// extension Minecraft players expect. Every slot is a normal
+/// stack slot - mining is driven by LMB regardless of what's
+/// held (the held tool only affects mining speed + drops).
 pub(crate) const HOTBAR_SLOTS: usize = 9;
 pub(crate) const INVENTORY_COLS: usize = 9;
 pub(crate) const INVENTORY_ROWS: usize = 4;
@@ -158,10 +158,6 @@ pub(crate) fn inv_apply_drag(
     if matches!(to, SlotKind::CraftOut) {
         return;
     }
-    // Protect the break-tool slot.
-    if matches!(to, SlotKind::Inv(0)) {
-        return;
-    }
     let from_stack = match from {
         SlotKind::Inv(i) => inv.inventory.get(i).copied().flatten(),
         SlotKind::Craft(i) => inv.craft_grid.get(i).copied().flatten(),
@@ -280,5 +276,134 @@ pub(crate) fn inv_apply_drag(
             write_to(inv, to, Some(from_stack));
             write_to(inv, from, to_stack);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_client_inv() -> ClientInv {
+        ClientInv {
+            inventory: [None; INVENTORY_SLOTS],
+            craft_grid: [None; 4],
+        }
+    }
+
+    #[test]
+    fn slot_0_accepts_drop_after_break_slot_removal() {
+        // Pre Q.1, dropping INTO Inv(0) was a no-op. After Q.1
+        // slot 0 is a normal stack slot - dragging a stone stack
+        // out of slot 5 into slot 0 has to actually move it.
+        let mut inv = empty_client_inv();
+        inv.inventory[5] = Some((BlockId(1), 8));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(5),
+            SlotKind::Inv(0),
+            SplitMode::All,
+        );
+        assert_eq!(inv.inventory[0], Some((BlockId(1), 8)));
+        assert_eq!(inv.inventory[5], None);
+    }
+
+    #[test]
+    fn slot_0_pickup_lands_normally() {
+        // inv_pickup walks slot 0 like any other - an empty
+        // inventory should now land the first picked item in
+        // slot 0.
+        let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
+            [None; INVENTORY_SLOTS];
+        assert!(inv_pickup(&mut inv, BlockId(2)));
+        assert_eq!(inv[0], Some((BlockId(2), 1)));
+    }
+
+    #[test]
+    fn slot_0_half_split_moves_into_empty_target() {
+        // Confirm SplitMode::Half also lands in slot 0 (not just
+        // SplitMode::All) - belts-and-braces against any future
+        // regression that would re-introduce a slot-0 guard for
+        // a single split mode.
+        let mut inv = empty_client_inv();
+        inv.inventory[3] = Some((BlockId(7), 10));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(3),
+            SlotKind::Inv(0),
+            SplitMode::Half,
+        );
+        // ceil(10/2) = 5 moves; 5 stays behind.
+        assert_eq!(inv.inventory[0], Some((BlockId(7), 5)));
+        assert_eq!(inv.inventory[3], Some((BlockId(7), 5)));
+    }
+
+    #[test]
+    fn slot_0_merges_existing_stack() {
+        // Dragging a stack of the same id onto a slot-0 stack
+        // merges them (subject to STACK_MAX). Mirrors the
+        // behaviour of any other slot.
+        let mut inv = empty_client_inv();
+        inv.inventory[0] = Some((BlockId(1), 30));
+        inv.inventory[5] = Some((BlockId(1), 20));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(5),
+            SlotKind::Inv(0),
+            SplitMode::All,
+        );
+        assert_eq!(inv.inventory[0], Some((BlockId(1), 50)));
+        assert_eq!(inv.inventory[5], None);
+    }
+
+    #[test]
+    fn slot_0_swap_with_occupied_target() {
+        // Different block ids: drag should swap, not protect
+        // slot 0.
+        let mut inv = empty_client_inv();
+        inv.inventory[0] = Some((BlockId(2), 4));
+        inv.inventory[1] = Some((BlockId(7), 9));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(1),
+            SlotKind::Inv(0),
+            SplitMode::All,
+        );
+        // Swap: 7's stack lands in slot 0; 2's stack lands in slot 1.
+        assert_eq!(inv.inventory[0], Some((BlockId(7), 9)));
+        assert_eq!(inv.inventory[1], Some((BlockId(2), 4)));
+    }
+
+    #[test]
+    fn slot_0_one_split_decrements_source() {
+        // SplitMode::One peels exactly 1 off the source stack
+        // into the destination, even when the destination is
+        // slot 0.
+        let mut inv = empty_client_inv();
+        inv.inventory[4] = Some((BlockId(8), 3));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(4),
+            SlotKind::Inv(0),
+            SplitMode::One,
+        );
+        assert_eq!(inv.inventory[0], Some((BlockId(8), 1)));
+        assert_eq!(inv.inventory[4], Some((BlockId(8), 2)));
+    }
+
+    #[test]
+    fn craft_output_still_rejected_as_drop_target() {
+        // CraftOut remains write-only; confirm the existing
+        // protection wasn't accidentally tied to the slot-0
+        // guard removal.
+        let mut inv = empty_client_inv();
+        inv.inventory[2] = Some((BlockId(3), 6));
+        inv_apply_drag(
+            &mut inv,
+            SlotKind::Inv(2),
+            SlotKind::CraftOut,
+            SplitMode::All,
+        );
+        // Source untouched, no drop happened.
+        assert_eq!(inv.inventory[2], Some((BlockId(3), 6)));
     }
 }
