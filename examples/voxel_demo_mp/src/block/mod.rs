@@ -30,6 +30,8 @@ pub(crate) mod portal;
 mod fire_tests;
 #[cfg(test)]
 mod phase_f_tests;
+#[cfg(test)]
+mod w11_emitter_tests;
 
 // ---------------------------------------------------------------
 // Texture atlas - tile descriptor + dimensions.
@@ -519,6 +521,179 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         top: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
+    },
+    // ---------------------------------------------------------------
+    // W11.3 - MC emitter + cosmetic blocks.
+    //
+    // Every entry here mirrors a `.lightLevel(...)` row from
+    // `block::light_emission::MC_EMITTERS` so the new ids show up
+    // as light sources in the BFS automatically. Texture paths
+    // follow the W9 name_map pattern (the asset pack picks the
+    // right tile when MC is installed; the swatch colour is the
+    // fallback). Most carry the same flag set as TORCH so the
+    // render pipeline + ray-cast + collision code don't need any
+    // emitter-specific branches.
+
+    // Redstone torch (id 50). MC emits 7 when lit. Same pillar
+    // render shape as a regular torch; tinted red.
+    BlockType {
+        id: 50, name: "redstone_torch", color: [0.85, 0.15, 0.10], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Redstone wall torch (id 51). Wall-mounted variant of
+    // REDSTONE_TORCH. Same flags + emission.
+    BlockType {
+        id: 51, name: "redstone_wall_torch", color: [0.85, 0.15, 0.10], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Soul torch (id 52). MC emits 10. Cooler-coloured variant of
+    // TORCH crafted from a torch + soul soil/sand.
+    BlockType {
+        id: 52, name: "soul_torch", color: [0.40, 0.85, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Soul wall torch (id 53). Wall variant of SOUL_TORCH.
+    BlockType {
+        id: 53, name: "soul_wall_torch", color: [0.40, 0.85, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Sea lantern (id 54). MC emits 15. Underwater light source;
+    // we ship it as a full cube without water-only restrictions
+    // (placement works anywhere).
+    BlockType {
+        id: 54, name: "sea_lantern", color: [0.85, 0.95, 1.00], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["sea_lantern.png", "glowstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["sea_lantern.png", "glowstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["sea_lantern.png", "glowstone.png"], keep_alpha: false },
+    },
+    // Jack o'lantern (id 55). MC emits 15. Carved pumpkin with
+    // a lit face; full-cube opaque block.
+    BlockType {
+        id: 55, name: "jack_o_lantern", color: [1.00, 0.78, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["pumpkin_top.png", "jack_o_lantern.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["pumpkin_top.png", "jack_o_lantern.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["jack_o_lantern.png", "pumpkin_face_on.png"], keep_alpha: false },
+    },
+    // Soul fire (id 56). MC emits 10. Same flag set as FIRE but
+    // with a cooler colour. No spread logic in W11.3 - that's a
+    // future enhancement to fire.rs gated on the block id.
+    BlockType {
+        id: 56, name: "soul_fire", color: [0.40, 0.85, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["soul_fire_0.png", "fire_layer_0.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["soul_fire_0.png", "fire_layer_0.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["soul_fire_0.png", "fire_layer_0.png"], keep_alpha: true },
+    },
+    // End rod (id 57). MC emits 14. Thin white-violet rod; render
+    // shape promoted to F_DEDICATED_RENDER like torches so the
+    // chunk mesher doesn't emit a full cube.
+    BlockType {
+        id: 57, name: "end_rod", color: [0.95, 0.90, 0.95], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["end_rod.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["end_rod.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["end_rod.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Magma block (id 58). MC emits 3. Solid orange-glow block.
+    // No fire-damage step in W11.3.
+    BlockType {
+        id: 58, name: "magma_block", color: [0.85, 0.30, 0.15], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["magma.png", "netherrack.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["magma.png", "netherrack.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["magma.png", "netherrack.png"], keep_alpha: false },
+    },
+    // Shroomlight (id 59). MC emits 15. Bright orange fungal
+    // light from huge fungi.
+    BlockType {
+        id: 59, name: "shroomlight", color: [1.00, 0.60, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["shroomlight.png", "glowstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["shroomlight.png", "glowstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["shroomlight.png", "glowstone.png"], keep_alpha: false },
+    },
+    // Lantern (id 60). MC emits 15. Hanging metal lantern; full
+    // cube here (no hangs-down rendering).
+    BlockType {
+        id: 60, name: "lantern", color: [0.55, 0.45, 0.30], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["lantern.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["lantern.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["lantern.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Soul lantern (id 61). MC emits 10.
+    BlockType {
+        id: 61, name: "soul_lantern", color: [0.35, 0.75, 0.95], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_DEDICATED_RENDER | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["soul_lantern.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["soul_lantern.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["soul_lantern.png", "torch_on.png"], keep_alpha: true },
+    },
+    // Crying obsidian (id 62). MC emits 10. Decorative variant of
+    // obsidian that drips purple light particles in MC; we ship
+    // the lit cube, particles are a future enhancement.
+    BlockType {
+        id: 62, name: "crying_obsidian", color: [0.18, 0.05, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["crying_obsidian.png", "obsidian.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["crying_obsidian.png", "obsidian.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["crying_obsidian.png", "obsidian.png"], keep_alpha: false },
+    },
+    // Respawn anchor (id 63). MC emits 0/3/7/11/15 by charge
+    // state (0..4 glowstone charges). We ship the table value
+    // (15 = fully charged) since the engine has no per-state
+    // charge yet; when charge state lands the lookup will route
+    // through a state-aware fn that returns 0 for uncharged.
+    BlockType {
+        id: 63, name: "respawn_anchor", color: [0.18, 0.05, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["respawn_anchor_top_off.png", "obsidian.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["respawn_anchor_bottom.png", "obsidian.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["respawn_anchor_side0.png", "obsidian.png"], keep_alpha: false },
+    },
+    // Ender chest (id 64). MC emits 7. Cosmetic only in W11.3 -
+    // no per-player Ender inventory yet. Looks like obsidian
+    // with cyan accents in MC.
+    BlockType {
+        id: 64, name: "ender_chest", color: [0.18, 0.18, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["ender_chest_top.png", "obsidian.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["ender_chest_bottom.png", "obsidian.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["ender_chest_side.png", "obsidian.png"], keep_alpha: false },
+    },
+    // Lit redstone lamp (id 65). MC emits 15 when lit. The unlit
+    // form is a separate id - we only ship the lit variant
+    // because the engine has no redstone state yet.
+    BlockType {
+        id: 65, name: "lit_redstone_lamp", color: [1.00, 0.85, 0.60], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["redstone_lamp_on.png", "glowstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["redstone_lamp_on.png", "glowstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["redstone_lamp_on.png", "glowstone.png"], keep_alpha: false },
+    },
+    // Lit redstone ore (id 66). MC emits 9 when activated.
+    BlockType {
+        id: 66, name: "lit_redstone_ore", color: [0.80, 0.30, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+    },
+    // Light block (id 67). MC's invisible debug-stick light.
+    // MC emits 15. Render as F_TRANSPARENT_RENDER + F_RAY_PASS
+    // + F_AABB_PASS so it's effectively invisible in-world; the
+    // BFS still picks up the emission.
+    BlockType {
+        id: 67, name: "light_block", color: [1.00, 1.00, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["light_15.png", "glowstone.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["light_15.png", "glowstone.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["light_15.png", "glowstone.png"], keep_alpha: true },
     },
 ];
 

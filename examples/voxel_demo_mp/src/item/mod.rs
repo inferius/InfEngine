@@ -396,6 +396,100 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 64, icon: None,
         category: ItemCategory::Decoration,
     },
+    // ---- W11.3: emitter + cosmetic blocks (ids 50..=67). All
+    // are placeable building / decoration items so item_places_block
+    // returns Some(id) - they show up in the Creative inventory tab
+    // automatically.
+    ItemType {
+        id: 50, name: "redstone_torch", display: Some("Redstone Torch"),
+        places: Some(50), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 51, name: "redstone_wall_torch", display: Some("Redstone Wall Torch"),
+        places: Some(51), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 52, name: "soul_torch", display: Some("Soul Torch"),
+        places: Some(52), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 53, name: "soul_wall_torch", display: Some("Soul Wall Torch"),
+        places: Some(53), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 54, name: "sea_lantern", display: Some("Sea Lantern"),
+        places: Some(54), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 55, name: "jack_o_lantern", display: Some("Jack o'Lantern"),
+        places: Some(55), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 56, name: "soul_fire", display: Some("Soul Fire"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 57, name: "end_rod", display: Some("End Rod"),
+        places: Some(57), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 58, name: "magma_block", display: Some("Magma Block"),
+        places: Some(58), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 59, name: "shroomlight", display: Some("Shroomlight"),
+        places: Some(59), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 60, name: "lantern", display: Some("Lantern"),
+        places: Some(60), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 61, name: "soul_lantern", display: Some("Soul Lantern"),
+        places: Some(61), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 62, name: "crying_obsidian", display: Some("Crying Obsidian"),
+        places: Some(62), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 63, name: "respawn_anchor", display: Some("Respawn Anchor"),
+        places: Some(63), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 64, name: "ender_chest", display: Some("Ender Chest"),
+        places: Some(64), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 65, name: "lit_redstone_lamp", display: Some("Redstone Lamp"),
+        places: Some(65), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 66, name: "lit_redstone_ore", display: Some("Redstone Ore"),
+        places: Some(66), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 67, name: "light_block", display: Some("Light Block"),
+        places: Some(67), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
 ];
 
 // ---------------------------------------------------------------
