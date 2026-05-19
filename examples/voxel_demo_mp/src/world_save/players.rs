@@ -43,8 +43,14 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 pub(crate) const PLAYER_MAGIC: &[u8; 4] = b"INFP";
 
 /// Envelope + payload format version. Bumped when the on-disk shape
-/// changes in a breaking way. Phase B.6 wires a migration registry.
-pub(crate) const PLAYER_FORMAT_VERSION: u32 = 1;
+/// changes in a breaking way.
+///
+/// History:
+/// - v1: Phase B.6 / B.7 initial schema.
+/// - v2: Q.2 - adds `highlight_mode: u8` (Auto/Build/Break wireframe
+///   selection). Old v1 saves migrate by appending a single `0`
+///   byte (= `HighlightMode::Auto`).
+pub(crate) const PLAYER_FORMAT_VERSION: u32 = 2;
 
 /// Default zstd compression level. Matches `chunks.rs` - level 3 is
 /// the documented "balanced" setting from the design doc.
@@ -119,6 +125,11 @@ pub(crate) struct PlayerSave {
     /// Dimension the player was in on last save. Phase F dispatches
     /// the join-time chunk stream off this field.
     pub last_dimension: String,
+    /// Targeting wireframe mode (Q.2). Encoded as a `u8` for forward
+    /// compatibility (unknown values round to `Auto` at load time):
+    /// `0 = Auto, 1 = Build, 2 = Break`. Defaults to `Auto` on a
+    /// fresh save and on migrated v1 saves.
+    pub highlight_mode: u8,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -145,6 +156,7 @@ pub(crate) fn fresh_player(spawn: [i32; 3]) -> PlayerSave {
         permission_level: DEFAULT_HOST_PERMISSION,
         play_time_seconds: 0,
         last_dimension: "overworld".to_string(),
+        highlight_mode: 0, // HighlightMode::Auto
     }
 }
 
@@ -441,6 +453,108 @@ fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
+/// V1-shaped subset of `PlayerSave` - exactly the fields that
+/// existed before the Q.2 schema bump. Used solely by the v1 -> v2
+/// migration step: decode v1 bytes into this, copy fields into a
+/// `PlayerSave` with `highlight_mode = 0`, re-encode under v2.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PlayerSaveV1 {
+    format_version: u32,
+    pos: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    inventory: Vec<Option<(u16, u8)>>,
+    craft_grid: Vec<Option<(u16, u8)>>,
+    selected_slot: u8,
+    air: f32,
+    health: f32,
+    home_pos: Option<[f32; 3]>,
+    spawn_pos: Option<[f32; 3]>,
+    permission_level: u8,
+    play_time_seconds: u64,
+    last_dimension: String,
+}
+
+/// V1 -> V2 envelope migration. Decodes the v1 payload (no
+/// `highlight_mode` field), re-encodes it as a v2 payload with
+/// `highlight_mode = HighlightMode::Auto`. Matches the
+/// containers v1 -> v2 step in shape: decompress, serde-decode the
+/// old struct, re-encode the new struct, re-envelope at v2.
+pub(crate) fn player_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("player v1 envelope truncated"));
+    }
+    if &bytes[..4] != PLAYER_MAGIC {
+        return Err(invalid("player v1 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 1 {
+        return Err(invalid(format!(
+            "player_v1_to_v2 expected v1, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+
+    let raw_v1: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v1 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v1 compression kind {other} during migration"
+            )));
+        }
+    };
+
+    let cfg = bincode::config::standard();
+    let (v1, _read) = bincode::serde::decode_from_slice::<PlayerSaveV1, _>(&raw_v1, cfg)
+        .map_err(|err| invalid(format!("v1 payload decode failed: {err}")))?;
+
+    let v2 = PlayerSave {
+        // Pin to literal target so a future v3 doesn't accidentally
+        // hijack the v1 -> v2 arrow.
+        format_version: 2,
+        pos: v1.pos,
+        yaw: v1.yaw,
+        pitch: v1.pitch,
+        inventory: v1.inventory,
+        craft_grid: v1.craft_grid,
+        selected_slot: v1.selected_slot,
+        air: v1.air,
+        health: v1.health,
+        home_pos: v1.home_pos,
+        spawn_pos: v1.spawn_pos,
+        permission_level: v1.permission_level,
+        play_time_seconds: v1.play_time_seconds,
+        last_dimension: v1.last_dimension,
+        highlight_mode: 0, // HighlightMode::Auto
+    };
+    let raw_v2 = bincode::serde::encode_to_vec(&v2, cfg)
+        .map_err(|err| invalid(format!("v2 payload encode failed: {err}")))?;
+    let uncompressed_len_v2 = raw_v2.len() as u64;
+
+    let (kind_v2, body_v2): (u8, Vec<u8>) = match zstd::encode_all(&raw_v2[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v2.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v2),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v2.len() + 17);
+    out.extend_from_slice(PLAYER_MAGIC);
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.push(kind_v2);
+    out.extend_from_slice(&uncompressed_len_v2.to_le_bytes());
+    out.extend_from_slice(&body_v2);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +577,7 @@ mod tests {
         assert_eq!(p.permission_level, DEFAULT_HOST_PERMISSION);
         assert_eq!(p.play_time_seconds, 0);
         assert_eq!(p.last_dimension, "overworld");
+        assert_eq!(p.highlight_mode, 0);
     }
 
     #[test]
@@ -474,5 +589,128 @@ mod tests {
         assert_eq!(sanitize_name("a/b\\c"), "a_b_c");
         assert_eq!(sanitize_name(".."), "__");
         assert_eq!(sanitize_name(""), "_unknown_");
+    }
+
+    /// Encode a `PlayerSaveV1`-shaped struct under a v1 envelope so
+    /// the v1 -> v2 migration test can run on bytes the real
+    /// pre-Q.2 writer would have produced.
+    fn encode_v1_envelope(v1: &PlayerSaveV1) -> Vec<u8> {
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(v1, cfg).unwrap();
+        let uncompressed_len = raw.len() as u64;
+        let mut bytes: Vec<u8> = Vec::with_capacity(raw.len() + 17);
+        bytes.extend_from_slice(PLAYER_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        bytes
+    }
+
+    #[test]
+    fn player_v1_to_v2_appends_highlight_mode_auto() {
+        // Build a representative v1 payload then drive the
+        // migration. The result must decode as v2 with
+        // `highlight_mode = 0` (= Auto).
+        let v1 = PlayerSaveV1 {
+            format_version: 1,
+            pos: [10.5, 64.0, -5.5],
+            yaw: 1.25,
+            pitch: -0.5,
+            inventory: vec![None; INVENTORY_SLOTS_DEFAULT],
+            craft_grid: vec![None; CRAFT_GRID_SLOTS_DEFAULT],
+            selected_slot: 3,
+            air: 12.5,
+            health: 17.5,
+            home_pos: Some([0.0, 64.0, 0.0]),
+            spawn_pos: None,
+            permission_level: 4,
+            play_time_seconds: 42,
+            last_dimension: "overworld".to_string(),
+        };
+        let v1_bytes = encode_v1_envelope(&v1);
+        let v2_bytes = player_v1_to_v2(&v1_bytes).expect("migration ok");
+
+        // Envelope version byte must be v2.
+        let on_disk_v =
+            u32::from_le_bytes([v2_bytes[4], v2_bytes[5], v2_bytes[6], v2_bytes[7]]);
+        assert_eq!(on_disk_v, 2);
+
+        // Decode the v2 envelope all the way down and confirm the
+        // highlight_mode rounded to Auto + every other field
+        // round-tripped.
+        let kind = v2_bytes[8];
+        let uncompressed_len = u64::from_le_bytes([
+            v2_bytes[9], v2_bytes[10], v2_bytes[11], v2_bytes[12], v2_bytes[13],
+            v2_bytes[14], v2_bytes[15], v2_bytes[16],
+        ]) as usize;
+        let body = &v2_bytes[17..];
+        let raw = match kind {
+            COMP_NONE => body.to_vec(),
+            COMP_ZSTD => decode_zstd(body, uncompressed_len).unwrap(),
+            other => panic!("unexpected compression kind {other}"),
+        };
+        let cfg = bincode::config::standard();
+        let (v2, _read) =
+            bincode::serde::decode_from_slice::<PlayerSave, _>(&raw, cfg).unwrap();
+        assert_eq!(v2.format_version, 2);
+        assert_eq!(v2.pos, v1.pos);
+        assert_eq!(v2.yaw, v1.yaw);
+        assert_eq!(v2.pitch, v1.pitch);
+        assert_eq!(v2.selected_slot, v1.selected_slot);
+        assert_eq!(v2.air, v1.air);
+        assert_eq!(v2.health, v1.health);
+        assert_eq!(v2.home_pos, v1.home_pos);
+        assert_eq!(v2.spawn_pos, v1.spawn_pos);
+        assert_eq!(v2.permission_level, v1.permission_level);
+        assert_eq!(v2.play_time_seconds, v1.play_time_seconds);
+        assert_eq!(v2.last_dimension, v1.last_dimension);
+        assert_eq!(v2.highlight_mode, 0);
+    }
+
+    #[test]
+    fn player_v1_to_v2_rejects_non_v1_input() {
+        // Driving the v1 -> v2 step on a non-v1 envelope must
+        // surface an error rather than corrupting the bytes.
+        let mut bytes = vec![0u8; 17];
+        bytes[..4].copy_from_slice(PLAYER_MAGIC);
+        // Claim v2 on disk.
+        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
+        let err = player_v1_to_v2(&bytes).expect_err("must reject v2");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn player_v1_to_v2_round_trip_through_write_read() {
+        // End-to-end: encode v1 bytes, write to disk under a
+        // tempdir, read with the production registry, confirm
+        // the on-load PlayerSave has v2 format + Auto mode.
+        let v1 = PlayerSaveV1 {
+            format_version: 1,
+            pos: [0.5, 64.0, 0.5],
+            yaw: 0.0,
+            pitch: 0.0,
+            inventory: vec![None; INVENTORY_SLOTS_DEFAULT],
+            craft_grid: vec![None; CRAFT_GRID_SLOTS_DEFAULT],
+            selected_slot: 0,
+            air: AIR_MAX_DEFAULT,
+            health: HEALTH_MAX_DEFAULT,
+            home_pos: None,
+            spawn_pos: None,
+            permission_level: DEFAULT_HOST_PERMISSION,
+            play_time_seconds: 0,
+            last_dimension: "overworld".to_string(),
+        };
+        let v1_bytes = encode_v1_envelope(&v1);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = player_path_in_dir(dir.path(), "q2", "tester");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &v1_bytes).unwrap();
+        let loaded = read_player_in_dir(dir.path(), "q2", "tester")
+            .expect("read ok")
+            .expect("save present");
+        assert_eq!(loaded.format_version, 2);
+        assert_eq!(loaded.highlight_mode, 0);
+        assert_eq!(loaded.last_dimension, "overworld");
     }
 }

@@ -113,7 +113,7 @@ use player::{
     PLAYER_SPEED, aabb_intersects_solid, body_aabb, submerged_liquid,
     submerged_liquid_eye,
 };
-use ui::{AppState, BackTo, InvAction, SlotIcon, match_recipe, match_recipe_named};
+use ui::{AppState, BackTo, HighlightMode, InvAction, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{
     Biome, WORLDGEN, WorldGen, biome_at, set_world_seed, world_seed,
 };
@@ -685,6 +685,14 @@ struct Voxel {
     /// + chunk loading patterns.
     show_chunk_grid: bool,
     g_prev: bool,
+    /// Targeting wireframe mode. H cycles
+    /// `Auto -> Build -> Break -> Auto`. Persisted per-player in
+    /// `PlayerSave::highlight_mode` so the choice survives across
+    /// sessions.
+    highlight_mode: HighlightMode,
+    /// Edge-detect helper for the H toggle: avoids re-triggering
+    /// every frame the key is physically held.
+    h_prev: bool,
     /// Current camera vertical FOV in radians. Smoothly lerps
     /// toward a wider angle while the player sprints, snaps back
     /// when they stop. Read by both the wgpu camera + the egui
@@ -3759,6 +3767,8 @@ impl Voxel {
             z_prev: false,
             show_chunk_grid: false,
             g_prev: false,
+            highlight_mode: HighlightMode::Auto,
+            h_prev: false,
             fov_y_rad: 60_f32.to_radians(),
             sprinting: false,
             stamina: STAMINA_MAX,
@@ -8918,15 +8928,32 @@ impl AppHandler for Voxel {
             self.show_chunk_grid = !self.show_chunk_grid;
         }
         self.g_prev = g_now;
+        // H cycles the targeting wireframe between Auto, Build and
+        // Break. Drives the per-frame highlight render decision and
+        // is persisted per-player in PlayerSave so the choice
+        // survives /save + relaunch.
+        let h_now = ctx.input.is_pressed(Key::H);
+        if h_now
+            && !self.h_prev
+            && matches!(self.state, AppState::Playing)
+            && !self.chat_open
+        {
+            self.highlight_mode = self.highlight_mode.cycle();
+            let label = self.highlight_mode.label();
+            self.chat_log.push((
+                std::time::Instant::now(),
+                format!("Highlight mode: {label}"),
+            ));
+        }
+        self.h_prev = h_now;
         // Tab held = playerlist overlay. Hidden in singleplayer
         // (the overlay drawer also guards on net role, but the
         // flag is gated here too so debug panels stay clean).
         self.tab_held =
             matches!(self.state, AppState::Playing) && ctx.input.is_pressed(Key::Tab);
         // 1..9 select the matching hotbar slot directly (Minecraft
-        // convention). Slot 0 is the empty/break-hand slot; we
-        // map digit 1 to slot 0 so the user-facing numbering
-        // matches the visual order in the hotbar.
+        // convention). Digit 1 maps to slot 0 so the user-facing
+        // numbering matches the visual order in the hotbar.
         if matches!(self.state, AppState::Playing) && !self.chat_open {
             let digits = [
                 Key::Digit1,
@@ -10920,29 +10947,40 @@ impl AppHandler for Voxel {
                 );
             }
         }
-        // Wire outline previewing the next action.
-        //   Empty slot     -> wire around the voxel that will be
-        //                     broken (target.voxel, black stroke).
-        //   Block slot     -> wire around the cell where the block
-        //                     will be placed (target.place_at,
-        //                     tinted with the block's albedo).
+        // Wire outline previewing the next action. The highlight
+        // mode (H key, persisted in PlayerSave) gates which
+        // preview wins:
+        //   Auto  -> placeable held = build preview,
+        //            otherwise the break wireframe.
+        //   Build -> always the build preview (uses the held
+        //            block's tint if any, else a neutral cyan so
+        //            the cell is still visible without a block).
+        //   Break -> always the break wireframe at target.voxel.
         if let Some(hit) = target {
-            let (cell, color) = match selected_block {
-                None => (hit.voxel, [0.0, 0.0, 0.0, 0.95]),
-                Some(block) => {
-                    let c = registry
-                        .get(block)
-                        .map(|d| {
-                            [
-                                (d.color[0] * 1.4).min(1.0),
-                                (d.color[1] * 1.4).min(1.0),
-                                (d.color[2] * 1.4).min(1.0),
-                                0.95,
-                            ]
-                        })
-                        .unwrap_or([1.0, 1.0, 1.0, 0.95]);
-                    (hit.place_at, c)
-                }
+            let highlight = self.highlight_mode;
+            let show_build = match highlight {
+                HighlightMode::Auto => selected_block.is_some(),
+                HighlightMode::Build => true,
+                HighlightMode::Break => false,
+            };
+            let (cell, color) = if show_build {
+                let tint = selected_block
+                    .and_then(|block| registry.get(block))
+                    .map(|d| {
+                        [
+                            (d.color[0] * 1.4).min(1.0),
+                            (d.color[1] * 1.4).min(1.0),
+                            (d.color[2] * 1.4).min(1.0),
+                            0.95,
+                        ]
+                    })
+                    // Cyan fallback so Build-mode without a block in
+                    // hand still draws something visible. Picked to
+                    // contrast with the break wireframe's black.
+                    .unwrap_or([0.3, 0.85, 1.0, 0.95]);
+                (hit.place_at, tint)
+            } else {
+                (hit.voxel, [0.0, 0.0, 0.0, 0.95])
             };
             let min = [
                 cell[0] as f32 - 0.005,

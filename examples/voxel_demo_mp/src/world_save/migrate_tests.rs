@@ -303,8 +303,18 @@ fn with_bak_suffix(path: &std::path::Path) -> std::path::PathBuf {
 // players
 // ---------------------------------------------------------------
 
+/// Migration step variant that bumps the envelope version straight
+/// to `PLAYER_FORMAT_VERSION`. Decoupled from the generic
+/// `bump_envelope_v0_to_v1` so this test keeps passing after Q.2
+/// (which bumped PLAYER_FORMAT_VERSION to 2).
+fn bump_envelope_v0_to_player_target(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut out = bytes.to_vec();
+    set_envelope_version(&mut out, PLAYER_FORMAT_VERSION);
+    Ok(out)
+}
+
 #[test]
-fn player_migration_v0_to_v1_round_trip() {
+fn player_migration_v0_to_current_round_trip() {
     let tmp = TempDir::new().unwrap();
     let save = fresh_player([0, 64, 0]);
     write_player_in_dir(tmp.path(), SLUG, "Alice", &save).unwrap();
@@ -320,7 +330,7 @@ fn player_migration_v0_to_v1_round_trip() {
         SaveKind::Player,
         0,
         PLAYER_FORMAT_VERSION,
-        bump_envelope_v0_to_v1,
+        bump_envelope_v0_to_player_target,
     );
 
     let loaded = read_player_in_dir_with_registry(tmp.path(), SLUG, "Alice", &registry)

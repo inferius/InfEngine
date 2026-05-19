@@ -291,7 +291,7 @@ fn write_player_is_atomic_no_tmp_left_behind() {
 
 #[test]
 fn player_format_version_matches_design_doc() {
-    // Lock the published schema number - bumping is a deliberate
-    // breaking change that needs a migration.
-    assert_eq!(PLAYER_FORMAT_VERSION, 1);
+    // Lock the published schema number. Bumped to v2 in Q.2 with
+    // the `highlight_mode` field + a v1 -> v2 migration arrow.
+    assert_eq!(PLAYER_FORMAT_VERSION, 2);
 }

@@ -20,9 +20,81 @@
 //! display + tooltip.
 
 use infengine_voxel::BlockId;
+use serde::{Deserialize, Serialize};
 
 use crate::inventory::{SlotKind, SplitMode};
 use crate::RECIPES;
+
+/// Targeting wireframe mode, cycled by the `H` key.
+///
+/// Drives the per-frame highlight box drawn around the voxel the
+/// crosshair is on:
+///
+/// - `Auto`: if the held item resolves to a block (placeable), the
+///   box previews the place-target cell; otherwise it falls back to
+///   the break wireframe around the targeted voxel. Same behaviour
+///   the demo shipped with before Q.2.
+/// - `Build`: always draws the place-target preview, even when the
+///   held item is a tool / has no block id. Useful when planning a
+///   structure with a sword in hand.
+/// - `Break`: always draws the break wireframe around the targeted
+///   voxel, even when a placeable block is held. Useful for fast
+///   demolition without an empty slot selected.
+///
+/// Persisted per-player in `PlayerSave::highlight_mode` (Phase Q.2
+/// migration; legacy v1 saves default to `Auto`).
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum HighlightMode {
+    /// Behaviour-driven: pick build or break based on the held
+    /// item. Default on a fresh save.
+    #[default]
+    Auto,
+    /// Always show the build (place-target) preview.
+    Build,
+    /// Always show the break wireframe at the targeted voxel.
+    Break,
+}
+
+impl HighlightMode {
+    /// Next mode in the `Auto -> Build -> Break -> Auto` cycle.
+    pub(crate) fn cycle(self) -> Self {
+        match self {
+            HighlightMode::Auto => HighlightMode::Build,
+            HighlightMode::Build => HighlightMode::Break,
+            HighlightMode::Break => HighlightMode::Auto,
+        }
+    }
+
+    /// Short user-facing label for HUD toast lines.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            HighlightMode::Auto => "Auto",
+            HighlightMode::Build => "Build",
+            HighlightMode::Break => "Break",
+        }
+    }
+
+    /// Wire / on-disk byte representation. Stable across builds so
+    /// PlayerSave migrations can rely on the mapping.
+    pub(crate) fn to_u8(self) -> u8 {
+        match self {
+            HighlightMode::Auto => 0,
+            HighlightMode::Build => 1,
+            HighlightMode::Break => 2,
+        }
+    }
+
+    /// Inverse of `to_u8`. Unknown bytes round to `Auto` so a future
+    /// schema bump can read older / unexpected files without
+    /// blowing up.
+    pub(crate) fn from_u8(b: u8) -> Self {
+        match b {
+            1 => HighlightMode::Build,
+            2 => HighlightMode::Break,
+            _ => HighlightMode::Auto,
+        }
+    }
+}
 
 /// Visual snapshot of one slot, lifted out of the inventory
 /// state for the egui pass. `(color, count, uv_rect, name)`
@@ -135,4 +207,48 @@ pub(crate) fn match_recipe_named(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlight_mode_default_is_auto() {
+        assert_eq!(HighlightMode::default(), HighlightMode::Auto);
+    }
+
+    #[test]
+    fn highlight_mode_cycle_covers_all_three_states() {
+        let mut m = HighlightMode::Auto;
+        m = m.cycle();
+        assert_eq!(m, HighlightMode::Build);
+        m = m.cycle();
+        assert_eq!(m, HighlightMode::Break);
+        m = m.cycle();
+        assert_eq!(m, HighlightMode::Auto);
+    }
+
+    #[test]
+    fn highlight_mode_to_from_u8_roundtrip() {
+        for mode in [HighlightMode::Auto, HighlightMode::Build, HighlightMode::Break] {
+            assert_eq!(HighlightMode::from_u8(mode.to_u8()), mode);
+        }
+    }
+
+    #[test]
+    fn highlight_mode_from_unknown_u8_falls_back_to_auto() {
+        // Forward-compat: a future enum value should not break
+        // older builds - round to Auto rather than panic / error.
+        for b in [3u8, 7, 42, 255] {
+            assert_eq!(HighlightMode::from_u8(b), HighlightMode::Auto);
+        }
+    }
+
+    #[test]
+    fn highlight_mode_labels_are_short_user_strings() {
+        assert_eq!(HighlightMode::Auto.label(), "Auto");
+        assert_eq!(HighlightMode::Build.label(), "Build");
+        assert_eq!(HighlightMode::Break.label(), "Break");
+    }
 }

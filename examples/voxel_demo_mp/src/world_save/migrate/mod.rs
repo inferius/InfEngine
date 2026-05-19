@@ -210,11 +210,15 @@ pub fn default_registry() -> &'static MigrationRegistry {
 /// Append the production migration arrows to `reg`. Currently:
 /// - `Containers` v1 -> v2: adds an empty `furnaces` vec to the
 ///   payload (the new C.4 field).
+/// - `WorldJson` v1 -> v2: lifts the legacy single `worldgen` field
+///   into a per-dimension map.
+/// - `Player` v1 -> v2: adds `highlight_mode: u8` (Q.2 targeting
+///   wireframe mode); v1 saves migrate to `0` (= `Auto`).
 ///
 /// Per the design doc, the right place for save-kind-specific
 /// migrations is alongside the on-disk struct definitions. We pull
-/// the v1 -> v2 step in from `super::containers` so the migration
-/// code stays co-located with the schema.
+/// each step from its owning module so the migration code stays
+/// co-located with the schema.
 fn register_production_arrows(reg: &mut MigrationRegistry) {
     reg.register(
         SaveKind::Containers,
@@ -231,6 +235,12 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         1,
         2,
         super::world_json::world_json_v1_to_v2,
+    );
+    reg.register(
+        SaveKind::Player,
+        1,
+        2,
+        super::players::player_v1_to_v2,
     );
 }
 
