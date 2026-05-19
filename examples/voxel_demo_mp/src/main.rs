@@ -1094,6 +1094,15 @@ struct Voxel {
     /// edit (break clears, place inserts). Used per frame to push
     /// point lights to the renderer near the player.
     torch_positions: HashSet<[i32; 3]>,
+    /// W12.5: World coords + emitter block-id of every loaded MC
+    /// light source (torch, glowstone, lava, fire, soul_torch,
+    /// sea_lantern, jack_o_lantern, ... - any block with
+    /// `light_emission_for_id(id) > 0`). Mirrors `torch_positions`
+    /// for the broader MC light-source set so the per-frame
+    /// halo picker can choose 8 nearest emitters of any kind, not
+    /// just torches + glowstone. Maintained by `world_set_tracked`
+    /// alongside `torch_positions`.
+    emitter_positions: HashMap<[i32; 3], u16>,
     /// W5.2a: tracker for placed portal blocks. Driven by
     /// `world_set_tracked` (the central edit path) so the renderer
     /// can walk a small per-frame set instead of scanning every
@@ -1491,6 +1500,15 @@ impl Voxel {
             self.torch_positions.insert(voxel);
         } else {
             self.torch_positions.remove(&voxel);
+        }
+        // W12.5: generic MC-emitter index for the halo picker. Covers
+        // every block id with `light_emission_for_id > 0` (torches,
+        // soul torches, sea_lantern, jack_o_lantern, end_rod, lava,
+        // fire, glowstone, shroomlight, lit_furnace, ...).
+        if block::light_emission::light_emission_for_id(block.0) > 0 {
+            self.emitter_positions.insert(voxel, block.0);
+        } else {
+            self.emitter_positions.remove(&voxel);
         }
         // Snow layer voxels render as a thin slab in the world
         // pass; tracked separately so the renderer can skip
@@ -5212,6 +5230,7 @@ impl Voxel {
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
+            emitter_positions: HashMap::new(),
             portal_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
@@ -5342,6 +5361,7 @@ impl Voxel {
             furnaces: std::mem::take(&mut self.furnaces),
             furnace_runtimes: std::mem::take(&mut self.furnace_runtimes),
             torch_positions: std::mem::take(&mut self.torch_positions),
+            emitter_positions: std::mem::take(&mut self.emitter_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
             snow_positions: std::mem::take(&mut self.snow_positions),
             fires: std::mem::take(&mut self.fires),
@@ -5374,6 +5394,7 @@ impl Voxel {
         self.furnaces = target_world.furnaces;
         self.furnace_runtimes = target_world.furnace_runtimes;
         self.torch_positions = target_world.torch_positions;
+        self.emitter_positions = target_world.emitter_positions;
         self.torch_orient = target_world.torch_orient;
         self.snow_positions = target_world.snow_positions;
         self.fires = target_world.fires;
@@ -5570,6 +5591,7 @@ impl Voxel {
         self.pending_set.clear();
         self.snow_positions.clear();
         self.torch_positions.clear();
+        self.emitter_positions.clear();
         // W5.2a: portal tracker rebuilds via world_set_tracked
         // when chunks reload, so clear here too.
         self.portal_positions.clear();
@@ -5680,7 +5702,17 @@ impl Voxel {
                                     || b.0 == GLOWSTONE_ID
                                 {
                                     self.torch_positions.insert(v);
-                                } else if let Some(lq) = liquid_for(b) {
+                                    self.emitter_positions.insert(v, b.0);
+                                } else if block::light_emission::light_emission_for_id(b.0)
+                                    > 0
+                                {
+                                    // Generic MC emitter (lava, fire,
+                                    // soul_torch, sea_lantern, ...).
+                                    // Don't double-insert torch/glowstone;
+                                    // those go through the branch above.
+                                    self.emitter_positions.insert(v, b.0);
+                                }
+                                if let Some(lq) = liquid_for(b) {
                                     self.liquid_schedule.schedule(
                                         v,
                                         self.liquid_clock
@@ -12506,36 +12538,50 @@ impl AppHandler for Voxel {
                 1.0,
             );
         }
-        // Push the 8 nearest torch positions to the renderer as
-        // point lights. We sort by squared distance so the player
-        // always sees the closest sources lit; far torches just
-        // drop out (MAX_LIGHTS = 8 cap in the shader).
-        let mut torches: Vec<([i32; 3], f32)> = self
-            .torch_positions
+        // W12.5: push the 8 nearest MC emitters (torch / glowstone /
+        // lava / fire / soul_torch / sea_lantern / jack_o_lantern /
+        // ...) to the renderer as point lights. Source set comes
+        // from `emitter_positions` which `world_set_tracked` keeps
+        // in sync. Sort by squared distance; far emitters drop out
+        // (MAX_LIGHTS = 8 cap in the shader).
+        let mut samples: Vec<emitter_lights::EmitterSample> = self
+            .emitter_positions
             .iter()
-            .map(|p| {
-                let dx = p[0] as f32 + 0.5 - player_pos.x;
-                let dy = p[1] as f32 + 0.5 - player_pos.y;
-                let dz = p[2] as f32 + 0.5 - player_pos.z;
-                (*p, dx * dx + dy * dy + dz * dz)
+            .filter_map(|(p, id)| {
+                emitter_lights::sample_for(
+                    *id,
+                    [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5],
+                )
             })
             .collect();
-        torches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        for (p, _) in torches.iter().take(8) {
+        let picked = emitter_lights::pick_nearest(
+            &samples,
+            [player_pos.x, player_pos.y, player_pos.z],
+            emitter_lights::MAX_POINT_LIGHTS,
+        );
+        samples.clear();
+        for s in picked.iter() {
             // Subtle flicker on each light's intensity hashed by
             // position so the room reads as living torchlight,
             // not a static lamp.
-            let phase = (p[0] as u32)
+            let px = s.position[0] as u32;
+            let py = s.position[1] as u32;
+            let pz = s.position[2] as u32;
+            let phase = px
                 .wrapping_mul(2654435761)
-                ^ ((p[1] as u32).wrapping_mul(0x9E37_79B1))
-                ^ ((p[2] as u32).wrapping_mul(0x85EB_CA6B));
+                ^ (py.wrapping_mul(0x9E37_79B1))
+                ^ (pz.wrapping_mul(0x85EB_CA6B));
             let phase_f =
                 (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
             let flicker = (self.day_time * 8.0 + phase_f).sin();
-            let intensity = 2.7 + 0.4 * flicker;
+            // Scale to renderer convention. Original torch path used
+            // intensity 2.7..3.1; map the emitter intensity (0..1)
+            // onto a similar range, but stronger for high-emission
+            // sources (lava, glowstone, sea_lantern).
+            let intensity = (s.intensity * 3.0 + 0.4 * flicker).max(0.2);
             renderer.queue_point_light(
-                [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5],
-                [1.0, 0.78, 0.40],
+                s.position,
+                s.color,
                 intensity,
                 8.0,
             );

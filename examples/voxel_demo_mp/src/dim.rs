@@ -81,6 +81,9 @@ pub(crate) struct DimWorld {
     pub furnaces: HashMap<[i32; 3], Container>,
     pub furnace_runtimes: HashMap<[i32; 3], FurnaceRuntime>,
     pub torch_positions: std::collections::HashSet<[i32; 3]>,
+    /// W12.5: generic MC-emitter index parked per-dim. See
+    /// `Voxel::emitter_positions` for semantics.
+    pub emitter_positions: HashMap<[i32; 3], u16>,
     pub torch_orient: HashMap<[i32; 3], u8>,
     pub snow_positions: HashMap<[i32; 3], u8>,
     /// Per-cell fire age (Q.4b). Parked alongside chests + furnaces
@@ -100,6 +103,7 @@ impl Default for DimWorld {
             furnaces: HashMap::new(),
             furnace_runtimes: HashMap::new(),
             torch_positions: std::collections::HashSet::new(),
+            emitter_positions: HashMap::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             fires: HashMap::new(),
