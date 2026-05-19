@@ -1197,7 +1197,16 @@ struct Voxel {
     /// picker (Phase B.7a scaffolding). The user types a display name
     /// here; `layout::slug()` canonicalises it before
     /// `current_world_slug` is set.
+    ///
+    /// Kept around as a fallback for the legacy code path in
+    /// `apply_menu_action`; the new picker (Wave 4) keeps its own
+    /// transient buffer inside `MenuScreen::Singleplayer::new_world_open`.
     new_world_name_buf: String,
+    /// Wave 4 menu state machine + per-screen form buffers + cached
+    /// `list_worlds()` snapshot. Drives every pre-Play UI screen.
+    /// Initialised in `Voxel::new` so the very first frame has a
+    /// valid screen to draw.
+    menu: menu::Menu,
 }
 
 impl Voxel {
@@ -4268,6 +4277,23 @@ impl Voxel {
             master_token: None,
             last_heartbeat: None,
             new_world_name_buf: String::new(),
+            // The OptionsSnapshot here mirrors Voxel::settings + a
+            // few fields outside `Settings`. Kept in sync with the
+            // runtime by `sync_menu_options` before each render so
+            // the screen always opens with the current values.
+            menu: menu::Menu::new(menu::OptionsSnapshot {
+                player_name: String::new(),
+                master_addr: String::new(),
+                view_distance: VIEW_DISTANCE_CHUNKS as u8,
+                fov_deg: 60.0,
+                mouse_sensitivity: 0.6,
+                show_fps: true,
+                head_bob: true,
+                invert_mouse_y: false,
+                invert_wheel: false,
+                lock_cursor: true,
+                hide_cursor: true,
+            }),
         }
     }
 
@@ -6359,6 +6385,15 @@ impl Voxel {
                 pending_inv_actions.len(),
             ),
         };
+        // Wave 4 (Phase G.6): refresh the menu's worlds +
+        // saved-servers caches if they've gone stale (>= 500 ms).
+        // Caps the `list_worlds()` rate at <= 2 Hz so the
+        // OnceLock-deduped "unreadable slot" warning doesn't fire
+        // repeatedly while the picker is open. Done BEFORE the
+        // `&mut self.X` capture forest so the helper has a clean
+        // &mut self to work with.
+        self.refresh_menu_caches();
+        self.sync_menu_options();
         let settings_edit = &mut self.settings;
         // Live-edit flag the F6 panel writes back when the user
         // clicks its window close button. Mirrors back to
@@ -6497,24 +6532,31 @@ impl Voxel {
         let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
         let mut chest_held_local = chest_held_snapshot;
-        let mut action_start = false;
+        // Wave 4 (Phase G.6): the four pre-Play `action_X` flags
+        // are emitted by the now-removed flat picker; the new
+        // menu module pushes `MenuAction` variants instead. Kept
+        // here as immutable false so the existing post-closure
+        // `if action_X { ... }` blocks compile until a follow-up
+        // sweep prunes the dead branches (deferred to keep this
+        // diff focused on the menu refactor).
+        let action_start = false;
         let mut action_resume = false;
         // Set by the recipe-book output slot click handler; drained
         // after the egui closure exits so the craft-grid mutation
         // can borrow `self` exclusively.
         let mut prefill_recipe_idx: Option<usize> = None;
-        let mut action_quit = false;
-        let mut action_menu_to_settings = false;
+        let action_quit = false;
+        let action_menu_to_settings = false;
         let mut action_pause_to_settings = false;
         let mut action_back_settings = false;
         let mut action_main_menu = false;
-        let mut action_to_direct = false;
-        let mut action_to_browser = false;
-        let mut action_to_host = false;
-        let mut action_join_direct = false;
-        let mut action_join_browser: Option<String> = None;
-        let mut action_browser_refresh = false;
-        let mut action_host_start = false;
+        let action_to_direct = false;
+        let action_to_browser = false;
+        let action_to_host = false;
+        let action_join_direct = false;
+        let action_join_browser: Option<String> = None;
+        let action_browser_refresh = false;
+        let action_host_start = false;
         // MP overlay actions: continue playing (close overlay) /
         // explicit disconnect-and-return-to-main-menu.
         let mut action_mp_resume = false;
@@ -6523,15 +6565,14 @@ impl Voxel {
         // Worlds-picker actions (Phase B.7a scaffolding). Drained
         // after the egui closure exits so the slug rewrite + slot
         // deletion happen under an exclusive borrow.
-        let mut action_new_world = false;
-        let mut action_load_world: Option<String> = None;
-        let mut action_delete_world: Option<String> = None;
+        let action_new_world = false;
+        let action_load_world: Option<String> = None;
+        let action_delete_world: Option<String> = None;
         let new_world_name = &mut self.new_world_name_buf;
-        // Snapshot the on-disk worlds list once per UI frame; the
-        // picker doesn't need to re-scan on every redraw.
-        let worlds_list: Vec<world_save::layout::WorldSummary> =
-            world_save::layout::list_worlds();
         let current_slug = self.current_world_slug.clone();
+        // Legacy buffers - kept around for the old picker fields
+        // but the new menu doesn't use them. Will be removed in a
+        // follow-up cleanup once the dust settles.
         let direct_buf = &mut self.direct_addr_buf;
         let host_name = &mut self.host_name_buf;
         let host_port = &mut self.host_port_buf;
@@ -6541,6 +6582,28 @@ impl Voxel {
         let browser_error = &self.browser_error;
         let browser_last_refresh = self.browser_last_refresh;
         let browser_querying = self.browser_query_rx.is_some();
+        // Wave 4 menu wiring. The closure mutates `menu` directly
+        // (form buffers, screen variant) + pushes actions into
+        // `menu_actions` for the outer apply pass.
+        let mut menu_actions: Vec<menu::MenuAction> = Vec::new();
+        let menu_world_seed = world_seed();
+        let menu_engine_version = env!("CARGO_PKG_VERSION");
+        // Snapshot the menu's caches as locals so the closure can
+        // borrow them alongside the disjoint `&mut menu.screen` +
+        // `&mut menu.options` mutable borrows without tripping
+        // Rust's aliasing rules.
+        let worlds_snapshot: Vec<world_save::layout::WorldSummary> =
+            self.menu.worlds_cache.clone();
+        let saved_servers_snapshot: Vec<menu::SavedServer> =
+            self.menu.saved_servers.clone();
+        // Split `&mut self.menu` into two disjoint `&mut` borrows
+        // of `screen` + `options` so the dispatcher can take one
+        // while the `MenuContext` carries the other.
+        let menu::Menu {
+            screen: menu_screen_ref,
+            options: menu_options_ref,
+            ..
+        } = &mut self.menu;
         // Mutable borrow for the chat input box captured by the
         // egui closure. Taken last so earlier self.* reads
         // (raycast_mob, registry, etc.) finish before this
@@ -6554,266 +6617,54 @@ impl Voxel {
             return;
         };
         ui.run(window.raw(), |ctx| match state {
-            AppState::MainMenu => {
+            // Wave 4 (Phase G.6): all four pre-Play AppStates now
+            // funnel through the menu module. The new state
+            // machine carries its own screen variant inside
+            // `menu_ref.screen`; AppState only flips to Playing /
+            // Paused / Settings when the user actually starts the
+            // game. The DirectConnect / ServerBrowser / HostSetup
+            // variants survive on `AppState` purely as legacy
+            // type-tags so the rest of the state-transition logic
+            // (Esc handler, Pause path) doesn't need to change.
+            AppState::MainMenu
+            | AppState::DirectConnect
+            | AppState::ServerBrowser
+            | AppState::HostSetup => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(60.0);
-                        ui.heading("InfEngine - Voxel Demo");
-                        ui.add_space(20.0);
-                        // Worldgen picker. Drives the WORLDGEN
-                        // atomic on Play; same combo also affects
-                        // Host server. Persists across menu visits
-                        // via the chosen variant stored as the
-                        // current atomic value.
-                        let mut wg = WorldGen::current();
-                        ui.horizontal(|ui| {
-                            ui.label("World:");
-                            egui::ComboBox::from_id_salt("world_pick")
-                                .selected_text(format!("{wg:?}"))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut wg,
-                                        WorldGen::Classic,
-                                        "Classic",
-                                    );
-                                    ui.selectable_value(
-                                        &mut wg,
-                                        WorldGen::Flat,
-                                        "Flat (debug)",
-                                    );
-                                    ui.selectable_value(
-                                        &mut wg,
-                                        WorldGen::Islands,
-                                        "Islands",
-                                    );
-                                    ui.selectable_value(
-                                        &mut wg,
-                                        WorldGen::Amplified,
-                                        "Amplified",
-                                    );
-                                });
-                        });
-                        WORLDGEN.store(
-                            wg as u8,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        // Worlds picker scaffolding (Phase B.7a).
-                        // Final polish lands in Phase G.
-                        ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new("Worlds")
-                                .strong()
-                                .size(15.0),
-                        );
-                        if let Some(slug) = &current_slug {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Active slot: {slug}"
-                                ))
-                                .small()
-                                .italics(),
-                            );
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label("Name:");
-                            ui.text_edit_singleline(new_world_name);
-                            if ui.button("New").clicked() {
-                                action_new_world = true;
-                            }
-                        });
-                        // Existing slots list. Compact rows so the
-                        // main menu doesn't grow unbounded for users
-                        // with many saves; the proper polished
-                        // picker lands in Phase G.
-                        egui::ScrollArea::vertical()
-                            .max_height(140.0)
-                            .show(ui, |ui| {
-                                if worlds_list.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "(no saved worlds yet)",
-                                        )
-                                        .italics(),
-                                    );
-                                }
-                                for w in &worlds_list {
-                                    ui.horizontal(|ui| {
-                                        let label = format!(
-                                            "{}  -  {} (seed {})",
-                                            w.name, w.worldgen, w.seed
-                                        );
-                                        ui.label(label);
-                                        if ui.button("Load").clicked() {
-                                            action_load_world = Some(w.slug.clone());
-                                        }
-                                        if ui.button("Delete").clicked() {
-                                            action_delete_world = Some(w.slug.clone());
-                                        }
-                                    });
-                                }
-                            });
-                        ui.add_space(8.0);
-                        if ui.button("Play offline").clicked() {
-                            action_start = true;
-                        }
-                        if ui.button("Host server...").clicked() {
-                            action_to_host = true;
-                        }
-                        if ui.button("Direct connect...").clicked() {
-                            action_to_direct = true;
-                        }
-                        if ui.button("Browse servers...").clicked() {
-                            action_to_browser = true;
-                        }
-                        ui.add_space(10.0);
-                        if ui.button("Settings").clicked() {
-                            action_menu_to_settings = true;
-                        }
-                        if ui.button("Quit").clicked() {
-                            action_quit = true;
-                        }
-                        ui.add_space(20.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Playing as: {}",
-                                player_name_buf
-                            ))
-                            .color(egui::Color32::from_rgb(180, 200, 200))
-                            .italics(),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Seed: {}",
-                                world_seed()
-                            ))
-                            .color(egui::Color32::from_rgb(150, 180, 180))
-                            .italics()
-                            .small(),
-                        );
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Master server:");
-                            ui.text_edit_singleline(master_addr);
-                        });
-                    });
+                    let mut mctx = menu::MenuContext {
+                        worlds: &worlds_snapshot,
+                        browser_servers,
+                        browser_error: browser_error.as_deref(),
+                        saved_servers: &saved_servers_snapshot,
+                        options: menu_options_ref,
+                        current_slug: current_slug.as_deref(),
+                        world_seed: menu_world_seed,
+                        engine_version: menu_engine_version,
+                        browser_querying,
+                    };
+                    menu::draw(
+                        ui,
+                        menu_screen_ref,
+                        &mut mctx,
+                        &mut menu_actions,
+                    );
                 });
-            }
-            AppState::DirectConnect => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(80.0);
-                        ui.heading("Direct connect");
-                        ui.add_space(10.0);
-                        ui.label("Enter host:port of the game server:");
-                        ui.text_edit_singleline(direct_buf);
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("Join").clicked() {
-                                action_join_direct = true;
-                            }
-                            if ui.button("Back").clicked() {
-                                action_main_menu = true;
-                            }
-                        });
-                    });
-                });
-            }
-            AppState::ServerBrowser => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading("Server browser");
-                    ui.horizontal(|ui| {
-                        ui.label("Master:");
-                        ui.text_edit_singleline(master_addr);
-                        if ui.button("Refresh").clicked() {
-                            action_browser_refresh = true;
-                        }
-                        if ui.button("Back").clicked() {
-                            action_main_menu = true;
-                        }
-                    });
-                    // Diagnostic status banner so the user knows
-                    // whether the last query reached the master.
-                    ui.horizontal(|ui| {
-                        let age = browser_last_refresh
-                            .map(|t| format!("{:.0}s ago", t.elapsed().as_secs_f32()));
-                        let status = if browser_querying {
-                            "[...] querying master".to_string()
-                        } else {
-                            match (browser_error.as_deref(), age.as_deref()) {
-                                (Some(err), _) => format!("[ERR] {err}"),
-                                (None, Some(a)) => format!(
-                                    "[OK] {} server(s) - refreshed {a}",
-                                    browser_servers.len()
-                                ),
-                                (None, None) => "[idle] press Refresh".to_string(),
-                            }
-                        };
-                        let color = if browser_querying {
-                            egui::Color32::from_rgb(140, 180, 220)
-                        } else if browser_error.is_some() {
-                            egui::Color32::from_rgb(220, 100, 100)
-                        } else if browser_servers.is_empty() {
-                            egui::Color32::from_rgb(220, 200, 100)
-                        } else {
-                            egui::Color32::from_rgb(140, 220, 140)
-                        };
-                        ui.colored_label(color, status);
-                    });
-                    ui.separator();
-                    if browser_servers.is_empty() && browser_error.is_none() {
-                        ui.label(
-                            "(no servers - host one from the menu or wait for someone to announce)"
-                        );
-                    }
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for s in browser_servers {
-                            ui.horizontal(|ui| {
-                                if ui.button("Join").clicked() {
-                                    action_join_browser = Some(s.addr.clone());
-                                }
-                                ui.label(format!(
-                                    "{}  -  {} ({}/{}{})",
-                                    s.addr,
-                                    s.name,
-                                    s.players,
-                                    s.max_players,
-                                    if s.mode.is_empty() {
-                                        String::new()
-                                    } else {
-                                        format!(", {}", s.mode)
-                                    }
-                                ));
-                            });
-                        }
-                    });
-                });
-            }
-            AppState::HostSetup => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(60.0);
-                        ui.heading("Host server");
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Display name:");
-                            ui.text_edit_singleline(host_name);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Bind port:");
-                            ui.text_edit_singleline(host_port);
-                        });
-                        ui.checkbox(host_announce, "Announce on master server");
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("Start hosting").clicked() {
-                                action_host_start = true;
-                            }
-                            if ui.button("Back").clicked() {
-                                action_main_menu = true;
-                            }
-                        });
-                    });
-                });
+                // Suppress the unused-warning trio: legacy buffers
+                // we keep around for the old picker but the new
+                // menu emits its own actions. The `_ = ...` calls
+                // discard the captures so the warning stays quiet
+                // without removing the buffers (a follow-up patch
+                // can prune them once the dust settles).
+                let _ = (
+                    &new_world_name,
+                    &direct_buf,
+                    &host_name,
+                    &host_port,
+                    &host_announce,
+                    &master_addr,
+                    &browser_last_refresh,
+                    &player_name_buf,
+                );
             }
             AppState::Paused => {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -8825,6 +8676,190 @@ impl Voxel {
                 ),
             }
         }
+        // Wave 4 (Phase G.6): drain everything the new menu pushed
+        // during the egui pass + route through `apply_menu_action`.
+        // The drain happens after the legacy `action_X` flags so a
+        // pre-G click on the old buttons still fires its side
+        // effect (the old buttons are gone in the new menu, but
+        // any stale path still works).
+        for action in menu_actions.drain(..) {
+            self.apply_menu_action(action);
+        }
+    }
+
+    /// Wave 4 (Phase G.6): consume one `MenuAction` emitted from
+    /// the new menu module. Each variant routes through the same
+    /// runtime helpers the legacy flat picker used, so an existing
+    /// `Voxel` codepath isn't duplicated.
+    ///
+    /// Kept on the bin (not the menu module) so the menu stays
+    /// `Voxel`-free and testable in isolation.
+    fn apply_menu_action(&mut self, action: menu::MenuAction) {
+        use menu::MenuAction;
+        match action {
+            MenuAction::SwitchScreen(target) => {
+                self.menu.apply_switch(target);
+                // Auto-refresh the server list when the user
+                // enters the Multiplayer screen so it doesn't sit
+                // empty waiting for them to click Obnovit.
+                if matches!(self.menu.screen, menu::MenuScreen::Multiplayer { .. })
+                {
+                    self.refresh_browser();
+                }
+            }
+            MenuAction::Quit => {
+                self.requested_quit = true;
+            }
+            MenuAction::PlayOffline { slug } => {
+                // Set the slot, reset the world so the next render
+                // tick reloads the chunks, then transition to
+                // Playing. Mirrors the legacy `action_start +
+                // action_load_world` flow.
+                self.current_world_slug = Some(slug);
+                self.reset_world();
+                self.last_built_worldgen = None;
+                self.menu.apply_switch(menu::MenuScreen::InGame);
+                self.state = AppState::Playing;
+                self.mouse_dx = 0.0;
+                self.mouse_dy = 0.0;
+                let want_wg = WorldGen::current();
+                if self.last_built_worldgen != Some(want_wg) {
+                    self.reset_world();
+                    self.build_world();
+                    let spawn = self.safe_spawn();
+                    self.player_pos = spawn;
+                    self.player_vel = Vec3::ZERO;
+                    self.fall_start_y = None;
+                    self.load_server_state();
+                }
+            }
+            MenuAction::NewWorld { name, worldgen: _ } => {
+                let slug = if name.trim().is_empty() {
+                    world_save::DEFAULT_SLUG.to_string()
+                } else {
+                    world_save::layout::slug(&name)
+                };
+                let display =
+                    if name.trim().is_empty() { slug.clone() } else { name };
+                let meta = world_save::meta::create_meta(&display, &slug);
+                if let Err(err) = world_save::meta::write_meta(&slug, &meta) {
+                    warn!(
+                        error = %err,
+                        slug = slug,
+                        "world_save: write_meta on NewWorld failed"
+                    );
+                }
+                let wj = world_save::world_json::create_world(
+                    world_save::worldgen_str(WorldGen::current()),
+                    world_seed(),
+                );
+                if let Err(err) = world_save::world_json::write_world(&slug, &wj) {
+                    warn!(
+                        error = %err,
+                        slug = slug,
+                        "world_save: write_world on NewWorld failed"
+                    );
+                }
+                self.current_world_slug = Some(slug);
+                self.menu.invalidate_caches();
+            }
+            MenuAction::DeleteWorld { slug } => {
+                let dir = world_save::layout::world_dir(&slug);
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => {
+                        info!(slug = %slug, "world_save: deleted slot");
+                        if self.current_world_slug.as_deref() == Some(slug.as_str())
+                        {
+                            self.current_world_slug =
+                                Some(world_save::DEFAULT_SLUG.to_string());
+                        }
+                    }
+                    Err(err) => warn!(
+                        error = %err,
+                        slug = %slug,
+                        "world_save: delete slot failed"
+                    ),
+                }
+                self.menu.invalidate_caches();
+            }
+            MenuAction::DirectConnect { addr } => {
+                self.connect_as_client(&addr);
+            }
+            MenuAction::JoinServer { addr } => {
+                self.connect_as_client(&addr);
+            }
+            MenuAction::BrowseServersRefresh => {
+                self.refresh_browser();
+            }
+            MenuAction::AddSavedServer { name, addr } => {
+                let mut entries = menu::multiplayer::load_saved_servers();
+                // De-dup on addr - editing falls back to "remove +
+                // re-add" rather than an in-place rewrite, so a
+                // dup-add silently overwrites the old name.
+                entries.retain(|s| s.addr != addr);
+                entries.push(menu::SavedServer { name, addr });
+                menu::multiplayer::save_saved_servers(&entries);
+                self.menu.invalidate_caches();
+            }
+            MenuAction::RemoveSavedServer { addr } => {
+                let mut entries = menu::multiplayer::load_saved_servers();
+                entries.retain(|s| s.addr != addr);
+                menu::multiplayer::save_saved_servers(&entries);
+                self.menu.invalidate_caches();
+            }
+            MenuAction::ApplyOptions { mut snapshot } => {
+                snapshot.clamp();
+                self.player_name = snapshot.player_name.clone();
+                self.master_addr = snapshot.master_addr.clone();
+                self.settings.view_distance = snapshot.view_distance;
+                self.fov_y_rad = snapshot.fov_deg.to_radians();
+                self.settings.mouse_sensitivity = snapshot.mouse_sensitivity;
+                self.settings.show_fps = snapshot.show_fps;
+                self.settings.head_bob = snapshot.head_bob;
+                self.settings.invert_mouse_y = snapshot.invert_mouse_y;
+                self.settings.invert_wheel = snapshot.invert_wheel;
+                self.settings.lock_cursor = snapshot.lock_cursor;
+                self.settings.hide_cursor = snapshot.hide_cursor;
+                // Mirror back so the screen keeps showing the
+                // clamped values on the next redraw.
+                self.menu.options = snapshot;
+                self.save_config();
+            }
+        }
+    }
+
+    /// Sync `self.menu.options` from the runtime's authoritative
+    /// state. Called once per UI frame before the menu draws so
+    /// the screen reflects any external mutation (e.g. the chat
+    /// `/name` command).
+    fn sync_menu_options(&mut self) {
+        self.menu.options.player_name = self.player_name.clone();
+        self.menu.options.master_addr = self.master_addr.clone();
+        self.menu.options.view_distance = self.settings.view_distance;
+        self.menu.options.fov_deg = self.fov_y_rad.to_degrees();
+        self.menu.options.mouse_sensitivity = self.settings.mouse_sensitivity;
+        self.menu.options.show_fps = self.settings.show_fps;
+        self.menu.options.head_bob = self.settings.head_bob;
+        self.menu.options.invert_mouse_y = self.settings.invert_mouse_y;
+        self.menu.options.invert_wheel = self.settings.invert_wheel;
+        self.menu.options.lock_cursor = self.settings.lock_cursor;
+        self.menu.options.hide_cursor = self.settings.hide_cursor;
+    }
+
+    /// Refresh the menu's worlds + saved-servers caches if they've
+    /// gone stale (>= 500 ms since the last scan). Caps the
+    /// `list_worlds()` rate at <= 2 Hz so the OnceLock-deduped
+    /// "unreadable slot" warning doesn't fire repeatedly while the
+    /// picker is open.
+    fn refresh_menu_caches(&mut self) {
+        if self.menu.worlds_cache_stale() {
+            let fresh = world_save::layout::list_worlds();
+            self.menu.store_worlds_cache(fresh);
+        }
+        if self.menu.saved_servers_stale() {
+            let fresh = menu::multiplayer::load_saved_servers();
+            self.menu.store_saved_servers(fresh);
+        }
     }
 }
 
@@ -9247,7 +9282,15 @@ impl AppHandler for Voxel {
                 AppState::MainMenu
                 | AppState::DirectConnect
                 | AppState::ServerBrowser
-                | AppState::HostSetup => {}
+                | AppState::HostSetup => {
+                    // Wave 4 (Phase G.6): defer to the menu's own
+                    // ESC handler. It returns true after popping a
+                    // sub-screen back to Main; we don't do
+                    // anything else in that case. False means the
+                    // user is already on Main, which in the new MC
+                    // hierarchy is a no-op (no quit-on-Esc).
+                    let _ = self.menu.on_escape();
+                }
             }
         }
 

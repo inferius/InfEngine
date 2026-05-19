@@ -259,3 +259,130 @@ fn cache_ttl_is_under_one_second() {
     assert!(CACHE_TTL <= std::time::Duration::from_millis(500));
     assert!(CACHE_TTL >= std::time::Duration::from_millis(100));
 }
+
+#[test]
+fn apply_switch_overwrites_screen() {
+    let mut menu = Menu::new(fresh_options());
+    menu.apply_switch(MenuScreen::Options);
+    assert!(matches!(menu.screen, MenuScreen::Options));
+    menu.apply_switch(default_multiplayer());
+    assert!(matches!(menu.screen, MenuScreen::Multiplayer { .. }));
+}
+
+#[test]
+fn invalidate_caches_clears_world_timestamp() {
+    let mut menu = Menu::new(fresh_options());
+    menu.store_worlds_cache(vec![]);
+    assert!(menu.worlds_cache_at.is_some());
+    menu.invalidate_caches();
+    assert!(menu.worlds_cache_at.is_none());
+}
+
+#[test]
+fn new_world_action_with_nonempty_name_round_trips() {
+    let cleaned = validate_world_name("Pretty World").expect("valid");
+    let action = MenuAction::NewWorld {
+        name: cleaned.clone(),
+        worldgen: String::new(),
+    };
+    match action {
+        MenuAction::NewWorld { name, worldgen } => {
+            assert_eq!(name, "Pretty World");
+            assert!(worldgen.is_empty());
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn delete_world_action_carries_slug() {
+    let action = MenuAction::DeleteWorld {
+        slug: "test-slot".to_string(),
+    };
+    if let MenuAction::DeleteWorld { slug } = action {
+        assert_eq!(slug, "test-slot");
+    } else {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn direct_connect_action_carries_addr() {
+    let action = MenuAction::DirectConnect {
+        addr: "1.2.3.4:7777".to_string(),
+    };
+    if let MenuAction::DirectConnect { addr } = action {
+        assert_eq!(addr, "1.2.3.4:7777");
+    } else {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn join_server_action_carries_addr() {
+    let action = MenuAction::JoinServer {
+        addr: "1.2.3.4:7777".to_string(),
+    };
+    if let MenuAction::JoinServer { addr } = action {
+        assert_eq!(addr, "1.2.3.4:7777");
+    } else {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn add_saved_server_action_carries_fields() {
+    let action = MenuAction::AddSavedServer {
+        name: "Home".to_string(),
+        addr: "127.0.0.1:7777".to_string(),
+    };
+    if let MenuAction::AddSavedServer { name, addr } = action {
+        assert_eq!(name, "Home");
+        assert_eq!(addr, "127.0.0.1:7777");
+    } else {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn options_apply_action_carries_snapshot() {
+    let action = MenuAction::ApplyOptions {
+        snapshot: fresh_options(),
+    };
+    if let MenuAction::ApplyOptions { snapshot } = action {
+        assert_eq!(snapshot.player_name, "Tester");
+        assert_eq!(snapshot.view_distance, 6);
+    } else {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn browse_refresh_action_is_unit_variant() {
+    // Trivial: assert the Refresh variant pattern-matches. Catches
+    // a future signature change that adds payload fields.
+    let action = MenuAction::BrowseServersRefresh;
+    if !matches!(action, MenuAction::BrowseServersRefresh) {
+        panic!("wrong variant");
+    }
+}
+
+#[test]
+fn switch_to_singleplayer_from_main_clears_form_state() {
+    let mut menu = Menu::new(fresh_options());
+    menu.apply_switch(default_singleplayer());
+    if let MenuScreen::Singleplayer {
+        selected_slug,
+        search,
+        new_world_open,
+        confirm_delete,
+    } = &menu.screen
+    {
+        assert!(selected_slug.is_none());
+        assert!(search.is_empty());
+        assert!(new_world_open.is_none());
+        assert!(confirm_delete.is_none());
+    } else {
+        panic!("expected Singleplayer");
+    }
+}

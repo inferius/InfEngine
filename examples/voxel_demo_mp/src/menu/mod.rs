@@ -372,9 +372,15 @@ pub(crate) fn validate_world_name(typed: &str) -> Option<String> {
 /// `actions`. Pulled out as a free fn (rather than a method) so
 /// tests can hand it a synthetic context without spinning up a
 /// real `Voxel`.
+///
+/// Takes `screen` separately from `MenuContext::options` so the
+/// caller can hand us two disjoint sub-borrows of `Menu` without
+/// tripping Rust's aliasing rules. The dispatcher restores the
+/// active variant on the way out + applies the most recent
+/// `SwitchScreen` action found in `actions`.
 pub(crate) fn draw(
     ui: &mut egui::Ui,
-    menu: &mut Menu,
+    screen_ref: &mut MenuScreen,
     ctx: &mut MenuContext<'_>,
     actions: &mut Vec<MenuAction>,
 ) {
@@ -382,7 +388,7 @@ pub(crate) fn draw(
     // each per-screen draw. The screens own their state (the
     // enum's payload), so we move/restore the variant rather
     // than threading two borrows in parallel.
-    let screen = std::mem::replace(&mut menu.screen, MenuScreen::Main);
+    let screen = std::mem::replace(screen_ref, MenuScreen::Main);
     let next = match screen {
         MenuScreen::Main => {
             main_screen::draw(ui, ctx, actions);
@@ -456,5 +462,5 @@ pub(crate) fn draw(
         MenuAction::SwitchScreen(t) => Some(t.clone()),
         _ => None,
     });
-    menu.screen = switch_target.unwrap_or(next);
+    *screen_ref = switch_target.unwrap_or(next);
 }
