@@ -4998,7 +4998,12 @@ impl Voxel {
         // quits without `/save` previously lost every build on
         // restart. The cadence matches the design doc's 60 s
         // autosave window.
-        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+        // W8.1 guard: only autosave while a world is actually loaded.
+        // Without this the loop fires on the empty main-menu lobby
+        // state too (current_slug = None falls back to DEFAULT_SLUG +
+        // creates an empty `default/` slot the user never asked for).
+        if self.world_loaded
+            && matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
             && self
                 .last_state_save
                 .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(60))
