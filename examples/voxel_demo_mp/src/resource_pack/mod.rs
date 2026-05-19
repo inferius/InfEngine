@@ -37,6 +37,7 @@ pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod models;
 pub(crate) mod name_map;
+pub(crate) mod particles;
 pub(crate) mod paths;
 pub(crate) mod sounds;
 pub(crate) mod special_models;
