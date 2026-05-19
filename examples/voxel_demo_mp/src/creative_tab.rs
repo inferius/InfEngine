@@ -22,7 +22,81 @@
 
 use infengine_voxel::BlockId;
 
-use crate::item::{ITEM_TYPES, ItemType, item_display_name};
+use crate::item::{ItemCategory, ITEM_TYPES, ItemType, item_display_name};
+
+/// W12.9 - Creative tab category strip. Mirrors MC's
+/// `CreativeModeTab` enum but at a coarser grain. Each category
+/// maps onto one or more `ItemCategory` rows via
+/// `CreativeCategory::accepts`.
+#[allow(dead_code)] // tab-strip UI hookup lands in a follow-up commit
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(crate) enum CreativeCategory {
+    /// All (default search across every kind).
+    #[default]
+    All,
+    /// Building blocks (terrain, planks, sandstone, ...).
+    Blocks,
+    /// Decoration (glass, wool, torches, slabs, doors, ...).
+    Decoration,
+    /// Tools (pickaxe / shovel / axe + flint and steel).
+    Tools,
+    /// Combat (swords).
+    Combat,
+    /// Food (meat + future bread / apple).
+    Food,
+    /// Misc - buckets + ingredients (feather, ingot, ...).
+    Misc,
+}
+
+impl CreativeCategory {
+    /// Stable display label for the tab strip.
+    #[allow(dead_code)]
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            CreativeCategory::All => "All",
+            CreativeCategory::Blocks => "Blocks",
+            CreativeCategory::Decoration => "Decoration",
+            CreativeCategory::Tools => "Tools",
+            CreativeCategory::Combat => "Combat",
+            CreativeCategory::Food => "Food",
+            CreativeCategory::Misc => "Misc",
+        }
+    }
+
+    /// Every category in display order. Used by the tab strip
+    /// renderer.
+    #[allow(dead_code)]
+    pub(crate) const fn all() -> [CreativeCategory; 7] {
+        [
+            CreativeCategory::All,
+            CreativeCategory::Blocks,
+            CreativeCategory::Decoration,
+            CreativeCategory::Tools,
+            CreativeCategory::Combat,
+            CreativeCategory::Food,
+            CreativeCategory::Misc,
+        ]
+    }
+
+    /// True when an item with `ItemCategory ic` should show up
+    /// inside this tab. The `All` tab always returns true so the
+    /// search-anything default works as before.
+    #[allow(dead_code)]
+    pub(crate) fn accepts(self, ic: ItemCategory) -> bool {
+        match self {
+            CreativeCategory::All => true,
+            CreativeCategory::Blocks => matches!(ic, ItemCategory::BuildingBlock),
+            CreativeCategory::Decoration => matches!(ic, ItemCategory::Decoration),
+            CreativeCategory::Tools => matches!(ic, ItemCategory::Tool),
+            CreativeCategory::Combat => matches!(ic, ItemCategory::Weapon),
+            CreativeCategory::Food => matches!(ic, ItemCategory::Food),
+            CreativeCategory::Misc => matches!(
+                ic,
+                ItemCategory::Bucket | ItemCategory::Ingredient
+            ),
+        }
+    }
+}
 
 /// One entry in the creative tab grid. Carries everything the
 /// UI needs to render + react to clicks without hopping back to
@@ -34,6 +108,8 @@ pub(crate) struct CreativeEntry {
     /// `max_stack` for the picked-up stack. Clicking on a tile
     /// fills the cursor with a stack of this size.
     pub max_stack: u8,
+    /// W12.9 - source ItemCategory the tab-strip filter walks.
+    pub category: ItemCategory,
 }
 
 impl CreativeEntry {
@@ -42,6 +118,7 @@ impl CreativeEntry {
         Self {
             id: it.id,
             max_stack: it.max_stack,
+            category: it.category,
         }
     }
 }
@@ -60,6 +137,8 @@ pub(crate) struct CreativeTabState {
     /// a grid tile; deposited by clicking a hotbar slot. None
     /// means the cursor is empty.
     pub cursor: Option<(BlockId, u8)>,
+    /// W12.9 - active tab. Defaults to All.
+    pub category: CreativeCategory,
 }
 
 impl CreativeTabState {
@@ -68,6 +147,7 @@ impl CreativeTabState {
         self.open = true;
         self.query.clear();
         self.cursor = None;
+        self.category = CreativeCategory::All;
     }
 
     /// Close the tab. Drops any held cursor stack (matches MC:
@@ -77,6 +157,7 @@ impl CreativeTabState {
         self.open = false;
         self.query.clear();
         self.cursor = None;
+        self.category = CreativeCategory::All;
     }
 }
 
@@ -109,6 +190,34 @@ pub(crate) fn filter_items(
             name.contains(&q)
         })
         .collect()
+}
+
+/// W12.9 - filter entries by the active creative-tab category.
+/// `All` returns every entry; other categories restrict to entries
+/// whose source `ItemCategory` is `accept`ed by the tab.
+#[allow(dead_code)] // wired up by the future tab-strip UI commit.
+pub(crate) fn filter_by_category(
+    entries: &[CreativeEntry],
+    category: CreativeCategory,
+) -> Vec<CreativeEntry> {
+    entries
+        .iter()
+        .copied()
+        .filter(|e| category.accepts(e.category))
+        .collect()
+}
+
+/// W12.9 - combined category + text filter. Equivalent to
+/// `filter_items(&filter_by_category(entries, cat), q)`; one
+/// helper to keep call sites concise.
+#[allow(dead_code)] // wired up by the future tab-strip UI commit.
+pub(crate) fn filter_items_in_category(
+    entries: &[CreativeEntry],
+    category: CreativeCategory,
+    query: &str,
+) -> Vec<CreativeEntry> {
+    let cat_hits = filter_by_category(entries, category);
+    filter_items(&cat_hits, query)
 }
 
 /// Try to deposit `stack` into the player's hotbar (slots
@@ -214,6 +323,7 @@ mod tests {
             open: false,
             query: "stale".into(),
             cursor: Some((BlockId(1), 64)),
+            category: CreativeCategory::Tools,
         };
         state.open_now();
         assert!(state.open);
@@ -294,5 +404,127 @@ mod tests {
         let items = available_items();
         let hits = filter_items(&items, "xyzzy_not_a_real_item");
         assert!(hits.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // W12.9 - Multi-tab category filter tests.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn creative_tab_categories_filter_items() {
+        // Tools tab includes pickaxes (id 16/17/18) but NOT stone (1).
+        let items = available_items();
+        let tools = filter_by_category(&items, CreativeCategory::Tools);
+        assert!(tools.iter().any(|e| e.id == 16), "wood pickaxe in Tools");
+        assert!(tools.iter().any(|e| e.id == 18), "iron pickaxe in Tools");
+        assert!(!tools.iter().any(|e| e.id == 1), "stone NOT in Tools");
+        // Combat tab includes swords.
+        let combat = filter_by_category(&items, CreativeCategory::Combat);
+        assert!(combat.iter().any(|e| e.id == 23), "wood sword in Combat");
+        assert!(combat.iter().any(|e| e.id == 25), "iron sword in Combat");
+        // Food tab includes meat (id 12).
+        let food = filter_by_category(&items, CreativeCategory::Food);
+        assert!(food.iter().any(|e| e.id == 12), "meat in Food");
+    }
+
+    #[test]
+    fn every_item_has_a_category() {
+        // The CreativeEntry's `category` field must be populated by
+        // `from_item`. None of the rows in ITEM_TYPES leave this as
+        // a default fallback - the field is mandatory.
+        let items = available_items();
+        for e in &items {
+            // Sanity check: each entry's category equals the
+            // ITEM_TYPES row's category (round-trip).
+            let it = ITEM_TYPES.iter().find(|i| i.id == e.id).unwrap();
+            assert_eq!(e.category, it.category, "id {} mismatched", e.id);
+        }
+        // Every entry must be in the All tab.
+        let all = filter_by_category(&items, CreativeCategory::All);
+        assert_eq!(all.len(), items.len(), "All tab must include everything");
+    }
+
+    #[test]
+    fn category_strip_lists_all_seven() {
+        let strip = CreativeCategory::all();
+        assert_eq!(strip.len(), 7);
+        // First is All, last is Misc per the display order.
+        assert_eq!(strip[0], CreativeCategory::All);
+        assert_eq!(strip[strip.len() - 1], CreativeCategory::Misc);
+    }
+
+    #[test]
+    fn category_labels_are_non_empty() {
+        for cat in CreativeCategory::all() {
+            assert!(
+                !cat.label().is_empty(),
+                "category {cat:?} has empty label",
+            );
+        }
+    }
+
+    #[test]
+    fn category_default_is_all() {
+        let s = CreativeTabState::default();
+        assert_eq!(s.category, CreativeCategory::All);
+    }
+
+    #[test]
+    fn open_resets_category_to_all() {
+        // open_now should clear any leftover category selection.
+        let mut s = CreativeTabState {
+            category: CreativeCategory::Tools,
+            ..Default::default()
+        };
+        s.open_now();
+        assert_eq!(s.category, CreativeCategory::All);
+    }
+
+    #[test]
+    fn filter_items_in_category_combines_both() {
+        // Search "wood" inside Tools should match the wood pickaxe
+        // (16) + wood shovel (29) + wood axe (32) but NOT the wood
+        // sword (23 - that's Combat).
+        let items = available_items();
+        let tool_woods =
+            filter_items_in_category(&items, CreativeCategory::Tools, "wood");
+        assert!(tool_woods.iter().any(|e| e.id == 16));
+        assert!(tool_woods.iter().any(|e| e.id == 29));
+        assert!(tool_woods.iter().any(|e| e.id == 32));
+        assert!(!tool_woods.iter().any(|e| e.id == 23));
+    }
+
+    #[test]
+    fn category_misc_holds_buckets_and_ingredients() {
+        let items = available_items();
+        let misc = filter_by_category(&items, CreativeCategory::Misc);
+        // Empty bucket = id 38.
+        assert!(misc.iter().any(|e| e.id == 38));
+        // Feather (ingredient) = id 19.
+        assert!(misc.iter().any(|e| e.id == 19));
+    }
+
+    #[test]
+    fn category_accepts_consistent_with_item_category() {
+        // Every ItemCategory variant should land in exactly one
+        // non-All tab (the partition is total). Check by walking
+        // every item + counting how many tabs `accept` it.
+        let items = available_items();
+        for e in &items {
+            let mut hits = 0;
+            for cat in CreativeCategory::all() {
+                if matches!(cat, CreativeCategory::All) {
+                    continue;
+                }
+                if cat.accepts(e.category) {
+                    hits += 1;
+                }
+            }
+            assert_eq!(
+                hits, 1,
+                "id {} (category {:?}) should land in exactly one tab",
+                e.id, e.category,
+            );
+        }
     }
 }
