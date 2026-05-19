@@ -26,10 +26,12 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
     let mut item_icons: HashMap<String, TextureRef> = HashMap::new();
 
     // Walk the bin's BlockType table + populate one TextureRef per
-    // (col, row) tile so the new lookup path lands on the same atlas
-    // tiles the legacy mesher uses. The block name (`bt.name`) maps
-    // 1:1 to the MC asset name for the W9.1 fallback.
+    // (col, row) tile. We register entries under BOTH our internal
+    // name (`bt.name`) and the MC asset name from the name_map so
+    // `icon_ref` / `block_face_ref` (which translate ids -> MC
+    // names) hit the same tiles the mesher does.
     use crate::block::{BLOCK_TYPES, TileSpec};
+    use super::name_map;
     let u_step = 1.0 / 4.0_f32;
     let v_step = 1.0 / 4.0_f32;
     let uv_of = |t: &TileSpec| -> [f32; 4] {
@@ -38,12 +40,25 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         [u0, v0, u0 + u_step, v0 + v_step]
     };
     for bt in BLOCK_TYPES {
-        let r = TextureRef::placeholder(uv_of(&bt.top));
-        textures.insert(TextureKey::Block(bt.name.to_string()), r);
-        // Non-block items reuse the top face for now (W9.3 will
-        // wire a dedicated item-icon path for non-block items
-        // once the real MC pack lands).
-        item_icons.insert(bt.name.to_string(), r);
+        let top_ref = TextureRef::placeholder(uv_of(&bt.top));
+        // Internal name.
+        textures.insert(TextureKey::Block(bt.name.to_string()), top_ref);
+        // MC name from the lookup table, when one exists. Otherwise
+        // fall back to the internal name (the loader's path uses
+        // `block_face_ref` which already chains internal -> MC).
+        if let Some(map) = name_map::lookup_block(bt.id) {
+            textures.insert(TextureKey::Block(map.block.to_string()), top_ref);
+            for face in [map.top, map.bottom, map.sides] {
+                if !face.is_empty() {
+                    textures.insert(TextureKey::Block(face.to_string()), top_ref);
+                }
+            }
+        }
+        // Block-form item icons reuse the top face.
+        item_icons.insert(bt.name.to_string(), top_ref);
+        if let Some(item_name) = name_map::lookup_item(bt.id) {
+            item_icons.insert(item_name.to_string(), top_ref);
+        }
     }
 
     ResourcePack {

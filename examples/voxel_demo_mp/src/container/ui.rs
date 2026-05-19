@@ -27,6 +27,12 @@
 use super::Container;
 use crate::item::icons::{icon_for, icon_uv_rect};
 
+/// W9.3: per-item UV resolver. Callers pass a closure that turns an
+/// item id into the atlas UV rect to paint (typically by routing
+/// through the loaded `ResourcePack::icon_ref`). Returning `None`
+/// falls back to the legacy 4x4-atlas icon table.
+pub(crate) type UvResolver<'a> = &'a dyn Fn(u16) -> Option<[f32; 4]>;
+
 /// One slot-interaction emitted by `draw_grid`. The caller applies
 /// these against the live `Container`(s) via `Container::take` /
 /// `insert_at` / `transfer_from`.
@@ -83,6 +89,21 @@ pub(crate) fn draw_grid(
     held: Option<(u16, u8)>,
     atlas: Option<egui::TextureId>,
 ) -> Vec<GridAction> {
+    draw_grid_with_uv(ui, cfg, container, held, atlas, &|_| None)
+}
+
+/// W9.3: same as `draw_grid` but the caller plumbs a per-item UV
+/// resolver (typically powered by the loaded MC resource pack)
+/// so non-block items get their dedicated MC icon instead of the
+/// shared placeholder tile at the (0, 0) atlas slot.
+pub(crate) fn draw_grid_with_uv(
+    ui: &mut egui::Ui,
+    cfg: &GridConfig,
+    container: &Container,
+    held: Option<(u16, u8)>,
+    atlas: Option<egui::TextureId>,
+    uv_resolver: UvResolver<'_>,
+) -> Vec<GridAction> {
     let mut actions: Vec<GridAction> = Vec::new();
     if let Some(title) = &cfg.title {
         ui.label(title.as_str());
@@ -101,7 +122,7 @@ pub(crate) fn draw_grid(
         .show(ui, |ui| {
             for idx in 0..total {
                 let slot = container.slot(idx);
-                let resp = draw_one_slot(ui, slot, cfg.tile_px, atlas);
+                let resp = draw_one_slot(ui, slot, cfg.tile_px, atlas, uv_resolver);
                 // Modifier mapping. We sample once per slot so a
                 // Shift-LMB and a plain LMB on the same slot don't
                 // both fire.
@@ -141,16 +162,18 @@ fn draw_one_slot(
     slot: super::Slot,
     tile_px: f32,
     atlas: Option<egui::TextureId>,
+    uv_resolver: UvResolver<'_>,
 ) -> egui::Response {
     let size = egui::vec2(tile_px, tile_px);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, egui::Color32::from_gray(24));
     if let Some((id, count)) = slot {
-        // Icon: prefer atlas tile, fall back to a tinted swatch.
-        match (atlas, icon_for(id)) {
-            (Some(tex_id), Some(icon)) => {
-                let uv = icon_uv_rect(icon);
+        // W9.3: prefer the resource_pack UV when supplied + non-None,
+        // then the legacy 4x4-atlas icon, then the tinted swatch.
+        let resolved_uv = uv_resolver(id).or_else(|| icon_for(id).map(icon_uv_rect));
+        match (atlas, resolved_uv) {
+            (Some(tex_id), Some(uv)) => {
                 let uv_rect = egui::Rect::from_min_max(
                     egui::pos2(uv[0], uv[1]),
                     egui::pos2(uv[2], uv[3]),

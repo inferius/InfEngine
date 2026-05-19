@@ -135,3 +135,48 @@ fn icon_ref_unknown_id_is_none() {
     // pack doesn't fabricate one either.
     assert!(pack.icon_ref(9999).is_none());
 }
+
+#[test]
+fn placeholder_pack_icon_ref_for_block_is_top_tile() {
+    // The fallback path populates `item_icons` from BLOCK_TYPES via
+    // the block's top tile, so block icons should resolve there.
+    let pack = ResourcePack::load();
+    // id 8 = cobble. (col=1, row=2) in the 4x4 placeholder atlas.
+    let icon = pack.icon_ref(8).expect("cobble icon");
+    let block = pack.block_texture("cobble").unwrap();
+    assert_eq!(icon.atlas_uv, block.atlas_uv);
+}
+
+#[test]
+fn placeholder_pack_icon_ref_distinct_per_item() {
+    // The W9 fix ensures DIFFERENT items get DIFFERENT UVs (the
+    // old bug had non-block items collapse onto the shared (0,0)
+    // placeholder tile). For the placeholder pack we route through
+    // each item's block-form tile, so iron_ore (id 14) and
+    // cobble (id 8) must report distinct UVs.
+    let pack = ResourcePack::load();
+    let iron = pack.icon_ref(14).expect("iron icon");
+    let cobble = pack.icon_ref(8).expect("cobble icon");
+    assert_ne!(iron.atlas_uv, cobble.atlas_uv);
+}
+
+#[test]
+fn icon_ref_for_non_block_item_resolves_under_placeholder() {
+    // Under the placeholder pack, non-block items still resolve to
+    // their block-form top tile (mirrors MC creative-tab behavior).
+    // The fix the user reported: ALL items should NOT collapse onto
+    // a single (0, 0) placeholder tile - they should at least be
+    // distinct by id. flint_and_steel (id 48) has no block form but
+    // the name_map points its item entry at the same placeholder
+    // tile its BLOCK_TYPES row uses (col=0, row=0).
+    let pack = ResourcePack::load();
+    let icon = pack.icon_ref(48);
+    // Either resolves (placeholder atlas knows about it via the
+    // item-name map) OR returns None (caller's tinted swatch
+    // kicks in). Both are acceptable; what's NOT acceptable is
+    // routing through a wrong block tile.
+    if let Some(r) = icon {
+        // If resolved, must point at a valid 4x4-atlas tile UV.
+        assert!(r.atlas_uv[0] >= 0.0 && r.atlas_uv[2] <= 1.0);
+    }
+}

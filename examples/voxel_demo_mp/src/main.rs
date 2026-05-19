@@ -7139,15 +7139,42 @@ impl Voxel {
         }
         let atlas_tex_id: Option<egui::TextureId> =
             self.egui_atlas.as_ref().map(|h| h.id());
+        // W9.3: per-item UV resolver that the container UI threads
+        // into its slot painter. Bound up here so the egui closure
+        // can borrow it alongside the rest of the per-frame
+        // snapshots. Snapshot a `Vec<(id, uv)>` flat list so the
+        // closure-captures don't have to borrow `&self`.
+        let icon_uv_table: HashMap<u16, [f32; 4]> = {
+            let mut t = HashMap::new();
+            for it in crate::item::ITEM_TYPES.iter() {
+                if let Some(r) = self.resource_pack.icon_ref(it.id) {
+                    t.insert(it.id, r.atlas_uv);
+                }
+            }
+            t
+        };
+        let icon_uv_resolver = |id: u16| -> Option<[f32; 4]> {
+            icon_uv_table.get(&id).copied()
+        };
         // Snapshot tuple: (color, count, uv_rect_for_top_face). UV
         // is only used when the egui atlas texture is loaded;
         // otherwise we fall back to a solid color swatch.
+        // W9.3: prefer the MC resource-pack's per-item icon UV when
+        // one resolves. Non-block items (tools, ingots, buckets,
+        // food, flint+steel) get dedicated MC icons; block items
+        // pick up the block's top face. Falls through to the legacy
+        // (0, 0)-placeholder + tinted swatch when no pack loaded.
+        let resource_pack = &self.resource_pack;
         let icon = |slot: Option<(BlockId, u8)>| -> Option<SlotIcon> {
             slot.and_then(|(b, c)| {
                 let bt = block_type(b.0);
+                let uv = resource_pack
+                    .icon_ref(b.0)
+                    .map(|r| r.atlas_uv)
+                    .unwrap_or_else(|| atlas_uv_rect(b, [0, 1, 0]));
                 self.registry
                     .get(b)
-                    .map(|d| (d.color, c, atlas_uv_rect(b, [0, 1, 0]), bt.map(|t| t.name).unwrap_or("?")))
+                    .map(|d| (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")))
             })
         };
         let hotbar_snapshot: Vec<Option<SlotIcon>> = self.inventory
@@ -8081,12 +8108,13 @@ impl Voxel {
                                 tile_px: 36.0,
                                 title: None,
                             };
-                            let actions = container::ui::draw_grid(
+                            let actions = container::ui::draw_grid_with_uv(
                                 ui,
                                 &chest_cfg,
                                 chest,
                                 chest_held_local,
                                 atlas_tex_id,
+                                &icon_uv_resolver,
                             );
                             for a in actions {
                                 chest_grid_actions.push((false, a));
@@ -8113,12 +8141,13 @@ impl Voxel {
                                 tile_px: 36.0,
                                 title: None,
                             };
-                            let inv_actions_g = container::ui::draw_grid(
+                            let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,
                                 &inv_cfg,
                                 &inv_view,
                                 chest_held_local,
                                 atlas_tex_id,
+                                &icon_uv_resolver,
                             );
                             for a in inv_actions_g {
                                 chest_grid_actions.push((true, a));
@@ -8165,8 +8194,8 @@ impl Voxel {
                                 };
                                 let mut single = container::Container::with_size(1);
                                 single.set_slot(0, furnace.slot(0));
-                                let acts = container::ui::draw_grid(
-                                    ui, &cfg_input, &single, furnace_held_local, atlas_tex_id,
+                                let acts = container::ui::draw_grid_with_uv(
+                                    ui, &cfg_input, &single, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts {
                                     // Remap idx 0 -> furnace
@@ -8205,8 +8234,8 @@ impl Voxel {
                                 };
                                 let mut single_f = container::Container::with_size(1);
                                 single_f.set_slot(0, furnace.slot(1));
-                                let acts_f = container::ui::draw_grid(
-                                    ui, &cfg_fuel, &single_f, furnace_held_local, atlas_tex_id,
+                                let acts_f = container::ui::draw_grid_with_uv(
+                                    ui, &cfg_fuel, &single_f, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts_f {
                                     furnace_grid_actions.push((false, remap_action(a, 1)));
@@ -8238,8 +8267,8 @@ impl Voxel {
                                 };
                                 let mut single_o = container::Container::with_size(1);
                                 single_o.set_slot(0, furnace.slot(2));
-                                let acts_o = container::ui::draw_grid(
-                                    ui, &cfg_out, &single_o, furnace_held_local, atlas_tex_id,
+                                let acts_o = container::ui::draw_grid_with_uv(
+                                    ui, &cfg_out, &single_o, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts_o {
                                     furnace_grid_actions.push((false, remap_action(a, 2)));
@@ -8259,12 +8288,13 @@ impl Voxel {
                                 tile_px: 36.0,
                                 title: None,
                             };
-                            let inv_actions_g = container::ui::draw_grid(
+                            let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,
                                 &inv_cfg,
                                 &inv_view,
                                 furnace_held_local,
                                 atlas_tex_id,
+                                &icon_uv_resolver,
                             );
                             for a in inv_actions_g {
                                 furnace_grid_actions.push((true, a));
