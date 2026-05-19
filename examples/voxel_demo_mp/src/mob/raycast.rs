@@ -13,7 +13,9 @@ use glam::Vec3;
 
 use crate::{Voxel, ray_aabb};
 
-use super::kinds::{KIND_CHICKEN, KIND_PIG, KIND_ZOMBIE};
+use super::kinds::{
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
+};
 
 /// Raycast a slab-tested ray against every known mob's AABB.
 /// Returns `Some((mob_id, distance))` for the nearest hit
@@ -29,12 +31,16 @@ pub(crate) fn raycast_mob(
 ) -> Option<(u32, f32)> {
     let mut best: Option<(u32, f32)> = None;
     for m in voxel.remote_mobs.values() {
-        // Per-kind hitbox. Sheep is wide + low, zombie is
-        // tall, chicken is a small cube near the feet.
+        // Per-kind hitbox. Sheep is wide + low, zombie + skeleton
+        // are tall, chicken is a small cube near the feet, spider
+        // is wide + low like a sheep, cow matches the sheep
+        // baseline.
         let (hx, hy, hz, cy_off) = match m.kind {
-            KIND_ZOMBIE => (0.45, 1.0, 0.45, 1.0_f32),
+            KIND_ZOMBIE | KIND_SKELETON => (0.45, 1.0, 0.45, 1.0_f32),
             KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35_f32),
             KIND_PIG => (0.6, 0.55, 0.45, 0.45_f32),
+            KIND_SPIDER => (0.7, 0.45, 0.7, 0.45_f32),
+            KIND_COW => (0.7, 0.85, 0.5, 0.55_f32),
             _ => (0.7, 0.75, 0.5, 0.55_f32),
         };
         let cx = m.pos[0];

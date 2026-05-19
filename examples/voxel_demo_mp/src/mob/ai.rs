@@ -17,7 +17,7 @@
 use crate::net::{MobEventMsg, MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, Voxel};
 
-use super::kinds::KIND_ZOMBIE;
+use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
 use super::spawn;
 use super::state::{
     MOB_DESPAWN_DIST_SQ, MOB_LUNGE_TIME, MOB_MAX_HEALTH, MOB_SPEED,
@@ -63,6 +63,13 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
     broadcast(voxel);
 }
 
+/// True for kinds that chase + bite players. Zombie / skeleton /
+/// spider all share the stub chase + melee path in H.3; H.8 splits
+/// skeleton off into a ranged-bow goal.
+fn kind_is_hostile(kind: u8) -> bool {
+    matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+}
+
 /// HP regen: any mob that hasn't been hit in 6 s slowly
 /// refills toward its kind's max. Heal 1 HP/s.
 fn hp_regen_pass(voxel: &mut Voxel, dt: f32) {
@@ -75,7 +82,7 @@ fn hp_regen_pass(voxel: &mut Voxel, dt: f32) {
             .entry(m.id)
             .and_modify(|v| *v += dt)
             .or_insert(dt);
-        let max = if m.kind == KIND_ZOMBIE {
+        let max = if kind_is_hostile(m.kind) {
             ZOMBIE_MAX_HEALTH
         } else {
             MOB_MAX_HEALTH
@@ -116,12 +123,12 @@ fn step_one(
     //    `ZOMBIE_SIGHT_RANGE` and lock onto their pose;
     //    when no player is in range they fall back to the
     //    sheep wander logic so they don't freeze in place.
-    let chase_player_pos: Option<[f32; 3]> = if m.kind == KIND_ZOMBIE {
+    let chase_player_pos: Option<[f32; 3]> = if kind_is_hostile(m.kind) {
         voxel.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
     } else {
         None
     };
-    let speed = if m.kind == KIND_ZOMBIE {
+    let speed = if kind_is_hostile(m.kind) {
         ZOMBIE_SPEED
     } else {
         MOB_SPEED
@@ -202,10 +209,12 @@ fn step_one(
     if let Some(sy) = voxel.surface_y_below(wx, wz, scan_top) {
         m.pos[1] = sy as f32 + 1.0;
     }
-    // Zombie touch damage: decrement attack cooldown each
+    // Hostile touch damage: zombies + skeletons + spiders all
+    // share the stub melee path. Decrement attack cooldown each
     // frame; when in range of the host + cooldown expired,
-    // hit the local player + reset.
-    if m.kind == KIND_ZOMBIE {
+    // hit the local player + reset. H.8 splits skeleton off into
+    // a ranged-bow goal.
+    if kind_is_hostile(m.kind) {
         m.attack_cd = (m.attack_cd - dt).max(0.0);
         let dx = voxel.player_pos.x - m.pos[0];
         let dy = voxel.player_pos.y - m.pos[1];

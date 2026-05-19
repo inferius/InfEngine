@@ -26,6 +26,7 @@ pub(crate) mod damage;
 pub(crate) mod kinds;
 pub(crate) mod light;
 pub(crate) mod pathfind;
+pub(crate) mod pool;
 pub(crate) mod raycast;
 pub(crate) mod spawn;
 pub(crate) mod state;

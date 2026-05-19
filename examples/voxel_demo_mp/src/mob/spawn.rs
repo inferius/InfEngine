@@ -26,12 +26,16 @@ use infengine_voxel::CHUNK_SIZE;
 use crate::net::{MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, VERTICAL_CHUNKS, Voxel, day_night};
 
-use super::kinds::{KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE};
+use super::kinds::{
+    KIND_CHICKEN, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
+};
 use super::light::{
     has_solid_floor, has_standing_room, is_bright_enough_for_passive,
     is_dark_enough_for_hostile, is_grass_below,
 };
+use super::pool::{pool_for, weighted_pick};
 use super::state::{MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH};
+use crate::worldgen::biome_at;
 
 /// Period (seconds) between spawn attempts. Keeps the world from
 /// flooding when the cap is high.
@@ -99,13 +103,34 @@ pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3],
     Some(([wx, spawn_y, wz], sy))
 }
 
+/// True for hostile kinds in the H.3 pool. Mirrors
+/// `MobKind::is_hostile` but consumes the raw u8 the pool stores.
+fn is_hostile_kind(kind: u8) -> bool {
+    matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+}
+
+/// Initial HP for a freshly spawned mob. Pulled out so the place
+/// site + the wire-init match stay in sync.
+pub(crate) fn initial_health_for(kind: u8) -> f32 {
+    match kind {
+        KIND_ZOMBIE | KIND_SKELETON => ZOMBIE_MAX_HEALTH,
+        KIND_SPIDER => 12.0,
+        KIND_CHICKEN => 4.0,
+        KIND_PIG => 10.0,
+        _ => MOB_MAX_HEALTH,
+    }
+}
+
 /// Decide which kind to spawn at the candidate cell. Returns
-/// `None` when neither the hostile nor the passive gate passes
-/// (cell is too dim for passive + too bright for hostile, or no
-/// grass under a passive candidate).
+/// `None` when the light gates reject every entry in the biome's
+/// active pool.
 ///
-/// H.3 plugs a biome-aware weighted pool here; H.2 uses the same
-/// time-of-day ad-hoc roll the original spawn loop carried.
+/// H.3: looks up the biome at `(wx, wz)` via `biome_at`, fetches
+/// the day / night pool from `pool::pool_for`, draws a weighted
+/// candidate, then validates the candidate against the light
+/// gates. If the draw fails the gate the spawn is skipped (no
+/// retries this tick - the caller will try a fresh ring position
+/// on the next spawn period).
 pub(crate) fn pick_kind_for(
     voxel: &Voxel,
     wpos: [i32; 3],
@@ -114,27 +139,25 @@ pub(crate) fn pick_kind_for(
 ) -> Option<u8> {
     let (sun_dir, _sky) = day_night(day_time);
     let is_night = sun_dir.y < 0.0;
-    // First try hostile if dark enough.
-    if is_dark_enough_for_hostile(voxel, wpos) {
-        // Hostile-eligible. At night, hostile dominates with 60%
-        // probability; at day (dark caves etc.), hostile every time.
-        if !is_night || rng.next_f32() < 0.6 {
-            return Some(KIND_ZOMBIE);
+    let biome = biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed);
+    let pool = pool_for(biome);
+    let active = if is_night { pool.night } else { pool.day };
+    let candidate = weighted_pick(active, rng.next_f32())?;
+    // Validate via the H.2 light + grass gates.
+    if is_hostile_kind(candidate) {
+        if !is_dark_enough_for_hostile(voxel, wpos) {
+            return None;
+        }
+    } else {
+        // Passive: bright enough AND grass below.
+        if !is_bright_enough_for_passive(voxel, wpos) {
+            return None;
+        }
+        if !is_grass_below(voxel, wpos) {
+            return None;
         }
     }
-    // Try passive: grass + bright enough.
-    if is_bright_enough_for_passive(voxel, wpos) && is_grass_below(voxel, wpos) {
-        let roll = rng.next_f32();
-        let kind = if roll < 0.25 {
-            KIND_CHICKEN
-        } else if roll < 0.45 {
-            KIND_PIG
-        } else {
-            KIND_SHEEP
-        };
-        return Some(kind);
-    }
-    None
+    Some(candidate)
 }
 
 /// Try to spawn one mob this tick. Returns the new `next_mob_id`
@@ -182,21 +205,11 @@ pub(crate) fn try_spawn_one(
         target: pos,
         yaw: 0.0,
         retarget_at: (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-        health: match kind {
-            KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
-            KIND_CHICKEN => 4.0,
-            KIND_PIG => 10.0,
-            _ => MOB_MAX_HEALTH,
-        },
+        health: initial_health_for(kind),
         dying: 0.0,
         attack_cd: 0.0,
     };
-    let initial_hp = match kind {
-        KIND_ZOMBIE => ZOMBIE_MAX_HEALTH,
-        KIND_CHICKEN => 4.0,
-        KIND_PIG => 10.0,
-        _ => MOB_MAX_HEALTH,
-    } as u8;
+    let initial_hp = initial_health_for(kind) as u8;
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
         id,
@@ -234,6 +247,7 @@ mod tests {
     //! predicates + the `try_spawn_one` entry point.
 
     use super::*;
+    use super::super::kinds::KIND_SHEEP;
     use crate::Voxel;
     use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
 
