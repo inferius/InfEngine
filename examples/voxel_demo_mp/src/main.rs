@@ -110,6 +110,10 @@ mod chest_mp_wire_tests;
 mod game_mode_runtime_tests;
 #[cfg(test)]
 mod portal_swirl_tests;
+// W11.6: cross-module lock that mirrors the per-module checksum
+// asserts so a CI failure points at the wave instead of one file.
+#[cfg(test)]
+mod wave11_audit_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per

@@ -23,6 +23,8 @@
 //! is pure logic on top of that state.
 
 pub(crate) mod autocomplete;
+#[cfg(test)]
+mod autocomplete_tests;
 mod cmds_chat;
 mod cmds_creative;
 mod cmds_dim;
