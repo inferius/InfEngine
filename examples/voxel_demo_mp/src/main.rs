@@ -7606,6 +7606,9 @@ impl Voxel {
         // closure exits.
         let creative_tab_open = self.creative_tab.open;
         let mut creative_query_local = self.creative_tab.query.clone();
+        // W12.9 - live category from the tab strip; mutated by the
+        // selectable labels inside the egui closure.
+        let mut creative_cat_local = self.creative_tab.category;
         let mut creative_close_clicked = false;
         // Pending pick-up intents queued from the grid. Each
         // entry is the (block, count) to drop into the hotbar.
@@ -8561,44 +8564,72 @@ impl Voxel {
                                 ui.label("Hledat:");
                                 ui.text_edit_singleline(&mut creative_query_local);
                             });
+                            // W12.9 tab strip: All / Blocks / Decoration /
+                            // Tools / Combat / Food / Misc. Click to filter.
+                            ui.horizontal(|ui| {
+                                for cat in creative_tab::CreativeCategory::all() {
+                                    let selected = creative_cat_local == cat;
+                                    if ui.selectable_label(selected, cat.label()).clicked() {
+                                        creative_cat_local = cat;
+                                    }
+                                }
+                            });
                             ui.separator();
                             let entries = creative_tab::available_items();
-                            let filtered = creative_tab::filter_items(
+                            let filtered = creative_tab::filter_items_in_category(
                                 &entries,
+                                creative_cat_local,
                                 &creative_query_local,
                             );
                             egui::ScrollArea::vertical()
                                 .max_height(360.0)
                                 .show(ui, |ui| {
-                                    let mut col = 0;
                                     ui.horizontal_wrapped(|ui| {
                                         for entry in filtered.iter() {
+                                            // W12.9 icon resolve via the live ResourcePack
+                                            // atlas. Falls back to a tinted swatch via the
+                                            // existing draw_slot_widget code path.
+                                            let icon_slot: Option<SlotIcon> = {
+                                                let bt = block_type(entry.id);
+                                                let uv = self
+                                                    .resource_pack
+                                                    .icon_ref(entry.id)
+                                                    .map(|r| r.atlas_uv)
+                                                    .unwrap_or_else(|| {
+                                                        atlas_uv_rect(
+                                                            BlockId(entry.id),
+                                                            [0, 1, 0],
+                                                        )
+                                                    });
+                                                self.registry
+                                                    .get(BlockId(entry.id))
+                                                    .map(|d| {
+                                                        (
+                                                            d.color,
+                                                            1u8,
+                                                            uv,
+                                                            bt.map(|t| t.name).unwrap_or("?"),
+                                                        )
+                                                    })
+                                            };
                                             let name =
                                                 crate::item::item_display_name(entry.id);
-                                            let resp = ui
-                                                .add_sized(
-                                                    [44.0, 44.0],
-                                                    egui::Button::new(
-                                                        egui::RichText::new(format!(
-                                                            "{}",
-                                                            entry.id
-                                                        ))
-                                                        .monospace(),
-                                                    ),
-                                                )
-                                                .on_hover_text(format!(
-                                                    "{} (max stack {})",
-                                                    name, entry.max_stack
-                                                ));
+                                            let resp = draw_slot_widget(
+                                                ui,
+                                                icon_slot,
+                                                atlas_tex_id,
+                                                false,
+                                                egui::Sense::click(),
+                                            )
+                                            .on_hover_text(format!(
+                                                "{} (max stack {})",
+                                                name, entry.max_stack
+                                            ));
                                             if resp.clicked() {
                                                 creative_picks.push((
                                                     BlockId(entry.id),
                                                     entry.max_stack,
                                                 ));
-                                            }
-                                            col += 1;
-                                            if col % 9 == 0 {
-                                                ui.end_row();
                                             }
                                         }
                                     });
@@ -9657,6 +9688,9 @@ impl Voxel {
         // on grid tiles produced (block, count) intents that we
         // deposit into the hotbar here.
         self.creative_tab.query = creative_query_local;
+        // W12.9 - apply the active category selection (clicked on the
+        // tab strip during the egui closure).
+        self.creative_tab.category = creative_cat_local;
         if creative_close_clicked {
             self.creative_tab.close();
         }
