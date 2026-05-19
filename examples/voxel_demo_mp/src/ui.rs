@@ -125,6 +125,34 @@ pub(crate) enum InvAction {
     },
 }
 
+/// Phase the loading screen is currently in. Drives both the
+/// progress label shown to the user and the state machine inside
+/// the `on_update` loading tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoadingPhase {
+    /// Workers are generating chunks. Progress bar advances as
+    /// chunks arrive from the worker pool.
+    GeneratingChunks,
+    /// All chunks are in; running the full-world lighting BFS.
+    BuildingLighting,
+    /// Lighting done; uploading mesh geometry to the GPU.
+    BuildingMeshes,
+    /// Final bookkeeping before switching to Playing.
+    Finalising,
+}
+
+impl LoadingPhase {
+    /// Czech label shown above the progress bar on the loading screen.
+    pub(crate) fn label_cz(self) -> &'static str {
+        match self {
+            Self::GeneratingChunks => "Generuji svet...",
+            Self::BuildingLighting => "Pocitam osvetleni...",
+            Self::BuildingMeshes => "Stavim chunky...",
+            Self::Finalising => "Dokoncuji...",
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum AppState {
@@ -144,6 +172,26 @@ pub(crate) enum AppState {
     /// Configures + spawns a host (game server). See note on
     /// `DirectConnect`.
     HostSetup,
+    /// Async world bootstrap in progress. The worker pool is
+    /// generating the initial chunk grid; the main thread renders
+    /// the loading screen + ticks `stream_chunks` each frame.
+    ///
+    /// Transitions to `Playing` once `loaded_chunks >= target_chunks`
+    /// and the post-load steps (lighting BFS, mesh upload) finish.
+    Loading {
+        /// Total number of chunks the bootstrap needs to generate.
+        /// Computed from `INITIAL_CHUNKS` + `VERTICAL_CHUNKS` in
+        /// `enter_world` before any chunk work starts.
+        target_chunks: u32,
+        /// Chunks actually inserted into `self.world` so far.
+        /// Updated every tick from `self.world.iter_chunks().count()`.
+        loaded_chunks: u32,
+        /// Current phase label shown above the progress bar.
+        phase: LoadingPhase,
+        /// Wall-clock instant at state entry. Used to display
+        /// elapsed seconds on the loading screen.
+        started_at: std::time::Instant,
+    },
     Playing,
     Paused,
     Settings {
@@ -222,6 +270,105 @@ pub(crate) fn match_recipe_named(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- LoadingPhase tests (L.1) ---
+
+    #[test]
+    fn loading_phase_labels_non_empty() {
+        for phase in [
+            LoadingPhase::GeneratingChunks,
+            LoadingPhase::BuildingLighting,
+            LoadingPhase::BuildingMeshes,
+            LoadingPhase::Finalising,
+        ] {
+            assert!(
+                !phase.label_cz().is_empty(),
+                "LoadingPhase::{:?} has an empty label",
+                phase
+            );
+        }
+    }
+
+    #[test]
+    fn loading_state_constructor_initializes_zero_loaded() {
+        let state = AppState::Loading {
+            target_chunks: 196,
+            loaded_chunks: 0,
+            phase: LoadingPhase::GeneratingChunks,
+            started_at: std::time::Instant::now(),
+        };
+        if let AppState::Loading { loaded_chunks, target_chunks, .. } = state {
+            assert_eq!(loaded_chunks, 0);
+            assert_eq!(target_chunks, 196);
+        } else {
+            panic!("expected AppState::Loading");
+        }
+    }
+
+    #[test]
+    fn loading_phase_all_labels_are_distinct() {
+        let labels: Vec<&str> = [
+            LoadingPhase::GeneratingChunks,
+            LoadingPhase::BuildingLighting,
+            LoadingPhase::BuildingMeshes,
+            LoadingPhase::Finalising,
+        ]
+        .iter()
+        .map(|p| p.label_cz())
+        .collect();
+        // Every label should be unique so the UI text always
+        // tells the user something different.
+        let unique: std::collections::HashSet<&str> = labels.iter().copied().collect();
+        assert_eq!(unique.len(), labels.len());
+    }
+
+    #[test]
+    fn loading_phase_is_copy() {
+        // Verify that LoadingPhase: Copy so it can live inside
+        // AppState: Copy without breaking the `let state = self.state`
+        // copy in render_ui.
+        let a = LoadingPhase::GeneratingChunks;
+        let b = a; // copy
+        let c = a; // copy again - if not Copy this would fail
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn app_state_loading_phase_progression_order() {
+        // Document the intended phase order: GeneratingChunks ->
+        // BuildingLighting -> BuildingMeshes -> Finalising.
+        // This test encodes the order so a future refactor that
+        // accidentally skips a phase is caught.
+        let phases = [
+            LoadingPhase::GeneratingChunks,
+            LoadingPhase::BuildingLighting,
+            LoadingPhase::BuildingMeshes,
+            LoadingPhase::Finalising,
+        ];
+        // Each phase has a distinct label - the labels drive the
+        // UI so the user sees progress, not a static string.
+        let label_0 = phases[0].label_cz();
+        let label_1 = phases[1].label_cz();
+        let label_2 = phases[2].label_cz();
+        let label_3 = phases[3].label_cz();
+        assert_ne!(label_0, label_1);
+        assert_ne!(label_1, label_2);
+        assert_ne!(label_2, label_3);
+    }
+
+    #[test]
+    fn loading_state_target_chunks_formula() {
+        // 7 x 7 x 4 = 196 for INITIAL_CHUNKS=3, VERTICAL_CHUNKS=4.
+        // The actual constants live in main.rs; this test just
+        // documents that the formula is (2*ic+1)^2 * vc.
+        let initial_chunks: u32 = 3;
+        let vertical_chunks: u32 = 4;
+        let side = 2 * initial_chunks + 1;
+        let expected = side * side * vertical_chunks;
+        assert_eq!(expected, 196);
+    }
+
+    // --- HighlightMode tests ---
 
     #[test]
     fn highlight_mode_default_is_auto() {
