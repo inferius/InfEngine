@@ -57,6 +57,8 @@ pub(crate) mod host;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod integration_tests;
 
 use std::path::{Path, PathBuf};
 

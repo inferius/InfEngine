@@ -4270,6 +4270,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample_plugin_rs"
+version = "0.0.1"
+dependencies = [
+ "infengine_sdk_rs",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

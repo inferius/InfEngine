@@ -25,6 +25,7 @@ members = [
     "examples/voxel_demo",
     "examples/voxel_demo_mp",
     "examples/voxel_demo_server",
+    "examples/sample_plugin_rs",
     "examples/showcase",
 ]
 

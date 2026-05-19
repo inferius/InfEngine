@@ -1,0 +1,22 @@
+[package]
+name = "sample_plugin_rs"
+description = "Sample InfEngine plugin in Rust - registers rainbow_brick + reacts to !rainbow chat."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+# cdylib so the engine's plugin host can load us via libloading.
+# Output: target/<profile>/sample_plugin_rs.{dll,so,dylib}.
+# rlib alongside so `cargo test` can build the test harness
+# against the same crate (cdylib alone can't link a test bin).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+infengine_sdk_rs = { path = "../../crates/infengine_sdk_rs" }
