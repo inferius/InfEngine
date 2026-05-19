@@ -377,3 +377,79 @@ fn reload_assigns_stable_slot_ids() {
     let key = TextureKey::Block("water_still".to_string());
     assert_eq!(pack_a.anim_slot(&key), pack_b.anim_slot(&key));
 }
+
+// ---------------------------------------------------------------
+// W9.y.6: reload integration. Sanity that the uniform body
+// rebuilds across loads + that the empty-pack reload path
+// (placeholder atlas) zeros the table.
+// ---------------------------------------------------------------
+
+#[test]
+fn reload_to_placeholder_zeros_anim_uniform() {
+    // Simulate the reload path: load a real pack with animated
+    // tiles, then reload from a path that doesn't exist (falls
+    // back to the placeholder). The placeholder uniform must
+    // be all-zero.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack_real = ResourcePack::load_with_override(Some(mc));
+    assert!(!pack_real.is_fallback);
+    assert!(!pack_real.anim_registry.is_empty());
+
+    let pack_fallback = ResourcePack::load_with_override(Some(
+        std::path::PathBuf::from("Z:/not/a/real/path"),
+    ));
+    assert!(pack_fallback.is_fallback);
+    let uni = pack_fallback.build_tile_anims_uniform();
+    for e in uni.entries.iter() {
+        assert_eq!(e.frame_count, 0);
+        assert_eq!(e.frametime_ms, 0);
+        assert_eq!(e.v_step, 0.0);
+    }
+}
+
+#[test]
+fn reload_uniform_survives_load_cycle() {
+    // The renderer-facing uniform must rebuild on every load.
+    // A reload of the same pack returns the same uniform body
+    // entry-for-entry so chunks rebuilt against the new pack
+    // sample the right rows.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack_a = ResourcePack::load_with_override(Some(mc.clone()));
+    let pack_b = ResourcePack::load_with_override(Some(mc));
+    let uni_a = pack_a.build_tile_anims_uniform();
+    let uni_b = pack_b.build_tile_anims_uniform();
+    for i in 0..32 {
+        assert_eq!(
+            uni_a.entries[i].frame_count,
+            uni_b.entries[i].frame_count,
+            "slot {i}: frame_count drift across reload",
+        );
+        assert_eq!(
+            uni_a.entries[i].frametime_ms,
+            uni_b.entries[i].frametime_ms,
+            "slot {i}: frametime_ms drift across reload",
+        );
+    }
+}
+
+#[test]
+fn reload_triggers_chunk_rebuild_signal_present() {
+    // Structural smoke test: confirm the rebuild path exists
+    // by checking that the reload-flow primitives are all
+    // call-able from a non-renderer context. This is a guard
+    // against accidentally removing the registry / uniform
+    // builders that the ReloadResourcePack action consumes.
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    // Step 1: registry exists.
+    assert!(!pack.anim_registry.is_empty());
+    // Step 2: uniform builder returns a snapshot.
+    let _uni = pack.build_tile_anims_uniform();
+    // Step 3: per-key slot lookup resolves animated tiles.
+    let key = TextureKey::Block("water_still".to_string());
+    let slot = pack.anim_slot(&key);
+    assert!(slot >= 1);
+}

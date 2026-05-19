@@ -9652,10 +9652,24 @@ impl Voxel {
                     );
                 }
                 self.egui_atlas = None;
+                // W9.y.6: a fresh resource pack may have new
+                // animated tiles (or shuffled slot ids), and
+                // every chunk mesh on the GPU was built against
+                // the OLD anim_id table + the old atlas UVs. Re-
+                // mesh every loaded chunk so the next frame
+                // samples the new uniform + atlas. The dirty
+                // path here is "all loaded chunks" because we
+                // don't track per-chunk staleness against the
+                // resource pack - reload is a rare action so
+                // the full rebuild is acceptable (matches
+                // rebuild_all_meshes called after initial world
+                // load + dim switch).
+                self.rebuild_all_meshes();
                 self.save_config();
                 tracing::info!(
                     source = %self.resource_pack.source.display(),
                     fallback = self.resource_pack.is_fallback,
+                    chunks = self.chunk_meshes.len(),
                     "resource pack reloaded",
                 );
             }
