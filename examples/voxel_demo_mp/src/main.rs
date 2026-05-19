@@ -5987,10 +5987,27 @@ impl Voxel {
         let world_origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
         let lighting = &self.lighting;
         let pack = &self.resource_pack;
+        // Atlas UV resolver: prefer the live MC ResourcePack atlas
+        // entry (per-block + per-face slot) so the dynamic atlas
+        // layout works. Falls back to the legacy 4x4 grid only when
+        // the pack has nothing for the (block, face) key.
+        let uv_resolver = |block: BlockId, normal: [i8; 3]| -> [f32; 4] {
+            let face = if normal[1] > 0 {
+                resource_pack::BlockFace::Top
+            } else if normal[1] < 0 {
+                resource_pack::BlockFace::Bottom
+            } else {
+                resource_pack::BlockFace::Sides
+            };
+            if let Some(r) = pack.block_face_ref(block.0, face) {
+                return r.atlas_uv;
+            }
+            atlas_uv_rect(block, normal)
+        };
         infengine_voxel::chunk_mesh_with_atlas_and_light_and_anim(
             chunk,
             origin,
-            atlas_uv_rect,
+            uv_resolver,
             block_is_opaque,
             |air_local, _normal| {
                 // Convert in-chunk local to world coord then back
