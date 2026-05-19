@@ -212,6 +212,7 @@ pub(super) fn build_dimension_containers_from(
         [i32; 3],
         crate::block::furnace::FurnaceRuntime,
     >,
+    fires: &std::collections::HashMap<[i32; 3], u8>,
 ) -> DimensionContainers {
     let chest_saves: Vec<ChestSave> = chests
         .iter()
@@ -233,10 +234,18 @@ pub(super) fn build_dimension_containers_from(
             }
         })
         .collect();
+    let fire_saves: Vec<crate::world_save::containers::FireSave> = fires
+        .iter()
+        .map(|(pos, age)| crate::world_save::containers::FireSave {
+            pos: *pos,
+            age: *age,
+        })
+        .collect();
     DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: chest_saves,
         furnaces: furnace_saves,
+        fires: fire_saves,
     }
 }
 
@@ -282,6 +291,13 @@ pub(super) fn apply_dimension_containers(
                 cook_progress_ms: furnace.cook_progress_ms,
             },
         );
+    }
+    // Q.4f: re-hydrate the fire-cell age map. The world block
+    // at each pos was already set by the chunk loader (FIRE_ID);
+    // here we just restore the parallel age state.
+    voxel.fires.clear();
+    for fire in containers_bundle.fires {
+        voxel.fires.insert(fire.pos, fire.age);
     }
 }
 

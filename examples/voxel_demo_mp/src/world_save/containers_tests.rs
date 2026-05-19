@@ -72,6 +72,7 @@ fn containers_roundtrip_single_empty_chest() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([10, 64, -3])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -92,6 +93,7 @@ fn containers_roundtrip_populated_chest() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 65, 0])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -119,6 +121,7 @@ fn containers_roundtrip_multi_chest() {
             populated_chest_at([-10, 64, 10]),
         ],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -232,11 +235,13 @@ fn containers_recover_from_bak() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([1, 64, 1])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     let second = DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([1, 64, 1]), empty_chest_at([2, 64, 2])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();
@@ -273,6 +278,7 @@ fn containers_slot_count_is_preserved() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![double_chest],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -367,6 +373,7 @@ fn containers_full_save_load_through_typed_apis() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests,
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &bundle).unwrap();
 
@@ -395,11 +402,13 @@ fn containers_two_writes_keep_bak() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     let second = DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();

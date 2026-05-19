@@ -152,6 +152,7 @@ fn per_dim_containers_files_independent() {
             fuel_full_ms: 8000,
             cook_progress_ms: 200,
         }],
+        fires: Vec::new(),
     };
     let nt = DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
@@ -160,6 +161,7 @@ fn per_dim_containers_files_independent() {
             slots: vec![Some((44, 5)), None, None], // netherrack
         }],
         furnaces: Vec::new(),
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, "overworld", &ow).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, "nether", &nt).unwrap();

@@ -55,6 +55,8 @@ mod containers_tests;
 #[cfg(test)]
 mod containers_v2_tests;
 #[cfg(test)]
+mod containers_v3_tests;
+#[cfg(test)]
 mod entities_tests;
 #[cfg(test)]
 mod migrate_tests;

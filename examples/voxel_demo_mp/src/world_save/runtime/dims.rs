@@ -92,6 +92,7 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         &voxel.chests,
         &voxel.furnaces,
         &voxel.furnace_runtimes,
+        &voxel.fires,
     );
     containers::write_containers(slug, dim, &dim_containers)?;
     Ok(chunk_count)
@@ -133,6 +134,7 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         &dw.chests,
         &dw.furnaces,
         &dw.furnace_runtimes,
+        &dw.fires,
     );
     containers::write_containers(slug, dim, &dim_containers)?;
     Ok(chunk_count)
@@ -275,6 +277,7 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
         &mut dw.chests,
         &mut dw.furnaces,
         &mut dw.furnace_runtimes,
+        &mut dw.fires,
         conts,
     );
     voxel.worlds.insert(dim.to_string(), dw);
@@ -330,6 +333,7 @@ fn apply_dim_containers_to_maps(
     chests: &mut HashMap<[i32; 3], Container>,
     furnaces: &mut HashMap<[i32; 3], Container>,
     furnace_runtimes: &mut HashMap<[i32; 3], FurnaceRuntime>,
+    fires: &mut HashMap<[i32; 3], u8>,
     bundle: DimensionContainers,
 ) {
     chests.clear();
@@ -359,6 +363,13 @@ fn apply_dim_containers_to_maps(
                 cook_progress_ms: f.cook_progress_ms,
             },
         );
+    }
+    // Q.4f: per-cell fire age. The world block at each pos was
+    // already set by the chunk loader (FIRE_ID); we just restore
+    // the parallel age state.
+    fires.clear();
+    for f in bundle.fires {
+        fires.insert(f.pos, f.age);
     }
 }
 

@@ -48,7 +48,10 @@ pub(crate) const CONTAINERS_MAGIC: &[u8; 4] = b"INFB";
 /// - v2: + `furnaces: Vec<FurnaceSave>` (slot vec + runtime triple).
 ///   Migration v1 -> v2 lives in `containers_v1_to_v2` and registers
 ///   into `default_registry()` at first read.
-pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 2;
+/// - v3: + `fires: Vec<FireSave>` (per-cell age for Q.4b/c/d/e fires).
+///   Migration v2 -> v3 lives in `containers_v2_to_v3` and registers
+///   into `default_registry()` at first read.
+pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 3;
 
 /// Default zstd compression level. Matches the sibling save modules.
 const ZSTD_LEVEL: i32 = 3;
@@ -79,6 +82,11 @@ pub(crate) struct DimensionContainers {
     /// runtime triple (fuel_left_ms, fuel_full_ms, cook_progress_ms)
     /// so a mid-cook save resumes cleanly.
     pub furnaces: Vec<FurnaceSave>,
+    /// Every fire cell in the dimension. Carries the per-cell age
+    /// so a reload resumes the spread algorithm at the same point
+    /// (no offline catch-up - fires don't tick while the world is
+    /// unloaded, matching MC).
+    pub fires: Vec<FireSave>,
 }
 
 impl DimensionContainers {
@@ -88,6 +96,7 @@ impl DimensionContainers {
             format_version: CONTAINERS_FORMAT_VERSION,
             chests: Vec::new(),
             furnaces: Vec::new(),
+            fires: Vec::new(),
         }
     }
 }
@@ -105,6 +114,21 @@ pub(crate) struct ChestSave {
     pub pos: [i32; 3],
     /// Slot contents in slot-index order.
     pub slots: Vec<Option<(u16, u8)>>,
+}
+
+/// One persistent fire entry. Q.4f.
+///
+/// `age` mirrors `Voxel::fires[pos]` (0..=15, the MC FireBlock
+/// AGE property). The world block at `pos` is implicitly
+/// `FIRE_ID` - we don't persist the block id because the loader
+/// re-derives it from chunk data; this side bundle only carries
+/// the per-cell tick state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FireSave {
+    /// Absolute world voxel coords of the fire cell.
+    pub pos: [i32; 3],
+    /// 0..=15. Saturates at 15 (MC's MAX_AGE).
+    pub age: u8,
 }
 
 /// One persistent furnace entry.
@@ -362,6 +386,16 @@ struct DimensionContainersV1 {
     pub chests: Vec<ChestSave>,
 }
 
+/// V2 on-disk shape (chests + furnaces). Decoded just long enough
+/// to convert into the v3 shape during migration; never used at
+/// runtime past the migration step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionContainersV2 {
+    pub format_version: u32,
+    pub chests: Vec<ChestSave>,
+    pub furnaces: Vec<FurnaceSave>,
+}
+
 /// One-step v1 -> v2 migration arrow. Takes the raw envelope
 /// (magic + version + comp_kind + uncompressed_len + body) of a
 /// v1 file, returns the raw envelope of an equivalent v2 file.
@@ -419,10 +453,9 @@ pub(crate) fn containers_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let (v1, _read) = bincode::serde::decode_from_slice::<DimensionContainersV1, _>(&raw_v1, cfg)
         .map_err(|err| invalid(format!("v1 payload decode failed: {err}")))?;
 
-    // ---- 4. Re-encode as v2. ----
-    let v2 = DimensionContainers {
-        // Pin to the literal target version so a future v3 doesn't
-        // accidentally hijack a v1->v2 arrow.
+    // ---- 4. Re-encode as v2 (using the V2 shape so a future
+    //         v3 field doesn't poison this arrow's payload). ----
+    let v2 = DimensionContainersV2 {
         format_version: 2,
         chests: v1.chests,
         furnaces: Vec::new(),
@@ -442,6 +475,70 @@ pub(crate) fn containers_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v2);
     out.extend_from_slice(&uncompressed_len_v2.to_le_bytes());
     out.extend_from_slice(&body_v2);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------
+// Migration: v2 -> v3 (adds the `fires` field for Q.4f).
+// ---------------------------------------------------------------
+
+/// One-step v2 -> v3 migration arrow. Same shape as v1->v2: decode
+/// the v2 envelope, re-encode as v3 with `fires: vec![]`.
+pub(crate) fn containers_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("containers v2 envelope truncated"));
+    }
+    if &bytes[..4] != CONTAINERS_MAGIC {
+        return Err(invalid("containers v2 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 2 {
+        return Err(invalid(format!(
+            "containers_v2_to_v3 expected v2, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v2: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v2 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v2 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v2, _read) = bincode::serde::decode_from_slice::<DimensionContainersV2, _>(&raw_v2, cfg)
+        .map_err(|err| invalid(format!("v2 payload decode failed: {err}")))?;
+    let v3 = DimensionContainers {
+        format_version: 3,
+        chests: v2.chests,
+        furnaces: v2.furnaces,
+        fires: Vec::new(),
+    };
+    let raw_v3 = bincode::serde::encode_to_vec(&v3, cfg)
+        .map_err(|err| invalid(format!("v3 payload encode failed: {err}")))?;
+    let uncompressed_len_v3 = raw_v3.len() as u64;
+    let (kind_v3, body_v3): (u8, Vec<u8>) = match zstd::encode_all(&raw_v3[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v3.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v3),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v3.len() + 17);
+    out.extend_from_slice(CONTAINERS_MAGIC);
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.push(kind_v3);
+    out.extend_from_slice(&uncompressed_len_v3.to_le_bytes());
+    out.extend_from_slice(&body_v3);
     Ok(out)
 }
 

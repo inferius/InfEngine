@@ -226,6 +226,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         2,
         super::containers::containers_v1_to_v2,
     );
+    // Q.4f: v2 -> v3 adds the `fires` vec for the new fire-block
+    // age state. v2 saves migrate to a v3 with `fires: vec![]`
+    // so any pre-Wave-2 world still loads cleanly + persists at v3
+    // on the next save.
+    reg.register(
+        SaveKind::Containers,
+        2,
+        3,
+        super::containers::containers_v2_to_v3,
+    );
     // world.json v1 -> v2: add per-dim worldgen map. v1 saves
     // (Phase B/C/D/E) lift cleanly by copying the legacy
     // `worldgen` field into the new `dimension_worldgens` map for

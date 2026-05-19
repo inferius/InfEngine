@@ -69,6 +69,7 @@ fn containers_roundtrip_furnaces_v2() {
             populated_furnace_at([10, 64, 10]),
             populated_furnace_at([-5, 65, 5]),
         ],
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -88,6 +89,7 @@ fn containers_roundtrip_chests_and_furnaces_together() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: vec![populated_furnace_at([1, 64, 1])],
+        fires: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -130,7 +132,9 @@ fn write_v1_containers_file(
 
 #[test]
 fn containers_v1_to_v2_migration_round_trip() {
-    use super::containers::{containers_v1_to_v2, read_containers_in_dir_with_registry};
+    use super::containers::{
+        containers_v1_to_v2, containers_v2_to_v3, read_containers_in_dir_with_registry,
+    };
 
     let tmp = TempDir::new().unwrap();
     write_v1_containers_file(
@@ -140,11 +144,16 @@ fn containers_v1_to_v2_migration_round_trip() {
         vec![populated_chest_at([3, 64, 7])],
     );
     let mut registry = MigrationRegistry::new();
+    // Chain: v1 -> v2 -> v3. Tests with an explicit registry must
+    // register every arrow on the path since the planner walks
+    // edges, not transitive closure. Production uses the
+    // `default_registry` which has both arrows pre-registered.
+    registry.register(SaveKind::Containers, 1, 2, containers_v1_to_v2);
     registry.register(
         SaveKind::Containers,
-        1,
+        2,
         CONTAINERS_FORMAT_VERSION,
-        containers_v1_to_v2,
+        containers_v2_to_v3,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -154,6 +163,7 @@ fn containers_v1_to_v2_migration_round_trip() {
     assert_eq!(loaded.chests[0].pos, [3, 64, 7]);
     assert_eq!(loaded.chests[0].slots[0], Some((ITEM_STONE, 64)));
     assert!(loaded.furnaces.is_empty());
+    assert!(loaded.fires.is_empty());
 
     let path = containers_path_in_dir(tmp.path(), SLUG, DIM);
     let post = std::fs::read(&path).unwrap();
@@ -174,7 +184,9 @@ fn containers_v1_to_v2_migration_via_default_registry() {
 
 #[test]
 fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
-    use super::containers::{containers_v1_to_v2, read_containers_in_dir_with_registry};
+    use super::containers::{
+        containers_v1_to_v2, containers_v2_to_v3, read_containers_in_dir_with_registry,
+    };
     let tmp = TempDir::new().unwrap();
     write_v1_containers_file(
         tmp.path(),
@@ -187,11 +199,12 @@ fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
         ],
     );
     let mut registry = MigrationRegistry::new();
+    registry.register(SaveKind::Containers, 1, 2, containers_v1_to_v2);
     registry.register(
         SaveKind::Containers,
-        1,
+        2,
         CONTAINERS_FORMAT_VERSION,
-        containers_v1_to_v2,
+        containers_v2_to_v3,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
