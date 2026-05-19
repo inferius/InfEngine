@@ -1,4 +1,4 @@
-//! BFS engine tests for the block-light propagator.
+//! BFS engine tests for the block-light + sky-light propagators.
 //!
 //! Each test builds a tiny `World` of one (or a few) 16^3 chunks,
 //! flips the relevant cells via `set`, then runs the propagator
@@ -8,6 +8,7 @@
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use super::block_engine::propagate_block_light;
+use super::sky_engine::propagate_sky_light;
 use super::LightingState;
 use crate::block::{FIRE_ID, GLOWSTONE_ID, LAVA_ID, TORCH_ID};
 
@@ -285,4 +286,197 @@ fn step_decay_transparent_voxel_is_one() {
     // are "non-occluding" for block-light decay (they propagate
     // with a -1 decay just like air).
     assert_eq!(step_decay(BlockId(6)), TRANSPARENT_DECAY);
+}
+
+// ---------------------------------------------------------------
+// Sky light.
+// ---------------------------------------------------------------
+
+fn get_sky_local(state: &LightingState, cc: ChunkCoord, lc: [u32; 3]) -> u8 {
+    state.get(cc).map(|g| g.get_sky(lc)).unwrap_or(0)
+}
+
+#[test]
+fn open_chunk_top_layer_sky_is_15() {
+    let w = empty_world_with_one_chunk();
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Every air cell with no opaque block above gets sky=15.
+    for x in 0..16u32 {
+        for z in 0..16u32 {
+            assert_eq!(get_sky_local(&s, ZERO_CHUNK, [x, 15, z]), 15);
+            // And the cells below that should also be 15 (no
+            // opaque blocker overhead).
+            assert_eq!(get_sky_local(&s, ZERO_CHUNK, [x, 0, z]), 15);
+        }
+    }
+}
+
+#[test]
+fn opaque_ceiling_blocks_sky_column() {
+    let mut w = empty_world_with_one_chunk();
+    // Stone slab at y=10 covering the whole chunk.
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            w.set([x, 10, z], BlockId(1));
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Above the slab: sky=15.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 15, 5]), 15);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 11, 5]), 15);
+    // The slab itself: dark.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 10, 5]), 0);
+    // Below the slab, well inside the chunk - dark too (no
+    // horizontal opening in this test).
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 5, 5]), 0);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 9, 5]), 0);
+}
+
+#[test]
+fn shaft_lets_sky_reach_floor() {
+    let mut w = empty_world_with_one_chunk();
+    // Slab at y=10 covering whole chunk except a 1x1 shaft at
+    // (5, 10, 5).
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            if !(x == 5 && z == 5) {
+                w.set([x, 10, z], BlockId(1));
+            }
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // The shaft column itself stays at 15 all the way down.
+    for y in 0..=15u32 {
+        assert_eq!(
+            get_sky_local(&s, ZERO_CHUNK, [5, y, 5]),
+            15,
+            "expected shaft column at y={} to be sky=15",
+            y
+        );
+    }
+    // Adjacent cell at the shaft floor sees one step of decay.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [6, 0, 5]), 14);
+}
+
+#[test]
+fn deep_cave_far_from_opening_stays_dark() {
+    let mut w = empty_world_with_one_chunk();
+    // Fully roof the chunk at y=15 (the very top voxel row).
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            w.set([x, 15, z], BlockId(1));
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Deep inside the chunk, under the lid, sky must be 0.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [8, 0, 8]), 0);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [8, 7, 8]), 0);
+}
+
+#[test]
+fn glass_column_does_not_block_sky() {
+    let mut w = empty_world_with_one_chunk();
+    // Glass at y=10. Glass is transparent so sky=15 passes
+    // straight through with no decay (vertical column walk).
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            w.set([x, 10, z], BlockId(9)); // glass
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Glass row + everything below stays at 15.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 10, 5]), 15);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 0, 5]), 15);
+}
+
+#[test]
+fn re_flood_sky_layer_is_idempotent() {
+    let mut w = empty_world_with_one_chunk();
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            w.set([x, 10, z], BlockId(1));
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    let first = get_sky_local(&s, ZERO_CHUNK, [5, 15, 5]);
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    let second = get_sky_local(&s, ZERO_CHUNK, [5, 15, 5]);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn shaft_floods_horizontally_under_ceiling() {
+    // Slab at y=10 with a single shaft at (5, *, 5). Cells at
+    // y=9 just adjacent to the shaft entrance should be lit by
+    // the horizontal BFS bleeding off the open column.
+    let mut w = empty_world_with_one_chunk();
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            if !(x == 5 && z == 5) {
+                w.set([x, 10, z], BlockId(1));
+            }
+        }
+    }
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Shaft floor is 15. Adjacent (6, 9, 5) sees the shaft
+    // column at 15 directly across one step -> 14.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [6, 9, 5]), 14);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [4, 9, 5]), 14);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [5, 9, 6]), 14);
+    // Two cells away horizontally: 13.
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [7, 9, 5]), 13);
+}
+
+#[test]
+fn empty_world_sky_layer_stays_zero() {
+    // Affected set is empty - propagate must early-out without
+    // touching anything.
+    let w = World::new();
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[]);
+    // No chunks loaded -> no grid entries.
+    assert!(s.get([0, 0, 0]).is_none());
+}
+
+#[test]
+fn cave_overhang_at_chunk_top_lets_sky_under() {
+    // Single overhang at (0, 15, 0). Cells around (1, 15, 0)
+    // still see sky (no block above them) so the BFS flooding
+    // from those cells lights up the cell directly underneath
+    // the overhang (0, 14, 0) at level 14.
+    let mut w = empty_world_with_one_chunk();
+    w.set([0, 15, 0], BlockId(1));
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    // Cell directly below the overhang gets sky=14 (one step
+    // horizontal-ish - actually one step DOWN from a lit
+    // neighbour). The cell at (1, 15, 0) is lit to 15 and the
+    // BFS pushes 14 into (0, 14, 0).
+    assert!(get_sky_local(&s, ZERO_CHUNK, [0, 14, 0]) >= 14);
+}
+
+#[test]
+fn block_and_sky_layers_propagate_independently() {
+    // Cross-check: a sealed cave with a torch inside has sky=0
+    // and block>0. Confirms the two engines run independently
+    // and the grid stores both layers cleanly.
+    let mut w = empty_world_with_one_chunk();
+    for x in 0..16i32 {
+        for z in 0..16i32 {
+            w.set([x, 15, z], BlockId(1));
+        }
+    }
+    w.set([8, 5, 8], BlockId(TORCH_ID));
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[ZERO_CHUNK]);
+    propagate_block_light(&w, &mut s, &[ZERO_CHUNK]);
+    assert_eq!(get_sky_local(&s, ZERO_CHUNK, [8, 5, 8]), 0);
+    assert_eq!(get_block_local(&s, ZERO_CHUNK, [8, 5, 8]), 14);
 }

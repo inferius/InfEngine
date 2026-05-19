@@ -25,6 +25,7 @@ use infengine_voxel::ChunkCoord;
 
 pub(crate) mod grid;
 pub(crate) mod block_engine;
+pub(crate) mod sky_engine;
 
 #[cfg(test)]
 mod grid_tests;
