@@ -82,10 +82,14 @@ pub(crate) fn hash3_for(pos: [i32; 3], clock: u64, salt: u32) -> u32 {
 
 /// 1-in-N gate for lava random-tick ignite checks (Q.4d). MC
 /// reference: `LavaFluid.randomTick` runs at the random-tick
-/// rate (1/4096 per chunk section per game tick). Our smaller
-/// worlds use this scale-down so a lava pool next to planks
-/// catches the planks within ~30s of fire_clock ticks.
-pub(crate) const LAVA_IGNITE_RATE_DENOM: u32 = 60;
+/// rate (1/4096 per chunk section per game tick). MC's per-section
+/// rate translates to ~3 attempts per source per second; our
+/// smaller worlds keep the gate per-cell. W8.4 dropped the gate
+/// from 60 -> 20 so a lava bucket dumped on flat grass visibly
+/// ignites at least one neighbour within ~10..20 seconds of wall
+/// time (the previous 60 left lava cells sitting on grass without
+/// any visible reaction).
+pub(crate) const LAVA_IGNITE_RATE_DENOM: u32 = 20;
 
 /// Per-block flammability lookup. Returns `(ignite_odds,
 /// burn_odds)` matching MC's `FireBlock::flammables` setup:

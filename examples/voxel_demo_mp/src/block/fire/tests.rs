@@ -499,3 +499,96 @@ fn lava_horizontal_sweep_ignores_blocked_above_target() {
         );
     }
 }
+
+// ----------------------------------------------------------------
+// W8.4: integration-style tests that exercise the
+// LAVA_IGNITE_RATE_DENOM gate + the plan path together, mirroring
+// what `tick_lava_fire_emit` does in main.rs.
+// ----------------------------------------------------------------
+
+/// Helper: run the gate + plan path for `pos` over `ticks` clocks,
+/// matching the runtime's flow in `tick_lava_fire_emit`.
+fn drive_lava_ignite(
+    w: &World,
+    lava_pos: [i32; 3],
+    ticks: u64,
+) -> Vec<([i32; 3], u8)> {
+    let mut ignites: Vec<([i32; 3], u8)> = Vec::new();
+    for clock in 1..=ticks {
+        let h_gate = hash3_for(lava_pos, clock, 0x9000);
+        if !h_gate.is_multiple_of(LAVA_IGNITE_RATE_DENOM) {
+            continue;
+        }
+        let mut step = FireStep::default();
+        plan_lava_random_tick(w, lava_pos, clock, &mut step);
+        ignites.extend(step.ignite);
+    }
+    ignites
+}
+
+#[test]
+fn lava_on_grass_ignites_neighbour_within_400_ticks() {
+    // W8.4: per the spec, a lava source dropped near a flammable
+    // surface should produce at least one FIRE_ID ignite within
+    // ~400 fire_clock ticks (the runtime advances fire_clock at
+    // 60 Hz so 400 ticks ~= 6.7 s of wall time). The previous
+    // RATE_DENOM = 60 made this regularly miss; the W8.4 bump to
+    // 20 brings it back into the 10..20 s window the spec
+    // requires.
+    let mut w = world_with_chunks();
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            w.set([dx, 0, dz], BlockId(3)); // grass surface
+        }
+    }
+    w.set([1, 1, 0], BlockId(WOOD_ID));
+    w.set([2, 1, 0], BlockId(WOOD_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    let ignites = drive_lava_ignite(&w, [0, 1, 0], 400);
+    assert!(
+        !ignites.is_empty(),
+        "lava on grass with wood neighbours produced no ignites in 400 ticks"
+    );
+    // Every ignite should land on an AIR cell - never on the
+    // grass itself (grass isn't flammable in MC's bootStrap).
+    for (p, _) in &ignites {
+        assert!(
+            w.get(*p).is_air(),
+            "lava ignited non-air cell {p:?}: that's the bug"
+        );
+    }
+}
+
+#[test]
+fn lava_spread_horizontal_max_3_cells_per_mc_drop_off() {
+    // W8.4: MC overworld lava `getDropOff = 2` + `MAX_AMOUNT = 7`
+    // -> 3 horizontal cells of flow from a source. Our liquid
+    // registry already encodes drop_off = 2 + max_range = 7;
+    // pin the contract here so a future tuning pass can't make
+    // the spread reach farther without an explicit decision.
+    let lava = crate::liquid::LIQUIDS
+        .iter()
+        .find(|l| l.block_id == crate::block::LAVA_ID)
+        .expect("lava registered");
+    assert_eq!(lava.drop_off, 2, "lava drop_off must mirror MC's 2 (LavaFluid::getDropOff)");
+    let rings = (lava.max_range / lava.drop_off) as i32;
+    assert_eq!(rings, 3, "expected 3 horizontal rings of spread (matches MC)");
+}
+
+#[test]
+fn lava_ignite_gate_fires_at_least_once_in_400_ticks() {
+    // The hash3_for-based gate is deterministic but pseudo-random.
+    // Over 400 clocks we expect the gate to fire many times for
+    // any fixed source position. Locks in the behaviour the wider
+    // integration tests above rely on.
+    let pos = [10, 7, -3];
+    let mut hits = 0u32;
+    for clock in 1..=400u64 {
+        let h = hash3_for(pos, clock, 0x9000);
+        if h.is_multiple_of(LAVA_IGNITE_RATE_DENOM) {
+            hits += 1;
+        }
+    }
+    assert!(hits >= 10, "lava ignite gate fired only {hits} times in 400 ticks");
+    assert!(hits <= 60, "lava ignite gate fired too often: {hits}");
+}

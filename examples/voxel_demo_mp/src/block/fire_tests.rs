@@ -80,3 +80,25 @@ fn fire_has_block_flag_helper() {
     assert!(block_has_flag(BlockId(FIRE_ID), F_TRANSPARENT_RENDER));
     assert!(block_has_flag(BlockId(FIRE_ID), F_REPLACEABLE));
 }
+
+#[test]
+fn fire_block_is_dedicated_render() {
+    // W8.4: the registry flag has been there since Q.4b, but the
+    // runtime had no draw call for FIRE_ID until W8 (the user
+    // reported a "lava on grass = nothing visible" bug). Pinning
+    // the flag in a dedicated test guards the contract for the
+    // billboard-quad render path in main.rs.
+    assert!(
+        block_skips_chunk_mesh(BlockId(FIRE_ID)),
+        "fire must be on the dedicated-render path so main.rs's billboard pass owns it"
+    );
+}
+
+#[test]
+fn lava_ignite_rate_denom_matches_w8_target() {
+    // W8.4: bumped from 60 to 20 so a lava bucket on grass ignites
+    // a flammable neighbour within ~10-20s of wall time. The
+    // constant is the inverse of MC's per-section random tick
+    // rate, scaled to our smaller worlds.
+    assert_eq!(super::fire::LAVA_IGNITE_RATE_DENOM, 20);
+}
