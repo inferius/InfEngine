@@ -46,6 +46,42 @@ struct LightsUniform {
 
 @group(3) @binding(0) var<uniform> point_lights: LightsUniform;
 
+// Wave 9.y: per-tile animation table. The fragment shader picks
+// `entries[anim_id - 1]` when a vertex's `anim_id != 0` and
+// scrolls UV.v through the frame strip. Slot 0 is the static
+// sentinel ("do not scroll") so the array is sized for 32 live
+// animations + the index math stays 1-based.
+struct TileAnim {
+    frame_count: u32,
+    frametime_ms: u32,
+    v_step: f32,
+    _pad: f32,
+};
+
+struct TileAnimsUniform {
+    entries: array<TileAnim, 32>,
+};
+
+@group(4) @binding(0) var<uniform> tile_anims: TileAnimsUniform;
+
+// Compute the active animated UV for a vertex's static (frame-0)
+// UV rect. `anim_id == 0` short-circuits to the static UV so the
+// shader's hot path stays a single branch. Otherwise we step
+// `time_ms / frametime_ms` (modulo `frame_count`) and shift
+// `v` by `frame * v_step`.
+fn animated_uv(base_uv: vec2<f32>, anim_id: u32, time_ms: f32) -> vec2<f32> {
+    if (anim_id == 0u) {
+        return base_uv;
+    }
+    let anim = tile_anims.entries[anim_id - 1u];
+    if (anim.frame_count <= 1u) {
+        return base_uv;
+    }
+    let ft = max(f32(anim.frametime_ms), 1.0);
+    let frame = u32(floor(time_ms / ft)) % anim.frame_count;
+    return vec2<f32>(base_uv.x, base_uv.y + f32(frame) * anim.v_step);
+}
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -212,7 +248,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if is_water {
         tex = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     } else {
-        tex = textureSample(albedo_tex, albedo_smp, in.uv);
+        // Wave 9.y: scroll UV.v through the active frame of an
+        // animated tile. `camera.time.x` is seconds since app
+        // start; the slot stores frametime_ms, so we convert to
+        // ms before the per-frame floor.
+        let time_ms = camera.time.x * 1000.0;
+        let sampled_uv = animated_uv(in.uv, in.anim_id, time_ms);
+        tex = textureSample(albedo_tex, albedo_smp, sampled_uv);
     }
     var albedo = in.color.rgb * tex.rgb;
     let alpha = in.color.a * tex.a;

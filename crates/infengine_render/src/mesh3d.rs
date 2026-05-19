@@ -384,6 +384,7 @@ impl Mesh3DPass {
         &self.instance_buffer
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -392,6 +393,7 @@ impl Mesh3DPass {
         camera_layout: &wgpu::BindGroupLayout,
         shadow_sample_layout: &wgpu::BindGroupLayout,
         lights_layout: &wgpu::BindGroupLayout,
+        tile_anims_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::mesh_instance_buf"),
@@ -487,6 +489,7 @@ impl Mesh3DPass {
                 &texture_bgl,
                 shadow_sample_layout,
                 lights_layout,
+                tile_anims_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -863,6 +866,7 @@ impl Mesh3DPass {
         batches
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
@@ -870,6 +874,7 @@ impl Mesh3DPass {
         batches: &[MeshBatch],
         shadow_bg: &'a wgpu::BindGroup,
         lights_bg: &'a wgpu::BindGroup,
+        tile_anims_bg: &'a wgpu::BindGroup,
         mesh_textures: &'a std::collections::HashMap<
             MeshHandle,
             std::sync::Arc<wgpu::BindGroup>,
@@ -884,6 +889,7 @@ impl Mesh3DPass {
         // batches contiguous without re-sorting the instance buffer.
         rpass.set_bind_group(2, shadow_bg, &[]);
         rpass.set_bind_group(3, lights_bg, &[]);
+        rpass.set_bind_group(4, tile_anims_bg, &[]);
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         rpass.set_pipeline(&self.pipeline);
         for batch in batches {

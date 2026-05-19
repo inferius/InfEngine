@@ -18,6 +18,7 @@ mod lights;
 mod mesh3d;
 mod shadow;
 mod sprite;
+mod tile_anims;
 mod tilemap;
 
 use std::sync::Arc;
@@ -42,6 +43,8 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
+use tile_anims::TileAnimsResource;
+pub use tile_anims::{MAX_ANIM_SLOTS, TileAnimEntry, TileAnimsUniform};
 
 /// Reference-counted albedo bind group built once by
 /// `Renderer::make_mesh_albedo` and cheaply cloned into any number
@@ -103,6 +106,12 @@ pub struct Renderer {
     mesh_albedos: std::collections::HashMap<MeshHandle, AlbedoHandle>,
     lights: LightsResource,
     light_queue: Vec<PointLight>,
+    /// Wave 9.y: GPU-side animation table. The mesh3d pipeline
+    /// reads it via @group(4) so the fragment shader can scroll a
+    /// vertex's UV.v through a tile's frame strip when the
+    /// vertex's `anim_id != 0`. Drivers refresh the uniform via
+    /// [`Renderer::upload_tile_anims`].
+    tile_anims: TileAnimsResource,
     /// Directional sun direction (points TOWARDS the sun). Used by
     /// the shadow pass + the mesh3d PBR shader. Defaults to a
     /// high-noon angle; drivers can swing this through the day via
@@ -200,6 +209,7 @@ impl Renderer {
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
         let shadow = ShadowPass::new(&device);
         let lights_res = LightsResource::new(&device);
+        let tile_anims = TileAnimsResource::new(&device);
         let mesh3d = Mesh3DPass::new(
             &device,
             &queue,
@@ -208,6 +218,7 @@ impl Renderer {
             &camera_3d_resource.layout,
             &shadow.sample_bgl,
             &lights_res.layout,
+            &tile_anims.layout,
         );
         let grid = GridPass::new(
             &device,
@@ -253,6 +264,7 @@ impl Renderer {
             mesh_albedos: std::collections::HashMap::new(),
             lights: lights_res,
             light_queue: Vec::new(),
+            tile_anims,
             sun_dir: glam::Vec3::new(0.4, 0.9, 0.5),
             sun_intensity: 3.0,
         })
@@ -678,6 +690,15 @@ impl Renderer {
         self.sun_intensity = intensity.max(0.0);
     }
 
+    /// Wave 9.y: refresh the per-tile animation uniform that the
+    /// mesh3d shader samples when a vertex carries `anim_id != 0`.
+    /// Callers build a `TileAnimsUniform` snapshot from their
+    /// resource-pack `AnimRegistry` then upload it every time the
+    /// pack reloads (slot ids stay stable across frames otherwise).
+    pub fn upload_tile_anims(&self, uniform: &TileAnimsUniform) {
+        self.tile_anims.upload(&self.queue, uniform);
+    }
+
     /// Render one frame, with an optional overlay callback.
     ///
     /// The closure runs after the engine's main pass with its own
@@ -809,6 +830,7 @@ impl Renderer {
                     &mesh_batches,
                     &self.shadow.sample_bg,
                     &self.lights.bind_group,
+                    &self.tile_anims.bind_group,
                     &self.mesh_albedos,
                 );
             }
