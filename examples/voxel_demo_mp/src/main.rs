@@ -100,6 +100,8 @@ mod dim_switch_tests;
 mod dim_teleport_tests;
 #[cfg(test)]
 mod debug_tests;
+#[cfg(test)]
+mod flint_durability_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -762,6 +764,20 @@ struct Voxel {
     /// via `E`. Each slot holds an optional `(BlockId, count)` -
     /// `count` saturates at `STACK_MAX`.
     inventory: [Option<(BlockId, u8)>; INVENTORY_SLOTS],
+    /// W5.2b: per-slot durability map. Currently only flint+steel
+    /// (id 48) ever lands here; other items have infinite uses.
+    /// Keyed by inventory slot index. When a slot moves (drag&drop
+    /// in the UI), the inventory module's mutation path updates
+    /// the map via `move_durability_on_drag` so the value follows
+    /// the stack. Slots that empty clear their entry; fresh
+    /// pickups of flint+steel mint `FLINT_AND_STEEL_MAX_USES`.
+    ///
+    /// Chosen over extending the slot's tuple to `(BlockId, u8,
+    /// Option<u16>)` to keep the on-disk player save format
+    /// unchanged for Wave 5; a later commit can fold this into
+    /// the slot tuple once the durability concept stabilises and
+    /// applies to more items (axes, swords, etc).
+    item_durability: HashMap<usize, u16>,
     selected_slot: usize,
     /// True when the inventory overlay is up. Pauses player input
     /// + shows the cursor.
@@ -2780,12 +2796,43 @@ impl Voxel {
         }
         // Second pass: claim an empty slot. Prefer hotbar first so
         // freshly mined blocks become hot-keyable immediately.
-        for slot in self.inventory.iter_mut() {
+        for (idx, slot) in self.inventory.iter_mut().enumerate() {
             if slot.is_none() {
                 *slot = Some((block, 1));
+                // W5.2b: fresh flint+steel gets MAX_USES durability.
+                if block.0 == block::FLINT_AND_STEEL_ID {
+                    self.item_durability
+                        .insert(idx, block::FLINT_AND_STEEL_MAX_USES);
+                }
                 self.note_pickup(block);
                 return;
             }
+        }
+    }
+
+    /// W5.2b: decrement the currently-held flint+steel's durability
+    /// after a successful ignition (portal frame OR fire block).
+    /// When the counter hits 0, empty the slot + drop the parallel
+    /// map entry so the next interaction sees no held tool.
+    ///
+    /// Idempotent across non-flint+steel held items - a Cobble in
+    /// hand never triggered ignition in the first place, so the
+    /// fn only fires when the caller already verified `held.0 ==
+    /// FLINT_AND_STEEL_ID`.
+    fn consume_flint_and_steel_use(&mut self) {
+        let slot_idx = self.selected_slot;
+        let remaining = self
+            .item_durability
+            .get(&slot_idx)
+            .copied()
+            .unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
+        let new = remaining.saturating_sub(1);
+        if new == 0 {
+            // Burn out: clear both slot + durability tracker.
+            self.inventory[slot_idx] = None;
+            self.item_durability.remove(&slot_idx);
+        } else {
+            self.item_durability.insert(slot_idx, new);
         }
     }
 
@@ -2881,6 +2928,23 @@ impl Voxel {
                 if matches!(to, SlotKind::Inv(0)) {
                     return;
                 }
+                // W5.2b: snapshot the durability values BEFORE the
+                // mutation so we can move them with the stacks.
+                // Drag is the only place a flint+steel slot can
+                // travel; record the from/to slot durabilities,
+                // then patch them after the mutation finishes.
+                let from_idx_dura = match from {
+                    SlotKind::Inv(i) => Some(i),
+                    _ => None,
+                };
+                let to_idx_dura = match to {
+                    SlotKind::Inv(i) => Some(i),
+                    _ => None,
+                };
+                let from_dura =
+                    from_idx_dura.and_then(|i| self.item_durability.get(&i).copied());
+                let to_dura =
+                    to_idx_dura.and_then(|i| self.item_durability.get(&i).copied());
                 let Some(from_stack) = self.slot_read(from) else {
                     return;
                 };
@@ -2974,7 +3038,66 @@ impl Voxel {
                         self.slot_write(from, to_stack);
                     }
                 }
+                // W5.2b: post-mutation durability fixup. The slot
+                // contents above already moved; sync the parallel
+                // map so flint+steel keeps its remaining-uses count
+                // when the player drags it to a new slot.
+                self.reconcile_slot_durabilities(
+                    from_idx_dura,
+                    to_idx_dura,
+                    from_dura,
+                    to_dura,
+                );
             }
+        }
+    }
+
+    /// W5.2b: after a Drag mutation, walk the from/to slot pair and
+    /// re-anchor the durability map entries. The drag mutates the
+    /// slot contents but the parallel map needs a manual swap /
+    /// move to follow the stacks. This fn looks at the live
+    /// inventory state to decide which side now holds the
+    /// flint+steel and writes the captured durability back into
+    /// the correct slot.
+    fn reconcile_slot_durabilities(
+        &mut self,
+        from_idx: Option<usize>,
+        to_idx: Option<usize>,
+        from_dura: Option<u16>,
+        to_dura: Option<u16>,
+    ) {
+        // Drop both old entries; we'll restore from the captured
+        // values into whichever slot ended up holding the stack.
+        if let Some(i) = from_idx {
+            self.item_durability.remove(&i);
+        }
+        if let Some(i) = to_idx {
+            self.item_durability.remove(&i);
+        }
+        // Look at the new state. A flint+steel in `from_idx` after
+        // the drag means the previously-from stack stayed (or a
+        // swap brought another flint+steel back); use whichever
+        // captured durability matches the direction the data
+        // travelled.
+        if let Some(i) = from_idx
+            && let Some((bid, _)) = self.inventory[i]
+            && bid.0 == block::FLINT_AND_STEEL_ID
+        {
+            // After a swap the to_dura is now in the from slot.
+            // After a leftover-back-write the from_dura stayed.
+            // Pick the "to side carried back" value first when
+            // present (swap path); otherwise keep the from value.
+            let dura = to_dura.or(from_dura).unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
+            self.item_durability.insert(i, dura);
+        }
+        if let Some(i) = to_idx
+            && let Some((bid, _)) = self.inventory[i]
+            && bid.0 == block::FLINT_AND_STEEL_ID
+        {
+            // The from stack just moved here; use the from_dura
+            // value.
+            let dura = from_dura.or(to_dura).unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
+            self.item_durability.insert(i, dura);
         }
     }
 
@@ -4164,6 +4287,9 @@ impl Voxel {
                 }
                 inv
             },
+            // W5.2b: starter inventory has no flint+steel; map
+            // stays empty until the first pickup / give of id 48.
+            item_durability: HashMap::new(),
             selected_slot: 0,
             inventory_open: false,
             mp_menu_open: false,
@@ -6491,6 +6617,18 @@ impl Voxel {
             .iter()
             .map(|s| icon(*s))
             .collect();
+        // W5.2b: per-slot durability snapshot for the slot widgets.
+        // Cloned out of `item_durability` so the egui closure can
+        // borrow it alongside the mutable `&mut self.inventory`
+        // capture without colliding.
+        let item_durability_snapshot: HashMap<usize, u16> =
+            self.item_durability.clone();
+        let durability_for_slot = |idx: usize| -> Option<(u16, u16)> {
+            item_durability_snapshot
+                .get(&idx)
+                .copied()
+                .map(|cur| (cur, block::FLINT_AND_STEEL_MAX_USES))
+        };
         let inventory_open = self.inventory_open;
         let mut inv_open_local = self.inventory_open;
         let mp_menu_open = self.mp_menu_open;
@@ -7110,7 +7248,7 @@ impl Voxel {
                             ui.vertical_centered(|ui| {
                                 ui.horizontal(|ui| {
                                     for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                        let resp = slot_with_dnd(
+                                        let resp = slot_with_dnd_dur(
                                             ui,
                                             *slot,
                                             atlas_tex_id,
@@ -7118,6 +7256,7 @@ impl Voxel {
                                             i == selected_slot,
                                             inventory_open,
                                             &mut inv_actions,
+                                            durability_for_slot(i),
                                         );
                                         if resp.clicked() {
                                             inv_actions.push(InvAction::SelectHotbar(i));
@@ -7185,7 +7324,7 @@ impl Voxel {
                                             .get(snap_idx)
                                             .copied()
                                             .unwrap_or(None);
-                                        slot_with_dnd(
+                                        slot_with_dnd_dur(
                                             ui,
                                             slot,
                                             atlas_tex_id,
@@ -7193,6 +7332,7 @@ impl Voxel {
                                             false,
                                             true,
                                             &mut inv_actions,
+                                            durability_for_slot(inv_idx),
                                         );
                                     }
                                 });
@@ -7204,7 +7344,7 @@ impl Voxel {
                             // closing the menu (matches Minecraft).
                             ui.horizontal(|ui| {
                                 for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                    let resp = slot_with_dnd(
+                                    let resp = slot_with_dnd_dur(
                                         ui,
                                         *slot,
                                         atlas_tex_id,
@@ -7212,6 +7352,7 @@ impl Voxel {
                                         i == selected_slot,
                                         true,
                                         &mut inv_actions,
+                                        durability_for_slot(i),
                                     );
                                     if resp.clicked() {
                                         inv_actions.push(InvAction::SelectHotbar(i));
@@ -10186,8 +10327,12 @@ impl AppHandler for Voxel {
                         self.apply_fire_step(step);
                     }
                 }
-                // Flint+steel doesn't deplete (durability is a
-                // deferred follow-up - see Phase F module docs).
+                // W5.2b: decrement flint+steel durability. The
+                // RMB path always counts as one "use" regardless of
+                // whether the underlying ignition succeeded -
+                // matches MC, which consumes a use on every RMB
+                // even when the surface refuses fire.
+                self.consume_flint_and_steel_use();
                 self.lmb_pending = false;
                 self.rmb_pending = false;
             } else if rmb
@@ -12163,6 +12308,25 @@ fn slot_with_dnd(
     draggable: bool,
     actions: &mut Vec<InvAction>,
 ) -> egui::Response {
+    slot_with_dnd_dur(ui, slot, atlas, kind, selected, draggable, actions, None)
+}
+
+/// W5.2b: `slot_with_dnd` variant that threads a durability
+/// `(cur, max)` pair through to `draw_slot_widget_with_durability`.
+/// New call sites that render the hotbar / inventory pass the
+/// flint+steel durability here; everywhere else the legacy shim
+/// above is fine.
+#[allow(clippy::too_many_arguments)]
+fn slot_with_dnd_dur(
+    ui: &mut egui::Ui,
+    slot: Option<SlotIcon>,
+    atlas: Option<egui::TextureId>,
+    kind: SlotKind,
+    selected: bool,
+    draggable: bool,
+    actions: &mut Vec<InvAction>,
+    durability: Option<(u16, u16)>,
+) -> egui::Response {
     // Scope the drag-source id through the parent ui so the same
     // SlotKind can appear in multiple layers (e.g. the hotbar Area
     // + the hotbar mirror inside the Inventory window) without
@@ -12170,11 +12334,15 @@ fn slot_with_dnd(
     let id = ui.make_persistent_id(("inv_slot", kind));
     let resp = if draggable && slot.is_some() {
         ui.dnd_drag_source(id, kind, |ui| {
-            draw_slot_widget(ui, slot, atlas, selected, egui::Sense::click_and_drag())
+            draw_slot_widget_with_durability(
+                ui, slot, atlas, selected, egui::Sense::click_and_drag(), durability,
+            )
         })
         .response
     } else {
-        draw_slot_widget(ui, slot, atlas, selected, egui::Sense::click())
+        draw_slot_widget_with_durability(
+            ui, slot, atlas, selected, egui::Sense::click(), durability,
+        )
     };
     if let Some(from) = resp.dnd_release_payload::<SlotKind>() {
         let from = *from;
@@ -12229,6 +12397,24 @@ fn draw_slot_widget(
     atlas: Option<egui::TextureId>,
     selected: bool,
     sense: egui::Sense,
+) -> egui::Response {
+    // W5.2b: callers that need a durability bar route through
+    // `draw_slot_widget_with_durability` below. The 5-arg shim
+    // keeps every existing call site untouched.
+    draw_slot_widget_with_durability(ui, slot, atlas, selected, sense, None)
+}
+
+/// W5.2b: like `draw_slot_widget` but paints a remaining-uses bar
+/// at the bottom of the cell when `durability` is `Some((cur, max))`
+/// and `cur < max`. Gradient red -> yellow -> green tracks the
+/// fraction.
+fn draw_slot_widget_with_durability(
+    ui: &mut egui::Ui,
+    slot: Option<SlotIcon>,
+    atlas: Option<egui::TextureId>,
+    selected: bool,
+    sense: egui::Sense,
+    durability: Option<(u16, u16)>,
 ) -> egui::Response {
     let size = egui::vec2(40.0, 40.0);
     let (rect, resp) = ui.allocate_exact_size(size, sense);
@@ -12286,6 +12472,32 @@ fn draw_slot_widget(
                 egui::Color32::WHITE,
             );
         }
+    }
+    // W5.2b: durability bar along the bottom edge. Hidden when
+    // cur == max (untouched tool) so the cell stays clean until
+    // the player actually wears it down.
+    if let Some((cur, max)) = durability
+        && cur < max
+        && max > 0
+    {
+        let frac = (cur as f32 / max as f32).clamp(0.0, 1.0);
+        // Bar geometry: inset 4px on each side, 4px tall, sitting
+        // 4px above the cell's bottom edge.
+        let bar_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 4.0, rect.max.y - 8.0),
+            egui::pos2(rect.max.x - 4.0, rect.max.y - 4.0),
+        );
+        // Dark backing so the gradient stays legible against the
+        // bright stack-count badge or icon.
+        painter.rect_filled(bar_rect, 1.0, egui::Color32::from_gray(20));
+        // Gradient: red (0%) -> yellow (50%) -> green (100%).
+        let r = if frac < 0.5 { 255 } else { (255.0 * (1.0 - frac) * 2.0) as u8 };
+        let g = if frac < 0.5 { (255.0 * frac * 2.0) as u8 } else { 255 };
+        let fill_rect = egui::Rect::from_min_max(
+            bar_rect.min,
+            egui::pos2(bar_rect.min.x + bar_rect.width() * frac, bar_rect.max.y),
+        );
+        painter.rect_filled(fill_rect, 1.0, egui::Color32::from_rgb(r, g, 0));
     }
     resp
 }
