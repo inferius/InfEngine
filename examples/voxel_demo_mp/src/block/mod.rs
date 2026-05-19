@@ -24,6 +24,8 @@ pub(crate) mod chest;
 pub(crate) mod furnace;
 pub(crate) mod portal;
 #[cfg(test)]
+mod fire_tests;
+#[cfg(test)]
 mod phase_f_tests;
 
 // ---------------------------------------------------------------
@@ -499,6 +501,21 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["flint_and_steel.png", "iron_ingot.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["flint_and_steel.png", "iron_ingot.png"], keep_alpha: false },
     },
+    // Fire block (Q.4b). Visual-only decoration that the player
+    // walks through; carries a per-cell `age: u8` (0..=15) stored
+    // on `Voxel::fires`. Spreads to flammable neighbours + dies
+    // when its support disappears. Same flag set as the portal
+    // (F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_DEDICATED_RENDER
+    // | F_TRANSPARENT_RENDER) - chunk mesher skips it; the
+    // dedicated render path is a follow-up (placeholder while
+    // Wave 2 ships).
+    BlockType {
+        id: 49, name: "fire", color: [1.00, 0.55, 0.10], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
+    },
 ];
 
 /// Block id of the torch (light source). Kept as a const so the
@@ -572,6 +589,12 @@ pub(crate) const PORTAL_ID: u16 = 47;
 /// Flint and steel: ignites a valid obsidian portal frame on
 /// RMB. Phase F. Durability is a deferred follow-up.
 pub(crate) const FLINT_AND_STEEL_ID: u16 = 48;
+/// Fire block id (Q.4b). Per-cell age (0..=15) lives in the
+/// parallel `Voxel::fires` HashMap (same pattern as chests +
+/// furnaces). Spreads to flammable neighbours, dies on
+/// extinguish / support failure.
+#[allow(dead_code)] // wired up by Q.4c fire tick + Q.4d/e ignite
+pub(crate) const FIRE_ID: u16 = 49;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.

@@ -990,6 +990,12 @@ struct Voxel {
     /// tight (the on-disk shape persists both side by side under
     /// `containers/<dim>.bin` v2).
     furnaces: HashMap<[i32; 3], container::Container>,
+    /// Per-cell fire age (0..=15), keyed by absolute world voxel
+    /// coords. Q.4b: parallel to `chests` / `furnaces`. The block
+    /// at the keyed cell is `FIRE_ID`; the age value drives the
+    /// extinguish + spread random-tick algorithm (MC
+    /// FireBlock.java::tick).
+    fires: HashMap<[i32; 3], u8>,
     /// Per-furnace live runtime: remaining fuel ms + cook progress
     /// ms + the full fuel duration for the UI bar. Driven by
     /// `block::furnace::furnace_tick`; persisted alongside the
@@ -3977,6 +3983,7 @@ impl Voxel {
             chest_held: None,
             furnaces: HashMap::new(),
             furnace_runtimes: HashMap::new(),
+            fires: HashMap::new(),
             furnace_open: None,
             furnace_held: None,
             liquid_schedule: LiquidSchedule::new(),
@@ -4065,6 +4072,7 @@ impl Voxel {
             torch_positions: std::mem::take(&mut self.torch_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
             snow_positions: std::mem::take(&mut self.snow_positions),
+            fires: std::mem::take(&mut self.fires),
             liquid_schedule: std::mem::replace(
                 &mut self.liquid_schedule,
                 LiquidSchedule::new(),
@@ -4096,6 +4104,7 @@ impl Voxel {
         self.torch_positions = target_world.torch_positions;
         self.torch_orient = target_world.torch_orient;
         self.snow_positions = target_world.snow_positions;
+        self.fires = target_world.fires;
         self.liquid_schedule = target_world.liquid_schedule;
         self.liquid_clock = target_world.liquid_clock;
         self.liquid_level = target_world.liquid_level;

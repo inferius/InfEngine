@@ -83,6 +83,9 @@ pub(crate) struct DimWorld {
     pub torch_positions: std::collections::HashSet<[i32; 3]>,
     pub torch_orient: HashMap<[i32; 3], u8>,
     pub snow_positions: HashMap<[i32; 3], u8>,
+    /// Per-cell fire age (Q.4b). Parked alongside chests + furnaces
+    /// when the dim swaps out.
+    pub fires: HashMap<[i32; 3], u8>,
     pub liquid_schedule: LiquidSchedule,
     pub liquid_clock: u64,
     pub liquid_level: HashMap<[i32; 3], u8>,
@@ -99,6 +102,7 @@ impl Default for DimWorld {
             torch_positions: std::collections::HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
+            fires: HashMap::new(),
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),
@@ -127,7 +131,15 @@ mod tests {
         assert!(dw.chests.is_empty());
         assert!(dw.furnaces.is_empty());
         assert!(dw.torch_positions.is_empty());
+        assert!(dw.fires.is_empty());
         assert_eq!(dw.liquid_clock, 0);
+    }
+
+    #[test]
+    fn dim_world_default_fires_map_is_empty() {
+        // Q.4b: every freshly-minted dim starts with no fire cells.
+        let dw = DimWorld::default();
+        assert!(dw.fires.is_empty());
     }
 
     #[test]
