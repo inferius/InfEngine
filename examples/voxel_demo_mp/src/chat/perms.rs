@@ -115,6 +115,7 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "grid", level: 0 },
     CmdMeta { name: "chunkinfo", level: 0 },
     CmdMeta { name: "serverinfo", level: 0 },
+    CmdMeta { name: "plugins", level: 0 },
     // Level 1 - personal QoL.
     CmdMeta { name: "setname", level: 1 },
     CmdMeta { name: "fov", level: 1 },

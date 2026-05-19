@@ -28,6 +28,7 @@ mod cmds_dim;
 mod cmds_host;
 mod cmds_misc;
 mod cmds_player;
+mod cmds_plugin;
 mod cmds_world;
 
 mod perms;
@@ -539,6 +540,14 @@ pub(crate) fn dispatch_as(
             "me" => {
                 handled_locally |=
                     cmds_chat::cmd_me(voxel, arg, &mut local_lines);
+            }
+            "plugins" => {
+                handled_locally |= cmds_plugin::cmd_plugins(
+                    voxel,
+                    arg,
+                    sender.level,
+                    &mut local_lines,
+                );
             }
             _ => {
                 local_lines.push(format!("Unknown command: /{cmd}"));
