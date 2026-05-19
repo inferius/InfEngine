@@ -300,12 +300,16 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
         });
     }
     for d in ents.drops {
+        let age_ticks = (d.age * 20.0).max(0.0) as u32;
         parked.drops.push(DropItem {
             id: d.id,
             block: d.block,
             pos: d.pos,
             vel: d.vel,
             age: d.age,
+            count: 1,
+            age_ticks,
+            pickup_delay_ticks: 0,
         });
     }
     parked.next_mob_id = ents

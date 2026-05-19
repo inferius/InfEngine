@@ -929,6 +929,14 @@ struct Voxel {
     /// (feathers were spawning continuously in inventory mid-air
     /// before this got gated). Toggle via `/debug feathers on|off`.
     chicken_lay_accum: f32,
+    /// Real-time accumulator that turns the variable-dt frame
+    /// loop into 20 Hz logical drop ticks. Drained inside
+    /// `drops::tick_physics` - every `TICK_DT_SECS` (0.05 s) of
+    /// real time it fires one `drops::step_logical_tick`. Lives
+    /// here because the loop may straddle multiple ticks during a
+    /// slow frame and the accumulator has to persist between
+    /// frames.
+    drop_tick_accum: f32,
     /// Gate for the periodic chicken feather lay loop. Defaults to
     /// `false`; flip on with `/debug feathers on` for testing.
     debug_chicken_feathers: bool,
@@ -3548,12 +3556,18 @@ impl Voxel {
             self.liquid_mesh_dirty = true;
         }
         for m in drop_spawns {
+            // Q.5: clients mirror the spawn but pickup is
+            // host-authoritative, so the count + pickup-delay
+            // here are decorative on the client side.
             self.dropped_items.push(DropItem {
                 id: m.id,
                 block: m.block,
                 pos: m.pos,
                 vel: [0.0, 2.0, 0.0],
                 age: 0.0,
+                count: 1,
+                age_ticks: 0,
+                pickup_delay_ticks: drops::PickupConfig::DEFAULT.pickup_delay_ticks,
             });
         }
         for id in drop_removes {
@@ -3894,6 +3908,7 @@ impl Voxel {
             snow_rate: 0.4,
             chicken_lay_accum: 0.0,
             debug_chicken_feathers: false,
+            drop_tick_accum: 0.0,
             next_lightning_at: 6.0,
             muted_players: HashSet::new(),
             head_bob_phase: 0.0,

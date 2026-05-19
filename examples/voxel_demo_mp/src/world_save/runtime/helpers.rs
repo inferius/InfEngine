@@ -174,12 +174,19 @@ pub(super) fn apply_dimension_entities(voxel: &mut Voxel, entities: DimensionEnt
         });
     }
     for d in entities.drops {
+        // Older saves don't carry the Q.5 fields; rehydrate as if
+        // freshly spawned (count = 1, pickup-delay already
+        // expired) so loading doesn't reset the pickup gate.
+        let age_ticks = (d.age * 20.0).max(0.0) as u32;
         voxel.dropped_items.push(DropItem {
             id: d.id,
             block: d.block,
             pos: d.pos,
             vel: d.vel,
             age: d.age,
+            count: 1,
+            age_ticks,
+            pickup_delay_ticks: 0,
         });
     }
     voxel.next_mob_id = entities
