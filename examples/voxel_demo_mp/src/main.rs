@@ -94,6 +94,8 @@ mod dim;
 mod dim_save_tests;
 #[cfg(test)]
 mod dim_switch_tests;
+#[cfg(test)]
+mod dim_teleport_tests;
 mod mining;
 mod mob_ai;
 mod player;
@@ -550,6 +552,19 @@ struct Voxel {
     /// hasn't been visited yet this session).
     #[allow(dead_code)]
     dim_worldgens: HashMap<String, WorldGen>,
+    /// Phase F.6: ticks the player has been stood inside a
+    /// portal cell continuously. Increments while the player
+    /// AABB overlaps a `PORTAL_ID` cell; resets to 0 on step
+    /// out. Once it reaches `PORTAL_TRIGGER_TICKS` the runtime
+    /// teleports the player to the paired dim.
+    #[allow(dead_code)]
+    portal_in_ticks: u32,
+    /// Phase F.6: cool-down counter set on teleport. Decremented
+    /// each tick; while > 0 the portal-overlap check is
+    /// suppressed so the player doesn't immediately bounce
+    /// back through the destination portal.
+    #[allow(dead_code)]
+    portal_cooldown_ticks: u32,
     /// Mesh handles grouped by the chunk that produced them. Lets the
     /// streaming code rebuild / unload only the chunks that change.
     chunk_meshes: Vec<(ChunkCoord, BlockId, MeshHandle)>,
@@ -3702,6 +3717,8 @@ impl Voxel {
             worlds: HashMap::new(),
             entities_by_dim: HashMap::new(),
             dim_worldgens: HashMap::new(),
+            portal_in_ticks: 0,
+            portal_cooldown_ticks: 0,
             chunk_meshes: Vec::new(),
             pending_chunks: VecDeque::new(),
             pending_set: HashSet::new(),
@@ -4034,6 +4051,117 @@ impl Voxel {
         self.furnace_open = None;
         self.furnace_held = None;
         self.liquid_mesh_dirty = true;
+    }
+
+    /// Phase F.6: increment / reset the in-portal counter +
+    /// fire a cross-dim teleport when the threshold is reached.
+    /// Called once per frame from the main tick loop.
+    ///
+    /// The check uses the player's foot voxel (rounded floor of
+    /// player_pos.x/z; player_pos.y - PLAYER_HEIGHT/2). When
+    /// the foot voxel is a `PORTAL_ID` and we're not on
+    /// cool-down, increment; on miss, reset to 0.
+    fn tick_player_portal(&mut self) {
+        if self.portal_cooldown_ticks > 0 {
+            self.portal_cooldown_ticks -= 1;
+            self.portal_in_ticks = 0;
+            return;
+        }
+        // Foot voxel: the cell the player's feet sit in. Round
+        // X/Z to floor; Y is the integer floor of the player's
+        // base.
+        let foot = [
+            self.player_pos.x.floor() as i32,
+            (self.player_pos.y - PLAYER_HEIGHT * 0.5).floor() as i32,
+            self.player_pos.z.floor() as i32,
+        ];
+        let in_portal = self.world.get(foot).0 == block::PORTAL_ID
+            || self.world.get([foot[0], foot[1] + 1, foot[2]]).0
+                == block::PORTAL_ID;
+        if !in_portal {
+            self.portal_in_ticks = 0;
+            return;
+        }
+        self.portal_in_ticks = self.portal_in_ticks.saturating_add(1);
+        if self.portal_in_ticks >= block::portal::PORTAL_TRIGGER_TICKS {
+            self.do_cross_dim_teleport(foot);
+        }
+    }
+
+    /// Phase F.6: fire a cross-dim teleport. Compute the
+    /// destination coord (scaled by 8), switch_dim into the
+    /// paired dim, find / build a return portal, place the
+    /// player adjacent, and set the cool-down so they don't
+    /// instantly bounce back.
+    fn do_cross_dim_teleport(&mut self, from_pos: [i32; 3]) {
+        let target_dim = block::portal::pair_dim(&self.current_dim);
+        let dest = block::portal::pair_coord(&self.current_dim, from_pos);
+        // Swap the active dim. switch_dim does the heavy lifting
+        // (move chunks/entities to the parking maps + load the
+        // target dim's state).
+        self.switch_dim(target_dim);
+        // Find or build a return portal at the scaled coord.
+        let cfg = bincode::config::standard();
+        let mut edits: Vec<[i32; 3]> = Vec::new();
+        let spawn = block::portal::ensure_return_portal(
+            &mut self.world,
+            dest,
+            Some(&mut edits),
+        );
+        // Broadcast portal edits so remote peers see the new
+        // frame appear. Guarded on the renderer being live so
+        // headless / test callers don't hit the rebuild path.
+        if !edits.is_empty() {
+            if self.renderer.is_some() {
+                let coords = Self::affected_chunks(dest);
+                self.rebuild_chunks(&coords);
+            }
+            let portal_id = block::PORTAL_ID;
+            let obsidian_id = block::OBSIDIAN_ID;
+            let edits_to_send: Vec<EditMsg> = edits
+                .iter()
+                .map(|p| EditMsg {
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
+                    block: {
+                        let v = self.world.get(*p).0;
+                        if v == portal_id || v == obsidian_id { v } else { 0 }
+                    },
+                })
+                .collect();
+            match &mut self.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    for e in &edits_to_send {
+                        self.edit_history.push(*e);
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(*e, cfg)
+                        {
+                            server.broadcast_bytes("vx.edit", buf);
+                        }
+                    }
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    for e in &edits_to_send {
+                        pending_edits.push(*e);
+                    }
+                }
+            }
+        }
+        // Park the player adjacent to the return portal.
+        self.player_pos = glam::Vec3::new(
+            spawn[0] as f32 + 0.5,
+            spawn[1] as f32,
+            spawn[2] as f32 + 0.5,
+        );
+        self.player_vel = glam::Vec3::ZERO;
+        self.portal_in_ticks = 0;
+        self.portal_cooldown_ticks = block::portal::PORTAL_COOLDOWN_TICKS;
+        self.chat_log.push((
+            std::time::Instant::now(),
+            format!("-> dim '{}'", target_dim),
+        ));
     }
 
     /// Drop every loaded chunk + the per-chunk mesh handles +
@@ -9918,6 +10046,8 @@ impl AppHandler for Voxel {
             &mut self.furnace_runtimes,
             dt_ms,
         );
+        // Phase F.6: portal-overlap counter + cross-dim teleport.
+        self.tick_player_portal();
         // Auto-close the chest UI when the player walks more than
         // ~5 blocks from the open chest. Matches MC's "stay close
         // to the container" rule. Done here (per-frame) so the

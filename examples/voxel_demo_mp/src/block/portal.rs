@@ -1,4 +1,5 @@
-//! Nether portal frame detection + ignition (Phase F.5).
+//! Nether portal frame detection + ignition (Phase F.5)
+//! plus cross-dim teleport orchestration (Phase F.6).
 //!
 //! Algorithm (MC-faithful, simplified):
 //! 1. RMB hands us an air cell adjacent to obsidian.
@@ -292,6 +293,322 @@ fn make_pos(plane: PortalPlane, a: i32, b: i32, fixed: i32) -> [i32; 3] {
     match plane {
         PortalPlane::Xy => [a, b, fixed],
         PortalPlane::Zy => [fixed, b, a],
+    }
+}
+
+// ---------------------------------------------------------------
+// Phase F.6: cross-dim teleport helpers.
+// ---------------------------------------------------------------
+
+/// MC's overworld <-> nether ratio. One block in the overworld
+/// covers 8 blocks in the nether (and vice-versa).
+pub(crate) const COORD_SCALE: i32 = 8;
+
+/// Number of consecutive ticks the player must stand in a
+/// portal cell before triggering a teleport. MC ships 80; we
+/// shorten to 30 for snappier dev / test UX.
+pub(crate) const PORTAL_TRIGGER_TICKS: u32 = 30;
+
+/// Cool-down after a teleport. While > 0 the portal-overlap
+/// counter stays at 0 so the player doesn't immediately
+/// re-trigger on the destination portal.
+pub(crate) const PORTAL_COOLDOWN_TICKS: u32 = 30;
+
+/// Search radius around a target coord when looking for an
+/// existing portal at the destination dim. Matches MC's
+/// "search a 16x16x16 cube" heuristic.
+pub(crate) const PORTAL_SEARCH_RADIUS: i32 = 16;
+
+/// Convert a position between paired dims. From the overworld
+/// to the nether: divide by 8 (Euclidean). From the nether to
+/// the overworld: multiply by 8.
+///
+/// String literals here mirror `dim::OVERWORLD` / `dim::NETHER`
+/// but keep the function lib-friendly (the lib crate doesn't
+/// see the bin-only `dim` module).
+pub(crate) fn pair_coord(from_dim: &str, pos: [i32; 3]) -> [i32; 3] {
+    if from_dim == "overworld" {
+        [
+            pos[0].div_euclid(COORD_SCALE),
+            pos[1],
+            pos[2].div_euclid(COORD_SCALE),
+        ]
+    } else {
+        [
+            pos[0] * COORD_SCALE,
+            pos[1],
+            pos[2] * COORD_SCALE,
+        ]
+    }
+}
+
+/// Resolve the paired dim name for `dim`. Today the pairing is
+/// fixed: overworld <-> nether. Other dim pairs would land here.
+pub(crate) fn pair_dim(dim: &str) -> &'static str {
+    if dim == "overworld" {
+        "nether"
+    } else {
+        "overworld"
+    }
+}
+
+/// Find the closest portal block within `PORTAL_SEARCH_RADIUS`
+/// of `target`. Returns `None` when no portal lives in range.
+///
+/// Manhattan-distance search over the cube; cheap enough since
+/// the radius is fixed at 16.
+pub(crate) fn find_portal_near(world: &World, target: [i32; 3]) -> Option<[i32; 3]> {
+    let r = PORTAL_SEARCH_RADIUS;
+    let mut best: Option<([i32; 3], i32)> = None;
+    for dx in -r..=r {
+        for dy in -r..=r {
+            for dz in -r..=r {
+                let p = [target[0] + dx, target[1] + dy, target[2] + dz];
+                if world.get(p).0 == PORTAL_ID {
+                    let d = dx.abs() + dy.abs() + dz.abs();
+                    match best {
+                        None => best = Some((p, d)),
+                        Some((_, bd)) if d < bd => best = Some((p, d)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
+/// Build a minimal 2x3 (interior) portal at `target` in the
+/// XY plane. Lays 10 obsidian frame blocks + 6 portal interior
+/// blocks. The bottom-left interior cell ends up at
+/// `[target[0], target[1], target[2]]` so callers can use the
+/// same coord as the player's "spawn after teleport" target.
+///
+/// Returns the list of cells the function edited so the
+/// caller can broadcast them as world edits to remote peers.
+pub(crate) fn build_minimal_portal(world: &mut World, target: [i32; 3]) -> Vec<[i32; 3]> {
+    let mut edits: Vec<[i32; 3]> = Vec::with_capacity(16);
+    let z = target[2];
+    // Frame outer: x in [-1..=2], y in [-1..=3], relative to
+    // target. Lay obsidian on the four edges.
+    for x in -1..=2 {
+        let bot = [target[0] + x, target[1] - 1, z];
+        let top = [target[0] + x, target[1] + 3, z];
+        if world.get(bot).0 != OBSIDIAN_ID {
+            world.set(bot, BlockId(OBSIDIAN_ID));
+            edits.push(bot);
+        }
+        if world.get(top).0 != OBSIDIAN_ID {
+            world.set(top, BlockId(OBSIDIAN_ID));
+            edits.push(top);
+        }
+    }
+    for y in -1..=3 {
+        let left = [target[0] - 1, target[1] + y, z];
+        let right = [target[0] + 2, target[1] + y, z];
+        if world.get(left).0 != OBSIDIAN_ID {
+            world.set(left, BlockId(OBSIDIAN_ID));
+            edits.push(left);
+        }
+        if world.get(right).0 != OBSIDIAN_ID {
+            world.set(right, BlockId(OBSIDIAN_ID));
+            edits.push(right);
+        }
+    }
+    // Interior: 2 wide x 3 tall.
+    for x in 0..=1 {
+        for y in 0..=2 {
+            let p = [target[0] + x, target[1] + y, z];
+            world.set(p, BlockId(PORTAL_ID));
+            edits.push(p);
+        }
+    }
+    edits
+}
+
+/// Find or build a return portal at `target` in the active
+/// dim's world. Returns a safe "stand-here" world coord for
+/// the player.
+///
+/// Idempotent: if a portal already lives within
+/// `PORTAL_SEARCH_RADIUS` of `target`, the player drops onto
+/// the cell next to it instead of stamping a new frame.
+///
+/// `edits_out` (if `Some`) gets filled with the cells the call
+/// site edited so the caller can broadcast them as world
+/// edits to remote peers.
+///
+/// Auto-creates chunks around `target` if they aren't loaded -
+/// the destination dim may have never been visited, so the
+/// chunk-streamer hasn't dispatched anything yet. The caller
+/// is responsible for rebuilding meshes once chunks are in
+/// place.
+pub(crate) fn ensure_return_portal(
+    world: &mut World,
+    target: [i32; 3],
+    edits_out: Option<&mut Vec<[i32; 3]>>,
+) -> [i32; 3] {
+    // Make sure the chunks around the destination exist before
+    // we try to set/get cells in them.
+    ensure_chunks_loaded(world, target);
+    if let Some(existing) = find_portal_near(world, target) {
+        // Player lands one cell to the south so they aren't
+        // standing IN the portal (which would immediately
+        // re-trigger).
+        return [existing[0], existing[1], existing[2] + 1];
+    }
+    // Need to mint a new frame. Clamp target Y to a sane band
+    // before building so the frame doesn't end up underground
+    // or above the world.
+    let safe_y = target[1].clamp(4, 100);
+    let safe = [target[0], safe_y, target[2]];
+    ensure_chunks_loaded(world, safe);
+    let new_edits = build_minimal_portal(world, safe);
+    if let Some(out) = edits_out {
+        out.extend(new_edits);
+    }
+    [safe[0], safe[1], safe[2] + 1]
+}
+
+/// Ensure the chunk containing `pos` AND its 26 neighbours are
+/// present in `world`. `World::set` is a no-op when the chunk
+/// is missing, so the caller has to pre-create chunks before
+/// the frame stamp can land.
+fn ensure_chunks_loaded(world: &mut World, pos: [i32; 3]) {
+    use infengine_voxel::{CHUNK_SIZE, Chunk};
+    let cs = CHUNK_SIZE as i32;
+    let cc = [
+        pos[0].div_euclid(cs),
+        pos[1].div_euclid(cs),
+        pos[2].div_euclid(cs),
+    ];
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                let n: [i32; 3] = [cc[0] + dx, cc[1] + dy, cc[2] + dz];
+                if world.chunk(n).is_none() {
+                    world.insert_chunk(n, Chunk::empty());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod portal_pair_tests {
+    use super::*;
+    use infengine_voxel::Chunk;
+
+    fn insert_neighbour_chunks(w: &mut World, range: i32) {
+        for cx in -range..=range {
+            for cy in -range..=range {
+                for cz in -range..=range {
+                    w.insert_chunk([cx, cy, cz], Chunk::empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pair_coord_overworld_to_nether_scales_by_8() {
+        assert_eq!(pair_coord("overworld", [80, 64, -16]), [10, 64, -2]);
+        assert_eq!(pair_coord("overworld", [0, 64, 0]), [0, 64, 0]);
+        // Euclidean div on negatives: -1 / 8 = -1 (NOT 0).
+        assert_eq!(pair_coord("overworld", [-1, 64, -1]), [-1, 64, -1]);
+    }
+
+    #[test]
+    fn pair_coord_nether_to_overworld_scales_by_8() {
+        assert_eq!(pair_coord("nether", [10, 64, -2]), [80, 64, -16]);
+        assert_eq!(pair_coord("nether", [0, 64, 0]), [0, 64, 0]);
+        assert_eq!(pair_coord("nether", [-1, 64, -1]), [-8, 64, -8]);
+    }
+
+    #[test]
+    fn pair_dim_inverts_when_called_twice() {
+        let a = "overworld";
+        let b = pair_dim(a);
+        let c = pair_dim(b);
+        assert_eq!(c, a);
+    }
+
+    #[test]
+    fn find_portal_near_returns_closest() {
+        let mut w = World::new();
+        // Use y near 8 so a small chunk range still covers it.
+        insert_neighbour_chunks(&mut w, 2);
+        w.set([5, 8, 5], BlockId(PORTAL_ID));
+        w.set([10, 8, 5], BlockId(PORTAL_ID));
+        // Distance from [0, 8, 0]: first = 10 (5+0+5),
+        // second = 15 (10+0+5). Closest = [5, 8, 5].
+        let found = find_portal_near(&w, [0, 8, 0]);
+        assert_eq!(found, Some([5, 8, 5]));
+    }
+
+    #[test]
+    fn find_portal_near_returns_none_outside_radius() {
+        let mut w = World::new();
+        insert_neighbour_chunks(&mut w, 3);
+        // Place a portal outside the search radius (>16
+        // Manhattan distance from origin).
+        w.set([20, 8, 20], BlockId(PORTAL_ID));
+        let found = find_portal_near(&w, [0, 8, 0]);
+        // 20 + 0 + 20 = 40 > 16 (radius); but the cube checks
+        // each axis <= radius, so [20, 8, 20] is outside the
+        // search cube too. Expect None.
+        assert!(found.is_none(), "portal at 20,8,20 should be outside the search cube");
+    }
+
+    #[test]
+    fn build_minimal_portal_creates_lit_frame() {
+        let mut w = World::new();
+        insert_neighbour_chunks(&mut w, 2);
+        let edits = build_minimal_portal(&mut w, [0, 5, 5]);
+        // Frame walls (10 obsidian) + interior (6 portal) = 16
+        // cells total (corners are written too in this impl).
+        assert!(edits.len() >= 16, "expected at least 16 edits, got {}", edits.len());
+        // Interior is portal:
+        for x in 0..=1 {
+            for y in 5..=7 {
+                assert_eq!(w.get([x, y, 5]).0, PORTAL_ID);
+            }
+        }
+        // Walls are obsidian:
+        assert_eq!(w.get([-1, 5, 5]).0, OBSIDIAN_ID);
+        assert_eq!(w.get([2, 5, 5]).0, OBSIDIAN_ID);
+        assert_eq!(w.get([0, 4, 5]).0, OBSIDIAN_ID);
+        assert_eq!(w.get([0, 8, 5]).0, OBSIDIAN_ID);
+    }
+
+    #[test]
+    fn ensure_return_portal_reuses_existing() {
+        let mut w = World::new();
+        insert_neighbour_chunks(&mut w, 2);
+        w.set([3, 8, 3], BlockId(PORTAL_ID));
+        // Target near the existing portal: no new frame should
+        // be built; the spawn coord lands next to the portal.
+        let mut edits: Vec<[i32; 3]> = Vec::new();
+        let spawn = ensure_return_portal(&mut w, [0, 8, 0], Some(&mut edits));
+        assert!(edits.is_empty(), "no edits expected when reusing existing portal");
+        assert_eq!(spawn, [3, 8, 4]); // existing + south
+    }
+
+    #[test]
+    fn ensure_return_portal_builds_new_when_far() {
+        let mut w = World::new();
+        insert_neighbour_chunks(&mut w, 5);
+        // No portal nearby - target [20, 8, 20] is far from any
+        // existing portal. The fn must build a fresh frame there.
+        let mut edits: Vec<[i32; 3]> = Vec::new();
+        let _ = ensure_return_portal(&mut w, [20, 8, 20], Some(&mut edits));
+        assert!(
+            edits.len() >= 6,
+            "expected portal-frame edits, got {} edits",
+            edits.len()
+        );
+        // At least one portal block should now sit near the target.
+        let found = find_portal_near(&w, [20, 8, 20]);
+        assert!(found.is_some());
     }
 }
 
