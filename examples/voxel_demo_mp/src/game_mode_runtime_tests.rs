@@ -236,6 +236,39 @@ fn fly_disables_gravity_via_fly_mode_flag() {
 }
 
 #[test]
+fn creative_player_takes_no_burn_damage() {
+    // W10.4: every non-Void DamageKind is swallowed by
+    // invulnerable. Burn (lava / fire) is the canonical test
+    // because mob damage already lives in
+    // `creative_player_takes_no_zombie_damage`.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.player_health = PLAYER_MAX_HEALTH;
+    crate::player::apply_damage_kind(&mut v, 2.0, DamageKind::Burn);
+    assert!((v.player_health - PLAYER_MAX_HEALTH).abs() < 1e-6);
+}
+
+#[test]
+fn creative_player_takes_no_drown_damage() {
+    // W10.4: drown damage is invuln-gated too.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.player_health = PLAYER_MAX_HEALTH;
+    crate::player::apply_damage_kind(&mut v, 2.0, DamageKind::Drown);
+    assert!((v.player_health - PLAYER_MAX_HEALTH).abs() < 1e-6);
+}
+
+#[test]
+fn survival_creative_zero_damage_is_noop() {
+    // Sanity: zero damage in either mode is a no-op (no flash,
+    // no SFX). Catches a regression where the invuln gate
+    // accidentally rolled over to the "amount <= 0" early return.
+    let mut v = voxel_in_mode(GameMode::Survival);
+    v.player_health = PLAYER_MAX_HEALTH;
+    crate::player::apply_damage(&mut v, 0.0);
+    assert!((v.player_health - PLAYER_MAX_HEALTH).abs() < 1e-6);
+    assert!(v.hurt_flash <= 0.0 + 1e-6);
+}
+
+#[test]
 fn holding_space_does_not_double_count() {
     // W10.3: only rising edges count. A frame-after-frame
     // sequence of `true, true` should NOT count as two taps.

@@ -6995,6 +6995,17 @@ impl Voxel {
         if self.invuln_remaining > 0.0 {
             self.invuln_remaining = (self.invuln_remaining - dt).max(0.0);
         }
+        // W10.4: Creative players' HP snaps back to max
+        // immediately (no regen delay) when below. Catches the
+        // "mode switched mid-combat" case where a Survival player
+        // dropped to 4 HP, then ran /gamemode creative.
+        if self.abilities.invulnerable
+            && self.player_health > 0.0
+            && self.player_health < PLAYER_MAX_HEALTH
+        {
+            self.player_health = PLAYER_MAX_HEALTH;
+            self.regen_accum = 0.0;
+        }
         // HP regen: tick the grace timer; once the player has gone
         // `REGEN_DELAY` seconds without damage, drip HP back in at
         // `REGEN_RATE` HP/s until full.
