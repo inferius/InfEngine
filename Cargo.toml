@@ -16,6 +16,7 @@ members = [
     "crates/infengine_net",
     "crates/infengine_particles",
     "crates/infengine_master_server",
+    "crates/infengine_sdk",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",

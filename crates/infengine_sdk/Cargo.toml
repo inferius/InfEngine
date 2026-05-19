@@ -1,0 +1,18 @@
+[package]
+name = "infengine_sdk"
+description = "Language-agnostic plugin SDK for InfEngine - C-ABI core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib only - the engine links this in directly. Plugins reference
+# the same C-ABI surface through `infengine_sdk_rs` (Rust wrapper)
+# or, later in Phase K, through `infengine_sdk_cs` (P/Invoke).
+crate-type = ["rlib"]
