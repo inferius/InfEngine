@@ -1728,6 +1728,14 @@ impl Voxel {
             if block.0 == 15 {
                 self.snow_positions.remove(p);
             }
+            // Q.4e: water spreading INTO a fire cell extinguishes
+            // the fire. No drop spawn (burned blocks + fire don't
+            // drop in MC). Clear the parallel age entry so the
+            // fire_tick loop stops visiting the slot.
+            if block.0 == block::FIRE_ID {
+                self.fires.remove(p);
+                continue;
+            }
             self.spawn_drop(*block, *p);
         }
         // Rebuild every chunk the apply touched.
@@ -9996,6 +10004,22 @@ impl AppHandler for Voxel {
                         std::time::Instant::now(),
                         "Portal frame is invalid.".to_string(),
                     ));
+                } else {
+                    // Q.4e: portal-ignition didn't fire (no adjacent
+                    // obsidian, hit cell wasn't part of a frame).
+                    // Fall through to "drop a fire on the clicked
+                    // air cell" - matches MC's flint+steel behaviour
+                    // on any non-frame solid surface.
+                    let ignite_pos = hit.place_at;
+                    if let Some(age) =
+                        block::fire::try_ignite_block(&self.world, ignite_pos)
+                    {
+                        let step = block::fire::FireStep {
+                            ignite: vec![(ignite_pos, age)],
+                            ..Default::default()
+                        };
+                        self.apply_fire_step(step);
+                    }
                 }
                 // Flint+steel doesn't deplete (durability is a
                 // deferred follow-up - see Phase F module docs).
@@ -10096,6 +10120,14 @@ impl AppHandler for Voxel {
                     };
                     let dest = self.world.get(target_voxel);
                     if dest.is_air() || block_is_replaceable(dest) {
+                        // Q.4e: pouring water/lava onto a fire cell
+                        // extinguishes it as the new source lands.
+                        // Clear the parallel age entry; the world
+                        // block write below overwrites FIRE_ID with
+                        // the liquid id.
+                        if dest.0 == block::FIRE_ID {
+                            self.fires.remove(&target_voxel);
+                        }
                         self.world_set_tracked(
                             target_voxel,
                             BlockId(liquid_id),

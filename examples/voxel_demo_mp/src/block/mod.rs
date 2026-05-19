@@ -507,12 +507,13 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // on `Voxel::fires`. Spreads to flammable neighbours + dies
     // when its support disappears. Same flag set as the portal
     // (F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_DEDICATED_RENDER
-    // | F_TRANSPARENT_RENDER) - chunk mesher skips it; the
-    // dedicated render path is a follow-up (placeholder while
-    // Wave 2 ships).
+    // | F_TRANSPARENT_RENDER) plus F_WASHABLE so water spreading
+    // INTO a fire cell extinguishes it (Q.4e) - the caller's
+    // washed-tape handler clears `voxel.fires[pos]` without
+    // spawning a drop.
     BlockType {
         id: 49, name: "fire", color: [1.00, 0.55, 0.10], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER,
+        flags: F_RAY_PASS | F_AABB_PASS | F_REPLACEABLE | F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_WASHABLE,
         top: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["fire_layer_0.png", "torch_on.png"], keep_alpha: true },

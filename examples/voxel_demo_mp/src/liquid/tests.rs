@@ -1304,6 +1304,79 @@ fn water_above_lava_source_becomes_obsidian_below() {
     assert_eq!(sim.world.get([0, 1, 0]).0, OBSIDIAN_ID);
 }
 
+// -----------------------------------------------------------------
+// Q.4e: water extinguishes fire (F_WASHABLE on FIRE_ID drives
+// the existing washable-spread path; the tape's `washed` entry
+// captures the displaced fire).
+// -----------------------------------------------------------------
+
+#[test]
+fn water_spreading_into_fire_replaces_it() {
+    use crate::block::FIRE_ID;
+    // Water source spreads onto a stone floor that extends well
+    // past the BFS-drop horizon (>4 cells) so every direction
+    // ties at u32::MAX in `distance_to_drop_at` and the spread
+    // hits all 4 NSEW neighbours. The fire cell sits on the
+    // floor; F_WASHABLE makes it a valid spread target -> water
+    // overwrites it.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -8..=8, -8..=8);
+    sim.place_source([0, 1, 0], water());
+    sim.world.set([1, 1, 0], BlockId(FIRE_ID));
+    sim.run(water(), 5);
+    let after = sim.world.get([1, 1, 0]).0;
+    assert_ne!(
+        after, FIRE_ID,
+        "fire still at [1,1,0] after 5 ticks (water plan must \
+         treat F_WASHABLE fire as a valid spread target)"
+    );
+    assert_eq!(
+        after,
+        crate::block::WATER_ID,
+        "expected water at former fire cell, got block id {after}"
+    );
+}
+
+#[test]
+fn water_spread_emits_washed_entry_for_fire() {
+    use crate::block::FIRE_ID;
+    // Verify the apply tape surfaces the fire as a washed block
+    // - that's what the live caller hooks to drop `voxel.fires`.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -8..=8, -8..=8);
+    sim.place_source([0, 1, 0], water());
+    sim.world.set([1, 1, 0], BlockId(FIRE_ID));
+    // Manually run one plan + apply cycle so we can inspect the
+    // tape.
+    use crate::liquid::plan::liquid_plan_step;
+    let mut saw_fire_wash = false;
+    for _ in 0..30 {
+        let plan = liquid_plan_step(
+            &sim.world,
+            &sim.level,
+            &sim.active,
+            water(),
+            sim.bias_drops,
+        );
+        let tape = crate::liquid::liquid_apply_plan(
+            &mut sim.world,
+            &mut sim.level,
+            &mut sim.active,
+            &mut sim.positions,
+            water(),
+            plan,
+        );
+        if tape.washed.iter().any(|(b, _)| b.0 == FIRE_ID) {
+            saw_fire_wash = true;
+            break;
+        }
+    }
+    assert!(
+        saw_fire_wash,
+        "no washed FIRE entry across 30 plan/apply cycles"
+    );
+}
+
 #[test]
 fn solidified_lava_cleared_from_level_map() {
     // Q.4a invariant: after the boundary conversion, the cell is

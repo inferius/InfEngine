@@ -10,8 +10,8 @@ use infengine_voxel::BlockId;
 use super::{
     FIRE_ID, block_has_flag, block_is_aabb_passable, block_is_opaque,
     block_is_placement_blocked, block_is_ray_passable, block_is_replaceable,
-    block_is_transparent_render, block_skips_chunk_mesh, block_type,
-    F_DEDICATED_RENDER, F_REPLACEABLE, F_TRANSPARENT_RENDER, is_tool_block,
+    block_is_transparent_render, block_is_washable, block_skips_chunk_mesh, block_type,
+    F_DEDICATED_RENDER, F_REPLACEABLE, F_TRANSPARENT_RENDER, F_WASHABLE, is_tool_block,
 };
 
 #[test]
@@ -54,10 +54,19 @@ fn fire_block_is_not_placement_blocked() {
 #[test]
 fn fire_block_flag_bits_match_spec() {
     let bt = block_type(FIRE_ID).unwrap();
-    let expected = F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_REPLACEABLE;
-    // Spot-check the three "render + replaceability" bits since
-    // the others have dedicated helpers above.
+    let expected =
+        F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_REPLACEABLE | F_WASHABLE;
+    // Spot-check the four "render + replaceability + wash" bits
+    // since the others have dedicated helpers above.
     assert_eq!(bt.flags & expected, expected);
+}
+
+#[test]
+fn fire_block_is_washable_for_water_extinguish() {
+    // Q.4e: water spreading INTO a fire cell must overwrite it.
+    // F_WASHABLE drives the existing liquid_plan's "spread can
+    // overwrite this block" gate.
+    assert!(block_is_washable(BlockId(FIRE_ID)));
 }
 
 #[test]
