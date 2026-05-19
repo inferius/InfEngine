@@ -88,6 +88,10 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
         1 => crate::game_mode::GameMode::Creative,
         _ => crate::game_mode::GameMode::Survival,
     };
+    // W10.1: keep the cached ability bundle in lockstep with
+    // `game_mode`. Without this the fly / invuln / instabuild
+    // flags would lag a tick behind the loaded mode.
+    voxel.refresh_abilities();
     // Re-anchor the day clock so a load right after a save doesn't
     // jump the sun. `day_time` itself lives in `meta.json` once Phase
     // C lands; for now the runtime keeps its value across reloads.

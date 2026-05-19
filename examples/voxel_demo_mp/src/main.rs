@@ -859,10 +859,21 @@ struct Voxel {
     current_world_slug: Option<String>,
     /// W8.2: current player game mode. Loaded from the player file
     /// on join + persisted on every save. Defaults to Survival on
-    /// a fresh runtime. The runtime checks for fly / invuln /
-    /// insta-break / creative-tab land in Wave 10; until then this
-    /// field is data-only.
+    /// a fresh runtime.
+    ///
+    /// Wave 10 wired the runtime checks: `fly_mode` / `god_mode` /
+    /// insta-break / creative tab now derive from `abilities`
+    /// below, which is recomputed every time this field changes.
     game_mode: game_mode::GameMode,
+    /// W10.1: cached `Abilities` bundle for `game_mode`. Updated
+    /// in lockstep with `game_mode` (world load, `/gamemode`
+    /// command). Consumers branch on individual flags here
+    /// instead of re-deriving them from the enum so future modes
+    /// (Adventure, Spectator) can opt in without touching every
+    /// call site. The `flying` flag is the toggleable live state
+    /// the double-tap-Space detector mutates - other flags are
+    /// pure functions of `game_mode`.
+    abilities: game_mode::Abilities,
     /// W8.1: gate for the world simulation tick. Set to `true` only
     /// after the user explicitly enters a world via
     /// PlayOffline/NewWorld+enter/DirectConnect/JoinServer; the bin
@@ -2611,6 +2622,26 @@ impl Voxel {
                 .collect(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// W10.1: recompute the cached `Abilities` bundle from the
+    /// current `game_mode`. Called whenever `game_mode` changes
+    /// (world load + `/gamemode` command). Preserves the live
+    /// `flying` toggle when switching INTO Creative (the player
+    /// keeps soaring) but force-disables it when switching to
+    /// Survival so gravity resumes immediately.
+    pub(crate) fn refresh_abilities(&mut self) {
+        let prev_flying = self.abilities.flying;
+        self.abilities = game_mode::Abilities::for_mode(self.game_mode);
+        // Carry over the live flight toggle only when the new
+        // mode still allows it (mayfly). Survival force-clears.
+        if self.abilities.mayfly {
+            self.abilities.flying = prev_flying;
+        }
+        // Sync the existing fly_mode flag so the physics
+        // integrator + HUD that already read it pick up the
+        // mode switch without a separate branch.
+        self.fly_mode = self.abilities.flying;
     }
 
     /// Persist user-facing settings (name, sensitivity, toggles)
@@ -4997,6 +5028,9 @@ impl Voxel {
             // W8.2: bootstrap defaults to Survival. The actual mode
             // is overridden by the player file on join.
             game_mode: game_mode::GameMode::Survival,
+            // W10.1: cached ability bundle. Recomputed at world
+            // load + on every `/gamemode` switch.
+            abilities: game_mode::Abilities::for_mode(game_mode::GameMode::Survival),
             // W8.1: bootstrap state has NO world loaded. The user
             // opts into world simulation by picking Singleplayer >
             // Hrat / Vytvorit or Multiplayer > Connect.
@@ -9530,6 +9564,10 @@ impl Voxel {
                 // W8.2: pin the runtime mode to the form pick. Wave
                 // 10 reads this for fly / invuln / insta-break.
                 self.game_mode = game_mode;
+                // W10.1: recompute the cached `Abilities` bundle so
+                // the fly / invuln / instabuild flags reflect the
+                // freshly-created world's mode immediately.
+                self.refresh_abilities();
                 self.menu.invalidate_caches();
                 // W8.1 + W8.2: jump straight into the freshly-created
                 // world. Mirrors PlayOffline.
