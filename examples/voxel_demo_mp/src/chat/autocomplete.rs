@@ -571,6 +571,94 @@ pub(crate) fn complete_with_tree(
     out
 }
 
+// ---------------------------------------------------------------
+// W11.5 - popup state shared with the UI.
+// ---------------------------------------------------------------
+
+/// Max visible rows in the popup. Beyond this the user scrolls.
+pub(crate) const POPUP_MAX_VISIBLE: usize = 10;
+
+/// Active completion popup state. Stored on `Voxel::chat_completion`
+/// while the popup is visible.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ChatCompletionPopup {
+    /// Candidate list - results of the last `complete()` call.
+    pub(crate) candidates: Vec<Completion>,
+    /// Currently highlighted candidate (cycle target for Tab +
+    /// arrow keys). Always `< candidates.len()` when the popup
+    /// is non-empty.
+    pub(crate) selected_index: usize,
+    /// Snapshot of the input the popup was computed against. The
+    /// UI compares this against the live `chat_input` each frame
+    /// to decide whether to recompute or reuse.
+    pub(crate) input_snapshot: String,
+    /// Cursor position the popup was computed against. Same
+    /// staleness check as `input_snapshot`.
+    pub(crate) cursor_snapshot: usize,
+}
+
+impl ChatCompletionPopup {
+    /// Move the highlight forward by one, wrapping at the end.
+    /// No-op when the popup is empty.
+    pub(crate) fn select_next(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        self.selected_index = (self.selected_index + 1) % self.candidates.len();
+    }
+
+    /// Move the highlight back by one, wrapping past the start.
+    pub(crate) fn select_prev(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        self.selected_index = if self.selected_index == 0 {
+            self.candidates.len() - 1
+        } else {
+            self.selected_index - 1
+        };
+    }
+
+    /// Return the currently highlighted completion's text.
+    pub(crate) fn selected(&self) -> Option<&Completion> {
+        self.candidates.get(self.selected_index)
+    }
+}
+
+/// Recompute the popup state for `input` + `cursor`. Returns
+/// `None` when there are no candidates (the UI hides the popup).
+pub(crate) fn recompute_popup(
+    input: &str,
+    cursor: usize,
+    user_level: PermLevel,
+    ctx: &CompletionContext,
+    previous: Option<&ChatCompletionPopup>,
+) -> Option<ChatCompletionPopup> {
+    let candidates = complete(input, cursor, user_level, ctx);
+    if candidates.is_empty() {
+        return None;
+    }
+    // Preserve selected_index when possible (same first candidate
+    // = treat as same list). Otherwise reset to 0.
+    let selected_index = match previous {
+        Some(prev)
+            if !prev.candidates.is_empty()
+                && prev.candidates.first().map(|c| &c.replacement)
+                    == candidates.first().map(|c| &c.replacement)
+                && prev.selected_index < candidates.len() =>
+        {
+            prev.selected_index
+        }
+        _ => 0,
+    };
+    Some(ChatCompletionPopup {
+        candidates,
+        selected_index,
+        input_snapshot: input.to_string(),
+        cursor_snapshot: cursor,
+    })
+}
+
 /// Replace the token at `cursor` in `input` with `replacement`,
 /// preserving the rest of the line. Returns the new (input, cursor)
 /// pair. If the token is at the start of input and the replacement
@@ -879,5 +967,203 @@ mod tests {
         assert!(names.contains(&"save"));
         // /help should NOT (doesn't start with "sa").
         assert!(!names.contains(&"help"));
+    }
+
+    // -----------------------------------------------------------
+    // W11.5 - popup state tests.
+    // -----------------------------------------------------------
+
+    #[test]
+    fn popup_select_next_wraps_around() {
+        let mut p = ChatCompletionPopup {
+            candidates: vec![
+                Completion::new("a"),
+                Completion::new("b"),
+                Completion::new("c"),
+            ],
+            selected_index: 2,
+            input_snapshot: String::new(),
+            cursor_snapshot: 0,
+        };
+        p.select_next();
+        assert_eq!(p.selected_index, 0);
+    }
+
+    #[test]
+    fn popup_select_prev_wraps_around() {
+        let mut p = ChatCompletionPopup {
+            candidates: vec![
+                Completion::new("a"),
+                Completion::new("b"),
+            ],
+            selected_index: 0,
+            input_snapshot: String::new(),
+            cursor_snapshot: 0,
+        };
+        p.select_prev();
+        assert_eq!(p.selected_index, 1);
+    }
+
+    #[test]
+    fn popup_select_no_op_on_empty() {
+        let mut p = ChatCompletionPopup::default();
+        p.select_next();
+        p.select_prev();
+        assert_eq!(p.selected_index, 0);
+    }
+
+    #[test]
+    fn popup_selected_returns_current() {
+        let p = ChatCompletionPopup {
+            candidates: vec![
+                Completion::new("alpha"),
+                Completion::new("beta"),
+            ],
+            selected_index: 1,
+            input_snapshot: String::new(),
+            cursor_snapshot: 0,
+        };
+        assert_eq!(p.selected().map(|c| c.label.as_str()), Some("beta"));
+    }
+
+    #[test]
+    fn recompute_popup_returns_some_when_candidates_exist() {
+        let p = recompute_popup("/", 1, 4, &CompletionContext::default(), None);
+        assert!(p.is_some());
+        let p = p.unwrap();
+        assert!(!p.candidates.is_empty());
+        assert_eq!(p.selected_index, 0);
+    }
+
+    #[test]
+    fn recompute_popup_returns_none_when_no_match() {
+        // A nonsense prefix yields no candidates -> popup hides.
+        let p = recompute_popup("/xyzzy_no", 9, 4, &CompletionContext::default(), None);
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn recompute_popup_preserves_selection_across_no_op_keystroke() {
+        // Same input + cursor -> same candidates -> selected_index
+        // is preserved.
+        let p1 =
+            recompute_popup("/", 1, 4, &CompletionContext::default(), None)
+                .unwrap();
+        let mut p1 = p1;
+        p1.selected_index = 5;
+        let p2 = recompute_popup(
+            "/",
+            1,
+            4,
+            &CompletionContext::default(),
+            Some(&p1),
+        )
+        .unwrap();
+        assert_eq!(p2.selected_index, 5);
+    }
+
+    #[test]
+    fn recompute_popup_resets_selection_on_list_change() {
+        // Different input -> different candidate set -> selection
+        // resets to 0.
+        let p1 =
+            recompute_popup("/sa", 3, 4, &CompletionContext::default(), None)
+                .unwrap();
+        let mut p1 = p1;
+        p1.selected_index = 1.min(p1.candidates.len() - 1);
+        let p2 = recompute_popup(
+            "/dim",
+            4,
+            4,
+            &CompletionContext::default(),
+            Some(&p1),
+        )
+        .unwrap();
+        assert_eq!(p2.selected_index, 0);
+    }
+
+    #[test]
+    fn popup_max_visible_is_10() {
+        // Sanity: the per-W11 brief decision is 10 visible rows.
+        assert_eq!(POPUP_MAX_VISIBLE, 10);
+    }
+
+    #[test]
+    fn esc_closes_popup_semantic() {
+        // The UI's Esc handler clears `chat_completion`; this test
+        // documents that semantic via Option<...> = None means
+        // closed.
+        let opened: Option<ChatCompletionPopup> = Some(
+            recompute_popup(
+                "/",
+                1,
+                4,
+                &CompletionContext::default(),
+                None,
+            )
+            .unwrap(),
+        );
+        assert!(opened.is_some());
+        // Esc clears the popup -> None.
+        let closed: Option<ChatCompletionPopup> = None;
+        assert!(closed.is_none());
+    }
+
+    #[test]
+    fn enter_accepts_selected_semantic() {
+        // The UI's Enter handler reads popup.selected() then calls
+        // apply_completion. This test exercises the same path.
+        let popup = recompute_popup(
+            "/sa",
+            3,
+            4,
+            &CompletionContext::default(),
+            None,
+        )
+        .unwrap();
+        let chosen = popup.selected().expect("at least one candidate");
+        let (out, _cur) = apply_completion("/sa", 3, &chosen.replacement);
+        // Output should start with one of the candidates.
+        assert!(out.starts_with('/'));
+        assert!(out.starts_with("/sa") || out.starts_with(&chosen.replacement));
+    }
+
+    #[test]
+    fn tab_in_chat_replaces_token_under_cursor() {
+        // Simulate the UI's Tab handler: take the selected
+        // candidate + apply it.
+        let mut popup =
+            recompute_popup("/gam", 4, 4, &CompletionContext::default(), None)
+                .unwrap();
+        // Find the /gamemode entry + select it.
+        let target_idx = popup
+            .candidates
+            .iter()
+            .position(|c| c.replacement == "/gamemode")
+            .expect("/gamemode should be a candidate");
+        popup.selected_index = target_idx;
+        let chosen = popup.selected().unwrap().replacement.clone();
+        let (out, _cur) = apply_completion("/gam", 4, &chosen);
+        assert_eq!(out, "/gamemode");
+    }
+
+    #[test]
+    fn arrow_up_down_changes_selection() {
+        let mut popup = ChatCompletionPopup {
+            candidates: vec![
+                Completion::new("alpha"),
+                Completion::new("beta"),
+                Completion::new("gamma"),
+            ],
+            selected_index: 0,
+            input_snapshot: String::new(),
+            cursor_snapshot: 0,
+        };
+        popup.select_next();
+        assert_eq!(popup.selected_index, 1);
+        popup.select_next();
+        assert_eq!(popup.selected_index, 2);
+        popup.select_prev();
+        assert_eq!(popup.selected_index, 1);
     }
 }

@@ -141,6 +141,9 @@ pub(crate) mod plugin;
 mod resource_pack;
 mod ui;
 mod worldgen;
+use chat::autocomplete::{
+    self as autocomplete, ChatCompletionPopup, CompletionContext,
+};
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
 use mining::{MiningState, block_hardness};
 use mob::{
@@ -701,6 +704,11 @@ struct Voxel {
     /// the player is typing fresh text. Reset whenever a new line
     /// is sent.
     chat_history_idx: Option<usize>,
+    /// W11.5: tab-autocomplete popup state. `None` when the
+    /// popup is hidden (no candidates / chat closed). `Some` when
+    /// the popup is visible above the chat input box. The
+    /// `selected_index` cycles with Tab + arrow keys.
+    chat_completion: Option<ChatCompletionPopup>,
     /// Previous-frame state of the T key for rising-edge open.
     t_prev: bool,
     lmb_pending: bool,
@@ -5008,6 +5016,7 @@ impl Voxel {
             chat_log: Vec::new(),
             chat_history: Vec::new(),
             chat_history_idx: None,
+            chat_completion: None,
             t_prev: false,
             lmb_pending: false,
             rmb_pending: false,
@@ -7673,6 +7682,19 @@ impl Voxel {
             options: menu_options_ref,
             ..
         } = &mut self.menu;
+        // W11.5: snapshot of every known player name + the local
+        // player. Built up here so the autocomplete CompletionContext
+        // can pull from a Vec<String> the closure owns - avoids
+        // re-borrowing `self.player_names` inside the egui callback.
+        let mut online_players: Vec<String> =
+            self.player_names.values().cloned().collect();
+        if !self.player_name.is_empty()
+            && !online_players.iter().any(|n| n == &self.player_name)
+        {
+            online_players.push(self.player_name.clone());
+        }
+        online_players.sort_by_key(|n| n.to_lowercase());
+        online_players.dedup();
         // Mutable borrow for the chat input box captured by the
         // egui closure. Taken last so earlier self.* reads
         // (raycast_mob, registry, etc.) finish before this
@@ -7680,6 +7702,7 @@ impl Voxel {
         let chat_buf = &mut self.chat_input;
         let chat_history_ref = &self.chat_history;
         let chat_history_idx = &mut self.chat_history_idx;
+        let chat_completion = &mut self.chat_completion;
         let player_name_buf = &mut self.player_name;
 
         let Some(ui) = self.ui.as_mut() else {
@@ -9201,6 +9224,64 @@ impl Voxel {
                                 ui.colored_label(col, line);
                             }
                             if chat_open {
+                                // W11.5 - autocomplete popup is
+                                // drawn ABOVE the input box so the
+                                // user sees candidates float over
+                                // the chat history while typing.
+                                if let Some(popup) = chat_completion.as_ref() {
+                                    egui::Frame::popup(ui.style())
+                                        .fill(egui::Color32::from_rgba_unmultiplied(
+                                            20, 20, 24, 230,
+                                        ))
+                                        .show(ui, |ui| {
+                                            let max =
+                                                autocomplete::POPUP_MAX_VISIBLE;
+                                            // Scroll-window the
+                                            // candidates around the
+                                            // selected index so the
+                                            // highlight stays visible.
+                                            let total = popup.candidates.len();
+                                            let start = if total > max
+                                                && popup.selected_index
+                                                    >= max
+                                            {
+                                                popup.selected_index + 1 - max
+                                            } else {
+                                                0
+                                            };
+                                            let end = (start + max).min(total);
+                                            for (i, c) in popup.candidates
+                                                [start..end]
+                                                .iter()
+                                                .enumerate()
+                                            {
+                                                let abs_idx = start + i;
+                                                let selected = abs_idx
+                                                    == popup.selected_index;
+                                                let col = if selected {
+                                                    egui::Color32::from_rgb(
+                                                        255, 220, 100,
+                                                    )
+                                                } else {
+                                                    egui::Color32::from_rgb(
+                                                        220, 220, 220,
+                                                    )
+                                                };
+                                                ui.colored_label(col, &c.label);
+                                            }
+                                            if total > end {
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(
+                                                        120, 120, 120,
+                                                    ),
+                                                    format!(
+                                                        "... +{} more",
+                                                        total - end
+                                                    ),
+                                                );
+                                            }
+                                        });
+                                }
                                 // `add_sized` forces the widget to
                                 // a hard 720x36 rect; the bare
                                 // `TextEdit::desired_width` hint
@@ -9215,55 +9296,143 @@ impl Voxel {
                                         .hint_text("press T to chat, Enter sends"),
                                 );
                                 resp.request_focus();
-                                // History scrolling via Up/Down.
-                                // Older entries are at the start
-                                // of the Vec, newest at the end;
-                                // Up walks backward, Down walks
-                                // forward. Down past the newest
-                                // entry clears the line so the
-                                // player can compose fresh text.
+                                // W11.5 - autocomplete state + key
+                                // handlers. Recompute popup when
+                                // input changes; route Tab / Esc /
+                                // Enter / arrows to the popup when
+                                // it's open instead of to the
+                                // history scroll.
                                 let up_pressed = ui
                                     .input(|i| i.key_pressed(egui::Key::ArrowUp));
                                 let down_pressed = ui
                                     .input(|i| i.key_pressed(egui::Key::ArrowDown));
-                                if !chat_history_ref.is_empty() {
-                                    if up_pressed {
-                                        let new_idx = match *chat_history_idx {
-                                            None => chat_history_ref.len() - 1,
-                                            Some(i) => i.saturating_sub(1),
-                                        };
-                                        *chat_history_idx = Some(new_idx);
-                                        *chat_buf =
-                                            chat_history_ref[new_idx].clone();
-                                    } else if down_pressed {
-                                        match *chat_history_idx {
-                                            Some(i)
-                                                if i + 1 < chat_history_ref.len() =>
-                                            {
-                                                *chat_history_idx = Some(i + 1);
-                                                *chat_buf =
-                                                    chat_history_ref[i + 1]
-                                                        .clone();
+                                let tab_pressed = ui
+                                    .input(|i| i.key_pressed(egui::Key::Tab));
+                                let esc_pressed = ui
+                                    .input(|i| i.key_pressed(egui::Key::Escape));
+                                let enter_pressed = ui
+                                    .input(|i| i.key_pressed(egui::Key::Enter));
+                                // Recompute popup on input change.
+                                let needs_recompute = match chat_completion
+                                    .as_ref()
+                                {
+                                    Some(p) => {
+                                        p.input_snapshot.as_str()
+                                            != chat_buf.as_str()
+                                    }
+                                    None => chat_buf.starts_with('/'),
+                                };
+                                if needs_recompute {
+                                    let ctx_ac = CompletionContext {
+                                        online_players: online_players.clone(),
+                                    };
+                                    *chat_completion =
+                                        autocomplete::recompute_popup(
+                                            chat_buf,
+                                            chat_buf.len(),
+                                            4, // host = full perm
+                                            &ctx_ac,
+                                            chat_completion.as_ref(),
+                                        );
+                                }
+                                let popup_active = chat_completion.is_some();
+                                if popup_active && esc_pressed {
+                                    *chat_completion = None;
+                                } else if popup_active && tab_pressed {
+                                    if let Some(popup) =
+                                        chat_completion.as_mut()
+                                    {
+                                        if popup.candidates.len() == 1 {
+                                            if let Some(c) = popup.selected() {
+                                                let (out, _) =
+                                                    autocomplete::apply_completion(
+                                                        chat_buf,
+                                                        chat_buf.len(),
+                                                        &c.replacement,
+                                                    );
+                                                *chat_buf = out;
                                             }
-                                            Some(_) => {
-                                                *chat_history_idx = None;
-                                                chat_buf.clear();
-                                            }
-                                            None => {}
+                                            *chat_completion = None;
+                                        } else {
+                                            popup.select_next();
                                         }
                                     }
-                                }
-                                // Enter sends + closes the chat.
-                                // Don't gate on `lost_focus` -
-                                // we force-focus the textbox each
-                                // frame via `request_focus`, so
-                                // focus never naturally leaves
-                                // when the user hits Enter. The
-                                // raw key check is enough.
-                                if ui
-                                    .input(|i| i.key_pressed(egui::Key::Enter))
+                                } else if popup_active && enter_pressed {
+                                    // Enter w/ popup open: accept
+                                    // the highlighted candidate
+                                    // + DON'T send.
+                                    if let Some(popup) =
+                                        chat_completion.as_ref()
+                                        && let Some(c) = popup.selected()
+                                    {
+                                        let (out, _) =
+                                            autocomplete::apply_completion(
+                                                chat_buf,
+                                                chat_buf.len(),
+                                                &c.replacement,
+                                            );
+                                        *chat_buf = out;
+                                    }
+                                    *chat_completion = None;
+                                } else if popup_active
+                                    && (up_pressed || down_pressed)
                                 {
-                                    chat_send_now = true;
+                                    if let Some(popup) =
+                                        chat_completion.as_mut()
+                                    {
+                                        if down_pressed {
+                                            popup.select_next();
+                                        } else {
+                                            popup.select_prev();
+                                        }
+                                    }
+                                } else if !popup_active {
+                                    // No popup - fall back to
+                                    // history scrolling + Enter
+                                    // send.
+                                    if !chat_history_ref.is_empty() {
+                                        if up_pressed {
+                                            let new_idx =
+                                                match *chat_history_idx {
+                                                    None => {
+                                                        chat_history_ref.len()
+                                                            - 1
+                                                    }
+                                                    Some(i) => {
+                                                        i.saturating_sub(1)
+                                                    }
+                                                };
+                                            *chat_history_idx =
+                                                Some(new_idx);
+                                            *chat_buf = chat_history_ref
+                                                [new_idx]
+                                                .clone();
+                                        } else if down_pressed {
+                                            match *chat_history_idx {
+                                                Some(i)
+                                                    if i + 1
+                                                        < chat_history_ref
+                                                            .len() =>
+                                                {
+                                                    *chat_history_idx =
+                                                        Some(i + 1);
+                                                    *chat_buf =
+                                                        chat_history_ref
+                                                            [i + 1]
+                                                            .clone();
+                                                }
+                                                Some(_) => {
+                                                    *chat_history_idx =
+                                                        None;
+                                                    chat_buf.clear();
+                                                }
+                                                None => {}
+                                            }
+                                        }
+                                    }
+                                    if enter_pressed {
+                                        chat_send_now = true;
+                                    }
                                 }
                             }
                         });
@@ -9309,6 +9478,8 @@ impl Voxel {
             self.chat_input.clear();
             self.chat_open = false;
             self.chat_history_idx = None;
+            // W11.5: closing chat hides the autocomplete popup.
+            self.chat_completion = None;
             if !text.is_empty() {
                 // Push to history, dedup adjacent repeats so
                 // hitting Up + Enter twice doesn't double-fill
@@ -10536,6 +10707,8 @@ impl AppHandler for Voxel {
                     if self.chat_open {
                         self.chat_open = false;
                         self.chat_input.clear();
+                        // W11.5: closing chat hides autocomplete.
+                        self.chat_completion = None;
                     } else if self.chest_open.is_some() {
                         self.close_chest_ui();
                     } else if self.furnace_open.is_some() {
