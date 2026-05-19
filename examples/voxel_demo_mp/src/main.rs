@@ -996,6 +996,11 @@ struct Voxel {
     /// extinguish + spread random-tick algorithm (MC
     /// FireBlock.java::tick).
     fires: HashMap<[i32; 3], u8>,
+    /// Game-tick counter for the fire random-tick gate. +1 per
+    /// net-tick frame. Q.4c uses `(pos, fire_clock)` as the seed
+    /// for the deterministic 1/30 probability check that gates
+    /// the spread + age step.
+    fire_clock: u64,
     /// Per-furnace live runtime: remaining fuel ms + cook progress
     /// ms + the full fuel duration for the UI bar. Driven by
     /// `block::furnace::furnace_tick`; persisted alongside the
@@ -1891,6 +1896,156 @@ impl Voxel {
                 if let Ok(buf) = bincode::serde::encode_to_vec((*pos, 0u8), cfg)
                 {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
+                }
+            }
+        }
+    }
+
+    /// Q.4c: fire random-tick. Walks `self.fires` once per
+    /// net-tick frame; each cell rolls `1/RATE_DENOM` and on
+    /// success runs `block::fire::plan_fire_cell`. Server-only
+    /// (clients receive the resulting `vx.edit` traffic).
+    fn fire_tick(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if self.fires.is_empty() {
+            return;
+        }
+        self.fire_clock = self.fire_clock.wrapping_add(1);
+        let clock = self.fire_clock;
+        // Snapshot the keys so we can mutate `self.fires` inside
+        // the loop without invalidating an iterator borrow.
+        let positions: Vec<[i32; 3]> = self.fires.keys().copied().collect();
+        let mut combined = block::fire::FireStep::default();
+        for pos in positions {
+            // Per-cell 1/RATE_DENOM gate. Salt 0x7000 separates
+            // the gate roll from the in-tick decision salts.
+            let h_gate = block::fire::hash3_for(pos, clock, 0x7000);
+            if !h_gate.is_multiple_of(block::fire::RATE_DENOM) {
+                continue;
+            }
+            block::fire::plan_fire_cell(
+                &self.world,
+                &self.fires,
+                pos,
+                clock,
+                &mut combined,
+            );
+        }
+        if combined.extinguish.is_empty()
+            && combined.age_bump.is_empty()
+            && combined.ignite.is_empty()
+            && combined.consume.is_empty()
+        {
+            return;
+        }
+        self.apply_fire_step(combined);
+    }
+
+    /// Commit a `FireStep` to the world + fires map + chunk mesh +
+    /// network. Split from `fire_tick` so flint+steel and the
+    /// lava-ignite path (Q.4d/e) can reuse the same commit shape.
+    fn apply_fire_step(&mut self, step: block::fire::FireStep) {
+        let cfg = bincode::config::standard();
+        let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
+        // Extinguish first - clears the world block + fires entry.
+        for pos in &step.extinguish {
+            if self.world.get(*pos).0 != block::FIRE_ID {
+                continue;
+            }
+            self.world.set(*pos, BlockId::AIR);
+            self.fires.remove(pos);
+            for c in Self::affected_chunks(*pos) {
+                chunk_set.insert(c);
+            }
+        }
+        // Consume (flammable -> air). Block was non-fire; just clear.
+        for pos in &step.consume {
+            let here = self.world.get(*pos);
+            if here.is_air() || here.0 == block::FIRE_ID {
+                continue;
+            }
+            // Don't drop the consumed block (MC: burned blocks
+            // don't drop items).
+            self.world.set(*pos, BlockId::AIR);
+            for c in Self::affected_chunks(*pos) {
+                chunk_set.insert(c);
+            }
+        }
+        // Age bumps - update fires map only; world stays FIRE_ID.
+        for (pos, age) in &step.age_bump {
+            if self.world.get(*pos).0 != block::FIRE_ID {
+                continue;
+            }
+            self.fires.insert(*pos, *age);
+        }
+        // Ignite (replace flammable / air with fire). MUST run
+        // after consume so a check_burn_out catch overrides the
+        // implicit air write.
+        for (pos, age) in &step.ignite {
+            // Defensive: don't overwrite an already-set fire with
+            // a stale ignite entry.
+            let here = self.world.get(*pos);
+            if here.0 == block::FIRE_ID {
+                // Already burning - just refresh age.
+                self.fires.insert(*pos, *age);
+                continue;
+            }
+            // The ignite target must currently be air OR a
+            // flammable block (the latter when check_burn_out
+            // catches). For air, ensure support is present.
+            if !here.is_air()
+                && block::fire::block_flammability(here.0) == (0, 0)
+            {
+                continue;
+            }
+            self.world.set(*pos, BlockId(block::FIRE_ID));
+            self.fires.insert(*pos, *age);
+            for c in Self::affected_chunks(*pos) {
+                chunk_set.insert(c);
+            }
+        }
+        if !chunk_set.is_empty() {
+            let coords: Vec<ChunkCoord> = chunk_set.into_iter().collect();
+            self.rebuild_chunks(&coords);
+        }
+        // Broadcast edits for every world-block change.
+        if let NetRole::Server { server, .. } = &mut self.net {
+            for pos in &step.extinguish {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: 0,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+            for pos in &step.consume {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: 0,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+            for (pos, _) in &step.ignite {
+                let edit = EditMsg {
+                    x: pos[0],
+                    y: pos[1],
+                    z: pos[2],
+                    block: block::FIRE_ID,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
                 }
             }
         }
@@ -3984,6 +4139,7 @@ impl Voxel {
             furnaces: HashMap::new(),
             furnace_runtimes: HashMap::new(),
             fires: HashMap::new(),
+            fire_clock: 0,
             furnace_open: None,
             furnace_held: None,
             liquid_schedule: LiquidSchedule::new(),
@@ -10187,6 +10343,10 @@ impl AppHandler for Voxel {
             &mut self.furnace_runtimes,
             dt_ms,
         );
+        // Q.4c: fire random-tick. Runs server-side; clients pick
+        // up the resulting `vx.edit` traffic. Cheap when
+        // `self.fires` is empty (early return).
+        self.fire_tick();
         // Phase F.6: portal-overlap counter + cross-dim teleport.
         self.tick_player_portal();
         // Auto-close the chest UI when the player walks more than

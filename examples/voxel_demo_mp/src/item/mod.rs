@@ -386,6 +386,16 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 1, icon: None,
         category: ItemCategory::Tool,
     },
+    // Fire (Q.4b). Block exists in the world but the player
+    // never holds it as an item stack - it spawns via flint+steel
+    // ignition or lava-burn. `places = None` keeps the place path
+    // honest if a creative-/give chat command ever shoves a fire
+    // stack into inventory.
+    ItemType {
+        id: 49, name: "fire", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
 ];
 
 // ---------------------------------------------------------------
