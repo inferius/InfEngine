@@ -108,6 +108,7 @@ mod debug_tests;
 // tolerates dead_code on the module until then.
 #[allow(dead_code)]
 mod lighting;
+mod menu;
 mod mining;
 mod mob_ai;
 mod player;
