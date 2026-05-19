@@ -93,6 +93,8 @@ mod dim;
 #[cfg(test)]
 mod dim_save_tests;
 #[cfg(test)]
+mod lighting_tick_tests;
+#[cfg(test)]
 mod dim_switch_tests;
 #[cfg(test)]
 mod dim_teleport_tests;
@@ -300,6 +302,11 @@ const REGEN_RATE: f32 = 0.5;
 /// see the sun move during a single play session - feel free to
 /// crank up for atmosphere later. 240s = 4 min full cycle.
 pub(crate) const DAY_LENGTH_S: f32 = 600.0;
+
+/// Phase L.6: the lighting tick runs at 10 Hz so block-edit ripples
+/// (place / break torch, dig a shaft) reach the GPU within 100 ms
+/// without re-flooding 27 chunks per individual edit.
+const LIGHTING_TICK_PERIOD_S: f32 = 0.1;
 
 /// The 6 axis-aligned neighbour offsets (4 NSEW + above + below).
 /// Used by the per-cell liquid tick to fan out re-schedules.
@@ -1051,6 +1058,11 @@ struct Voxel {
     /// lighting tick. Re-derived from the block grid on world
     /// load + dim switch - never persisted.
     lighting: lighting::LightingState,
+    /// Seconds since the last lighting tick. The lighting tick
+    /// runs at ~10 Hz (`LIGHTING_TICK_PERIOD_S`); intermediate
+    /// frames just stamp the dirty set + the meshes keep
+    /// rendering the previous tick's light values.
+    last_lighting_tick_s: f32,
     /// Server-authoritative mob list (sheep + future kinds). Only
     /// populated in `NetRole::Server` / `NetRole::Offline`. Each
     /// tick the server updates pos / yaw + broadcasts `vx.mob`.
@@ -1302,6 +1314,14 @@ impl Voxel {
             // the next-frame response - no separate force flag
             // needed in the per-cell schedule model.
         }
+        // Phase L.6: every block edit potentially changes the
+        // local light field - whether the new block is an
+        // emitter (torch/glowstone/lava/fire), an opaque blocker
+        // (carving out / sealing up sky columns), or just a
+        // transparent swap (water replacing leaves). We let the
+        // lighting tick figure out which chunks need a re-flood
+        // by adding the touched voxel to the dirty set.
+        self.lighting.mark_dirty(voxel);
     }
 
     /// Thin wrapper - see `mob_ai::damage_mob`.
@@ -4213,6 +4233,7 @@ impl Voxel {
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
             lighting: lighting::LightingState::new(),
+            last_lighting_tick_s: 0.0,
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
@@ -4920,6 +4941,65 @@ impl Voxel {
                 }
             },
         )
+    }
+
+    /// Drain the lighting dirty-set + run the conservative
+    /// re-flood across every chunk that contains a dirty voxel
+    /// PLUS the 3x3x3 chunk neighbourhood around it. The bigger
+    /// halo is what lets a torch placed near a chunk boundary
+    /// bleed light into the adjacent chunks even though the
+    /// torch's own voxel is in the centre chunk.
+    ///
+    /// Returns the unique set of chunks that need a mesh rebuild
+    /// (every chunk re-flooded). Callers funnel the result into
+    /// `rebuild_chunks` so the GPU buffers pick up the new
+    /// vertex light values.
+    fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
+        let dirty = self.lighting.take_dirty();
+        if dirty.is_empty() {
+            return Vec::new();
+        }
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let mut affected: HashSet<ChunkCoord> = HashSet::new();
+        for v in &dirty {
+            let cc = [
+                v[0].div_euclid(cs),
+                v[1].div_euclid(cs),
+                v[2].div_euclid(cs),
+            ];
+            // 3x3x3 chunk halo around each dirty voxel. This is
+            // the "conservative full re-flood of the touched
+            // chunk + its 26 neighbours" the L.6 plan picks
+            // instead of MC's incremental two-phase unlight.
+            for dx in -1..=1i32 {
+                for dy in -1..=1i32 {
+                    for dz in -1..=1i32 {
+                        affected.insert([cc[0] + dx, cc[1] + dy, cc[2] + dz]);
+                    }
+                }
+            }
+        }
+        // Keep only chunks that actually exist in the world.
+        // Re-flooding a phantom chunk wastes work + writes
+        // light into a grid the renderer never queries.
+        let affected: Vec<ChunkCoord> = affected
+            .into_iter()
+            .filter(|cc| self.world.chunk(*cc).is_some())
+            .collect();
+        if affected.is_empty() {
+            return Vec::new();
+        }
+        lighting::block_engine::propagate_block_light(
+            &self.world,
+            &mut self.lighting,
+            &affected,
+        );
+        lighting::sky_engine::propagate_sky_light(
+            &self.world,
+            &mut self.lighting,
+            &affected,
+        );
+        affected
     }
 
     fn rebuild_chunks(&mut self, coords: &[ChunkCoord]) {
@@ -10547,6 +10627,18 @@ impl AppHandler for Voxel {
         // pauses the advance.
         if !self.freeze_time {
             self.day_time = (self.day_time + dt).rem_euclid(DAY_LENGTH_S);
+        }
+        // Phase L.6: lighting tick at ~10 Hz. Drains the dirty
+        // set + re-floods every affected chunk + 26-neighbour
+        // halo, then asks the renderer to rebuild those meshes
+        // so the new per-vertex light reaches the GPU.
+        self.last_lighting_tick_s += dt;
+        if self.last_lighting_tick_s >= LIGHTING_TICK_PERIOD_S {
+            self.last_lighting_tick_s = 0.0;
+            let affected = self.tick_lighting();
+            if !affected.is_empty() && self.renderer.is_some() {
+                self.rebuild_chunks(&affected);
+            }
         }
         // Day <-> night transition announcer. Fires once per
         // crossing using the sun elevation so the chat doesn't
