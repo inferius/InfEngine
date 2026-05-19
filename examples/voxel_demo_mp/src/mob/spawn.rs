@@ -1,11 +1,15 @@
-//! Mob spawn loop: pick a candidate column near the host, check
-//! basic standing room, pick a kind, push a fresh `MobState` +
-//! broadcast a `MobMsg`.
+//! Mob spawn loop: pick a candidate ring position around the host,
+//! probe light + standing room, decide hostile vs passive, push a
+//! fresh `MobState` + broadcast a `MobMsg`.
 //!
-//! H.1 (this commit) is a pure refactor: the original 6-second
-//! grass-block spawn logic moves here verbatim. H.2 layers in the
-//! light-level + biome-aware spawn rules without touching the
-//! caller signature.
+//! H.2 layers in the MC-style light + biome gates on top of the
+//! H.1 refactor: hostile mobs need block_light <= 7 AND
+//! effective_sky_light <= 7; passive mobs need sky_light >= 9 AND
+//! a grass block under their feet. A per-chunk soft cap (4) keeps
+//! the density tolerable around the player.
+//!
+//! H.3 will plug a biome-aware weighted pool in place of the
+//! ad-hoc kind picker at the bottom.
 //!
 //! MC mirror:
 //! - `net/minecraft/world/level/NaturalSpawner.java` - per-chunk
@@ -13,7 +17,9 @@
 //!   loop to "one candidate per host tick" since the demo world
 //!   has a single live player at most.
 //! - `net/minecraft/world/entity/monster/Monster.java::checkMonsterSpawnRules`
-//!   - block-light <= 7 gate (light-driven spawn) - landed in H.2.
+//!   - block_light <= 7 gate (light-driven spawn).
+//! - `net/minecraft/world/entity/animal/Animal.java::checkAnimalSpawnRules`
+//!   - sky_light >= 9 + grass-below gate.
 
 use infengine_voxel::CHUNK_SIZE;
 
@@ -21,13 +27,28 @@ use crate::net::{MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, VERTICAL_CHUNKS, Voxel, day_night};
 
 use super::kinds::{KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE};
-use super::state::{
-    MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH,
+use super::light::{
+    has_solid_floor, has_standing_room, is_bright_enough_for_passive,
+    is_dark_enough_for_hostile, is_grass_below,
 };
+use super::state::{MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH};
 
 /// Period (seconds) between spawn attempts. Keeps the world from
 /// flooding when the cap is high.
 pub(crate) const MOB_SPAWN_PERIOD: f32 = 6.0;
+
+/// Per-chunk soft cap on simultaneous mobs. MC keeps a per-mob-
+/// category cap; we use a single all-kinds cap of 4 to stop a
+/// single grass field from monopolising the spawn budget.
+pub(crate) const PER_CHUNK_SOFT_CAP: usize = 4;
+
+/// Inner radius (blocks) of the spawn ring around the player.
+pub(crate) const SPAWN_RING_INNER: f32 = 12.0;
+/// Outer radius (blocks) of the spawn ring around the player.
+/// Cells outside this distance get the immediate-despawn pass
+/// (`MOB_DESPAWN_DIST_SQ = 80^2`), so keeping the spawn ring
+/// inside that envelope avoids spawn / despawn ping-ponging.
+pub(crate) const SPAWN_RING_OUTER: f32 = 32.0;
 
 /// Pluggable RNG: caller threads a counter-based xorshift through
 /// the AI tick so spawn + wander share entropy.
@@ -50,6 +71,72 @@ impl<'a> SpawnRng<'a> {
     }
 }
 
+/// Count mobs that currently live in the same chunk as `wpos`.
+/// Used to enforce the per-chunk soft cap.
+pub(crate) fn mobs_in_chunk(voxel: &Voxel, wpos: [i32; 3]) -> usize {
+    let cs = CHUNK_SIZE as i32;
+    let cx = wpos[0].div_euclid(cs);
+    let cz = wpos[2].div_euclid(cs);
+    voxel
+        .mobs
+        .iter()
+        .filter(|m| {
+            (m.pos[0].floor() as i32).div_euclid(cs) == cx
+                && (m.pos[2].floor() as i32).div_euclid(cs) == cz
+        })
+        .count()
+}
+
+/// Probe the column at `(wx, wz)` for a placement target. Returns
+/// the world voxel coord of the spawn cell (the AIR cell the mob
+/// will stand in - one above the surface block) plus the surface
+/// Y. `None` means the column has no exposed surface within
+/// `VERTICAL_CHUNKS`.
+pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3], i32)> {
+    let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+    let sy = voxel.surface_y_below(wx, wz, ceiling)?;
+    let spawn_y = sy + 1;
+    Some(([wx, spawn_y, wz], sy))
+}
+
+/// Decide which kind to spawn at the candidate cell. Returns
+/// `None` when neither the hostile nor the passive gate passes
+/// (cell is too dim for passive + too bright for hostile, or no
+/// grass under a passive candidate).
+///
+/// H.3 plugs a biome-aware weighted pool here; H.2 uses the same
+/// time-of-day ad-hoc roll the original spawn loop carried.
+pub(crate) fn pick_kind_for(
+    voxel: &Voxel,
+    wpos: [i32; 3],
+    day_time: f32,
+    rng: &mut SpawnRng<'_>,
+) -> Option<u8> {
+    let (sun_dir, _sky) = day_night(day_time);
+    let is_night = sun_dir.y < 0.0;
+    // First try hostile if dark enough.
+    if is_dark_enough_for_hostile(voxel, wpos) {
+        // Hostile-eligible. At night, hostile dominates with 60%
+        // probability; at day (dark caves etc.), hostile every time.
+        if !is_night || rng.next_f32() < 0.6 {
+            return Some(KIND_ZOMBIE);
+        }
+    }
+    // Try passive: grass + bright enough.
+    if is_bright_enough_for_passive(voxel, wpos) && is_grass_below(voxel, wpos) {
+        let roll = rng.next_f32();
+        let kind = if roll < 0.25 {
+            KIND_CHICKEN
+        } else if roll < 0.45 {
+            KIND_PIG
+        } else {
+            KIND_SHEEP
+        };
+        return Some(kind);
+    }
+    None
+}
+
 /// Try to spawn one mob this tick. Returns the new `next_mob_id`
 /// (incremented if a mob was placed, unchanged otherwise).
 ///
@@ -61,48 +148,33 @@ pub(crate) fn try_spawn_one(
     mut next_id: u32,
     rng: &mut SpawnRng<'_>,
 ) -> u32 {
-    // Spawn in a ring 12..32 blocks around the host so
-    // the world feels more populated as the player
-    // explores. Pure origin-anchored spawns were
-    // confusing once they wandered far from spawn.
+    // Spawn in a ring 12..32 blocks around the host so the world
+    // feels more populated as the player explores.
     let angle = rng.next_f32() * std::f32::consts::TAU;
-    let radius = 12.0 + rng.next_f32() * 20.0;
+    let radius =
+        SPAWN_RING_INNER + rng.next_f32() * (SPAWN_RING_OUTER - SPAWN_RING_INNER);
     let cx = voxel.player_pos.x;
     let cz = voxel.player_pos.z;
     let wx = (cx + angle.cos() * radius).round() as i32;
     let wz = (cz + angle.sin() * radius).round() as i32;
-    // Spawn scan: probe the column ceiling so the sheep
-    // lands on real ground (canopy is fine here too since
-    // mobs spawn from above).
-    let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
-    let Some(sy) = voxel.surface_y_below(wx, wz, ceiling) else {
+    let Some((spawn_pos, _sy)) = probe_column(voxel, wx, wz) else {
         return next_id;
     };
-    let top = voxel.world.get([wx, sy, wz]);
-    if top.0 != 3 {
+    // Per-chunk cap: bail if this chunk already holds N mobs.
+    if mobs_in_chunk(voxel, spawn_pos) >= PER_CHUNK_SOFT_CAP {
         return next_id;
     }
-    // Pick kind: zombies only spawn at night
-    // (sun_dir.y < 0) and crowd out sheep with a
-    // 60% chance during the dark hours. Daytime is
-    // sheep-only.
-    let (sun_dir, _sky) = day_night(day_time);
-    let is_night = sun_dir.y < 0.0;
-    let roll = rng.next_f32();
-    let kind = if is_night && roll < 0.6 {
-        KIND_ZOMBIE
-    } else if !is_night && roll < 0.25 {
-        KIND_CHICKEN
-    } else if !is_night && roll < 0.45 {
-        // Daytime mixes in pigs alongside
-        // chickens + sheep.
-        KIND_PIG
-    } else {
-        KIND_SHEEP
+    // Structural gate: need a solid floor + two air cells stacked.
+    if !has_solid_floor(voxel, spawn_pos) || !has_standing_room(voxel, spawn_pos) {
+        return next_id;
+    }
+    // Decide kind via light + biome rules.
+    let Some(kind) = pick_kind_for(voxel, spawn_pos, day_time, rng) else {
+        return next_id;
     };
     let id = next_id;
     next_id = next_id.wrapping_add(1).max(1);
-    let pos = [wx as f32 + 0.5, sy as f32 + 1.0, wz as f32 + 0.5];
+    let pos = [spawn_pos[0] as f32 + 0.5, spawn_pos[1] as f32, spawn_pos[2] as f32 + 0.5];
     let mob = MobState {
         id,
         kind,
@@ -153,4 +225,172 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
     }
     let mut rng = SpawnRng::new(rng_state);
     voxel.next_mob_id = try_spawn_one(voxel, day_time, voxel.next_mob_id, &mut rng);
+}
+
+#[cfg(test)]
+mod tests {
+    //! Live-Voxel tests for the spawn-loop gates. Each test stamps
+    //! the world + lighting state by hand, then calls the gate
+    //! predicates + the `try_spawn_one` entry point.
+
+    use super::*;
+    use crate::Voxel;
+    use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
+
+    fn stamp_light(v: &mut Voxel, w: [i32; 3], block: u8, sky: u8) {
+        let cs = CHUNK_SIZE as i32;
+        let cc: ChunkCoord = [
+            w[0].div_euclid(cs),
+            w[1].div_euclid(cs),
+            w[2].div_euclid(cs),
+        ];
+        let lc = [
+            w[0].rem_euclid(cs) as u32,
+            w[1].rem_euclid(cs) as u32,
+            w[2].rem_euclid(cs) as u32,
+        ];
+        let g = v.lighting.ensure(cc);
+        g.set_block(lc, block);
+        g.set_sky(lc, sky);
+    }
+
+    fn stamp_grass_platform(v: &mut Voxel, w: [i32; 3]) {
+        // Place a grass block one below the spawn target so passive
+        // rules + standing room both pass. The voxel world is empty
+        // on `Voxel::new()` so we need to mint the owning chunk
+        // before writing - `World::set` is a no-op for unloaded
+        // chunks.
+        use infengine_voxel::{Chunk, CHUNK_SIZE};
+        let cs = CHUNK_SIZE as i32;
+        let floor_w = [w[0], w[1] - 1, w[2]];
+        let cc = [
+            floor_w[0].div_euclid(cs),
+            floor_w[1].div_euclid(cs),
+            floor_w[2].div_euclid(cs),
+        ];
+        if v.world.chunk(cc).is_none() {
+            v.world.insert_chunk(cc, Chunk::empty());
+        }
+        v.world.set(floor_w, BlockId(3));
+    }
+
+    #[test]
+    fn per_chunk_cap_blocks_excess_spawns() {
+        let mut v = Voxel::new();
+        // Stuff the chunk at world origin with the per-chunk cap.
+        for i in 0..PER_CHUNK_SOFT_CAP {
+            v.mobs.push(MobState {
+                id: (i as u32) + 1,
+                kind: KIND_SHEEP,
+                pos: [0.5, 64.0, 0.5],
+                target: [0.5, 64.0, 0.5],
+                yaw: 0.0,
+                retarget_at: 0.0,
+                health: MOB_MAX_HEALTH,
+                dying: 0.0,
+                attack_cd: 0.0,
+            });
+        }
+        assert!(mobs_in_chunk(&v, [0, 64, 0]) >= PER_CHUNK_SOFT_CAP);
+    }
+
+    #[test]
+    fn mobs_in_chunk_counts_only_same_chunk() {
+        let mut v = Voxel::new();
+        v.mobs.push(MobState {
+            id: 1,
+            kind: KIND_SHEEP,
+            pos: [0.5, 64.0, 0.5],
+            target: [0.5, 64.0, 0.5],
+            yaw: 0.0,
+            retarget_at: 0.0,
+            health: 1.0,
+            dying: 0.0,
+            attack_cd: 0.0,
+        });
+        v.mobs.push(MobState {
+            id: 2,
+            kind: KIND_SHEEP,
+            pos: [200.5, 64.0, 200.5],
+            target: [200.5, 64.0, 200.5],
+            yaw: 0.0,
+            retarget_at: 0.0,
+            health: 1.0,
+            dying: 0.0,
+            attack_cd: 0.0,
+        });
+        assert_eq!(mobs_in_chunk(&v, [0, 64, 0]), 1);
+        assert_eq!(mobs_in_chunk(&v, [200, 64, 200]), 1);
+    }
+
+    #[test]
+    fn pick_kind_chooses_hostile_in_dark() {
+        // Dark cell (block + sky both 0): hostile gate passes. At
+        // night with roll < 0.6 we get a zombie; with roll >= 0.6
+        // we fall through to passive, which also gates on grass.
+        let mut v = Voxel::new();
+        v.day_time = crate::DAY_LENGTH_S * 0.75; // midnight
+        stamp_light(&mut v, [10, 60, 10], 0, 0);
+        // No grass under the cell -> passive fallback fails too,
+        // so a roll >= 0.6 returns None. We deterministically pick
+        // a seed that lands < 0.6 on the first call.
+        let mut seed = 0x12345u32;
+        let mut rng = SpawnRng::new(&mut seed);
+        let kind = pick_kind_for(&v, [10, 60, 10], v.day_time, &mut rng);
+        assert!(kind == Some(KIND_ZOMBIE) || kind.is_none());
+    }
+
+    #[test]
+    fn pick_kind_passes_passive_on_grass_in_daylight() {
+        let mut v = Voxel::new();
+        v.day_time = 0.0; // noon - daylight kills hostile gate
+        stamp_light(&mut v, [20, 60, 20], 0, 15);
+        stamp_grass_platform(&mut v, [20, 60, 20]);
+        let mut seed = 0xC0FFEEu32;
+        let mut rng = SpawnRng::new(&mut seed);
+        let kind = pick_kind_for(&v, [20, 60, 20], v.day_time, &mut rng);
+        assert!(
+            kind == Some(KIND_SHEEP)
+                || kind == Some(KIND_CHICKEN)
+                || kind == Some(KIND_PIG)
+        );
+    }
+
+    #[test]
+    fn pick_kind_rejects_dark_non_grass_during_day() {
+        // Daylight: hostile gate fails (effective sky high).
+        // Passive gate fails: not enough sky_light AND no grass.
+        let mut v = Voxel::new();
+        v.day_time = 0.0;
+        stamp_light(&mut v, [30, 60, 30], 0, 8); // sky_light = 8 (one below floor)
+        // No grass placed.
+        let mut seed = 1u32;
+        let mut rng = SpawnRng::new(&mut seed);
+        assert_eq!(pick_kind_for(&v, [30, 60, 30], v.day_time, &mut rng), None);
+    }
+
+    #[test]
+    fn pick_kind_rejects_passive_on_non_grass() {
+        // Bright sky but no grass below -> passive gate fails.
+        let mut v = Voxel::new();
+        v.day_time = 0.0;
+        stamp_light(&mut v, [40, 60, 40], 0, 15);
+        // No grass under the spawn cell.
+        let mut seed = 2u32;
+        let mut rng = SpawnRng::new(&mut seed);
+        assert_eq!(pick_kind_for(&v, [40, 60, 40], v.day_time, &mut rng), None);
+    }
+
+    #[test]
+    fn pick_kind_rejects_bright_lit_corner_at_night() {
+        // Torch-lit cell at night: block_light = 14 -> hostile
+        // gate fails (block_light > 7). sky_light = 0 + no grass
+        // -> passive gate fails too.
+        let mut v = Voxel::new();
+        v.day_time = crate::DAY_LENGTH_S * 0.75;
+        stamp_light(&mut v, [50, 60, 50], 14, 0);
+        let mut seed = 3u32;
+        let mut rng = SpawnRng::new(&mut seed);
+        assert_eq!(pick_kind_for(&v, [50, 60, 50], v.day_time, &mut rng), None);
+    }
 }

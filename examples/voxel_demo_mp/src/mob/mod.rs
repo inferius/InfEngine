@@ -24,6 +24,7 @@ pub(crate) mod ai;
 pub(crate) mod audio;
 pub(crate) mod damage;
 pub(crate) mod kinds;
+pub(crate) mod light;
 pub(crate) mod pathfind;
 pub(crate) mod raycast;
 pub(crate) mod spawn;
