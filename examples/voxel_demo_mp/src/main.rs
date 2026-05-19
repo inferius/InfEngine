@@ -124,6 +124,13 @@ mod player;
 // (defined in `infengine_sdk`) will back the C# CLR host in Phase K
 // without any SDK rewrite.
 pub(crate) mod plugin;
+// W9: MC resource-pack loader. Reads textures + .mcmeta animations
+// + sounds.json from the user's local MC install (assets are NOT
+// committed to the repo - the loader points at external paths).
+// Falls back to a synthetic placeholder atlas when no MC install
+// is detected so the demo still launches on a clean machine.
+#[allow(dead_code)]
+mod resource_pack;
 mod ui;
 mod worldgen;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
