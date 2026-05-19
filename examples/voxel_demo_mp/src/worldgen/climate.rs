@@ -183,7 +183,7 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         } else if wy >= h - 3 {
             near_surface_block(biome)
         } else {
-            pick_stone_or_ore(wx, wy, wz, biome)
+            pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });
     // Decoration passes - reuse the Classic placement helpers for

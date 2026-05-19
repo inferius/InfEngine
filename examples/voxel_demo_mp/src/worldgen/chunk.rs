@@ -173,7 +173,7 @@ fn gen_classic(coord: ChunkCoord, ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
         } else if wy >= h - 3 {
             near_surface
         } else {
-            pick_stone_or_ore(wx, wy, wz, biome)
+            pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });
     // Decoration passes follow the same order as the pre-split

@@ -24,7 +24,7 @@ use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use crate::block::{BEDROCK_ID, GLOWSTONE_ID, LAVA_ID, NETHERRACK_ID};
 use crate::worldgen::WorldgenCtx;
-use crate::worldgen::hash2;
+use crate::worldgen::hash2_for;
 use crate::worldgen::height::cave_at;
 
 /// World-Y of the bedrock floor. Vanilla MC matches this; the
@@ -48,14 +48,15 @@ const BULK_AMP: i32 = 16;
 const LAVA_LAKE_Y_MAX: i32 = 32;
 
 /// `gen_nether` - deterministic chunk generator for the nether.
-pub(crate) fn gen_nether(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
+pub(crate) fn gen_nether(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
+    let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
         let wy = origin.y as i32 + y as i32;
         let wz = origin.z + z as f32;
-        nether_block_at(wx, wy, wz)
+        nether_block_at(wx, wy, wz, seed)
     });
     chunk
 }
@@ -64,7 +65,10 @@ pub(crate) fn gen_nether(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
 /// nether generator. Factored out so the caller can drive a
 /// fold-hash test against the same per-cell decision used by
 /// the chunk pass.
-pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32) -> BlockId {
+///
+/// F.2c-2: takes an explicit seed so the noise calls are pure;
+/// callers thread `ctx.effective_seed()` through.
+pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32, seed: u32) -> BlockId {
     // Bedrock floor - one solid row at y=0. Anything below is
     // out of bounds (chunks never extend there in practice but
     // keep the guard).
@@ -80,7 +84,7 @@ pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32) -> BlockId {
     if wy >= NETHER_CEILING_Y {
         // Bottom ceiling row -> sometimes glowstone, mostly
         // netherrack. Hash2 keeps it deterministic.
-        if wy == NETHER_CEILING_Y && glowstone_at(wx, wz) {
+        if wy == NETHER_CEILING_Y && glowstone_at(wx, wz, seed) {
             return BlockId(GLOWSTONE_ID);
         }
         return BlockId(NETHERRACK_ID);
@@ -93,7 +97,7 @@ pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32) -> BlockId {
         // pools in basin columns from y=ground_h+1 up to
         // LAVA_LAKE_Y_MAX. This produces visible lava lakes
         // rather than a single thin row.
-        if wy <= LAVA_LAKE_Y_MAX && is_lava_lake(wx, wz) {
+        if wy <= LAVA_LAKE_Y_MAX && is_lava_lake(wx, wz, seed) {
             return BlockId(LAVA_ID);
         }
         return BlockId::AIR;
@@ -102,7 +106,7 @@ pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32) -> BlockId {
     // through the bulk for navigation. Skip the cave carve if
     // we're inside an actual lava lake column so the cave gen
     // doesn't punch holes into the lava floor.
-    if !is_lava_lake(wx, wz) && cave_at(wx, wy as f32, wz) {
+    if !is_lava_lake(wx, wz, seed) && cave_at(wx, wy as f32, wz) {
         return BlockId::AIR;
     }
     BlockId(NETHERRACK_ID)
@@ -122,15 +126,15 @@ fn nether_ground_height(wx: f32, wz: f32) -> i32 {
 /// Threshold the standard `hash2` to about 12% coverage so
 /// lakes are sparse but visible. Pure XZ test - the caller
 /// gates on Y separately.
-fn is_lava_lake(wx: f32, wz: f32) -> bool {
-    let h = hash2(wx as i32, wz as i32);
+fn is_lava_lake(wx: f32, wz: f32, seed: u32) -> bool {
+    let h = hash2_for(wx as i32, wz as i32, seed);
     (h % 100) < 12
 }
 
 /// Returns true when (wx, wz) on the ceiling-bottom row should
 /// emit glowstone instead of netherrack. ~8% coverage.
-fn glowstone_at(wx: f32, wz: f32) -> bool {
-    let h = hash2(wx as i32 + 7, wz as i32 + 13);
+fn glowstone_at(wx: f32, wz: f32, seed: u32) -> bool {
+    let h = hash2_for(wx as i32 + 7, wz as i32 + 13, seed);
     (h % 100) < 8
 }
 
@@ -153,7 +157,7 @@ mod tests {
         for wx in -8..8 {
             for wz in -8..8 {
                 assert_eq!(
-                    nether_block_at(wx as f32, 0, wz as f32).0,
+                    nether_block_at(wx as f32, 0, wz as f32, 0).0,
                     BEDROCK_ID,
                     "floor at ({wx}, 0, {wz}) should be bedrock"
                 );
@@ -191,7 +195,7 @@ mod tests {
         // glowstone (never air, never bedrock).
         for wx in -4..4 {
             for wz in -4..4 {
-                let id = nether_block_at(wx as f32, NETHER_CEILING_Y, wz as f32).0;
+                let id = nether_block_at(wx as f32, NETHER_CEILING_Y, wz as f32, 0).0;
                 assert!(
                     id == NETHERRACK_ID || id == GLOWSTONE_ID,
                     "ceiling at ({wx}, {NETHER_CEILING_Y}, {wz}) = {id}"
@@ -211,7 +215,7 @@ mod tests {
         let mut found_lava = false;
         for wx in -64..64 {
             for wz in -64..64 {
-                if is_lava_lake(wx as f32, wz as f32) {
+                if is_lava_lake(wx as f32, wz as f32, 0) {
                     found_lava = true;
                     break;
                 }
@@ -231,7 +235,7 @@ mod tests {
         let mut found = false;
         for wx in -64..64 {
             for wz in -64..64 {
-                if glowstone_at(wx as f32, wz as f32) {
+                if glowstone_at(wx as f32, wz as f32, 0) {
                     found = true;
                     break;
                 }
