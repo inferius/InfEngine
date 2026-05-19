@@ -6896,6 +6896,11 @@ impl Voxel {
         let dbg_chunks = self.chunk_meshes.len();
         let dbg_grounded = self.grounded;
         let dbg_mobs = self.remote_mobs.len();
+        // H.7: mob count + nearest distance line + per-kind breakdown
+        // pulled from the new mob::hud helpers. Pre-format here so the
+        // egui closure stays borrow-free of `&self`.
+        let dbg_mob_count_line = mob::hud::format_mob_count_line(self);
+        let dbg_mob_kinds_line = mob::hud::format_mob_kinds_line(self);
         let dbg_particles = self.particles.live_count();
         let dbg_fly = self.fly_mode;
         let dbg_cam = match self.camera_mode {
@@ -7601,6 +7606,12 @@ impl Voxel {
                                 ui.label(format!("chunk meshes: {dbg_chunks}"));
                                 ui.label(format!("pending chunks: {dbg_pending}"));
                                 ui.label(format!("mobs (remote): {dbg_mobs}"));
+                                // H.7 mob HUD: count vs cap, nearest
+                                // kind + distance, per-kind tally.
+                                ui.label(&dbg_mob_count_line);
+                                if !dbg_mob_kinds_line.is_empty() {
+                                    ui.label(&dbg_mob_kinds_line);
+                                }
                                 ui.label(format!("particles: {dbg_particles}"));
                                 ui.label(format!(
                                     "camera: {dbg_cam}{}",
