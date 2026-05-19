@@ -139,6 +139,55 @@ impl PanoramaState {
     }
 }
 
+/// W12.6 (cube-light path): horizontally-stitched panorama strip
+/// built from the 4 horizon-facing faces (north + east + south + west)
+/// so the menu backdrop can present a continuous panorama via simple
+/// horizontal UV scroll instead of running a 3D skybox cube. The
+/// stitched order north -> east -> south -> west matches MC's
+/// PanoramaRenderer face order so the seam between adjacent faces
+/// stays MC-faithful.
+///
+/// Returns `(width_px, height_px, RGBA8 bytes)` when all four faces
+/// load + match dimensions; `None` otherwise (caller falls back to
+/// the dark-navy backdrop).
+pub(crate) fn stitch_horizontal_strip(
+    assets_root: &Path,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let paths = discover_panorama_faces(assets_root)?;
+    // North + east + south + west = indices 2, 3, 0, 1 in
+    // PANORAMA_FACE_NAMES order. Walking this order gives a
+    // continuous left-to-right panorama with the seams MC tunes.
+    let order = [2usize, 3, 0, 1];
+    let mut tiles: Vec<image::RgbaImage> = Vec::with_capacity(4);
+    let mut tile_w: u32 = 0;
+    let mut tile_h: u32 = 0;
+    for i in order {
+        let img = image::open(&paths[i]).ok()?.to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        if tile_w == 0 {
+            tile_w = w;
+            tile_h = h;
+        } else if w != tile_w || h != tile_h {
+            // Mismatched dimensions - bail rather than stitch a
+            // skewed strip.
+            return None;
+        }
+        tiles.push(img);
+    }
+    let total_w = tile_w * 4;
+    let mut strip = image::RgbaImage::new(total_w, tile_h);
+    for (idx, tile) in tiles.into_iter().enumerate() {
+        let x_off = idx as u32 * tile_w;
+        for y in 0..tile_h {
+            for x in 0..tile_w {
+                let px = tile.get_pixel(x, y);
+                strip.put_pixel(x_off + x, y, *px);
+            }
+        }
+    }
+    Some((total_w, tile_h, strip.into_raw()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

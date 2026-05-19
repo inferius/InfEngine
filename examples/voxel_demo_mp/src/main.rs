@@ -1319,6 +1319,17 @@ struct Voxel {
     /// first inventory render so we don't pay the upload cost until
     /// the player actually opens the menu.
     egui_atlas: Option<egui::TextureHandle>,
+    /// W12.6: cached egui handle for the MC main-menu panorama
+    /// (one of the 6 cube faces from
+    /// `assets/minecraft/textures/gui/title/background/panorama_*.png`).
+    /// Loaded lazily on the first menu draw + reused across frames;
+    /// the underlying texture survives until the program exits.
+    egui_panorama: Option<egui::TextureHandle>,
+    /// W12.6: scroll offset accumulator for the panorama backdrop.
+    /// Advanced each frame by `PANORAMA_ROT_RATE_RAD_PER_SEC * dt`
+    /// and wrapped to `0..=1` so UV math stays numerically stable
+    /// over long sessions.
+    panorama_scroll: f32,
     /// Optional directory of PNG / TGA block textures. When set,
     /// `on_start` tries to load the atlas from there before
     /// falling back to the procedural builder.
@@ -5145,6 +5156,8 @@ impl Voxel {
             voxel_atlas: None,
             atlas_rgba: None,
             egui_atlas: None,
+            egui_panorama: None,
+            panorama_scroll: 0.0,
             texture_dir: None,
             resource_pack: resource_pack::ResourcePack::load(),
             particles: {
@@ -7541,6 +7554,39 @@ impl Voxel {
         }
         let atlas_tex_id: Option<egui::TextureId> =
             self.egui_atlas.as_ref().map(|h| h.id());
+        // W12.6: lazy-load the MC menu panorama strip (horizontally
+        // stitched from 4 horizon faces) into an egui texture on
+        // first menu draw. Falls back to None when no MC assets
+        // present, in which case the menu still works with the
+        // existing dark-navy clear color.
+        if self.egui_panorama.is_none()
+            && let Some(ui) = self.ui.as_ref()
+            && !self.resource_pack.is_fallback
+            && let Some((w, h, rgba)) =
+                panorama::stitch_horizontal_strip(&self.resource_pack.source)
+        {
+            let img =
+                egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            let handle = ui.context().load_texture(
+                "voxel_panorama_egui",
+                img,
+                egui::TextureOptions::LINEAR,
+            );
+            self.egui_panorama = Some(handle);
+        }
+        // W12.6: advance the scroll offset by the MC 1-RPM rate.
+        // A full 360-deg rotation = 60 s; the stitched strip is 4
+        // tiles wide, so one full scroll = 60 s and per-frame
+        // advance at 60 fps = `1/3600` in UV units. We use a fixed
+        // 1/60 s tick assumption rather than threading `dt` through
+        // every render path - the menu backdrop tolerates frame-rate
+        // jitter (slight scroll-speed variance is invisible at
+        // 1 RPM).
+        self.panorama_scroll =
+            (self.panorama_scroll + 1.0 / 3600.0).rem_euclid(1.0);
+        let panorama_egui_tex: Option<egui::TextureId> =
+            self.egui_panorama.as_ref().map(|h| h.id());
+        let panorama_scroll_local = self.panorama_scroll;
         // W9.3 + W9.4: per-item UV resolver that the container UI
         // threads into its slot painter. Bound up here so the egui
         // closure can borrow it alongside the rest of the per-frame
@@ -7775,7 +7821,38 @@ impl Voxel {
             | AppState::DirectConnect
             | AppState::ServerBrowser
             | AppState::HostSetup => {
+                // W12.6: paint the stitched MC panorama as the menu
+                // backdrop. Scroll the UV horizontally at the MC
+                // 1-RPM rate so the sky reads as a slow rotation.
+                let panorama_tex = panorama_egui_tex;
+                let scroll = panorama_scroll_local;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(tex_id) = panorama_tex {
+                        let rect = ui.max_rect();
+                        // Scroll U over time; V fixed. The strip is
+                        // 4x wider than 1 face so a `1.0` shift = a
+                        // full quarter-turn.
+                        let u0 = scroll.rem_euclid(1.0);
+                        let uv = egui::Rect::from_min_max(
+                            egui::pos2(u0, 0.0),
+                            egui::pos2(u0 + 0.25, 1.0),
+                        );
+                        ui.painter().image(
+                            tex_id,
+                            rect,
+                            uv,
+                            egui::Color32::WHITE,
+                        );
+                        // Subtle dark vignette so the buttons stand
+                        // out against the panorama.
+                        let mut dim = rect;
+                        dim.set_height(rect.height());
+                        ui.painter().rect_filled(
+                            dim,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 110),
+                        );
+                    }
                     let mut mctx = menu::MenuContext {
                         worlds: &worlds_snapshot,
                         browser_servers,
