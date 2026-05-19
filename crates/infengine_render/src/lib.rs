@@ -155,10 +155,24 @@ impl Renderer {
             "selected GPU adapter"
         );
 
+        // W9.y.2 added a 5th bind group (`tile_anims` at @group(4))
+        // to the mesh3d pipeline. wgpu's `downlevel_defaults` cap
+        // `max_bind_groups = 4`, which trips a device-creation
+        // validation error on Vulkan stacks honouring the floor.
+        // Bump to 5 - the actual hardware floor across desktop GPUs
+        // is 8 (Vulkan / DX12 spec), so this stays within the
+        // adapter's real limits while keeping every other downlevel
+        // default the same.
+        let mut required_limits =
+            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        required_limits.max_bind_groups = required_limits
+            .max_bind_groups
+            .max(5)
+            .min(adapter.limits().max_bind_groups);
         let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("infengine_render::device"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            required_limits,
             memory_hints: MemoryHints::Performance,
             trace: Trace::Off,
             experimental_features: wgpu::ExperimentalFeatures::default(),
