@@ -149,6 +149,8 @@ mod particle_pass;
 mod sky;
 #[allow(dead_code)]
 mod emitter_lights;
+#[allow(dead_code)]
+mod panorama;
 mod ui;
 mod worldgen;
 use chat::autocomplete::{
