@@ -24,6 +24,7 @@
 
 mod cmds_chat;
 mod cmds_creative;
+mod cmds_dim;
 mod cmds_host;
 mod cmds_misc;
 mod cmds_player;
@@ -384,6 +385,10 @@ pub(crate) fn dispatch_as(
             "biome" => {
                 handled_locally |=
                     cmds_misc::cmd_biome(voxel, arg, &mut local_lines);
+            }
+            "dim" => {
+                handled_locally |=
+                    cmds_dim::cmd_dim(voxel, arg, &mut local_lines);
             }
             "findbiome" => {
                 handled_locally |= cmds_misc::cmd_findbiome(

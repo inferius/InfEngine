@@ -5478,6 +5478,7 @@ impl Voxel {
         let state = self.state;
         let fps = self.fps_ema;
         let show_fps = self.settings.show_fps;
+        let dim = self.current_dim.clone();
         let day_time = self.day_time;
         let player_health = self.player_health;
         let stamina_frac =
@@ -6532,6 +6533,15 @@ impl Voxel {
                                 ui.separator();
                                 ui.label(format!("FPS: {fps:.0}"));
                             }
+                            // Phase F.7: show the active dim so
+                            // the player has feedback after a
+                            // /dim or portal teleport. Cheap
+                            // ASCII; no separator unless FPS is
+                            // visible (keeps the HUD tidy).
+                            if show_fps {
+                                ui.separator();
+                            }
+                            ui.label(format!("Dim: {dim}"));
                         });
                     });
                 }

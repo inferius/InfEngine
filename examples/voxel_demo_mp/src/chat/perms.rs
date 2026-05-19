@@ -150,6 +150,7 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "fw", level: 2 },
     CmdMeta { name: "firework", level: 2 },
     // Level 3 - world edits + host moderation.
+    CmdMeta { name: "dim", level: 3 },
     CmdMeta { name: "kill", level: 3 },
     CmdMeta { name: "setblock", level: 3 },
     CmdMeta { name: "fill", level: 3 },
