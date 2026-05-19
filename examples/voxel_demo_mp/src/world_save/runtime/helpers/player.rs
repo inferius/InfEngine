@@ -48,6 +48,10 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         // OVERWORLD here, which broke cross-dim save / load.
         last_dimension: voxel.current_dim.clone(),
         highlight_mode: voxel.highlight_mode.to_u8(),
+        // W8.2: per-player game mode. The runtime field is the
+        // source of truth; the in-game toggle path lands in
+        // Wave 10 (Survival / Creative semantics).
+        game_mode: voxel.game_mode as u8,
     }
 }
 
@@ -78,6 +82,12 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
     voxel.home_pos = save.home_pos;
     voxel.spawn_pos = save.spawn_pos;
     voxel.highlight_mode = HighlightMode::from_u8(save.highlight_mode);
+    // W8.2: load the saved game mode. Wave 10 wires the
+    // fly/invuln/insta-break flips against this field.
+    voxel.game_mode = match save.game_mode {
+        1 => crate::game_mode::GameMode::Creative,
+        _ => crate::game_mode::GameMode::Survival,
+    };
     // Re-anchor the day clock so a load right after a save doesn't
     // jump the sun. `day_time` itself lives in `meta.json` once Phase
     // C lands; for now the runtime keeps its value across reloads.

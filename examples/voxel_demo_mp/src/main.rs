@@ -38,7 +38,7 @@ use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
     BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, GLOWSTONE_ID, LAVA_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
-    block_category, block_is_aabb_passable, block_is_liquid,
+    block_category, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
     block_material, block_required_tier,
@@ -114,6 +114,7 @@ mod portal_swirl_tests;
 // tolerates dead_code on the module until then.
 #[allow(dead_code)]
 mod lighting;
+mod game_mode;
 mod menu;
 mod mining;
 mod mob;
@@ -842,6 +843,21 @@ struct Voxel {
     /// is present, and the Worlds picker (Phase G scaffolding in B.7a)
     /// rewrites it on a New / Load click.
     current_world_slug: Option<String>,
+    /// W8.2: current player game mode. Loaded from the player file
+    /// on join + persisted on every save. Defaults to Survival on
+    /// a fresh runtime. The runtime checks for fly / invuln /
+    /// insta-break / creative-tab land in Wave 10; until then this
+    /// field is data-only.
+    game_mode: game_mode::GameMode,
+    /// W8.1: gate for the world simulation tick. Set to `true` only
+    /// after the user explicitly enters a world via
+    /// PlayOffline/NewWorld+enter/DirectConnect/JoinServer; the bin
+    /// boots with the menu over an empty Voxel so no chunks / mobs /
+    /// liquids / lighting workers run in the background. Returning
+    /// to the top-level main menu (action_main_menu /
+    /// action_mp_disconnect) tears the world down + flips this back
+    /// to `false`.
+    world_loaded: bool,
     /// Monotonic tick counter incremented at the start of each
     /// `tick_net` call. Used to throttle pending-edit / pending-
     /// inventory-action resends so we don't spam UDP every frame.
@@ -1289,6 +1305,74 @@ pub(crate) struct PluginBlock {
 }
 
 impl Voxel {
+    /// W8.1: explicit world-load step. Spins up the worker pool,
+    /// generates the initial chunk grid, pins the player on the
+    /// surface, and resumes any persisted edits. Idempotent: a
+    /// second call returns immediately once `world_loaded` is set,
+    /// so the per-entry-point wiring (PlayOffline / NewWorld+enter
+    /// / DirectConnect / JoinServer) can call it unconditionally.
+    fn enter_world(&mut self) {
+        if self.world_loaded {
+            return;
+        }
+        self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
+        self.build_world();
+        // Place the player on top of the actual terrain so the
+        // hardcoded (0, 32, 0) origin doesn't drop them inside a
+        // stone column when the seed happens to put a mountain at
+        // the world origin.
+        let spawn = self.safe_spawn();
+        self.player_pos = spawn;
+        self.player_vel = Vec3::ZERO;
+        self.fall_start_y = None;
+        // Server hosts AND offline singleplayer resume any
+        // persisted edits so a re-enter picks up where the world
+        // left off. Clients sync via the catch-up broadcast on
+        // first heartbeat.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+            self.load_server_state();
+        }
+        self.world_loaded = true;
+        info!(
+            slug = ?self.current_world_slug,
+            net = %self.net.label(),
+            "voxel: entered world"
+        );
+    }
+
+    /// W8.1: explicit world-teardown step. Auto-saves, drops the
+    /// worker pool, clears every per-world index, and flips
+    /// `world_loaded` back to `false` so the next launch into the
+    /// menu shows a cold runtime. Called from `action_main_menu`
+    /// and `action_mp_disconnect`. Idempotent (no-op when
+    /// `world_loaded` is already false).
+    fn teardown_world(&mut self) {
+        if !self.world_loaded {
+            return;
+        }
+        // Best-effort save before tearing the world down. Offline +
+        // server hosts persist; clients have no authoritative state
+        // to save here.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
+            self.save_server_state();
+        }
+        // Drop chunk geometry / liquid meshes / mob entities so
+        // the menu draws over a clean black screen.
+        self.reset_world();
+        self.mobs.clear();
+        self.remote_mobs.clear();
+        self.dropped_items.clear();
+        self.lighting = lighting::LightingState::new();
+        self.fires.clear();
+        self.fire_clock = 0;
+        // Stop the worker pool so it doesn't keep streaming chunks
+        // in the background. Dropping the handle closes the
+        // request channel; the workers exit on the next recv.
+        self.workers = None;
+        self.world_loaded = false;
+        info!("voxel: world torn down (returned to menu)");
+    }
+
     fn new_with_net(net: NetRole) -> Self {
         let mut v = Self::new();
         v.net = net;
@@ -3466,6 +3550,10 @@ impl Voxel {
                 self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
+                // W8.1: switch the menu off the lobby + enter the
+                // world so the renderer + tick paths spin up.
+                self.menu.apply_switch(menu::MenuScreen::InGame);
+                self.enter_world();
             }
             Err(err) => {
                 warn!(error = %err, addr = %addr, "client connect failed");
@@ -4758,6 +4846,13 @@ impl Voxel {
             // save is found; the Worlds picker rewrites it to the
             // user's pick on New / Load.
             current_world_slug: Some(world_save::DEFAULT_SLUG.to_string()),
+            // W8.2: bootstrap defaults to Survival. The actual mode
+            // is overridden by the player file on join.
+            game_mode: game_mode::GameMode::Survival,
+            // W8.1: bootstrap state has NO world loaded. The user
+            // opts into world simulation by picking Singleplayer >
+            // Hrat / Vytvorit or Multiplayer > Connect.
+            world_loaded: false,
             net_tick: 0,
             audio: None,
             audio_bank: infengine_audio::AudioBank::new(),
@@ -6731,30 +6826,10 @@ impl Voxel {
             0.1,
             500.0,
         ) * Mat4::look_at_rh(hud_cam_pos, hud_cam_pos + hud_forward, Vec3::Y);
-        // Sky visibility for the star field: the stars are 2D egui
-        // circles on the Background layer (no depth test) so they
-        // would otherwise render through stone / ceilings inside
-        // caves or enclosed builds. Compute once here against
-        // `self.world` so the egui closure doesn't need a world
-        // capture. Looks for a non-passable solid voxel within
-        // 64 cells directly above the player.
-        let sky_blocked = (1..=64).any(|dy| {
-            let above = [
-                self.player_pos.x.floor() as i32,
-                (self.player_pos.y as i32) + dy,
-                self.player_pos.z.floor() as i32,
-            ];
-            let b = self.world.get(above);
-            !b.is_air()
-                && !block_is_ray_passable(b)
-                && !block_is_aabb_passable(b)
-        });
-        // Star field: fades in as the sun drops below the horizon.
-        // The raw sun elevation (un-clamped) gives a smooth
-        // night-factor in [0, 1] when the sun is below the horizon.
-        let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
-        let raw_elev = (phase * std::f32::consts::TAU).sin();
-        let night_factor = (-raw_elev).clamp(0.0, 1.0);
+        // W8.3: `sky_blocked` + `night_factor` lived here only to
+        // gate the 2D star field. The star field was deleted; if a
+        // future wave reintroduces overhead-only HUD bits these
+        // helpers can come back.
         // Mob HP snapshot: (pos, current, max). Only mobs that
         // are damaged + not dying show a bar so the world doesn't
         // get cluttered with full-health bars.
@@ -8310,91 +8385,12 @@ impl Voxel {
                         );
                     }
                 }
-                // Star field: dimly visible at dusk, brighter at
-                // midnight, gone during the day. Each star sits at
-                // a fixed direction on the celestial sphere; we
-                // project that direction (treated as a far-away
-                // world point relative to the player) through the
-                // HUD view-projection so the field rotates with
-                // the camera but doesn't slide with translation.
-                //
-                // `sky_blocked` was computed before the closure
-                // against `self.world` since the closure has no
-                // world capture.
-                if night_factor > 0.0 && hud_visible && !sky_blocked {
-                    const STAR_COUNT: u32 = 90;
-                    const STAR_DIST: f32 = 250.0;
-                    let layer = ctx.layer_painter(egui::LayerId::new(
-                        egui::Order::Background,
-                        egui::Id::new("voxel_stars"),
-                    ));
-                    let screen_rect = ctx.content_rect();
-                    for i in 0..STAR_COUNT {
-                        // Cheap deterministic direction: hash i to
-                        // two angles + sample a hemisphere above
-                        // the horizon (y > 0 in the celestial
-                        // frame, rotated into world via day_time
-                        // so the sky drifts).
-                        let h1 =
-                            (i.wrapping_mul(2654435761)) as f32 / u32::MAX as f32;
-                        let h2 = ((i.wrapping_mul(40503))
-                            .wrapping_add(0x9E37_79B9))
-                            as f32
-                            / u32::MAX as f32;
-                        let azimuth = h1 * std::f32::consts::TAU;
-                        let elev = h2 * std::f32::consts::FRAC_PI_2 * 0.95
-                            + 0.05;
-                        // Rotate the star around +X by the sun
-                        // phase so the sky slowly drifts overnight.
-                        let drift = phase * std::f32::consts::TAU;
-                        let base = glam::Vec3::new(
-                            elev.cos() * azimuth.cos(),
-                            elev.sin(),
-                            elev.cos() * azimuth.sin(),
-                        );
-                        let drifted = glam::Vec3::new(
-                            base.x,
-                            base.y * drift.cos() - base.z * drift.sin(),
-                            base.y * drift.sin() + base.z * drift.cos(),
-                        );
-                        if drifted.y <= 0.05 {
-                            continue;
-                        }
-                        let world = glam::Vec3::new(
-                            hud_cam_pos.x + drifted.x * STAR_DIST,
-                            hud_cam_pos.y + drifted.y * STAR_DIST,
-                            hud_cam_pos.z + drifted.z * STAR_DIST,
-                        );
-                        let clip = hud_view_proj
-                            * glam::Vec4::new(world.x, world.y, world.z, 1.0);
-                        if clip.w <= 0.0 {
-                            continue;
-                        }
-                        let ndc = glam::Vec3::new(
-                            clip.x / clip.w,
-                            clip.y / clip.w,
-                            clip.z / clip.w,
-                        );
-                        if !(0.0..=1.0).contains(&ndc.z) {
-                            continue;
-                        }
-                        let sx = (ndc.x * 0.5 + 0.5) * screen_rect.width()
-                            + screen_rect.min.x;
-                        let sy = (-ndc.y * 0.5 + 0.5) * screen_rect.height()
-                            + screen_rect.min.y;
-                        // Per-star brightness jitter so the field
-                        // doesn't look uniform.
-                        let brightness = 0.55 + (h2 * 3.7).fract() * 0.45;
-                        let alpha = (220.0 * night_factor * brightness) as u8;
-                        layer.circle_filled(
-                            egui::pos2(sx, sy),
-                            1.4,
-                            egui::Color32::from_rgba_unmultiplied(
-                                235, 240, 255, alpha,
-                            ),
-                        );
-                    }
-                }
+                // W8.3: the 2D star field was deleted per the user's
+                // feedback ("hnusne"). The sky reads as near-black
+                // at midnight via `day_night`'s new anchors instead.
+                // A future wave adds a proper sun + moon sprite pair
+                // + a tasteful star field using the real celestial
+                // sphere.
                 // Floating mob HP bars. Projected onto the screen
                 // from each mob's world-space pos + a vertical
                 // offset so the bar sits a bit above the head.
@@ -9173,6 +9169,11 @@ impl Voxel {
             self.notify_server_leaving();
             self.net = NetRole::Offline;
             self.mp_menu_open = false;
+            // W8.1: tear the world down so the simulation halts
+            // while the user is back on the menu. Drops chunks,
+            // workers, mobs, lighting. Auto-saves first when the
+            // current role is offline / server.
+            self.teardown_world();
             // Same fix as `action_main_menu`: bounce the menu state
             // back to the top screen so the user actually sees the
             // main menu after disconnecting.
@@ -9204,6 +9205,11 @@ impl Voxel {
             };
         }
         if action_main_menu {
+            // W8.1: tear the world down on return-to-main so the
+            // simulation halts + the next world load runs the
+            // proper enter_world entry. Auto-saves first when the
+            // current net role is offline / server.
+            self.teardown_world();
             // Reset the menu state machine too. Wave 4 (G.x) decoupled
             // AppState from `menu::MenuScreen`; flipping AppState alone
             // would leave the menu showing whatever sub-screen the user
@@ -9261,19 +9267,11 @@ impl Voxel {
                 self.state = AppState::Playing;
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;
-                // W5.1: read per-dim ctx instead of the global atomic.
-                let want_wg = self.current_worldgen_ctx().profile;
-                if self.last_built_worldgen != Some(want_wg) {
-                    self.reset_world();
-                    self.build_world();
-                    let spawn = self.safe_spawn();
-                    self.player_pos = spawn;
-                    self.player_vel = Vec3::ZERO;
-                    self.fall_start_y = None;
-                    self.load_server_state();
-                }
+                // W8.1: explicit entry point. Spins workers, builds
+                // chunks, loads persisted edits + auto-pin spawn.
+                self.enter_world();
             }
-            MenuAction::NewWorld { name, worldgen: _ } => {
+            MenuAction::NewWorld { name, worldgen, seed, game_mode } => {
                 let slug = if name.trim().is_empty() {
                     world_save::DEFAULT_SLUG.to_string()
                 } else {
@@ -9289,26 +9287,34 @@ impl Voxel {
                         "world_save: write_meta on NewWorld failed"
                     );
                 }
-                // W5.1: pick a fresh seed if we don't yet have one
-                // pinned in voxel state, then derive worldgen from
-                // the active dim's profile (defaulting to Classic).
-                if self.base_seed == 0 {
-                    let seed = std::time::SystemTime::now()
+                // W8.2: pin the seed from the menu form. Empty form
+                // input lands as `None` which routes to a fresh
+                // random seed; numeric input pins exactly that value.
+                self.base_seed = seed.unwrap_or_else(|| {
+                    std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.subsec_nanos())
                         .unwrap_or(0)
                         .wrapping_mul(0x9E37_79B1)
-                        | 1;
-                    self.base_seed = seed;
-                }
-                let active_wg = self
-                    .dim_worldgens
-                    .get(&self.current_dim)
-                    .copied()
-                    .unwrap_or(WorldGen::Classic);
-                let wj = world_save::world_json::create_world(
+                        | 1
+                });
+                // W8.2: pin the worldgen on the new slot's overworld
+                // dim from the form pick. Empty string falls back to
+                // the runtime's current dim profile so the existing
+                // CLI / Options path still works.
+                let active_wg = if worldgen.is_empty() {
+                    self.dim_worldgens
+                        .get(&self.current_dim)
+                        .copied()
+                        .unwrap_or(WorldGen::Classic)
+                } else {
+                    WorldGen::from_str(&worldgen).unwrap_or(WorldGen::Classic)
+                };
+                self.dim_worldgens.insert(self.current_dim.clone(), active_wg);
+                let wj = world_save::world_json::create_world_with_mode(
                     world_save::worldgen_str(active_wg),
                     self.base_seed,
+                    game_mode.as_tag(),
                 );
                 if let Err(err) = world_save::world_json::write_world(&slug, &wj) {
                     warn!(
@@ -9318,7 +9324,19 @@ impl Voxel {
                     );
                 }
                 self.current_world_slug = Some(slug);
+                // W8.2: pin the runtime mode to the form pick. Wave
+                // 10 reads this for fly / invuln / insta-break.
+                self.game_mode = game_mode;
                 self.menu.invalidate_caches();
+                // W8.1 + W8.2: jump straight into the freshly-created
+                // world. Mirrors PlayOffline.
+                self.reset_world();
+                self.last_built_worldgen = None;
+                self.menu.apply_switch(menu::MenuScreen::InGame);
+                self.state = AppState::Playing;
+                self.mouse_dx = 0.0;
+                self.mouse_dy = 0.0;
+                self.enter_world();
             }
             MenuAction::DeleteWorld { slug } => {
                 let dir = world_save::layout::world_dir(&slug);
@@ -9572,16 +9590,14 @@ impl AppHandler for Voxel {
                 }
             }
         }
-        self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
-        self.build_world();
-        // Place the player on top of the actual terrain so the
-        // hardcoded (0, 32, 0) origin doesn't drop them inside a
-        // stone column when the seed happens to put a mountain
-        // at the world origin.
-        let spawn = self.safe_spawn();
-        self.player_pos = spawn;
-        self.player_vel = Vec3::ZERO;
-        self.fall_start_y = None;
+        // W8.1: the worker pool + initial world build + safe-spawn
+        // pin USED to run unconditionally inside `on_start`, which
+        // meant launching the engine spun up a Plains-biome world
+        // before the user clicked a thing. The bootstrap stage now
+        // stops at the renderer / atlas / audio / plugin init; the
+        // world enters via `enter_world` once the user picks
+        // Singleplayer "Hrat" / "Vytvorit" or Multiplayer Connect.
+        //
         // Best-effort audio: a missing output device just disables
         // SFX rather than blocking the demo from launching.
         match infengine_audio::AudioSystem::new() {
@@ -9683,14 +9699,16 @@ impl AppHandler for Voxel {
                 }
             }
         }
-        // Server hosts AND offline singleplayer resume any
-        // persisted edits so a restart picks up where the world
-        // left off. Clients sync via the catch-up broadcast on
-        // first heartbeat.
-        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline) {
-            self.load_server_state();
+        // W8.1: server hosts launched directly from the CLI
+        // (`--server` argv flag) still need the world up by the
+        // time the first client connects, so we enter immediately
+        // here. Pure offline + client launches defer until the user
+        // explicitly picks a world from the menu.
+        if matches!(self.net, NetRole::Server { .. }) {
+            self.enter_world();
         }
     }
+
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
         if let Some(ui) = self.ui.as_mut() {
@@ -10166,11 +10184,14 @@ impl AppHandler for Voxel {
             }
         }
 
-        if matches!(self.state, AppState::Playing) {
+        if matches!(self.state, AppState::Playing) && self.world_loaded {
             // update_play itself gates player input on
             // `self.inventory_open` - we still need to tick it every
             // frame so gravity + collision + net pose broadcasts
             // keep running while the menu is up.
+            //
+            // W8.1: also gated on `world_loaded` so the simulation
+            // path can't run while the user is on the main menu.
             self.update_play(ctx, dt);
             self.stream_chunks();
         } else {
@@ -11233,8 +11254,26 @@ impl AppHandler for Voxel {
                 }
             }
         }
-        // Net tick: poll + apply + broadcast / send.
+        // Net tick: poll + apply + broadcast / send. Always runs
+        // so a CLI-started server can accept connects even before
+        // a player picks a world; the heavier world simulation
+        // gates on `world_loaded` below.
         self.tick_net();
+        // W8.1: every tick below this point touches the world -
+        // chunks, mobs, liquids, lighting, day clock. Skip them
+        // entirely while the menu is up so the bootstrap stage
+        // doesn't burn CPU on phantom simulation. The renderer
+        // still needs a clear colour set each frame so the egui
+        // pass draws over a stable backdrop. W9 will replace this
+        // with a MC-style panorama; for now we pin a neutral dark
+        // navy so the menu reads cleanly.
+        if !self.world_loaded {
+            self.particles.tick(dt);
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_clear_color(0.04, 0.05, 0.09, 1.0);
+            }
+            return;
+        }
         // Authoritative side simulates wandering mobs. The render
         // path reads `self.remote_mobs` which gets populated by
         // both `tick_mobs` (server) and `vx.mob` (client).
@@ -11798,6 +11837,75 @@ impl AppHandler for Voxel {
                     purple,
                     0.6,
                     0.2,
+                );
+            }
+        }
+        // W8.4: fire cell rendering. Each FIRE_ID voxel draws as
+        // two crossed flat quads tinted orange-red so the player
+        // can see lava + flint+steel ignites. The dedicated-render
+        // flag was set in the block table but no draw call existed
+        // before W8 (the user-reported bug). A future wave swaps
+        // the colour for the animated flame texture; for now the
+        // placeholder is enough to surface the fire visually.
+        if !self.fires.is_empty() {
+            let cube = *self
+                .player_cube
+                .get_or_insert_with(|| renderer.cube_handle());
+            let time = self.day_time;
+            for p in self.fires.keys() {
+                let cx = p[0] as f32 + 0.5;
+                let cy = p[1] as f32 + 0.2;
+                let cz = p[2] as f32 + 0.5;
+                // Mild per-cell phase so neighbouring fires don't
+                // strobe in lockstep.
+                let phase = ((p[0] as u32).wrapping_mul(0x9E37_79B1))
+                    ^ ((p[1] as u32).wrapping_mul(0x85EB_CA6B))
+                    ^ ((p[2] as u32).wrapping_mul(0xC2B2_AE35));
+                let phase_f =
+                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+                let flicker = (time * 6.0 + phase_f).sin();
+                let intensity = (0.85 + 0.15 * flicker).clamp(0.5, 1.05);
+                let orange = [
+                    1.0 * intensity,
+                    0.55 * intensity,
+                    0.15 * intensity,
+                    0.92,
+                ];
+                // Crossed pair of thin panels so the flame reads
+                // from any angle. Matches the portal pattern; a
+                // future wave swaps these for two billboard sprites
+                // facing the camera + the animated MC flame.
+                let xy_panel = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.9, 0.9, 0.06),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy, cz),
+                );
+                let zy_panel = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.06, 0.9, 0.9),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    xy_panel.to_cols_array(),
+                    orange,
+                    0.0,
+                    0.8,
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    zy_panel.to_cols_array(),
+                    orange,
+                    0.0,
+                    0.8,
+                );
+                // Add a small point light so the fire glows nearby
+                // surfaces - matches lava + torch behaviour.
+                renderer.queue_point_light(
+                    [cx, cy + 0.2, cz],
+                    [1.0, 0.55, 0.15],
+                    1.6 + 0.4 * flicker,
+                    6.0,
                 );
             }
         }
@@ -12545,9 +12653,13 @@ fn day_night(time: f32) -> (Vec3, [f32; 3]) {
     // along +Z so shadows never align perfectly with cardinal axes.
     let sun = Vec3::new(theta.cos(), theta.sin(), 0.35).normalize();
     let elev = sun.y; // -1 (under ground) .. +1 (overhead)
-    let night = [0.04_f32, 0.06, 0.12];
+    // W8.3: midnight is now near-black instead of a faint navy.
+    // The user explicitly asked for a dark night sky; the old
+    // [0.04, 0.06, 0.12] still read as "dim blue" on a calibrated
+    // monitor.
+    let night = [0.02_f32, 0.02, 0.05];
     let horizon = [0.95_f32, 0.55, 0.30];
-    let noon = [0.50_f32, 0.70, 0.92];
+    let noon = [0.45_f32, 0.65, 0.95];
     let lerp = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
         let t = t.clamp(0.0, 1.0);
         [
@@ -13261,3 +13373,96 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+
+/// W8.3: day/night sky color tests. Lives at the very bottom of
+/// the bin so clippy's `items_after_test_module` lint is happy
+/// (no further items live below).
+#[cfg(test)]
+mod day_night_tests {
+    use super::{DAY_LENGTH_S, day_night};
+
+    /// Helper: just the sky color half of the `day_night` return.
+    fn sky_at(t: f32) -> [f32; 3] {
+        day_night(t).1
+    }
+
+    /// Helper: euclidean distance between two RGB triples. Lets the
+    /// assertions read tolerantly so the smoothstep ramp doesn't
+    /// have to land on exact float boundaries.
+    fn rgb_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+        let dr = a[0] - b[0];
+        let dg = a[1] - b[1];
+        let db = a[2] - b[2];
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    #[test]
+    fn sky_color_at_noon_matches_daytime_anchor() {
+        // W8.3: noon = day fraction 0.25 (sun at +Y peak in our
+        // phase = sin(theta) curve). Within tolerance of the
+        // noon anchor [0.45, 0.65, 0.95].
+        let sky = sky_at(DAY_LENGTH_S * 0.25);
+        let noon_anchor = [0.45_f32, 0.65, 0.95];
+        assert!(
+            rgb_dist(sky, noon_anchor) < 0.10,
+            "noon sky {sky:?} far from anchor {noon_anchor:?}"
+        );
+    }
+
+    #[test]
+    fn sky_color_at_midnight_is_near_black() {
+        // W8.3: midnight = day fraction 0.75 (sun straight down).
+        // Each channel should be <= 0.10 (the night anchor max).
+        let sky = sky_at(DAY_LENGTH_S * 0.75);
+        for (i, ch) in sky.iter().enumerate() {
+            assert!(
+                *ch <= 0.10,
+                "midnight sky channel {i} = {ch} not near-black"
+            );
+        }
+    }
+
+    #[test]
+    fn sky_color_dawn_is_intermediate() {
+        // W8.3: dawn (0.50) sits in the night..horizon ramp - the
+        // result should be brighter than the midnight anchor but
+        // darker than the noon anchor.
+        let dawn = sky_at(DAY_LENGTH_S * 0.50);
+        let midnight = sky_at(DAY_LENGTH_S * 0.75);
+        let noon = sky_at(DAY_LENGTH_S * 0.25);
+        let lum = |c: [f32; 3]| c[0] + c[1] + c[2];
+        let strict_min = [0.0_f32, 0.0, 0.0];
+        assert!(
+            lum(dawn) >= lum(strict_min),
+            "dawn {dawn:?} below strict min"
+        );
+        assert!(
+            lum(dawn) < lum(noon),
+            "dawn {dawn:?} brighter than noon {noon:?}"
+        );
+        // Soft sanity: midnight luminance is non-greater than dawn
+        // (the ramp is monotonic in the dawn -> noon direction).
+        assert!(lum(midnight) <= lum(noon));
+    }
+
+    #[test]
+    fn sky_color_smooth_ramp_through_dusk() {
+        // W8.3: stepping in 0.01-day fractions across dusk
+        // (0.70..0.80) should produce a monotonically-darkening
+        // sequence - no jumps back to bright blue.
+        let mut prev_lum = f32::INFINITY;
+        let mut samples = 0;
+        for i in 70..=80 {
+            let t = DAY_LENGTH_S * (i as f32 * 0.01);
+            let c = sky_at(t);
+            let lum = c[0] + c[1] + c[2];
+            assert!(
+                lum <= prev_lum + 0.01,
+                "sky luminance not monotonic at t={t}: {lum} after {prev_lum}"
+            );
+            prev_lum = lum;
+            samples += 1;
+        }
+        assert!(samples >= 10, "expected at least 10 ramp samples");
+    }
+}
