@@ -38,6 +38,7 @@ pub(crate) mod models;
 pub(crate) mod name_map;
 pub(crate) mod paths;
 pub(crate) mod sounds;
+pub(crate) mod special_models;
 pub(crate) mod textures;
 
 #[cfg(test)]
