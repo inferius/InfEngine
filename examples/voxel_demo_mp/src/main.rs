@@ -5514,7 +5514,7 @@ impl Voxel {
             2 => Some("Snow"),
             _ => None,
         };
-        let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z);
+        let biome_at_player = biome_at(self.player_pos.x, self.player_pos.z, world_seed());
         let spawn_xz: (f32, f32) = match self.spawn_pos {
             Some(p) => (p[0], p[2]),
             None => (0.0, 0.0),

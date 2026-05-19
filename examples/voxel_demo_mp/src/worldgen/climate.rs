@@ -43,8 +43,12 @@ pub(crate) const SEA_LEVEL: i32 = 12;
 /// Channel phase offsets. Each one xor-mixes a fixed magic number
 /// into the seed so distinct hosts get distinct temperature /
 /// humidity / elevation maps without burning more atomic state.
-fn channel_offset(channel: u32) -> f32 {
-    let s = super::world_seed() ^ channel;
+///
+/// F.2c-1: takes the effective seed as an explicit parameter
+/// instead of reading the global atomic. Callers pass
+/// `ctx.effective_seed()`.
+fn channel_offset(channel: u32, seed: u32) -> f32 {
+    let s = seed ^ channel;
     (s.wrapping_mul(0x9E37_79B1) as f32 / u32::MAX as f32) * 1000.0
 }
 
@@ -63,14 +67,18 @@ fn noise2(wx: f32, wz: f32, phase: f32, scale: f32) -> f32 {
 /// Climate sample at a world-space (wx, wz). Uses three distinct
 /// channel offsets so temperature, humidity, and elevation don't
 /// share a phase.
-pub(crate) fn climate_at(wx: f32, wz: f32) -> Climate {
+///
+/// F.2c-1: takes the effective seed as an explicit parameter
+/// instead of reading the global atomic. Callers pass
+/// `ctx.effective_seed()`.
+pub(crate) fn climate_at(wx: f32, wz: f32, seed: u32) -> Climate {
     // Channel constants are arbitrary but stable. Don't reuse the
     // legacy `biome_at` offset (0x9E37_79B1 via seed_offset()) so
     // the Classic + Realistic maps look distinct under the same
     // seed.
-    let p_temp = channel_offset(0x4E15_77B7);
-    let p_hum = channel_offset(0xC2B2_AE35);
-    let p_elev = channel_offset(0x1656_67B1);
+    let p_temp = channel_offset(0x4E15_77B7, seed);
+    let p_hum = channel_offset(0xC2B2_AE35, seed);
+    let p_elev = channel_offset(0x1656_67B1, seed);
 
     // Elevation rides a slightly higher frequency so coastlines
     // wrinkle inside biome regions, and humidity a slightly
@@ -146,13 +154,14 @@ pub(crate) fn near_surface_block(biome: Biome) -> BlockId {
 /// height + surface + ore. Negative-elevation cells under sea
 /// level fill with water; everywhere else carves caves the same
 /// way Classic does.
-pub(crate) fn gen_realistic(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
+pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
+    let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
         let wz = origin.z + z as f32;
-        let climate = climate_at(wx, wz);
+        let climate = climate_at(wx, wz, seed);
         let biome = biome_from_climate(climate);
         let h = realistic_height(climate, biome);
         let wy = origin.y as i32 + y as i32;
@@ -180,9 +189,9 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
     // Decoration passes - reuse the Classic placement helpers for
     // now (E.4 introduces species dispatch). Flowers + cactus run
     // unchanged; trees stay oak-only until E.4b.
-    trees::place_realistic_from_coord(&mut chunk, coord);
-    flowers::place_realistic_from_coord(&mut chunk, coord);
-    cactus::place_realistic_from_coord(&mut chunk, coord);
+    trees::place_realistic_from_coord(&mut chunk, coord, ctx);
+    flowers::place_realistic_from_coord(&mut chunk, coord, ctx);
+    cactus::place_realistic_from_coord(&mut chunk, coord, ctx);
     chunk
 }
 
@@ -199,8 +208,8 @@ mod tests {
     fn climate_at_is_deterministic_per_seed() {
         let _g = lock_gen();
         set_world_seed(7);
-        let a = climate_at(123.0, 456.0);
-        let b = climate_at(123.0, 456.0);
+        let a = climate_at(123.0, 456.0, 7);
+        let b = climate_at(123.0, 456.0, 7);
         assert_eq!(a.temperature.to_bits(), b.temperature.to_bits());
         assert_eq!(a.humidity.to_bits(), b.humidity.to_bits());
         assert_eq!(a.elevation.to_bits(), b.elevation.to_bits());
@@ -218,7 +227,7 @@ mod tests {
         let mut equal_hum_elev = 0;
         for x in 0..64 {
             for z in 0..64 {
-                let c = climate_at(x as f32 * 4.0, z as f32 * 4.0);
+                let c = climate_at(x as f32 * 4.0, z as f32 * 4.0, 0);
                 if (c.temperature - c.humidity).abs() < 0.001 {
                     equal_temp_hum += 1;
                 }
@@ -253,7 +262,7 @@ mod tests {
         // sampling phase-locked to a fixed offset.
         for x in (-512..512).step_by(4) {
             for z in (-512..512).step_by(4) {
-                let c = climate_at(x as f32, z as f32);
+                let c = climate_at(x as f32, z as f32, 0);
                 t_min = t_min.min(c.temperature);
                 t_max = t_max.max(c.temperature);
                 h_min = h_min.min(c.humidity);
@@ -270,10 +279,8 @@ mod tests {
     #[test]
     fn climate_changes_with_seed() {
         let _g = lock_gen();
-        set_world_seed(1);
-        let a = climate_at(100.0, 100.0);
-        set_world_seed(99);
-        let b = climate_at(100.0, 100.0);
+        let a = climate_at(100.0, 100.0, 1);
+        let b = climate_at(100.0, 100.0, 99);
         assert!(
             (a.temperature - b.temperature).abs() > 0.01
                 || (a.humidity - b.humidity).abs() > 0.01

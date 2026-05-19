@@ -240,10 +240,10 @@ pub(crate) fn cmd_biome(
             // realistic generator. Re-uses the same lookup that
             // gen_realistic uses so the answer matches what the
             // player is standing on.
-            let climate = crate::worldgen::climate::climate_at(px, pz);
+            let climate = crate::worldgen::climate::climate_at(px, pz, crate::worldgen::world_seed());
             crate::worldgen::biome_table::biome_from_climate(climate)
         }
-        _ => biome_at(px, pz),
+        _ => biome_at(px, pz, crate::worldgen::world_seed()),
     };
     lines.push(format!(
         "Biome: {} at ({:.0}, {:.0})",
@@ -284,7 +284,7 @@ pub(crate) fn cmd_findbiome(
                     for dz in (-r..=r).step_by(8usize) {
                         let wx = (px + dx * 8) as f32;
                         let wz = (pz + dz * 8) as f32;
-                        if biome_at(wx, wz) == b {
+                        if biome_at(wx, wz, crate::worldgen::world_seed()) == b {
                             let d2 =
                                 (dx * dx + dz * dz) as f32;
                             if best.is_none_or(|(_, _, bd)| d2 < bd)

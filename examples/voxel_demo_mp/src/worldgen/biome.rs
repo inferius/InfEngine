@@ -7,7 +7,7 @@
 //! the new variants are inert under `Classic` so legacy saves
 //! still produce byte-identical terrain.
 
-use super::seed_offset;
+use super::seed_offset_for;
 
 /// Biome tag. The first three variants are the legacy Classic
 /// biomes and MUST stay first in the enum so `biome_at` keeps its
@@ -61,8 +61,12 @@ impl Biome {
 /// IMPORTANT: this fn drives `Classic` + `Amplified` and MUST
 /// stay byte-identical to the pre-Phase-E baseline. Realistic
 /// uses a separate `climate_at` path.
-pub(crate) fn biome_at(wx: f32, wz: f32) -> Biome {
-    let s = seed_offset();
+///
+/// F.2c-1: the seed is now an explicit parameter instead of an
+/// implicit read from the `WORLD_SEED` atomic. Callers thread
+/// `ctx.effective_seed()` through.
+pub(crate) fn biome_at(wx: f32, wz: f32, seed: u32) -> Biome {
+    let s = seed_offset_for(seed);
     let n = ((wx + s) * 0.012).sin() * 0.6
         + ((wz + s) * 0.009).cos() * 0.5
         + (((wx + wz) + s) * 0.004).sin() * 0.3;
@@ -88,8 +92,8 @@ mod tests {
     fn biome_at_is_deterministic_for_seed() {
         let _g = lock_gen();
         set_world_seed(42);
-        let a = biome_at(123.5, 456.5);
-        let b = biome_at(123.5, 456.5);
+        let a = biome_at(123.5, 456.5, 42);
+        let b = biome_at(123.5, 456.5, 42);
         assert_eq!(a, b);
     }
 
@@ -100,7 +104,7 @@ mod tests {
         let mut seen = [false; 3];
         for x in -200..200 {
             for z in -200..200 {
-                match biome_at(x as f32, z as f32) {
+                match biome_at(x as f32, z as f32, 0) {
                     Biome::Desert => seen[0] = true,
                     Biome::Plains => seen[1] = true,
                     Biome::Mountain => seen[2] = true,

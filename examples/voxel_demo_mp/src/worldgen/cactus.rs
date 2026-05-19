@@ -4,21 +4,29 @@
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, World};
 
+use super::WorldgenCtx;
 use super::biome::{Biome, biome_at};
-use super::hash2;
+use super::hash2_for;
 use super::height::height_at_classic;
 
-pub(crate) fn place_classic(chunk: &mut Chunk, origin_x: i32, origin_y: i32, origin_z: i32, amp_scale: f32) {
+pub(crate) fn place_classic(
+    chunk: &mut Chunk,
+    origin_x: i32,
+    origin_y: i32,
+    origin_z: i32,
+    amp_scale: f32,
+    seed: u32,
+) {
     let cs = CHUNK_SIZE as i32;
     for x in 0..cs {
         for z in 0..cs {
             let wx = origin_x + x;
             let wz = origin_z + z;
-            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            let biome = biome_at(wx as f32 + 0.5, wz as f32 + 0.5, seed);
             if biome != Biome::Desert {
                 continue;
             }
-            let h = hash2(wx ^ 0xCAC7, wz ^ 0x1A55);
+            let h = hash2_for(wx ^ 0xCAC7, wz ^ 0x1A55, seed);
             if h % 24 != 5 {
                 continue;
             }
@@ -36,7 +44,12 @@ pub(crate) fn place_classic(chunk: &mut Chunk, origin_x: i32, origin_y: i32, ori
     }
 }
 
-pub(crate) fn place_classic_from_coord(chunk: &mut Chunk, coord: infengine_voxel::ChunkCoord, amp_scale: f32) {
+pub(crate) fn place_classic_from_coord(
+    chunk: &mut Chunk,
+    coord: infengine_voxel::ChunkCoord,
+    amp_scale: f32,
+    ctx: &WorldgenCtx,
+) {
     let origin = World::chunk_world_origin(coord);
     place_classic(
         chunk,
@@ -44,15 +57,21 @@ pub(crate) fn place_classic_from_coord(chunk: &mut Chunk, coord: infengine_voxel
         origin.y as i32,
         origin.z as i32,
         amp_scale,
+        ctx.effective_seed(),
     );
 }
 
 /// Realistic-profile cactus pass. Cactus columns sit on Desert
 /// sand (climate-driven). Skips Savanna for now - acacia trees
 /// in E.4b will handle that biome's vertical decoration.
-pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: infengine_voxel::ChunkCoord) {
+pub(crate) fn place_realistic_from_coord(
+    chunk: &mut Chunk,
+    coord: infengine_voxel::ChunkCoord,
+    ctx: &WorldgenCtx,
+) {
     use super::biome_table::biome_from_climate;
     use super::climate::{climate_at, realistic_height};
+    let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
     let origin_y = origin.y as i32;
@@ -62,12 +81,12 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: infengine_vox
         for z in 0..cs {
             let wx = origin_x + x;
             let wz = origin_z + z;
-            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed);
             let biome = biome_from_climate(climate);
             if biome != Biome::Desert {
                 continue;
             }
-            let h = hash2(wx ^ 0xCAC7, wz ^ 0x1A55);
+            let h = hash2_for(wx ^ 0xCAC7, wz ^ 0x1A55, seed);
             if h % 24 != 5 {
                 continue;
             }

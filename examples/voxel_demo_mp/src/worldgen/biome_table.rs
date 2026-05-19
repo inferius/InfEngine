@@ -196,7 +196,7 @@ mod tests {
         // covers the same ground as a dense one.
         for x in (-512..512).step_by(4) {
             for z in (-512..512).step_by(4) {
-                let c = climate_at(x as f32, z as f32);
+                let c = climate_at(x as f32, z as f32, 0);
                 let idx = match biome_from_climate(c) {
                     Biome::Desert => 0,
                     Biome::Plains => 1,

@@ -127,17 +127,17 @@ fn gen_islands(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
 /// Classic biome-driven terrain. `amp_scale` lets the Amplified
 /// preset reuse this generator with a 2.5x vertical multiplier.
 ///
-/// F.2b: `ctx` is plumbed through to the decoration passes so the
-/// later F.2c-* commits can deliver `ctx.effective_seed()` to the
-/// noise leaves (biome / ore / hash2) without a second pass over
-/// the call sites.
-fn gen_classic(coord: ChunkCoord, _ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
+/// F.2c-1: `biome_at` now takes an explicit seed, threaded through
+/// via `ctx.effective_seed()`. The decoration helpers + ore
+/// picker still read the atomic; F.2c-2 lifts those.
+fn gen_classic(coord: ChunkCoord, ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
+    let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
         let wz = origin.z + z as f32;
-        let biome = biome_at(wx, wz);
+        let biome = biome_at(wx, wz, seed);
         let h = height_at_classic(wx, wz, biome, amp_scale);
         let wy = origin.y as i32 + y as i32;
         if wy > h {
@@ -179,9 +179,9 @@ fn gen_classic(coord: ChunkCoord, _ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
     // Decoration passes follow the same order as the pre-split
     // implementation so the chunk-fold hash stays unchanged:
     // trees -> flowers -> (no ponds) -> cactus.
-    trees::place_classic_from_coord(&mut chunk, coord, amp_scale);
-    flowers::place_classic_from_coord(&mut chunk, coord, amp_scale);
-    cactus::place_classic_from_coord(&mut chunk, coord, amp_scale);
+    trees::place_classic_from_coord(&mut chunk, coord, amp_scale, ctx);
+    flowers::place_classic_from_coord(&mut chunk, coord, amp_scale, ctx);
+    cactus::place_classic_from_coord(&mut chunk, coord, amp_scale, ctx);
     chunk
 }
 

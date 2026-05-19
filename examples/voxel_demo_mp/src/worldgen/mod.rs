@@ -86,9 +86,20 @@ impl WorldgenCtx {
     /// `base_seed XOR FNV1a(dim_name)`. Same algorithm as the free
     /// `dim_seed`; kept as a method so callers can avoid importing
     /// the helper when they only need the effective value.
+    ///
+    /// Special case: if `dim` is empty, returns `base_seed`
+    /// unchanged. The legacy-bridge wrapper
+    /// (`generate_chunk_at` -> `generate_chunk_at_ctx`) builds a
+    /// ctx from the already-effective `WORLD_SEED` atomic + an
+    /// empty dim name; skipping the dim mix there keeps the noise
+    /// pipeline byte-identical to the pre-refactor output.
     #[allow(dead_code)] // Used by bin-side workers once F.2d lands.
     pub fn effective_seed(&self) -> u32 {
-        dim_seed(self.base_seed, &self.dim)
+        if self.dim.is_empty() {
+            self.base_seed
+        } else {
+            dim_seed(self.base_seed, &self.dim)
+        }
     }
 }
 
@@ -151,24 +162,49 @@ pub fn dim_seed(base: u32, dim: &str) -> u32 {
     base ^ fnv1a32(dim.as_bytes())
 }
 
-/// Mix the seed into a deterministic float used as a phase
-/// offset for the sin/cos noise stack. Picking a small range
+/// Mix the supplied seed into a deterministic float used as a
+/// phase offset for the sin/cos noise stack. Picking a small range
 /// keeps the curves visually similar across seeds while still
 /// producing distinct terrain.
-pub(crate) fn seed_offset() -> f32 {
-    (world_seed().wrapping_mul(0x9E37_79B1) as f32 / u32::MAX as f32) * 1000.0
+///
+/// F.2c-1: takes an explicit seed instead of reading the
+/// `WORLD_SEED` atomic, so the noise pipeline is independent of
+/// the global state. Callers pass `ctx.effective_seed()`.
+pub(crate) fn seed_offset_for(seed: u32) -> f32 {
+    (seed.wrapping_mul(0x9E37_79B1) as f32 / u32::MAX as f32) * 1000.0
 }
 
 /// Cheap, deterministic 2D hash. Used for tree placement so two
 /// peers running the same generator drop trees in the same spots.
-pub(crate) fn hash2(wx: i32, wz: i32) -> u32 {
+///
+/// F.2c-2 plumbs the seed in as a parameter; callers pass
+/// `ctx.effective_seed()` directly.
+pub(crate) fn hash2_for(wx: i32, wz: i32, seed: u32) -> u32 {
     let mut h = (wx as u32).wrapping_mul(0x27D4_EB2F);
     h ^= (wz as u32).wrapping_mul(0x1656_67B1);
-    h ^= world_seed();
+    h ^= seed;
     h ^= h >> 16;
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
     h.wrapping_mul(0xC2B2_AE35)
+}
+
+/// Legacy seed_offset that still reads the `WORLD_SEED` atomic.
+/// Phased out as F.2c migrates each call site to the ctx-driven
+/// `seed_offset_for`; left here for the noise functions that
+/// haven't been touched yet.
+#[allow(dead_code)]
+pub(crate) fn seed_offset() -> f32 {
+    seed_offset_for(world_seed())
+}
+
+/// Legacy 2D hash that still reads the `WORLD_SEED` atomic. Phased
+/// out as F.2c migrates each call site to the ctx-driven
+/// `hash2_for`; left here for the decoration passes that haven't
+/// been rewritten yet.
+#[allow(dead_code)]
+pub(crate) fn hash2(wx: i32, wz: i32) -> u32 {
+    hash2_for(wx, wz, world_seed())
 }
 
 /// World-generation profile. Selected once at startup (via the

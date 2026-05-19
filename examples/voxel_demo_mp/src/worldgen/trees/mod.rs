@@ -16,8 +16,9 @@
 
 use infengine_voxel::{CHUNK_SIZE, Chunk, World};
 
+use crate::worldgen::WorldgenCtx;
 use crate::worldgen::biome::Biome;
-use crate::worldgen::hash2;
+use crate::worldgen::hash2_for;
 use crate::worldgen::height::height_at_classic;
 
 pub(crate) mod acacia;
@@ -42,6 +43,7 @@ pub(crate) fn place_classic(
     origin_y: i32,
     origin_z: i32,
     amp_scale: f32,
+    seed: u32,
 ) {
     let cs = CHUNK_SIZE as i32;
     for x in -2..(cs + 2) {
@@ -51,11 +53,11 @@ pub(crate) fn place_classic(
             // Classic uses `biome_at` directly via
             // `crate::worldgen::biome::biome_at`, but `height_at_classic`
             // takes the biome enum so we route through it once.
-            let biome = crate::worldgen::biome::biome_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            let biome = crate::worldgen::biome::biome_at(wx as f32 + 0.5, wz as f32 + 0.5, seed);
             if biome != Biome::Plains {
                 continue;
             }
-            if hash2(wx, wz) % 32 != 7 {
+            if hash2_for(wx, wz, seed) % 32 != 7 {
                 continue;
             }
             let ground = height_at_classic(wx as f32 + 0.5, wz as f32 + 0.5, biome, amp_scale);
@@ -68,6 +70,7 @@ pub(crate) fn place_classic_from_coord(
     chunk: &mut Chunk,
     coord: infengine_voxel::ChunkCoord,
     amp_scale: f32,
+    ctx: &WorldgenCtx,
 ) {
     let origin = World::chunk_world_origin(coord);
     place_classic(
@@ -76,6 +79,7 @@ pub(crate) fn place_classic_from_coord(
         origin.y as i32,
         origin.z as i32,
         amp_scale,
+        ctx.effective_seed(),
     );
 }
 
@@ -83,9 +87,14 @@ pub(crate) fn place_classic_from_coord(
 /// species via biome, and runs that species' `place_at`. Density
 /// plus species are biome-driven so Forest is thick with
 /// oak / birch, Taiga is pine-only, Jungle is sparse-but-tall.
-pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: infengine_voxel::ChunkCoord) {
+pub(crate) fn place_realistic_from_coord(
+    chunk: &mut Chunk,
+    coord: infengine_voxel::ChunkCoord,
+    ctx: &WorldgenCtx,
+) {
     use crate::worldgen::biome_table::biome_from_climate;
     use crate::worldgen::climate::{climate_at, realistic_height};
+    let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
     let origin_y = origin.y as i32;
@@ -95,9 +104,9 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: infengine_vox
         for z in -TREE_MARGIN..(cs + TREE_MARGIN) {
             let wx = origin_x + x;
             let wz = origin_z + z;
-            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5);
+            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed);
             let biome = biome_from_climate(climate);
-            let rng = hash2(wx, wz);
+            let rng = hash2_for(wx, wz, seed);
             let Some((modulus, species)) = pick_species(biome, rng) else {
                 continue;
             };
