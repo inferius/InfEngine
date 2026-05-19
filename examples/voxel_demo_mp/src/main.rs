@@ -98,6 +98,14 @@ mod dim_switch_tests;
 mod dim_teleport_tests;
 #[cfg(test)]
 mod debug_tests;
+// Phase L (Wave 3): per-voxel block + sky lighting subsystem.
+// `LightingState` lives on `Voxel`; engines flood emitter + day
+// light into per-chunk `LightGrid`s nibble-packed at 4 bits per
+// cell per layer. Some helpers (sky engine, dirty queue) land
+// their first runtime call site across the L.x commits; the bin
+// tolerates dead_code on the module until then.
+#[allow(dead_code)]
+mod lighting;
 mod mining;
 mod mob_ai;
 mod player;

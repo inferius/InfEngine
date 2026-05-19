@@ -82,6 +82,16 @@ mod worldgen_ctx_test;
 #[path = "liquid/mod.rs"]
 pub mod liquid;
 
+// Phase L (Wave 3): per-voxel block + sky lighting. The module is
+// headless-safe: it operates purely on `infengine_voxel::World` +
+// the bin's `block` module (already re-mounted via `#[path]`
+// above) and contains no renderer dependency. Re-mounting it under
+// the lib lets the `cargo test -p voxel_demo_mp --lib` path run
+// the inline propagator tests under the same source-of-truth file
+// the bin compiles from.
+#[path = "lighting/mod.rs"]
+pub mod lighting;
+
 // The lib_world_save.rs file wraps the leaf modules under
 // world_save::* so the `#[path]` inside resolves against the same
 // directory as the wrapper file (i.e. `src/`).
