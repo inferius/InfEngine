@@ -192,6 +192,14 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
     if voxel.god_mode {
         return;
     }
+    // W10.4: Creative `invulnerable` swallows every damage source
+    // EXCEPT `DamageKind::Void` (out-of-world). Mirrors MC's
+    // `Player::isInvulnerableTo` + `DamageSource::bypassInvul`.
+    // Void damage stays lethal so /gamemode creative isn't a
+    // free way to escape the bottom of the world.
+    if voxel.abilities.invulnerable && !matches!(kind, DamageKind::Void) {
+        return;
+    }
     // Spawn invuln window. Decrements in update_play; while
     // positive every damage call is a no-op so a fresh
     // respawn can't be insta-killed by lingering mobs.
@@ -227,6 +235,13 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
             DamageKind::Burn => {
                 voxel.sfx_at("burn", pos, |a, g| {
                     let _ = a.play_swish(0.18 * g);
+                });
+            }
+            DamageKind::Void => {
+                // Out-of-world damage: low rumble + bell tone so
+                // the player hears the floor disappearing.
+                voxel.sfx_at("void", pos, |a, g| {
+                    let _ = a.play_thud(60.0, 0.4 * g);
                 });
             }
         }

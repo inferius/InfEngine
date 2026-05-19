@@ -88,7 +88,13 @@ pub(crate) fn dislodge_unsupported(voxel: &mut Voxel, removed: [i32; 3]) {
             voxel.world_set_tracked(c, BlockId::AIR);
             let coords = Voxel::affected_chunks(c);
             voxel.rebuild_chunks(&coords);
-            voxel.spawn_drop(b, c);
+            // W10.2: Creative `instabuild` skips the cascade
+            // drops too. The torch / flower still pops off (so
+            // the world stays consistent) but no item entity
+            // spawns.
+            if !voxel.abilities.instabuild {
+                voxel.spawn_drop(b, c);
+            }
             let edit = EditMsg {
                 x: c[0],
                 y: c[1],

@@ -104,6 +104,10 @@ mod debug_tests;
 mod flint_durability_tests;
 #[cfg(test)]
 mod chest_mp_wire_tests;
+// W10: per-mode runtime behaviour (Abilities bundle wiring,
+// insta-break + drop suppression, invulnerability gate).
+#[cfg(test)]
+mod game_mode_runtime_tests;
 #[cfg(test)]
 mod portal_swirl_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
@@ -282,13 +286,19 @@ const NUM_WORKERS: usize = 2;
 /// `apply_player_damage_kind` plays on integer heart loss. New
 /// kinds drop in here + add a `match` arm in the SFX selector.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum DamageKind {
+pub(crate) enum DamageKind {
     /// Mob hits, fall damage, PvP - the standard hurt thud.
     Generic,
     /// Air ran out underwater - subtle bubble + airy swish.
     Drown,
     /// Hot liquid contact - sizzling swish, no bass.
     Burn,
+    /// W10.4: the player fell out of the world (below y < 0 in
+    /// overworld / y < -1 in nether). Bypasses the Creative
+    /// invulnerability gate so /gamemode creative is not an
+    /// auto-cheat against the void. Mirrors MC's
+    /// `DamageSource::OUT_OF_WORLD` being marked `bypassInvul`.
+    Void,
 }
 
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10
@@ -2622,6 +2632,16 @@ impl Voxel {
                 .collect(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// W10.2: test-only accessor for the `dropped_items` list
+    /// length. The field itself stays private + non-test callers
+    /// reach it via `drops::tick_physics` / `drops::spawn`. This
+    /// avoids exposing the whole Vec just so the runtime test
+    /// suite can count entries.
+    #[cfg(test)]
+    pub(crate) fn dropped_items_len(&self) -> usize {
+        self.dropped_items.len()
     }
 
     /// W10.1: recompute the cached `Abilities` bundle from the
@@ -6905,6 +6925,20 @@ impl Voxel {
             }
         }
 
+        // W10.4: Creative players take continuous Void damage below
+        // the world surface so /gamemode creative isn't a free pass
+        // against the void. `DamageKind::Void` is the only kind that
+        // bypasses `abilities.invulnerable`. Survival players keep
+        // using the legacy hard-respawn path below.
+        if self.player_pos.y < 0.0
+            && self.abilities.invulnerable
+            && !matches!(self.net, NetRole::Client { .. })
+        {
+            // 4 HP/s = drains a full bar in ~5 s, fast enough to
+            // matter but slow enough that a single rebound off a
+            // platform doesn't kill outright.
+            player::apply_damage_kind(self, 4.0 * dt, DamageKind::Void);
+        }
         if self.player_pos.y < -20.0 {
             // Fell through the world - respawn above origin. Acts
             // as a soft "death": storage rows wipe so falling has
@@ -10775,10 +10809,15 @@ impl AppHandler for Voxel {
         // (a melee swing takes priority). Tick the active session
         // toward `total`; on completion, set `mine_break` so the
         // block-edit path below executes the break exactly once.
+        //
+        // W10.2: `may_build = false` (future Adventure mode)
+        // suppresses the mining path entirely. Today every mode
+        // ships with `may_build = true`; this is a forward hook.
         let lmb_active = self.lmb_held
             && !self.any_panel_open()
             && attack_mob.is_none()
-            && attack_player.is_none();
+            && attack_player.is_none()
+            && self.abilities.may_build;
         let mut mine_break: Option<[i32; 3]> = None;
         if lmb_active && let Some(hit) = self.mine_target {
             let block = self.world.get(hit.voxel);
@@ -10789,6 +10828,17 @@ impl AppHandler for Voxel {
             // swing. Liquids themselves remain unbreakable; they
             // only come out via the bucket scoop path.
             if block != BlockId::AIR {
+                // W10.2: Creative insta-break path. With
+                // `abilities.instabuild` the very first LMB tick
+                // on a new block completes the break immediately
+                // (no timer, no per-block hardness, no tool tier
+                // check). Mirrors MC's
+                // `ServerPlayerGameMode::destroyBlock` when
+                // `Abilities.instabuild = true`.
+                if self.abilities.instabuild {
+                    self.mining = None;
+                    mine_break = Some(hit.voxel);
+                } else {
                 // Restart the session if either the target voxel
                 // changed or the block at the target has been
                 // replaced (e.g. by another player).
@@ -10874,6 +10924,7 @@ impl AppHandler for Voxel {
                         self.mining = Some(m);
                     }
                 }
+                } // end of else (non-instabuild) branch
             } else {
                 self.mining = None;
             }
@@ -10932,6 +10983,14 @@ impl AppHandler for Voxel {
                 self.edit_history.push(edit);
             }
             if !is_client && broken != BlockId::AIR {
+                // W10.2: Creative `instabuild` suppresses block
+                // drops. MC ref: ServerPlayerGameMode.java
+                // `destroyBlock` short-circuits the drop path
+                // when `Player.Abilities.instabuild` is true.
+                // Container contents (chest, furnace) still drop
+                // below - we never want to silently delete the
+                // player's stored items.
+                let suppress_drops = self.abilities.instabuild;
                 // Tool gating: drop only when the currently
                 // selected slot's tool tier meets the block's
                 // requirement. Player can still swing at higher
@@ -10949,7 +11008,7 @@ impl AppHandler for Voxel {
                     .unwrap_or(BlockId::AIR);
                 let tier = tool_tier(held);
                 let needed = block_required_tier(broken);
-                if tier >= needed {
+                if !suppress_drops && tier >= needed {
                     self.spawn_drop(broken, voxel);
                 }
                 // Chest break: drain the per-position container's
@@ -11429,9 +11488,14 @@ impl AppHandler for Voxel {
                     }
                 }
             } else if rmb
+                && self.abilities.may_build
                 && let Some(block) = selected_block
                 && !is_tool_block(block)
             {
+                // W10.2: `may_build = false` (future Adventure mode)
+                // suppresses RMB placement entirely. Today every
+                // mode opts in.
+                //
                 // Pick the destination voxel: if the crosshair is
                 // on a `F_REPLACEABLE` cell (water, lava, snow
                 // layer), the new block lands AT that cell -
@@ -11595,7 +11659,13 @@ impl AppHandler for Voxel {
                     // Decrement the active stack now that placement
                     // succeeded. Clients defer this - the server's
                     // `vx.inv` snapshot reflects the decrement.
+                    //
+                    // W10.2: Creative `instabuild` does NOT consume
+                    // the held stack. Mirrors MC's
+                    // ServerPlayerGameMode.useItemOn -> the held
+                    // ItemStack's count survives in creative mode.
                     if !is_client
+                        && !self.abilities.instabuild
                         && let Some((_, count)) =
                             self.inventory[self.selected_slot].as_mut()
                     {
