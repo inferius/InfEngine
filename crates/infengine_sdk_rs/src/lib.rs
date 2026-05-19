@@ -201,7 +201,7 @@ impl Engine {
         }
         // SAFETY: `self.api` is non-null (checked above) +
         // valid for the callback's duration per the SDK
-        // contract. `world_get` is an unsafe extern "C" fn
+        // contract. `world_get` is an unsafe extern "C-unwind" fn
         // that just reads the world; the handle pointer is
         // opaque and dereferenced only by the host.
         unsafe { ((*self.api).world_get)(self.handle, x, y, z) }
@@ -364,7 +364,7 @@ macro_rules! declare_plugin {
             unsafe { $crate::Engine::from_raw(handle, api) }
         }
 
-        unsafe extern "C" fn __infengine_on_init(
+        unsafe extern "C-unwind" fn __infengine_on_init(
             handle: *mut $crate::raw::EngineHandle,
         ) {
             if let Ok(mut p) = __infengine_state().lock() {
@@ -373,7 +373,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        unsafe extern "C" fn __infengine_on_shutdown(
+        unsafe extern "C-unwind" fn __infengine_on_shutdown(
             handle: *mut $crate::raw::EngineHandle,
         ) {
             if let Ok(mut p) = __infengine_state().lock() {
@@ -382,7 +382,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        unsafe extern "C" fn __infengine_on_tick(
+        unsafe extern "C-unwind" fn __infengine_on_tick(
             handle: *mut $crate::raw::EngineHandle,
             ev: $crate::raw::TickEvent,
         ) {
@@ -401,7 +401,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        unsafe extern "C" fn __infengine_on_block_place(
+        unsafe extern "C-unwind" fn __infengine_on_block_place(
             handle: *mut $crate::raw::EngineHandle,
             ev: $crate::raw::BlockEvent,
         ) {
@@ -417,7 +417,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        unsafe extern "C" fn __infengine_on_block_break(
+        unsafe extern "C-unwind" fn __infengine_on_block_break(
             handle: *mut $crate::raw::EngineHandle,
             ev: $crate::raw::BlockEvent,
         ) {
@@ -433,7 +433,7 @@ macro_rules! declare_plugin {
             }
         }
 
-        unsafe extern "C" fn __infengine_on_chat_msg(
+        unsafe extern "C-unwind" fn __infengine_on_chat_msg(
             handle: *mut $crate::raw::EngineHandle,
             ev: $crate::raw::ChatEvent,
         ) {
@@ -460,7 +460,7 @@ macro_rules! declare_plugin {
         /// must be a non-NULL pointer to a slot the host
         /// already wrote the api pointer into.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn infengine_plugin_register(
+        pub unsafe extern "C-unwind" fn infengine_plugin_register(
             out_vtable: *mut $crate::raw::PluginVTable,
             out_api: *mut *const $crate::raw::EngineApi,
         ) -> $crate::raw::PluginInfo {
@@ -528,7 +528,7 @@ mod tests {
     use std::ffi::CString;
     use std::os::raw::c_char;
 
-    // A capturing test API. The unsafe extern "C" fns can't
+    // A capturing test API. The unsafe extern "C-unwind" fns can't
     // close over state, so we route every call through a
     // thread-local sink + check the sink after the call.
     thread_local! {
@@ -540,7 +540,7 @@ mod tests {
             const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    unsafe extern "C" fn test_world_get(
+    unsafe extern "C-unwind" fn test_world_get(
         _h: *mut raw::EngineHandle,
         _x: i32,
         _y: i32,
@@ -549,7 +549,7 @@ mod tests {
         42
     }
 
-    unsafe extern "C" fn test_world_set(
+    unsafe extern "C-unwind" fn test_world_set(
         _h: *mut raw::EngineHandle,
         x: i32,
         y: i32,
@@ -559,7 +559,7 @@ mod tests {
         LAST_BLOCK_SET.with(|s| s.borrow_mut().push((x, y, z, id)));
     }
 
-    unsafe extern "C" fn test_chat_send(
+    unsafe extern "C-unwind" fn test_chat_send(
         _h: *mut raw::EngineHandle,
         msg: *const c_char,
     ) {
@@ -568,7 +568,7 @@ mod tests {
         LAST_LOG.with(|l| l.borrow_mut().push(format!("chat:{s}")));
     }
 
-    unsafe extern "C" fn test_block_register(
+    unsafe extern "C-unwind" fn test_block_register(
         _h: *mut raw::EngineHandle,
         name: *const c_char,
         _color: raw::Rgb,
@@ -584,13 +584,13 @@ mod tests {
         1000
     }
 
-    unsafe extern "C" fn test_log_info(msg: *const c_char) {
+    unsafe extern "C-unwind" fn test_log_info(msg: *const c_char) {
         // SAFETY: test invariant.
         let s = unsafe { std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned() };
         LAST_LOG.with(|l| l.borrow_mut().push(format!("info:{s}")));
     }
 
-    unsafe extern "C" fn test_log_warn(msg: *const c_char) {
+    unsafe extern "C-unwind" fn test_log_warn(msg: *const c_char) {
         // SAFETY: test invariant.
         let s = unsafe { std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned() };
         LAST_LOG.with(|l| l.borrow_mut().push(format!("warn:{s}")));

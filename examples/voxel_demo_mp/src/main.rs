@@ -118,6 +118,11 @@ mod menu;
 mod mining;
 mod mob;
 mod player;
+// Wave 7: Rust-dylib plugin host. Loads `<exec_dir>/plugins/*.{dll,so,dylib}`
+// at startup (overrideable via `INFENGINE_PLUGIN_DIR`). The same C-ABI
+// (defined in `infengine_sdk`) will back the C# CLR host in Phase K
+// without any SDK rewrite.
+pub(crate) mod plugin;
 mod ui;
 mod worldgen;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
@@ -1257,6 +1262,30 @@ struct Voxel {
     /// Initialised in `Voxel::new` so the very first frame has a
     /// valid screen to draw.
     menu: menu::Menu,
+    /// Wave 7 plugin registry. `Some` while plugins are loaded;
+    /// `None` between dispatcher calls (`take`-restore pattern).
+    /// Stored as `Option` so the dispatcher can split-borrow it
+    /// without aliasing `&mut Voxel` with `&mut PluginRegistry`.
+    pub(crate) plugins: Option<plugin::PluginRegistry>,
+    /// Wave 7: blocks plugins registered at runtime. Each entry
+    /// has an id (1000..=1999, allocated by the engine), a
+    /// display name + a tint colour. The `/plugins` chat
+    /// command lists these.
+    pub(crate) plugin_blocks: Vec<PluginBlock>,
+}
+
+/// One block kind contributed by a plugin via
+/// `Engine::block_register`. Wave 7 stores them on `Voxel`
+/// alongside the engine's static `BLOCK_TYPES` table; future
+/// work synthesises atlas tiles + extends the world meshing
+/// path so these blocks actually render. `color` is parked for
+/// the future renderer hookup; `/plugins` reads it next.
+#[derive(Debug, Clone)]
+pub(crate) struct PluginBlock {
+    pub(crate) id: u16,
+    pub(crate) name: String,
+    #[allow(dead_code)]
+    pub(crate) color: [f32; 3],
 }
 
 impl Voxel {
@@ -1390,6 +1419,34 @@ impl Voxel {
         // lighting tick figure out which chunks need a re-flood
         // by adding the touched voxel to the dirty set.
         self.lighting.mark_dirty(voxel);
+        // Wave 7: fire on_block_place / on_block_break for
+        // every loaded plugin. Air (block.0 == 0) is treated
+        // as a break; everything else is a place. player_id
+        // 0 means "engine-driven" - we don't have a clean
+        // player attribution here (this fn is the common funnel
+        // for player edits, liquid spread, worldgen settle...).
+        // Future work: thread an Option<u32> player_id down
+        // through the call sites that originate from a player
+        // hit.
+        if block.0 == 0 {
+            plugin::events::dispatch_block_break(
+                self,
+                voxel[0],
+                voxel[1],
+                voxel[2],
+                0,
+                0,
+            );
+        } else {
+            plugin::events::dispatch_block_place(
+                self,
+                voxel[0],
+                voxel[1],
+                voxel[2],
+                block.0,
+                0,
+            );
+        }
     }
 
     /// Thin wrapper - see `mob::damage::damage_mob`.
@@ -4806,6 +4863,8 @@ impl Voxel {
                 lock_cursor: true,
                 hide_cursor: true,
             }),
+            plugins: Some(plugin::PluginRegistry::new()),
+            plugin_blocks: Vec::new(),
         }
     }
 
@@ -8753,6 +8812,12 @@ impl Voxel {
                         self.chat_history.drain(0..drop);
                     }
                 }
+                // Wave 7: fire on_chat_msg for every loaded
+                // plugin BEFORE slash-command dispatch so a
+                // plugin can observe the raw user input + react.
+                // speaker_id 0 = local sender (the engine isn't
+                // multi-player-aware in this hook yet).
+                plugin::events::dispatch_chat(self, 0, &text);
                 // Slash-command dispatch. Commands run locally
                 // (no broadcast); everything else routes to chat
                 // normally below.
@@ -9345,6 +9410,14 @@ impl AppHandler for Voxel {
     fn on_start(&mut self, window: &EngineWindow) {
         let (w, h) = window.size();
         self.viewport = (w, h);
+        // Wave 7: discover + load plugins on startup. Pulls from
+        // <exec_dir>/plugins or the INFENGINE_PLUGIN_DIR env var.
+        // Failures are logged + skipped so a bad plugin doesn't
+        // prevent the engine from booting.
+        let plugin_dir = plugin::PluginRegistry::discover_dir();
+        if let Some(reg) = self.plugins.as_mut() {
+            reg.load_all(&plugin_dir);
+        }
         // Load persisted settings before any user interaction so
         // the main menu badge + Settings panel show the last
         // chosen identity instead of a fresh random Player####.
@@ -9712,6 +9785,12 @@ impl AppHandler for Voxel {
 
     fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.clamp(1e-4, 0.1);
+        // Wave 7: fire on_tick for every loaded plugin BEFORE
+        // anything else in the frame so plugins see a stable
+        // world state (no edits applied mid-tick). day_time
+        // mirrors the day/night cycle if active.
+        let day_time = (self.app_start.elapsed().as_secs_f32()) % 1200.0;
+        plugin::events::dispatch_tick(self, dt, day_time);
         // FPS counter: heavier new-frame weight so the reading
         // tracks reality under load. The old 0.9/0.1 EMA was so
         // sticky that a freshly-stalled game still showed the

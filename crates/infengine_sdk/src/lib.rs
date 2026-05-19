@@ -1,9 +1,12 @@
 //! InfEngine plugin SDK - C-ABI core.
 //!
 //! Every type is `#[repr(C)]`. Every function pointer is
-//! `extern "C"`. The surface is **language-agnostic** so the
-//! Rust dylib host (Wave 7) and the C# CLR host (Phase K) can
-//! consume the same definitions without any duplication.
+//! `extern "C-unwind"`. The surface is **language-agnostic** so
+//! the Rust dylib host (Wave 7) and the C# CLR host (Phase K)
+//! can consume the same definitions without any duplication.
+//! `C-unwind` allows panics to propagate across the FFI boundary
+//! so the host's `catch_unwind` can isolate a misbehaving
+//! plugin (a plain `extern "C"` would abort the process).
 //!
 //! # Layering
 //!
@@ -177,17 +180,17 @@ pub struct TickEvent {
 #[derive(Default)]
 pub struct PluginVTable {
     pub on_init:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle)>,
     pub on_shutdown:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle)>,
     pub on_tick:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle, ev: TickEvent)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle, ev: TickEvent)>,
     pub on_block_place:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle, ev: BlockEvent)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle, ev: BlockEvent)>,
     pub on_block_break:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle, ev: BlockEvent)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle, ev: BlockEvent)>,
     pub on_chat_msg:
-        Option<unsafe extern "C" fn(handle: *mut EngineHandle, ev: ChatEvent)>,
+        Option<unsafe extern "C-unwind" fn(handle: *mut EngineHandle, ev: ChatEvent)>,
 }
 
 impl std::fmt::Debug for PluginVTable {
@@ -236,14 +239,14 @@ impl Rgb {
 /// once on plugin load + the plugin keeps the pointer for the
 /// life of the load.
 ///
-/// All function pointers are `unsafe extern "C" fn` because
+/// All function pointers are `unsafe extern "C-unwind" fn` because
 /// they accept raw pointers + NUL-terminated strings. The Rust
 /// wrapper validates inputs before calling.
 #[repr(C)]
 pub struct EngineApi {
     /// Read the block id at a world voxel. Returns 0 (air) for
     /// out-of-range coords or unloaded chunks.
-    pub world_get: unsafe extern "C" fn(
+    pub world_get: unsafe extern "C-unwind" fn(
         handle: *mut EngineHandle,
         x: i32,
         y: i32,
@@ -252,7 +255,7 @@ pub struct EngineApi {
     /// Write a block id at a world voxel. Out-of-range coords
     /// silently no-op. Triggers the engine's normal edit-
     /// broadcast path so MP peers see the change.
-    pub world_set: unsafe extern "C" fn(
+    pub world_set: unsafe extern "C-unwind" fn(
         handle: *mut EngineHandle,
         x: i32,
         y: i32,
@@ -261,7 +264,7 @@ pub struct EngineApi {
     ),
     /// Push a chat line to the local chat log. UTF-8,
     /// NUL-terminated. NULL pointer = no-op.
-    pub chat_send: unsafe extern "C" fn(
+    pub chat_send: unsafe extern "C-unwind" fn(
         handle: *mut EngineHandle,
         msg: *const c_char,
     ),
@@ -271,15 +274,15 @@ pub struct EngineApi {
     /// allocation failed. Wave 7 reserves a small pool of
     /// plugin-owned block ids (1000..=1999) for the host to
     /// hand out from.
-    pub block_register: unsafe extern "C" fn(
+    pub block_register: unsafe extern "C-unwind" fn(
         handle: *mut EngineHandle,
         name: *const c_char,
         color_rgb: Rgb,
     ) -> u16,
     /// Log at INFO level. NULL pointer = no-op.
-    pub log_info: unsafe extern "C" fn(msg: *const c_char),
+    pub log_info: unsafe extern "C-unwind" fn(msg: *const c_char),
     /// Log at WARN level. NULL pointer = no-op.
-    pub log_warn: unsafe extern "C" fn(msg: *const c_char),
+    pub log_warn: unsafe extern "C-unwind" fn(msg: *const c_char),
 }
 
 impl std::fmt::Debug for EngineApi {
