@@ -151,6 +151,8 @@ mod sky;
 mod emitter_lights;
 #[allow(dead_code)]
 mod panorama;
+#[allow(dead_code)]
+mod jar_cache;
 mod ui;
 mod worldgen;
 use chat::autocomplete::{
