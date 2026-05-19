@@ -31,6 +31,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub(crate) mod blockstates;
 pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod models;
