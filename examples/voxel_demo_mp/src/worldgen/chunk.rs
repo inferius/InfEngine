@@ -17,9 +17,11 @@ use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 ///
 /// Legacy entry point - reads the `WORLD_SEED` + `WORLDGEN` global
 /// atomics. Kept as a thin wrapper around `generate_chunk_at_ctx`
-/// for call sites that haven't migrated to the explicit-ctx path
-/// yet. New callers should prefer `generate_chunk_at_ctx`, which
-/// will be race-free once F.2c finishes the migration.
+/// for headless callers + tests that still build chunks against
+/// the active atomic state. New code should prefer
+/// `generate_chunk_at_ctx`, which is race-free across atomic
+/// writes.
+#[allow(dead_code)] // headless lib + tests still reach for it.
 pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
     // Build a ctx snapshot from the atomics so the dispatch goes
     // through the new path. The sub-modules (biome / climate / ore
@@ -44,14 +46,14 @@ pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
 }
 
 /// Pure-function chunk generator. Determined entirely by `ctx` +
-/// `coord`; once F.2c lands the full migration, this function
-/// never reads the global `WORLD_SEED` / `WORLDGEN` atomics.
+/// `coord`; never reads the global `WORLD_SEED` / `WORLDGEN`
+/// atomics.
 ///
-/// F.2b: dispatch is routed through `ctx.profile`. The legacy
-/// `gen_*` body still reads `world_seed()` inside `biome_at`,
-/// `climate_at`, `ore_hash`, and `hash2` - those moves to a ctx
-/// parameter in F.2c-1, c-2, c-3. The pure-fn race-free
-/// guarantee kicks in fully after that.
+/// F.2c-3 finalised the migration: every noise leaf
+/// (`biome_at`, `climate_at`, `ore_hash`, `hash2_for`,
+/// `seed_offset_for`) takes the seed as a parameter, so a
+/// concurrent stomp of the global atomics on another thread can
+/// no longer poison this call.
 pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     match ctx.profile {
         WorldGen::Classic => gen_classic(coord, ctx, 1.0),

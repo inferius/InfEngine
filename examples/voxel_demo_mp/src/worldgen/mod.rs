@@ -42,13 +42,15 @@ pub(crate) mod trees;
 // depends on. Keep this list tight; new internals stay inside the
 // module unless someone has a reason to call them.
 pub(crate) use biome::{Biome, biome_at};
+// F.2d: bin no longer calls `generate_chunk_at` directly (the
+// worker pool + build_world use `generate_chunk_at_ctx`). The
+// legacy entry point survives for the headless lib + tests; mute
+// the unused-import warning so the bin's clippy pass stays clean.
+#[allow(unused_imports)]
 pub use chunk::generate_chunk_at;
-// F.2a: pure-ctx entry point exists but the bin doesn't reach for
-// it yet (later sub-phases route the worker pool through it). Mute
-// the unused-import lint here so the bin's clippy pass stays
-// clean. The `dead_code` allow covers the leaf fn since the bin
-// re-mounts the source.
-#[allow(unused_imports, dead_code)]
+// F.2a: pure-ctx entry point. Re-exported as the new public
+// surface; the bin reaches for it via `worldgen::WorldgenCtx +
+// worldgen::generate_chunk_at_ctx`.
 pub use chunk::generate_chunk_at_ctx;
 
 /// Pure-function bundle of every input the worldgen call tree
@@ -64,7 +66,6 @@ pub use chunk::generate_chunk_at_ctx;
 /// terrain that no longer matched the chunk's stored block data
 /// when the player walked back to a previously-visited area
 /// after a dim swap or `/worldgen` command.
-#[allow(dead_code)] // Used by bin-side workers once F.2d lands.
 #[derive(Debug, Clone)]
 pub struct WorldgenCtx {
     /// Base seed from `world.json::seed`. The same across all
@@ -93,7 +94,6 @@ impl WorldgenCtx {
     /// ctx from the already-effective `WORLD_SEED` atomic + an
     /// empty dim name; skipping the dim mix there keeps the noise
     /// pipeline byte-identical to the pre-refactor output.
-    #[allow(dead_code)] // Used by bin-side workers once F.2d lands.
     pub fn effective_seed(&self) -> u32 {
         if self.dim.is_empty() {
             self.base_seed

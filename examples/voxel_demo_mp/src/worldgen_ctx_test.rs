@@ -82,6 +82,42 @@ fn pure_worldgen_is_stable_across_global_atomic_writes() {
 }
 
 #[test]
+fn pure_worldgen_is_stable_across_worker_thread_atomic_stomp() {
+    // Mimics the F.2d worker-thread race: spawn a worker that
+    // gens via WorldgenCtx, while the main thread stomps the
+    // global atomics with garbage. The ctx-driven gen result
+    // must still match a control gen using the original ctx.
+    let _g = lock_gen();
+
+    let ctx = WorldgenCtx {
+        base_seed: 0x1234_5678,
+        dim: "overworld".to_string(),
+        profile: WorldGen::Classic,
+    };
+
+    // Control: gen the chunk on the main thread, ctx intact.
+    let control = fold_chunk_ctx([2, 0, 3], &ctx);
+
+    // Stomp the atomics with completely unrelated values BEFORE
+    // spawning the worker. The worker must ignore the atomics
+    // and only consult the cloned ctx it carries.
+    set_world_seed(0xFFFF_FFFF);
+    WORLDGEN.store(WorldGen::Realistic as u8, std::sync::atomic::Ordering::Relaxed);
+
+    let ctx_for_worker = ctx.clone();
+    let worker_hash = std::thread::spawn(move || {
+        fold_chunk_ctx([2, 0, 3], &ctx_for_worker)
+    })
+    .join()
+    .expect("worker thread");
+
+    assert_eq!(
+        control, worker_hash,
+        "worker-thread gen must be stable across atomic stomp",
+    );
+}
+
+#[test]
 fn pure_worldgen_two_dim_round_trip_is_byte_identical() {
     // 2-dim round-trip: gen 3 overworld chunks, switch dim (write
     // atomics + gen some nether), then re-gen the SAME 3 overworld

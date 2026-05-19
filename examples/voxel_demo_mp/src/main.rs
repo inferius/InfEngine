@@ -115,8 +115,7 @@ use player::{
 };
 use ui::{AppState, BackTo, InvAction, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{
-    Biome, WORLDGEN, WorldGen, biome_at, generate_chunk_at, set_world_seed,
-    world_seed,
+    Biome, WORLDGEN, WorldGen, biome_at, set_world_seed, world_seed,
 };
 use drops::{DROP_ATTRACT_RADIUS, DropItem};
 use inventory::{
@@ -3941,6 +3940,25 @@ impl Voxel {
         }
     }
 
+    /// F.2d: build a fresh `WorldgenCtx` snapshot from the live
+    /// per-dim runtime state. Captured on the main thread, then
+    /// shipped to the worker pool so the generator runs with the
+    /// EXACT base seed + dim + profile the player saw at enqueue
+    /// time. A later `switch_dim` between enqueue + pickup no
+    /// longer poisons the gen.
+    fn current_worldgen_ctx(&self) -> worldgen::WorldgenCtx {
+        let profile = self
+            .dim_worldgens
+            .get(&self.current_dim)
+            .copied()
+            .unwrap_or_else(WorldGen::current);
+        worldgen::WorldgenCtx {
+            base_seed: self.base_seed,
+            dim: self.current_dim.clone(),
+            profile,
+        }
+    }
+
     /// Phase F: swap the active dim to `target`. Parks the
     /// current dim's voxel + entity state in the `_by_dim` maps,
     /// pulls the target dim's state back out (minting empty if
@@ -4244,12 +4262,17 @@ impl Voxel {
     /// Synchronously generate the initial chunk grid so the player
     /// drops into a non-empty world. Streaming workers take over once
     /// the player starts moving.
+    ///
+    /// F.2d: builds a `WorldgenCtx` snapshot once before the loop
+    /// and passes it through `generate_chunk_at_ctx`. Pure-fn path,
+    /// no atomic reads.
     fn build_world(&mut self) {
+        let ctx = self.current_worldgen_ctx();
         for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
             for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
                 for cy in 0..VERTICAL_CHUNKS {
                     let cc: ChunkCoord = [cx, cy, cz];
-                    let chunk = generate_chunk_at(cc);
+                    let chunk = worldgen::generate_chunk_at_ctx(cc, &ctx);
                     let origin = World::chunk_world_origin(cc);
                     let cs = CHUNK_SIZE as i32;
                     for ly in 0..cs {
@@ -4357,9 +4380,18 @@ impl Voxel {
 
         // Dispatch pending chunks to the worker pool. The request
         // channel is unbounded; workers consume at their own rate.
+        // F.2d: snapshot the current worldgen ctx on the main
+        // thread and ship a copy with every job. If switch_dim
+        // fires between enqueue and pickup, the worker still gens
+        // against the captured ctx, not the stomped atomics.
         if let Some(pool) = self.workers.as_ref() {
+            let ctx = self.current_worldgen_ctx();
             while let Some(cc) = self.pending_chunks.pop_front() {
-                if pool.req_tx.send(cc).is_err() {
+                let job = ChunkJob {
+                    coord: cc,
+                    ctx: ctx.clone(),
+                };
+                if pool.req_tx.send(job).is_err() {
                     self.pending_chunks.push_front(cc);
                     break;
                 }
@@ -11014,19 +11046,30 @@ struct WorkerResult {
     submeshes: Vec<ChunkSubmesh>,
 }
 
+/// One unit of work for the chunk worker pool. Carries the per-job
+/// `WorldgenCtx` snapshot captured at enqueue time, so the worker
+/// generates the chunk against the EXACT base seed + dim + profile
+/// the player saw when the request was made. Without this, a
+/// `switch_dim` between enqueue and pickup poisoned the result
+/// (the worker would read fresh atomics from the wrong dim).
+struct ChunkJob {
+    coord: ChunkCoord,
+    ctx: worldgen::WorldgenCtx,
+}
+
 /// Thread pool that runs `generate_chunk` + `chunk_mesh` off the main
-/// thread. The main thread enqueues `ChunkCoord` requests on
+/// thread. The main thread enqueues `ChunkJob` requests on
 /// `req_tx`; workers produce `WorkerResult` on `res_rx`. Dropping the
 /// pool closes `req_tx`; the workers see `recv` return Err and exit.
 struct WorkerPool {
-    req_tx: Sender<ChunkCoord>,
+    req_tx: Sender<ChunkJob>,
     res_rx: Receiver<WorkerResult>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl WorkerPool {
     fn spawn(num_workers: usize) -> Self {
-        let (req_tx, req_rx) = mpsc::channel::<ChunkCoord>();
+        let (req_tx, req_rx) = mpsc::channel::<ChunkJob>();
         let req_rx = Arc::new(Mutex::new(req_rx));
         let (res_tx, res_rx) = mpsc::channel::<WorkerResult>();
         let mut threads = Vec::with_capacity(num_workers);
@@ -11039,21 +11082,27 @@ impl WorkerPool {
                     .spawn(move || {
                         loop {
                             // Briefly lock the shared receiver to grab the
-                            // next coord. The lock is held only across one
+                            // next job. The lock is held only across one
                             // recv() call; generation runs lock-free.
-                            let coord = {
+                            let job = {
                                 let rx = req_rx.lock().expect("worker mutex");
                                 match rx.recv() {
-                                    Ok(c) => c,
+                                    Ok(j) => j,
                                     Err(_) => return,
                                 }
                             };
-                            let chunk = generate_chunk_at(coord);
-                            let origin = World::chunk_world_origin(coord);
+                            // Pure-ctx call - no atomic reads. The
+                            // ctx snapshot at enqueue is the
+                            // source of truth for this job; a dim
+                            // swap on the main thread between
+                            // enqueue + pickup can no longer
+                            // poison the gen.
+                            let chunk = worldgen::generate_chunk_at_ctx(job.coord, &job.ctx);
+                            let origin = World::chunk_world_origin(job.coord);
                             let submeshes = chunk_mesh_with_atlas(&chunk, origin, atlas_uv_rect, block_is_opaque);
                             if res_tx
                                 .send(WorkerResult {
-                                    coord,
+                                    coord: job.coord,
                                     chunk,
                                     submeshes,
                                 })
@@ -11081,7 +11130,7 @@ impl Drop for WorkerPool {
         // dummy that we then drop, which causes worker recv() to fail.
         // Replacing the field with a fresh channel and dropping is
         // equivalent; using `mem::replace` keeps the type stable.
-        let (dummy_tx, _) = mpsc::channel::<ChunkCoord>();
+        let (dummy_tx, _) = mpsc::channel::<ChunkJob>();
         let _ = std::mem::replace(&mut self.req_tx, dummy_tx);
         for t in self.threads.drain(..) {
             let _ = t.join();
