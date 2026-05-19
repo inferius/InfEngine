@@ -284,11 +284,97 @@ fn new_world_action_with_nonempty_name_round_trips() {
     let action = MenuAction::NewWorld {
         name: cleaned.clone(),
         worldgen: String::new(),
+        seed: None,
+        game_mode: GameMode::Survival,
     };
     match action {
-        MenuAction::NewWorld { name, worldgen } => {
+        MenuAction::NewWorld { name, worldgen, seed, game_mode } => {
             assert_eq!(name, "Pretty World");
             assert!(worldgen.is_empty());
+            assert!(seed.is_none());
+            assert_eq!(game_mode, GameMode::Survival);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn default_new_world_uses_realistic_and_survival() {
+    // W8.2: per the spec, "Realistic" is the default generator and
+    // "Survival" is the default game mode. The form starts with
+    // both pre-selected so the user can just type a name + click
+    // Vytvorit svet.
+    let s = default_new_world();
+    match s {
+        MenuScreen::NewWorld {
+            name,
+            seed,
+            generator,
+            game_mode,
+        } => {
+            assert!(name.is_empty());
+            assert!(seed.is_empty());
+            assert_eq!(generator, "realistic");
+            assert_eq!(game_mode, GameMode::Survival);
+        }
+        _ => panic!("expected NewWorld"),
+    }
+}
+
+#[test]
+fn parse_seed_field_empty_is_none() {
+    // W8.2: empty seed field -> None (= runtime picks random).
+    assert!(parse_seed_field("").is_none());
+    assert!(parse_seed_field("   ").is_none());
+}
+
+#[test]
+fn parse_seed_field_numeric_pins_value() {
+    // W8.2: numeric input parses into a `u32` and pins exactly
+    // that value into the action payload.
+    assert_eq!(parse_seed_field("42"), Some(42));
+    assert_eq!(parse_seed_field("17539214"), Some(17539214));
+    assert_eq!(parse_seed_field("0"), Some(0));
+}
+
+#[test]
+fn parse_seed_field_garbage_is_none() {
+    // W8.2: non-numeric text falls back to None so a typo doesn't
+    // panic + the user can still create a world (with a fresh
+    // random seed).
+    assert!(parse_seed_field("not a number").is_none());
+    assert!(parse_seed_field("3.14").is_none());
+}
+
+#[test]
+fn parse_seed_field_trims_whitespace() {
+    assert_eq!(parse_seed_field("  17  "), Some(17));
+}
+
+#[test]
+fn esc_from_new_world_returns_to_singleplayer() {
+    // W8.2: ESC on the new-world screen should NOT drop the user
+    // all the way back to Main - they want to keep browsing the
+    // existing slot list.
+    let mut menu = Menu::new(fresh_options());
+    menu.apply_switch(default_new_world());
+    let handled = menu.on_escape();
+    assert!(handled);
+    assert!(matches!(menu.screen, MenuScreen::Singleplayer { .. }));
+}
+
+#[test]
+fn new_world_action_with_pinned_seed_round_trips() {
+    let action = MenuAction::NewWorld {
+        name: "Test".to_string(),
+        worldgen: "realistic".to_string(),
+        seed: Some(7),
+        game_mode: GameMode::Creative,
+    };
+    match action {
+        MenuAction::NewWorld { seed, game_mode, .. } => {
+            assert_eq!(seed, Some(7));
+            assert_eq!(game_mode, GameMode::Creative);
         }
         _ => panic!("wrong variant"),
     }

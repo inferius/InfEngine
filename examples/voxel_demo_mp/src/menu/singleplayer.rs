@@ -5,7 +5,7 @@ use egui::{Color32, RichText, ScrollArea, Vec2};
 use crate::world_save::layout::WorldSummary;
 
 use super::{
-    MenuAction, MenuContext, MenuScreen, shared, validate_world_name,
+    MenuAction, MenuContext, MenuScreen, default_new_world, shared,
 };
 
 /// Render the world picker. The screen's persistent state lives
@@ -19,7 +19,11 @@ pub(crate) fn draw(
     ctx: &mut MenuContext<'_>,
     selected_slug: &mut Option<String>,
     search: &mut String,
-    new_world_open: &mut Option<String>,
+    // W8.2: the inline new-world popup is gone; "Vytvorit novy svet"
+    // now switches to a dedicated `MenuScreen::NewWorld`. The buffer
+    // is kept on the variant only for compatibility with the rest
+    // of the state machine + still-existing tests.
+    _new_world_open: &mut Option<String>,
     confirm_delete: &mut Option<String>,
     actions: &mut Vec<MenuAction>,
 ) {
@@ -78,8 +82,9 @@ pub(crate) fn draw(
         {
             actions.push(MenuAction::PlayOffline { slug: slug.clone() });
         }
-        if shared::small_button(ui, "Vytvorit novy svet") && new_world_open.is_none() {
-            *new_world_open = Some(String::new());
+        if shared::small_button(ui, "Vytvorit novy svet") {
+            // W8.2: switch to the dedicated new-world screen.
+            actions.push(MenuAction::SwitchScreen(default_new_world()));
         }
     });
     ui.horizontal(|ui| {
@@ -90,7 +95,7 @@ pub(crate) fn draw(
             actions.push(MenuAction::SwitchScreen(MenuScreen::Singleplayer {
                 selected_slug: selected_slug.clone(),
                 search: search.clone(),
-                new_world_open: new_world_open.clone(),
+                new_world_open: None,
                 confirm_delete: confirm_delete.clone(),
             }));
         }
@@ -108,63 +113,10 @@ pub(crate) fn draw(
         }
     });
 
-    // Inline new-world form. Modal-ish: rendered as a centred
-    // egui::Window so the user can still see the world list
-    // behind it.
-    if let Some(buf) = new_world_open.as_mut() {
-        let mut keep_open = true;
-        let mut commit: Option<String> = None;
-        egui::Window::new("Novy svet")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Jmeno:");
-                    ui.add_sized(
-                        Vec2::new(220.0, 20.0),
-                        egui::TextEdit::singleline(buf),
-                    );
-                });
-                let valid = validate_world_name(buf).is_some();
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(valid, egui::Button::new("Vytvorit"))
-                        .clicked()
-                        && let Some(name) = validate_world_name(buf)
-                    {
-                        commit = Some(name);
-                        keep_open = false;
-                    }
-                    if ui.button("Zrusit").clicked() {
-                        keep_open = false;
-                    }
-                });
-                if !valid {
-                    ui.label(
-                        RichText::new("Zadej jmeno sveta (1-64 znaku).")
-                            .small()
-                            .color(Color32::from_rgb(220, 150, 150)),
-                    );
-                }
-            });
-        if let Some(name) = commit {
-            // Worldgen choice is pinned to the runtime's current
-            // `WorldGen::current()` for Wave 4 - the user picks it
-            // from the Options screen rather than the new-world
-            // form. The action carries an empty string so
-            // `apply_menu_action` can fall back to the global
-            // atomic (kept for forward-compat with a future
-            // per-slot picker).
-            actions.push(MenuAction::NewWorld {
-                name,
-                worldgen: String::new(),
-            });
-        }
-        if !keep_open {
-            *new_world_open = None;
-        }
-    }
+    // W8.2: the inline new-world popup was retired - the screen
+    // is now a dedicated `MenuScreen::NewWorld` so the user gets
+    // the full form (name + seed + generator + game mode) rather
+    // than a single name field jammed into a 200 px window.
 
     // Delete confirm modal.
     if let Some(slug) = confirm_delete.clone() {

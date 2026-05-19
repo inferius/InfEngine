@@ -30,10 +30,12 @@
 
 use std::time::Instant;
 
+use crate::game_mode::GameMode;
 use crate::world_save::layout::WorldSummary;
 
 pub(crate) mod main_screen;
 pub(crate) mod multiplayer;
+pub(crate) mod new_world;
 pub(crate) mod options;
 pub(crate) mod shared;
 pub(crate) mod singleplayer;
@@ -82,6 +84,23 @@ pub(crate) enum MenuScreen {
     /// Options screen. Editable copies of `Voxel::settings` plus
     /// player name + master-server IP.
     Options,
+    /// W8.2: dedicated new-world screen. Replaces the inline popup
+    /// that the Singleplayer screen used in Wave 4. Carries the
+    /// editable form buffers so re-entry doesn't lose the user's
+    /// pending pick.
+    NewWorld {
+        /// Display name typed by the user. Validated via
+        /// `validate_world_name` on submit.
+        name: String,
+        /// Seed text field. Empty = random; numeric = pinned.
+        seed: String,
+        /// Generator tag picked from the dropdown (Classic /
+        /// Flat / Islands / Amplified / Realistic).
+        generator: String,
+        /// Per-world default game mode. Wave 10 honours the
+        /// flag at runtime; Wave 8 just persists it.
+        game_mode: GameMode,
+    },
     /// Bucket for "not on a menu screen" - actual gameplay state
     /// lives on the `Voxel` struct (Playing / Paused / chest UI
     /// etc.). Used so the menu's transition matrix has a unique
@@ -132,8 +151,16 @@ pub(crate) enum MenuAction {
     Quit,
     /// Load `slug` from disk and start playing offline.
     PlayOffline { slug: String },
-    /// Mint a new world slot from the new-world form.
-    NewWorld { name: String, worldgen: String },
+    /// Mint a new world slot from the new-world form. W8.2: now
+    /// carries a parsed seed (None = random) + the picked game
+    /// mode so the runtime persists both on the WorldJson at
+    /// creation time.
+    NewWorld {
+        name: String,
+        worldgen: String,
+        seed: Option<u32>,
+        game_mode: GameMode,
+    },
     /// Delete `slug` and remove it from the picker.
     DeleteWorld { slug: String },
     /// Connect to `addr` (`host:port`) as a client.
@@ -312,6 +339,13 @@ impl Menu {
                 self.screen = MenuScreen::Main;
                 true
             }
+            // W8.2: ESC from the new-world screen returns to the
+            // Singleplayer picker so the user doesn't drop back to
+            // Main mid-form.
+            MenuScreen::NewWorld { .. } => {
+                self.screen = default_singleplayer();
+                true
+            }
             MenuScreen::Main | MenuScreen::InGame => false,
         }
     }
@@ -334,6 +368,48 @@ pub(crate) fn default_singleplayer() -> MenuScreen {
         new_world_open: None,
         confirm_delete: None,
     }
+}
+
+/// W8.2: build a fresh `NewWorld` screen. The form starts with
+/// the documented defaults: empty name + seed, Realistic
+/// generator, Survival mode. Reset on each re-entry from the
+/// Singleplayer screen.
+pub(crate) fn default_new_world() -> MenuScreen {
+    MenuScreen::NewWorld {
+        name: String::new(),
+        seed: String::new(),
+        generator: "realistic".to_string(),
+        game_mode: GameMode::Survival,
+    }
+}
+
+/// W8.2: parse a seed text field. Empty input lands as `None`
+/// (= runtime picks a fresh random value); any string that parses
+/// as a `u32` pins exactly that value. Strings that don't parse
+/// also yield `None` so a typo doesn't accidentally lock the user
+/// out of the form.
+pub(crate) fn parse_seed_field(typed: &str) -> Option<u32> {
+    let trimmed = typed.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<u32>().ok()
+}
+
+/// W8.2: parse a seed text field with negative-number fallback.
+/// Accepts `i32` so a user can type a seed like `-42` (lots of
+/// MC-era saves do); we wrap the signed value into the matching
+/// `u32` bit pattern.
+#[allow(dead_code)] // kept for a future "accept negative seeds" toggle
+pub(crate) fn parse_seed_field_signed(typed: &str) -> Option<u32> {
+    let trimmed = typed.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(v) = trimmed.parse::<u32>() {
+        return Some(v);
+    }
+    trimmed.parse::<i32>().ok().map(|v| v as u32)
 }
 
 /// Build a fresh `Multiplayer` screen with empty form buffers.
@@ -444,6 +520,28 @@ pub(crate) fn draw(
         MenuScreen::Options => {
             options::draw(ui, ctx, actions);
             MenuScreen::Options
+        }
+        MenuScreen::NewWorld {
+            mut name,
+            mut seed,
+            mut generator,
+            mut game_mode,
+        } => {
+            new_world::draw(
+                ui,
+                ctx,
+                &mut name,
+                &mut seed,
+                &mut generator,
+                &mut game_mode,
+                actions,
+            );
+            MenuScreen::NewWorld {
+                name,
+                seed,
+                generator,
+                game_mode,
+            }
         }
         MenuScreen::InGame => {
             // No-op: the menu isn't drawn while in game; the
