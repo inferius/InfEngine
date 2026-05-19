@@ -33,6 +33,7 @@ use std::path::PathBuf;
 
 pub(crate) mod fallback;
 pub(crate) mod mcmeta;
+pub(crate) mod models;
 pub(crate) mod name_map;
 pub(crate) mod paths;
 pub(crate) mod sounds;
@@ -40,6 +41,9 @@ pub(crate) mod textures;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod models_tests;
 
 /// A single texture entry inside the runtime atlas - either a static
 /// 16x16 tile or the head of an animation strip whose frames live
