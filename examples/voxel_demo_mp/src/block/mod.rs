@@ -24,6 +24,7 @@ pub(crate) mod chest;
 pub(crate) mod fire;
 pub(crate) mod flammability;
 pub(crate) mod furnace;
+pub(crate) mod light_emission;
 pub(crate) mod portal;
 #[cfg(test)]
 mod fire_tests;
@@ -604,6 +605,85 @@ pub(crate) const FLINT_AND_STEEL_MAX_USES: u16 = 64;
 /// extinguish / support failure.
 #[allow(dead_code)] // wired up by Q.4c fire tick + Q.4d/e ignite
 pub(crate) const FIRE_ID: u16 = 49;
+
+// ---------------------------------------------------------------
+// W11.3 - Emitter + cosmetic block ids.
+// ---------------------------------------------------------------
+//
+// Reserved id range 50..=70 for emitter + cosmetic blocks added
+// alongside the MC `Blocks.java` lightLevel transcribe (W11.2).
+// Each constant has a matching `BlockType` row in `BLOCK_TYPES`
+// + a matching MC name in `light_emission::engine_id_to_mc_name`
+// so the lighting BFS picks up the value on the next re-flood.
+
+/// Redstone torch (lit). Emits 7 in MC (FireBlock.bootStrap unlit
+/// emits 0; we ship the lit variant only since the engine has no
+/// redstone state yet).
+#[allow(dead_code)] // wired by W11.2 light_emission table
+pub(crate) const REDSTONE_TORCH_ID: u16 = 50;
+/// Redstone wall torch (lit). MC mirror of REDSTONE_TORCH for the
+/// wall-mounted orientation; same emission.
+#[allow(dead_code)]
+pub(crate) const REDSTONE_WALL_TORCH_ID: u16 = 51;
+/// Soul torch. MC emits 10.
+#[allow(dead_code)]
+pub(crate) const SOUL_TORCH_ID: u16 = 52;
+/// Soul wall torch. Same emission as SOUL_TORCH (10).
+#[allow(dead_code)]
+pub(crate) const SOUL_WALL_TORCH_ID: u16 = 53;
+/// Sea lantern. MC emits 15.
+#[allow(dead_code)]
+pub(crate) const SEA_LANTERN_ID: u16 = 54;
+/// Jack o'lantern. MC emits 15.
+#[allow(dead_code)]
+pub(crate) const JACK_O_LANTERN_ID: u16 = 55;
+/// Soul fire. MC emits 10.
+#[allow(dead_code)]
+pub(crate) const SOUL_FIRE_ID: u16 = 56;
+/// End rod. MC emits 14.
+#[allow(dead_code)]
+pub(crate) const END_ROD_ID: u16 = 57;
+/// Magma block. MC emits 3 - a low-grade light source that the
+/// player can stand on (no fire damage in our engine yet).
+#[allow(dead_code)]
+pub(crate) const MAGMA_BLOCK_ID: u16 = 58;
+/// Shroomlight. MC emits 15.
+#[allow(dead_code)]
+pub(crate) const SHROOMLIGHT_ID: u16 = 59;
+/// Lantern. MC emits 15.
+#[allow(dead_code)]
+pub(crate) const LANTERN_ID: u16 = 60;
+/// Soul lantern. MC emits 10.
+#[allow(dead_code)]
+pub(crate) const SOUL_LANTERN_ID: u16 = 61;
+/// Crying obsidian. MC emits 10.
+#[allow(dead_code)]
+pub(crate) const CRYING_OBSIDIAN_ID: u16 = 62;
+/// Respawn anchor. MC emits 0/3/7/11/15 based on charge state;
+/// the engine has no charge state yet so the block ships with
+/// emission 0 (state defaults to "uncharged"). The MC name
+/// `respawn_anchor` is still in the emitter table at value 15 so
+/// adding charge state later picks up the right max.
+#[allow(dead_code)]
+pub(crate) const RESPAWN_ANCHOR_ID: u16 = 63;
+/// Ender chest. MC emits 7. Cosmetic-only in W11.3 (no per-player
+/// inventory yet); the block lights up but has no inventory.
+#[allow(dead_code)]
+pub(crate) const ENDER_CHEST_ID: u16 = 64;
+/// Lit redstone lamp. MC emits 15 when lit; the unlit form is a
+/// separate id (66). Since the engine has no redstone state, the
+/// lit form is the only variant we ship.
+#[allow(dead_code)]
+pub(crate) const LIT_REDSTONE_LAMP_ID: u16 = 65;
+/// Lit redstone ore. MC emits 9 when lit (player walks over /
+/// punches it). Like LIT_REDSTONE_LAMP we ship the lit form only.
+#[allow(dead_code)]
+pub(crate) const LIT_REDSTONE_ORE_ID: u16 = 66;
+/// Light block (MC's invisible debug-stick light). MC emits 15.
+/// In MC the player only gets this via the /setblock command with
+/// the debug stick; our engine exposes it the same way.
+#[allow(dead_code)]
+pub(crate) const LIGHT_BLOCK_ID: u16 = 67;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.

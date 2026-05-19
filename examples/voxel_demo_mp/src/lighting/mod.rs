@@ -106,21 +106,14 @@ impl LightingState {
 }
 
 /// Block-emission lookup. Mirrors MC's `BlockBehaviour.lightEmission`
-/// constants in `net/minecraft/world/level/block/Blocks.java`:
-/// torch=14, glowstone=15, lava=15, fire=15. Every other block id
-/// (including air) returns 0. Block ids resolve via the constants
-/// declared in `crate::block`.
+/// constants in `net/minecraft/world/level/block/Blocks.java`.
 ///
-/// Kept here (not in `block/mod.rs`) so the lighting module owns
-/// its own emitter table - the block table is the source of truth
-/// for the IDs themselves, lighting just consults them.
+/// W11.2: the source-of-truth table moved to
+/// `crate::block::light_emission::MC_EMITTERS` - a 1:1 transcribe
+/// of every `.lightLevel(...)` modifier in MC's `Blocks.java`.
+/// This wrapper just forwards to the engine-id resolver.
 pub(crate) fn block_emission(id: u16) -> u8 {
-    use crate::block::{FIRE_ID, GLOWSTONE_ID, LAVA_ID, TORCH_ID};
-    match id {
-        TORCH_ID => 14,
-        GLOWSTONE_ID | LAVA_ID | FIRE_ID => 15,
-        _ => 0,
-    }
+    crate::block::light_emission::light_emission_for_id(id)
 }
 
 // ---------------------------------------------------------------
