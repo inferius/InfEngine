@@ -304,6 +304,10 @@ pub(crate) enum DamageKind {
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10
 /// hearts of 2 HP each).
 pub(crate) const PLAYER_MAX_HEALTH: f32 = 20.0;
+/// W10.3: maximum seconds between two consecutive Space presses
+/// for the double-tap fly toggle to fire. Matches MC's
+/// `LocalPlayer.java` jumpTriggerTime budget (~ 0.5 s).
+pub(crate) const DOUBLE_TAP_WINDOW_SECS: f32 = 0.5;
 const STAMINA_MAX: f32 = 100.0;
 /// Breath capacity in seconds. MC matches this at ~15 s with
 /// the default lung capacity. Drains 1 s/s while submerged in a
@@ -661,6 +665,17 @@ struct Voxel {
     /// Previous-frame state of the F key. Rising edge consumes
     /// one piece of food from the inventory + restores HP.
     f_prev: bool,
+    /// W10.3: previous-frame state of the Space key. Rising-edge
+    /// detection is the cheap way to count discrete press events
+    /// for the double-tap fly toggle (the jump path already uses
+    /// `is_pressed` for hold-to-jump, so we can't piggy-back).
+    space_prev: bool,
+    /// W10.3: seconds since the last Space rising edge. A second
+    /// rising edge inside `DOUBLE_TAP_WINDOW_SECS` toggles
+    /// `abilities.flying` when `abilities.mayfly` is true. Mirrors
+    /// MC's LocalPlayer.java tick handler. `None` = no recent tap
+    /// is being tracked.
+    last_space_press: Option<f32>,
     /// F1 toggles HUD visibility. Useful for clean screenshots
     /// and stress-testing the renderer without overlay overhead.
     hud_visible: bool,
@@ -2631,6 +2646,61 @@ impl Voxel {
                 .map(|s| s.to_string())
                 .collect(),
             Err(_) => Vec::new(),
+        }
+    }
+
+    /// W10.3: process a single Space key event for the double-tap
+    /// fly toggle. `now_pressed` is the current frame's
+    /// `is_pressed(Key::Space)`; `dt` is the frame delta. Returns
+    /// `true` when the toggle fired (so the caller can suppress
+    /// the regular jump path for that frame).
+    ///
+    /// Logic:
+    /// - Only the rising edge counts (`!space_prev && now_pressed`).
+    /// - A first rising edge starts a window of
+    ///   `DOUBLE_TAP_WINDOW_SECS`; a second rising edge inside
+    ///   the window flips `abilities.flying`.
+    /// - `abilities.mayfly = false` makes the helper a no-op so
+    ///   Survival players can't accidentally toggle.
+    ///
+    /// Mirrors net/minecraft/client/player/LocalPlayer.java in MC.
+    pub(crate) fn tick_double_tap_fly(&mut self, now_pressed: bool, dt: f32) -> bool {
+        // Advance the existing window timer first so it expires
+        // even on frames where Space is not pressed.
+        if let Some(t) = self.last_space_press.as_mut() {
+            *t += dt;
+            if *t > DOUBLE_TAP_WINDOW_SECS {
+                self.last_space_press = None;
+            }
+        }
+        let rising = now_pressed && !self.space_prev;
+        self.space_prev = now_pressed;
+        if !rising {
+            return false;
+        }
+        // Survival / Adventure ignores Space taps for fly.
+        if !self.abilities.mayfly {
+            // Still reset the window so the player can swap to
+            // Creative and the next pair of taps fires cleanly.
+            self.last_space_press = None;
+            return false;
+        }
+        // Second rising edge inside the window = toggle.
+        if self.last_space_press.is_some() {
+            self.abilities.flying = !self.abilities.flying;
+            self.fly_mode = self.abilities.flying;
+            self.last_space_press = None;
+            if self.abilities.flying {
+                // Zero the fall tracker so the player doesn't
+                // take fall damage on takeoff. Mirrors the /fly
+                // chat command's existing behaviour.
+                self.player_vel = glam::Vec3::ZERO;
+                self.fall_start_y = None;
+            }
+            true
+        } else {
+            self.last_space_press = Some(0.0);
+            false
         }
     }
 
@@ -4917,6 +4987,10 @@ impl Voxel {
             esc_prev: false,
             e_prev: false,
             f_prev: false,
+            // W10.3: double-tap-Space detector starts idle. The
+            // first Space press kicks off the timer.
+            space_prev: false,
+            last_space_press: None,
             hud_visible: true,
             f1_prev: false,
             chat_open: false,
@@ -6137,6 +6211,14 @@ impl Voxel {
         // Minecraft convention - opening the inventory in multiplayer
         // never pauses the world for anyone.
         let input_active = !self.any_panel_open();
+
+        // W10.3: double-tap Space toggles fly in Creative. Tick
+        // the detector EVERY frame so the window timer expires
+        // even when the player is idle. The helper itself
+        // short-circuits when `abilities.mayfly = false` so the
+        // Survival path is unchanged.
+        let space_now = input_active && ctx.input.is_pressed(Key::Space);
+        self.tick_double_tap_fly(space_now, dt);
 
         if input_active {
             let dx = std::mem::take(&mut self.mouse_dx);

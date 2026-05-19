@@ -173,3 +173,75 @@ fn may_build_is_on_in_both_shipped_modes() {
     assert!(Abilities::for_mode(GameMode::Survival).may_build);
     assert!(Abilities::for_mode(GameMode::Creative).may_build);
 }
+
+#[test]
+fn double_space_toggles_fly_in_creative() {
+    // W10.3: two Space rising edges inside the 0.5 s window flip
+    // `abilities.flying` from false to true.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    assert!(!v.abilities.flying);
+    // First tap: rising edge starts the window.
+    let fired_first = v.tick_double_tap_fly(true, 0.0);
+    assert!(!fired_first);
+    // Key release between taps.
+    v.tick_double_tap_fly(false, 0.05);
+    // Second tap inside the window flips the toggle.
+    let fired = v.tick_double_tap_fly(true, 0.05);
+    assert!(fired);
+    assert!(v.abilities.flying);
+    assert!(v.fly_mode);
+}
+
+#[test]
+fn survival_double_space_does_not_toggle_fly() {
+    // W10.3: `abilities.mayfly = false` makes the detector a
+    // no-op. Two Space presses in Survival leave `flying` off.
+    let mut v = voxel_in_mode(GameMode::Survival);
+    v.tick_double_tap_fly(true, 0.0);
+    v.tick_double_tap_fly(false, 0.05);
+    let fired = v.tick_double_tap_fly(true, 0.05);
+    assert!(!fired);
+    assert!(!v.abilities.flying);
+}
+
+#[test]
+fn slow_second_tap_does_not_toggle_fly() {
+    // W10.3: a second Space press AFTER the 0.5 s window expires
+    // restarts the timer instead of toggling. Mirrors MC's
+    // jumpTriggerTime budget.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.tick_double_tap_fly(true, 0.0);
+    v.tick_double_tap_fly(false, 0.6); // window expires
+    let fired = v.tick_double_tap_fly(true, 0.0);
+    assert!(!fired);
+    assert!(!v.abilities.flying);
+}
+
+#[test]
+fn fly_disables_gravity_via_fly_mode_flag() {
+    // W10.3 integration: toggling fly flips both `abilities.flying`
+    // + the legacy `fly_mode` field the physics integrator reads.
+    // If they diverged, gravity would still apply.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.tick_double_tap_fly(true, 0.0);
+    v.tick_double_tap_fly(false, 0.05);
+    v.tick_double_tap_fly(true, 0.05);
+    assert!(v.fly_mode);
+    // Toggling off mirrors the flip.
+    v.tick_double_tap_fly(false, 0.05);
+    v.tick_double_tap_fly(true, 0.0);
+    v.tick_double_tap_fly(false, 0.05);
+    v.tick_double_tap_fly(true, 0.05);
+    assert!(!v.fly_mode);
+}
+
+#[test]
+fn holding_space_does_not_double_count() {
+    // W10.3: only rising edges count. A frame-after-frame
+    // sequence of `true, true` should NOT count as two taps.
+    let mut v = voxel_in_mode(GameMode::Creative);
+    v.tick_double_tap_fly(true, 0.0);
+    let fired = v.tick_double_tap_fly(true, 0.05);
+    assert!(!fired);
+    assert!(!v.abilities.flying);
+}
