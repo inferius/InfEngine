@@ -33,6 +33,7 @@ use std::time::Instant;
 use crate::game_mode::GameMode;
 use crate::world_save::layout::WorldSummary;
 
+pub(crate) mod loading;
 pub(crate) mod main_screen;
 pub(crate) mod multiplayer;
 pub(crate) mod new_world;
