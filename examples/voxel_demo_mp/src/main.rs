@@ -12552,22 +12552,51 @@ impl AppHandler for Voxel {
             );
         }
         // Moon: opposite of sun, slightly smaller + cooler tint.
+        // W12.4: moon brightness + size dimmed by the current phase
+        // so a new moon nearly vanishes + a full moon stays bright.
+        // Phase index walks 0..7 over a `MOON_PHASE_CYCLE_DAYS` cycle
+        // (sky::moon_phase_for_day). Full = 0, new = 4.
         let moon_dir = -sun_dir;
         if moon_dir.y > -0.05 {
+            // Pick the moon phase from the current in-game day count.
+            // `day_time` cycles 0..DAY_LENGTH_S; integer divide of
+            // wall-elapsed seconds by DAY_LENGTH_S gives the day idx.
+            let day_idx = (self
+                .session_started
+                .map(|s| s.elapsed().as_secs_f32() / DAY_LENGTH_S)
+                .unwrap_or(0.0))
+                as u32;
+            let phase_idx = sky::moon_phase_for_day(day_idx);
+            // Phase brightness: full moon (0) = 1.0, new moon (4) = 0.15,
+            // others scale linearly. Symmetric so waxing + waning look
+            // the same.
+            let dist_from_full =
+                (phase_idx as i32).abs().min(8 - phase_idx as i32) as f32;
+            let brightness = (1.0 - dist_from_full / 4.0).max(0.15);
+            // Disc size shrinks slightly with the phase as a soft
+            // visual cue (MC's moon stays 1 size; ours fades + shrinks
+            // because we don't have phase atlas sampling yet).
+            let scale = 7.0 + 3.0 * brightness;
             let moon_world = Vec3::new(
                 player_pos.x + moon_dir.x * CELESTIAL_DIST,
                 player_pos.y + moon_dir.y * CELESTIAL_DIST,
                 player_pos.z + moon_dir.z * CELESTIAL_DIST,
             );
             let m = Mat4::from_scale_rotation_translation(
-                Vec3::splat(10.0),
+                Vec3::splat(scale),
                 glam::Quat::IDENTITY,
                 moon_world,
             );
+            let albedo = [
+                2.8 * brightness,
+                3.0 * brightness,
+                3.8 * brightness,
+                1.0,
+            ];
             renderer.draw_mesh_pbr(
                 player_cube_handle,
                 m.to_cols_array(),
-                [2.8, 3.0, 3.8, 1.0],
+                albedo,
                 0.0,
                 1.0,
             );
