@@ -64,6 +64,28 @@ impl TextureRef {
             interpolate: false,
         }
     }
+
+    /// Compute the UV rect for the active animation frame at the
+    /// given `time_ms` clock. Static tiles return `atlas_uv` as-is.
+    ///
+    /// Frame stride: animated tiles place each frame sequentially
+    /// in the atlas with frame 0 at `atlas_uv`. The vertical extent
+    /// of one frame is `atlas_uv[3] - atlas_uv[1]`; advancing one
+    /// frame shifts `v0` + `v1` by that amount.
+    pub(crate) fn uv_at(&self, time_ms: u32) -> [f32; 4] {
+        if self.frames <= 1 || self.frametime_ms == 0 {
+            return self.atlas_uv;
+        }
+        let frame = (time_ms / self.frametime_ms) % self.frames;
+        let frame_h = self.atlas_uv[3] - self.atlas_uv[1];
+        let v0 = self.atlas_uv[1] + frame as f32 * frame_h;
+        let v1 = v0 + frame_h;
+        [self.atlas_uv[0], v0, self.atlas_uv[2], v1]
+    }
+
+    pub(crate) fn is_animated(&self) -> bool {
+        self.frames > 1 && self.frametime_ms > 0
+    }
 }
 
 /// Atlas-relative texture key: which sub-folder under

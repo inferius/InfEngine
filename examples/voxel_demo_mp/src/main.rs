@@ -7139,16 +7139,18 @@ impl Voxel {
         }
         let atlas_tex_id: Option<egui::TextureId> =
             self.egui_atlas.as_ref().map(|h| h.id());
-        // W9.3: per-item UV resolver that the container UI threads
-        // into its slot painter. Bound up here so the egui closure
-        // can borrow it alongside the rest of the per-frame
-        // snapshots. Snapshot a `Vec<(id, uv)>` flat list so the
-        // closure-captures don't have to borrow `&self`.
+        // W9.3 + W9.4: per-item UV resolver that the container UI
+        // threads into its slot painter. Bound up here so the egui
+        // closure can borrow it alongside the rest of the per-frame
+        // snapshots. Animated items (water bucket - if MC's
+        // bucket_water.png ever animates - etc.) advance to the
+        // current frame via `TextureRef::uv_at`.
+        let app_time_ms = self.app_start.elapsed().as_millis() as u32;
         let icon_uv_table: HashMap<u16, [f32; 4]> = {
             let mut t = HashMap::new();
             for it in crate::item::ITEM_TYPES.iter() {
                 if let Some(r) = self.resource_pack.icon_ref(it.id) {
-                    t.insert(it.id, r.atlas_uv);
+                    t.insert(it.id, r.uv_at(app_time_ms));
                 }
             }
             t

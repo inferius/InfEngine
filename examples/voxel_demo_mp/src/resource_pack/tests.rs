@@ -161,6 +161,61 @@ fn placeholder_pack_icon_ref_distinct_per_item() {
 }
 
 #[test]
+fn static_texture_uv_at_is_constant() {
+    let t = TextureRef::placeholder([0.0, 0.0, 0.25, 0.25]);
+    assert_eq!(t.uv_at(0), t.atlas_uv);
+    assert_eq!(t.uv_at(1_000), t.atlas_uv);
+    assert_eq!(t.uv_at(10_000), t.atlas_uv);
+    assert!(!t.is_animated());
+}
+
+#[test]
+fn animated_uv_at_advances_with_time() {
+    // 4 frames at 100 ms each, frame 0 starts at v=[0, 0.25].
+    // The strip occupies v=[0, 1.0] (4 * 0.25).
+    let t = TextureRef {
+        atlas_uv: [0.0, 0.0, 0.25, 0.25],
+        frames: 4,
+        frametime_ms: 100,
+        interpolate: false,
+    };
+    assert!(t.is_animated());
+    let f0 = t.uv_at(0);
+    let f1 = t.uv_at(100);
+    let f2 = t.uv_at(200);
+    let f3 = t.uv_at(300);
+    let f0_wrap = t.uv_at(400);
+    let eps = 1e-6;
+    // Frame index 0 -> v0=0, v1=0.25.
+    assert!((f0[1] - 0.0).abs() < eps);
+    assert!((f0[3] - 0.25).abs() < eps);
+    // Frame index 1 -> v0=0.25, v1=0.5.
+    assert!((f1[1] - 0.25).abs() < eps);
+    assert!((f1[3] - 0.5).abs() < eps);
+    // Frame index 2 -> v0=0.5, v1=0.75.
+    assert!((f2[1] - 0.5).abs() < eps);
+    // Frame index 3 -> v0=0.75, v1=1.0.
+    assert!((f3[1] - 0.75).abs() < eps);
+    // Wraps back to frame 0.
+    assert_eq!(f0_wrap, f0);
+}
+
+#[test]
+fn animated_uv_zero_frametime_does_not_animate() {
+    // A pack ships frametime=0 by mistake; the loader floors to >= 50,
+    // but the safety branch in uv_at also guards against zero.
+    let t = TextureRef {
+        atlas_uv: [0.0, 0.0, 0.25, 0.25],
+        frames: 4,
+        frametime_ms: 0,
+        interpolate: false,
+    };
+    assert_eq!(t.uv_at(0), t.atlas_uv);
+    assert_eq!(t.uv_at(5_000), t.atlas_uv);
+    assert!(!t.is_animated());
+}
+
+#[test]
 fn icon_ref_for_non_block_item_resolves_under_placeholder() {
     // Under the placeholder pack, non-block items still resolve to
     // their block-form top tile (mirrors MC creative-tab behavior).
