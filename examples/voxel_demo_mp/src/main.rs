@@ -9861,6 +9861,33 @@ impl AppHandler for Voxel {
                 }
             }
         }
+        // W9.6: extend the AudioBank with variants from the loaded
+        // MC resource pack. Each engine key (`"dig:stone"`, etc.) is
+        // mapped to its MC event name via `ENGINE_TO_MC`; the
+        // resource_pack carries the resolved OGG paths. Only fills
+        // keys that didn't already get something from `--sounds`,
+        // so the explicit CLI dir takes precedence on conflict.
+        if let Some(a) = self.audio.as_ref()
+            && !self.resource_pack.sounds.is_empty()
+        {
+            for (engine_key, _) in resource_pack::sounds::ENGINE_TO_MC {
+                if self.audio_bank.has(engine_key) {
+                    continue;
+                }
+                let paths = self.resource_pack.sound_paths(engine_key);
+                if paths.is_empty() {
+                    continue;
+                }
+                let n = self.audio_bank.load_variants(a, engine_key, paths);
+                if n > 0 {
+                    info!(
+                        key = %engine_key,
+                        count = n,
+                        "loaded MC sound variants from resource pack",
+                    );
+                }
+            }
+        }
         // W8.1: server hosts launched directly from the CLI
         // (`--server` argv flag) still need the world up by the
         // time the first client connects, so we enter immediately

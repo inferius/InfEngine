@@ -35,6 +35,7 @@ pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod name_map;
 pub(crate) mod paths;
+pub(crate) mod sounds;
 pub(crate) mod textures;
 
 #[cfg(test)]
@@ -148,6 +149,13 @@ impl ResourcePack {
         match discovered {
             Some(root) => {
                 tracing::info!(path = %root.display(), "MC resource pack discovered");
+                let sounds_reg = sounds::load_sounds_json(&root);
+                if !sounds_reg.is_empty() {
+                    tracing::info!(
+                        events = sounds_reg.len(),
+                        "MC sounds.json loaded",
+                    );
+                }
                 match textures::load_atlas(&root) {
                     Some(atlas) => {
                         tracing::info!(
@@ -158,7 +166,7 @@ impl ResourcePack {
                         ResourcePack {
                             textures: atlas.textures,
                             item_icons: atlas.item_icons,
-                            sounds: HashMap::new(),
+                            sounds: sounds_reg,
                             source: root,
                             is_fallback: false,
                             atlas_size: atlas.atlas_size,
@@ -172,6 +180,7 @@ impl ResourcePack {
                         );
                         let mut pack = fallback::placeholder_pack();
                         pack.source = root;
+                        pack.sounds = sounds_reg;
                         pack
                     }
                 }
@@ -199,6 +208,26 @@ impl ResourcePack {
     /// non-block items (tools, buckets, ingots, food, ...).
     pub(crate) fn item_icon(&self, name: &str) -> Option<&TextureRef> {
         self.item_icons.get(name)
+    }
+
+    /// Resolve an engine sound key (`"step:grass"`, `"lava:pop"`,
+    /// ...) into a list of OGG file paths. Walks the engine -> MC
+    /// translation table + the registry; returns an empty slice
+    /// when the key is unknown or no variants resolved.
+    pub(crate) fn sound_paths(&self, engine_key: &str) -> &[PathBuf] {
+        for (k, mc_name) in sounds::ENGINE_TO_MC {
+            if *k == engine_key
+                && let Some(v) = self.sounds.get(*mc_name)
+            {
+                return v.as_slice();
+            }
+        }
+        // Direct MC-name lookup as a fallback so callers can
+        // pass the MC event name explicitly.
+        if let Some(v) = self.sounds.get(engine_key) {
+            return v.as_slice();
+        }
+        &[]
     }
 
     /// Resolve a block face (top / bottom / sides) for an infengine

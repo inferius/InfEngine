@@ -216,6 +216,51 @@ fn animated_uv_zero_frametime_does_not_animate() {
 }
 
 #[test]
+fn sound_paths_empty_on_placeholder_pack() {
+    let pack = ResourcePack::load();
+    assert!(pack.sound_paths("dig:stone").is_empty());
+    assert!(pack.sound_paths("lava:pop").is_empty());
+}
+
+#[test]
+fn sound_paths_resolves_engine_key_through_mc_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    // Stage a sounds.json + matching OGG file.
+    let snd_root = mc.join("sounds").join("block").join("stone");
+    std::fs::create_dir_all(&snd_root).unwrap();
+    std::fs::write(snd_root.join("break1.ogg"), b"oggdata").unwrap();
+    std::fs::write(snd_root.join("break2.ogg"), b"oggdata").unwrap();
+    std::fs::write(
+        mc.join("sounds.json"),
+        r#"{ "block.stone.break": { "sounds": ["block/stone/break1", "block/stone/break2"] } }"#,
+    )
+    .unwrap();
+    let pack = ResourcePack::load_with_override(Some(mc));
+    let paths = pack.sound_paths("dig:stone");
+    assert_eq!(paths.len(), 2);
+}
+
+#[test]
+fn sound_paths_accepts_mc_event_name_directly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let snd_root = mc.join("sounds").join("block").join("lava");
+    std::fs::create_dir_all(&snd_root).unwrap();
+    std::fs::write(snd_root.join("pop.ogg"), b"oggdata").unwrap();
+    std::fs::write(
+        mc.join("sounds.json"),
+        r#"{ "block.lava.pop": { "sounds": ["block/lava/pop"] } }"#,
+    )
+    .unwrap();
+    let pack = ResourcePack::load_with_override(Some(mc));
+    // Pass the MC event name directly - the fallback path picks
+    // it up.
+    let paths = pack.sound_paths("block.lava.pop");
+    assert_eq!(paths.len(), 1);
+}
+
+#[test]
 fn icon_ref_for_non_block_item_resolves_under_placeholder() {
     // Under the placeholder pack, non-block items still resolve to
     // their block-form top tile (mirrors MC creative-tab behavior).
