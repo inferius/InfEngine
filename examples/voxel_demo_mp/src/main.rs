@@ -145,6 +145,8 @@ pub(crate) mod plugin;
 mod resource_pack;
 #[allow(dead_code)]
 mod particle_pass;
+#[allow(dead_code)]
+mod sky;
 mod ui;
 mod worldgen;
 use chat::autocomplete::{
