@@ -1,0 +1,20 @@
+[package]
+name = "infengine_sdk_rs"
+description = "Rust idiomatic wrapper over the InfEngine C-ABI plugin SDK."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib only - sample plugins re-export this and build their own
+# cdylib that exports `infengine_plugin_register`.
+crate-type = ["rlib"]
+
+[dependencies]
+infengine_sdk = { path = "../infengine_sdk" }

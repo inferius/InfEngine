@@ -207,6 +207,31 @@ impl std::fmt::Debug for PluginVTable {
 // Engine API
 // ---------------------------------------------------------------
 
+/// 3-channel RGB colour for block registration. Wrapping the
+/// `[f32; 3]` in a `#[repr(C)]` struct makes the ABI fully
+/// FFI-safe across all targets (raw `[f32; 3]` is FFI-clean
+/// in practice but clippy's `improper_ctypes` lint flags the
+/// raw array form). Plugins construct this directly.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rgb {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+}
+
+impl Rgb {
+    pub const fn new(r: f32, g: f32, b: f32) -> Self {
+        Self { r, g, b }
+    }
+    pub const fn from_array(a: [f32; 3]) -> Self {
+        Self { r: a[0], g: a[1], b: a[2] }
+    }
+    pub const fn into_array(self) -> [f32; 3] {
+        [self.r, self.g, self.b]
+    }
+}
+
 /// Engine API exposed to plugins. The host fills these slots
 /// once on plugin load + the plugin keeps the pointer for the
 /// life of the load.
@@ -249,7 +274,7 @@ pub struct EngineApi {
     pub block_register: unsafe extern "C" fn(
         handle: *mut EngineHandle,
         name: *const c_char,
-        color_rgb: [f32; 3],
+        color_rgb: Rgb,
     ) -> u16,
     /// Log at INFO level. NULL pointer = no-op.
     pub log_info: unsafe extern "C" fn(msg: *const c_char),
@@ -311,6 +336,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<BlockEvent>(), 20);
         assert_eq!(std::mem::size_of::<ChatEvent>(), 16);
         assert_eq!(std::mem::size_of::<TickEvent>(), 16);
+        // Rgb: 3x f32.
+        assert_eq!(std::mem::size_of::<Rgb>(), 12);
         // PluginInfo: 2x u32 + 2x ptr (16 on 64-bit).
         assert_eq!(
             std::mem::size_of::<PluginInfo>(),
@@ -326,6 +353,16 @@ mod tests {
             std::mem::size_of::<EngineApi>(),
             6 * std::mem::size_of::<*const ()>()
         );
+    }
+
+    #[test]
+    fn rgb_roundtrip_array() {
+        let a = [0.25, 0.5, 0.75];
+        let r = Rgb::from_array(a);
+        assert_eq!(r.into_array(), a);
+        assert_eq!(r.r, 0.25);
+        assert_eq!(r.g, 0.5);
+        assert_eq!(r.b, 0.75);
     }
 
     #[test]

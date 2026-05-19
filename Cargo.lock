@@ -2381,6 +2381,13 @@ name = "infengine_sdk"
 version = "0.0.1"
 
 [[package]]
+name = "infengine_sdk_rs"
+version = "0.0.1"
+dependencies = [
+ "infengine_sdk",
+]
+
+[[package]]
 name = "infengine_voxel"
 version = "0.0.1"
 dependencies = [
