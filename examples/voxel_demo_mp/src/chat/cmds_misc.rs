@@ -527,6 +527,64 @@ pub(crate) fn cmd_grid(
     true
 }
 
+/// `/debug <subsystem> [on|off]`. Toggle developer-only loops that
+/// ship off-by-default to keep the live experience clean. Today
+/// the only switch is `feathers`, which controls the periodic
+/// chicken feather-laying loop fixed in Q.3.
+///
+/// Usage:
+///   /debug feathers          - report current state
+///   /debug feathers on       - enable
+///   /debug feathers off      - disable
+///
+/// Returns `true` whenever the command is recognised, even when
+/// the argument is malformed - the function prints usage so the
+/// caller never has to reach for an `unknown command` arm.
+pub(crate) fn cmd_debug(
+    voxel: &mut Voxel,
+    arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
+    let mut parts = arg.split_whitespace();
+    let subsystem = parts.next().unwrap_or("");
+    let action = parts.next().unwrap_or("");
+    match subsystem {
+        "feathers" => {
+            let new = match action {
+                "" => voxel.debug_chicken_feathers,
+                "on" | "true" | "1" => true,
+                "off" | "false" | "0" => false,
+                _ => {
+                    lines.push(
+                        "Usage: /debug feathers [on|off]".to_string(),
+                    );
+                    return true;
+                }
+            };
+            voxel.debug_chicken_feathers = new;
+            // Reset accumulator on toggle so flipping ON doesn't
+            // immediately emit a stale-accumulated feather.
+            voxel.chicken_lay_accum = 0.0;
+            lines.push(format!(
+                "Debug feathers {}",
+                if new { "ON" } else { "OFF" }
+            ));
+        }
+        "" => {
+            lines.push(
+                "Usage: /debug <subsystem> [on|off]; known: feathers"
+                    .to_string(),
+            );
+        }
+        other => {
+            lines.push(format!(
+                "Unknown debug subsystem: {other} (known: feathers)"
+            ));
+        }
+    }
+    true
+}
+
 /// `/listmobs` (alias `/mobs`). Print a summary of remote mobs:
 /// total count + per-kind tally.
 pub(crate) fn cmd_listmobs(

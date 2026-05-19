@@ -186,6 +186,7 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "clearedits", level: 4 },
     CmdMeta { name: "wipe", level: 4 },
     CmdMeta { name: "seed", level: 4 },
+    CmdMeta { name: "debug", level: 4 },
 ];
 
 /// Permission level required to run `name`. Returns `None`

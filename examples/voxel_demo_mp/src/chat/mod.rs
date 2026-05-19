@@ -468,6 +468,10 @@ pub(crate) fn dispatch_as(
                 handled_locally |=
                     cmds_misc::cmd_grid(voxel, arg, &mut local_lines);
             }
+            "debug" => {
+                handled_locally |=
+                    cmds_misc::cmd_debug(voxel, arg, &mut local_lines);
+            }
             "listmobs" | "mobs" => {
                 handled_locally |= cmds_misc::cmd_listmobs(
                     voxel,

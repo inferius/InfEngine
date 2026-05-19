@@ -96,6 +96,8 @@ mod dim_save_tests;
 mod dim_switch_tests;
 #[cfg(test)]
 mod dim_teleport_tests;
+#[cfg(test)]
+mod debug_tests;
 mod mining;
 mod mob_ai;
 mod player;
@@ -920,10 +922,16 @@ struct Voxel {
     /// Seconds between snow paint events while weather=2. Lower
     /// = denser snowfall. Adjustable from the F6 debug panel.
     snow_rate: f32,
-    /// Accumulator for chicken feather laying. Hosts drop one
-    /// feather into the host's inventory every ~12 s per live
-    /// chicken via this timer. MP clients see no effect.
+    /// Accumulator for the optional chicken feather-laying debug
+    /// loop. While `debug_chicken_feathers` is on, hosts drop one
+    /// feather into the host's inventory every ~12 s as long as a
+    /// live chicken exists. Off by default - see the Q.3 fix
+    /// (feathers were spawning continuously in inventory mid-air
+    /// before this got gated). Toggle via `/debug feathers on|off`.
     chicken_lay_accum: f32,
+    /// Gate for the periodic chicken feather lay loop. Defaults to
+    /// `false`; flip on with `/debug feathers on` for testing.
+    debug_chicken_feathers: bool,
     /// Seconds until the next lightning strike attempt while
     /// weather=1. Initialised to a positive value so the first
     /// strike isn't instant on /weather rain.
@@ -3885,6 +3893,7 @@ impl Voxel {
             snow_accum: 0.0,
             snow_rate: 0.4,
             chicken_lay_accum: 0.0,
+            debug_chicken_feathers: false,
             next_lightning_at: 6.0,
             muted_players: HashSet::new(),
             head_bob_phase: 0.0,
@@ -5033,20 +5042,24 @@ impl Voxel {
         // through the authoritative replication path. Limits to
         // one cell per fire so the world doesn't snap to a
         // uniform white sheet instantly.
-        // Chicken passive laying: every ~12 s the host adds one
-        // feather to its own inventory if any live chicken
-        // exists. MP clients see the feather pop in via the
-        // next vx.inv snapshot.
-        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
-            && self.mobs.iter().any(|m| m.kind == KIND_CHICKEN)
-        {
-            self.chicken_lay_accum += dt;
-            if self.chicken_lay_accum >= 12.0 {
-                self.chicken_lay_accum = 0.0;
-                self.pickup(BlockId(19));
-            }
-        } else {
-            self.chicken_lay_accum = 0.0;
+        // Chicken passive laying (Q.3): every ~12 s the host
+        // would drop one feather into its own inventory while a
+        // live chicken existed. The loop ran unconditionally,
+        // which is the "feathers spawn periodically in inventory
+        // mid-air" bug the user reported. Now gated behind the
+        // `/debug feathers on` toggle (defaults off); the
+        // canonical way to get feathers is to kill a chicken (see
+        // the mob death drop in `mob_ai`).
+        let host_role = matches!(self.net, NetRole::Server { .. } | NetRole::Offline);
+        let chicken_alive = self.mobs.iter().any(|m| m.kind == KIND_CHICKEN);
+        if tick_chicken_feather_lay(
+            self.debug_chicken_feathers,
+            host_role,
+            chicken_alive,
+            &mut self.chicken_lay_accum,
+            dt,
+        ) {
+            self.pickup(BlockId(19));
         }
         if self.weather == 2
             && matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
@@ -11525,6 +11538,32 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
         uv(14, 0),
     );
     (verts, indices)
+}
+
+/// Periodic chicken feather-lay gate (Q.3). Free fn so the test
+/// harness can drive it without a full `Voxel`. Returns `true`
+/// exactly on the tick the timer crosses the 12 s mark with the
+/// debug toggle on AND a chicken alive on a host; the caller's
+/// job is to perform the actual pickup. Resets the accumulator
+/// every gated-off frame so flipping the toggle never emits a
+/// stale-stored feather.
+fn tick_chicken_feather_lay(
+    debug_enabled: bool,
+    host_role: bool,
+    chicken_alive: bool,
+    accum: &mut f32,
+    dt: f32,
+) -> bool {
+    if !(debug_enabled && host_role && chicken_alive) {
+        *accum = 0.0;
+        return false;
+    }
+    *accum += dt;
+    if *accum >= 12.0 {
+        *accum = 0.0;
+        return true;
+    }
+    false
 }
 
 fn ray_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> Option<f32> {
