@@ -11,10 +11,11 @@
 //! - **Netherrack ceiling** at y=127 (a few rows of solid rock).
 //! - **Glowstone scatter** along the ceiling for ambient light.
 //!
-//! Determinism: every noise call mixes `world_seed()`, which the
-//! `switch_dim` path sets to `dim_seed(base, "nether")`. So two
-//! peers running the same base seed produce byte-identical
-//! nether chunks - no sync over the wire.
+//! Determinism: every noise call mixes `ctx.effective_seed()`
+//! where ctx is built per-job from `base_seed` + `"nether"`
+//! (Phase F.2 ctx-first refactor). So two peers running the
+//! same base seed produce byte-identical nether chunks - no
+//! sync over the wire.
 //!
 //! F.1 ships a minimal placeholder (bedrock floor + netherrack
 //! bulk only) so the worldgen enum compiles cleanly. F.3 swaps

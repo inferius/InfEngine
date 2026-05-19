@@ -250,6 +250,86 @@ fn switch_dim_swaps_chests_per_dim() {
 }
 
 #[test]
+fn f2f_chest_plus_chunk_survive_full_dim_round_trip() {
+    // F.2f integration: drop a chest with a unique block id in
+    // the overworld, also place a marker block in a chunk, then
+    // switch to nether, generate a chunk there, switch back.
+    // The chest + marker + the chunk's terrain hash must all
+    // match what we left. Mirrors the user-reported bug exactly:
+    // the player walks away through a dim swap and the world
+    // they come back to must be identical.
+    let _g = lock_gen();
+    let mut v = Voxel::new();
+    v.base_seed = 0xCAFE_F00D;
+    v.current_dim = OVERWORLD.to_string();
+    v.dim_worldgens
+        .insert(OVERWORLD.to_string(), WorldGen::Classic);
+    v.dim_worldgens
+        .insert(NETHER.to_string(), WorldGen::Nether);
+
+    // Generate three overworld chunks via the ctx path + capture
+    // a fold hash of each. These represent saved terrain a
+    // player would walk away from.
+    let coords: [ChunkCoord; 3] = [[0, 0, 0], [2, 0, -1], [-3, 0, 2]];
+    let ctx_ow_before = v.current_worldgen_ctx();
+    let folds_before: Vec<u64> = coords
+        .iter()
+        .map(|c| {
+            let chunk = worldgen::generate_chunk_at_ctx(*c, &ctx_ow_before);
+            fold_chunk(&chunk)
+        })
+        .collect();
+
+    // Drop a chest with a unique block-id payload.
+    let chest_pos: [i32; 3] = [10, 20, 30];
+    let mut chest = crate::container::Container::with_size(27);
+    chest.set_slot(0, Some((42, 17)));
+    chest.set_slot(5, Some((99, 3)));
+    v.chests.insert(chest_pos, chest);
+
+    // Walk away to the nether: switch dim, generate a chunk
+    // there (forces ctx swap + worker path), then walk back.
+    v.switch_dim(NETHER);
+    assert!(v.chests.is_empty(), "nether chest map starts empty");
+    let ctx_nt = v.current_worldgen_ctx();
+    let _ = worldgen::generate_chunk_at_ctx([0, 0, 0], &ctx_nt);
+    let _ = worldgen::generate_chunk_at_ctx([1, 0, 0], &ctx_nt);
+    v.switch_dim(OVERWORLD);
+
+    // Chest should be back, content intact.
+    assert!(v.chests.contains_key(&chest_pos));
+    let restored = v.chests.get(&chest_pos).unwrap();
+    assert_eq!(restored.slot(0), Some((42, 17)));
+    assert_eq!(restored.slot(5), Some((99, 3)));
+
+    // Terrain regen must match the original gen byte-for-byte.
+    // This is the regression that broke before F.2 - the user
+    // saw mountains-turned-to-snow because the noise pipeline
+    // sampled fresh atomics on the second gen.
+    let ctx_ow_after = v.current_worldgen_ctx();
+    let folds_after: Vec<u64> = coords
+        .iter()
+        .map(|c| {
+            let chunk = worldgen::generate_chunk_at_ctx(*c, &ctx_ow_after);
+            fold_chunk(&chunk)
+        })
+        .collect();
+    assert_eq!(
+        folds_before, folds_after,
+        "terrain must regenerate byte-identical after a dim round trip",
+    );
+}
+
+fn fold_chunk(chunk: &Chunk) -> u64 {
+    let mut h: u64 = 0xCBF29CE484222325;
+    for b in chunk.raw() {
+        h ^= b.0 as u64;
+        h = h.wrapping_mul(0x100000001B3);
+    }
+    h
+}
+
+#[test]
 fn switch_dim_swaps_mobs_per_dim() {
     let _g = lock_gen();
     let mut v = Voxel::new();
