@@ -22,6 +22,7 @@ use infengine_voxel::BlockId;
 
 pub(crate) mod chest;
 pub(crate) mod fire;
+pub(crate) mod flammability;
 pub(crate) mod furnace;
 pub(crate) mod portal;
 #[cfg(test)]

@@ -50,10 +50,7 @@ use std::collections::HashMap;
 
 use infengine_voxel::World;
 
-use super::{
-    F_AABB_PASS, F_RAY_PASS, FIRE_ID, LEAVES_ID, PLANKS_ID, WOOD_ID, WOOL_ID,
-    block_has_flag,
-};
+use super::{F_AABB_PASS, F_RAY_PASS, FIRE_ID, block_has_flag};
 
 #[cfg(test)]
 mod tests;
@@ -92,24 +89,14 @@ pub(crate) fn hash3_for(pos: [i32; 3], clock: u64, salt: u32) -> u32 {
 pub(crate) const LAVA_IGNITE_RATE_DENOM: u32 = 20;
 
 /// Per-block flammability lookup. Returns `(ignite_odds,
-/// burn_odds)` matching MC's `FireBlock::flammables` setup:
+/// burn_odds)` matching MC's `FireBlock::bootStrap()` setup.
 ///
-/// - wood / planks: (5, 5..=20). Planks burn faster (catch +
-///   consume) than logs.
-/// - leaves: (30, 60). Leaves catch fire FAST, consume slowly.
-/// - wool: (30, 60). Same as MC.
-/// - everything else: (0, 0). Won't burn.
-///
-/// Cactus + sand + dirt + stone are not in MC's flammables list
-/// either - the catch-all 0,0 keeps them unburnable.
+/// W11.1: the source-of-truth table moved to
+/// [`super::flammability::MC_FLAMMABLES`] - a 1:1 transcription
+/// of MC `FireBlock.java::bootStrap()` (lines 299..=508).
+/// This wrapper just forwards to the engine-id resolver.
 pub(crate) fn block_flammability(id: u16) -> (u32, u32) {
-    match id {
-        WOOD_ID => (5, 5),
-        PLANKS_ID => (5, 20),
-        LEAVES_ID => (30, 60),
-        WOOL_ID => (30, 60),
-        _ => (0, 0),
-    }
+    super::flammability::flammability_for_id(id)
 }
 
 /// Max `ignite_odds` across the 6 face neighbours of `pos`.
