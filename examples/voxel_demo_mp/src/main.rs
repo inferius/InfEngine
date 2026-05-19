@@ -7826,9 +7826,14 @@ impl Voxel {
                 // 1-RPM rate so the sky reads as a slow rotation.
                 let panorama_tex = panorama_egui_tex;
                 let scroll = panorama_scroll_local;
-                egui::CentralPanel::default().show(ctx, |ui| {
+                // W12.6: dark backdrop unconditionally so a missing
+                // panorama doesn't leak egui's default light frame
+                // through. Panorama (if loaded) renders on top.
+                let menu_frame = egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(13, 15, 26));
+                egui::CentralPanel::default().frame(menu_frame).show(ctx, |ui| {
+                    let rect = ui.max_rect();
                     if let Some(tex_id) = panorama_tex {
-                        let rect = ui.max_rect();
                         // Scroll U over time; V fixed. The strip is
                         // 4x wider than 1 face so a `1.0` shift = a
                         // full quarter-turn.
@@ -7845,10 +7850,8 @@ impl Voxel {
                         );
                         // Subtle dark vignette so the buttons stand
                         // out against the panorama.
-                        let mut dim = rect;
-                        dim.set_height(rect.height());
                         ui.painter().rect_filled(
-                            dim,
+                            rect,
                             0.0,
                             egui::Color32::from_rgba_unmultiplied(0, 0, 0, 110),
                         );
