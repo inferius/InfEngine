@@ -13219,6 +13219,9 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
                 // sees `light = [0.0, 1.0]` so day/night still
                 // dims it via `day_factor` like every other voxel.
                 light: [0.0, 1.0],
+                // Wave 9.y: sheep mesh is a static-textured cube,
+                // not a voxel tile, so anim_id = 0.
+                anim_id: 0,
             });
         }
         // Engine cube pipeline uses CCW front-face but the

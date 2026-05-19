@@ -15,10 +15,13 @@ use wgpu::util::DeviceExt;
 /// Vertex format used by `Mesh3DPass`. Includes UV coordinates so the
 /// mesh shader can sample an albedo texture, plus a `light` channel
 /// (Phase L): two normalised values (block, sky) in `[0, 1]` that
-/// drive the per-voxel lighting modulation. Non-voxel meshes (gltf
-/// loads, cube_demo) leave `light = [0.0, 1.0]` so they default to
-/// "no block light, full sky" which mirrors today's unlit behaviour
-/// when the shader picks `max(block, sky * day_factor)`.
+/// drive the per-voxel lighting modulation, plus an `anim_id` slot
+/// (Wave 9.y): `0` = static tile, `1..=32` indexes into the shader's
+/// `tile_anim` uniform array for animated UV scroll. Non-voxel
+/// meshes (gltf loads, cube_demo) leave `light = [0.0, 1.0]` and
+/// `anim_id = 0` so they default to "no block light, full sky,
+/// static UV" which mirrors today's unlit-textured behaviour when
+/// the shader picks `max(block, sky * day_factor)`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct MeshVertex {
@@ -30,6 +33,13 @@ pub struct MeshVertex {
     /// else keeps the default `[0.0, 1.0]` ("no block light, full
     /// sky") so day-time lighting is unchanged on legacy meshes.
     pub light: [f32; 2],
+    /// Wave 9.y animation slot. `0` = static tile (no UV scroll),
+    /// `1..=32` indexes into the shader's `tile_anim` uniform
+    /// array so the fragment shader can offset `uv.v` by the
+    /// active frame each draw. Voxel meshes set this from the
+    /// resource pack's `AnimRegistry`; legacy callers leave it at
+    /// 0 so static UV sampling is unchanged.
+    pub anim_id: u32,
 }
 
 impl MeshVertex {
@@ -39,6 +49,7 @@ impl MeshVertex {
             normal,
             uv: [0.0, 0.0],
             light: [0.0, 1.0],
+            anim_id: 0,
         }
     }
 
@@ -55,6 +66,17 @@ impl MeshVertex {
     /// at full brightness regardless of the day/night ramp.
     pub fn with_light(mut self, block: f32, sky: f32) -> Self {
         self.light = [block.clamp(0.0, 1.0), sky.clamp(0.0, 1.0)];
+        self
+    }
+
+    /// Wave 9.y: tag this vertex with an animation slot id. `0`
+    /// means static (no UV scroll); `1..=32` references an entry
+    /// in the shader's `tile_anim` uniform array so the fragment
+    /// shader walks through the animated tile's frame strip. Slots
+    /// outside `0..=32` are clamped because the uniform array is
+    /// statically sized.
+    pub fn with_anim_id(mut self, slot: u32) -> Self {
+        self.anim_id = slot.min(32);
         self
     }
 }
@@ -99,6 +121,7 @@ impl Mesh3DRegistry {
             normal: [0.0; 3],
             uv: [0.0; 2],
             light: [0.0, 1.0],
+            anim_id: 0,
         }];
         let fallback_i: [u32; 1] = [0];
         let (vsrc, isrc) = if vertices.is_empty() || indices.is_empty() {
@@ -293,6 +316,7 @@ fn cube_geometry() -> (Vec<MeshVertex>, Vec<u16>) {
                 normal,
                 uv: FACE_UVS[i],
                 light: [0.0, 1.0],
+                anim_id: 0,
             });
         }
         // Two triangles per face wound CCW when viewed from the
@@ -493,6 +517,16 @@ impl Mesh3DPass {
                     as wgpu::BufferAddress,
                 shader_location: 9,
                 format: wgpu::VertexFormat::Float32x2,
+            },
+            // Wave 9.y: anim_id (u32). 0 = static, 1..=32 indexes
+            // into the shader's `tile_anim` uniform array. Sits
+            // right after the per-vertex light pair at offset 40.
+            wgpu::VertexAttribute {
+                offset: (std::mem::size_of::<[f32; 3]>() * 2
+                    + std::mem::size_of::<[f32; 2]>() * 2)
+                    as wgpu::BufferAddress,
+                shader_location: 10,
+                format: wgpu::VertexFormat::Uint32,
             },
         ];
 
@@ -893,5 +927,65 @@ impl Mesh3DPass {
                 batch.start..batch.start + batch.count,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mesh_vertex_size_matches_attribute_layout() {
+        // position (12) + normal (12) + uv (8) + light (8) + anim_id (4)
+        // = 44 bytes. The wgpu vertex layout's last attribute lives
+        // at offset 40 + 4 = 44, matching size_of::<MeshVertex>().
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 44);
+    }
+
+    #[test]
+    fn mesh_vertex_new_defaults_static_anim_id() {
+        let v = MeshVertex::new([1.0, 2.0, 3.0], [0.0, 1.0, 0.0]);
+        assert_eq!(v.position, [1.0, 2.0, 3.0]);
+        assert_eq!(v.normal, [0.0, 1.0, 0.0]);
+        assert_eq!(v.uv, [0.0, 0.0]);
+        assert_eq!(v.light, [0.0, 1.0]);
+        assert_eq!(v.anim_id, 0);
+    }
+
+    #[test]
+    fn with_anim_id_clamps_to_max_slot() {
+        // The shader's tile_anim array has 32 entries. Slot ids
+        // above 32 clamp to 32 so they never index out of bounds.
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(5);
+        assert_eq!(v.anim_id, 5);
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(32);
+        assert_eq!(v.anim_id, 32);
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(99);
+        assert_eq!(v.anim_id, 32);
+    }
+
+    #[test]
+    fn with_anim_id_zero_remains_static() {
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(0);
+        assert_eq!(v.anim_id, 0);
+    }
+
+    #[test]
+    fn mesh_vertex_anim_id_offset_is_40() {
+        // Critical for the wgpu vertex attribute at shader_location
+        // 10 - if any field shifts this offset, the GPU reads the
+        // wrong bytes and animated tiles get random slot ids.
+        let v = MeshVertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            uv: [0.0; 2],
+            light: [0.0; 2],
+            anim_id: 0xDEADBEEFu32,
+        };
+        let bytes: &[u8] = bytemuck::bytes_of(&v);
+        let offset = 40usize;
+        let slice = &bytes[offset..offset + 4];
+        let value = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+        assert_eq!(value, 0xDEADBEEFu32);
     }
 }

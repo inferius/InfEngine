@@ -61,6 +61,10 @@ struct VertexInput {
     // legacy non-voxel meshes leave it at (0.0, 1.0) so they
     // render as if they sit under open sky.
     @location(9) light: vec2<f32>,
+    // Wave 9.y: animation slot (0 = static, 1..=32 indexes
+    // into tile_anims.entries). The fragment shader uses this
+    // to scroll UV.v through an animated tile's frame strip.
+    @location(10) anim_id: u32,
 };
 
 struct VertexOutput {
@@ -71,6 +75,10 @@ struct VertexOutput {
     @location(3) material: vec4<f32>,
     @location(4) uv: vec2<f32>,
     @location(5) light: vec2<f32>,
+    // Wave 9.y: animation slot forwarded so the fragment shader
+    // can pick the right tile_anims entry. Flat-interpolated
+    // because every vertex of a quad shares the same slot.
+    @location(6) @interpolate(flat) anim_id: u32,
 };
 
 @vertex
@@ -87,6 +95,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.material = in.inst_material;
     out.uv = in.uv;
     out.light = in.light;
+    out.anim_id = in.anim_id;
     return out;
 }
 
