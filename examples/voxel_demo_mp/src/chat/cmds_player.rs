@@ -523,3 +523,199 @@ pub(crate) fn cmd_tp(
     }
     true
 }
+
+/// W10.5: `/gamemode <survival|creative|0|1>` (alias `/gm`).
+/// Switches the local player's mode + recomputes the cached
+/// `Abilities` bundle so fly / invuln / instabuild flip in
+/// lockstep. Mirrors MC's GameModeCommand.java lines 30-80.
+///
+/// Accepted spellings (case-insensitive):
+/// - `survival`, `s`, `0` -> Survival
+/// - `creative`, `c`, `1` -> Creative
+///
+/// Empty arg prints the current mode without changing it.
+pub(crate) fn cmd_gamemode(
+    voxel: &mut Voxel,
+    arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
+    use crate::game_mode::GameMode;
+    let arg = arg.trim();
+    if arg.is_empty() {
+        lines.push(format!(
+            "Current game mode: {}",
+            voxel.game_mode.label_cs()
+        ));
+        return true;
+    }
+    let target = match arg.to_lowercase().as_str() {
+        "survival" | "s" | "0" => GameMode::Survival,
+        "creative" | "c" | "1" => GameMode::Creative,
+        other => {
+            lines.push(format!(
+                "Unknown game mode: {other}. \
+                 Use survival|creative|0|1."
+            ));
+            return true;
+        }
+    };
+    if voxel.game_mode == target {
+        lines.push(format!(
+            "Already in {} mode.",
+            target.label_cs()
+        ));
+        return true;
+    }
+    voxel.game_mode = target;
+    voxel.refresh_abilities();
+    lines.push(format!(
+        "Game mode set to {}.",
+        target.label_cs()
+    ));
+    true
+}
+
+#[cfg(test)]
+mod gamemode_tests {
+    use super::*;
+    use crate::chat::{Sender, cmd_level, dispatch_as};
+    use crate::game_mode::GameMode;
+
+    fn make_voxel() -> Voxel {
+        Voxel::new()
+    }
+
+    #[test]
+    fn gamemode_command_creative_switches() {
+        // W10.5: /gamemode creative flips the mode + refreshes
+        // abilities (instabuild now true).
+        let mut v = make_voxel();
+        let mut lines = Vec::new();
+        assert!(cmd_gamemode(&mut v, "creative", &mut lines));
+        assert_eq!(v.game_mode, GameMode::Creative);
+        assert!(v.abilities.instabuild);
+        assert!(lines.iter().any(|l| l.contains("Creative")));
+    }
+
+    #[test]
+    fn gamemode_command_survival_switches() {
+        // Inverse: Creative -> Survival drops instabuild back.
+        let mut v = make_voxel();
+        v.game_mode = GameMode::Creative;
+        v.refresh_abilities();
+        let mut lines = Vec::new();
+        assert!(cmd_gamemode(&mut v, "survival", &mut lines));
+        assert_eq!(v.game_mode, GameMode::Survival);
+        assert!(!v.abilities.instabuild);
+        assert!(!v.abilities.invulnerable);
+    }
+
+    #[test]
+    fn gamemode_command_accepts_numeric_aliases() {
+        // /gamemode 0 == survival, /gamemode 1 == creative.
+        // Matches MC's GameModeCommand integer overload.
+        let mut v = make_voxel();
+        let mut lines = Vec::new();
+        cmd_gamemode(&mut v, "1", &mut lines);
+        assert_eq!(v.game_mode, GameMode::Creative);
+        cmd_gamemode(&mut v, "0", &mut lines);
+        assert_eq!(v.game_mode, GameMode::Survival);
+    }
+
+    #[test]
+    fn gamemode_command_accepts_short_aliases() {
+        // s / c shorthand. The /gm s / /gm c dispatcher form
+        // delegates here.
+        let mut v = make_voxel();
+        let mut lines = Vec::new();
+        cmd_gamemode(&mut v, "c", &mut lines);
+        assert_eq!(v.game_mode, GameMode::Creative);
+        cmd_gamemode(&mut v, "s", &mut lines);
+        assert_eq!(v.game_mode, GameMode::Survival);
+    }
+
+    #[test]
+    fn gamemode_command_invalid_arg_errors() {
+        // Unknown spelling stays in the current mode + emits a
+        // helpful error line. Catches typos like /gm adventure.
+        let mut v = make_voxel();
+        let before = v.game_mode;
+        let mut lines = Vec::new();
+        assert!(cmd_gamemode(&mut v, "adventure", &mut lines));
+        assert_eq!(v.game_mode, before);
+        assert!(lines.iter().any(|l| l.contains("Unknown")));
+    }
+
+    #[test]
+    fn gamemode_command_empty_arg_prints_current() {
+        // Bare /gamemode reports the current mode without
+        // changing it. Matches MC's `/gamemode` with no arg.
+        let mut v = make_voxel();
+        let before = v.game_mode;
+        let mut lines = Vec::new();
+        assert!(cmd_gamemode(&mut v, "", &mut lines));
+        assert_eq!(v.game_mode, before);
+        assert!(lines.iter().any(|l| l.contains("Current")));
+    }
+
+    #[test]
+    fn gamemode_command_perm_level_is_two() {
+        // W10.5 spec: perm 2 (creative/movement). A level-0
+        // sender is blocked at the dispatcher gate.
+        assert_eq!(cmd_level("gamemode"), Some(2));
+        assert_eq!(cmd_level("gm"), Some(2));
+    }
+
+    #[test]
+    fn gamemode_command_perm_blocked_for_level_0() {
+        // Drive the full dispatcher with a guest-level sender
+        // and confirm the mode never changes.
+        let mut v = make_voxel();
+        let guest = Sender { name: "guest".into(), level: 0 };
+        let handled = dispatch_as(&mut v, &guest, "/gamemode creative");
+        assert!(handled);
+        // Mode untouched.
+        assert_eq!(v.game_mode, GameMode::Survival);
+        // Feedback line mentions the gate.
+        let last = v.chat_log.iter().next_back().map(|(_, l)| l.clone());
+        assert!(
+            last.as_deref().unwrap_or("").contains("permission level 2"),
+            "expected perm denial line, got: {last:?}"
+        );
+    }
+
+    #[test]
+    fn gamemode_command_already_in_mode_is_noop_line() {
+        // /gamemode creative while already creative emits an
+        // "Already in" line + leaves the mode untouched.
+        let mut v = make_voxel();
+        v.game_mode = GameMode::Creative;
+        v.refresh_abilities();
+        let mut lines = Vec::new();
+        assert!(cmd_gamemode(&mut v, "creative", &mut lines));
+        assert_eq!(v.game_mode, GameMode::Creative);
+        assert!(lines.iter().any(|l| l.contains("Already")));
+    }
+
+    #[test]
+    fn gms_alias_routes_to_survival() {
+        // /gms is a shorthand for /gamemode survival. The
+        // dispatcher rewrites the arg to "survival" before
+        // calling cmd_gamemode.
+        let mut v = make_voxel();
+        v.game_mode = GameMode::Creative;
+        v.refresh_abilities();
+        dispatch_as(&mut v, &Sender::host(), "/gms");
+        assert_eq!(v.game_mode, GameMode::Survival);
+    }
+
+    #[test]
+    fn gmc_alias_routes_to_creative() {
+        // /gmc is a shorthand for /gamemode creative.
+        let mut v = make_voxel();
+        assert_eq!(v.game_mode, GameMode::Survival);
+        dispatch_as(&mut v, &Sender::host(), "/gmc");
+        assert_eq!(v.game_mode, GameMode::Creative);
+        assert!(v.abilities.instabuild);
+    }
+}

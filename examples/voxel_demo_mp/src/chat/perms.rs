@@ -138,6 +138,13 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "fly", level: 2 },
     CmdMeta { name: "godmode", level: 2 },
     CmdMeta { name: "god", level: 2 },
+    // W10.5: /gamemode + aliases. Permission level 2 (creative /
+    // movement) matches MC's GameModeCommand.java "requires(s ->
+    // s.hasPermission(2))".
+    CmdMeta { name: "gamemode", level: 2 },
+    CmdMeta { name: "gm", level: 2 },
+    CmdMeta { name: "gms", level: 2 },
+    CmdMeta { name: "gmc", level: 2 },
     CmdMeta { name: "heal", level: 2 },
     CmdMeta { name: "give", level: 2 },
     CmdMeta { name: "restock", level: 2 },

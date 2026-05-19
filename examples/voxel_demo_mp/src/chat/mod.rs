@@ -322,6 +322,26 @@ pub(crate) fn dispatch_as(
                 handled_locally |=
                     cmds_player::cmd_fly(voxel, arg, &mut local_lines);
             }
+            // W10.5: /gamemode + short aliases. /gm with a sub-verb
+            // (e.g. /gm survival, /gm 1) routes through the same
+            // dispatcher. The /gms and /gmc forms are MC-style
+            // shorthands that bypass the sub-verb parse entirely.
+            "gamemode" => {
+                handled_locally |=
+                    cmds_player::cmd_gamemode(voxel, arg, &mut local_lines);
+            }
+            "gm" => {
+                handled_locally |=
+                    cmds_player::cmd_gamemode(voxel, arg, &mut local_lines);
+            }
+            "gms" => {
+                handled_locally |=
+                    cmds_player::cmd_gamemode(voxel, "survival", &mut local_lines);
+            }
+            "gmc" => {
+                handled_locally |=
+                    cmds_player::cmd_gamemode(voxel, "creative", &mut local_lines);
+            }
             "night" => {
                 handled_locally |=
                     cmds_world::cmd_night(voxel, arg, &mut local_lines);
