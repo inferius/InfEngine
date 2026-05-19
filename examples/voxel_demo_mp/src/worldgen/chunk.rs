@@ -9,10 +9,16 @@ use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 use super::biome::{Biome, biome_at};
 use super::height::{cave_at, height_at_classic};
 use super::ore::pick_stone_or_ore;
-use super::{WorldGen, cactus, flowers, trees};
+use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 
 /// Top-level chunk generator. Dispatches to the per-profile
 /// implementation based on the currently-loaded `WORLDGEN`.
+///
+/// Legacy entry point - reads the `WORLD_SEED` + `WORLDGEN` global
+/// atomics. Kept for call sites that haven't migrated to the
+/// `WorldgenCtx` path yet. New callers should prefer
+/// `generate_chunk_at_ctx`, which is race-free across atomic
+/// writes.
 pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
     match WorldGen::current() {
         WorldGen::Classic => gen_classic(coord, 1.0),
@@ -22,6 +28,20 @@ pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
         WorldGen::Realistic => super::climate::gen_realistic(coord),
         WorldGen::Nether => super::nether::gen_nether(coord),
     }
+}
+
+/// Pure-function chunk generator. Determined entirely by `ctx` +
+/// `coord`; never reads the global `WORLD_SEED` / `WORLDGEN`
+/// atomics.
+///
+/// F.2a stub: routes through the legacy global-atomic path while
+/// the sub-modules still consume the atomics. F.2b onwards
+/// rewrites each `gen_*` to take `&WorldgenCtx` and the stub goes
+/// away. Until then this function is not race-free - the
+/// regression test guarding it is `#[ignore]`d.
+#[allow(dead_code)] // Used by bin-side workers once F.2d lands.
+pub fn generate_chunk_at_ctx(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
+    generate_chunk_at(coord)
 }
 
 /// Pancake-flat terrain at y=8: one row of grass, three rows of

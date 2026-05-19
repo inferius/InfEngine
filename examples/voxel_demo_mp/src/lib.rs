@@ -71,6 +71,14 @@ pub mod worldgen;
 #[path = "worldgen_baseline_test.rs"]
 mod worldgen_baseline_test;
 
+// F.2a regression marker: pure-ctx worldgen stability across global
+// atomic writes. Ignored until F.2b adds the `WorldgenCtx` struct +
+// `generate_chunk_at_ctx` entry point; un-ignored once the refactor
+// makes it pass.
+#[cfg(test)]
+#[path = "worldgen_ctx_test.rs"]
+mod worldgen_ctx_test;
+
 #[path = "liquid/mod.rs"]
 pub mod liquid;
 

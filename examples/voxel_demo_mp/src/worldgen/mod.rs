@@ -43,6 +43,66 @@ pub(crate) mod trees;
 // module unless someone has a reason to call them.
 pub(crate) use biome::{Biome, biome_at};
 pub use chunk::generate_chunk_at;
+// F.2a: pure-ctx entry point exists but the bin doesn't reach for
+// it yet (later sub-phases route the worker pool through it). Mute
+// the unused-import lint here so the bin's clippy pass stays clean.
+#[allow(unused_imports)]
+pub use chunk::generate_chunk_at_ctx;
+
+/// Pure-function bundle of every input the worldgen call tree
+/// needs. Built at the edge of the generator (chunk-worker enqueue
+/// / chat-command / save-load) and threaded by reference through
+/// every gen / noise / decoration call. Two calls with the same
+/// `WorldgenCtx` + same coord produce byte-identical chunks no
+/// matter what the global `WORLD_SEED` / `WORLDGEN` atomics say.
+///
+/// Phase F.2: introduced to fix a race where background workers
+/// (and reload-from-disk chunk regens) would sample the atomics
+/// at a different moment than the caller intended, producing
+/// terrain that no longer matched the chunk's stored block data
+/// when the player walked back to a previously-visited area
+/// after a dim swap or `/worldgen` command.
+#[allow(dead_code)] // Used by bin-side workers once F.2d lands.
+#[derive(Debug, Clone)]
+pub struct WorldgenCtx {
+    /// Base seed from `world.json::seed`. The same across all
+    /// dims of one world; the per-dim split is done by
+    /// `effective_seed`.
+    pub base_seed: u32,
+    /// Name of the dimension this gen call belongs to (e.g.
+    /// `"overworld"`, `"nether"`). Folded into the effective seed
+    /// so two dims sharing one base seed produce different chunk
+    /// lattices.
+    pub dim: String,
+    /// World-gen profile to run for this dim. Per-dim, not global -
+    /// in a multi-dim save the overworld may be `Classic` while
+    /// the nether is `Nether`.
+    pub profile: WorldGen,
+}
+
+impl WorldgenCtx {
+    /// `base_seed XOR FNV1a(dim_name)`. Same algorithm as the free
+    /// `dim_seed`; kept as a method so callers can avoid importing
+    /// the helper when they only need the effective value.
+    #[allow(dead_code)] // Used by bin-side workers once F.2d lands.
+    pub fn effective_seed(&self) -> u32 {
+        dim_seed(self.base_seed, &self.dim)
+    }
+}
+
+impl Default for WorldgenCtx {
+    /// The defaults match a fresh `WorldJson::create_world(
+    /// "classic", 0)`: base seed 0, overworld dim, Classic
+    /// profile. Lets tests that don't care about ctx construct
+    /// one trivially.
+    fn default() -> Self {
+        Self {
+            base_seed: 0,
+            dim: "overworld".to_string(),
+            profile: WorldGen::Classic,
+        }
+    }
+}
 
 /// Global world-generation seed. Mixed into every noise function so
 /// distinct hosts (or /seed-cycled sessions) produce different
