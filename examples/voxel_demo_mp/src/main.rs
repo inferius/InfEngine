@@ -104,6 +104,8 @@ mod debug_tests;
 mod flint_durability_tests;
 #[cfg(test)]
 mod chest_mp_wire_tests;
+#[cfg(test)]
+mod portal_swirl_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -985,6 +987,12 @@ struct Voxel {
     /// edit (break clears, place inserts). Used per frame to push
     /// point lights to the renderer near the player.
     torch_positions: HashSet<[i32; 3]>,
+    /// W5.2a: tracker for placed portal blocks. Driven by
+    /// `world_set_tracked` (the central edit path) so the renderer
+    /// can walk a small per-frame set instead of scanning every
+    /// chunk for `PORTAL_ID`. Lit portals don't move; the set
+    /// stays empty until `try_ignite` fills in interior cells.
+    portal_positions: HashSet<[i32; 3]>,
     /// Sticky torch orientations keyed by voxel. 0 = floor,
     /// 1 = wall pointing -X (mounted on +X face of a block at
     /// voxel.x+1), 2 = +X, 3 = -Z, 4 = +Z. Set at placement
@@ -1285,6 +1293,14 @@ impl Voxel {
             self.snow_positions.entry(voxel).or_insert(1);
         } else {
             self.snow_positions.remove(&voxel);
+        }
+        // W5.2a: portal-block index. Tracked so the animated swirl
+        // render pass doesn't have to scan every chunk for
+        // `PORTAL_ID` each frame.
+        if block.0 == block::PORTAL_ID {
+            self.portal_positions.insert(voxel);
+        } else {
+            self.portal_positions.remove(&voxel);
         }
         // Torch removal also clears the sticky orientation
         // override so a future placement starts fresh.
@@ -4720,6 +4736,7 @@ impl Voxel {
             show_debug: false,
             f3_prev: false,
             torch_positions: HashSet::new(),
+            portal_positions: HashSet::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             chests: HashMap::new(),
@@ -5069,6 +5086,9 @@ impl Voxel {
         self.pending_set.clear();
         self.snow_positions.clear();
         self.torch_positions.clear();
+        // W5.2a: portal tracker rebuilds via world_set_tracked
+        // when chunks reload, so clear here too.
+        self.portal_positions.clear();
         self.torch_orient.clear();
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
@@ -10663,6 +10683,11 @@ impl AppHandler for Voxel {
                             for dz in -3..=3 {
                                 let p = [center[0] + dx, center[1] + dy, center[2] + dz];
                                 if self.world.get(p).0 == block::PORTAL_ID {
+                                    // W5.2a: index the freshly-lit
+                                    // portal cells so the swirl
+                                    // render pass picks them up
+                                    // without scanning chunks.
+                                    self.portal_positions.insert(p);
                                     emitted.push(EditMsg {
                                         x: p[0],
                                         y: p[1],
@@ -11599,6 +11624,71 @@ impl AppHandler for Voxel {
                     [0.97, 0.98, 1.0, 1.0],
                     0.0,
                     0.9,
+                );
+            }
+        }
+        // W5.2a: animated portal swirl. Each `PORTAL_ID` voxel
+        // draws as two thin quads (one Z-aligned, one X-aligned)
+        // tinted procedurally so the panel reads as a swirling
+        // purple curtain. The colour modulation comes from
+        // `day_time` (the only frame-anchored f32 we have without
+        // touching the renderer crate's shader uniforms) -> the
+        // base purple `(0.6, 0.2, 0.9)` rolls between dim and
+        // bright on a per-cell phase offset, so a 2x3 portal
+        // doesn't strobe in lockstep.
+        if !self.portal_positions.is_empty() {
+            let cube = *self
+                .player_cube
+                .get_or_insert_with(|| renderer.cube_handle());
+            let time = self.day_time;
+            for p in self.portal_positions.iter() {
+                let cx = p[0] as f32 + 0.5;
+                let cy = p[1] as f32 + 0.5;
+                let cz = p[2] as f32 + 0.5;
+                // Per-cell phase so neighbouring cells swirl
+                // out of sync; a coordinate hash gives a stable
+                // offset that doesn't randomise between frames.
+                let phase = ((p[0] as u32).wrapping_mul(0x9E37_79B1))
+                    ^ ((p[1] as u32).wrapping_mul(0x85EB_CA6B))
+                    ^ ((p[2] as u32).wrapping_mul(0xC2B2_AE35));
+                let phase_f =
+                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+                let swirl = (time * 2.0 + phase_f).sin();
+                let intensity = (0.55 + 0.35 * swirl).clamp(0.2, 1.0);
+                let purple = [
+                    0.6 * intensity,
+                    0.2 * intensity,
+                    0.9 * intensity,
+                    0.75,
+                ];
+                // Two thin panels: one in the XY plane (Z thin)
+                // and one in the ZY plane (X thin). Either covers
+                // the visible face depending on the frame
+                // orientation; rendering both keeps the rotation-
+                // agnostic look without storing axis state.
+                let xy_panel = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, 1.0, 0.08),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy, cz),
+                );
+                let zy_panel = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.08, 1.0, 1.0),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(cx, cy, cz),
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    xy_panel.to_cols_array(),
+                    purple,
+                    0.6,
+                    0.2,
+                );
+                renderer.draw_mesh_pbr(
+                    cube,
+                    zy_panel.to_cols_array(),
+                    purple,
+                    0.6,
+                    0.2,
                 );
             }
         }
