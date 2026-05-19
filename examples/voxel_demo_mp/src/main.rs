@@ -1731,6 +1731,15 @@ impl Voxel {
                 chunk_set.insert(c);
             }
         }
+        // Q.4a: solidified cells are former lava cells now holding
+        // obsidian / cobble. Treat them like placed entries for
+        // chunk rebuild + mesh dirty so the renderer drops the
+        // liquid slab and emits a full solid cube.
+        for (p, _) in &tape.solidified {
+            for c in Self::affected_chunks(*p) {
+                chunk_set.insert(c);
+            }
+        }
         if !chunk_set.is_empty() {
             let coords: Vec<ChunkCoord> = chunk_set.into_iter().collect();
             self.rebuild_chunks(&coords);
@@ -1738,6 +1747,7 @@ impl Voxel {
         if !tape.evaporated.is_empty()
             || !tape.placed.is_empty()
             || !tape.decayed.is_empty()
+            || !tape.solidified.is_empty()
         {
             self.liquid_mesh_dirty = true;
         }
@@ -1777,6 +1787,22 @@ impl Voxel {
                     server.broadcast_bytes("vx.liquid_lvl", buf);
                 }
             }
+            // Q.4a: lava-water boundary -> broadcast the solid
+            // block id as a regular edit so remote peers see the
+            // obsidian / cobble swap. No liquid_lvl needed - the
+            // cell is no longer a liquid.
+            for (p, solid_id) in &tape.solidified {
+                let edit = EditMsg {
+                    x: p[0],
+                    y: p[1],
+                    z: p[2],
+                    block: *solid_id,
+                };
+                self.edit_history.push(edit);
+                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
         }
         // MC: spread schedules the NEXT tick for each cell it
         // actually wrote into. A cell whose state stayed exactly
@@ -1810,6 +1836,20 @@ impl Voxel {
                 let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
                 if self.world.get(n).0 == liquid_id {
                     self.liquid_schedule.schedule(n, now + delay);
+                }
+            }
+        }
+        // Q.4a: solidified cells leave the liquid pool entirely;
+        // wake every adjacent liquid neighbour (water OR lava) so
+        // the flow re-evaluates against the new solid block. MC
+        // does this implicitly via `setBlockAndUpdate` which fires
+        // neighborChanged.
+        for (p, _) in &tape.solidified {
+            for d in &SIX_NSEW_UD {
+                let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+                let nb = self.world.get(n);
+                if crate::block::block_is_liquid(nb) {
+                    self.liquid_schedule.schedule(n, now + 1);
                 }
             }
         }

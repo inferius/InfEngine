@@ -28,6 +28,10 @@ pub(crate) struct LiquidTape {
     pub(crate) evaporated: Vec<[i32; 3]>,
     /// Cells whose level changed without changing block.
     pub(crate) decayed: Vec<([i32; 3], u8)>,
+    /// Cells whose lava/water boundary turned them into a solid
+    /// block (Q.4a). `(pos, solid_block_id)`. The applier already
+    /// cleared them from `liquid_level` / `liquid_positions`.
+    pub(crate) solidified: Vec<([i32; 3], u16)>,
 }
 
 /// Apply the plan. Wakes up NSEW + Y neighbours of every changed
@@ -45,6 +49,22 @@ pub(crate) fn liquid_apply_plan(
     let liquid_id = liquid.block_id;
     let mut tape = LiquidTape::default();
     let mut touched: Vec<[i32; 3]> = Vec::new();
+    // Q.4a: solidify pass runs first - a lava cell that converts
+    // to obsidian/cobble vacates `liquid_level` + `liquid_positions`
+    // and turns into a solid block. The following evaporate / decay
+    // / place loops then ignore it because `world.get(pos).0 !=
+    // liquid_id`.
+    for (pos, solid_id) in plan.solidify {
+        if world.get(pos).0 != liquid_id {
+            continue;
+        }
+        world.set(pos, BlockId(solid_id));
+        level_map.remove(&pos);
+        active.remove(&pos);
+        positions.remove(&pos);
+        tape.solidified.push((pos, solid_id));
+        touched.push(pos);
+    }
     for pos in plan.evaporate {
         // Defensive: don't evaporate a cell that's no longer the
         // expected liquid (could've been overwritten by a push that

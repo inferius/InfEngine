@@ -538,6 +538,23 @@ pub(crate) const IRON_ORE_ID: u16 = 14;
 pub(crate) const WOOD_ID: u16 = 5;
 /// Planks item id. Doubles as a fuel (mirrors MC's planks burn).
 pub(crate) const PLANKS_ID: u16 = 7;
+/// Cobblestone block id. Drops from `stone` mining + serves as
+/// the lava-flow-meets-water conversion product (MC's
+/// `LiquidBlock.shouldSpreadLiquid` flow branch).
+pub(crate) const COBBLE_ID: u16 = 8;
+/// Stone block id. Re-exported alongside `COBBLE_ID` so the
+/// lava-boundary path can read either constant without bare
+/// literals; also future-proof for a separate "lava flow over
+/// water on top" -> stone conversion if we mirror MC's basalt
+/// case for our palette.
+#[allow(dead_code)] // wired up in a future Q.4 follow-up
+pub(crate) const STONE_ID: u16 = 1;
+/// Leaves block id. Flammable (catches fire fast per MC).
+#[allow(dead_code)] // wired up in Q.4c flammability table
+pub(crate) const LEAVES_ID: u16 = 6;
+/// Wool block id. Flammable.
+#[allow(dead_code)] // wired up in Q.4c flammability table
+pub(crate) const WOOL_ID: u16 = 11;
 /// Iron ingot item id. Output of smelting iron ore. Pure item -
 /// has no block form, so the place path treats it like the
 /// pickaxes (not placeable).

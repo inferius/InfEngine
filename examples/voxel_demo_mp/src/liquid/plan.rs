@@ -45,6 +45,7 @@ use infengine_voxel::{BlockId, World};
 use crate::block::block_is_washable;
 
 use super::Liquid;
+use super::boundary::lava_boundary_solid_id;
 use super::mesh::distance_to_drop_at;
 
 /// Output of one liquid planning pass. The applier consumes this and
@@ -57,6 +58,11 @@ pub(crate) struct LiquidPlanStep {
     pub(crate) decay: Vec<([i32; 3], u8)>,
     /// Proposed liquid writes. `(pos, level, falling)`.
     pub(crate) place: Vec<([i32; 3], u8, bool)>,
+    /// Cells whose lava/water boundary converts them to a solid
+    /// block (MC `LiquidBlock.shouldSpreadLiquid`):
+    /// `(pos, solid_block_id)`. Today only lava cells produce
+    /// solidify entries (obsidian / cobblestone).
+    pub(crate) solidify: Vec<([i32; 3], u16)>,
 }
 
 /// MC `FlowingFluid.getNewLiquid` port. Returns the level a flow cell
@@ -277,6 +283,15 @@ pub(crate) fn liquid_plan_cell(
     // Defensive: cell may have been overwritten since it was
     // scheduled.
     if world.get(pos).0 != liquid_id {
+        return;
+    }
+    // Q.4a: lava-water boundary. If this is a lava cell with a
+    // water neighbour, convert it to obsidian (source) or
+    // cobblestone (flow) and skip the rest of the tick. MC's
+    // `LiquidBlock.shouldSpreadLiquid` returns false in the same
+    // shape - no spread is staged when a fizz triggers.
+    if let Some(solid_id) = lava_boundary_solid_id(world, level_map, pos, liquid) {
+        plan.solidify.push((pos, solid_id));
         return;
     }
     let level = level_map.get(&pos).copied().unwrap_or(0);

@@ -128,6 +128,9 @@ impl LiquidSim {
 pub(crate) fn water() -> &'static Liquid {
     &LIQUIDS[0]
 }
+pub(crate) fn lava() -> &'static Liquid {
+    &LIQUIDS[1]
+}
 fn mk_world() -> World {
     // Single chunk at the origin so coords [0..16) on each axis are
     // writable.
@@ -1193,4 +1196,128 @@ fn edit_near_liquid_wakes_neighbours() {
         "liquid at {liq_pos:?} didn't actually tick within 5 frames of \
          the edit (saved {saved_tick}, got {new_tick})"
     );
+}
+
+// -----------------------------------------------------------------
+// Q.4a: lava-water boundary behaviour through LiquidSim.
+// MC reference: LiquidBlock.java::shouldSpreadLiquid (lines 219..=241).
+// -----------------------------------------------------------------
+
+use crate::block::{COBBLE_ID, LAVA_ID, OBSIDIAN_ID};
+
+#[test]
+fn lava_source_next_to_water_source_becomes_obsidian() {
+    // Two adjacent sources. Lava ticks, sees water neighbour,
+    // converts to obsidian.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.place_source([0, 1, 0], lava());
+    sim.world.set([1, 1, 0], BlockId(crate::block::WATER_ID));
+    sim.level.insert([1, 1, 0], 0);
+    sim.active.insert([1, 1, 0]);
+    sim.positions.insert([1, 1, 0]);
+    sim.run(lava(), 2);
+    assert_eq!(
+        sim.world.get([0, 1, 0]).0,
+        OBSIDIAN_ID,
+        "lava source did not convert to obsidian"
+    );
+    // The water cell is untouched.
+    assert_eq!(sim.world.get([1, 1, 0]).0, crate::block::WATER_ID);
+}
+
+#[test]
+fn lava_flow_next_to_water_source_becomes_cobble() {
+    // Lava flow (level >= 1) next to water -> cobblestone.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.world.set([0, 1, 0], BlockId(LAVA_ID));
+    sim.level.insert([0, 1, 0], 4); // flow
+    sim.active.insert([0, 1, 0]);
+    sim.positions.insert([0, 1, 0]);
+    sim.world.set([1, 1, 0], BlockId(crate::block::WATER_ID));
+    sim.level.insert([1, 1, 0], 0);
+    sim.active.insert([1, 1, 0]);
+    sim.positions.insert([1, 1, 0]);
+    sim.run(lava(), 2);
+    assert_eq!(
+        sim.world.get([0, 1, 0]).0,
+        COBBLE_ID,
+        "lava flow did not convert to cobble"
+    );
+}
+
+#[test]
+fn lava_flow_spreads_to_water_flow_becomes_cobble() {
+    // Two flowing cells touching: the lava flow converts. Mirrors
+    // the "lava streams into a water sheet" practical case.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.world.set([0, 1, 0], BlockId(LAVA_ID));
+    sim.level.insert([0, 1, 0], 5);
+    sim.active.insert([0, 1, 0]);
+    sim.positions.insert([0, 1, 0]);
+    sim.world.set([1, 1, 0], BlockId(crate::block::WATER_ID));
+    sim.level.insert([1, 1, 0], 3); // water flow too
+    sim.active.insert([1, 1, 0]);
+    sim.positions.insert([1, 1, 0]);
+    sim.run(lava(), 2);
+    assert_eq!(sim.world.get([0, 1, 0]).0, COBBLE_ID);
+}
+
+#[test]
+fn lava_without_water_neighbour_does_not_solidify() {
+    // Sanity: lava in isolation must continue to flow, not freeze.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.place_source([0, 1, 0], lava());
+    sim.run(lava(), 5);
+    assert_eq!(sim.world.get([0, 1, 0]).0, LAVA_ID);
+}
+
+#[test]
+fn water_source_next_to_lava_source_water_unchanged() {
+    // Symmetric layout: only the lava cell mutates. Water keeps
+    // its source level even after multiple ticks.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.place_source([0, 1, 0], lava());
+    sim.place_source([1, 1, 0], water());
+    sim.run(lava(), 2);
+    sim.run(water(), 2);
+    assert_eq!(sim.world.get([1, 1, 0]).0, crate::block::WATER_ID);
+    assert_eq!(sim.world.get([0, 1, 0]).0, OBSIDIAN_ID);
+}
+
+#[test]
+fn water_above_lava_source_becomes_obsidian_below() {
+    // Water sitting on top of lava: lava is source -> obsidian
+    // (covers the "pour water into lava pit" interaction).
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.place_source([0, 1, 0], lava());
+    sim.world.set([0, 2, 0], BlockId(crate::block::WATER_ID));
+    sim.level.insert([0, 2, 0], 0);
+    sim.active.insert([0, 2, 0]);
+    sim.positions.insert([0, 2, 0]);
+    sim.run(lava(), 2);
+    assert_eq!(sim.world.get([0, 1, 0]).0, OBSIDIAN_ID);
+}
+
+#[test]
+fn solidified_lava_cleared_from_level_map() {
+    // Q.4a invariant: after the boundary conversion, the cell is
+    // no longer tracked as a liquid - level_map + positions are
+    // both cleared so the renderer + future ticks treat it as a
+    // regular solid block.
+    let mut sim = LiquidSim::new();
+    sim.fill_floor(0, -3..=3, -3..=3);
+    sim.place_source([0, 1, 0], lava());
+    sim.world.set([1, 1, 0], BlockId(crate::block::WATER_ID));
+    sim.level.insert([1, 1, 0], 0);
+    sim.active.insert([1, 1, 0]);
+    sim.positions.insert([1, 1, 0]);
+    sim.run(lava(), 2);
+    assert!(!sim.level.contains_key(&[0, 1, 0]));
+    assert!(!sim.positions.contains(&[0, 1, 0]));
 }

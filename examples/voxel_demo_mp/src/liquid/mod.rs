@@ -16,6 +16,7 @@
 //! crossed the 1000-LOC hard cap.
 
 pub(crate) mod apply;
+pub(crate) mod boundary;
 pub(crate) mod merge;
 pub(crate) mod mesh;
 pub(crate) mod plan;
