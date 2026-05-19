@@ -126,17 +126,23 @@ pub(crate) enum InvAction {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum AppState {
     MainMenu,
     /// Direct-IP connect dialog: user types `host:port` and
     /// hits Join.
+    ///
+    /// Wave 4 (Phase G.6) folded this state into the
+    /// `MenuScreen::Multiplayer` inline form so it's never
+    /// constructed; the variant survives so the Esc-handler match
+    /// arm + the egui dispatch arm stay exhaustive. Tracked under
+    /// the same follow-up as `start_hosting`.
     DirectConnect,
     /// Browses servers fetched from the configured master
-    /// server.
+    /// server. See note on `DirectConnect`.
     ServerBrowser,
-    /// Configures + spawns a host (game server). User can opt
-    /// to announce on the master so others see it in the
-    /// browser.
+    /// Configures + spawns a host (game server). See note on
+    /// `DirectConnect`.
     HostSetup,
     Playing,
     Paused,
@@ -146,7 +152,11 @@ pub(crate) enum AppState {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum BackTo {
+    /// Wave 4 (Phase G.6) retired the "Back to Main from Settings"
+    /// flow on the flat picker. The Pause flow still uses
+    /// `BackTo::Pause` so the enum stays.
     MainMenu,
     Pause,
 }

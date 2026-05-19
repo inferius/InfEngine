@@ -1171,9 +1171,18 @@ struct Voxel {
     master_addr: String,
     /// Buffers + state backing the three new menu screens. Lifted
     /// out of `AppState` so the enum stays Copy.
+    ///
+    /// Wave 4 retired the flat-picker `Host server...` flow, so the
+    /// host buffers below are only reached from
+    /// `start_hosting` / `announce_to_master` (both
+    /// `#[allow(dead_code)]` for the same reason). The new MP screen
+    /// has no Host UI yet; tracked as a deferred follow-up.
+    #[allow(dead_code)]
     direct_addr_buf: String,
     host_name_buf: String,
+    #[allow(dead_code)]
     host_port_buf: String,
+    #[allow(dead_code)]
     host_announce: bool,
     browser_servers: Vec<infengine_net::master::ServerInfo>,
     browser_error: Option<String>,
@@ -1194,13 +1203,12 @@ struct Voxel {
     /// the periodic re-heartbeat in `tick_net`.
     last_heartbeat: Option<std::time::Instant>,
     /// Buffer for the "New world" name input in the main-menu Worlds
-    /// picker (Phase B.7a scaffolding). The user types a display name
-    /// here; `layout::slug()` canonicalises it before
-    /// `current_world_slug` is set.
-    ///
-    /// Kept around as a fallback for the legacy code path in
-    /// `apply_menu_action`; the new picker (Wave 4) keeps its own
-    /// transient buffer inside `MenuScreen::Singleplayer::new_world_open`.
+    /// picker (Phase B.7a scaffolding). Wave 4 moved the input into
+    /// `MenuScreen::Singleplayer::new_world_open` so this buffer is
+    /// no longer read; kept as a default-empty field so a future
+    /// chat-command (`/newworld <name>`) can route through the same
+    /// `apply_menu_action(MenuAction::NewWorld { ... })` path.
+    #[allow(dead_code)]
     new_world_name_buf: String,
     /// Wave 4 menu state machine + per-screen form buffers + cached
     /// `list_worlds()` snapshot. Drives every pre-Play UI screen.
@@ -3015,6 +3023,12 @@ impl Voxel {
 
     /// Bind a NetServer on the configured port, optionally announce
     /// to the master server, then drop into Playing.
+    ///
+    /// Wave 4 removed the "Host server..." UI button, so this is no
+    /// longer reachable from clicks. Kept around as a runtime entry
+    /// point a future chat-command (`/host`) or argv path can call;
+    /// `#[allow(dead_code)]` silences the warning until then.
+    #[allow(dead_code)]
     fn start_hosting(&mut self) {
         let port: u16 = self.host_port_buf.parse().unwrap_or(7777);
         let bind = format!("0.0.0.0:{port}");
@@ -3057,6 +3071,11 @@ impl Voxel {
     /// Register this host with the configured master server. Caches
     /// the returned token so periodic heartbeats land on the right
     /// directory entry.
+    ///
+    /// Reachable from `start_hosting`; both are currently
+    /// unreached-from-UI in Wave 4 (see the comment on
+    /// `start_hosting` for the deferred follow-up).
+    #[allow(dead_code)]
     fn announce_to_master(&mut self, port: u16) {
         use infengine_net::master::{MASTER_PROTO, MasterRequest, ServerInfo};
         if self.announce_query_rx.is_some() {
@@ -6532,55 +6551,22 @@ impl Voxel {
         let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
         let mut chest_held_local = chest_held_snapshot;
-        // Wave 4 (Phase G.6): the four pre-Play `action_X` flags
-        // are emitted by the now-removed flat picker; the new
-        // menu module pushes `MenuAction` variants instead. Kept
-        // here as immutable false so the existing post-closure
-        // `if action_X { ... }` blocks compile until a follow-up
-        // sweep prunes the dead branches (deferred to keep this
-        // diff focused on the menu refactor).
-        let action_start = false;
         let mut action_resume = false;
         // Set by the recipe-book output slot click handler; drained
         // after the egui closure exits so the craft-grid mutation
         // can borrow `self` exclusively.
         let mut prefill_recipe_idx: Option<usize> = None;
-        let action_quit = false;
-        let action_menu_to_settings = false;
         let mut action_pause_to_settings = false;
         let mut action_back_settings = false;
         let mut action_main_menu = false;
-        let action_to_direct = false;
-        let action_to_browser = false;
-        let action_to_host = false;
-        let action_join_direct = false;
-        let action_join_browser: Option<String> = None;
-        let action_browser_refresh = false;
-        let action_host_start = false;
         // MP overlay actions: continue playing (close overlay) /
         // explicit disconnect-and-return-to-main-menu.
         let mut action_mp_resume = false;
         let mut action_mp_disconnect = false;
         let mut action_mp_quit = false;
-        // Worlds-picker actions (Phase B.7a scaffolding). Drained
-        // after the egui closure exits so the slug rewrite + slot
-        // deletion happen under an exclusive borrow.
-        let action_new_world = false;
-        let action_load_world: Option<String> = None;
-        let action_delete_world: Option<String> = None;
-        let new_world_name = &mut self.new_world_name_buf;
         let current_slug = self.current_world_slug.clone();
-        // Legacy buffers - kept around for the old picker fields
-        // but the new menu doesn't use them. Will be removed in a
-        // follow-up cleanup once the dust settles.
-        let direct_buf = &mut self.direct_addr_buf;
-        let host_name = &mut self.host_name_buf;
-        let host_port = &mut self.host_port_buf;
-        let host_announce = &mut self.host_announce;
-        let master_addr = &mut self.master_addr;
         let browser_servers = &self.browser_servers;
         let browser_error = &self.browser_error;
-        let browser_last_refresh = self.browser_last_refresh;
         let browser_querying = self.browser_query_rx.is_some();
         // Wave 4 menu wiring. The closure mutates `menu` directly
         // (form buffers, screen variant) + pushes actions into
@@ -6649,22 +6635,6 @@ impl Voxel {
                         &mut menu_actions,
                     );
                 });
-                // Suppress the unused-warning trio: legacy buffers
-                // we keep around for the old picker but the new
-                // menu emits its own actions. The `_ = ...` calls
-                // discard the captures so the warning stays quiet
-                // without removing the buffers (a follow-up patch
-                // can prune them once the dust settles).
-                let _ = (
-                    &new_world_name,
-                    &direct_buf,
-                    &host_name,
-                    &host_port,
-                    &host_announce,
-                    &master_addr,
-                    &browser_last_refresh,
-                    &player_name_buf,
-                );
             }
             AppState::Paused => {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -8429,32 +8399,9 @@ impl Voxel {
         } else {
             self.furnace_held = furnace_held_local;
         }
-        if action_start {
-            self.state = AppState::Playing;
-            self.mouse_dx = 0.0;
-            self.mouse_dy = 0.0;
-            // If the user picked a Load slot the Worlds picker reset
-            // `last_built_worldgen` to None, which forces this branch
-            // to load the slot's saved chunks (via the legacy
-            // `load_server_state` shim that now dispatches into
-            // world_save). If nothing changed since the last Play,
-            // skip the heavy work so a quick menu round-trip doesn't
-            // reset the world.
-            let want_wg = WorldGen::current();
-            if self.last_built_worldgen != Some(want_wg) {
-                self.reset_world();
-                self.build_world();
-                let spawn = self.safe_spawn();
-                self.player_pos = spawn;
-                self.player_vel = Vec3::ZERO;
-                self.fall_start_y = None;
-                // Now that the procedural baseline is in place,
-                // overlay the slot's persisted chunks + player. A
-                // missing slot is fine - load_server_state swallows
-                // NotFound and we keep the fresh world.
-                self.load_server_state();
-            }
-        }
+        // `action_start` lived on the legacy flat picker. The Wave 4
+        // menu emits `MenuAction::PlayOffline { slug }` instead, which
+        // `apply_menu_action` consumes below.
         // Recipe-book auto-fill: try to pull every input stack
         // from `self.inventory` into the 2x2 craft grid. Returns
         // any earlier withdrawals if the recipe demands more
@@ -8551,9 +8498,8 @@ impl Voxel {
             self.mouse_dx = 0.0;
             self.mouse_dy = 0.0;
         }
-        if action_quit {
-            self.requested_quit = true;
-        }
+        // `action_quit` lived on the legacy flat picker; the Wave 4
+        // menu emits `MenuAction::Quit` instead.
         if action_mp_resume {
             self.mp_menu_open = false;
         }
@@ -8573,11 +8519,9 @@ impl Voxel {
             self.notify_server_leaving();
             self.requested_quit = true;
         }
-        if action_menu_to_settings {
-            self.state = AppState::Settings {
-                back_to: BackTo::MainMenu,
-            };
-        }
+        // The legacy "Settings" button on the flat picker emitted
+        // `action_menu_to_settings`. Wave 4 routes the same intent
+        // through `MenuScreen::Options` (handled by the menu module).
         if action_pause_to_settings {
             self.state = AppState::Settings {
                 back_to: BackTo::Pause,
@@ -8596,92 +8540,15 @@ impl Voxel {
         if action_main_menu {
             self.state = AppState::MainMenu;
         }
-        if action_to_direct {
-            self.state = AppState::DirectConnect;
-        }
-        if action_to_browser {
-            self.state = AppState::ServerBrowser;
-            self.browser_last_refresh = None;
-            // Auto-refresh on entering the browser so the user
-            // immediately sees the current directory contents.
-            self.refresh_browser();
-        }
-        if action_to_host {
-            self.state = AppState::HostSetup;
-        }
-        if action_join_direct {
-            let addr = self.direct_addr_buf.clone();
-            self.connect_as_client(&addr);
-        }
-        if let Some(addr) = action_join_browser {
-            self.connect_as_client(&addr);
-        }
-        if action_browser_refresh {
-            self.refresh_browser();
-        }
-        if action_host_start {
-            self.start_hosting();
-        }
-        // Worlds picker (Phase B.7a scaffolding). Each branch
-        // rewrites `current_world_slug` so the next save / load
-        // operation targets the chosen slot; the actual load happens
-        // lazily on Play offline via `load_server_state` so the user
-        // sees the new world the moment they click Play.
-        if action_new_world {
-            let typed = self.new_world_name_buf.trim().to_string();
-            let slug = if typed.is_empty() {
-                world_save::DEFAULT_SLUG.to_string()
-            } else {
-                world_save::layout::slug(&typed)
-            };
-            // Mint a fresh meta + world.json right away so the slot
-            // shows up in the picker on the next frame, even if the
-            // user closes the app before clicking Play.
-            let display = if typed.is_empty() { slug.clone() } else { typed };
-            let meta = world_save::meta::create_meta(&display, &slug);
-            if let Err(err) = world_save::meta::write_meta(&slug, &meta) {
-                warn!(error = %err, slug = slug, "world_save: write_meta on New failed");
-            }
-            let wj = world_save::world_json::create_world(
-                world_save::worldgen_str(WorldGen::current()),
-                world_seed(),
-            );
-            if let Err(err) = world_save::world_json::write_world(&slug, &wj) {
-                warn!(error = %err, slug = slug, "world_save: write_world on New failed");
-            }
-            self.current_world_slug = Some(slug);
-            self.new_world_name_buf.clear();
-        }
-        if let Some(slug) = action_load_world {
-            self.current_world_slug = Some(slug);
-            // Trigger a fresh load on the next Play click by resetting
-            // the world. `load_server_state` then pulls the slot in.
-            self.reset_world();
-            self.last_built_worldgen = None;
-        }
-        if let Some(slug) = action_delete_world {
-            let dir = world_save::layout::world_dir(&slug);
-            match std::fs::remove_dir_all(&dir) {
-                Ok(()) => {
-                    info!(slug = %slug, "world_save: deleted slot");
-                    if self.current_world_slug.as_deref() == Some(slug.as_str()) {
-                        self.current_world_slug =
-                            Some(world_save::DEFAULT_SLUG.to_string());
-                    }
-                }
-                Err(err) => warn!(
-                    error = %err,
-                    slug = %slug,
-                    "world_save: delete slot failed"
-                ),
-            }
-        }
-        // Wave 4 (Phase G.6): drain everything the new menu pushed
-        // during the egui pass + route through `apply_menu_action`.
-        // The drain happens after the legacy `action_X` flags so a
-        // pre-G click on the old buttons still fires its side
-        // effect (the old buttons are gone in the new menu, but
-        // any stale path still works).
+        // Wave 4 (Phase G.6 + G.7): the legacy `action_to_direct /
+        // action_to_browser / action_to_host / action_join_direct /
+        // action_join_browser / action_browser_refresh /
+        // action_host_start / action_new_world / action_load_world /
+        // action_delete_world` blocks are gone - the new menu emits
+        // `MenuAction` variants that `apply_menu_action` (below)
+        // routes through the same runtime helpers. Drain the
+        // collected actions here so the egui borrow scope has
+        // ended.
         for action in menu_actions.drain(..) {
             self.apply_menu_action(action);
         }
