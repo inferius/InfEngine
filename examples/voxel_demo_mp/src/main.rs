@@ -2051,6 +2051,51 @@ impl Voxel {
         }
     }
 
+    /// Q.4d: lava source cells emit fire on flammable neighbours
+    /// (MC LavaFluid::randomTick, lines 78..=114). Walks every
+    /// lava source cell once per net-tick frame; each gates
+    /// 1/LAVA_IGNITE_RATE_DENOM and rolls the two-branch ignite
+    /// algorithm from `block::fire::plan_lava_random_tick`. The
+    /// produced `ignite` entries route through `apply_fire_step`
+    /// so the broadcast + chunk-rebuild plumbing is shared with
+    /// the regular fire spread path.
+    fn tick_lava_fire_emit(&mut self) {
+        if matches!(self.net, NetRole::Client { .. }) {
+            return;
+        }
+        if self.liquid_positions.is_empty() {
+            return;
+        }
+        let clock = self.fire_clock;
+        // Snapshot source cells - only level-0 lava blocks count
+        // per MC (`fluid_lava_flow_does_not_ignite` test).
+        let mut sources: Vec<[i32; 3]> = Vec::new();
+        for pos in self.liquid_positions.iter().copied() {
+            if self.world.get(pos).0 != block::LAVA_ID {
+                continue;
+            }
+            if self.liquid_level.get(&pos).copied().unwrap_or(0) != 0 {
+                continue;
+            }
+            sources.push(pos);
+        }
+        if sources.is_empty() {
+            return;
+        }
+        let mut step = block::fire::FireStep::default();
+        for pos in sources {
+            let h_gate = block::fire::hash3_for(pos, clock, 0x9000);
+            if !h_gate.is_multiple_of(block::fire::LAVA_IGNITE_RATE_DENOM) {
+                continue;
+            }
+            block::fire::plan_lava_random_tick(&self.world, pos, clock, &mut step);
+        }
+        if step.ignite.is_empty() && step.consume.is_empty() {
+            return;
+        }
+        self.apply_fire_step(step);
+    }
+
     /// Server-side mob update: gravity-snap to surface, walk
     /// toward target, retarget on arrival / timeout, spawn new
     /// sheep when the cap allows. Builds the broadcast list as a
@@ -10347,6 +10392,11 @@ impl AppHandler for Voxel {
         // up the resulting `vx.edit` traffic. Cheap when
         // `self.fires` is empty (early return).
         self.fire_tick();
+        // Q.4d: lava-source-block fire emission (MC's
+        // LavaFluid.randomTick). Walks every lava source cell
+        // once per net tick; each gates 1/LAVA_IGNITE_RATE_DENOM
+        // and rolls the two-branch ignite algorithm.
+        self.tick_lava_fire_emit();
         // Phase F.6: portal-overlap counter + cross-dim teleport.
         self.tick_player_portal();
         // Auto-close the chest UI when the player walks more than

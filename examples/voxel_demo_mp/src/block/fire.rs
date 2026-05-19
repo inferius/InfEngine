@@ -80,6 +80,13 @@ pub(crate) fn hash3_for(pos: [i32; 3], clock: u64, salt: u32) -> u32 {
     h.wrapping_mul(0xC2B2_AE35)
 }
 
+/// 1-in-N gate for lava random-tick ignite checks (Q.4d). MC
+/// reference: `LavaFluid.randomTick` runs at the random-tick
+/// rate (1/4096 per chunk section per game tick). Our smaller
+/// worlds use this scale-down so a lava pool next to planks
+/// catches the planks within ~30s of fire_clock ticks.
+pub(crate) const LAVA_IGNITE_RATE_DENOM: u32 = 60;
+
 /// Per-block flammability lookup. Returns `(ignite_odds,
 /// burn_odds)` matching MC's `FireBlock::flammables` setup:
 ///
@@ -288,6 +295,83 @@ pub(crate) fn plan_fire_cell(
                         (new_age as u32 + ((h_spread >> 8) % 5) / 4).min(15) as u8;
                     step.ignite.push((n, spread_age));
                 }
+            }
+        }
+    }
+}
+
+/// MC `LavaFluid.randomTick(level, pos, fluidState, random)`
+/// (lines 78..=114 of `LavaFluid.java`). Direct port of the
+/// two-branch algorithm:
+///
+///   passes = rand[0..3];
+///   if passes > 0:
+///     for pass in 0..passes:
+///       testPos.offset(rand[-1,0,1], 1, rand[-1,0,1])
+///       if air AND has flammable neighbour:
+///         set FIRE; return
+///   else:
+///     for i in 0..3:
+///       offset(rand[-1,0,1], 0, rand[-1,0,1])
+///       if pos.above is air AND pos is flammable:
+///         set pos.above to FIRE
+///
+/// `lava_pos` must be a lava source cell; the caller is expected
+/// to gate the call on `1/LAVA_IGNITE_RATE_DENOM` first. `step`
+/// accumulates the resulting `ignite` entries.
+pub(crate) fn plan_lava_random_tick(
+    world: &World,
+    lava_pos: [i32; 3],
+    fire_clock: u64,
+    step: &mut FireStep,
+) {
+    // Pass count: 0, 1, or 2. Salt 0x100 separates from the
+    // fire-tick salts.
+    let h_passes = hash3_for(lava_pos, fire_clock, 0x100);
+    let passes = h_passes % 3;
+    if passes > 0 {
+        // Upward drift branch. Each pass jitters the test pos by
+        // (rand[-1,0,1], 1, rand[-1,0,1]) and ignites the first
+        // air cell with a flammable neighbour.
+        let mut test_pos = lava_pos;
+        for pass in 0..passes {
+            let h_x = hash3_for(lava_pos, fire_clock, 0x110 + pass);
+            let h_z = hash3_for(lava_pos, fire_clock, 0x120 + pass);
+            let dx = (h_x % 3) as i32 - 1;
+            let dz = (h_z % 3) as i32 - 1;
+            test_pos = [test_pos[0] + dx, test_pos[1] + 1, test_pos[2] + dz];
+            let here = world.get(test_pos);
+            if !here.is_air() {
+                // MC: if the cell blocksMotion, return (the lava
+                // can't punch through). Solid block - bail.
+                if !block_has_flag(here, F_AABB_PASS)
+                    && !block_has_flag(here, F_RAY_PASS)
+                {
+                    return;
+                }
+                continue;
+            }
+            if has_flammable_neighbour(world, test_pos) {
+                step.ignite.push((test_pos, 0));
+                return;
+            }
+        }
+    } else {
+        // Horizontal sweep: 3 attempts to find a flammable block
+        // with empty air above; ignite the air cell.
+        for i in 0..3u32 {
+            let h_x = hash3_for(lava_pos, fire_clock, 0x130 + i);
+            let h_z = hash3_for(lava_pos, fire_clock, 0x140 + i);
+            let dx = (h_x % 3) as i32 - 1;
+            let dz = (h_z % 3) as i32 - 1;
+            let test_pos = [lava_pos[0] + dx, lava_pos[1], lava_pos[2] + dz];
+            let above = [test_pos[0], test_pos[1] + 1, test_pos[2]];
+            if !world.get(above).is_air() {
+                continue;
+            }
+            let (ig, _) = block_flammability(world.get(test_pos).0);
+            if ig > 0 {
+                step.ignite.push((above, 0));
             }
         }
     }

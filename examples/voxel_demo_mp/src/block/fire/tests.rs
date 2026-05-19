@@ -343,3 +343,159 @@ fn hash3_changes_with_pos() {
     let b = hash3_for([1, 0, 0], 42, 0xAA);
     assert_ne!(a, b);
 }
+
+// ----------------------------------------------------------------
+// Q.4d: lava randomTick fire emission.
+// MC reference: LavaFluid.java lines 78..=114.
+// ----------------------------------------------------------------
+
+#[test]
+fn lava_with_no_flammable_nearby_does_not_ignite() {
+    // Lava source over stone with no flammable in range -> no
+    // ignite across many clocks.
+    let mut w = world_with_chunks();
+    w.set([0, 0, 0], BlockId(STONE_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    for clock in 1..=100u64 {
+        let mut step = FireStep::default();
+        plan_lava_random_tick(&w, [0, 1, 0], clock, &mut step);
+        assert!(step.ignite.is_empty(), "lava ignited with no flammable: clock {clock}");
+    }
+}
+
+#[test]
+fn lava_with_flammable_planks_ignites_within_n_ticks() {
+    // Lava source + adjacent planks block at ground level. Expect
+    // an ignite (either via the upward-drift branch or the
+    // horizontal-sweep branch) within 100 clocks.
+    let mut w = world_with_chunks();
+    w.set([0, 0, 0], BlockId(STONE_ID));
+    w.set([1, 0, 0], BlockId(STONE_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    w.set([1, 1, 0], BlockId(PLANKS_ID));
+    // Air at (1, 2, 0) is the "above planks" target for the
+    // horizontal-sweep branch.
+    let mut hit = false;
+    for clock in 1..=100u64 {
+        let mut step = FireStep::default();
+        plan_lava_random_tick(&w, [0, 1, 0], clock, &mut step);
+        if !step.ignite.is_empty() {
+            hit = true;
+            break;
+        }
+    }
+    assert!(hit, "lava failed to ignite nearby planks across 100 ticks");
+}
+
+#[test]
+fn lava_horizontal_sweep_lights_air_above_flammable() {
+    // Force the passes==0 horizontal-sweep branch by picking a
+    // clock value where hash3_for(pos, clock, 0x100) % 3 == 0.
+    // Then check the ignite list contains an air cell ABOVE a
+    // flammable block, not the flammable block itself.
+    let mut w = world_with_chunks();
+    w.set([0, 0, 0], BlockId(STONE_ID));
+    w.set([1, 0, 0], BlockId(STONE_ID));
+    w.set([-1, 0, 0], BlockId(STONE_ID));
+    w.set([0, 0, 1], BlockId(STONE_ID));
+    w.set([0, 0, -1], BlockId(STONE_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    // Surround the lava with planks ALL around at the same Y so
+    // any sweep direction hits something.
+    w.set([1, 1, 0], BlockId(PLANKS_ID));
+    w.set([-1, 1, 0], BlockId(PLANKS_ID));
+    w.set([0, 1, 1], BlockId(PLANKS_ID));
+    w.set([0, 1, -1], BlockId(PLANKS_ID));
+    // Try many clocks; at least one should produce a horizontal-
+    // sweep ignite.
+    let mut sweep_ignite_hit = false;
+    for clock in 1..=200u64 {
+        let h_passes = hash3_for([0, 1, 0], clock, 0x100);
+        if !h_passes.is_multiple_of(3) {
+            continue;
+        }
+        let mut step = FireStep::default();
+        plan_lava_random_tick(&w, [0, 1, 0], clock, &mut step);
+        if step.ignite.is_empty() {
+            continue;
+        }
+        // Every ignited cell should be AIR (the above-planks cell),
+        // never the planks block itself.
+        for (pos, _) in &step.ignite {
+            assert!(
+                w.get(*pos).is_air(),
+                "horizontal-sweep ignited a non-air cell at {pos:?}"
+            );
+        }
+        sweep_ignite_hit = true;
+        break;
+    }
+    assert!(sweep_ignite_hit, "no horizontal-sweep ignite in 200 ticks (gate never fired?)");
+}
+
+#[test]
+fn lava_upward_drift_ignites_air_above() {
+    // Force the passes > 0 branch by finding a clock where the
+    // hash satisfies it. Lava under a tall column of air with a
+    // planks block at side -> the upward drift hits an air cell
+    // with a flammable neighbour.
+    let mut w = world_with_chunks();
+    w.set([0, 0, 0], BlockId(STONE_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    w.set([1, 2, 0], BlockId(PLANKS_ID));
+    // Air at [0,2,0], [0,3,0], [-1,2,0] etc. so the drift can
+    // land on a cell with the planks as a face neighbour.
+    let mut hit = false;
+    for clock in 1..=200u64 {
+        let h_passes = hash3_for([0, 1, 0], clock, 0x100);
+        if h_passes.is_multiple_of(3) {
+            continue; // skip horizontal branch
+        }
+        let mut step = FireStep::default();
+        plan_lava_random_tick(&w, [0, 1, 0], clock, &mut step);
+        if !step.ignite.is_empty() {
+            for (pos, _) in &step.ignite {
+                assert!(
+                    w.get(*pos).is_air(),
+                    "upward-drift ignited a non-air cell at {pos:?}"
+                );
+            }
+            hit = true;
+            break;
+        }
+    }
+    assert!(hit, "upward drift never ignited across 200 ticks");
+}
+
+#[test]
+fn lava_horizontal_sweep_ignores_blocked_above_target() {
+    // If the cell ABOVE the flammable is solid, the horizontal-
+    // sweep does NOT ignite (MC's `level.isEmptyBlock(testPos.above())`
+    // check). Build a layout where every flammable's above is
+    // capped by stone.
+    let mut w = world_with_chunks();
+    w.set([0, 0, 0], BlockId(STONE_ID));
+    w.set([0, 1, 0], BlockId(crate::block::LAVA_ID));
+    w.set([1, 1, 0], BlockId(PLANKS_ID));
+    w.set([1, 2, 0], BlockId(STONE_ID)); // cap
+    w.set([-1, 1, 0], BlockId(PLANKS_ID));
+    w.set([-1, 2, 0], BlockId(STONE_ID));
+    w.set([0, 1, 1], BlockId(PLANKS_ID));
+    w.set([0, 2, 1], BlockId(STONE_ID));
+    w.set([0, 1, -1], BlockId(PLANKS_ID));
+    w.set([0, 2, -1], BlockId(STONE_ID));
+    for clock in 1..=100u64 {
+        let h_passes = hash3_for([0, 1, 0], clock, 0x100);
+        if !h_passes.is_multiple_of(3) {
+            continue; // horizontal branch only
+        }
+        let mut step = FireStep::default();
+        plan_lava_random_tick(&w, [0, 1, 0], clock, &mut step);
+        // No ignite should be staged in this layout.
+        assert!(
+            step.ignite.is_empty(),
+            "horizontal-sweep ignited despite capped flammables: {:?}",
+            step.ignite
+        );
+    }
+}
