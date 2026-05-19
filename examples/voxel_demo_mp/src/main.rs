@@ -5793,7 +5793,8 @@ impl Voxel {
         let cs = infengine_voxel::CHUNK_SIZE as i32;
         let world_origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
         let lighting = &self.lighting;
-        infengine_voxel::chunk_mesh_with_atlas_and_light(
+        let pack = &self.resource_pack;
+        infengine_voxel::chunk_mesh_with_atlas_and_light_and_anim(
             chunk,
             origin,
             atlas_uv_rect,
@@ -5824,6 +5825,23 @@ impl Voxel {
                     ],
                     None => [0.0, 1.0], // no lighting yet -> full sky
                 }
+            },
+            |block, normal| {
+                // W9.y.4: look up the animation slot for this
+                // block's face in the resource pack. Water /
+                // lava / fire side faces return their registered
+                // slot id; static tiles return 0 so the shader
+                // skips the UV scroll branch.
+                let face = if normal[1] > 0 {
+                    resource_pack::BlockFace::Top
+                } else if normal[1] < 0 {
+                    resource_pack::BlockFace::Bottom
+                } else {
+                    resource_pack::BlockFace::Sides
+                };
+                pack.block_face_ref(block.0, face)
+                    .map(|t| pack.anim_slot_for_ref(t) as u32)
+                    .unwrap_or(0)
             },
         )
     }

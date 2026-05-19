@@ -247,6 +247,40 @@ where
     O: Fn(BlockId) -> bool,
     L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
 {
+    // W9.y.4 shim: callers without an animation table get
+    // `anim_id = 0` on every vertex (static UV). The
+    // `*_and_anim` variant below is the real workhorse.
+    chunk_mesh_with_atlas_and_light_and_anim(
+        chunk,
+        origin,
+        uv_rect,
+        is_opaque,
+        light_at,
+        |_, _| 0u32,
+    )
+}
+
+/// Like `chunk_mesh_with_atlas_and_light` but each emitted face
+/// also samples an `anim_id_at(block, normal)` closure to stamp
+/// the vertex's `anim_id` slot (Wave 9.y). `0` keeps the face
+/// static; `1..=32` indexes into the renderer's `tile_anim`
+/// uniform array so the fragment shader walks through the
+/// tile's frame strip.
+#[allow(clippy::too_many_arguments)]
+pub fn chunk_mesh_with_atlas_and_light_and_anim<F, O, L, A>(
+    chunk: &Chunk,
+    origin: Vec3,
+    uv_rect: F,
+    is_opaque: O,
+    light_at: L,
+    anim_id_at: A,
+) -> Vec<ChunkSubmesh>
+where
+    F: Fn(BlockId, [i8; 3]) -> [f32; 4],
+    O: Fn(BlockId) -> bool,
+    L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
+    A: Fn(BlockId, [i8; 3]) -> u32,
+{
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
     for z in 0..CHUNK_SIZE {
@@ -302,7 +336,16 @@ where
                     // that have a world-space `LightGrid` lookup
                     // can route across chunk borders.
                     let light = light_at([nx, ny, nz], face.normal);
-                    emit_quad_lit(&mut entry.0, &mut entry.1, p, face, rect, light);
+                    let anim = anim_id_at(block, face.normal);
+                    emit_quad_lit_anim(
+                        &mut entry.0,
+                        &mut entry.1,
+                        p,
+                        face,
+                        rect,
+                        light,
+                        anim,
+                    );
                 }
             }
         }
@@ -391,16 +434,19 @@ const FACES: &[Face] = &[
     },
 ];
 
-/// Emit one quad with per-vertex `light` `(block, sky)`. All 4
-/// corners of the quad share the same values - the 4-corner AO
-/// smoothing pass is a follow-up.
-fn emit_quad_lit(
+/// Emit one quad with per-vertex `light` `(block, sky)` + anim
+/// slot id (Wave 9.y). All 4 corners share the same values - the
+/// 4-corner AO smoothing pass is a follow-up; per-corner anim
+/// would only matter if a single tile straddled two animated
+/// strips (it doesn't).
+fn emit_quad_lit_anim(
     vertices: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
     origin: Vec3,
     face: &Face,
     uv_rect: [f32; 4],
     light: [f32; 2],
+    anim_id: u32,
 ) {
     let normal = [
         face.normal[0] as f32,
@@ -421,7 +467,8 @@ fn emit_quad_lit(
                 normal,
             )
             .with_uv(uvs[i])
-            .with_light(light[0], light[1]),
+            .with_light(light[0], light[1])
+            .with_anim_id(anim_id),
         );
     }
     indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
@@ -811,5 +858,78 @@ mod tests {
         assert_eq!(v.light, [0.0, 1.0]);
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(0.5, 0.25);
         assert_eq!(v.light, [0.5, 0.25]);
+    }
+
+    #[test]
+    fn chunk_mesh_legacy_path_writes_anim_id_zero() {
+        // `chunk_mesh_with_atlas_and_light` (no anim closure) MUST
+        // leave every vertex at `anim_id = 0` so static UVs hold.
+        let mut chunk = Chunk::empty();
+        chunk.set(4, 4, 4, BlockId(1));
+        let subs = chunk_mesh_with_atlas_and_light(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |_, _| [0.0, 1.0],
+        );
+        for sub in subs {
+            for v in &sub.vertices {
+                assert_eq!(v.anim_id, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn chunk_mesh_anim_closure_stamps_per_face() {
+        // The anim closure receives `(block, normal)` and returns
+        // the slot id. Stamping `7` on +Y and `0` elsewhere must
+        // produce a 4-vertex +Y quad with anim_id == 7 and 20
+        // other vertices with anim_id == 0.
+        let mut chunk = Chunk::empty();
+        chunk.set(8, 8, 8, BlockId(1));
+        let subs = chunk_mesh_with_atlas_and_light_and_anim(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |_, _| [0.0, 1.0],
+            |_block, normal| if normal[1] > 0 { 7 } else { 0 },
+        );
+        assert_eq!(subs.len(), 1);
+        let verts = &subs[0].vertices;
+        let plus_y_with_anim: Vec<_> = verts
+            .iter()
+            .filter(|v| v.normal[1] > 0.5 && v.anim_id == 7)
+            .collect();
+        assert_eq!(plus_y_with_anim.len(), 4);
+        // Every other face stays at 0.
+        let other_zero: Vec<_> = verts
+            .iter()
+            .filter(|v| v.normal[1] <= 0.5)
+            .collect();
+        assert!(other_zero.iter().all(|v| v.anim_id == 0));
+    }
+
+    #[test]
+    fn chunk_mesh_anim_id_clamps_at_32_per_with_anim_id() {
+        // The vertex builder clamps anim_id to 32. Even when the
+        // closure returns 50, the emitted vertex sees 32 so it
+        // can never index out of bounds in the GPU uniform.
+        let mut chunk = Chunk::empty();
+        chunk.set(0, 0, 0, BlockId(1));
+        let subs = chunk_mesh_with_atlas_and_light_and_anim(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |_, _| [0.0, 1.0],
+            |_, _| 50,
+        );
+        for sub in subs {
+            for v in &sub.vertices {
+                assert_eq!(v.anim_id, 32);
+            }
+        }
     }
 }
