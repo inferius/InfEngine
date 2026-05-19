@@ -7400,6 +7400,15 @@ impl Voxel {
         // W5.1: capture the effective seed for the F3 HUD label so
         // the egui closure doesn't have to borrow &self.
         let dbg_seed = self.current_worldgen_ctx().effective_seed();
+        // W10.7: snapshot the current game mode for the F3 line.
+        let dbg_game_mode = self.game_mode;
+        // W10.7: cache whether the player's in Creative so the
+        // hotbar tint + heart-row hide logic can branch without
+        // borrowing self inside the egui closure.
+        let dbg_is_creative = self.game_mode.is_creative();
+        // W10.7: snapshot the fly state so the HUD chip can read
+        // it without the closure borrowing self.
+        let dbg_fly_state = self.fly_mode;
         let dbg_pending = self.pending_chunks.len();
         let dbg_net = match &self.net {
             NetRole::Offline => "offline".to_string(),
@@ -7863,6 +7872,11 @@ impl Voxel {
                                     "Spawn: {dir_sp}  {dist_sp:.0}m"
                                 ));
                             }
+                            // W10.7: hide HP + stamina bars in
+                            // Creative - they always read full
+                            // (invuln=true), so the row is just
+                            // visual noise. Survival keeps them.
+                            if !dbg_is_creative {
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,
@@ -7958,6 +7972,23 @@ impl Voxel {
                                     };
                                     painter.rect_filled(fill, 2.0, col);
                                 });
+                            }
+                            } // W10.7: end of `!dbg_is_creative` HP/stamina/air block.
+                            // W10.7: Creative gets a small mode
+                            // chip in place of the HP rows so the
+                            // player can still spot the active
+                            // mode at a glance. Also doubles as the
+                            // "Fly" status indicator when flying.
+                            if dbg_is_creative {
+                                let fly_tag = if dbg_fly_state {
+                                    " (Fly)"
+                                } else {
+                                    ""
+                                };
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(255, 215, 80),
+                                    format!("Mode: Creative{fly_tag}"),
+                                );
                             }
                             if show_fps {
                                 ui.separator();
@@ -8148,6 +8179,11 @@ impl Voxel {
                                 let s = dbg_playtime % 60;
                                 ui.label(format!("session: {h:02}:{m:02}:{s:02}"));
                                 ui.label(format!("seed: {dbg_seed}"));
+                                // W10.7: current game mode line.
+                                ui.label(format!(
+                                    "Mode: {}",
+                                    dbg_game_mode.label_cs()
+                                ));
                             });
                         });
                 }
@@ -8161,7 +8197,18 @@ impl Voxel {
                 egui::Area::new(egui::Id::new("voxel_hotbar"))
                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
                     .show(ctx, |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        // W10.7: tint the hotbar frame yellow in
+                        // Creative so the player can tell modes
+                        // apart at a glance. Survival keeps the
+                        // default neutral grey.
+                        let mut frame = egui::Frame::popup(ui.style());
+                        if dbg_is_creative {
+                            frame = frame.stroke(egui::Stroke::new(
+                                1.5,
+                                egui::Color32::from_rgb(255, 215, 80),
+                            ));
+                        }
+                        frame.show(ui, |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.horizontal(|ui| {
                                     for (i, slot) in hotbar_snapshot.iter().enumerate() {

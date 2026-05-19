@@ -282,6 +282,43 @@ fn creative_tab_does_not_open_in_survival_mode() {
 }
 
 #[test]
+fn f3_overlay_uses_game_mode_label() {
+    // W10.7: the F3 mode line reads from `game_mode.label_cs()`.
+    // We verify the label round-trips for both modes so a future
+    // rename (e.g. Czech wording) catches a missing F3 update.
+    let v_s = voxel_in_mode(GameMode::Survival);
+    let v_c = voxel_in_mode(GameMode::Creative);
+    assert_eq!(v_s.game_mode.label_cs(), "Survival");
+    assert_eq!(v_c.game_mode.label_cs(), "Creative");
+}
+
+#[test]
+fn creative_hud_predicate_hides_hearts() {
+    // W10.7: the heart-row + stamina + air bars are wrapped in
+    // `if !is_creative()`. Lock in the predicate so an
+    // accidental refactor that swaps the gate keeps the
+    // rendering branch consistent.
+    let v_creative = voxel_in_mode(GameMode::Creative);
+    let v_survival = voxel_in_mode(GameMode::Survival);
+    assert!(v_creative.game_mode.is_creative());
+    assert!(!v_survival.game_mode.is_creative());
+}
+
+#[test]
+fn creative_hotbar_tint_predicate_matches_mode() {
+    // W10.7: the hotbar yellow stroke is gated on the same
+    // `is_creative()` flag the heart-row hide uses, so they
+    // can't drift apart. Survival -> no tint, Creative -> tint.
+    for (mode, expect) in [
+        (GameMode::Survival, false),
+        (GameMode::Creative, true),
+    ] {
+        let v = voxel_in_mode(mode);
+        assert_eq!(v.game_mode.is_creative(), expect);
+    }
+}
+
+#[test]
 fn creative_tab_opens_via_helper_in_creative() {
     // W10.6: `open_now` flips the panel on + clears any stale
     // query / cursor. Drives the same path the E-key handler
