@@ -39,6 +39,7 @@ use crate::args::Args;
 use crate::audit::AuditLog;
 
 pub mod shutdown;
+pub mod stdin_repl;
 pub mod tick;
 
 /// Number of chunks (in each horizontal direction) generated on

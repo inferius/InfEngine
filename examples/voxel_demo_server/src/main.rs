@@ -33,6 +33,7 @@ mod runtime;
 use args::Args;
 use runtime::HeadlessServer;
 use runtime::shutdown;
+use runtime::stdin_repl;
 
 fn main() -> ExitCode {
     init_tracing();
@@ -63,6 +64,11 @@ fn main() -> ExitCode {
         }
     };
 
+    // W5.4a: spawn the stdin REPL reader. The thread blocks on
+    // stdin.lines(); each parsed `ConsoleCommand` arrives via
+    // mpsc and we drain it at the top of every tick.
+    let console_rx = stdin_repl::spawn_reader();
+
     // 20 Hz server tick - matches the design doc baseline. Stays
     // independent of the client's render rate; clients receive
     // per-tick broadcasts.
@@ -70,6 +76,15 @@ fn main() -> ExitCode {
     let mut next_tick = std::time::Instant::now() + tick_rate;
 
     while !shutdown.is_requested() {
+        // Drain any pending REPL commands first - one-shot poll, no
+        // blocking. Each command runs synchronously inside the
+        // tick loop so the dispatched output stays interleaved with
+        // tick-loop logging.
+        while let Ok(cmd) = console_rx.try_recv() {
+            if stdin_repl::dispatch(&mut srv, &shutdown, cmd) {
+                break;
+            }
+        }
         let now = std::time::Instant::now();
         if now >= next_tick {
             srv.tick();
