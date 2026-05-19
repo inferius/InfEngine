@@ -143,6 +143,8 @@ pub(crate) mod plugin;
 // is detected so the demo still launches on a clean machine.
 #[allow(dead_code)]
 mod resource_pack;
+#[allow(dead_code)]
+mod particle_pass;
 mod ui;
 mod worldgen;
 use chat::autocomplete::{
