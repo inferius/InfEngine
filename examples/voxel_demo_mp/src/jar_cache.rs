@@ -109,6 +109,73 @@ pub(crate) fn mark_cache_extracted(
     Ok(())
 }
 
+/// Filter applied to entries inside the .jar: we only keep what the
+/// resource-pack loader actually consumes. Reduces extract time +
+/// disk usage from ~60 MB (full jar) to a few MB (just assets +
+/// `pack.mcmeta`).
+fn keep_entry(name: &str) -> bool {
+    name.starts_with("assets/")
+        || name == "pack.mcmeta"
+        || name == "pack.png"
+}
+
+/// Extract the relevant subtree of `jar_path` into `cache_dir`.
+/// Idempotent + atomic-ish: if the cache is `Fresh`, returns without
+/// doing work; on success writes the mtime sentinel last so a
+/// partial extract leaves the cache marked `Stale` for retry.
+///
+/// Strips the `assets/` etc. paths into `cache_dir` verbatim - the
+/// resource-pack loader's well-known layout (`textures/block/...`)
+/// lives under `cache_dir/assets/minecraft/textures/...` once the
+/// extract finishes.
+pub(crate) fn ensure_extracted(
+    jar_path: &Path,
+    cache_dir: &Path,
+) -> io::Result<()> {
+    if cache_status(jar_path, cache_dir) == CacheStatus::Fresh {
+        return Ok(());
+    }
+    // Wipe a stale cache so we don't mix old + new files. Cheap: at
+    // worst we re-extract a few MB.
+    if cache_dir.is_dir() {
+        fs::remove_dir_all(cache_dir)?;
+    }
+    fs::create_dir_all(cache_dir)?;
+
+    let f = fs::File::open(jar_path)?;
+    let mut archive = zip::ZipArchive::new(f)
+        .map_err(|e| io::Error::other(format!("zip open: {e}")))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| io::Error::other(format!("zip entry: {e}")))?;
+        // ZipFile::name returns the entry path. Use enclosed_name
+        // to refuse `..` traversal attempts before we touch the FS.
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let Some(rel_str) = rel.to_str() else {
+            continue;
+        };
+        if !keep_entry(rel_str) {
+            continue;
+        }
+        let out = cache_dir.join(&rel);
+        if entry.is_dir() {
+            fs::create_dir_all(&out)?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut sink = fs::File::create(&out)?;
+        io::copy(&mut entry, &mut sink)?;
+    }
+    // Sentinel last so a partially-extracted cache stays Stale.
+    mark_cache_extracted(jar_path, cache_dir)?;
+    Ok(())
+}
+
 /// Detect whether the user's MC install has only the `.jar` (no
 /// pre-extracted dir). The W9 path discovery already covers the
 /// extracted case; this helper tells the caller "extract before
@@ -298,6 +365,100 @@ mod tests {
         let jar = root.join("missing.jar");
         let res = mark_cache_extracted(&jar, &cache);
         assert!(res.is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Build a tiny in-memory zip with the entries we care about
+    /// (an `assets/minecraft/textures/block/stone.png` + a stray
+    /// non-assets entry) so the test can exercise the filter.
+    fn make_fake_jar(out: &Path) {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let f = fs::File::create(out).expect("create jar");
+        let mut zw = zip::ZipWriter::new(f);
+        let opts = SimpleFileOptions::default();
+        zw.start_file("assets/minecraft/textures/block/stone.png", opts)
+            .unwrap();
+        zw.write_all(b"PNG bytes").unwrap();
+        zw.start_file("META-INF/MANIFEST.MF", opts).unwrap();
+        zw.write_all(b"junk").unwrap();
+        zw.start_file("pack.mcmeta", opts).unwrap();
+        zw.write_all(b"{}").unwrap();
+        zw.finish().unwrap();
+    }
+
+    #[test]
+    fn ensure_extracted_pulls_only_assets() {
+        let root = temp_root("extract_filter");
+        let jar = root.join("test.jar");
+        make_fake_jar(&jar);
+        let cache = root.join("cache");
+        ensure_extracted(&jar, &cache).expect("extract");
+        assert!(
+            cache
+                .join("assets")
+                .join("minecraft")
+                .join("textures")
+                .join("block")
+                .join("stone.png")
+                .is_file(),
+            "asset PNG must extract"
+        );
+        assert!(
+            cache.join("pack.mcmeta").is_file(),
+            "pack.mcmeta must extract"
+        );
+        // META-INF is dropped by the keep_entry filter.
+        assert!(
+            !cache.join("META-INF").exists(),
+            "META-INF should be skipped"
+        );
+        assert_eq!(cache_status(&jar, &cache), CacheStatus::Fresh);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_extracted_is_idempotent_when_fresh() {
+        let root = temp_root("extract_idempotent");
+        let jar = root.join("test.jar");
+        make_fake_jar(&jar);
+        let cache = root.join("cache");
+        ensure_extracted(&jar, &cache).expect("first");
+        let stone = cache
+            .join("assets/minecraft/textures/block/stone.png")
+            .clone();
+        // Drop the file under the cache to prove the second call
+        // does NOT re-extract (cache is Fresh -> early return).
+        fs::remove_file(&stone).ok();
+        ensure_extracted(&jar, &cache).expect("second");
+        assert!(
+            !stone.is_file(),
+            "Fresh cache must skip the extract pass entirely"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_extracted_refreshes_stale_cache() {
+        let root = temp_root("extract_stale");
+        let jar = root.join("test.jar");
+        make_fake_jar(&jar);
+        let cache = root.join("cache");
+        // Plant a bogus pre-existing file + a wrong sentinel so the
+        // status is Stale.
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("bogus.txt"), b"old").unwrap();
+        fs::write(cache.join(CACHE_MTIME_SENTINEL), "12345").unwrap();
+        assert_eq!(cache_status(&jar, &cache), CacheStatus::Stale);
+        ensure_extracted(&jar, &cache).expect("extract");
+        // Old file gone; new ones present; status now Fresh.
+        assert!(!cache.join("bogus.txt").exists());
+        assert!(
+            cache
+                .join("assets/minecraft/textures/block/stone.png")
+                .is_file()
+        );
+        assert_eq!(cache_status(&jar, &cache), CacheStatus::Fresh);
         fs::remove_dir_all(&root).ok();
     }
 }

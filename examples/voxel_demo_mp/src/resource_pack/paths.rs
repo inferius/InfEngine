@@ -24,12 +24,68 @@ const CANARY: &str = "textures/block/stone.png";
 
 /// Public entry point - run the 4-tier probe and return the first
 /// path that looks like a real MC assets root, or `None`.
+///
+/// Tier 5 (W12.7) kicks in only when the standard probe finds nothing:
+/// we look for a `<version>.jar` next to the missing extracted dir
+/// and, on first hit, extract its `assets/` subtree into the engine
+/// cache (`<data_dir>/cache/mc_assets/<version>/`). Subsequent boots
+/// reuse the cache because the cache mtime sentinel matches.
 pub(crate) fn discover_assets_root() -> Option<PathBuf> {
     for candidate in candidate_paths() {
         if let Some(root) = canonicalize_assets_root(candidate)
             && root.join(CANARY).exists()
         {
             return Some(root);
+        }
+    }
+    // Tier 5: try the .jar-extract path.
+    extract_jar_if_available()
+}
+
+/// Scan the standard MC versions dir for any `<ver>.jar` whose
+/// matching extracted tree is missing; extract on first hit + return
+/// the resulting cache root. Skips silently when no MC install is
+/// present.
+fn extract_jar_if_available() -> Option<PathBuf> {
+    let appdata = appdata_roaming()?;
+    let versions_dir = appdata.join(".minecraft").join("versions");
+    let entries = std::fs::read_dir(&versions_dir).ok()?;
+    let mut versions: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with("26.1") {
+                Some(n)
+            } else {
+                None
+            }
+        })
+        .collect();
+    versions.sort();
+    let data = crate::world_save::layout::data_dir();
+    for ver in &versions {
+        let Some(jar) = crate::jar_cache::needs_extraction(&versions_dir, ver) else {
+            continue;
+        };
+        let cache = crate::jar_cache::jar_cache_dir(&data, ver);
+        if let Err(err) = crate::jar_cache::ensure_extracted(&jar, &cache) {
+            tracing::warn!(
+                version = %ver,
+                jar = %jar.display(),
+                cache = %cache.display(),
+                error = %err,
+                "MC jar extract failed - skipping version"
+            );
+            continue;
+        }
+        let nested = cache.join("assets").join("minecraft");
+        if nested.join(CANARY).exists() {
+            tracing::info!(
+                version = %ver,
+                cache = %nested.display(),
+                "MC assets extracted from .jar into engine cache"
+            );
+            return Some(nested);
         }
     }
     None

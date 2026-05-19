@@ -40,6 +40,7 @@ zstd = { workspace = true }
 directories = { workspace = true }
 chrono = { workspace = true }
 image = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

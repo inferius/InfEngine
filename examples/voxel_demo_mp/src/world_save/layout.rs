@@ -62,6 +62,16 @@ pub(crate) fn worlds_dir() -> PathBuf {
     }
 }
 
+/// Engine-wide data dir (the parent of `worlds/`). Used by sibling
+/// caches like the `.jar`-extract cache the resource-pack loader
+/// writes to. Falls back to `./` if `directories` can't resolve.
+pub(crate) fn data_dir() -> PathBuf {
+    match ProjectDirs::from(PROJECT_QUALIFIER, PROJECT_ORG, PROJECT_APP) {
+        Some(dirs) => dirs.data_dir().to_path_buf(),
+        None => PathBuf::from("."),
+    }
+}
+
 /// Slugify a human-typed world name into something filesystem-safe.
 ///
 /// Rules (deliberately strict so two players can't end up with
