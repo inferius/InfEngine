@@ -153,6 +153,8 @@ mod emitter_lights;
 mod panorama;
 #[allow(dead_code)]
 mod jar_cache;
+#[allow(dead_code)]
+mod mob_skin;
 mod ui;
 mod worldgen;
 use chat::autocomplete::{

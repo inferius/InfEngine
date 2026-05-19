@@ -1,0 +1,266 @@
+//! Wave 12.8 - Mob skin import.
+//!
+//! Walk `assets/minecraft/textures/entity/<mob>/<mob>.png` for
+//! every `MobKind` and resolve the file path.
+//!
+//! The actual GPU texture upload + UV mapping per body part is
+//! layered on top by the mob render path; this module ships the
+//! path discovery + fallback predicate so the engine knows which
+//! mobs the user has skins for.
+//!
+//! Per W12 design decisions: this wave ships the **simplest**
+//! version - each mob gets a single full-texture sample stretched
+//! on a billboard / flat-cube mesh. Per-body-part UV (head / body /
+//! legs separate) is a W13+ follow-up.
+//!
+//! Cite the MC source for the texture file names:
+//! `J:\Temp\template-mod-template-26.1.2\sources\
+//! minecraft-merged-52430b475d-26.1.2-sources\
+//! net\minecraft\client\renderer\entity\` - per-mob renderer
+//! classes (e.g. `ZombieRenderer.java` references
+//! `textures/entity/zombie/zombie.png`).
+
+use std::path::{Path, PathBuf};
+
+use crate::mob::kinds::MobKind;
+
+/// Per-MobKind subdirectory + file stem inside
+/// `assets/minecraft/textures/entity/`. Most kinds match MC 1:1.
+pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static str) {
+    match kind {
+        MobKind::Zombie => ("zombie", "zombie"),
+        MobKind::Skeleton => ("skeleton", "skeleton"),
+        MobKind::Spider => ("spider", "spider"),
+        MobKind::Sheep => ("sheep", "sheep"),
+        // Cow + pig + chicken use the standard layout too. Vanilla
+        // MC variants (mooshroom, baby, ...) live in subdirs we
+        // can route to in a follow-up.
+        MobKind::Cow => ("cow", "cow"),
+        MobKind::Pig => ("pig", "pig"),
+        MobKind::Chicken => ("chicken", "chicken"),
+    }
+}
+
+/// Resolve the full path to a mob skin PNG inside the user's MC
+/// asset tree. Returns `None` when the file doesn't exist; caller
+/// falls back to the kind's hard-coded color.
+pub(crate) fn mob_skin_path(
+    assets_root: &Path,
+    kind: MobKind,
+) -> Option<PathBuf> {
+    let (subdir, stem) = entity_texture_subpath(kind);
+    let p = assets_root
+        .join("textures")
+        .join("entity")
+        .join(subdir)
+        .join(format!("{stem}.png"));
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// True when EVERY supported mob has a resolvable skin under
+/// `assets_root`. Used by the engine startup banner to report
+/// "MC mob skins detected" vs "falling back to colours".
+pub(crate) fn full_skin_set_present(assets_root: &Path) -> bool {
+    [
+        MobKind::Sheep,
+        MobKind::Zombie,
+        MobKind::Chicken,
+        MobKind::Pig,
+        MobKind::Cow,
+        MobKind::Skeleton,
+        MobKind::Spider,
+    ]
+    .iter()
+    .all(|k| mob_skin_path(assets_root, *k).is_some())
+}
+
+/// Aggregate result handed to the renderer. Each kind that
+/// resolved a PNG carries the path; kinds that fell through stay
+/// at `None` so the render path falls back to the kind's hard-
+/// coded colour.
+pub(crate) struct MobSkinSet {
+    pub(crate) sheep: Option<PathBuf>,
+    pub(crate) zombie: Option<PathBuf>,
+    pub(crate) chicken: Option<PathBuf>,
+    pub(crate) pig: Option<PathBuf>,
+    pub(crate) cow: Option<PathBuf>,
+    pub(crate) skeleton: Option<PathBuf>,
+    pub(crate) spider: Option<PathBuf>,
+}
+
+impl MobSkinSet {
+    pub(crate) fn discover(assets_root: &Path) -> Self {
+        Self {
+            sheep: mob_skin_path(assets_root, MobKind::Sheep),
+            zombie: mob_skin_path(assets_root, MobKind::Zombie),
+            chicken: mob_skin_path(assets_root, MobKind::Chicken),
+            pig: mob_skin_path(assets_root, MobKind::Pig),
+            cow: mob_skin_path(assets_root, MobKind::Cow),
+            skeleton: mob_skin_path(assets_root, MobKind::Skeleton),
+            spider: mob_skin_path(assets_root, MobKind::Spider),
+        }
+    }
+
+    pub(crate) fn for_kind(&self, k: MobKind) -> Option<&Path> {
+        let opt = match k {
+            MobKind::Sheep => &self.sheep,
+            MobKind::Zombie => &self.zombie,
+            MobKind::Chicken => &self.chicken,
+            MobKind::Pig => &self.pig,
+            MobKind::Cow => &self.cow,
+            MobKind::Skeleton => &self.skeleton,
+            MobKind::Spider => &self.spider,
+        };
+        opt.as_deref()
+    }
+
+    /// Count of resolved kinds. Used by the startup banner.
+    pub(crate) fn loaded_count(&self) -> usize {
+        [
+            &self.sheep,
+            &self.zombie,
+            &self.chicken,
+            &self.pig,
+            &self.cow,
+            &self.skeleton,
+            &self.spider,
+        ]
+        .iter()
+        .filter(|o| o.is_some())
+        .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_root(label: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "infengine_mob_skin_{}_{}_{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        fs::create_dir_all(&p).expect("mkdir");
+        p
+    }
+
+    fn write_skin(root: &Path, kind: MobKind) {
+        let (sub, stem) = entity_texture_subpath(kind);
+        let dir = root.join("textures").join("entity").join(sub);
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::write(dir.join(format!("{stem}.png")), b"\x89PNG").expect("write");
+    }
+
+    #[test]
+    fn mob_skin_loaded_for_zombie() {
+        let root = temp_root("zombie");
+        write_skin(&root, MobKind::Zombie);
+        let p = mob_skin_path(&root, MobKind::Zombie)
+            .expect("zombie skin should resolve");
+        assert!(p.is_file());
+        assert!(p.to_string_lossy().contains("zombie"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mob_skin_falls_back_to_color_when_missing() {
+        let root = temp_root("missing");
+        // No skins written.
+        assert!(mob_skin_path(&root, MobKind::Sheep).is_none());
+        assert!(mob_skin_path(&root, MobKind::Zombie).is_none());
+        let set = MobSkinSet::discover(&root);
+        assert_eq!(set.loaded_count(), 0);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn partial_install_resolves_only_present_kinds() {
+        let root = temp_root("partial");
+        write_skin(&root, MobKind::Chicken);
+        write_skin(&root, MobKind::Pig);
+        let set = MobSkinSet::discover(&root);
+        assert!(set.for_kind(MobKind::Chicken).is_some());
+        assert!(set.for_kind(MobKind::Pig).is_some());
+        assert!(set.for_kind(MobKind::Zombie).is_none());
+        assert_eq!(set.loaded_count(), 2);
+        assert!(!full_skin_set_present(&root));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn full_install_resolves_every_kind() {
+        let root = temp_root("full");
+        for k in [
+            MobKind::Sheep,
+            MobKind::Zombie,
+            MobKind::Chicken,
+            MobKind::Pig,
+            MobKind::Cow,
+            MobKind::Skeleton,
+            MobKind::Spider,
+        ] {
+            write_skin(&root, k);
+        }
+        let set = MobSkinSet::discover(&root);
+        assert_eq!(set.loaded_count(), 7);
+        assert!(full_skin_set_present(&root));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn entity_subpath_uses_mob_name() {
+        // Every kind's subdir + stem should equal the kind's
+        // canonical short name so the loader can use the
+        // MobKind::name() helper to build the path too.
+        for k in [
+            MobKind::Sheep,
+            MobKind::Zombie,
+            MobKind::Chicken,
+            MobKind::Pig,
+            MobKind::Cow,
+            MobKind::Skeleton,
+            MobKind::Spider,
+        ] {
+            let (sub, stem) = entity_texture_subpath(k);
+            assert_eq!(sub, k.name(), "subdir mismatch for {k:?}");
+            assert_eq!(stem, k.name(), "stem mismatch for {k:?}");
+        }
+    }
+
+    #[test]
+    fn for_kind_returns_path_when_set() {
+        let root = temp_root("for_kind");
+        write_skin(&root, MobKind::Spider);
+        let set = MobSkinSet::discover(&root);
+        let p = set.for_kind(MobKind::Spider).expect("spider path");
+        assert!(p.to_string_lossy().contains("spider"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mob_skin_path_rejects_directory() {
+        // If someone puts a directory at the texture path the
+        // resolver should NOT return it (we need a file).
+        let root = temp_root("is_dir");
+        let (sub, stem) = entity_texture_subpath(MobKind::Sheep);
+        let dir = root
+            .join("textures")
+            .join("entity")
+            .join(sub)
+            .join(format!("{stem}.png"));
+        fs::create_dir_all(&dir).expect("mkdir at png path");
+        assert!(mob_skin_path(&root, MobKind::Sheep).is_none());
+        fs::remove_dir_all(&root).ok();
+    }
+}
