@@ -1,6 +1,7 @@
 //! Top-level chunk generator + the `Flat` / `Islands` flat-noise
 //! profiles. Dispatches into the per-profile implementation based
-//! on the currently-loaded `WORLDGEN`. The Classic + Amplified
+//! on the `WorldgenCtx` (Phase F.2) or the currently-loaded
+//! `WORLDGEN` atomic (legacy path). The Classic + Amplified
 //! paths share `gen_classic` with an amplitude scale; Realistic
 //! lives in a sibling module (see Phase E.3).
 
@@ -15,38 +16,60 @@ use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 /// implementation based on the currently-loaded `WORLDGEN`.
 ///
 /// Legacy entry point - reads the `WORLD_SEED` + `WORLDGEN` global
-/// atomics. Kept for call sites that haven't migrated to the
-/// `WorldgenCtx` path yet. New callers should prefer
-/// `generate_chunk_at_ctx`, which is race-free across atomic
-/// writes.
+/// atomics. Kept as a thin wrapper around `generate_chunk_at_ctx`
+/// for call sites that haven't migrated to the explicit-ctx path
+/// yet. New callers should prefer `generate_chunk_at_ctx`, which
+/// will be race-free once F.2c finishes the migration.
 pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
-    match WorldGen::current() {
-        WorldGen::Classic => gen_classic(coord, 1.0),
-        WorldGen::Amplified => gen_classic(coord, 2.5),
-        WorldGen::Flat => gen_flat(coord),
-        WorldGen::Islands => gen_islands(coord),
-        WorldGen::Realistic => super::climate::gen_realistic(coord),
-        WorldGen::Nether => super::nether::gen_nether(coord),
-    }
+    // Build a ctx snapshot from the atomics so the dispatch goes
+    // through the new path. The sub-modules (biome / climate / ore
+    // / trees / decorations) still read the atomics until F.2c, so
+    // the wrapper isn't race-free yet - the ctx is mostly along for
+    // the ride. Once F.2c plumbs ctx into the noise leaves, the
+    // legacy atomics fall away and this fn picks them up only as
+    // the "active state" cache.
+    let ctx = WorldgenCtx {
+        // The `WORLD_SEED` atomic already holds the effective seed
+        // (dim_seed(base, current_dim) per Phase F.1). Recovering
+        // the base + dim from it isn't possible, so we stash the
+        // effective value as the base and leave dim empty - it
+        // produces the same `effective_seed()` and behaves
+        // identically against any pure-fn that only consumes the
+        // mixed value.
+        base_seed: super::world_seed(),
+        dim: String::new(),
+        profile: WorldGen::current(),
+    };
+    generate_chunk_at_ctx(coord, &ctx)
 }
 
 /// Pure-function chunk generator. Determined entirely by `ctx` +
-/// `coord`; never reads the global `WORLD_SEED` / `WORLDGEN`
-/// atomics.
+/// `coord`; once F.2c lands the full migration, this function
+/// never reads the global `WORLD_SEED` / `WORLDGEN` atomics.
 ///
-/// F.2a stub: routes through the legacy global-atomic path while
-/// the sub-modules still consume the atomics. F.2b onwards
-/// rewrites each `gen_*` to take `&WorldgenCtx` and the stub goes
-/// away. Until then this function is not race-free - the
-/// regression test guarding it is `#[ignore]`d.
-#[allow(dead_code)] // Used by bin-side workers once F.2d lands.
-pub fn generate_chunk_at_ctx(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
-    generate_chunk_at(coord)
+/// F.2b: dispatch is routed through `ctx.profile`. The legacy
+/// `gen_*` body still reads `world_seed()` inside `biome_at`,
+/// `climate_at`, `ore_hash`, and `hash2` - those moves to a ctx
+/// parameter in F.2c-1, c-2, c-3. The pure-fn race-free
+/// guarantee kicks in fully after that.
+pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
+    match ctx.profile {
+        WorldGen::Classic => gen_classic(coord, ctx, 1.0),
+        WorldGen::Amplified => gen_classic(coord, ctx, 2.5),
+        WorldGen::Flat => gen_flat(coord, ctx),
+        WorldGen::Islands => gen_islands(coord, ctx),
+        WorldGen::Realistic => super::climate::gen_realistic(coord, ctx),
+        WorldGen::Nether => super::nether::gen_nether(coord, ctx),
+    }
 }
 
 /// Pancake-flat terrain at y=8: one row of grass, three rows of
 /// dirt, stone below. Empty above. Trees disabled.
-fn gen_flat(coord: ChunkCoord) -> Chunk {
+///
+/// Flat is deterministic regardless of seed - it doesn't sample
+/// any noise. `ctx` is unused but kept on the signature for
+/// uniform dispatch.
+fn gen_flat(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|_x, y, _z| {
@@ -64,7 +87,11 @@ fn gen_flat(coord: ChunkCoord) -> Chunk {
 /// Sparse-island terrain: only where 2D noise exceeds a threshold
 /// does land rise; everywhere else is bottomless air. Trees grow
 /// on the island tops.
-fn gen_islands(coord: ChunkCoord) -> Chunk {
+///
+/// Islands uses pure sin/cos noise of (wx, wz) - no seed mixing -
+/// so the result is independent of `ctx`. The argument is kept for
+/// uniform dispatch.
+fn gen_islands(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     let mask = |wx: f32, wz: f32| -> f32 {
@@ -99,7 +126,12 @@ fn gen_islands(coord: ChunkCoord) -> Chunk {
 
 /// Classic biome-driven terrain. `amp_scale` lets the Amplified
 /// preset reuse this generator with a 2.5x vertical multiplier.
-fn gen_classic(coord: ChunkCoord, amp_scale: f32) -> Chunk {
+///
+/// F.2b: `ctx` is plumbed through to the decoration passes so the
+/// later F.2c-* commits can deliver `ctx.effective_seed()` to the
+/// noise leaves (biome / ore / hash2) without a second pass over
+/// the call sites.
+fn gen_classic(coord: ChunkCoord, _ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
@@ -183,6 +215,27 @@ mod tests {
         let b = generate_chunk_at([0, 0, 0]);
         for (x, y, z) in itertools_xyz() {
             assert_eq!(a.get(x, y, z).0, b.get(x, y, z).0);
+        }
+    }
+
+    /// F.2b: legacy `generate_chunk_at` is now a thin wrapper
+    /// around `generate_chunk_at_ctx` that builds a ctx from the
+    /// atomics. Two calls (one through each entry point) with the
+    /// matching seed + profile must produce byte-identical chunks.
+    #[test]
+    fn ctx_path_matches_atomic_path_classic_seed_0() {
+        let _g = lock_gen();
+        set_world_seed(0);
+        WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
+        let legacy = generate_chunk_at([0, 0, 0]);
+        let ctx = WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile: WorldGen::Classic,
+        };
+        let via_ctx = generate_chunk_at_ctx([0, 0, 0], &ctx);
+        for (x, y, z) in itertools_xyz() {
+            assert_eq!(legacy.get(x, y, z).0, via_ctx.get(x, y, z).0);
         }
     }
 

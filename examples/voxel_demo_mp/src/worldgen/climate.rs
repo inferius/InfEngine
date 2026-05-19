@@ -18,7 +18,7 @@ use super::biome::Biome;
 use super::biome_table::biome_from_climate;
 use super::height::cave_at;
 use super::ore::pick_stone_or_ore;
-use super::{cactus, flowers, trees};
+use super::{WorldgenCtx, cactus, flowers, trees};
 
 /// Per-(wx, wz) climate sample. Each component is normalised to
 /// roughly `[-1, 1]`. Re-derived deterministically from the world
@@ -146,7 +146,7 @@ pub(crate) fn near_surface_block(biome: Biome) -> BlockId {
 /// height + surface + ore. Negative-elevation cells under sea
 /// level fill with water; everywhere else carves caves the same
 /// way Classic does.
-pub(crate) fn gen_realistic(coord: ChunkCoord) -> Chunk {
+pub(crate) fn gen_realistic(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
@@ -314,7 +314,12 @@ mod tests {
     fn gen_realistic_smoke_runs() {
         let _g = lock_gen();
         set_world_seed(0);
-        let _ = gen_realistic([0, 0, 0]);
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Realistic,
+        };
+        let _ = gen_realistic([0, 0, 0], &ctx);
     }
 
     // Sanity: SEA_LEVEL sits below Mountain base + above the

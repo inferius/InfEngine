@@ -45,8 +45,10 @@ pub(crate) use biome::{Biome, biome_at};
 pub use chunk::generate_chunk_at;
 // F.2a: pure-ctx entry point exists but the bin doesn't reach for
 // it yet (later sub-phases route the worker pool through it). Mute
-// the unused-import lint here so the bin's clippy pass stays clean.
-#[allow(unused_imports)]
+// the unused-import lint here so the bin's clippy pass stays
+// clean. The `dead_code` allow covers the leaf fn since the bin
+// re-mounts the source.
+#[allow(unused_imports, dead_code)]
 pub use chunk::generate_chunk_at_ctx;
 
 /// Pure-function bundle of every input the worldgen call tree

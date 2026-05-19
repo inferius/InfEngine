@@ -23,8 +23,9 @@
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use crate::block::{BEDROCK_ID, GLOWSTONE_ID, LAVA_ID, NETHERRACK_ID};
-use crate::worldgen::height::cave_at;
+use crate::worldgen::WorldgenCtx;
 use crate::worldgen::hash2;
+use crate::worldgen::height::cave_at;
 
 /// World-Y of the bedrock floor. Vanilla MC matches this; the
 /// nether's actual playable range is 1..127.
@@ -47,7 +48,7 @@ const BULK_AMP: i32 = 16;
 const LAVA_LAKE_Y_MAX: i32 = 32;
 
 /// `gen_nether` - deterministic chunk generator for the nether.
-pub(crate) fn gen_nether(coord: ChunkCoord) -> Chunk {
+pub(crate) fn gen_nether(coord: ChunkCoord, _ctx: &WorldgenCtx) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
@@ -165,8 +166,13 @@ mod tests {
         let _g = lock_gen();
         set_world_seed(42);
         WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
-        let a = gen_nether([0, 0, 0]);
-        let b = gen_nether([0, 0, 0]);
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 42,
+            dim: String::new(),
+            profile: WorldGen::Nether,
+        };
+        let a = gen_nether([0, 0, 0], &ctx);
+        let b = gen_nether([0, 0, 0], &ctx);
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
