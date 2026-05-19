@@ -34,6 +34,8 @@
 //! the next phase can wire it up without juggling cfg gates.
 #![allow(dead_code)]
 
+use std::collections::HashSet;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -180,6 +182,35 @@ pub(crate) fn list_worlds() -> Vec<WorldSummary> {
     list_worlds_in(&worlds_dir())
 }
 
+/// Dedup set for `list_worlds: skipping unreadable slot` warnings.
+/// The Worlds picker calls `list_worlds()` once per UI frame, so a
+/// permanently-broken slot (e.g. a `legacy/` dir without a
+/// `meta.json`) would otherwise spam the log at 60+ Hz. We log once
+/// per `(slug, error-text)` pair and stay quiet afterwards; if the
+/// error text changes (the slot was repaired then re-broke
+/// differently) it re-fires once.
+fn note_unreadable_once(slug: &str, err: &io::Error) {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    static SEEN: OnceLock<Mutex<HashSet<(String, String)>>> =
+        OnceLock::new();
+    let set = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let key = (slug.to_string(), err.to_string());
+    let mut guard = match set.lock() {
+        Ok(g) => g,
+        // Poisoned mutex: recover the inner value rather than panic.
+        // A poisoned set just means we may double-log once; harmless.
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(key) {
+        tracing::warn!(
+            slug = slug,
+            error = %err,
+            "list_worlds: skipping unreadable slot (logged once per slug)"
+        );
+    }
+}
+
 /// Like `list_worlds` but rooted at an explicit base path.
 pub(crate) fn list_worlds_in(base: &Path) -> Vec<WorldSummary> {
     let read = match std::fs::read_dir(base) {
@@ -199,11 +230,7 @@ pub(crate) fn list_worlds_in(base: &Path) -> Vec<WorldSummary> {
         let meta = match read_meta_in_dir(base, slug) {
             Ok(m) => m,
             Err(err) => {
-                tracing::warn!(
-                    slug = slug,
-                    error = %err,
-                    "list_worlds: skipping unreadable slot"
-                );
+                note_unreadable_once(slug, &err);
                 continue;
             }
         };
