@@ -33,7 +33,7 @@ use voxel_demo_mp::world_save::{
     meta::{self, create_meta},
     world_json::{self, create_world},
 };
-use voxel_demo_mp::worldgen::{self, WorldGen, generate_chunk_at};
+use voxel_demo_mp::worldgen::{WorldGen, WorldgenCtx, generate_chunk_at_ctx};
 
 use crate::args::Args;
 use crate::audit::AuditLog;
@@ -177,8 +177,10 @@ impl HeadlessServer {
             w
         };
 
-        // 3. Pin the global worldgen + seed so any subsequent
-        // `generate_chunk_at` call reads the right values.
+        // 3. Build a `WorldgenCtx` snapshot for the overworld so
+        // every `generate_chunk_at_ctx` call below reads the
+        // right per-world inputs. W5.1b: no global atomics to
+        // pin; the ctx is plumbed through explicitly.
         let wg = WorldGen::from_str(&wj.worldgen).unwrap_or_else(|| {
             warn!(
                 worldgen = %wj.worldgen,
@@ -186,8 +188,11 @@ impl HeadlessServer {
             );
             WorldGen::Classic
         });
-        worldgen::WORLDGEN.store(wg as u8, std::sync::atomic::Ordering::Relaxed);
-        worldgen::set_world_seed(wj.seed);
+        let worldgen_ctx = WorldgenCtx {
+            base_seed: wj.seed,
+            dim: OVERWORLD.to_string(),
+            profile: wg,
+        };
 
         // 4. Load every persisted chunk under chunks/overworld/.
         let mut world = World::new();
@@ -231,7 +236,7 @@ impl HeadlessServer {
                     if world.chunk(coord).is_some() {
                         continue;
                     }
-                    let chunk = generate_chunk_at(coord);
+                    let chunk = generate_chunk_at_ctx(coord, &worldgen_ctx);
                     world.insert_chunk(coord, chunk);
                     chunks_generated += 1;
                 }

@@ -198,16 +198,11 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
-
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    // W5.1b: every helper takes seed as an explicit parameter;
+    // no globals to lock or seed.
 
     #[test]
     fn climate_at_is_deterministic_per_seed() {
-        let _g = lock_gen();
-        set_world_seed(7);
         let a = climate_at(123.0, 456.0, 7);
         let b = climate_at(123.0, 456.0, 7);
         assert_eq!(a.temperature.to_bits(), b.temperature.to_bits());
@@ -217,9 +212,7 @@ mod tests {
 
     #[test]
     fn climate_channels_are_decorrelated() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        // Sample 4096 cells. The three channels share the same
+// Sample 4096 cells. The three channels share the same
         // noise shape but with distinct phases, so two channels
         // should never read as a constant scalar of each other.
         let mut equal_temp_hum = 0;
@@ -248,9 +241,7 @@ mod tests {
 
     #[test]
     fn climate_channels_span_full_range() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        let mut t_min = f32::INFINITY;
+let mut t_min = f32::INFINITY;
         let mut t_max = f32::NEG_INFINITY;
         let mut h_min = f32::INFINITY;
         let mut h_max = f32::NEG_INFINITY;
@@ -278,7 +269,6 @@ mod tests {
 
     #[test]
     fn climate_changes_with_seed() {
-        let _g = lock_gen();
         let a = climate_at(100.0, 100.0, 1);
         let b = climate_at(100.0, 100.0, 99);
         assert!(
@@ -290,9 +280,7 @@ mod tests {
 
     #[test]
     fn realistic_height_under_sea_for_deep_elevation() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        let c = Climate {
+let c = Climate {
             temperature: 0.0,
             humidity: 0.5,
             elevation: -1.0,
@@ -305,9 +293,7 @@ mod tests {
 
     #[test]
     fn realistic_height_for_mountain_climbs() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        let c = Climate {
+let c = Climate {
             temperature: -0.5,
             humidity: 0.5,
             elevation: 1.0,
@@ -319,9 +305,7 @@ mod tests {
     // Avoid "unused fn" warnings until E.3b wires the chunk gen.
     #[test]
     fn gen_realistic_smoke_runs() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        let ctx = crate::worldgen::WorldgenCtx {
+let ctx = crate::worldgen::WorldgenCtx {
             base_seed: 0,
             dim: String::new(),
             profile: crate::worldgen::WorldGen::Realistic,

@@ -6,16 +6,12 @@
 
 use crate::Voxel;
 use crate::dim::{NETHER, OVERWORLD};
-use crate::worldgen::{self, WORLDGEN, WorldGen, dim_seed};
+use crate::worldgen::{self, WorldGen, dim_seed};
 use infengine_voxel::{BlockId, Chunk, ChunkCoord};
 
-// Tests touch the WORLD_SEED + WORLDGEN atomics; share the
-// worldgen test-lock so we don't race other generator tests.
-fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-    worldgen::TEST_GEN_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
+// W5.1b: the worldgen globals are gone, so these tests no longer
+// need a serialising mutex. `switch_dim` operates purely on
+// `Voxel` fields; each test is naturally isolated.
 
 /// Helper: build a Voxel + place a single non-air block in a
 /// known chunk so we can assert preservation across switches.
@@ -31,8 +27,7 @@ fn build_voxel_with_stone(coord: ChunkCoord, x: usize, y: usize, z: usize) -> Vo
 
 #[test]
 fn switch_dim_is_idempotent_when_target_matches() {
-    let _g = lock_gen();
-    let mut v = build_voxel_with_stone([0, 0, 0], 1, 1, 1);
+let mut v = build_voxel_with_stone([0, 0, 0], 1, 1, 1);
     let before = v
         .world
         .chunk([0, 0, 0])
@@ -48,8 +43,7 @@ fn switch_dim_is_idempotent_when_target_matches() {
 
 #[test]
 fn switch_dim_preserves_overworld_voxel_state() {
-    let _g = lock_gen();
-    let mut v = build_voxel_with_stone([2, 0, 3], 4, 5, 6);
+let mut v = build_voxel_with_stone([2, 0, 3], 4, 5, 6);
     // Bounce overworld -> nether -> overworld and verify the
     // stone block is back where we left it.
     v.switch_dim(NETHER);
@@ -62,36 +56,25 @@ fn switch_dim_preserves_overworld_voxel_state() {
 }
 
 #[test]
-fn switch_dim_does_not_stomp_world_seed_atomic_in_flight() {
-    // F.2e: switch_dim no longer writes the WORLD_SEED atomic.
-    // A worker job enqueued before the swap holds its own
-    // WorldgenCtx clone, so the atomic doesn't drive chunk gen
-    // anymore. Validating the no-write contract here keeps the
-    // pure-fn guarantee from quietly regressing.
-    let _g = lock_gen();
+fn switch_dim_preserves_base_seed_across_swaps() {
+    // W5.1b: switch_dim must not touch voxel.base_seed - it's
+    // the world's invariant. The per-dim mix happens at
+    // `current_worldgen_ctx()` build time.
     let mut v = Voxel::new();
     v.base_seed = 0xDEAD_BEEF;
     v.current_dim = OVERWORLD.to_string();
-    let before = 0x1234_5678;
-    worldgen::set_world_seed(before);
+    let before = v.base_seed;
     v.switch_dim(NETHER);
-    assert_eq!(
-        worldgen::world_seed(),
-        before,
-        "switch_dim must not write WORLD_SEED",
-    );
+    assert_eq!(v.base_seed, before, "switch_dim must not touch base_seed");
     v.switch_dim(OVERWORLD);
-    assert_eq!(
-        worldgen::world_seed(),
-        before,
-        "switch_dim must not write WORLD_SEED",
-    );
+    assert_eq!(v.base_seed, before, "switch_dim must not touch base_seed");
 }
 
 #[test]
-fn switch_dim_does_not_stomp_worldgen_atomic_in_flight() {
-    // Mirror test for the WORLDGEN atomic. Same rationale.
-    let _g = lock_gen();
+fn switch_dim_preserves_dim_worldgens_table() {
+    // W5.1b: switch_dim must not rewrite the `dim_worldgens`
+    // entries it consults. The map is the world's per-dim
+    // profile table; only `/worldgen` should mutate it.
     let mut v = Voxel::new();
     v.base_seed = 42;
     v.current_dim = OVERWORLD.to_string();
@@ -99,18 +82,23 @@ fn switch_dim_does_not_stomp_worldgen_atomic_in_flight() {
         .insert(OVERWORLD.to_string(), WorldGen::Realistic);
     v.dim_worldgens
         .insert(NETHER.to_string(), WorldGen::Nether);
-    WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
     v.switch_dim(NETHER);
     assert_eq!(
-        WorldGen::current(),
-        WorldGen::Classic,
-        "switch_dim must not write WORLDGEN",
+        v.dim_worldgens.get(OVERWORLD).copied(),
+        Some(WorldGen::Realistic),
+    );
+    assert_eq!(
+        v.dim_worldgens.get(NETHER).copied(),
+        Some(WorldGen::Nether),
     );
     v.switch_dim(OVERWORLD);
     assert_eq!(
-        WorldGen::current(),
-        WorldGen::Classic,
-        "switch_dim must not write WORLDGEN",
+        v.dim_worldgens.get(OVERWORLD).copied(),
+        Some(WorldGen::Realistic),
+    );
+    assert_eq!(
+        v.dim_worldgens.get(NETHER).copied(),
+        Some(WorldGen::Nether),
     );
 }
 
@@ -121,8 +109,7 @@ fn switch_dim_updates_current_dim_for_ctx_consumers() {
     // ctx that describes the TARGET dim. Pure-fn callers (the
     // worker pool) build their jobs from this and so see the
     // right seed + profile.
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 0xDEAD_BEEF;
     v.current_dim = OVERWORLD.to_string();
     v.dim_worldgens
@@ -146,8 +133,7 @@ fn two_dim_round_trip_byte_identical_overworld_chunks() {
     // F.2e integration: gen 3 overworld chunks, jump to nether
     // and back, re-gen the same 3 overworld chunks. They must be
     // byte-identical the second time around.
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 0xDEAD_BEEF;
     v.current_dim = OVERWORLD.to_string();
     v.dim_worldgens
@@ -192,8 +178,7 @@ fn two_dim_round_trip_byte_identical_overworld_chunks() {
 
 #[test]
 fn switch_dim_preserves_player_pose_and_inventory() {
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 7;
     v.current_dim = OVERWORLD.to_string();
     v.player_pos = glam::Vec3::new(12.5, 64.0, -7.5);
@@ -218,8 +203,7 @@ fn switch_dim_preserves_player_pose_and_inventory() {
 
 #[test]
 fn switch_dim_swaps_chests_per_dim() {
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 99;
     v.current_dim = OVERWORLD.to_string();
     // Drop a chest in the overworld.
@@ -258,8 +242,7 @@ fn f2f_chest_plus_chunk_survive_full_dim_round_trip() {
     // match what we left. Mirrors the user-reported bug exactly:
     // the player walks away through a dim swap and the world
     // they come back to must be identical.
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 0xCAFE_F00D;
     v.current_dim = OVERWORLD.to_string();
     v.dim_worldgens
@@ -331,8 +314,7 @@ fn fold_chunk(chunk: &Chunk) -> u64 {
 
 #[test]
 fn switch_dim_swaps_mobs_per_dim() {
-    let _g = lock_gen();
-    let mut v = Voxel::new();
+let mut v = Voxel::new();
     v.base_seed = 17;
     v.current_dim = OVERWORLD.to_string();
     // Drop a mob in the overworld.

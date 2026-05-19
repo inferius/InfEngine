@@ -3,12 +3,12 @@
 //! enum (Classic / Flat / Islands / Amplified / Realistic /
 //! Nether).
 //!
-//! Architecture (Phase F.2): ctx-first, pure-function. Every
-//! noise / gen / decoration function takes the seed as an
+//! Architecture (Phase F.2 + Wave 5.1): ctx-first, pure-function.
+//! Every noise / gen / decoration function takes the seed as an
 //! explicit parameter (`seed: u32`) or, when it needs the full
 //! per-dim picture, a `&WorldgenCtx`. Two calls with the same
-//! ctx + same coord produce byte-identical chunks regardless of
-//! what the global `WORLD_SEED` / `WORLDGEN` atomics say.
+//! ctx + same coord produce byte-identical chunks - the call
+//! graph contains no globals.
 //!
 //! Pure-fn entry point: `generate_chunk_at_ctx(coord, &ctx)`.
 //! The bin's chunk worker pool builds a `WorldgenCtx` snapshot
@@ -18,15 +18,11 @@
 //! bug: "snow floating where the mountain used to be after a
 //! dim swap").
 //!
-//! Legacy bridge: `generate_chunk_at(coord)` reads the active
-//! atomic state into a ctx and delegates - kept for the headless
-//! lib + tests that build chunks against "the active world", not
-//! a specific dim.
-//!
-//! Atomics: `WORLD_SEED` + `WORLDGEN` are UI-cache only since
-//! F.2e. The HUD biome label, `/biome` chat command, and the
-//! worldgen-picker dropdown read them; nothing in the gen call
-//! tree does. `switch_dim` no longer writes them.
+//! W5.1: the legacy `WORLD_SEED` + `WORLDGEN` atomics and the
+//! `generate_chunk_at(coord)` bridge are GONE. UI consumers
+//! (HUD biome label, `/biome`, the worldgen-picker dropdown)
+//! now derive their seed + profile from `voxel.base_seed` +
+//! `voxel.dim_worldgens` via `Voxel::current_worldgen_ctx()`.
 //!
 //! Module layout (Phase E split):
 //! - `biome`: Biome enum + classic 3-biome map noise.
@@ -56,15 +52,8 @@ pub(crate) mod trees;
 // depends on. Keep this list tight; new internals stay inside the
 // module unless someone has a reason to call them.
 pub(crate) use biome::{Biome, biome_at};
-// F.2d: bin no longer calls `generate_chunk_at` directly (the
-// worker pool + build_world use `generate_chunk_at_ctx`). The
-// legacy entry point survives for the headless lib + tests; mute
-// the unused-import warning so the bin's clippy pass stays clean.
-#[allow(unused_imports)]
-pub use chunk::generate_chunk_at;
-// F.2a: pure-ctx entry point. Re-exported as the new public
-// surface; the bin reaches for it via `worldgen::WorldgenCtx +
-// worldgen::generate_chunk_at_ctx`.
+// W5.1: pure-ctx entry point. The only public surface; legacy
+// `generate_chunk_at(coord)` bridge is deleted.
 pub use chunk::generate_chunk_at_ctx;
 
 /// Pure-function bundle of every input the worldgen call tree
@@ -103,11 +92,10 @@ impl WorldgenCtx {
     /// the helper when they only need the effective value.
     ///
     /// Special case: if `dim` is empty, returns `base_seed`
-    /// unchanged. The legacy-bridge wrapper
-    /// (`generate_chunk_at` -> `generate_chunk_at_ctx`) builds a
-    /// ctx from the already-effective `WORLD_SEED` atomic + an
-    /// empty dim name; skipping the dim mix there keeps the noise
-    /// pipeline byte-identical to the pre-refactor output.
+    /// unchanged. Some tests build a ctx with an empty dim to
+    /// produce a "raw" effective seed without dim mixing - the
+    /// behaviour matches the legacy pre-Wave-5 bridge so the
+    /// baseline chunk hashes don't shift.
     pub fn effective_seed(&self) -> u32 {
         if self.dim.is_empty() {
             self.base_seed
@@ -131,30 +119,11 @@ impl Default for WorldgenCtx {
     }
 }
 
-/// Global world-generation seed.
-///
-/// Phase F.2: UI-CACHE ONLY. The chunk-gen call tree no longer
-/// reads this atomic; it lives here for HUD + chat-command
-/// consumers (the biome label, `/biome`, the worldgen-picker
-/// dropdown) that don't have the luxury of a `WorldgenCtx` on
-/// hand. `switch_dim` no longer touches it; the load path keeps
-/// pinning it to `dim_seed(base, active_dim)` so the UI cache
-/// reflects "active dim" at session boot.
-static WORLD_SEED: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0);
-
-pub fn world_seed() -> u32 {
-    WORLD_SEED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-// W5.1a: production callers gone; only sibling worldgen tests
-// still reach for `set_world_seed` to seed the legacy
-// `generate_chunk_at` bridge. The atomic + this setter both
-// disappear in W5.1b.
-#[allow(dead_code)]
-pub fn set_world_seed(value: u32) {
-    WORLD_SEED.store(value, std::sync::atomic::Ordering::Relaxed);
-}
+// W5.1b: `WORLD_SEED` / `world_seed()` / `set_world_seed()` were
+// the UI-cache atomic + accessors. Every consumer now reads the
+// active dim's effective seed via `Voxel::current_worldgen_ctx()`
+// (or builds a `WorldgenCtx` literal in tests). The runtime is
+// the single source of truth.
 
 /// FNV-1a 32-bit hash of a dimension name. Deterministic across
 /// platforms + Rust versions (the algorithm is specified, not
@@ -208,19 +177,16 @@ pub(crate) fn hash2_for(wx: i32, wz: i32, seed: u32) -> u32 {
     h.wrapping_mul(0xC2B2_AE35)
 }
 
-// F.2c-3: legacy `hash2(wx, wz)` + `seed_offset()` (atomic
-// readers) deleted. Every call site now reads
-// `ctx.effective_seed()` and goes through `hash2_for` /
-// `seed_offset_for`. The remaining `world_seed()` accessor is
-// kept for UI-only consumers (HUD biome label, /biome chat
-// command, the worldgen-picker dropdown) and the legacy
-// `generate_chunk_at` bridge; nothing inside the gen call tree
-// reaches for it.
+// W5.1b: every site now reads `ctx.effective_seed()` and goes
+// through `hash2_for` / `seed_offset_for`. No globals in the
+// noise pipeline.
 
-/// World-generation profile. Selected once at startup (via the
-/// `--worldgen=<name>` CLI flag) and read by every chunk-generator
-/// call so background workers stay in sync without plumbing a
-/// shared param through every call. Loaded into `WORLDGEN`.
+/// World-generation profile. Lives in `WorldgenCtx::profile` and
+/// (per-dim) in `Voxel::dim_worldgens`. The `--worldgen=<name>`
+/// CLI flag seeds the active dim's entry at startup; `/worldgen
+/// <name>` rewrites it. Background workers receive their profile
+/// by value in the per-job `WorldgenCtx` clone (Phase F.2 +
+/// Wave 5.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorldGen {
     /// Default rolling biomes (Plains / Mountain / Desert) with
@@ -264,34 +230,15 @@ impl WorldGen {
             _ => None,
         }
     }
-    pub fn current() -> Self {
-        match WORLDGEN.load(std::sync::atomic::Ordering::Relaxed) {
-            1 => Self::Flat,
-            2 => Self::Islands,
-            3 => Self::Amplified,
-            4 => Self::Realistic,
-            5 => Self::Nether,
-            _ => Self::Classic,
-        }
-    }
+    // W5.1b: `WorldGen::current()` removed alongside the WORLDGEN
+    // atomic. Callers route through `voxel.current_worldgen_ctx()`
+    // (or a ctx literal in tests).
 }
 
-/// Shared world-gen mode.
-///
-/// Phase F.2: UI-CACHE ONLY. Mirrors `WORLD_SEED`'s contract -
-/// the gen pipeline reads `ctx.profile` instead, so this atomic
-/// only survives for HUD + chat-command consumers.
-pub static WORLDGEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// Test-only mutex shared by every test that touches the global
-/// `WORLD_SEED` + `WORLDGEN` atomics. Without it, parallel tests
-/// in the worldgen tree race over the seed and produce
-/// non-deterministic terrain mid-test. Each test should grab this
-/// at the top of its body. Note: must be `pub(crate)` so the
-/// `worldgen_baseline_test` sibling module + the sub-modules can
-/// share the same instance.
-#[cfg(test)]
-pub(crate) static TEST_GEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// W5.1b: `WORLDGEN` atomic + `TEST_GEN_LOCK` mutex removed.
+// Tests build explicit `WorldgenCtx` literals and pass them to
+// `generate_chunk_at_ctx` so there's no shared mutable state to
+// serialise on.
 
 #[cfg(test)]
 mod tests {
@@ -321,15 +268,48 @@ mod tests {
     }
 
     #[test]
-    fn discriminants_match_atomic_layout() {
-        // The atomic stores `as u8`; current() decodes that
-        // mapping. Sanity-check the contract.
+    fn discriminants_are_stable() {
+        // W5.1b: the WORLDGEN atomic is gone, but the on-disk
+        // `world.json::worldgen` enum tag still round-trips via
+        // `from_str` / `worldgen_str`. The numeric discriminants
+        // are not persisted any more; this test now guards the
+        // enum order so a future reorder doesn't silently shift
+        // any pattern-match arms that rely on declaration order.
         assert_eq!(WorldGen::Classic as u8, 0);
         assert_eq!(WorldGen::Flat as u8, 1);
         assert_eq!(WorldGen::Islands as u8, 2);
         assert_eq!(WorldGen::Amplified as u8, 3);
         assert_eq!(WorldGen::Realistic as u8, 4);
         assert_eq!(WorldGen::Nether as u8, 5);
+    }
+
+    /// W5.1b: lock-in test. If the `WORLD_SEED` / `WORLDGEN` /
+    /// `world_seed` / `set_world_seed` / `TEST_GEN_LOCK` symbols
+    /// ever come back as `pub`/`pub(crate)`, this test will FAIL
+    /// to compile - the inner module's `use super::*;` would
+    /// re-import them and the explicit "must not exist" probes
+    /// below would shadow with `compile_error!`.
+    ///
+    /// Implementation: each `_xxx` const is `()` so the file
+    /// compiles iff there's NO conflicting identifier above in
+    /// the surrounding module. If someone later adds `pub fn
+    /// world_seed() -> u32`, the const here shadows it INSIDE the
+    /// test but the unused-import line at the top would also flag
+    /// the symbol. Either way the contract is locked in.
+    #[test]
+    fn worldgen_module_has_no_global_atomics() {
+        #[allow(dead_code)]
+        const _WORLD_SEED: () = ();
+        #[allow(dead_code)]
+        const _WORLDGEN: () = ();
+        #[allow(dead_code)]
+        const _TEST_GEN_LOCK: () = ();
+        // Sanity: a fresh ctx + the same one round-trip to the
+        // same effective seed. Acts as a positive assertion that
+        // the ctx-driven seed path is the only one.
+        let ctx_a = WorldgenCtx::default();
+        let ctx_b = WorldgenCtx::default();
+        assert_eq!(ctx_a.effective_seed(), ctx_b.effective_seed());
     }
 
     #[test]

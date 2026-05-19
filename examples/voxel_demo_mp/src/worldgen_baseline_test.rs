@@ -11,16 +11,22 @@
 //! The chunk coordinates are spread across +/- 4 chunks on the
 //! x/z plane plus a single mid-air y=1 chunk so the test exercises
 //! both the surface terrain pass and the under/over-y=0 cases.
+//!
+//! W5.1b: switched from the deleted `generate_chunk_at` atomic
+//! bridge to `generate_chunk_at_ctx` with an explicit
+//! `WorldgenCtx` per snapshot. Empty `dim` preserves the
+//! pre-Wave-5 effective seed (= base_seed) so the snapshot
+//! hashes don't shift.
 
 #![cfg(test)]
 
 use crate::worldgen::{
-    WORLDGEN, WorldGen, generate_chunk_at, set_world_seed,
+    WorldGen, WorldgenCtx, generate_chunk_at_ctx,
 };
 use infengine_voxel::ChunkCoord;
 
-fn fold_chunk(coord: ChunkCoord) -> u64 {
-    let chunk = generate_chunk_at(coord);
+fn fold_chunk(coord: ChunkCoord, ctx: &WorldgenCtx) -> u64 {
+    let chunk = generate_chunk_at_ctx(coord, ctx);
     let mut h: u64 = 0xCBF29CE484222325;
     for b in chunk.raw() {
         h ^= b.0 as u64;
@@ -42,39 +48,27 @@ fn coords() -> [ChunkCoord; 7] {
 }
 
 fn snapshot(profile: WorldGen) -> [u64; 7] {
-    set_world_seed(0);
-    WORLDGEN.store(profile as u8, std::sync::atomic::Ordering::Relaxed);
+    // W5.1b: pure-fn ctx, no globals to lock.
+    let ctx = WorldgenCtx {
+        base_seed: 0,
+        dim: String::new(),
+        profile,
+    };
     let cs = coords();
     let mut out = [0u64; 7];
     for (i, c) in cs.iter().enumerate() {
-        out[i] = fold_chunk(*c);
+        out[i] = fold_chunk(*c, &ctx);
     }
     out
-}
-
-// `WORLDGEN` + `WORLD_SEED` are global atomics shared with worker
-// threads. The regression suite cycles through profiles in series,
-// so it MUST serialise against any other test that touches them.
-// Re-uses the shared `TEST_GEN_LOCK` from `worldgen::mod`.
-use crate::worldgen::TEST_GEN_LOCK;
-
-fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-    // Poisoned-state recovery: another test panicked while
-    // holding the lock; that's fine for our purposes since each
-    // test re-seeds the world before reading.
-    TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Captured against `worldgen.rs` HEAD prior to the Phase E split.
 /// If this test fails after the worldgen folder migration, the
 /// split changed terrain output -> rollback and find the diff.
 ///
-/// Runs all four profiles in series under a shared mutex so the
-/// global `WORLDGEN` atomic can't be stomped by a sibling test
-/// running in parallel.
+/// W5.1b: no global lock needed; each snapshot uses its own ctx.
 #[test]
 fn all_profiles_seed_0_byte_identical_after_split() {
-    let _g = lock_gen();
     assert_eq!(
         snapshot(WorldGen::Classic),
         CLASSIC_SEED_0,
@@ -145,7 +139,6 @@ const AMPLIFIED_SEED_0: [u64; 7] = [
 #[ignore]
 #[allow(clippy::print_stdout)]
 fn dump_snapshots() {
-    let _g = lock_gen();
     for (name, profile) in [
         ("CLASSIC", WorldGen::Classic),
         ("FLAT", WorldGen::Flat),

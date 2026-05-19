@@ -62,16 +62,11 @@ pub(crate) fn pick_stone_or_ore(wx: f32, wy: i32, wz: f32, biome: Biome, seed: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
-
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    // W5.1b: ore_hash takes seed as a parameter; no globals to
+    // lock or seed.
 
     #[test]
     fn ore_hash_in_unit_range() {
-        let _g = lock_gen();
-        set_world_seed(7);
         for x in -8..8 {
             for y in -8..8 {
                 for z in -8..8 {
@@ -84,7 +79,6 @@ mod tests {
 
     #[test]
     fn ore_hash_deterministic_across_calls() {
-        let _g = lock_gen();
         let a = ore_hash(3, 5, 7, 0xCAFE, 11);
         let b = ore_hash(3, 5, 7, 0xCAFE, 11);
         assert_eq!(a.to_bits(), b.to_bits());
@@ -92,7 +86,6 @@ mod tests {
 
     #[test]
     fn ore_hash_changes_with_seed() {
-        let _g = lock_gen();
         let a = ore_hash(0, 1, 0, 0xCAFE, 1);
         let b = ore_hash(0, 1, 0, 0xCAFE, 2);
         assert_ne!(a.to_bits(), b.to_bits());
@@ -100,7 +93,6 @@ mod tests {
 
     #[test]
     fn pick_stone_or_ore_returns_block() {
-        let _g = lock_gen();
         for y in 0..20 {
             let b = pick_stone_or_ore(0.0, y, 0.0, Biome::Plains, 0);
             assert!(matches!(b.0, 1 | 13 | 14));

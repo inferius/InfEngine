@@ -187,9 +187,8 @@ mod tests {
     #[test]
     fn realistic_seed_0_produces_every_biome() {
         use crate::worldgen::climate::climate_at;
-        use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
-        let _g = TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        set_world_seed(0);
+        // W5.1b: `climate_at` takes seed as a parameter; no
+        // globals to lock or seed.
         let mut seen = [false; 11];
         // Sweep a 1024x1024 region in 4-cell steps. Realistic's
         // climate noises move at biome scale so a sparse sweep

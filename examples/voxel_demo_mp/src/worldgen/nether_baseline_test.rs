@@ -9,16 +9,18 @@
 //! +/- 4 chunks on the X/Z plane plus a single y=1 above-the-
 //! bedrock chunk so the test exercises the floor + bulk +
 //! ceiling cases.
+//!
+//! W5.1b: pure-ctx tests. No globals to lock or seed.
 
 #![cfg(test)]
 
 use crate::worldgen::{
-    TEST_GEN_LOCK, WORLDGEN, WorldGen, generate_chunk_at, set_world_seed,
+    WorldGen, WorldgenCtx, generate_chunk_at_ctx,
 };
 use infengine_voxel::ChunkCoord;
 
-fn fold_chunk(coord: ChunkCoord) -> u64 {
-    let chunk = generate_chunk_at(coord);
+fn fold_chunk(coord: ChunkCoord, ctx: &WorldgenCtx) -> u64 {
+    let chunk = generate_chunk_at_ctx(coord, ctx);
     let mut h: u64 = 0xCBF29CE484222325;
     for b in chunk.raw() {
         h ^= b.0 as u64;
@@ -37,8 +39,12 @@ fn coords() -> [ChunkCoord; 5] {
     ]
 }
 
-fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-    TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+fn ctx(profile: WorldGen, seed: u32) -> WorldgenCtx {
+    WorldgenCtx {
+        base_seed: seed,
+        dim: String::new(),
+        profile,
+    }
 }
 
 #[test]
@@ -47,11 +53,9 @@ fn nether_seed_0_is_idempotent_across_calls() {
     // same seed yields byte-identical output. Locks the
     // determinism contract for the new generator before any
     // numeric snapshot.
-    let _g = lock_gen();
-    set_world_seed(0);
-    WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
-    let a: Vec<u64> = coords().iter().map(|c| fold_chunk(*c)).collect();
-    let b: Vec<u64> = coords().iter().map(|c| fold_chunk(*c)).collect();
+    let c = ctx(WorldGen::Nether, 0);
+    let a: Vec<u64> = coords().iter().map(|cc| fold_chunk(*cc, &c)).collect();
+    let b: Vec<u64> = coords().iter().map(|cc| fold_chunk(*cc, &c)).collect();
     assert_eq!(a, b);
 }
 
@@ -60,12 +64,10 @@ fn nether_seed_0_distinct_from_overworld_seed_0() {
     // Locks the per-dim isolation: even though both profiles
     // run at seed=0, nether chunks must not match the Classic
     // overworld at the same coords.
-    let _g = lock_gen();
-    set_world_seed(0);
-    WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
-    let ow: Vec<u64> = coords().iter().map(|c| fold_chunk(*c)).collect();
-    WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
-    let nt: Vec<u64> = coords().iter().map(|c| fold_chunk(*c)).collect();
+    let ow_ctx = ctx(WorldGen::Classic, 0);
+    let nt_ctx = ctx(WorldGen::Nether, 0);
+    let ow: Vec<u64> = coords().iter().map(|c| fold_chunk(*c, &ow_ctx)).collect();
+    let nt: Vec<u64> = coords().iter().map(|c| fold_chunk(*c, &nt_ctx)).collect();
     assert_ne!(ow, nt);
     // Sanity: no coord should accidentally fold the same hash
     // (would imply both profiles emit the same blocks there).
@@ -76,11 +78,9 @@ fn nether_seed_0_distinct_from_overworld_seed_0() {
 
 #[test]
 fn nether_two_seeds_produce_different_chunks() {
-    let _g = lock_gen();
-    WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
-    set_world_seed(0);
-    let s0 = fold_chunk([0, 0, 0]);
-    set_world_seed(12345);
-    let s12345 = fold_chunk([0, 0, 0]);
+    let c0 = ctx(WorldGen::Nether, 0);
+    let s0 = fold_chunk([0, 0, 0], &c0);
+    let c12345 = ctx(WorldGen::Nether, 12345);
+    let s12345 = fold_chunk([0, 0, 0], &c12345);
     assert_ne!(s0, s12345, "seed must influence the nether output");
 }

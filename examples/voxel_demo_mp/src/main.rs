@@ -4330,11 +4330,15 @@ impl Voxel {
     /// time. A later `switch_dim` between enqueue + pickup no
     /// longer poisons the gen.
     fn current_worldgen_ctx(&self) -> worldgen::WorldgenCtx {
+        // W5.1b: no global atomic to fall back on. The active dim
+        // is expected to have an entry in `dim_worldgens` by the
+        // time anyone reaches for a ctx; missing entries default
+        // to Classic.
         let profile = self
             .dim_worldgens
             .get(&self.current_dim)
             .copied()
-            .unwrap_or_else(WorldGen::current);
+            .unwrap_or(WorldGen::Classic);
         worldgen::WorldgenCtx {
             base_seed: self.base_seed,
             dim: self.current_dim.clone(),

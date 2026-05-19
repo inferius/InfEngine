@@ -82,16 +82,11 @@ pub(crate) fn biome_at(wx: f32, wz: f32, seed: u32) -> Biome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
-
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    // W5.1b: `biome_at` takes seed as an explicit parameter; no
+    // globals to lock or seed.
 
     #[test]
     fn biome_at_is_deterministic_for_seed() {
-        let _g = lock_gen();
-        set_world_seed(42);
         let a = biome_at(123.5, 456.5, 42);
         let b = biome_at(123.5, 456.5, 42);
         assert_eq!(a, b);
@@ -99,8 +94,6 @@ mod tests {
 
     #[test]
     fn classic_biomes_cover_all_three_under_seed_0() {
-        let _g = lock_gen();
-        set_world_seed(0);
         let mut seen = [false; 3];
         for x in -200..200 {
             for z in -200..200 {

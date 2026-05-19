@@ -1,9 +1,12 @@
 //! Top-level chunk generator + the `Flat` / `Islands` flat-noise
 //! profiles. Dispatches into the per-profile implementation based
-//! on the `WorldgenCtx` (Phase F.2) or the currently-loaded
-//! `WORLDGEN` atomic (legacy path). The Classic + Amplified
-//! paths share `gen_classic` with an amplitude scale; Realistic
-//! lives in a sibling module (see Phase E.3).
+//! on the `WorldgenCtx`. The Classic + Amplified paths share
+//! `gen_classic` with an amplitude scale; Realistic lives in a
+//! sibling module (see Phase E.3).
+//!
+//! W5.1: the legacy `generate_chunk_at(coord)` bridge that read
+//! `WORLD_SEED` / `WORLDGEN` atomics is gone. Every caller passes
+//! a ctx explicitly.
 
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
@@ -12,48 +15,13 @@ use super::height::{cave_at, height_at_classic};
 use super::ore::pick_stone_or_ore;
 use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 
-/// Top-level chunk generator. Dispatches to the per-profile
-/// implementation based on the currently-loaded `WORLDGEN`.
-///
-/// Legacy entry point - reads the `WORLD_SEED` + `WORLDGEN` global
-/// atomics. Kept as a thin wrapper around `generate_chunk_at_ctx`
-/// for headless callers + tests that still build chunks against
-/// the active atomic state. New code should prefer
-/// `generate_chunk_at_ctx`, which is race-free across atomic
-/// writes.
-#[allow(dead_code)] // headless lib + tests still reach for it.
-pub fn generate_chunk_at(coord: ChunkCoord) -> Chunk {
-    // Build a ctx snapshot from the atomics so the dispatch goes
-    // through the new path. The sub-modules (biome / climate / ore
-    // / trees / decorations) still read the atomics until F.2c, so
-    // the wrapper isn't race-free yet - the ctx is mostly along for
-    // the ride. Once F.2c plumbs ctx into the noise leaves, the
-    // legacy atomics fall away and this fn picks them up only as
-    // the "active state" cache.
-    let ctx = WorldgenCtx {
-        // The `WORLD_SEED` atomic already holds the effective seed
-        // (dim_seed(base, current_dim) per Phase F.1). Recovering
-        // the base + dim from it isn't possible, so we stash the
-        // effective value as the base and leave dim empty - it
-        // produces the same `effective_seed()` and behaves
-        // identically against any pure-fn that only consumes the
-        // mixed value.
-        base_seed: super::world_seed(),
-        dim: String::new(),
-        profile: WorldGen::current(),
-    };
-    generate_chunk_at_ctx(coord, &ctx)
-}
-
 /// Pure-function chunk generator. Determined entirely by `ctx` +
-/// `coord`; never reads the global `WORLD_SEED` / `WORLDGEN`
-/// atomics.
+/// `coord`; never reads any global state.
 ///
 /// F.2c-3 finalised the migration: every noise leaf
 /// (`biome_at`, `climate_at`, `ore_hash`, `hash2_for`,
-/// `seed_offset_for`) takes the seed as a parameter, so a
-/// concurrent stomp of the global atomics on another thread can
-/// no longer poison this call.
+/// `seed_offset_for`) takes the seed as a parameter. W5.1 deleted
+/// the last globals (`WORLD_SEED` + `WORLDGEN`).
 pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     match ctx.profile {
         WorldGen::Classic => gen_classic(coord, ctx, 1.0),
@@ -190,19 +158,22 @@ fn gen_classic(coord: ChunkCoord, ctx: &WorldgenCtx, amp_scale: f32) -> Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, WORLDGEN, set_world_seed};
     use infengine_voxel::CHUNK_SIZE;
 
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    fn ctx_for(profile: WorldGen) -> WorldgenCtx {
+        // W5.1b: tests build an explicit ctx; no globals to write.
+        // Empty dim keeps `effective_seed()` == `base_seed`, so
+        // baseline hashes captured under seed=0 still line up.
+        WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile,
+        }
     }
 
     #[test]
     fn flat_chunk_has_y8_grass_at_origin() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Flat as u8, std::sync::atomic::Ordering::Relaxed);
-        let chunk = generate_chunk_at([0, 0, 0]);
+        let chunk = generate_chunk_at_ctx([0, 0, 0], &ctx_for(WorldGen::Flat));
         // y=8 must be grass; y=9 must be air.
         assert_eq!(chunk.get(0, 8, 0).0, 3);
         assert_eq!(chunk.get(0, 9, 0).0, 0);
@@ -210,34 +181,33 @@ mod tests {
 
     #[test]
     fn gen_classic_is_idempotent() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
-        let a = generate_chunk_at([0, 0, 0]);
-        let b = generate_chunk_at([0, 0, 0]);
+        let ctx = ctx_for(WorldGen::Classic);
+        let a = generate_chunk_at_ctx([0, 0, 0], &ctx);
+        let b = generate_chunk_at_ctx([0, 0, 0], &ctx);
         for (x, y, z) in itertools_xyz() {
             assert_eq!(a.get(x, y, z).0, b.get(x, y, z).0);
         }
     }
 
-    /// F.2b: legacy `generate_chunk_at` is now a thin wrapper
-    /// around `generate_chunk_at_ctx` that builds a ctx from the
-    /// atomics. Two calls (one through each entry point) with the
-    /// matching seed + profile must produce byte-identical chunks.
+    /// W5.1b: the ctx is the only path. This test pins the
+    /// determinism contract: same ctx + same coord -> identical
+    /// chunk, even across two independently-built ctxes.
     #[test]
-    fn ctx_path_matches_atomic_path_classic_seed_0() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Classic as u8, std::sync::atomic::Ordering::Relaxed);
-        let legacy = generate_chunk_at([0, 0, 0]);
-        let ctx = WorldgenCtx {
+    fn ctx_path_is_deterministic_classic_seed_0() {
+        let ctx1 = WorldgenCtx {
             base_seed: 0,
             dim: String::new(),
             profile: WorldGen::Classic,
         };
-        let via_ctx = generate_chunk_at_ctx([0, 0, 0], &ctx);
+        let ctx2 = WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile: WorldGen::Classic,
+        };
+        let a = generate_chunk_at_ctx([0, 0, 0], &ctx1);
+        let b = generate_chunk_at_ctx([0, 0, 0], &ctx2);
         for (x, y, z) in itertools_xyz() {
-            assert_eq!(legacy.get(x, y, z).0, via_ctx.get(x, y, z).0);
+            assert_eq!(a.get(x, y, z).0, b.get(x, y, z).0);
         }
     }
 

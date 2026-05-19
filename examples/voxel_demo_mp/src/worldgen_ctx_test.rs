@@ -1,41 +1,21 @@
-//! F.2a regression test: pure-function worldgen stability across
-//! global-atomic writes.
+//! F.2a regression test: pure-function worldgen stability.
 //!
-//! Today the worldgen call tree reads the `WORLD_SEED` + `WORLDGEN`
-//! global atomics on every call. A `switch_dim` (or any other write
-//! to those atomics) between two gens of the SAME chunk yields
-//! different terrain even though the caller intended an identical
-//! result. The user hit this for real: walk away from a chunk while
-//! the worldgen profile changes, walk back, the chunk regenerates
-//! with the new noise, and the saved block layout no longer matches
-//! the freshly-derived biome ("snow floating where the mountain
-//! used to be").
+//! Originally guarded against the `WORLD_SEED` + `WORLDGEN` global
+//! atomics leaking into the gen tree (a `switch_dim` or `/worldgen`
+//! between two gens of the same chunk would produce different
+//! terrain). W5.1b deleted the atomics entirely; these tests now
+//! assert the pure-ctx contract directly:
 //!
-//! This test reproduces the bug as a regression marker:
-//!
-//! 1. Build a `WorldgenCtx { base_seed, dim, profile }` snapshot.
-//! 2. Generate chunk (0,0,0) via the new pure entry point.
-//! 3. Stomp `WORLD_SEED` + `WORLDGEN` with completely different
-//!    values (simulating a dim swap or `/worldgen` command between
-//!    two gens of the SAME chunk).
-//! 4. Regenerate chunk (0,0,0) via the same `WorldgenCtx`.
-//! 5. Assert byte-identical output.
-//!
-//! F.2c-3: ctx is now plumbed through every noise leaf so the
-//! test passes byte-for-byte. The `#[ignore]` markers are gone;
-//! this file is the live regression guard for the F.2 refactor.
+//! 1. Same ctx + same coord -> byte-identical chunk.
+//! 2. A second ctx with different content runs concurrently and
+//!    does NOT influence the first ctx's result.
+//! 3. Worker thread carrying a cloned ctx produces the same bytes
+//!    as a main-thread gen.
 
 #![cfg(test)]
 
-use crate::worldgen::{
-    TEST_GEN_LOCK, WORLDGEN, WorldGen, WorldgenCtx, generate_chunk_at_ctx,
-    set_world_seed,
-};
+use crate::worldgen::{WorldGen, WorldgenCtx, generate_chunk_at_ctx};
 use infengine_voxel::ChunkCoord;
-
-fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-    TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 fn fold_chunk_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> u64 {
     let chunk = generate_chunk_at_ctx(coord, ctx);
@@ -48,61 +28,59 @@ fn fold_chunk_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> u64 {
 }
 
 #[test]
-fn pure_worldgen_is_stable_across_global_atomic_writes() {
-    let _g = lock_gen();
-
+fn pure_worldgen_is_stable_under_unrelated_concurrent_gens() {
     let ctx = WorldgenCtx {
         base_seed: 12345,
         dim: "overworld".to_string(),
         profile: WorldGen::Classic,
     };
 
-    // Step 1: generate the chunk via the pure entry point.
+    // Step 1: gen the chunk via the pure entry point.
     let hash_pre = fold_chunk_ctx([0, 0, 0], &ctx);
 
-    // Step 2: stomp the atomics with completely unrelated values,
-    // simulating a `switch_dim("nether")` + `/worldgen realistic`
-    // between two gens of the same chunk.
-    set_world_seed(999);
-    WORLDGEN.store(
-        WorldGen::Realistic as u8,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // Step 2: run an unrelated gen with a completely different
+    // ctx (different seed + profile). With the atomics gone, this
+    // can no longer corrupt the original ctx's gen path.
+    let other_ctx = WorldgenCtx {
+        base_seed: 999,
+        dim: "nether".to_string(),
+        profile: WorldGen::Realistic,
+    };
+    let _other = fold_chunk_ctx([5, 0, 5], &other_ctx);
 
-    // Step 3: re-gen the SAME chunk via the SAME ctx. If the
-    // gen tree still secretly reads the atomics, the result will
-    // differ and this test fails. After F.2b-F.2e the result must
-    // match step 1 byte-for-byte.
+    // Step 3: re-gen the SAME chunk via the SAME ctx.
     let hash_post = fold_chunk_ctx([0, 0, 0], &ctx);
 
     assert_eq!(
         hash_pre, hash_post,
-        "pure WorldgenCtx-driven gen must be stable across global atomic writes",
+        "pure WorldgenCtx-driven gen must be stable under unrelated concurrent gens",
     );
 }
 
 #[test]
-fn pure_worldgen_is_stable_across_worker_thread_atomic_stomp() {
-    // Mimics the F.2d worker-thread race: spawn a worker that
-    // gens via WorldgenCtx, while the main thread stomps the
-    // global atomics with garbage. The ctx-driven gen result
-    // must still match a control gen using the original ctx.
-    let _g = lock_gen();
-
+fn pure_worldgen_is_stable_across_worker_thread_unrelated_gen() {
+    // The F.2d worker-thread race used to require atomic stomps.
+    // With no atomics, the test reduces to: spawn a worker doing
+    // an unrelated gen; verify the main thread's ctx-driven gen
+    // is unaffected.
     let ctx = WorldgenCtx {
         base_seed: 0x1234_5678,
         dim: "overworld".to_string(),
         profile: WorldGen::Classic,
     };
 
-    // Control: gen the chunk on the main thread, ctx intact.
+    // Control: gen the chunk on the main thread.
     let control = fold_chunk_ctx([2, 0, 3], &ctx);
 
-    // Stomp the atomics with completely unrelated values BEFORE
-    // spawning the worker. The worker must ignore the atomics
-    // and only consult the cloned ctx it carries.
-    set_world_seed(0xFFFF_FFFF);
-    WORLDGEN.store(WorldGen::Realistic as u8, std::sync::atomic::Ordering::Relaxed);
+    // Spawn a worker that gens with completely unrelated ctx.
+    let unrelated = WorldgenCtx {
+        base_seed: 0xFFFF_FFFF,
+        dim: "nether".to_string(),
+        profile: WorldGen::Realistic,
+    };
+    let _ = std::thread::spawn(move || fold_chunk_ctx([7, 0, 7], &unrelated))
+        .join()
+        .expect("worker thread");
 
     let ctx_for_worker = ctx.clone();
     let worker_hash = std::thread::spawn(move || {
@@ -113,17 +91,16 @@ fn pure_worldgen_is_stable_across_worker_thread_atomic_stomp() {
 
     assert_eq!(
         control, worker_hash,
-        "worker-thread gen must be stable across atomic stomp",
+        "worker-thread gen with a cloned ctx must match main-thread gen",
     );
 }
 
 #[test]
 fn pure_worldgen_two_dim_round_trip_is_byte_identical() {
-    // 2-dim round-trip: gen 3 overworld chunks, switch dim (write
-    // atomics + gen some nether), then re-gen the SAME 3 overworld
-    // chunks via their original ctx. Byte-identical or bust.
-    let _g = lock_gen();
-
+    // 2-dim round-trip: gen 3 overworld chunks, gen some nether
+    // chunks with a separate ctx, then re-gen the SAME 3
+    // overworld chunks via their original ctx. Byte-identical or
+    // bust.
     let ow_ctx = WorldgenCtx {
         base_seed: 0xDEAD_BEEF,
         dim: "overworld".to_string(),
@@ -142,15 +119,11 @@ fn pure_worldgen_two_dim_round_trip_is_byte_identical() {
         .map(|c| fold_chunk_ctx(*c, &ow_ctx))
         .collect();
 
-    // Simulate `switch_dim("nether")`: atomic writes + gen the
-    // other dim's chunks.
-    set_world_seed(crate::worldgen::dim_seed(0xDEAD_BEEF, "nether"));
-    WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
+    // Run nether gens in the meantime. With no atomics this can
+    // no longer corrupt the overworld path.
     let _ = fold_chunk_ctx([0, 0, 0], &nt_ctx);
     let _ = fold_chunk_ctx([1, 0, 0], &nt_ctx);
 
-    // Walk back to overworld. The original ctx still describes
-    // the overworld; the atomics are now nether-state.
     let ow_post: Vec<u64> = coords
         .iter()
         .map(|c| fold_chunk_ctx(*c, &ow_ctx))
@@ -158,6 +131,6 @@ fn pure_worldgen_two_dim_round_trip_is_byte_identical() {
 
     assert_eq!(
         ow_pre, ow_post,
-        "overworld chunks must regenerate identical after a dim swap",
+        "overworld chunks must regenerate identical after intervening nether gens",
     );
 }

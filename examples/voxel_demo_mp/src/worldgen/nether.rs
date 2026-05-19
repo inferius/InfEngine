@@ -142,18 +142,13 @@ fn glowstone_at(wx: f32, wz: f32, seed: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, WORLDGEN, WorldGen, set_world_seed};
+    use crate::worldgen::WorldGen;
     use infengine_voxel::CHUNK_SIZE;
-
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    // W5.1b: nether helpers take seed as a parameter; no globals
+    // to lock or seed.
 
     #[test]
     fn nether_bedrock_floor_is_solid() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
         // y=0 must be bedrock at every (x, z).
         for wx in -8..8 {
             for wz in -8..8 {
@@ -168,9 +163,6 @@ mod tests {
 
     #[test]
     fn nether_chunk_is_idempotent() {
-        let _g = lock_gen();
-        set_world_seed(42);
-        WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
         let ctx = crate::worldgen::WorldgenCtx {
             base_seed: 42,
             dim: String::new(),
@@ -189,9 +181,6 @@ mod tests {
 
     #[test]
     fn nether_ceiling_is_netherrack() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
         // Top ceiling row: every column is either netherrack or
         // glowstone (never air, never bedrock).
         for wx in -4..4 {
@@ -207,9 +196,6 @@ mod tests {
 
     #[test]
     fn nether_has_lava_somewhere_at_seed_zero() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
         // Scan a wide XZ band looking for at least one column
         // that resolves to a lava lake. Determinism contract:
         // seed=0 must always have some lava on this band.
@@ -230,9 +216,6 @@ mod tests {
 
     #[test]
     fn nether_has_glowstone_somewhere_at_seed_zero() {
-        let _g = lock_gen();
-        set_world_seed(0);
-        WORLDGEN.store(WorldGen::Nether as u8, std::sync::atomic::Ordering::Relaxed);
         let mut found = false;
         for wx in -64..64 {
             for wz in -64..64 {

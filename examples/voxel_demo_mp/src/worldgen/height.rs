@@ -53,16 +53,11 @@ pub(crate) fn cave_at(wx: f32, wy: f32, wz: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worldgen::{TEST_GEN_LOCK, set_world_seed};
-
-    fn lock_gen() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GEN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    // W5.1b: height functions are pure (no seed mixing); no
+    // globals to lock or seed.
 
     #[test]
     fn classic_heights_in_sane_range() {
-        let _g = lock_gen();
-        set_world_seed(0);
         for wx in -64..64 {
             for wz in -64..64 {
                 let h = height_at_classic(wx as f32, wz as f32, Biome::Plains, 1.0);
@@ -73,8 +68,6 @@ mod tests {
 
     #[test]
     fn cave_at_floor_is_solid() {
-        let _g = lock_gen();
-        set_world_seed(0);
         for wy in -3..1 {
             assert!(!cave_at(10.0, wy as f32, 10.0));
         }
@@ -82,8 +75,6 @@ mod tests {
 
     #[test]
     fn amplified_extends_range() {
-        let _g = lock_gen();
-        set_world_seed(0);
         let h1 = height_at_classic(7.0, 11.0, Biome::Mountain, 1.0);
         let h25 = height_at_classic(7.0, 11.0, Biome::Mountain, 2.5);
         // For any non-zero offset around the base the amplified
