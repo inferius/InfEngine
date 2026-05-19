@@ -199,17 +199,15 @@ pub(crate) fn try_spawn_one(
     let id = next_id;
     next_id = next_id.wrapping_add(1).max(1);
     let pos = [spawn_pos[0] as f32 + 0.5, spawn_pos[1] as f32, spawn_pos[2] as f32 + 0.5];
-    let mob = MobState {
+    let mob = MobState::new_natural(
         id,
         kind,
         pos,
-        target: pos,
-        yaw: 0.0,
-        retarget_at: (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-        health: initial_health_for(kind),
-        dying: 0.0,
-        attack_cd: 0.0,
-    };
+        pos,
+        0.0,
+        (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
+        initial_health_for(kind),
+    );
     let initial_hp = initial_health_for(kind) as u8;
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
@@ -294,17 +292,15 @@ mod tests {
         let mut v = Voxel::new();
         // Stuff the chunk at world origin with the per-chunk cap.
         for i in 0..PER_CHUNK_SOFT_CAP {
-            v.mobs.push(MobState {
-                id: (i as u32) + 1,
-                kind: KIND_SHEEP,
-                pos: [0.5, 64.0, 0.5],
-                target: [0.5, 64.0, 0.5],
-                yaw: 0.0,
-                retarget_at: 0.0,
-                health: MOB_MAX_HEALTH,
-                dying: 0.0,
-                attack_cd: 0.0,
-            });
+            v.mobs.push(MobState::new_natural(
+                (i as u32) + 1,
+                KIND_SHEEP,
+                [0.5, 64.0, 0.5],
+                [0.5, 64.0, 0.5],
+                0.0,
+                0.0,
+                MOB_MAX_HEALTH,
+            ));
         }
         assert!(mobs_in_chunk(&v, [0, 64, 0]) >= PER_CHUNK_SOFT_CAP);
     }
@@ -312,28 +308,24 @@ mod tests {
     #[test]
     fn mobs_in_chunk_counts_only_same_chunk() {
         let mut v = Voxel::new();
-        v.mobs.push(MobState {
-            id: 1,
-            kind: KIND_SHEEP,
-            pos: [0.5, 64.0, 0.5],
-            target: [0.5, 64.0, 0.5],
-            yaw: 0.0,
-            retarget_at: 0.0,
-            health: 1.0,
-            dying: 0.0,
-            attack_cd: 0.0,
-        });
-        v.mobs.push(MobState {
-            id: 2,
-            kind: KIND_SHEEP,
-            pos: [200.5, 64.0, 200.5],
-            target: [200.5, 64.0, 200.5],
-            yaw: 0.0,
-            retarget_at: 0.0,
-            health: 1.0,
-            dying: 0.0,
-            attack_cd: 0.0,
-        });
+        v.mobs.push(MobState::new_natural(
+            1,
+            KIND_SHEEP,
+            [0.5, 64.0, 0.5],
+            [0.5, 64.0, 0.5],
+            0.0,
+            0.0,
+            1.0,
+        ));
+        v.mobs.push(MobState::new_natural(
+            2,
+            KIND_SHEEP,
+            [200.5, 64.0, 200.5],
+            [200.5, 64.0, 200.5],
+            0.0,
+            0.0,
+            1.0,
+        ));
         assert_eq!(mobs_in_chunk(&v, [0, 64, 0]), 1);
         assert_eq!(mobs_in_chunk(&v, [200, 64, 200]), 1);
     }

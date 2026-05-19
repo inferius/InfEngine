@@ -23,6 +23,7 @@
 pub(crate) mod ai;
 pub(crate) mod audio;
 pub(crate) mod damage;
+pub(crate) mod despawn;
 pub(crate) mod goal;
 pub(crate) mod kinds;
 pub(crate) mod light;

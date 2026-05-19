@@ -68,17 +68,15 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         if m.health <= 0.0 {
             continue;
         }
-        voxel.mobs.push(MobState {
-            id: m.id,
-            kind: m.kind,
-            pos: m.pos,
-            target: m.pos,
-            yaw: m.yaw,
-            retarget_at: 0.0,
-            health: m.health,
-            dying: 0.0,
-            attack_cd: 0.0,
-        });
+        voxel.mobs.push(MobState::new_natural(
+            m.id,
+            m.kind,
+            m.pos,
+            m.pos,
+            m.yaw,
+            0.0,
+            m.health,
+        ));
     }
     for d in entities.drops {
         // Older saves don't carry the Q.5 fields; rehydrate as if

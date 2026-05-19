@@ -1114,6 +1114,10 @@ struct Voxel {
     /// throttle spawn attempts to one every `MOB_SPAWN_PERIOD`
     /// seconds.
     last_mob_spawn_time: f32,
+    /// Day-clock value of the last despawn-pass check. H.6 runs
+    /// the despawn scan every `DESPAWN_CHECK_PERIOD` seconds so
+    /// the squared-distance loop doesn't drain per-tick CPU.
+    last_despawn_check_time: f32,
     /// Counter for the next mob id. Reset to 1 because 0 is the
     /// host player's id in the pose table - no point in collisions.
     next_mob_id: u32,
@@ -4760,6 +4764,7 @@ impl Voxel {
             mobs: Vec::new(),
             remote_mobs: HashMap::new(),
             last_mob_spawn_time: 0.0,
+            last_despawn_check_time: 0.0,
             next_mob_id: 1,
             mob_step_timers: HashMap::new(),
             mob_say_timers: HashMap::new(),

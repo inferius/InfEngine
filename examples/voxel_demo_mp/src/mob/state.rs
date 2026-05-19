@@ -39,6 +39,48 @@ pub(crate) struct MobState {
     /// contact damage to whichever player it's standing next
     /// to and resets to `ZOMBIE_ATTACK_COOLDOWN`.
     pub(crate) attack_cd: f32,
+    /// True when the mob is exempt from the despawn passes -
+    /// named, leash-tagged, bred, or spawned via the /spawnmob
+    /// chat command. Matches MC's `Mob.persistenceRequired` flag.
+    /// Defaults to `false` for natural-spawn mobs.
+    pub(crate) persistent: bool,
+    /// Far-despawn timer (seconds remaining). Ticks down only
+    /// while no player is within `FAR_DESPAWN_DIST`. Resets to
+    /// `FAR_DESPAWN_TIMER` whenever a player comes back in
+    /// range. Zero or below + persistent = false triggers the
+    /// despawn pass. Mirrors MC's
+    /// `Mob::checkDespawn` 30-second far-timer.
+    pub(crate) far_despawn_timer: f32,
+}
+
+impl MobState {
+    /// Build a fresh natural-spawn `MobState`. New fields land in
+    /// here so existing call sites don't enumerate every field.
+    /// Persistent + the despawn timer get their default values.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_natural(
+        id: u32,
+        kind: u8,
+        pos: [f32; 3],
+        target: [f32; 3],
+        yaw: f32,
+        retarget_at: f32,
+        health: f32,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            pos,
+            target,
+            yaw,
+            retarget_at,
+            health,
+            dying: 0.0,
+            attack_cd: 0.0,
+            persistent: false,
+            far_despawn_timer: FAR_DESPAWN_TIMER,
+        }
+    }
 }
 
 // ---------------------------------------------------------------
@@ -72,8 +114,28 @@ pub(crate) const ZOMBIE_SIGHT_RANGE: f32 = 22.0;
 
 /// Squared distance from the nearest player past which a mob
 /// is despawned. Stops sheep + zombies from piling up in
-/// unloaded chunks the player will never visit again.
-pub(crate) const MOB_DESPAWN_DIST_SQ: f32 = 80.0 * 80.0;
+/// unloaded chunks the player will never visit again. Wave 5
+/// callers still reference this; H.6 layers a finer-grained
+/// 3-tier despawn rule on top (see `despawn.rs`).
+#[allow(dead_code)] // Retained as a public constant for callers that haven't moved to despawn.rs yet.
+pub(crate) const MOB_DESPAWN_DIST_SQ: f32 = INSTANT_DESPAWN_DIST * INSTANT_DESPAWN_DIST;
+
+/// Distance (blocks) past which a non-persistent mob despawns
+/// immediately. Mirrors MC's
+/// `Mob::removeWhenFarAway` 128-block threshold, dropped to
+/// 80 for the demo's smaller render distance.
+pub(crate) const INSTANT_DESPAWN_DIST: f32 = 80.0;
+/// Distance (blocks) at which the far-despawn timer starts
+/// ticking. Inside this range the timer is paused + reset on
+/// every check. Matches MC's 32-block soft despawn band.
+pub(crate) const FAR_DESPAWN_DIST: f32 = 48.0;
+/// Seconds the far-despawn timer counts down before a mob is
+/// evicted. Mirrors MC's 30-second timer in `Mob::checkDespawn`.
+pub(crate) const FAR_DESPAWN_TIMER: f32 = 30.0;
+/// Period (seconds) between despawn checks. Matches MC's
+/// 20-tick (~1 second) cadence in `Mob::baseTick`; we throttle
+/// to 5 seconds since the demo runs a smaller mob_cap.
+pub(crate) const DESPAWN_CHECK_PERIOD: f32 = 5.0;
 /// Seconds the zombie body offsets forward after striking.
 /// Drives the lunge animation timer.
 pub(crate) const MOB_LUNGE_TIME: f32 = 0.30;

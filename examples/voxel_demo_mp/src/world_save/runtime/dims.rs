@@ -290,17 +290,15 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
         if m.health <= 0.0 {
             continue;
         }
-        parked.mobs.push(MobState {
-            id: m.id,
-            kind: m.kind,
-            pos: m.pos,
-            target: m.pos,
-            yaw: m.yaw,
-            retarget_at: 0.0,
-            health: m.health,
-            dying: 0.0,
-            attack_cd: 0.0,
-        });
+        parked.mobs.push(MobState::new_natural(
+            m.id,
+            m.kind,
+            m.pos,
+            m.pos,
+            m.yaw,
+            0.0,
+            m.health,
+        ));
     }
     for d in ents.drops {
         let age_ticks = (d.age * 20.0).max(0.0) as u32;

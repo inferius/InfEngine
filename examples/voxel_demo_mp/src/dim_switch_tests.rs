@@ -318,17 +318,15 @@ let mut v = Voxel::new();
     v.base_seed = 17;
     v.current_dim = OVERWORLD.to_string();
     // Drop a mob in the overworld.
-    v.mobs.push(crate::mob::MobState {
-        id: 1,
-        kind: 0,
-        pos: [0.0, 32.0, 0.0],
-        target: [0.0, 32.0, 0.0],
-        yaw: 0.0,
-        retarget_at: 0.0,
-        health: 10.0,
-        dying: 0.0,
-        attack_cd: 0.0,
-    });
+    v.mobs.push(crate::mob::MobState::new_natural(
+        1,
+        0,
+        [0.0, 32.0, 0.0],
+        [0.0, 32.0, 0.0],
+        0.0,
+        0.0,
+        10.0,
+    ));
     v.switch_dim(NETHER);
     assert!(v.mobs.is_empty(), "nether starts with no mobs");
     v.switch_dim(OVERWORLD);

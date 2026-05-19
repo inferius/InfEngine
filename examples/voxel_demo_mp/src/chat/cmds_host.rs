@@ -226,18 +226,18 @@ pub(crate) fn cmd_horde(
         let id = voxel.next_mob_id;
         voxel.next_mob_id =
             voxel.next_mob_id.wrapping_add(1).max(1);
-        let mob = MobState {
+        // Horde mobs are command-spawned - mark them persistent
+        // so they survive the despawn pass.
+        let mut mob = MobState::new_natural(
             id,
-            kind: KIND_ZOMBIE,
+            KIND_ZOMBIE,
             pos,
-            target: pos,
-            yaw: 0.0,
-            retarget_at: (voxel.day_time + 1.0)
-                .rem_euclid(DAY_LENGTH_S),
-            health: ZOMBIE_MAX_HEALTH,
-            dying: 0.0,
-            attack_cd: 0.0,
-        };
+            pos,
+            0.0,
+            (voxel.day_time + 1.0).rem_euclid(DAY_LENGTH_S),
+            ZOMBIE_MAX_HEALTH,
+        );
+        mob.persistent = true;
         voxel.mobs.push(mob);
         voxel.remote_mobs.insert(
             id,
@@ -292,22 +292,21 @@ pub(crate) fn cmd_spawnmob(
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
     let pos = [spawn_at.x, spawn_at.y, spawn_at.z];
-    let mob = MobState {
+    // /spawnmob is a command-spawn - mark persistent.
+    let mut mob = MobState::new_natural(
         id,
         kind,
         pos,
-        target: pos,
-        yaw: 0.0,
-        retarget_at: (voxel.day_time + 1.0)
-            .rem_euclid(DAY_LENGTH_S),
-        health: if kind == KIND_ZOMBIE {
+        pos,
+        0.0,
+        (voxel.day_time + 1.0).rem_euclid(DAY_LENGTH_S),
+        if kind == KIND_ZOMBIE {
             ZOMBIE_MAX_HEALTH
         } else {
             MOB_MAX_HEALTH
         },
-        dying: 0.0,
-        attack_cd: 0.0,
-    };
+    );
+    mob.persistent = true;
     let initial_hp = if kind == KIND_ZOMBIE {
         ZOMBIE_MAX_HEALTH
     } else {

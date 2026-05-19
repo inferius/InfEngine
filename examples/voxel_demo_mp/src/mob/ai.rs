@@ -17,13 +17,13 @@
 use crate::net::{MobEventMsg, MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, Voxel};
 
+use super::despawn;
 use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
 use super::spawn;
 use super::state::{
-    MOB_DESPAWN_DIST_SQ, MOB_LUNGE_TIME, MOB_MAX_HEALTH, MOB_SPEED,
-    MobState, ZOMBIE_ATTACK_COOLDOWN, ZOMBIE_ATTACK_RANGE,
-    ZOMBIE_MAX_HEALTH, ZOMBIE_SIGHT_RANGE, ZOMBIE_SPEED,
-    ZOMBIE_TOUCH_DAMAGE,
+    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MOB_SPEED, MobState,
+    ZOMBIE_ATTACK_COOLDOWN, ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH,
+    ZOMBIE_SIGHT_RANGE, ZOMBIE_SPEED, ZOMBIE_TOUCH_DAMAGE,
 };
 
 /// Authoritative mob AI tick: step every server-side mob
@@ -57,7 +57,8 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
             },
         );
     }
-    despawn_pass(voxel, &mut to_remove);
+    voxel.last_despawn_check_time =
+        despawn::despawn_pass(voxel, day_time, voxel.last_despawn_check_time, &mut to_remove);
     evict(voxel, &to_remove);
     spawn::spawn_pass(voxel, day_time, &mut rand_seed);
     broadcast(voxel);
@@ -237,26 +238,6 @@ fn step_one(
         }
     }
     m
-}
-
-/// Despawn pass: mobs far from every known player get evicted.
-fn despawn_pass(voxel: &mut Voxel, to_remove: &mut Vec<u32>) {
-    for m in &voxel.mobs {
-        if m.dying > 0.0 {
-            continue;
-        }
-        let nearest = voxel.nearest_player_pos(m.pos, 1.0e6);
-        if let Some(p) = nearest {
-            let dx = p[0] - m.pos[0];
-            let dy = p[1] - m.pos[1];
-            let dz = p[2] - m.pos[2];
-            if dx * dx + dy * dy + dz * dz > MOB_DESPAWN_DIST_SQ
-                && !to_remove.contains(&m.id)
-            {
-                to_remove.push(m.id);
-            }
-        }
-    }
 }
 
 /// Evict mobs whose death fade just finished, plus anything
