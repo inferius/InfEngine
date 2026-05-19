@@ -1,0 +1,100 @@
+//! Per-mob SFX companion tick: footstep swishes + species "say"
+//! lines, hurt-flash decay, death-fade decay, lunge-timer decay.
+//!
+//! Runs on every peer (the server's audio comes through too if the
+//! host is playing). The decay passes for the visual timers also
+//! live here so the same tick boundary clears both audio + visual
+//! state.
+//!
+//! MC mirror: `net/minecraft/world/entity/LivingEntity::tickEffects`
+//! interleaves potion / status timers with the entity's per-tick
+//! sound + animation hooks. We split the timer decay into this
+//! audio tick to avoid borrowing the mutable mob list while playing
+//! audio (the audio path calls back into `&mut Voxel`).
+
+use std::collections::HashSet;
+
+use crate::Voxel;
+use crate::net::MobMsg;
+
+/// Tick the per-mob step + baa sound timers. Runs on every
+/// peer (the server's audio comes through too if the host is
+/// playing). Step sounds fire only when the mob actually
+/// moved since the last tick; baa fires on a randomised
+/// cooldown.
+pub(crate) fn tick_mob_audio(voxel: &mut Voxel, dt: f32) {
+    // Decay every hurt flash regardless of audio availability
+    // so the visual tint clears even when SFX are disabled.
+    voxel.mob_hurt_flash.retain(|_, t| {
+        *t -= dt;
+        *t > 0.0
+    });
+    // Client-side death fade: server's `tick_mobs` runs the
+    // authoritative copy + broadcasts `vx.mob_remove` when the
+    // timer hits zero, but every peer also runs the decay
+    // locally so the visual fade stays smooth between net
+    // ticks. The eventual `vx.mob_remove` (or pure-client
+    // simulation timeout) clears the entry.
+    voxel.mob_dying.retain(|_, t| {
+        *t = (*t - dt).max(0.0);
+        *t > 0.0
+    });
+    voxel.mob_lunge.retain(|_, t| {
+        *t = (*t - dt).max(0.0);
+        *t > 0.0
+    });
+    if voxel.audio.is_none() {
+        return;
+    }
+    // Snapshot the mob list so we don't keep `voxel.remote_mobs`
+    // borrowed while calling back into `&mut voxel` via sfx_at.
+    let mobs: Vec<MobMsg> = voxel.remote_mobs.values().copied().collect();
+    // Drop timers for mobs that no longer exist (despawned).
+    let live: HashSet<u32> = mobs.iter().map(|m| m.id).collect();
+    voxel.mob_step_timers.retain(|id, _| live.contains(id));
+    voxel.mob_say_timers.retain(|id, _| live.contains(id));
+    voxel.mob_last_xz.retain(|id, _| live.contains(id));
+    for m in mobs {
+        // Step detection: compare to last known XZ. If moved
+        // by more than a small epsilon, count it as active
+        // motion; decrement timer + fire when due.
+        let last = voxel.mob_last_xz.get(&m.id).copied();
+        voxel.mob_last_xz.insert(m.id, [m.pos[0], m.pos[2]]);
+        let moved = match last {
+            Some([lx, lz]) => {
+                let dx = m.pos[0] - lx;
+                let dz = m.pos[2] - lz;
+                (dx * dx + dz * dz).sqrt() > 0.02
+            }
+            None => false,
+        };
+        let step_t = voxel.mob_step_timers.entry(m.id).or_insert(0.45);
+        if moved {
+            *step_t -= dt;
+            if *step_t <= 0.0 {
+                *step_t = 0.45;
+                let pos = m.pos;
+                voxel.sfx_at("mob/sheep/step", pos, |a, g| {
+                    let _ = a.play_swish(0.18 * g);
+                });
+            }
+        }
+        // Baa: random initial timer, refresh on each fire.
+        let say_t = voxel
+            .mob_say_timers
+            .entry(m.id)
+            .or_insert_with(|| 5.0 + (m.id as f32 * 0.71).fract() * 12.0);
+        *say_t -= dt;
+        if *say_t <= 0.0 {
+            // Pseudo-random new delay in [6, 20) s. Hash by
+            // mob id + current net tick so we don't get a
+            // chorus when many sheep retime together.
+            let h = (m.id.wrapping_mul(2654435761) ^ voxel.net_tick as u32) as f32;
+            *say_t = 6.0 + (h % 14.0).abs();
+            let pos = m.pos;
+            voxel.sfx_at("mob/sheep/say", pos, |a, g| {
+                let _ = a.play_beep(300.0, 0.18, 0.18 * g);
+            });
+        }
+    }
+}

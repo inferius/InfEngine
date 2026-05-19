@@ -116,13 +116,13 @@ mod portal_swirl_tests;
 mod lighting;
 mod menu;
 mod mining;
-mod mob_ai;
+mod mob;
 mod player;
 mod ui;
 mod worldgen;
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
 use mining::{MiningState, block_hardness};
-use mob_ai::{
+use mob::{
     KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE, MOB_ATTACK_REACH,
     MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE, MOB_LUNGE_TIME,
     MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH,
@@ -239,7 +239,7 @@ impl RemoteInterp {
 // `MiningState` + `block_hardness` moved to `mining.rs`.
 
 // `MobState` struct + all `MOB_*`, `KIND_*`, `ZOMBIE_*` constants
-// moved to `mob_ai.rs` and re-imported below.
+// moved to the `mob` module (see `mob/mod.rs`); re-imported below.
 
 const PVP_DAMAGE: f32 = 1.5;
 const PVP_REACH: f32 = 5.5;
@@ -1388,29 +1388,29 @@ impl Voxel {
         self.lighting.mark_dirty(voxel);
     }
 
-    /// Thin wrapper - see `mob_ai::damage_mob`.
+    /// Thin wrapper - see `mob::damage::damage_mob`.
     fn damage_mob(&mut self, mob_id: u32, attacker_client_id: Option<u32>) {
-        mob_ai::damage_mob(self, mob_id, attacker_client_id);
+        mob::damage_mob(self, mob_id, attacker_client_id);
     }
 
-    /// Thin wrapper - see `mob_ai::damage_mob_scaled`.
+    /// Thin wrapper - see `mob::damage::damage_mob_scaled`.
     fn damage_mob_scaled(
         &mut self,
         mob_id: u32,
         attacker_client_id: Option<u32>,
         mult: f32,
     ) {
-        mob_ai::damage_mob_scaled(self, mob_id, attacker_client_id, mult);
+        mob::damage_mob_scaled(self, mob_id, attacker_client_id, mult);
     }
 
-    /// Thin wrapper - see `mob_ai::raycast_mob`.
+    /// Thin wrapper - see `mob::raycast::raycast_mob`.
     fn raycast_mob(
         &self,
         origin: Vec3,
         dir: Vec3,
         max_dist: f32,
     ) -> Option<(u32, f32)> {
-        mob_ai::raycast_mob(self, origin, dir, max_dist)
+        mob::raycast_mob(self, origin, dir, max_dist)
     }
 
     /// Find the world-space Y of the topmost solid voxel at column
@@ -2205,14 +2205,14 @@ impl Voxel {
     /// toward target, retarget on arrival / timeout, spawn new
     /// sheep when the cap allows. Builds the broadcast list as a
     /// side effect.
-    /// Thin wrapper - see `mob_ai::tick_mobs`.
+    /// Thin wrapper - see `mob::ai::tick_mobs`.
     fn tick_mobs(&mut self, dt: f32) {
-        mob_ai::tick_mobs(self, dt);
+        mob::tick_mobs(self, dt);
     }
 
-    /// Thin wrapper - see `mob_ai::tick_mob_audio`.
+    /// Thin wrapper - see `mob::audio::tick_mob_audio`.
     fn tick_mob_audio(&mut self, dt: f32) {
-        mob_ai::tick_mob_audio(self, dt);
+        mob::tick_mob_audio(self, dt);
     }
 
     fn sfx_at(

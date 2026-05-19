@@ -318,7 +318,7 @@ let mut v = Voxel::new();
     v.base_seed = 17;
     v.current_dim = OVERWORLD.to_string();
     // Drop a mob in the overworld.
-    v.mobs.push(crate::mob_ai::MobState {
+    v.mobs.push(crate::mob::MobState {
         id: 1,
         kind: 0,
         pos: [0.0, 32.0, 0.0],

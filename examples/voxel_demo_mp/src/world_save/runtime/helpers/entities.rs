@@ -5,7 +5,7 @@
 
 use crate::Voxel;
 use crate::drops::DropItem;
-use crate::mob_ai::MobState;
+use crate::mob::MobState;
 
 use crate::world_save::entities::{
     DimensionEntities, DropSave, ENTITIES_FORMAT_VERSION, MobSave,

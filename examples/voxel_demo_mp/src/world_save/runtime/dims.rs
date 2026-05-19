@@ -26,7 +26,7 @@ use crate::block::furnace::FurnaceRuntime;
 use crate::container::Container;
 use crate::dim::DimWorld;
 use crate::drops::DropItem;
-use crate::mob_ai::MobState;
+use crate::mob::MobState;
 
 use super::super::chunks::{self, CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
 use super::super::containers::{self, DimensionContainers};

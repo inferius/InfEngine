@@ -30,7 +30,7 @@ use crate::block::furnace::FurnaceRuntime;
 use crate::container::Container;
 use crate::drops::DropItem;
 use crate::liquid::schedule::LiquidSchedule;
-use crate::mob_ai::MobState;
+use crate::mob::MobState;
 
 /// Canonical name of the overworld dimension. Used as the default
 /// when a save record has no explicit `current_dim`.

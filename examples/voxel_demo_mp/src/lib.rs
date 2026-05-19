@@ -13,7 +13,7 @@
 //! - The full `world_save::{save_world,load_world,runtime}` glue
 //!   (sits on the GUI's `Voxel` struct). Headless callers reach
 //!   for the typed leaf modules below directly.
-//! - `chat::*`, `mob_ai`, `drops`, `inventory`, `player`,
+//! - `chat::*`, `mob::*`, `drops`, `inventory`, `player`,
 //!   `mining`, `decorations`, `ui`, `net` (those references rely
 //!   on `crate::Voxel` or its constants).
 //!
