@@ -702,3 +702,107 @@ MC source refs:
   `category` field; W20 derives it from `item_category(output.id)` at
   render time. A static `RecipeCategory` field would make the sort
   order deterministic without depending on `item_category`.
+
+## Wave 21 - MC-style main menu polish
+
+Wave 21 overhauls the voxel_demo_mp main menu to feel Minecraft-like
+without copying MC's proprietary pixel-art assets.
+
+### W21.1 - Title banner + animated splash text
+
+Source: `examples/voxel_demo_mp/src/menu/main_screen.rs`,
+        `examples/voxel_demo_mp/src/menu/mod.rs`
+
+The plain `ui.heading` is replaced by a layered title banner:
+
+- "InfEngine" in 56 px bold white text.
+- "Voxel Demo" subtitle in 18 px muted blue-grey.
+- Splash text: yellow italic line below the subtitle, size pulsed
+  at 4 Hz via `(t * 4.0).sin() * 0.05 + 1.0` scale factor.
+
+Splash text source: inspired by MC's `TitleScreen.java` splash pool.
+Our pool lives in `menu::SPLASH_LINES` (30 entries). A fresh line is
+picked in `Menu::enter_main()` on each Main-screen entry using a
+nanosecond-hash index so successive visits get different quips.
+
+**Rotation deferred**: egui 0.33 does not expose per-widget rotation
+without dropping to `Shape`-level transforms that break the sizing
+pass. The splash text is rendered upright for now; angled rotation
+(MC uses ~17 deg counter-clockwise) is a follow-up item.
+
+### W21.2 - Background panorama
+
+Already shipped in W12.6. The panorama backdrop is a single-axis
+horizontal tile scroll (1 RPM, `panorama_scroll += 1/3600` per frame)
+over a discovered `panorama_0..5.png` strip, darkened 43% by an RGBA
+overlay. MC uses a full 6-face skybox (`PanoramaRenderer.java`); our
+implementation uses a single stitched strip, which is visually close
+at low resolution. No changes in W21.
+
+### W21.3 - Button styling
+
+Source: `examples/voxel_demo_mp/src/menu/shared.rs`
+
+`big_button` and `small_button` now use a custom `mc_button_sized`
+painter instead of the plain `egui::Button`. Visual deltas vs MC:
+
+| Property | MC default | InfEngine W21 |
+|---|---|---|
+| Background fill | #5A5A5A stone-grey | #545454 normal, #6A6A6A hover |
+| Pressed fill | darker | #3C3C3C |
+| Top/left border | bright highlight | 1 px #AAAAAA |
+| Bottom/right border | dark shadow | 1 px #282828 |
+| Label colour | white | #FFFFA0 (pale yellow) |
+| Label shadow | 1 px dark | 1.5 px semi-transparent black |
+| Corner rounding | 0 px (sharp) | 2 px (slight) |
+
+Disabled buttons use `#323232` fill and `#646464` label; enabled/
+disabled state toggled via the `enabled` flag on `big_button`.
+
+### W21.4 - Footer polish
+
+Source: `examples/voxel_demo_mp/src/menu/shared.rs` (`footer_combined`)
+
+The separate `footer_identity` + `footer_seed` labels on the Main
+screen are replaced by a single horizontal row:
+"Playing as: <name> | Seed: <seed>"
+
+A new bottom-left `egui::Area` ("menu_pack_footer") shows
+"MC pack: <name> | <count> blocks" when a real MC resource pack is
+loaded (`pack_block_count > 0`). The count comes from
+`resource_pack.textures.len()` and the name from
+`resource_pack.source.file_name()`.
+
+The bottom-right version footer (`footer_version`) is unchanged.
+
+### W21.5 - Pause menu unification
+
+Source: `examples/voxel_demo_mp/src/menu/pause.rs`
+
+The inline `AppState::Paused` egui block in `main.rs` is extracted to
+`menu::pause::draw(ctx, world_seed, actions)` which returns a vec of
+`PauseAction` variants (Resume / Settings / MainMenu). The caller in
+`main.rs` maps these back to the existing boolean action flags so the
+transition logic is unchanged.
+
+Visual: same `big_button` widgets as the main menu, 50% black tint
+over the world rendered via a background-layer `egui::Painter` before
+the central panel so the 3-D world is visible but dimmed.
+
+The "Paused" heading uses 36 px bold white text (vs the old
+`ui.heading` default).
+
+### Deferred follow-ups
+
+- **Splash text rotation**: ~17 deg counter-clockwise as in MC's
+  `TitleScreen`. Requires `egui::Shape::text` + manual affine
+  transform on the `Painter`; the sizing/layout implications need
+  investigation. The text currently renders upright.
+- **Full 6-face skybox panorama**: MC's `PanoramaRenderer` uses 6
+  cube faces stitched into a fisheye projection rotating at 1 RPM.
+  Our strip-scroll is a coarse approximation; a proper cube-map
+  renderer would be a dedicated graphics wave.
+- **Dirt/gravel tile fallback for background**: when no panorama PNG
+  is discovered, the current fallback is a solid dark-navy fill. A
+  procedural tiled "dirt" pattern (drawn via `egui::Painter` quads)
+  would match MC's fallback more closely.
