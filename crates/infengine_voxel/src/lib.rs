@@ -525,31 +525,22 @@ where
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // W33.1: universal quad_uv corners that match the old
-                    // per-voxel mesher's UV assignment (emit_quad_lit_anim):
-                    //   corner 0 -> tex BL (0, 1)
-                    //   corner 1 -> tex BR (1, 1)
-                    //   corner 2 -> tex TR (1, 0)
-                    //   corner 3 -> tex TL (0, 0)
-                    //
-                    // The winding already ensures that for every face:
-                    //   side>0: c0=(0,0) c1=(0,h) c2=(w,h) c3=(w,0) in (du,dv)
-                    //   side<0: c0=(w,0) c1=(w,h) c2=(0,h) c3=(0,0) in (du,dv)
-                    //
-                    // quad_uv.x = tex-u in [0, h] (increases with dv).
-                    // quad_uv.y = tex-v in [w, 0] (decreases with du =
-                    //   inverted Y for side faces, keeps orientation upright).
-                    //
-                    // E = small epsilon so fract(h-E) ~ 1 at tile right/bottom
-                    // edge. Interior fragments interpolate correctly. The shader
-                    // clamps to [tile_uv0+half_texel, tile_uv0+tile_size-half_texel]
-                    // so the exact-integer fract==0 corner artifact is invisible.
+                    // W33.1: greedy meshing repeatedly produced rotated /
+                    // mirrored textures across multiple repair attempts. The
+                    // per-face quad_uv mapping is more elaborate than a
+                    // shared formula can express - each of the 6 face axes
+                    // has its own (du, dv) -> (tex_u, tex_v) projection
+                    // that needs an explicit per-face lookup. Deferred
+                    // pending a proper shader-side per-face UV remap design.
+                    // For now we still emit a quad_uv table so greedy
+                    // compiles; the per-voxel mesher is the production path
+                    // (configured in voxel_demo_mp/main.rs).
                     const E: f32 = 0.001;
                     let quad_uv_corners = [
-                        [0.0f32, w - E],   // c0 = BL: tex(0, ~1)
-                        [h - E,  w - E],   // c1 = BR: tex(~1, ~1)
-                        [h - E,  0.0f32],  // c2 = TR: tex(~1, 0)
-                        [0.0f32, 0.0f32],  // c3 = TL: tex(0, 0)
+                        [0.0f32, w - E],
+                        [h - E,  w - E],
+                        [h - E,  0.0f32],
+                        [0.0f32, 0.0f32],
                     ];
 
                     let normal_f32 = [

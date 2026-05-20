@@ -30,7 +30,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_greedy_with_special,
+    chunk_mesh_with_atlas_light_anim_and_special,
     raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
@@ -6575,9 +6575,14 @@ impl Voxel {
                 },
             )
         };
-        // W31.3: greedy mesher re-enabled. Per-face UV orientation fixed
-        // (X/Y faces swap tex_u/tex_v), tile seam clamped in shader.
-        chunk_mesh_greedy_with_special(
+        // W33 final revert: greedy mesher's per-face UV mapping needs a
+        // proper per-axis lookup table, multiple repair attempts produced
+        // rotated textures on Z faces or other axes. Defer greedy to a
+        // future wave with explicit per-face quad_uv tables. Per-voxel
+        // mesher is correct and still parallelized in workers via W24.
+        // UberGpuBuffer batching (W32) provides the dominant perf win;
+        // greedy's 5-20x triangle reduction is secondary.
+        chunk_mesh_with_atlas_light_anim_and_special(
             chunk,
             origin,
             uv_resolver,
@@ -15532,8 +15537,8 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    // W31.3: greedy mesher re-enabled (same as build_lit_submeshes path).
-    chunk_mesh_greedy_with_special(
+    // W33 final revert: per-voxel mesher in worker, see build_lit_submeshes.
+    chunk_mesh_with_atlas_light_anim_and_special(
         chunk,
         origin,
         uv_resolver,
