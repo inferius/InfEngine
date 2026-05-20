@@ -1,10 +1,16 @@
-//! W18.3 regression tests for the textured particle emitters.
+//! W18.3 + W18.4 regression tests for the textured particle emitters
+//! and chunk-mesh anim_id assignment.
 //!
-//! Covers:
+//! W18.3 covers:
 //! - `emit_textured_flame` emits 1 particle with atlas-resolved UV
 //!   when a "flame" strip is registered.
 //! - `emit_textured_lava` emits a particle with the "lava" sprite UV.
 //! - `emit_textured_smoke` picks a smoke frame within the 0..7 range.
+//!
+//! W18.4 covers:
+//! - Animated water_still face -> anim_id > 0 when pack registers it.
+//! - Static stone face -> anim_id == 0 always.
+//! - Pack with water_still/lava_still/fire_0 registers all 3 in anim_registry.
 
 #![cfg(test)]
 
@@ -122,4 +128,126 @@ fn smoke_particle_sprite_selection_stays_within_eight_frame_range() {
             uv,
         );
     }
+}
+
+// -----------------------------------------------------------------------
+// W18.4: chunk-mesh anim_id tests
+// -----------------------------------------------------------------------
+
+use crate::resource_pack::{ResourcePack, TextureKey, TextureRef};
+
+/// Build a minimal `ResourcePack` for anim_id tests.  Inserts the given
+/// block textures as animated (frames > 1) or static (frames == 1) entries
+/// and runs `build_anim_index` so `anim_slot()` / `anim_slot_for_ref()`
+/// are populated.
+fn synth_pack_with_textures(
+    animated: &[(&str, [f32; 4], u32)],
+    static_: &[(&str, [f32; 4])],
+) -> ResourcePack {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    let mut textures: HashMap<TextureKey, TextureRef> = HashMap::new();
+    for (name, uv, frames) in animated {
+        textures.insert(
+            TextureKey::Block((*name).to_string()),
+            TextureRef {
+                atlas_uv: *uv,
+                frames: *frames,
+                frametime_ms: 100,
+                interpolate: false,
+            },
+        );
+    }
+    for (name, uv) in static_ {
+        textures.insert(
+            TextureKey::Block((*name).to_string()),
+            TextureRef {
+                atlas_uv: *uv,
+                frames: 1,
+                frametime_ms: 0,
+                interpolate: false,
+            },
+        );
+    }
+    // Use the same index-building path as the production loader.
+    let (anim_registry, anim_slots) =
+        crate::resource_pack::build_anim_index(&textures);
+    ResourcePack {
+        textures,
+        item_icons: HashMap::new(),
+        sounds: HashMap::new(),
+        source: PathBuf::from("<test>"),
+        is_fallback: false,
+        atlas_size: (256, 256),
+        atlas_rgba: vec![0u8; 256 * 256 * 4],
+        anim_registry,
+        anim_slots,
+        particle_atlas: None,
+    }
+}
+
+/// Animated `water_still` face must produce `anim_id > 0` from
+/// `anim_slot_for_ref` when the pack loaded that texture as animated.
+#[test]
+fn water_block_face_has_anim_id_nonzero_when_pack_animates_water_still() {
+    // water_still: 8-frame animated strip.
+    let pack = synth_pack_with_textures(
+        &[("water_still", [0.0, 0.0, 1.0, 0.125], 8)],
+        &[],
+    );
+    let tex_key = TextureKey::Block("water_still".to_string());
+    let slot = pack.anim_slot(&tex_key);
+    assert!(slot > 0, "water_still must be in an animated slot (got {slot})");
+
+    // Also verify via anim_slot_for_ref: given the TextureRef directly,
+    // the helper must return the same non-zero slot.
+    let water_ref = pack.textures[&tex_key];
+    let slot_via_ref = pack.anim_slot_for_ref(&water_ref);
+    assert_eq!(slot_via_ref, slot, "anim_slot_for_ref must agree with anim_slot");
+}
+
+/// Static stone face must always produce `anim_id == 0`.
+#[test]
+fn static_stone_face_has_anim_id_zero() {
+    let pack = synth_pack_with_textures(
+        &[("water_still", [0.0, 0.0, 1.0, 0.125], 8)],
+        &[("stone", [0.0, 0.0, 0.0625, 0.0625])],
+    );
+    let stone_key = TextureKey::Block("stone".to_string());
+    let slot = pack.anim_slot(&stone_key);
+    assert_eq!(slot, 0, "static stone face must have anim_id 0");
+
+    let stone_ref = pack.textures[&stone_key];
+    assert_eq!(
+        pack.anim_slot_for_ref(&stone_ref),
+        0,
+        "anim_slot_for_ref must return 0 for non-animated stone",
+    );
+}
+
+/// Pack with water_still, lava_still, and fire_0 as animated textures
+/// must register all three in the anim_registry with distinct non-zero
+/// slots.
+#[test]
+fn anim_registry_pack_load_registers_water_lava_fire_textures() {
+    let pack = synth_pack_with_textures(
+        &[
+            ("water_still", [0.0, 0.0, 1.0, 0.125], 8),
+            ("lava_still",  [0.0, 0.125, 1.0, 0.25], 16),
+            ("fire_0",      [0.0, 0.25, 1.0, 0.375], 8),
+        ],
+        &[("stone", [0.0, 0.875, 0.0625, 0.9375])],
+    );
+    let water_slot = pack.anim_slot(&TextureKey::Block("water_still".to_string()));
+    let lava_slot  = pack.anim_slot(&TextureKey::Block("lava_still".to_string()));
+    let fire_slot  = pack.anim_slot(&TextureKey::Block("fire_0".to_string()));
+
+    assert!(water_slot > 0, "water_still must be animated (slot {water_slot})");
+    assert!(lava_slot  > 0, "lava_still must be animated (slot {lava_slot})");
+    assert!(fire_slot  > 0, "fire_0 must be animated (slot {fire_slot})");
+
+    // All three must have distinct slot ids (no collision).
+    assert_ne!(water_slot, lava_slot, "water_still and lava_still collide");
+    assert_ne!(water_slot, fire_slot, "water_still and fire_0 collide");
+    assert_ne!(lava_slot,  fire_slot, "lava_still and fire_0 collide");
 }

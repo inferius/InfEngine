@@ -384,7 +384,7 @@ impl ResourcePack {
 /// `AnimRegistry`. Returns the registry + a reverse map keyed by
 /// `TextureKey` so the chunk mesher can resolve a tile to its
 /// slot id without re-scanning the textures map per face.
-fn build_anim_index(
+pub(crate) fn build_anim_index(
     textures: &HashMap<TextureKey, TextureRef>,
 ) -> (anim_registry::AnimRegistry, HashMap<TextureKey, u8>) {
     let mut reg = anim_registry::AnimRegistry::new();
