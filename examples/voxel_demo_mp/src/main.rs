@@ -30,7 +30,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_greedy_with_special,
+    chunk_mesh_with_atlas_light_anim_and_special,
     raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
@@ -6554,11 +6554,14 @@ impl Voxel {
                 },
             )
         };
-        // W30.3: greedy mesher re-enabled. The W28.4 UV-bleed bug is fixed by
-        // the shader-side tile fract in W30.1/W30.2 - each vertex now carries
-        // tile_uv0/tile_size/quad_uv and the shader computes
-        // tile_uv0 + fract(quad_uv) * tile_size which stays within the atlas tile.
-        chunk_mesh_greedy_with_special(
+        // W30 deferred again: greedy mesher's per-face UV orientation needs
+        // a per-axis remap (X face: tex_u=Z tex_v=Y; Y face: tex_u=X tex_v=Z;
+        // Z face: tex_u=X tex_v=Y) AND the shader fract introduces a 1-pixel
+        // tile-seam artifact at integer voxel boundaries within merged
+        // quads. Per-voxel mesher is correct + still parallelized in worker
+        // threads via W24. Re-enable when per-face UV remap + tile seam
+        // padding shipped in W31.
+        chunk_mesh_with_atlas_light_anim_and_special(
             chunk,
             origin,
             uv_resolver,
@@ -15483,8 +15486,8 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    // W30.3: greedy mesher re-enabled (UV bleed fixed by shader tile fract).
-    chunk_mesh_greedy_with_special(
+    // W30 deferred: see build_lit_submeshes for revert rationale.
+    chunk_mesh_with_atlas_light_anim_and_special(
         chunk,
         origin,
         uv_resolver,

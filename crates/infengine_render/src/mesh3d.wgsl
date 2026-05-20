@@ -130,8 +130,16 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) material: vec4<f32>,
+    // W30 fix: uv carries tile_uv0 (atlas origin); the fract-based tile
+    // wrap is computed in the fragment shader per-pixel using the
+    // interpolated quad_uv. Vertex-shader fract was wrong because fract
+    // is per-vertex - at integer voxel coords it always returned 0 so
+    // every vertex got the same UV and the texture stretched.
     @location(4) uv: vec2<f32>,
     @location(5) light: vec2<f32>,
+    @location(7) tile_uv0_out: vec2<f32>,
+    @location(8) tile_size_out: vec2<f32>,
+    @location(9) quad_uv_out: vec2<f32>,
     // Wave 9.y: animation slot forwarded so the fragment shader
     // can pick the right tile_anims entry. Flat-interpolated
     // because every vertex of a quad shares the same slot.
@@ -154,15 +162,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Unorm8x4 already in [0, 1]; .xy = (block, sky).
     let light = in.light_packed.xy;
 
-    // W30.1: tile-fract UV computation.
-    // tile_uv0 and tile_size are in [0, 1] atlas space (/ 65535.0).
-    // quad_uv is in [0, 16] voxel space (/ 65535.0 * 16.0).
-    // Final UV stays within [tile_uv0, tile_uv0 + tile_size] regardless of
-    // how large the merged greedy quad is because fract() wraps the tiling.
-    //
-    // For per-voxel (non-greedy) quads: tile_size=0 so
-    //   tile_uv = tile_uv0 + fract(0) * 0 = tile_uv0
-    // which equals the legacy uv_packed value (set by with_uv -> tile_uv0).
+    // W30 fix: only DECODE the packed tile/quad attrs here; fract() is
+    // applied in the fragment shader where it sees the interpolated
+    // per-pixel value. Passing fract-result from vertex shader would
+    // collapse to 0 at integer voxel coords - the actual bug observed.
     let tile_uv0 = vec2<f32>(
         f32(in.tile_uv0_packed.x) / 65535.0,
         f32(in.tile_uv0_packed.y) / 65535.0,
@@ -175,7 +178,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         f32(in.quad_uv_packed.x) / 65535.0 * 16.0,
         f32(in.quad_uv_packed.y) / 65535.0 * 16.0,
     );
-    let tile_uv = tile_uv0 + fract(quad_uv) * tile_size;
 
     var out: VertexOutput;
     out.clip = camera.view_proj * world4;
@@ -183,9 +185,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_normal = normalize(normal_mat * normal);
     out.color = in.inst_color;
     out.material = in.inst_material;
-    out.uv = tile_uv;
+    // Legacy `uv` slot keeps tile_uv0 so any code path that still reads
+    // `out.uv` without the tile-fract logic falls back to the tile origin.
+    out.uv = tile_uv0;
     out.light = light;
     out.anim_id = in.anim_id;
+    out.tile_uv0_out = tile_uv0;
+    out.tile_size_out = tile_size;
+    out.quad_uv_out = quad_uv;
     return out;
 }
 
@@ -302,12 +309,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if is_water {
         tex = vec4<f32>(1.0, 1.0, 1.0, 1.0);
     } else {
+        // W30 fix: per-fragment tile-fract UV. Interpolated quad_uv
+        // gives true fractional values across the merged greedy quad;
+        // fract() wraps it within [0, 1] per tile, then we map back
+        // into the atlas rect [tile_uv0, tile_uv0 + tile_size]. When
+        // tile_size = 0 (per-voxel mesher set up via with_uv), the
+        // formula collapses to in.uv = tile_uv0 = legacy UV.
+        let tile_size = in.tile_size_out;
+        var final_uv: vec2<f32>;
+        if tile_size.x > 0.0 && tile_size.y > 0.0 {
+            final_uv = in.tile_uv0_out + fract(in.quad_uv_out) * tile_size;
+        } else {
+            final_uv = in.uv;
+        }
         // Wave 9.y: scroll UV.v through the active frame of an
         // animated tile. `camera.time.x` is seconds since app
         // start; the slot stores frametime_ms, so we convert to
         // ms before the per-frame floor.
         let time_ms = camera.time.x * 1000.0;
-        let sampled_uv = animated_uv(in.uv, in.anim_id, time_ms);
+        let sampled_uv = animated_uv(final_uv, in.anim_id, time_ms);
         tex = textureSample(albedo_tex, albedo_smp, sampled_uv);
     }
     var albedo = in.color.rgb * tex.rgb;
