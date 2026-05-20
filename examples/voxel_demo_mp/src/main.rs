@@ -16171,19 +16171,43 @@ fn load_non_sheep_mob_meshes(
     /// Try .tga then .png in the canonical MC entity sub-directory.
     /// Returns the image bytes as an RGBA `image::RgbaImage`, or `None`
     /// if neither file exists or the image can't be decoded.
+    /// W31.2: logs a warn when no candidate is found so the user knows
+    /// they need a resource pack for that mob's texture.
     fn try_open_entity(
         entity_root: &std::path::Path,
         mob: &str,
     ) -> Option<image::RgbaImage> {
         let mob_dir = entity_root.join(mob);
+        // W31.2: extra Bedrock-style candidates - some packs keep a
+        // variant name (e.g. "chicken.tga" directly under entity/) or
+        // store the file under a "vanilla" subdirectory.
         let candidates = [
             mob_dir.join(format!("{mob}.tga")),
             mob_dir.join(format!("{mob}.png")),
-            // Some Bedrock packs flatten the entity dir:
+            // Bedrock packs often flatten the entity dir:
             entity_root.join(format!("{mob}.tga")),
             entity_root.join(format!("{mob}.png")),
+            // Some Java packs place the texture one level up from entity/:
+            entity_root
+                .parent()
+                .map(|p| p.join(format!("{mob}.tga")))
+                .unwrap_or_else(|| entity_root.join(format!("{mob}.tga"))),
+            entity_root
+                .parent()
+                .map(|p| p.join(format!("{mob}.png")))
+                .unwrap_or_else(|| entity_root.join(format!("{mob}.png"))),
         ];
-        let path = candidates.iter().find(|p| p.is_file())?;
+        let path = match candidates.iter().find(|p| p.is_file()) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    mob = mob,
+                    searched = ?candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    "entity texture not found - mob will be untextured (install a resource pack)"
+                );
+                return None;
+            }
+        };
         let mut img = image::open(path).ok()?.to_rgba8();
         // Force alpha=255 so the cutout shader path can't punch holes
         // through soft edges in .tga files with pre-multiplied alpha.
