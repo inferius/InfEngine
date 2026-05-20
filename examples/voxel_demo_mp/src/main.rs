@@ -180,9 +180,9 @@ use chat::autocomplete::{
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
 use mining::{MiningState, block_hardness};
 use mob::{
-    KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE, MOB_ATTACK_REACH,
-    MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE, MOB_LUNGE_TIME,
-    MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH,
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON, KIND_ZOMBIE,
+    MOB_ATTACK_REACH, MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE,
+    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH,
 };
 use player::{
     COLLISION_EPSILON, GRAVITY, JUMP_VELOCITY, PLAYER_HEIGHT, PLAYER_RADIUS,
@@ -13758,57 +13758,14 @@ impl AppHandler for Voxel {
                     -std::f32::consts::FRAC_PI_2 * death_progress,
                 );
                 let death_sink = 0.18 * death_progress;
-                // Per-kind body proportions + meshes + base colour.
-                // Sheep uses the textured sheep_body + sheep_head
-                // meshes; zombies use the plain player_cube with a
-                // dim green tint stretched into a humanoid box.
-                let is_zombie = mob.kind == KIND_ZOMBIE;
-                let is_chicken = mob.kind == KIND_CHICKEN;
-                let is_pig = mob.kind == KIND_PIG;
-                let (body_scale, body_y_off, base_body_tint, body_use_mesh) = if is_zombie {
-                    (
-                        Vec3::new(0.65, 1.55, 0.45),
-                        0.78,
-                        [0.30, 0.55, 0.30, 1.0],
-                        player_cube_handle,
-                    )
-                } else if is_chicken {
-                    (
-                        Vec3::new(0.45, 0.55, 0.4),
-                        0.28,
-                        [0.95, 0.95, 0.9, 1.0],
-                        player_cube_handle,
-                    )
-                } else if is_pig {
-                    // Pinkish stretched cube.
-                    (
-                        Vec3::new(1.1, 0.75, 0.6),
-                        0.35,
-                        [0.95, 0.65, 0.65, 1.0],
-                        player_cube_handle,
-                    )
-                } else {
-                    (
-                        Vec3::new(1.2, 0.8, 0.7),
-                        0.4,
-                        body_tint,
-                        body_mesh,
-                    )
-                };
-                let tint = [
-                    (base_body_tint[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
-                        * body_brightness,
-                    (base_body_tint[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    (base_body_tint[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    base_body_tint[3],
-                ];
+                // W19.3: per-kind dispatch. Match on mob.kind so adding
+                // a new kind requires only one new arm, not a chain of
+                // is_X booleans. Each arm either draws multi-part textured
+                // meshes (when the entity texture was loaded) or falls back
+                // to the two-cube silhouette (tinted body + head cube).
+                //
+                // Common animation state computed once above the match:
                 let body_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
-                // Lunge offset: a brief forward shove on the
-                // attack frame. The timer starts at MOB_LUNGE_TIME
-                // + decays to 0; a sin curve gives a smooth
-                // out-and-back motion within that window.
                 let lunge_t = self
                     .mob_lunge
                     .get(&mob.id)
@@ -13821,9 +13778,6 @@ impl AppHandler for Voxel {
                     * (lunge_phase * std::f32::consts::PI).sin().max(0.0);
                 let lunge_fwd =
                     Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin()) * lunge_amp;
-                // Small walk-bob: id-hashed phase + day_time so
-                // mobs visibly bounce while wandering. Skipped on
-                // dying mobs so the death tilt stays clean.
                 let walk_bob = if death_progress <= 0.0 {
                     let phase = mob.id.wrapping_mul(2654435761) as f32
                         / u32::MAX as f32
@@ -13832,87 +13786,403 @@ impl AppHandler for Voxel {
                 } else {
                     0.0
                 };
-                let body = Mat4::from_scale_rotation_translation(
-                    body_scale,
-                    body_rot,
-                    Vec3::new(
-                        mob.pos[0] + lunge_fwd.x,
-                        mob.pos[1] + body_y_off - death_sink + walk_bob,
-                        mob.pos[2] + lunge_fwd.z,
-                    ),
-                );
-                renderer.draw_mesh_pbr(
-                    body_use_mesh,
-                    body.to_cols_array(),
-                    tint,
-                    0.0,
-                    0.9,
-                );
                 let fwd = Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin());
-                let (head_scale, head_off_y, head_off_fwd, head_mesh_use, base_head_color) =
-                    if is_zombie {
-                        (
-                            Vec3::new(0.55, 0.55, 0.55),
-                            1.85,
-                            0.0,
-                            player_cube_handle,
-                            [0.22, 0.42, 0.22, 1.0],
-                        )
-                    } else if is_chicken {
-                        // Small head, slight forward poke, red
-                        // comb-ish tint so the chicken reads as
-                        // distinct from a tiny sheep.
-                        (
-                            Vec3::new(0.3, 0.3, 0.3),
-                            0.65,
-                            0.25,
-                            player_cube_handle,
-                            [0.95, 0.35, 0.30, 1.0],
-                        )
-                    } else if is_pig {
-                        (
-                            Vec3::new(0.6, 0.55, 0.55),
-                            0.65,
-                            0.40,
-                            player_cube_handle,
-                            [0.95, 0.65, 0.65, 1.0],
-                        )
-                    } else {
-                        (
-                            Vec3::new(0.60, 0.45, 0.45),
-                            0.8,
-                            0.45,
-                            head_mesh,
-                            head_color,
-                        )
+
+                // Shorthand: build a transform at `pos` offset by
+                // `(fx, fy, fz)` in mob-local space and draw a mesh.
+                // `tint_base` is modulated by hurt_flash and brightness.
+                let apply_tint =
+                    |base: [f32; 4]| -> [f32; 4] {
+                        [
+                            (base[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
+                                * body_brightness,
+                            (base[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                                * body_brightness,
+                            (base[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
+                                * body_brightness,
+                            base[3],
+                        ]
                     };
-                let head_pos = Vec3::new(
-                    mob.pos[0] + lunge_fwd.x,
-                    mob.pos[1] + head_off_y - death_sink + walk_bob,
-                    mob.pos[2] + lunge_fwd.z,
-                ) + fwd * head_off_fwd;
-                let head_rot = glam::Quat::from_rotation_y(mob.yaw) * tilt;
-                let head = Mat4::from_scale_rotation_translation(
-                    head_scale,
-                    head_rot,
-                    head_pos,
-                );
-                let head_tint = [
-                    (base_head_color[0] * (1.0 - hurt_flash) + 1.0 * hurt_flash)
-                        * body_brightness,
-                    (base_head_color[1] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    (base_head_color[2] * (1.0 - hurt_flash) + 0.25 * hurt_flash)
-                        * body_brightness,
-                    base_head_color[3],
-                ];
-                renderer.draw_mesh_pbr(
-                    head_mesh_use,
-                    head.to_cols_array(),
-                    head_tint,
-                    0.0,
-                    0.9,
-                );
+
+                let base_x = mob.pos[0] + lunge_fwd.x;
+                let base_z = mob.pos[2] + lunge_fwd.z;
+
+                match mob.kind {
+                    // ---- Sheep ------------------------------------------
+                    // Unchanged from the pre-W19 path: wool-tile body cube
+                    // + sheep.tga head cube.
+                    KIND_SHEEP => {
+                        let body = Mat4::from_scale_rotation_translation(
+                            Vec3::new(1.2, 0.8, 0.7),
+                            body_rot,
+                            Vec3::new(
+                                base_x,
+                                mob.pos[1] + 0.4 - death_sink + walk_bob,
+                                base_z,
+                            ),
+                        );
+                        renderer.draw_mesh_pbr(
+                            body_mesh,
+                            body.to_cols_array(),
+                            apply_tint(body_tint),
+                            0.0,
+                            0.9,
+                        );
+                        let head_pos = Vec3::new(base_x, mob.pos[1] + 0.8 - death_sink + walk_bob, base_z)
+                            + fwd * 0.45;
+                        let head = Mat4::from_scale_rotation_translation(
+                            Vec3::new(0.60, 0.45, 0.45),
+                            glam::Quat::from_rotation_y(mob.yaw) * tilt,
+                            head_pos,
+                        );
+                        renderer.draw_mesh_pbr(
+                            head_mesh,
+                            head.to_cols_array(),
+                            apply_tint(head_color),
+                            0.0,
+                            0.9,
+                        );
+                    }
+
+                    // ---- Zombie -----------------------------------------
+                    KIND_ZOMBIE => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let green = [0.30f32, 0.55, 0.30, 1.0];
+                        let head_green = [0.22f32, 0.42, 0.22, 1.0];
+                        if self.mob_meshes.zombie_loaded() {
+                            // Textured humanoid: body centre at y=0.78,
+                            // head at y=1.85, arms and legs flanking.
+                            let rot = body_rot;
+                            let by = mob.pos[1] + 0.78 - death_sink + walk_bob;
+                            // body
+                            if let Some(m) = self.mob_meshes.zombie_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, by, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // head
+                            if let Some(m) = self.mob_meshes.zombie_head {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.50, 0.50), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 1.60 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // right arm (offset to mob's right = -side)
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            if let Some(m) = self.mob_meshes.zombie_right_arm {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.25, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, by, base_z) + side * 0.38);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // left arm
+                            if let Some(m) = self.mob_meshes.zombie_left_arm {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.25, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, by, base_z) - side * 0.38);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // legs
+                            let leg_y = mob.pos[1] + 0.0 - death_sink + walk_bob;
+                            if let Some(m) = self.mob_meshes.zombie_right_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.25, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, leg_y, base_z) + side * 0.12);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.zombie_left_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.25, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, leg_y, base_z) - side * 0.12);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                        } else {
+                            // Fallback: tinted 2-cube silhouette.
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.65, 1.55, 0.45), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.78 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(green), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.55, 0.55, 0.55), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 1.85 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(head_green), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Chicken ----------------------------------------
+                    KIND_CHICKEN => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let feather = [0.95f32, 0.95, 0.9, 1.0];
+                        let comb = [0.95f32, 0.35, 0.30, 1.0];
+                        if self.mob_meshes.chicken_loaded() {
+                            let rot = body_rot;
+                            // Body centre at y=0.28
+                            if let Some(m) = self.mob_meshes.chicken_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.37, 0.50, 0.37), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.28 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // Head forward-poked
+                            if let Some(m) = self.mob_meshes.chicken_head {
+                                let hp = Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.25;
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.25, 0.25, 0.25), rot, hp);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            let leg_y = mob.pos[1] - 0.12 - death_sink + walk_bob;
+                            if let Some(m) = self.mob_meshes.chicken_right_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.18, 0.30, 0.18), rot,
+                                    Vec3::new(base_x, leg_y, base_z) + side * 0.10);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.chicken_left_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.18, 0.30, 0.18), rot,
+                                    Vec3::new(base_x, leg_y, base_z) - side * 0.10);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                        } else {
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.45, 0.55, 0.4), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.28 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(feather), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.3, 0.3, 0.3), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.25);
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(comb), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Pig --------------------------------------------
+                    KIND_PIG => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let pink = [0.95f32, 0.65, 0.65, 1.0];
+                        if self.mob_meshes.pig_loaded() {
+                            let rot = body_rot;
+                            if let Some(m) = self.mob_meshes.pig_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.62, 1.0, 0.50), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.35 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.pig_head {
+                                let hp = Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.40;
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.50, 0.50), rot, hp);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            let leg_scale = Vec3::new(0.25, 0.375, 0.25);
+                            let leg_y = mob.pos[1] - 0.12 - death_sink + walk_bob;
+                            for (mesh_opt, dx, dz) in [
+                                (self.mob_meshes.pig_right_front_leg,  0.19_f32, -0.20_f32),
+                                (self.mob_meshes.pig_left_front_leg,  -0.19,     -0.20),
+                                (self.mob_meshes.pig_right_back_leg,   0.19,      0.20),
+                                (self.mob_meshes.pig_left_back_leg,   -0.19,      0.20),
+                            ] {
+                                if let Some(m) = mesh_opt {
+                                    let off = side * dx + fwd * (-dz);
+                                    let t = Mat4::from_scale_rotation_translation(
+                                        leg_scale, rot,
+                                        Vec3::new(base_x, leg_y, base_z) + off);
+                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                                }
+                            }
+                        } else {
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(1.1, 0.75, 0.6), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.35 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(pink), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.6, 0.55, 0.55), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.40);
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(pink), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Cow --------------------------------------------
+                    _ if mob.kind == KIND_COW => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let brown = [0.55f32, 0.35, 0.20, 1.0];
+                        if self.mob_meshes.cow_loaded() {
+                            let rot = body_rot;
+                            if let Some(m) = self.mob_meshes.cow_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.75, 1.12, 0.62), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.40 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.cow_head {
+                                let hp = Vec3::new(base_x, mob.pos[1] + 0.80 - death_sink + walk_bob, base_z) + fwd * 0.45;
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.50, 0.37), rot, hp);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            let leg_scale = Vec3::new(0.25, 0.75, 0.25);
+                            let leg_y = mob.pos[1] - 0.30 - death_sink + walk_bob;
+                            for (mesh_opt, dx, dz) in [
+                                (self.mob_meshes.cow_right_front_leg,  0.25_f32, -0.25_f32),
+                                (self.mob_meshes.cow_left_front_leg,  -0.25,     -0.25),
+                                (self.mob_meshes.cow_right_back_leg,   0.25,      0.25),
+                                (self.mob_meshes.cow_left_back_leg,   -0.25,      0.25),
+                            ] {
+                                if let Some(m) = mesh_opt {
+                                    let off = side * dx + fwd * (-dz);
+                                    let t = Mat4::from_scale_rotation_translation(
+                                        leg_scale, rot,
+                                        Vec3::new(base_x, leg_y, base_z) + off);
+                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                                }
+                            }
+                        } else {
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(1.2, 0.9, 0.7), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.40 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(brown), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.55, 0.50, 0.40), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.80 - death_sink + walk_bob, base_z) + fwd * 0.45);
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(brown), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Skeleton ---------------------------------------
+                    _ if mob.kind == KIND_SKELETON => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let bone = [0.88f32, 0.87, 0.82, 1.0];
+                        let bone_head = [0.80f32, 0.79, 0.74, 1.0];
+                        if self.mob_meshes.skeleton_loaded() {
+                            let rot = body_rot;
+                            let by = mob.pos[1] + 0.78 - death_sink + walk_bob;
+                            if let Some(m) = self.mob_meshes.skeleton_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.75, 0.25), rot,
+                                    Vec3::new(base_x, by, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.skeleton_head {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.50, 0.50), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 1.60 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            // Arms: thinner than zombie (2x12x2 MC units)
+                            if let Some(m) = self.mob_meshes.skeleton_right_arm {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.12, 0.75, 0.12), rot,
+                                    Vec3::new(base_x, by, base_z) + side * 0.31);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.skeleton_left_arm {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.12, 0.75, 0.12), rot,
+                                    Vec3::new(base_x, by, base_z) - side * 0.31);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            let leg_y = mob.pos[1] + 0.0 - death_sink + walk_bob;
+                            if let Some(m) = self.mob_meshes.skeleton_right_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.12, 0.75, 0.12), rot,
+                                    Vec3::new(base_x, leg_y, base_z) + side * 0.12);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            if let Some(m) = self.mob_meshes.skeleton_left_leg {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.12, 0.75, 0.12), rot,
+                                    Vec3::new(base_x, leg_y, base_z) - side * 0.12);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                        } else {
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.45, 1.55, 0.30), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.78 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(bone), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.50, 0.50, 0.50), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 1.85 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(bone_head), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Spider -----------------------------------------
+                    // Spider has 2 body segments + 1 head + 8 legs (all
+                    // sharing the same leg UV tile). The head matches the
+                    // mob's yaw; all other parts track the body orientation.
+                    _ => {
+                        // Spider (KIND_SPIDER) OR any future unknown kind
+                        // that falls through here gets the spider/cube path.
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        let dark = [0.18f32, 0.12, 0.12, 1.0];
+                        if self.mob_meshes.spider_loaded() {
+                            let rot = body_rot;
+                            let cy = mob.pos[1] + 0.10 - death_sink + walk_bob;
+                            // Thorax (body0)
+                            if let Some(m) = self.mob_meshes.spider_body0 {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.37, 0.37, 0.37), rot,
+                                    Vec3::new(base_x, cy, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // Abdomen (body1) - behind the thorax
+                            if let Some(m) = self.mob_meshes.spider_body1 {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.62, 0.50, 0.75), rot,
+                                    Vec3::new(base_x, cy, base_z) - fwd * 0.55);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // Head - forward
+                            if let Some(m) = self.mob_meshes.spider_head {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.50, 0.50), rot,
+                                    Vec3::new(base_x, cy + 0.05, base_z) + fwd * 0.35);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                            }
+                            // 8 legs as pairs: each leg is a thin elongated
+                            // box extending sideways from the thorax.
+                            if let Some(m) = self.mob_meshes.spider_leg {
+                                let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                                let leg_offsets: [(f32, f32, f32); 4] = [
+                                    // (side_dist, forward, y_raise)
+                                    (0.55, -0.20, 0.0),
+                                    (0.55,  0.0,  0.0),
+                                    (0.55,  0.20, 0.0),
+                                    (0.55,  0.40, 0.0),
+                                ];
+                                for (sd, fwd_off, yr) in leg_offsets {
+                                    let leg_scale = Vec3::new(1.0, 0.12, 0.12);
+                                    // Right leg
+                                    let t = Mat4::from_scale_rotation_translation(
+                                        leg_scale, rot,
+                                        Vec3::new(base_x, cy + yr, base_z)
+                                            + side * sd + fwd * fwd_off);
+                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                                    // Left leg (mirror)
+                                    let t = Mat4::from_scale_rotation_translation(
+                                        leg_scale, rot,
+                                        Vec3::new(base_x, cy + yr, base_z)
+                                            - side * sd + fwd * fwd_off);
+                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                                }
+                            }
+                        } else {
+                            // Fallback: flat dark elongated cube
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(1.4, 0.45, 0.65), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.10 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube_handle, body.to_cols_array(), apply_tint(dark), 0.0, 0.9);
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.50, 0.50, 0.50), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.35 - death_sink + walk_bob, base_z) + fwd * 0.50);
+                            renderer.draw_mesh_pbr(player_cube_handle, head.to_cols_array(), apply_tint(dark), 0.0, 0.9);
+                        }
+                    }
+                } // end match mob.kind
             }
         }
         // Render any live debris particles before the world cubes
