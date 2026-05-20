@@ -20,6 +20,7 @@
 //! touched chunk + its 8 neighbours per block edit.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use infengine_voxel::{CHUNK_SIZE, ChunkCoord};
 
@@ -49,28 +50,34 @@ pub(crate) use grid::LightGrid;
 /// bake per-vertex lighting without accessing the main-thread
 /// LightingState.
 ///
-/// Each slot holds a cloned `LightGrid` (4096 bytes). `None` means the
-/// neighbour chunk's lighting hasn't been computed yet; the mesher
-/// falls back to `[0.0, 1.0]` (no block light, full sky) - the same
-/// fallback used by the main-thread `build_lit_submeshes`.
+/// W26.1: each slot is now `Option<Arc<LightGrid>>` instead of
+/// `Option<LightGrid>`. Cloning a `HaloLighting` bumps 7 refcounts
+/// (7 x 8 bytes) instead of copying 7 x 4096 bytes (~28 KB). The
+/// `LightingState` stores `Arc<LightGrid>` internally so the halo
+/// snapshot is zero-copy on the main thread.
+///
+/// `None` means the neighbour chunk's lighting hasn't been computed
+/// yet; the mesher falls back to `[0.0, 1.0]` (no block light, full
+/// sky) - the same fallback used by the main-thread
+/// `build_lit_submeshes`.
 ///
 /// `Default` yields all-None (all slots missing = all lighting fallback).
 #[derive(Clone, Default)]
 pub(crate) struct HaloLighting {
     /// Own chunk's light grid.
-    pub(crate) own: Option<LightGrid>,
+    pub(crate) own: Option<Arc<LightGrid>>,
     /// +X neighbour (dx=+1, dy=0, dz=0).
-    pub(crate) px: Option<LightGrid>,
+    pub(crate) px: Option<Arc<LightGrid>>,
     /// -X neighbour.
-    pub(crate) nx: Option<LightGrid>,
+    pub(crate) nx: Option<Arc<LightGrid>>,
     /// +Z neighbour.
-    pub(crate) pz: Option<LightGrid>,
+    pub(crate) pz: Option<Arc<LightGrid>>,
     /// -Z neighbour.
-    pub(crate) nz: Option<LightGrid>,
+    pub(crate) nz: Option<Arc<LightGrid>>,
     /// +Y neighbour.
-    pub(crate) py: Option<LightGrid>,
+    pub(crate) py: Option<Arc<LightGrid>>,
     /// -Y neighbour.
-    pub(crate) ny: Option<LightGrid>,
+    pub(crate) ny: Option<Arc<LightGrid>>,
 }
 
 impl HaloLighting {
@@ -130,10 +137,17 @@ impl HaloLighting {
 /// chunk unloads (dim swap, save unload). The `dirty` set is drained
 /// each lighting tick and translates voxel coords into the set of
 /// chunks that need a full re-flood pass.
+///
+/// W26.1: grids are stored as `Arc<LightGrid>` so that
+/// `HaloLighting` snapshots are reference-count bumps instead of
+/// 4096-byte memcpy calls. Mutable access goes through
+/// `Arc::make_mut` (copy-on-write) so in the common case where the
+/// arc is unique (not shared with any in-flight worker), we skip the
+/// allocation entirely.
 #[derive(Debug, Default)]
 pub(crate) struct LightingState {
     /// Loaded chunks -> their nibble-packed light grids.
-    pub(crate) grids: HashMap<ChunkCoord, LightGrid>,
+    pub(crate) grids: HashMap<ChunkCoord, Arc<LightGrid>>,
     /// World voxel positions touched since the last lighting tick.
     /// Drained by `take_dirty` + fed back as chunk coords to the
     /// engines.
@@ -162,15 +176,24 @@ impl LightingState {
 
     /// Get-or-create the `LightGrid` for `chunk`. Brand-new entries
     /// start fully zeroed; the engines populate them.
+    ///
+    /// W26.1: returns `&mut LightGrid` via `Arc::make_mut` so that
+    /// when the arc is uniquely owned (no in-flight worker holds a
+    /// clone), no allocation is needed. When a worker does hold a
+    /// clone, a fresh copy is made here (copy-on-write semantics).
     pub(crate) fn ensure(&mut self, chunk: ChunkCoord) -> &mut LightGrid {
-        self.grids.entry(chunk).or_insert_with(LightGrid::empty)
+        let arc = self.grids.entry(chunk).or_insert_with(|| Arc::new(LightGrid::empty()));
+        Arc::make_mut(arc)
     }
 
     /// Borrow the grid for `chunk` without creating one. Returns
     /// `None` for chunks the engines have never visited (treated
     /// by callers as "all zero" / "treat as full sky 15" depending
     /// on context).
-    pub(crate) fn get(&self, chunk: ChunkCoord) -> Option<&LightGrid> {
+    ///
+    /// W26.1: returns `Option<&Arc<LightGrid>>` so callers can
+    /// cheaply clone the Arc for `HaloLighting` snapshots.
+    pub(crate) fn get(&self, chunk: ChunkCoord) -> Option<&Arc<LightGrid>> {
         self.grids.get(&chunk)
     }
 
@@ -246,11 +269,12 @@ pub(crate) fn compute_day_factor(day_time: f32, day_length_s: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// W24: HaloLighting unit tests - run via `cargo test --lib`.
+// W24 / W26.1: HaloLighting unit tests - run via `cargo test --lib`.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod halo_tests {
-    use super::{HaloLighting, LightGrid};
+    use std::sync::Arc;
+    use super::{HaloLighting, LightGrid, LightingState};
 
     /// LightGrid is Clone; cloned copy preserves nibble values.
     #[test]
@@ -282,7 +306,7 @@ mod halo_tests {
         let mut own = LightGrid::empty();
         own.set_block([3, 4, 5], 7);
         own.set_sky([3, 4, 5], 14);
-        let halo = HaloLighting { own: Some(own), ..Default::default() };
+        let halo = HaloLighting { own: Some(Arc::new(own)), ..Default::default() };
         let v = halo.lookup([0, 0, 0], [3, 4, 5]);
         assert!((v[0] - 7.0 / 15.0).abs() < 1e-5, "block light mismatch");
         assert!((v[1] - 14.0 / 15.0).abs() < 1e-5, "sky light mismatch");
@@ -294,7 +318,7 @@ mod halo_tests {
         let cs = infengine_voxel::CHUNK_SIZE as i32;
         let mut px = LightGrid::empty();
         px.set_block([0, 0, 0], 12);
-        let halo = HaloLighting { px: Some(px), ..Default::default() };
+        let halo = HaloLighting { px: Some(Arc::new(px)), ..Default::default() };
         // World [cs, 0, 0] = local (0,0,0) in chunk [1,0,0] = px slot.
         let v = halo.lookup([0, 0, 0], [cs, 0, 0]);
         assert!((v[0] - 12.0 / 15.0).abs() < 1e-5, "block light from px grid");
@@ -305,7 +329,7 @@ mod halo_tests {
     fn halo_nx_grid_lookup() {
         let mut nx = LightGrid::empty();
         nx.set_block([15, 0, 0], 9);
-        let halo = HaloLighting { nx: Some(nx), ..Default::default() };
+        let halo = HaloLighting { nx: Some(Arc::new(nx)), ..Default::default() };
         // World [-1, 0, 0] = local (15,0,0) in chunk [-1,0,0] = nx slot.
         let v = halo.lookup([0, 0, 0], [-1, 0, 0]);
         assert!((v[0] - 9.0 / 15.0).abs() < 1e-5, "block light from nx grid");
@@ -318,7 +342,7 @@ mod halo_tests {
         let mut diag = LightGrid::empty();
         diag.set_block([0, 0, 0], 8);
         // Put the grid in px but request the diagonal chunk.
-        let halo = HaloLighting { px: Some(diag), ..Default::default() };
+        let halo = HaloLighting { px: Some(Arc::new(diag)), ..Default::default() };
         // World [cs, cs, 0] = chunk [1, 1, 0] = diagonal, no slot.
         let v = halo.lookup([0, 0, 0], [cs, cs, 0]);
         assert_eq!(v, [0.0, 1.0], "diagonal neighbour -> fallback");
@@ -329,9 +353,88 @@ mod halo_tests {
     fn halo_lighting_is_clone() {
         let mut own = LightGrid::empty();
         own.set_block([0, 0, 0], 5);
-        let halo = HaloLighting { own: Some(own), ..Default::default() };
+        let halo = HaloLighting { own: Some(Arc::new(own)), ..Default::default() };
         let cloned = halo.clone();
         let v = cloned.lookup([0, 0, 0], [0, 0, 0]);
         assert!((v[0] - 5.0 / 15.0).abs() < 1e-5);
+    }
+
+    // -----------------------------------------------------------------
+    // W26.1: Arc<LightGrid> correctness + performance tests.
+    // -----------------------------------------------------------------
+
+    /// W26.1: LightingState::get returns Option<&Arc<LightGrid>>.
+    /// This means `cloned()` bumps the refcount, not the grid bytes.
+    #[test]
+    fn lighting_state_get_returns_arc() {
+        let mut state = LightingState::new();
+        let cc = [0i32, 0, 0];
+        // Before insertion: None.
+        assert!(state.get(cc).is_none());
+        // Insert via ensure.
+        state.ensure(cc).set_block([1, 2, 3], 7);
+        // get() returns Some(&Arc<LightGrid>).
+        let arc = state.get(cc).expect("grid present");
+        assert_eq!(arc.get_block([1, 2, 3]), 7);
+    }
+
+    /// W26.1: cloning a HaloLighting with all 7 grids filled is cheap
+    /// (refcount bumps only, not 7x4096-byte copies).
+    /// We verify by cloning 1000 times; the test must complete quickly.
+    #[test]
+    fn halo_clone_is_cheap_with_arc_grids() {
+        let mut state = LightingState::new();
+        // Populate 7 neighbour coords.
+        let cc = [5i32, 5, 5];
+        let neighbours = [
+            cc,
+            [cc[0] + 1, cc[1], cc[2]],
+            [cc[0] - 1, cc[1], cc[2]],
+            [cc[0], cc[1], cc[2] + 1],
+            [cc[0], cc[1], cc[2] - 1],
+            [cc[0], cc[1] + 1, cc[2]],
+            [cc[0], cc[1] - 1, cc[2]],
+        ];
+        for n in neighbours {
+            state.ensure(n).set_block([0, 0, 0], 5);
+        }
+        let halo = HaloLighting {
+            own: state.get(cc).cloned(),
+            px:  state.get([cc[0] + 1, cc[1], cc[2]]).cloned(),
+            nx:  state.get([cc[0] - 1, cc[1], cc[2]]).cloned(),
+            pz:  state.get([cc[0], cc[1], cc[2] + 1]).cloned(),
+            nz:  state.get([cc[0], cc[1], cc[2] - 1]).cloned(),
+            py:  state.get([cc[0], cc[1] + 1, cc[2]]).cloned(),
+            ny:  state.get([cc[0], cc[1] - 1, cc[2]]).cloned(),
+        };
+        // Clone 1000x - must finish in well under 1 s.
+        let t0 = std::time::Instant::now();
+        for _ in 0..1000 {
+            let _copy = halo.clone();
+        }
+        let elapsed_ms = t0.elapsed().as_millis();
+        // Even on a slow CI machine, 1000 Arc refcount bumps x 7 slots
+        // should complete in < 50 ms comfortably.
+        assert!(
+            elapsed_ms < 50,
+            "1000 HaloLighting clones took {elapsed_ms} ms (expected < 50 ms)"
+        );
+    }
+
+    /// W26.1: ensure() COW - mutating after a clone does not affect
+    /// the snapshot held by HaloLighting.
+    #[test]
+    fn lighting_state_ensure_cow_after_snapshot() {
+        let mut state = LightingState::new();
+        let cc = [0i32, 0, 0];
+        state.ensure(cc).set_block([0, 0, 0], 3);
+        // Snapshot the Arc before further mutations.
+        let snap = state.get(cc).cloned().expect("grid present");
+        // Mutate via ensure (should trigger COW because snap holds a ref).
+        state.ensure(cc).set_block([0, 0, 0], 9);
+        // The snapshot must still hold the old value.
+        assert_eq!(snap.get_block([0, 0, 0]), 3, "snapshot not affected by COW mutation");
+        // The state now reflects the new value.
+        assert_eq!(state.get(cc).unwrap().get_block([0, 0, 0]), 9);
     }
 }
