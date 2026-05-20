@@ -151,12 +151,14 @@ pub(crate) fn build_tree() -> CommandNode {
     // Per-command argument grammars. Each grammar block builds a
     // verb-level Literal with the right argument shape underneath.
 
-    // /give <player> <item> [count]
+    // /give <block> [count]
+    // NOTE: cmd_give in cmds_creative.rs takes `arg` as
+    // "<block> [count]" and does a BLOCK_TYPES lookup, so the
+    // autocomplete tree mirrors that - no <player> arg. W14.5.
     {
         let count = CommandNode::typed("<count>", ArgKind::Integer, 2);
-        let item = CommandNode::typed("<item>", ArgKind::Item, 2).with(count);
-        let player = CommandNode::typed("<player>", ArgKind::Player, 2).with(item);
-        root.children.push(CommandNode::literal("give", 2).with(player));
+        let block = CommandNode::typed("<block>", ArgKind::Block, 2).with(count);
+        root.children.push(CommandNode::literal("give", 2).with(block));
         grammar_verbs.insert("give".into());
     }
 
@@ -595,6 +597,12 @@ pub(crate) struct ChatCompletionPopup {
     /// Cursor position the popup was computed against. Same
     /// staleness check as `input_snapshot`.
     pub(crate) cursor_snapshot: usize,
+    /// After a Tab/Enter accept the UI stores the desired cursor
+    /// offset here as a fallback; the main path applies it
+    /// directly via `egui::TextEdit::store_state` in the same
+    /// frame. This field exists for cases where the TextEditState
+    /// is not yet available (first frame after chat opens).
+    pub(crate) pending_cursor: Option<usize>,
 }
 
 impl ChatCompletionPopup {
@@ -656,6 +664,7 @@ pub(crate) fn recompute_popup(
         selected_index,
         input_snapshot: input.to_string(),
         cursor_snapshot: cursor,
+        pending_cursor: None,
     })
 }
 
@@ -663,6 +672,12 @@ pub(crate) fn recompute_popup(
 /// preserving the rest of the line. Returns the new (input, cursor)
 /// pair. If the token is at the start of input and the replacement
 /// already starts with '/', the slash is NOT duplicated.
+///
+/// A trailing space is appended when the replacement is non-empty
+/// (not a hint placeholder) and the suffix is empty or blank-
+/// prefixed (avoids doubling spaces). The cursor is placed right
+/// after the inserted text + space so the next arg can be typed
+/// immediately. W14.1.
 pub(crate) fn apply_completion(
     input: &str,
     cursor: usize,
@@ -689,18 +704,30 @@ pub(crate) fn apply_completion(
     } else {
         (abs_start, replacement.to_string())
     };
+    let suffix = &input[abs_end..];
+    // Append a trailing space so the user can type the next arg
+    // immediately. Only when the replacement is non-empty AND
+    // the input ends right after the replaced token (suffix is
+    // empty). When there is already text after the token we leave
+    // it untouched to avoid double-spacing. W14.1.
+    let add_space = !replacement_str.is_empty() && suffix.is_empty();
     let mut out = String::new();
     out.push_str(&input[..slice_start]);
     if token_idx == 0 {
         out.push('/');
     }
     out.push_str(&replacement_str);
-    out.push_str(&input[abs_end..]);
-    let new_cursor = if token_idx == 0 {
+    if add_space {
+        out.push(' ');
+    }
+    out.push_str(suffix);
+    let insertion_end = if token_idx == 0 {
         1 + replacement_str.len()
     } else {
         abs_start + replacement_str.len()
     };
+    // Cursor lands after the replacement + optional space. W14.1.
+    let new_cursor = if add_space { insertion_end + 1 } else { insertion_end };
     (out, new_cursor)
 }
 

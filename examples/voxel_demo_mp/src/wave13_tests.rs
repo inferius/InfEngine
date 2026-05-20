@@ -30,7 +30,7 @@ fn results_per_frame_is_two() {
 #[test]
 fn worker_count_bounds() {
     assert_eq!(crate::MIN_WORKERS, 4, "MIN_WORKERS must be 4");
-    assert!(crate::MAX_WORKERS >= crate::MIN_WORKERS);
+    const { assert!(crate::MAX_WORKERS >= crate::MIN_WORKERS) };
     let picked = crate::pick_worker_count();
     assert!(picked >= crate::MIN_WORKERS);
     assert!(picked <= crate::MAX_WORKERS);
