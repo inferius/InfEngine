@@ -168,8 +168,10 @@ pub(crate) fn cmd_seed(
         if !to_unload.is_empty() {
             let renderer =
                 voxel.renderer.as_mut().expect("renderer ready");
-            for entry in voxel.chunk_meshes.drain(..) {
-                renderer.remove_mesh(entry.2);
+            for (_cc, subs) in voxel.chunk_meshes.drain() {
+                for (_block, handle) in subs {
+                    renderer.remove_mesh(handle);
+                }
             }
             for cc in &to_unload {
                 voxel.world.remove_chunk(*cc);
@@ -559,8 +561,10 @@ pub(crate) fn cmd_worldgen(
         if !to_unload.is_empty() {
             let renderer =
                 voxel.renderer.as_mut().expect("renderer ready");
-            for entry in voxel.chunk_meshes.drain(..) {
-                renderer.remove_mesh(entry.2);
+            for (_cc, subs) in voxel.chunk_meshes.drain() {
+                for (_block, handle) in subs {
+                    renderer.remove_mesh(handle);
+                }
             }
             for cc in &to_unload {
                 voxel.world.remove_chunk(*cc);
@@ -605,8 +609,10 @@ pub(crate) fn cmd_clearedits(
         if !to_unload.is_empty() {
             let renderer =
                 voxel.renderer.as_mut().expect("renderer ready");
-            for entry in voxel.chunk_meshes.drain(..) {
-                renderer.remove_mesh(entry.2);
+            for (_cc, subs) in voxel.chunk_meshes.drain() {
+                for (_block, handle) in subs {
+                    renderer.remove_mesh(handle);
+                }
             }
             for cc in &to_unload {
                 voxel.world.remove_chunk(*cc);

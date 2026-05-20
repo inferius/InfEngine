@@ -729,7 +729,12 @@ struct Voxel {
     portal_cooldown_ticks: u32,
     /// Mesh handles grouped by the chunk that produced them. Lets the
     /// streaming code rebuild / unload only the chunks that change.
-    chunk_meshes: Vec<(ChunkCoord, BlockId, MeshHandle)>,
+    ///
+    /// W26.4: changed from Vec<(ChunkCoord, BlockId, MeshHandle)> to
+    /// HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>> so that removal
+    /// of a single chunk's meshes is O(1) instead of O(n) where n is
+    /// the total number of entries across all chunks.
+    chunk_meshes: HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>,
     /// Chunks queued for generation that haven't been dispatched to a
     /// worker yet.
     pending_chunks: VecDeque<ChunkCoord>,
@@ -4993,8 +4998,10 @@ impl Voxel {
                     .renderer
                     .as_mut()
                     .expect("renderer ready");
-                for entry in self.chunk_meshes.drain(..) {
-                    renderer.remove_mesh(entry.2);
+                for (_cc, subs) in self.chunk_meshes.drain() {
+                    for (_block, handle) in subs {
+                        renderer.remove_mesh(handle);
+                    }
                 }
                 for cc in &to_unload {
                     self.world.remove_chunk(*cc);
@@ -5194,7 +5201,7 @@ impl Voxel {
             dim_worldgens: HashMap::new(),
             portal_in_ticks: 0,
             portal_cooldown_ticks: 0,
-            chunk_meshes: Vec::new(),
+            chunk_meshes: HashMap::new(),
             pending_chunks: VecDeque::new(),
             pending_set: HashSet::new(),
             pending_remesh: VecDeque::new(),
@@ -5606,8 +5613,10 @@ impl Voxel {
         // parked - the active dim's chunk list completely
         // changed.
         if let Some(renderer) = self.renderer.as_mut() {
-            for entry in self.chunk_meshes.drain(..) {
-                renderer.remove_mesh(entry.2);
+            for (_cc, subs) in self.chunk_meshes.drain() {
+                for (_block, handle) in subs {
+                    renderer.remove_mesh(handle);
+                }
             }
             for (_, h) in self.liquid_mesh_handles.drain() {
                 renderer.remove_mesh(h);
@@ -5759,8 +5768,10 @@ impl Voxel {
             .map(|(c, _)| *c)
             .collect();
         if let Some(renderer) = self.renderer.as_mut() {
-            for entry in self.chunk_meshes.drain(..) {
-                renderer.remove_mesh(entry.2);
+            for (_cc, subs) in self.chunk_meshes.drain() {
+                for (_block, handle) in subs {
+                    renderer.remove_mesh(handle);
+                }
             }
             for (_, h) in self.liquid_mesh_handles.drain() {
                 renderer.remove_mesh(h);
@@ -5943,16 +5954,14 @@ impl Voxel {
             .collect();
         if !to_unload.is_empty() {
             let renderer = self.renderer.as_mut().expect("renderer ready");
-            let mut keep = Vec::with_capacity(self.chunk_meshes.len());
-            for entry in self.chunk_meshes.drain(..) {
-                // O(1) hash lookup instead of O(n) Vec::contains.
-                if to_unload.contains(&entry.0) {
-                    renderer.remove_mesh(entry.2);
-                } else {
-                    keep.push(entry);
+            // W26.4: HashMap - remove each unloaded coord in O(1).
+            for cc in &to_unload {
+                if let Some(subs) = self.chunk_meshes.remove(cc) {
+                    for (_block, handle) in subs {
+                        renderer.remove_mesh(handle);
+                    }
                 }
             }
-            self.chunk_meshes = keep;
             for cc in &to_unload {
                 self.world.remove_chunk(*cc);
             }
@@ -6092,7 +6101,7 @@ impl Voxel {
                             if let Some(a) = atlas.clone() {
                                 renderer.bind_mesh_albedo_arc(handle, a);
                             }
-                            self.chunk_meshes.push((cc, sub.block, handle));
+                            self.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                         }
                     }
 
@@ -6149,17 +6158,14 @@ impl Voxel {
                     }
 
                     // Drop old GPU handles for this chunk.
+                    // W26.4: O(1) HashMap remove instead of O(n) Vec filter.
                     {
                         let renderer = self.renderer.as_mut().expect("renderer ready");
-                        let mut keep = Vec::with_capacity(self.chunk_meshes.len());
-                        for entry in self.chunk_meshes.drain(..) {
-                            if entry.0 == coord {
-                                renderer.remove_mesh(entry.2);
-                            } else {
-                                keep.push(entry);
+                        if let Some(old_subs) = self.chunk_meshes.remove(&coord) {
+                            for (_block, handle) in old_subs {
+                                renderer.remove_mesh(handle);
                             }
                         }
-                        self.chunk_meshes = keep;
                     }
 
                     // Upload the new submeshes.
@@ -6184,7 +6190,7 @@ impl Voxel {
                             if let Some(a) = atlas.clone() {
                                 renderer.bind_mesh_albedo_arc(handle, a);
                             }
-                            self.chunk_meshes.push((coord, sub.block, handle));
+                            self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
                         }
                     }
                 }
@@ -6533,22 +6539,19 @@ impl Voxel {
     /// pool is present (headless tests, pre-init). Builds submeshes on
     /// the main thread and uploads them immediately.
     fn rebuild_chunks_sync(&mut self, coords: &[ChunkCoord]) {
-        let renderer = self.renderer.as_mut().expect("renderer ready");
         // Release old mesh handles for the affected chunks so the
         // mesh registry doesn't accumulate stale buffers across edits.
-        // Use a HashSet for O(1) lookup - at view_distance=32
-        // chunk_meshes can be tens of thousands of entries.
-        let coord_set: std::collections::HashSet<ChunkCoord> =
-            coords.iter().copied().collect();
-        let mut keep = Vec::with_capacity(self.chunk_meshes.len());
-        for entry in self.chunk_meshes.drain(..) {
-            if coord_set.contains(&entry.0) {
-                renderer.remove_mesh(entry.2);
-            } else {
-                keep.push(entry);
+        // W26.4: HashMap remove is O(1) per coord.
+        {
+            let renderer = self.renderer.as_mut().expect("renderer ready");
+            for coord in coords {
+                if let Some(old_subs) = self.chunk_meshes.remove(coord) {
+                    for (_block, handle) in old_subs {
+                        renderer.remove_mesh(handle);
+                    }
+                }
             }
         }
-        self.chunk_meshes = keep;
         let atlas = self.voxel_atlas.clone();
         for coord in coords {
             let subs = self.build_lit_submeshes(*coord);
@@ -6577,7 +6580,7 @@ impl Voxel {
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
                 }
-                self.chunk_meshes.push((*coord, sub.block, handle));
+                self.chunk_meshes.entry(*coord).or_default().push((sub.block, handle));
             }
         }
     }
@@ -6617,7 +6620,7 @@ impl Voxel {
                 if let Some(a) = atlas.clone() {
                     renderer.bind_mesh_albedo_arc(handle, a);
                 }
-                self.chunk_meshes.push((coord, sub.block, handle));
+                self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
             }
         }
     }
@@ -14552,30 +14555,33 @@ impl AppHandler for Voxel {
             let cam = renderer.camera_3d();
             Frustum::from_view_proj(cam.view_projection())
         };
-        for (coord, block, handle) in &chunk_meshes {
+        // W26.4: chunk_meshes is HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>.
+        for (coord, subs) in &chunk_meshes {
             // W13.4: skip chunks that are fully outside the view
             // frustum (behind the camera, off to the sides, beyond
             // the far plane). Typical win: ~60-70% of chunks culled.
             if !frustum.is_chunk_visible(*coord) {
                 continue;
             }
-            if let Some(def) = registry.get(*block) {
-                // Liquid voxels arrive here only when their
-                // dedicated slope path is disabled (test paths or
-                // unflagged builds). Generic alpha gate so any
-                // F_TRANSPARENT_RENDER block reads correctly.
-                let alpha = if block_is_transparent_render(*block) {
-                    0.65
-                } else {
-                    1.0
-                };
-                renderer.draw_mesh_pbr(
-                    *handle,
-                    model,
-                    [def.color[0], def.color[1], def.color[2], alpha],
-                    def.metallic,
-                    def.roughness,
-                );
+            for (block, handle) in subs {
+                if let Some(def) = registry.get(*block) {
+                    // Liquid voxels arrive here only when their
+                    // dedicated slope path is disabled (test paths or
+                    // unflagged builds). Generic alpha gate so any
+                    // F_TRANSPARENT_RENDER block reads correctly.
+                    let alpha = if block_is_transparent_render(*block) {
+                        0.65
+                    } else {
+                        1.0
+                    };
+                    renderer.draw_mesh_pbr(
+                        *handle,
+                        model,
+                        [def.color[0], def.color[1], def.color[2], alpha],
+                        def.metallic,
+                        def.roughness,
+                    );
+                }
             }
         }
         // Wire outline previewing the next action. The highlight
