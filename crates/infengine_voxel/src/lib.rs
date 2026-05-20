@@ -907,21 +907,23 @@ mod tests {
         let verts = &subs[0].vertices;
         // 6 faces * 4 verts each = 24 vertices.
         assert_eq!(verts.len(), 24);
-        // Every vertex `light.x` (block_light) sits in [0, 1].
+        // Every vertex `light().0` (block_light) sits in [0, 1].
         for v in verts {
-            assert!(v.light[0] >= 0.0 && v.light[0] <= 1.0);
-            assert!(v.light[1] >= 0.0 && v.light[1] <= 1.0);
+            let l = v.light();
+            assert!(l[0] >= 0.0 && l[0] <= 1.0);
+            assert!(l[1] >= 0.0 && l[1] <= 1.0);
         }
         // Pick the +X face: air-side cell is (9, 8, 8) -> block
         // light = (9 - 7) / 15 = 2 / 15.
         let expected_block = 2.0 / 15.0;
         let plus_x_verts: Vec<_> = verts
             .iter()
-            .filter(|v| (v.normal[0] - 1.0).abs() < 0.5)
+            .filter(|v| (v.normal()[0] - 1.0).abs() < 0.5)
             .collect();
         assert_eq!(plus_x_verts.len(), 4);
         for v in plus_x_verts {
-            assert!((v.light[0] - expected_block).abs() < 1e-5);
+            // W28.6: light() decode has 1/255 rounding tolerance.
+            assert!((v.light()[0] - expected_block).abs() < 1e-2);
         }
     }
 
@@ -940,7 +942,10 @@ mod tests {
         );
         for sub in subs {
             for v in &sub.vertices {
-                assert_eq!(v.light, [0.0, 1.0]);
+                // W28.6: packed light, decode with 1/255 tolerance.
+                let l = v.light();
+                assert!(l[0].abs() < 1e-4, "expected block=0, got {}", l[0]);
+                assert!((l[1] - 1.0).abs() < 1e-4, "expected sky=1, got {}", l[1]);
             }
         }
     }
@@ -950,9 +955,13 @@ mod tests {
         // `with_light` clamps both inputs to [0, 1] regardless of
         // raw call-site values.
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(-1.0, 2.5);
-        assert_eq!(v.light, [0.0, 1.0]);
+        let l = v.light();
+        assert!(l[0].abs() < 1e-4, "expected 0, got {}", l[0]);
+        assert!((l[1] - 1.0).abs() < 1e-4, "expected 1, got {}", l[1]);
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(0.5, 0.25);
-        assert_eq!(v.light, [0.5, 0.25]);
+        let l = v.light();
+        assert!((l[0] - 0.5).abs() < 2e-3, "expected 0.5, got {}", l[0]);
+        assert!((l[1] - 0.25).abs() < 2e-3, "expected 0.25, got {}", l[1]);
     }
 
     #[test]
@@ -995,13 +1004,13 @@ mod tests {
         let verts = &subs[0].vertices;
         let plus_y_with_anim: Vec<_> = verts
             .iter()
-            .filter(|v| v.normal[1] > 0.5 && v.anim_id == 7)
+            .filter(|v| v.normal()[1] > 0.5 && v.anim_id == 7)
             .collect();
         assert_eq!(plus_y_with_anim.len(), 4);
         // Every other face stays at 0.
         let other_zero: Vec<_> = verts
             .iter()
-            .filter(|v| v.normal[1] <= 0.5)
+            .filter(|v| v.normal()[1] <= 0.5)
             .collect();
         assert!(other_zero.iter().all(|v| v.anim_id == 0));
     }

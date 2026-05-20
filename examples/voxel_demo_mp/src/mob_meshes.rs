@@ -314,14 +314,12 @@ pub(crate) fn build_box_uv_mesh(
         let base = verts.len() as u32;
         let uvs = [uv0, uv1, uv2, uv3];
         for i in 0..4 {
-            verts.push(MeshVertex {
-                position: corners[i],
-                normal,
-                uv: uvs[i],
-                // Static mob mesh: no block light, full sky, static tile.
-                light: [0.0, 1.0],
-                anim_id: 0,
-            });
+            // W28.6: use builder API - direct struct init removed.
+            verts.push(
+                MeshVertex::new(corners[i], normal)
+                    .with_uv(uvs[i])
+                    .with_light(0.0, 1.0),
+            );
         }
         indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     };
@@ -525,15 +523,16 @@ mod tests {
         for part in parts_64x32 {
             let (verts, _) = build_mob_part_mesh(part, 64, 32);
             for v in &verts {
+                let uv = v.uv();
                 assert!(
-                    v.uv[0] >= 0.0 && v.uv[0] <= 1.0,
+                    uv[0] >= 0.0 && uv[0] <= 1.0,
                     "{part:?}: u={} out of [0,1]",
-                    v.uv[0]
+                    uv[0]
                 );
                 assert!(
-                    v.uv[1] >= 0.0 && v.uv[1] <= 1.0,
+                    uv[1] >= 0.0 && uv[1] <= 1.0,
                     "{part:?}: v={} out of [0,1]",
-                    v.uv[1]
+                    uv[1]
                 );
             }
         }
@@ -545,15 +544,16 @@ mod tests {
         for &part in all_parts() {
             let (verts, _) = build_mob_part_mesh(part, 64, 64);
             for v in &verts {
+                let uv = v.uv();
                 assert!(
-                    v.uv[0] >= 0.0 && v.uv[0] <= 1.0,
+                    uv[0] >= 0.0 && uv[0] <= 1.0,
                     "{part:?}: u={} out of [0,1] (64x64)",
-                    v.uv[0]
+                    uv[0]
                 );
                 assert!(
-                    v.uv[1] >= 0.0 && v.uv[1] <= 1.0,
+                    uv[1] >= 0.0 && uv[1] <= 1.0,
                     "{part:?}: v={} out of [0,1] (64x64)",
-                    v.uv[1]
+                    uv[1]
                 );
             }
         }
@@ -575,8 +575,8 @@ mod tests {
         for &part in all_parts() {
             let (verts, _) = build_mob_part_mesh(part, 64, 32);
             for v in &verts {
-                let len =
-                    (v.normal[0].powi(2) + v.normal[1].powi(2) + v.normal[2].powi(2)).sqrt();
+                let n = v.normal();
+                let len = (n[0].powi(2) + n[1].powi(2) + n[2].powi(2)).sqrt();
                 assert!(
                     (len - 1.0).abs() < 1e-5,
                     "{part:?}: normal length {len} != 1"
@@ -590,7 +590,11 @@ mod tests {
         for &part in all_parts() {
             let (verts, _) = build_mob_part_mesh(part, 64, 32);
             for v in &verts {
-                assert_eq!(v.light, [0.0, 1.0], "{part:?}: unexpected light");
+                let light = v.light();
+                // block=0, sky=1 -> packed as [0, 255, 0, 0]; decoded
+                // values may differ by 1/255 due to u8 rounding.
+                assert!(light[0].abs() < 1e-4, "{part:?}: expected block=0, got {}", light[0]);
+                assert!((light[1] - 1.0).abs() < 1e-4, "{part:?}: expected sky=1, got {}", light[1]);
                 assert_eq!(v.anim_id, 0, "{part:?}: unexpected anim_id");
             }
         }
@@ -606,7 +610,7 @@ mod tests {
         // Normalised: [0.125 .. 0.25] x [0.125 .. 0.25]
         let (verts, _) = build_mob_part_mesh(MobPart::ZombieHead, 64, 64);
         // +X face is vertices 8..12 (face index 2 * 4 = 8).
-        let front_uvs: Vec<[f32; 2]> = verts[8..12].iter().map(|v| v.uv).collect();
+        let front_uvs: Vec<[f32; 2]> = verts[8..12].iter().map(|v| v.uv()).collect();
         // All u-coords should be in [8/64, 16/64] = [0.125, 0.25]
         for uv in &front_uvs {
             assert!(uv[0] >= 0.124 && uv[0] <= 0.251, "front u={}", uv[0]);
@@ -621,8 +625,9 @@ mod tests {
         // Bottom pixel: v0+d+h = 0+2+2 = 4 < 32 ok.
         let (verts, _) = build_mob_part_mesh(MobPart::SpiderLeg, 64, 32);
         for v in &verts {
-            assert!(v.uv[0] <= 1.0, "spider leg u out of bounds: {}", v.uv[0]);
-            assert!(v.uv[1] <= 1.0, "spider leg v out of bounds: {}", v.uv[1]);
+            let uv = v.uv();
+            assert!(uv[0] <= 1.0, "spider leg u out of bounds: {}", uv[0]);
+            assert!(uv[1] <= 1.0, "spider leg v out of bounds: {}", uv[1]);
         }
     }
 
@@ -636,7 +641,11 @@ mod tests {
         assert_eq!(i1, i2);
         assert_eq!(v1.len(), v2.len());
         for (a, b) in v1.iter().zip(v2.iter()) {
-            assert_eq!(a.uv, b.uv);
+            // W28.6: compare decoded UVs (1/65535 rounding tolerance).
+            let ua = a.uv();
+            let ub = b.uv();
+            assert!((ua[0] - ub[0]).abs() < 2e-5, "u mismatch: {} vs {}", ua[0], ub[0]);
+            assert!((ua[1] - ub[1]).abs() < 2e-5, "v mismatch: {} vs {}", ua[1], ub[1]);
         }
     }
 

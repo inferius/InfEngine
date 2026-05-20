@@ -12,72 +12,112 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-/// Vertex format used by `Mesh3DPass`. Includes UV coordinates so the
-/// mesh shader can sample an albedo texture, plus a `light` channel
-/// (Phase L): two normalised values (block, sky) in `[0, 1]` that
-/// drive the per-voxel lighting modulation, plus an `anim_id` slot
-/// (Wave 9.y): `0` = static tile, `1..=32` indexes into the shader's
-/// `tile_anim` uniform array for animated UV scroll. Non-voxel
-/// meshes (gltf loads, cube_demo) leave `light = [0.0, 1.0]` and
-/// `anim_id = 0` so they default to "no block light, full sky,
-/// static UV" which mirrors today's unlit-textured behaviour when
-/// the shader picks `max(block, sky * day_factor)`.
+/// Vertex format used by `Mesh3DPass`. W28.6: packed to 28 bytes (was 44).
+///
+/// Layout (28 bytes, all 4-byte aligned for wgpu):
+///
+/// - `position`   `[f32; 3]`  offset  0  (12 B)  Float32x3 @ loc 0
+/// - `normal_pad` `[i8; 4]`   offset 12  ( 4 B)  Sint8x4   @ loc 1 (first 3 = normal*127, 4th = 0)
+/// - `uv_packed`  `[u16; 2]`  offset 16  ( 4 B)  Uint16x2  @ loc 2 (component / 65535.0)
+/// - `light_pad`  `[u8; 4]`   offset 20  ( 4 B)  Unorm8x4  @ loc 9 ([0]=block [1]=sky)
+/// - `anim_id`    `u32`       offset 24  ( 4 B)  Uint32    @ loc 10
+///
+/// Total: 28 bytes (saves 16 B vs old 44 B layout).
+///
+/// Public API (`.new` / `.with_uv` / `.with_light` / `.with_anim_id`) unchanged.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct MeshVertex {
+    /// World-space position.
     pub position: [f32; 3],
-    pub normal: [f32; 3],
-    pub uv: [f32; 2],
-    /// `(block_light_norm, sky_light_norm)` in `[0, 1]`. Wave 3
-    /// L.4 plumbs this from per-chunk `LightGrid`s; everything
-    /// else keeps the default `[0.0, 1.0]` ("no block light, full
-    /// sky") so day-time lighting is unchanged on legacy meshes.
-    pub light: [f32; 2],
-    /// Wave 9.y animation slot. `0` = static tile (no UV scroll),
-    /// `1..=32` indexes into the shader's `tile_anim` uniform
-    /// array so the fragment shader can offset `uv.v` by the
-    /// active frame each draw. Voxel meshes set this from the
-    /// resource pack's `AnimRegistry`; legacy callers leave it at
-    /// 0 so static UV sampling is unchanged.
+    /// Normal components packed as i8 * 127; 4th byte = padding 0.
+    pub normal_pad: [i8; 4],
+    /// UV coordinates packed as u16 = component * 65535.
+    pub uv_packed: [u16; 2],
+    /// Light values packed as unorm8: [block_light, sky_light, 0, 0].
+    pub light_pad: [u8; 4],
+    /// Animation slot id (0 = static, 1..=32 = animated tile).
     pub anim_id: u32,
 }
 
 impl MeshVertex {
+    /// Pack a float normal component to i8 range.
+    #[inline]
+    fn pack_normal_comp(n: f32) -> i8 {
+        (n.clamp(-1.0, 1.0) * 127.0) as i8
+    }
+
     pub fn new(position: [f32; 3], normal: [f32; 3]) -> Self {
         Self {
             position,
-            normal,
-            uv: [0.0, 0.0],
-            light: [0.0, 1.0],
+            normal_pad: [
+                Self::pack_normal_comp(normal[0]),
+                Self::pack_normal_comp(normal[1]),
+                Self::pack_normal_comp(normal[2]),
+                0,
+            ],
+            uv_packed: [0, 0],
+            // Default: no block light (0), full sky (255 = 1.0).
+            light_pad: [0, 255, 0, 0],
             anim_id: 0,
         }
     }
 
     pub fn with_uv(mut self, uv: [f32; 2]) -> Self {
-        self.uv = uv;
+        self.uv_packed = [
+            (uv[0].clamp(0.0, 1.0) * 65535.0) as u16,
+            (uv[1].clamp(0.0, 1.0) * 65535.0) as u16,
+        ];
         self
     }
 
     /// Override the per-vertex `(block, sky)` light values. Inputs
     /// are clamped to `[0, 1]`. The shader takes `max(block, sky *
-    /// day_factor)` and folds it into the final color, so a vertex
-    /// with `light = [0.0, 0.0]` renders pitch black (subject to
-    /// the shader's small minimum floor) while `[1.0, 1.0]` renders
-    /// at full brightness regardless of the day/night ramp.
+    /// day_factor)` and folds it into the final color.
     pub fn with_light(mut self, block: f32, sky: f32) -> Self {
-        self.light = [block.clamp(0.0, 1.0), sky.clamp(0.0, 1.0)];
+        self.light_pad[0] = (block.clamp(0.0, 1.0) * 255.0) as u8;
+        self.light_pad[1] = (sky.clamp(0.0, 1.0) * 255.0) as u8;
         self
     }
 
     /// Wave 9.y: tag this vertex with an animation slot id. `0`
     /// means static (no UV scroll); `1..=32` references an entry
-    /// in the shader's `tile_anim` uniform array so the fragment
-    /// shader walks through the animated tile's frame strip. Slots
-    /// outside `0..=32` are clamped because the uniform array is
-    /// statically sized.
+    /// in the shader's `tile_anim` uniform array. Slots outside
+    /// `0..=32` are clamped because the uniform array is statically
+    /// sized.
     pub fn with_anim_id(mut self, slot: u32) -> Self {
         self.anim_id = slot.min(32);
         self
+    }
+
+    // W28.6: decode helpers for tests and debug inspection.
+
+    /// Decode normal back to f32 components.
+    #[inline]
+    pub fn normal(&self) -> [f32; 3] {
+        [
+            self.normal_pad[0] as f32 / 127.0,
+            self.normal_pad[1] as f32 / 127.0,
+            self.normal_pad[2] as f32 / 127.0,
+        ]
+    }
+
+    /// Decode UV back to f32 components.
+    #[inline]
+    pub fn uv(&self) -> [f32; 2] {
+        [
+            self.uv_packed[0] as f32 / 65535.0,
+            self.uv_packed[1] as f32 / 65535.0,
+        ]
+    }
+
+    /// Decode (block_light, sky_light) back to f32 components.
+    #[inline]
+    pub fn light(&self) -> [f32; 2] {
+        [
+            self.light_pad[0] as f32 / 255.0,
+            self.light_pad[1] as f32 / 255.0,
+        ]
     }
 }
 
@@ -116,13 +156,7 @@ impl Mesh3DRegistry {
         // callers that submit an empty submesh would crash the
         // shadow pass. Padding lets the entry exist but the
         // `index_count = 0` draw call below stays a no-op.
-        let fallback_v: [MeshVertex; 1] = [MeshVertex {
-            position: [0.0; 3],
-            normal: [0.0; 3],
-            uv: [0.0; 2],
-            light: [0.0, 1.0],
-            anim_id: 0,
-        }];
+        let fallback_v: [MeshVertex; 1] = [MeshVertex::new([0.0; 3], [0.0; 3])];
         let fallback_i: [u32; 1] = [0];
         let (vsrc, isrc) = if vertices.is_empty() || indices.is_empty() {
             (
@@ -311,13 +345,11 @@ fn cube_geometry() -> (Vec<MeshVertex>, Vec<u16>) {
     for (normal, corners) in faces {
         let base = vertices.len() as u16;
         for (i, c) in corners.iter().enumerate() {
-            vertices.push(MeshVertex {
-                position: *c,
-                normal,
-                uv: FACE_UVS[i],
-                light: [0.0, 1.0],
-                anim_id: 0,
-            });
+            vertices.push(
+                MeshVertex::new(*c, normal)
+                    .with_uv(FACE_UVS[i])
+                    .with_light(0.0, 1.0),
+            );
         }
         // Two triangles per face wound CCW when viewed from the
         // outside (the `normal` direction). With `FrontFace::Ccw` and
@@ -494,6 +526,12 @@ impl Mesh3DPass {
             push_constant_ranges: &[],
         });
 
+        // W28.6: packed vertex layout (28 bytes, see MeshVertex).
+        // loc 0: position  [f32;3] @ offset  0  Float32x3
+        // loc 1: normal    [i8;4]  @ offset 12  Sint8x4
+        // loc 2: uv        [u16;2] @ offset 16  Uint16x2
+        // loc 9: light     [u8;4]  @ offset 20  Unorm8x4
+        // loc10: anim_id   u32     @ offset 24  Uint32
         let vertex_attrs = [
             wgpu::VertexAttribute {
                 offset: 0,
@@ -501,33 +539,22 @@ impl Mesh3DPass {
                 format: wgpu::VertexFormat::Float32x3,
             },
             wgpu::VertexAttribute {
-                offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                offset: 12,
                 shader_location: 1,
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Sint8x4,
             },
             wgpu::VertexAttribute {
-                offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                offset: 16,
                 shader_location: 2,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Uint16x2,
             },
-            // Phase L.4: per-vertex (block_light, sky_light) in [0,1].
-            // Sits right after the UV pair; the instance attrs at
-            // location 3..=8 are in a separate buffer slot so this
-            // is free to live at location 9.
             wgpu::VertexAttribute {
-                offset: (std::mem::size_of::<[f32; 3]>() * 2
-                    + std::mem::size_of::<[f32; 2]>())
-                    as wgpu::BufferAddress,
+                offset: 20,
                 shader_location: 9,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Unorm8x4,
             },
-            // Wave 9.y: anim_id (u32). 0 = static, 1..=32 indexes
-            // into the shader's `tile_anim` uniform array. Sits
-            // right after the per-vertex light pair at offset 40.
             wgpu::VertexAttribute {
-                offset: (std::mem::size_of::<[f32; 3]>() * 2
-                    + std::mem::size_of::<[f32; 2]>() * 2)
-                    as wgpu::BufferAddress,
+                offset: 24,
                 shader_location: 10,
                 format: wgpu::VertexFormat::Uint32,
             },
@@ -942,19 +969,26 @@ mod tests {
 
     #[test]
     fn mesh_vertex_size_matches_attribute_layout() {
-        // position (12) + normal (12) + uv (8) + light (8) + anim_id (4)
-        // = 44 bytes. The wgpu vertex layout's last attribute lives
-        // at offset 40 + 4 = 44, matching size_of::<MeshVertex>().
-        assert_eq!(std::mem::size_of::<MeshVertex>(), 44);
+        // W28.6: position (12) + normal_pad (4) + uv_packed (4)
+        // + light_pad (4) + anim_id (4) = 28 bytes.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 28);
     }
 
     #[test]
     fn mesh_vertex_new_defaults_static_anim_id() {
         let v = MeshVertex::new([1.0, 2.0, 3.0], [0.0, 1.0, 0.0]);
         assert_eq!(v.position, [1.0, 2.0, 3.0]);
-        assert_eq!(v.normal, [0.0, 1.0, 0.0]);
-        assert_eq!(v.uv, [0.0, 0.0]);
-        assert_eq!(v.light, [0.0, 1.0]);
+        // Decode and check with tolerance (i8 packing loses ~0.8% precision).
+        let n = v.normal();
+        assert!((n[0]).abs() < 1e-3);
+        assert!((n[1] - 1.0).abs() < 0.01);
+        assert!((n[2]).abs() < 1e-3);
+        let uv = v.uv();
+        assert!(uv[0].abs() < 1e-5);
+        assert!(uv[1].abs() < 1e-5);
+        let light = v.light();
+        assert!(light[0].abs() < 1e-4);
+        assert!((light[1] - 1.0).abs() < 1e-4);
         assert_eq!(v.anim_id, 0);
     }
 
@@ -977,21 +1011,22 @@ mod tests {
     }
 
     #[test]
-    fn mesh_vertex_anim_id_offset_is_40() {
-        // Critical for the wgpu vertex attribute at shader_location
-        // 10 - if any field shifts this offset, the GPU reads the
+    fn mesh_vertex_anim_id_offset_is_24() {
+        // W28.6: packed layout. anim_id is at offset 24 (was 40).
+        // Critical: if any field shifts this offset, the GPU reads the
         // wrong bytes and animated tiles get random slot ids.
-        let v = MeshVertex {
-            position: [0.0; 3],
-            normal: [0.0; 3],
-            uv: [0.0; 2],
-            light: [0.0; 2],
-            anim_id: 0xDEADBEEFu32,
-        };
+        let mut v = MeshVertex::new([0.0; 3], [0.0; 3]);
+        v.anim_id = 0xDEAD_BEEFu32;
         let bytes: &[u8] = bytemuck::bytes_of(&v);
-        let offset = 40usize;
+        let offset = 24usize;
         let slice = &bytes[offset..offset + 4];
         let value = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
-        assert_eq!(value, 0xDEADBEEFu32);
+        assert_eq!(value, 0xDEAD_BEEFu32);
+    }
+
+    #[test]
+    fn mesh_vertex_size_is_28() {
+        // W28.6: packed layout must be exactly 28 bytes.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 28);
     }
 }

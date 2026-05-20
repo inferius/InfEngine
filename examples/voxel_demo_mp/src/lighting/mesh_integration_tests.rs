@@ -76,14 +76,14 @@ fn open_chunk_top_face_gets_full_sky_light_attribute() {
     let plus_y: Vec<_> = stone
         .vertices
         .iter()
-        .filter(|v| (v.normal[1] - 1.0).abs() < 0.5)
+        .filter(|v| (v.normal()[1] - 1.0).abs() < 0.5)
         .collect();
     assert_eq!(plus_y.len(), 4);
     for v in plus_y {
         assert!(
-            (v.light[1] - 1.0).abs() < 1e-5,
+            (v.light()[1] - 1.0).abs() < 1e-4,
             "expected sky=1.0, got {}",
-            v.light[1]
+            v.light()[1]
         );
     }
     // The -Y face faces (8, 7, 8) - the air directly below the
@@ -93,10 +93,10 @@ fn open_chunk_top_face_gets_full_sky_light_attribute() {
     let minus_y: Vec<_> = stone
         .vertices
         .iter()
-        .filter(|v| (v.normal[1] + 1.0).abs() < 0.5)
+        .filter(|v| (v.normal()[1] + 1.0).abs() < 0.5)
         .collect();
     for v in minus_y {
-        assert!(v.light[1] < 1.0, "expected sky<1.0 under block, got {}", v.light[1]);
+        assert!(v.light()[1] < 1.0, "expected sky<1.0 under block, got {}", v.light()[1]);
     }
 }
 
@@ -119,17 +119,17 @@ fn torch_neighbour_face_gets_high_block_light() {
     let plus_x: Vec<_> = stone
         .vertices
         .iter()
-        .filter(|v| (v.normal[0] - 1.0).abs() < 0.5)
+        .filter(|v| (v.normal()[0] - 1.0).abs() < 0.5)
         .collect();
     assert_eq!(plus_x.len(), 4);
     // Torch sits AT the air cell -> block_light = 14/15.
     let expected = 14.0 / 15.0;
     for v in plus_x {
         assert!(
-            (v.light[0] - expected).abs() < 1e-4,
+            (v.light()[0] - expected).abs() < 1e-4,
             "expected block_light={}, got {}",
             expected,
-            v.light[0]
+            v.light()[0]
         );
     }
 }
@@ -154,11 +154,11 @@ fn covered_floor_face_under_ceiling_has_sky_zero() {
     let minus_y: Vec<_> = stone
         .vertices
         .iter()
-        .filter(|v| (v.normal[1] + 1.0).abs() < 0.5)
+        .filter(|v| (v.normal()[1] + 1.0).abs() < 0.5)
         .collect();
     // Every -Y vertex (the slab's underside) has sky=0.
     for v in minus_y {
-        assert_eq!(v.light[1], 0.0);
+        assert!(v.light()[1].abs() < 1e-4, "expected sky=0, got {}", v.light()[1]);
     }
 }
 
@@ -182,11 +182,11 @@ fn boundary_face_samples_neighbour_chunk_when_known() {
     let plus_x: Vec<_> = stone
         .vertices
         .iter()
-        .filter(|v| (v.normal[0] - 1.0).abs() < 0.5)
+        .filter(|v| (v.normal()[0] - 1.0).abs() < 0.5)
         .collect();
     // Neighbour chunk's (0, 8, 8) cell sits under open sky -> 15.
     for v in plus_x {
-        assert!((v.light[1] - 1.0).abs() < 1e-5);
+        assert!((v.light()[1] - 1.0).abs() < 1e-4);
     }
 }
 
@@ -203,6 +203,9 @@ fn missing_neighbour_grid_falls_back_to_full_sky_default() {
     let subs = mesh_with_light(chunk_ref, [0, 0, 0], &s);
     let stone = subs.iter().find(|s| s.block == BlockId(1)).unwrap();
     for v in &stone.vertices {
-        assert_eq!(v.light, [0.0, 1.0]);
+        // W28.6: block=0, sky=1 -> with 1/255 rounding tolerance.
+        let light = v.light();
+        assert!(light[0].abs() < 1e-4, "expected block=0, got {}", light[0]);
+        assert!((light[1] - 1.0).abs() < 1e-4, "expected sky=1, got {}", light[1]);
     }
 }

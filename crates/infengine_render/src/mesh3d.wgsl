@@ -82,24 +82,26 @@ fn animated_uv(base_uv: vec2<f32>, anim_id: u32, time_ms: f32) -> vec2<f32> {
     return vec2<f32>(base_uv.x, base_uv.y + f32(frame) * anim.v_step);
 }
 
+// W28.6: packed vertex input. CPU-side types and offsets:
+//   loc 0: position  [f32;3]  Float32x3  -> vec3<f32>   (passthrough)
+//   loc 1: normal    [i8;4]   Sint8x4    -> vec4<i32>   (decode: .xyz / 127.0)
+//   loc 2: uv        [u16;2]  Uint16x2   -> vec2<u32>   (decode: f32(c) / 65535.0)
+//   loc 9: light     [u8;4]   Unorm8x4   -> vec4<f32>   (already [0,1]; use .xy)
+//  loc 10: anim_id   u32      Uint32     -> u32          (passthrough)
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
+    // Sint8x4 -> vec4<i32> in WGSL.
+    @location(1) normal_packed: vec4<i32>,
+    // Uint16x2 -> vec2<u32> in WGSL.
+    @location(2) uv_packed: vec2<u32>,
     @location(3) inst_row0: vec4<f32>,
     @location(4) inst_row1: vec4<f32>,
     @location(5) inst_row2: vec4<f32>,
     @location(6) inst_row3: vec4<f32>,
     @location(7) inst_color: vec4<f32>,
     @location(8) inst_material: vec4<f32>,
-    // Phase L.4: per-vertex (block_light, sky_light) in [0, 1].
-    // Voxel meshes bake these in from the per-chunk LightGrid;
-    // legacy non-voxel meshes leave it at (0.0, 1.0) so they
-    // render as if they sit under open sky.
-    @location(9) light: vec2<f32>,
-    // Wave 9.y: animation slot (0 = static, 1..=32 indexes
-    // into tile_anims.entries). The fragment shader uses this
-    // to scroll UV.v through an animated tile's frame strip.
+    // Unorm8x4 -> vec4<f32> already in [0, 1]. .x = block, .y = sky.
+    @location(9) light_packed: vec4<f32>,
     @location(10) anim_id: u32,
 };
 
@@ -123,14 +125,29 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let world4 = model * vec4<f32>(in.position, 1.0);
     let normal_mat = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
 
+    // W28.6: decode packed inputs.
+    // Sint8x4 components are i32 in WGSL [-128, 127]; scale to [-1, 1].
+    let normal = vec3<f32>(
+        f32(in.normal_packed.x) / 127.0,
+        f32(in.normal_packed.y) / 127.0,
+        f32(in.normal_packed.z) / 127.0,
+    );
+    // Uint16x2 components are u32 [0, 65535]; scale to [0, 1].
+    let uv = vec2<f32>(
+        f32(in.uv_packed.x) / 65535.0,
+        f32(in.uv_packed.y) / 65535.0,
+    );
+    // Unorm8x4 already in [0, 1]; .xy = (block, sky).
+    let light = in.light_packed.xy;
+
     var out: VertexOutput;
     out.clip = camera.view_proj * world4;
     out.world_pos = world4.xyz;
-    out.world_normal = normalize(normal_mat * in.normal);
+    out.world_normal = normalize(normal_mat * normal);
     out.color = in.inst_color;
     out.material = in.inst_material;
-    out.uv = in.uv;
-    out.light = in.light;
+    out.uv = uv;
+    out.light = light;
     out.anim_id = in.anim_id;
     return out;
 }

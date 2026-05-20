@@ -15938,20 +15938,13 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
         let base = verts.len() as u32;
         let uvs = [uv0, uv1, uv2, uv3];
         for i in 0..4 {
-            verts.push(MeshVertex {
-                position: corners[i],
-                normal,
-                uv: uvs[i],
-                // Water meshes (this code path) get the default
-                // "no block light, full sky" tint. The shader's
-                // water branch handles its own animated tint and
-                // sees `light = [0.0, 1.0]` so day/night still
-                // dims it via `day_factor` like every other voxel.
-                light: [0.0, 1.0],
-                // Wave 9.y: sheep mesh is a static-textured cube,
-                // not a voxel tile, so anim_id = 0.
-                anim_id: 0,
-            });
+            // W28.6: use builder API - direct struct init removed.
+            // No block light, full sky; anim_id = 0 (static tile).
+            verts.push(
+                MeshVertex::new(corners[i], normal)
+                    .with_uv(uvs[i])
+                    .with_light(0.0, 1.0),
+            );
         }
         // Engine cube pipeline uses CCW front-face but the
         // `cube_geometry` reference winds quads as
