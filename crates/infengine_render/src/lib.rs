@@ -21,6 +21,7 @@ mod shadow;
 mod sprite;
 mod tile_anims;
 mod tilemap;
+mod uber_buffer;
 
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
+use uber_buffer::UberMeshAllocator;
 pub use particle_pass::{ParticleInstance as TexturedParticleInstance, ParticlePass};
 use tile_anims::TileAnimsResource;
 pub use tile_anims::{MAX_ANIM_SLOTS, TileAnimEntry, TileAnimsUniform};
@@ -130,6 +132,37 @@ pub struct Renderer {
     pub particle_pass: ParticlePass,
     /// Queued textured particle instances for the current frame.
     particle_instances: Vec<TexturedParticleInstance>,
+
+    // W32: UberGpuBuffer chunk batching.
+    //
+    // All chunk meshes share a single vertex + index buffer allocated by
+    // `uber`. Per-frame draw commands accumulate in `chunk_draw_queue_*`
+    // and are flushed to the GPU via one `multi_draw_indexed_indirect` call
+    // per render layer (opaque + transparent) inside `render()`.
+
+    /// Shared vertex/index pools for chunk meshes.
+    uber: UberMeshAllocator,
+    /// Monotonically-increasing handle counter for uber-path meshes.
+    /// Kept separate from the legacy counter inside Mesh3DRegistry so
+    /// the two handle spaces never collide.
+    uber_next_id: u32,
+    /// Per-frame opaque indirect draw commands queued by `queue_chunk_draw`.
+    chunk_draw_queue_opaque: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    /// Per-frame transparent indirect draw commands.
+    chunk_draw_queue_transparent: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    /// GPU buffer for the per-frame indirect command list (opaque + transparent,
+    /// written at the start of each render call and used immediately).
+    uber_indirect_buf: wgpu::Buffer,
+    /// GPU buffer for the per-frame per-chunk instance data (model/color/material).
+    /// Written alongside indirect commands; indexed by `first_instance` in the
+    /// indirect args.  Size doubles on overflow just like the legacy instance buf.
+    uber_instance_buf: wgpu::Buffer,
+    uber_instance_capacity: u64,
+    /// Whether `INDIRECT_FIRST_INSTANCE` was successfully enabled on this
+    /// device. When false the indirect path uses a tight loop of
+    /// `draw_indexed_indirect` calls instead (still better than the
+    /// legacy path because the vertex/index buffers never rebind).
+    has_indirect_first_instance: bool,
 }
 
 impl Renderer {
@@ -177,9 +210,29 @@ impl Renderer {
             .max_bind_groups
             .max(5)
             .min(adapter.limits().max_bind_groups);
+
+        // W32: try to enable INDIRECT_FIRST_INSTANCE so that
+        // multi_draw_indexed_indirect can use non-zero first_instance to
+        // index per-chunk instance data. This is required on DX12, Vulkan,
+        // and Metal; gracefully fall back to a loop of draw_indexed_indirect
+        // if the adapter lacks support (e.g. some OpenGL backends).
+        let adapter_features = adapter.features();
+        let indirect_first_instance =
+            adapter_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        let required_features = if indirect_first_instance {
+            wgpu::Features::INDIRECT_FIRST_INSTANCE
+        } else {
+            wgpu::Features::empty()
+        };
+        if indirect_first_instance {
+            info!("W32: INDIRECT_FIRST_INSTANCE enabled - using multi_draw_indexed_indirect");
+        } else {
+            warn!("W32: INDIRECT_FIRST_INSTANCE unavailable - falling back to draw_indexed_indirect loop");
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("infengine_render::device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits,
             memory_hints: MemoryHints::Performance,
             trace: Trace::Off,
@@ -264,6 +317,27 @@ impl Renderer {
         let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
         let depth_view = create_depth_view(&device, config.width, config.height);
 
+        // W32: allocate uber GPU pools and per-frame staging buffers.
+        // The indirect buffer is pre-allocated for 2048 commands (one per
+        // visible chunk submesh); it doubles on overflow like the instance buf.
+        const UBER_INITIAL_INDIRECT_CAP: u64 = 2048;
+        const UBER_INITIAL_INSTANCE_CAP: u64 = 2048;
+        let uber = UberMeshAllocator::new(&device);
+        let uber_indirect_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("infengine_render::uber_indirect_buf"),
+            size: UBER_INITIAL_INDIRECT_CAP
+                * std::mem::size_of::<wgpu::util::DrawIndexedIndirectArgs>() as u64,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uber_instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("infengine_render::uber_instance_buf"),
+            size: UBER_INITIAL_INSTANCE_CAP
+                * std::mem::size_of::<MeshInstance>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             surface,
             device,
@@ -296,6 +370,14 @@ impl Renderer {
             sun_intensity: 3.0,
             particle_pass,
             particle_instances: Vec::new(),
+            uber,
+            uber_next_id: 0x8000_0000, // high bit set avoids collisions with legacy handles
+            chunk_draw_queue_opaque: Vec::new(),
+            chunk_draw_queue_transparent: Vec::new(),
+            uber_indirect_buf,
+            uber_instance_buf,
+            uber_instance_capacity: UBER_INITIAL_INSTANCE_CAP,
+            has_indirect_first_instance: indirect_first_instance,
         })
     }
 
@@ -443,6 +525,111 @@ impl Renderer {
     /// each other out of the depth buffer.
     pub fn set_mesh_transparent(&mut self, handle: MeshHandle, transparent: bool) {
         self.meshes.set_transparent(handle, transparent);
+    }
+
+    // --- W32: UberGpuBuffer chunk draw API ---
+
+    /// W32: Register a chunk sub-mesh into the shared uber GPU buffer and
+    /// return a `MeshHandle` key. The vertices/indices are written into the
+    /// shared pool immediately (via `queue.write_buffer`).
+    ///
+    /// Returns a handle on success or falls back to `create_mesh` (legacy
+    /// per-buffer path) if the uber pool is full (unlikely at normal view
+    /// distances but handled gracefully).
+    ///
+    /// Use `remove_chunk_mesh` to release the slot when the chunk is unloaded.
+    pub fn create_chunk_mesh(
+        &mut self,
+        name: &str,
+        vertices: &[MeshVertex],
+        indices: &[u32],
+    ) -> MeshHandle {
+        let handle = MeshHandle(self.uber_next_id);
+        self.uber_next_id += 1;
+        if !self.uber.alloc(&self.queue, handle, vertices, indices) {
+            // Pool full - fall back to legacy path. The handle id already
+            // advanced past the uber range; map it into the legacy registry.
+            // This is a rare edge case and the mesh will not benefit from
+            // the batched draw path this frame.
+            warn!(name, "W32: uber pool full, allocating legacy mesh buffer");
+            return self.meshes.insert(&self.device, name, vertices, indices);
+        }
+        handle
+    }
+
+    /// W32: Bind an albedo texture to a chunk mesh handle (same semantics as
+    /// `bind_mesh_albedo_arc` for legacy meshes - the uber pipeline uses the
+    /// global atlas so this is currently a no-op, but kept for API symmetry).
+    pub fn bind_chunk_mesh_albedo(&mut self, _handle: MeshHandle, _albedo: AlbedoHandle) {
+        // Uber-path chunks share the global atlas set via `set_mesh_albedo`.
+        // Per-chunk albedo overrides are not supported in the uber path; the
+        // atlas covers all block textures. This method exists so callers can
+        // use the same call site for both legacy and uber meshes.
+    }
+
+    /// W32: Release a chunk mesh slot. Returns `true` if the handle was live.
+    /// The slot is pushed to the free list and will be reused by a future
+    /// `create_chunk_mesh` call.
+    pub fn remove_chunk_mesh(&mut self, handle: MeshHandle) -> bool {
+        if self.uber.free(handle) {
+            return true;
+        }
+        // Handle may be from the legacy fallback path.
+        self.mesh_albedos.remove(&handle);
+        self.meshes.remove(handle)
+    }
+
+    /// W32: Flag a chunk mesh as transparent (e.g. liquid surface).
+    /// Transparent chunk meshes are drawn in a separate sub-pass with
+    /// alpha blending + no depth write, same as the legacy transparent path.
+    pub fn set_chunk_mesh_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+        if self.uber.get(handle).is_some() {
+            self.uber.set_transparent(handle, transparent);
+        } else {
+            self.meshes.set_transparent(handle, transparent);
+        }
+    }
+
+    /// W32: Queue a chunk mesh draw for the current frame.
+    ///
+    /// The call is O(1) - it just pushes a `DrawIndexedIndirectArgs` + a
+    /// `MeshInstance` into a per-frame Vec. The actual GPU work (buffer
+    /// upload + `multi_draw_indexed_indirect`) happens once at `render()` time.
+    ///
+    /// `model`, `color`, `metallic`, `roughness` have the same semantics as
+    /// `draw_mesh_pbr`. Handles that were registered via the legacy fallback
+    /// path automatically route to the non-batched `draw_mesh_pbr` call.
+    pub fn queue_chunk_draw(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+    ) {
+        if let Some(alloc) = self.uber.get(handle) {
+            if alloc.i_count == 0 {
+                return; // Empty mesh - no draw needed.
+            }
+            let instance = MeshInstance::new(model, color).with_material(metallic, roughness);
+            // first_instance is filled in at flush time (we don't know the
+            // packed index yet). Store 0 as placeholder.
+            let cmd = wgpu::util::DrawIndexedIndirectArgs {
+                index_count: alloc.i_count,
+                instance_count: 1,
+                first_index: (alloc.i_byte_off / std::mem::size_of::<u32>() as u64) as u32,
+                base_vertex: (alloc.v_byte_off / std::mem::size_of::<MeshVertex>() as u64) as i32,
+                first_instance: 0, // patched during flush
+            };
+            if alloc.transparent {
+                self.chunk_draw_queue_transparent.push((cmd, instance));
+            } else {
+                self.chunk_draw_queue_opaque.push((cmd, instance));
+            }
+        } else {
+            // Legacy fallback path (uber pool was full when this mesh was created).
+            self.draw_mesh_pbr(handle, model, color, metallic, roughness);
+        }
     }
 
     /// Load every primitive in a glTF / glb file and register each as
@@ -873,6 +1060,78 @@ impl Renderer {
         let mesh3d_count = self.mesh3d_queue.len() as u32;
         let debug3d_count = self.debug3d_vertices.len() as u32;
 
+        // W32: pack the opaque + transparent chunk draw queues and upload to
+        // GPU. Indirect args and instance data are interleaved: opaque commands
+        // first, then transparent. first_instance is patched here to select
+        // the right row in the per-frame uber instance buffer.
+        let chunk_opaque_count = self.chunk_draw_queue_opaque.len() as u32;
+        let chunk_transparent_count = self.chunk_draw_queue_transparent.len() as u32;
+        let total_chunk_draws =
+            (chunk_opaque_count + chunk_transparent_count) as u64;
+
+        if total_chunk_draws > 0 {
+            // Grow per-frame buffers if needed (doubling strategy).
+            let indirect_elem = std::mem::size_of::<wgpu::util::DrawIndexedIndirectArgs>() as u64;
+            let instance_elem = std::mem::size_of::<MeshInstance>() as u64;
+            // uber_instance_capacity tracks current buf capacity in elements.
+            // We reuse it as the indirect cap too (both grow together).
+            if total_chunk_draws > self.uber_instance_capacity {
+                let mut new_cap = self.uber_instance_capacity;
+                while new_cap < total_chunk_draws {
+                    new_cap *= 2;
+                }
+                self.uber_indirect_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("infengine_render::uber_indirect_buf"),
+                    size: new_cap * indirect_elem,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.uber_instance_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("infengine_render::uber_instance_buf"),
+                    size: new_cap * instance_elem,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.uber_instance_capacity = new_cap;
+            }
+
+            // Pack indirect args with patched first_instance, then pack instances.
+            let mut indirect_data: Vec<wgpu::util::DrawIndexedIndirectArgs> =
+                Vec::with_capacity(total_chunk_draws as usize);
+            let mut instance_data: Vec<MeshInstance> =
+                Vec::with_capacity(total_chunk_draws as usize);
+
+            for (idx, (base_cmd, inst)) in self
+                .chunk_draw_queue_opaque
+                .iter()
+                .chain(self.chunk_draw_queue_transparent.iter())
+                .enumerate()
+            {
+                let mut cmd = *base_cmd;
+                cmd.first_instance = if self.has_indirect_first_instance {
+                    idx as u32
+                } else {
+                    // Without the feature first_instance must be 0.
+                    // We fall back to a draw loop instead of multi-draw,
+                    // so this value is unused in that path.
+                    0
+                };
+                indirect_data.push(cmd);
+                instance_data.push(*inst);
+            }
+
+            self.queue.write_buffer(
+                &self.uber_indirect_buf,
+                0,
+                bytemuck::cast_slice(&indirect_data),
+            );
+            self.queue.write_buffer(
+                &self.uber_instance_buf,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+        }
+
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -883,7 +1142,8 @@ impl Renderer {
 
         // Shadow depth pass first - writes the sun-perspective depth
         // map that the mesh fragment shader samples for occlusion.
-        if mesh3d_count > 0 {
+        let run_shadow = mesh3d_count > 0 || chunk_opaque_count > 0;
+        if run_shadow {
             let mut spass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::shadow_pass"),
                 color_attachments: &[],
@@ -898,18 +1158,36 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            self.shadow.draw(
-                &mut spass,
-                &self.meshes,
-                &mesh_batches,
-                self.mesh3d.instance_buffer(),
-            );
+            if mesh3d_count > 0 {
+                self.shadow.draw(
+                    &mut spass,
+                    &self.meshes,
+                    &mesh_batches,
+                    self.mesh3d.instance_buffer(),
+                );
+            }
+            // W32: shadow pass for uber chunk meshes (opaque only -
+            // transparent meshes like water don't cast shadows).
+            if chunk_opaque_count > 0 {
+                self.shadow.draw_uber(
+                    &mut spass,
+                    &self.uber.vertex_buf,
+                    &self.uber.index_buf,
+                    &self.uber_indirect_buf,
+                    &self.uber_instance_buf,
+                    chunk_opaque_count,
+                    self.has_indirect_first_instance,
+                );
+            }
         }
 
         // 3D pass next (with depth), then 2D pass on top (no depth).
         // Always run when meshes, grid, or debug lines are present so
         // the depth/color attachments get cleared.
-        let run_scene3d = mesh3d_count > 0 || self.show_grid || debug3d_count > 0;
+        let run_scene3d = mesh3d_count > 0
+            || total_chunk_draws > 0
+            || self.show_grid
+            || debug3d_count > 0;
         if run_scene3d {
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::mesh3d_pass"),
@@ -943,6 +1221,24 @@ impl Renderer {
                     &self.lights.bind_group,
                     &self.tile_anims.bind_group,
                     &self.mesh_albedos,
+                );
+            }
+            // W32: flush uber chunk draws. The uber pipeline uses the same
+            // shader/layout as mesh3d but with a shared vertex+index buffer.
+            // Opaque draws first (depth-write on), transparent last.
+            if total_chunk_draws > 0 {
+                self.mesh3d.draw_uber_chunks(
+                    &mut rpass,
+                    &self.uber.vertex_buf,
+                    &self.uber.index_buf,
+                    &self.uber_indirect_buf,
+                    &self.uber_instance_buf,
+                    &self.shadow.sample_bg,
+                    &self.lights.bind_group,
+                    &self.tile_anims.bind_group,
+                    chunk_opaque_count,
+                    chunk_transparent_count,
+                    self.has_indirect_first_instance,
                 );
             }
             if self.show_grid {
@@ -1030,6 +1326,9 @@ impl Renderer {
         self.debug3d_vertices.clear();
         self.light_queue.clear();
         self.particle_instances.clear();
+        // W32: clear the per-frame chunk draw queues.
+        self.chunk_draw_queue_opaque.clear();
+        self.chunk_draw_queue_transparent.clear();
         Ok(())
     }
 

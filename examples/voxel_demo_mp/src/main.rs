@@ -5055,7 +5055,7 @@ impl Voxel {
                     .expect("renderer ready");
                 for (_cc, subs) in self.chunk_meshes.drain() {
                     for (_block, handle) in subs {
-                        renderer.remove_mesh(handle);
+                        renderer.remove_chunk_mesh(handle);
                     }
                 }
                 for cc in &to_unload {
@@ -5677,7 +5677,7 @@ impl Voxel {
         if let Some(renderer) = self.renderer.as_mut() {
             for (_cc, subs) in self.chunk_meshes.drain() {
                 for (_block, handle) in subs {
-                    renderer.remove_mesh(handle);
+                    renderer.remove_chunk_mesh(handle);
                 }
             }
             for (_, h) in self.liquid_mesh_handles.drain() {
@@ -5832,7 +5832,7 @@ impl Voxel {
         if let Some(renderer) = self.renderer.as_mut() {
             for (_cc, subs) in self.chunk_meshes.drain() {
                 for (_block, handle) in subs {
-                    renderer.remove_mesh(handle);
+                    renderer.remove_chunk_mesh(handle);
                 }
             }
             for (_, h) in self.liquid_mesh_handles.drain() {
@@ -6076,7 +6076,7 @@ impl Voxel {
             for cc in &to_unload {
                 if let Some(subs) = self.chunk_meshes.remove(cc) {
                     for (_block, handle) in subs {
-                        renderer.remove_mesh(handle);
+                        renderer.remove_chunk_mesh(handle);
                     }
                 }
             }
@@ -6233,7 +6233,7 @@ impl Voxel {
                             if block_skips_chunk_mesh(sub.block) {
                                 continue;
                             }
-                            let handle = renderer.create_mesh(
+                            let handle = renderer.create_chunk_mesh(
                                 &format!(
                                     "voxel_chunk_{}_{}_{}_b{}",
                                     cc[0], cc[1], cc[2], sub.block.0
@@ -6242,7 +6242,7 @@ impl Voxel {
                                 &sub.indices,
                             );
                             if let Some(a) = atlas.clone() {
-                                renderer.bind_mesh_albedo_arc(handle, a);
+                                renderer.bind_chunk_mesh_albedo(handle, a);
                             }
                             self.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                         }
@@ -6306,7 +6306,7 @@ impl Voxel {
                         let renderer = self.renderer.as_mut().expect("renderer ready");
                         if let Some(old_subs) = self.chunk_meshes.remove(&coord) {
                             for (_block, handle) in old_subs {
-                                renderer.remove_mesh(handle);
+                                renderer.remove_chunk_mesh(handle);
                             }
                         }
                     }
@@ -6322,7 +6322,7 @@ impl Voxel {
                             if block_skips_chunk_mesh(sub.block) {
                                 continue;
                             }
-                            let handle = renderer.create_mesh(
+                            let handle = renderer.create_chunk_mesh(
                                 &format!(
                                     "voxel_chunk_{}_{}_{}_b{}",
                                     coord[0], coord[1], coord[2], sub.block.0
@@ -6331,7 +6331,7 @@ impl Voxel {
                                 &sub.indices,
                             );
                             if let Some(a) = atlas.clone() {
-                                renderer.bind_mesh_albedo_arc(handle, a);
+                                renderer.bind_chunk_mesh_albedo(handle, a);
                             }
                             self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
                         }
@@ -6837,7 +6837,7 @@ impl Voxel {
             for coord in coords {
                 if let Some(old_subs) = self.chunk_meshes.remove(coord) {
                     for (_block, handle) in old_subs {
-                        renderer.remove_mesh(handle);
+                        renderer.remove_chunk_mesh(handle);
                     }
                 }
             }
@@ -6859,7 +6859,7 @@ impl Voxel {
                 if block_skips_chunk_mesh(sub.block) {
                     continue;
                 }
-                let handle = renderer.create_mesh(
+                let handle = renderer.create_chunk_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
                         coord[0], coord[1], coord[2], sub.block.0
@@ -6868,7 +6868,7 @@ impl Voxel {
                     &sub.indices,
                 );
                 if let Some(a) = atlas.clone() {
-                    renderer.bind_mesh_albedo_arc(handle, a);
+                    renderer.bind_chunk_mesh_albedo(handle, a);
                 }
                 self.chunk_meshes.entry(*coord).or_default().push((sub.block, handle));
             }
@@ -6899,7 +6899,7 @@ impl Voxel {
                 if block_skips_chunk_mesh(sub.block) {
                     continue;
                 }
-                let handle = renderer.create_mesh(
+                let handle = renderer.create_chunk_mesh(
                     &format!(
                         "voxel_chunk_{}_{}_{}_b{}",
                         coord[0], coord[1], coord[2], sub.block.0
@@ -6908,7 +6908,7 @@ impl Voxel {
                     &sub.indices,
                 );
                 if let Some(a) = atlas.clone() {
-                    renderer.bind_mesh_albedo_arc(handle, a);
+                    renderer.bind_chunk_mesh_albedo(handle, a);
                 }
                 self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
             }
@@ -14900,7 +14900,10 @@ impl AppHandler for Voxel {
             let cam = renderer.camera_3d();
             Frustum::from_view_proj(cam.view_projection())
         };
-        // W26.4: chunk_meshes is HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>.
+        // W26.4 / W32: chunk_meshes is HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>.
+        // W32: draw_mesh_pbr replaced with queue_chunk_draw - all visible chunk
+        // submeshes are batched into a single multi_draw_indexed_indirect call
+        // at render() time instead of one draw call per submesh.
         for (coord, subs) in &chunk_meshes {
             // W13.4: skip chunks that are fully outside the view
             // frustum (behind the camera, off to the sides, beyond
@@ -14919,7 +14922,7 @@ impl AppHandler for Voxel {
                     } else {
                         1.0
                     };
-                    renderer.draw_mesh_pbr(
+                    renderer.queue_chunk_draw(
                         *handle,
                         model,
                         [def.color[0], def.color[1], def.color[2], alpha],

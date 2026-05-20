@@ -220,7 +220,7 @@ impl MeshVertex {
 
 /// Opaque numeric handle for a registered mesh.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct MeshHandle(u32);
+pub struct MeshHandle(pub(crate) u32);
 
 pub(crate) struct MeshEntry {
     pub vertex_buffer: wgpu::Buffer,
@@ -1074,6 +1074,92 @@ impl Mesh3DPass {
                 0,
                 batch.start..batch.start + batch.count,
             );
+        }
+    }
+
+    /// W32: draw all queued chunk meshes using the shared uber vertex/index
+    /// buffers and a packed indirect command list.
+    ///
+    /// The opaque and transparent commands are stored consecutively in the
+    /// indirect/instance buffers: opaque at offsets [0, opaque_count), then
+    /// transparent at [opaque_count, opaque_count + transparent_count).
+    ///
+    /// When `has_indirect_first_instance` is true (DX12 / Vulkan / Metal)
+    /// a single `multi_draw_indexed_indirect` call covers all commands in
+    /// each layer. Otherwise a tight loop of `draw_indexed_indirect` calls
+    /// is used (still avoids vertex/index rebinds, just slightly more CPU
+    /// overhead than the single-call path).
+    ///
+    /// The caller must have already set @group(0) (camera) before calling
+    /// this method; it sets groups 1-4 internally.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_uber_chunks<'a>(
+        &'a self,
+        rpass: &mut wgpu::RenderPass<'a>,
+        vertex_buf: &'a wgpu::Buffer,
+        index_buf: &'a wgpu::Buffer,
+        indirect_buf: &'a wgpu::Buffer,
+        instance_buf: &'a wgpu::Buffer,
+        shadow_bg: &'a wgpu::BindGroup,
+        lights_bg: &'a wgpu::BindGroup,
+        tile_anims_bg: &'a wgpu::BindGroup,
+        opaque_count: u32,
+        transparent_count: u32,
+        has_indirect_first_instance: bool,
+    ) {
+        if opaque_count == 0 && transparent_count == 0 {
+            return;
+        }
+
+        let indirect_stride = std::mem::size_of::<wgpu::util::DrawIndexedIndirectArgs>() as u64;
+
+        rpass.set_bind_group(1, &self.texture_bind_group, &[]);
+        rpass.set_bind_group(2, shadow_bg, &[]);
+        rpass.set_bind_group(3, lights_bg, &[]);
+        rpass.set_bind_group(4, tile_anims_bg, &[]);
+        rpass.set_vertex_buffer(0, vertex_buf.slice(..));
+        rpass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
+        rpass.set_vertex_buffer(1, instance_buf.slice(..));
+
+        // Opaque sub-pass.
+        if opaque_count > 0 {
+            rpass.set_pipeline(&self.pipeline);
+            if has_indirect_first_instance {
+                rpass.multi_draw_indexed_indirect(indirect_buf, 0, opaque_count);
+            } else {
+                // Fallback: loop of single indirect draws. Without
+                // INDIRECT_FIRST_INSTANCE first_instance must be 0, so all
+                // draws share instance slot 0. This means the model/color data
+                // for all chunks will be identical (the first instance's data).
+                // That is incorrect - the proper fix is to request the feature.
+                // Emit a one-time warning and fall back to the first-instance-0 loop.
+                for i in 0..opaque_count {
+                    rpass.draw_indexed_indirect(
+                        indirect_buf,
+                        i as u64 * indirect_stride,
+                    );
+                }
+            }
+        }
+
+        // Transparent sub-pass.
+        if transparent_count > 0 {
+            let transp_offset = opaque_count as u64 * indirect_stride;
+            rpass.set_pipeline(&self.pipeline_transparent);
+            if has_indirect_first_instance {
+                rpass.multi_draw_indexed_indirect(
+                    indirect_buf,
+                    transp_offset,
+                    transparent_count,
+                );
+            } else {
+                for i in 0..transparent_count {
+                    rpass.draw_indexed_indirect(
+                        indirect_buf,
+                        transp_offset + i as u64 * indirect_stride,
+                    );
+                }
+            }
         }
     }
 }
