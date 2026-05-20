@@ -937,3 +937,82 @@ neighbour, pushing it 5 times into the queue. At `view_distance=32`
 (67600 chunks) the queue could accumulate thousands of redundant
 entries per second, keeping `REMESH_DEFERRED_PER_FRAME` permanently
 maxed out and causing persistent stutter.
+
+## Wave 24 - Parallel chunk meshing in worker threads
+
+### Motivation
+
+W22-W23 moved generation to workers but meshing (`build_lit_submeshes`)
+stayed on the main thread - every arriving chunk triggered a full
+MC-atlas + lighting + special-model pass on the main thread, causing
+visible stutter during initial world load.
+
+MC source reference: `ChunkRenderDispatcher.compile()` runs N async
+compile tasks per frame. W24 mirrors this: N worker threads now each
+run a full `mesh_chunk_in_worker` call concurrently. Main thread only
+does GPU upload (`renderer.create_mesh`) which cannot be threaded.
+
+### Changes
+
+**W24.1 - LightGrid Clone + Arc<ResourcePack>**
+
+`LightGrid` gains `#[derive(Clone)]` (4096 bytes per grid; cheap to
+copy for the halo snapshot). `Voxel::resource_pack` changes from
+`ResourcePack` to `Arc<ResourcePack>` so workers share a reference
+without locking. All three construction sites wrap with `Arc::new`.
+
+**W24.2 - HaloLighting + extended ChunkJob**
+
+New type `lighting::HaloLighting` (derives Clone + Default): owns 7
+`Option<LightGrid>` slots - own chunk + +X/-X/+Z/-Z/+Y/-Y neighbours.
+The `lookup(own_coord, world)` method maps a world voxel coord to the
+correct slot and returns `[block_light, sky_light]` in `0.0..=1.0`,
+falling back to `[0.0, 1.0]` when the slot is None (no block light,
+full sky - same as the pre-W24 main-thread fallback).
+
+`ChunkJob` is extended with `pack: Arc<ResourcePack>` and
+`halo: HaloLighting`. `WorkerResult` gains `submeshes: Vec<ChunkSubmesh>`.
+
+**W24.3 - mesh_chunk_in_worker free function**
+
+Replicates the closure setup of `build_lit_submeshes` but captures
+`&ResourcePack` + `&HaloLighting` instead of `&self`. Calls
+`chunk_mesh_with_atlas_light_anim_and_special` via the same path.
+Called at the end of each worker iteration after generation + side-
+effect scan.
+
+**W24.4 - Main-thread integration**
+
+`stream_chunks` dispatch path: snapshot `Arc::clone(&resource_pack)` +
+pre-fetch 6-neighbour halo grids (cloned from `LightingState`), ship
+with each job.
+
+`stream_chunks` delivery path: on `WorkerResult` arrival, upload
+`result.submeshes` directly via `renderer.create_mesh` +
+`bind_mesh_albedo_arc` instead of enqueueing to `pending_remesh`. The
+new chunk itself is NOT enqueued - it was just meshed by the worker.
+The 4 horizontal neighbours ARE still enqueued into `pending_remesh`
+because their boundary faces depend on the new chunk's voxels.
+
+### Tradeoffs
+
+- Workers cannot access the GPU. Mesh data ships as
+  `Vec<MeshVertex> + Vec<u32>` (already the shape of `ChunkSubmesh`).
+- Halo snapshot is taken at enqueue time. If lighting propagates
+  for the neighbours AFTER enqueue, the worker's baked light will be
+  stale until the next `tick_lighting` triggers a `rebuild_chunks`
+  remesh. This is acceptable: initial load gets correct neighbour
+  geometry, lighting update pass runs afterwards and triggers a
+  boundary remesh with fresh values.
+- Block edits + neighbour remeshes triggered by `pending_remesh` still
+  run `build_lit_submeshes` on the main thread (W25 could parallelise
+  these too via `RemeshJob` dispatched to the worker pool).
+
+### Deferred (W25)
+
+Neighbour remeshes from `pending_remesh` still execute
+`build_lit_submeshes` on the main thread. The bulk of initial-load
+meshing is now parallelised; ongoing per-block edits remain
+main-thread. W25 could dispatch a `RemeshJob` variant (carries an
+`Arc<Chunk>` instead of regenerating) to fully empty the main-thread
+meshing path.
