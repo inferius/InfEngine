@@ -16039,27 +16039,15 @@ fn water_face_normal(
     v2: [f32; 3],
     _v3: [f32; 3],
 ) -> [f32; 3] {
-    // W34 final: caller emits corners in SW->SE->NE->NW order (CW from
-    // above when viewed at flat surface). Cross (v1-v0)x(v2-v0) gives
-    // -Y. We negate the result so the shader-side stored normal points
-    // +Y. The geometric triangle winding stays CW (= -Y) but with the
-    // transparent pipeline's cull_mode::None both sides draw anyway,
-    // and the +Y normal makes lighting compute correctly for the typical
-    // above-water vantage.
-    let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-    let b = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-    let raw = [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ];
-    let n = [-raw[0], -raw[1], -raw[2]];
-    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if len < 1e-6 {
-        [0.0, 1.0, 0.0]
-    } else {
-        [n[0] / len, n[1] / len, n[2] / len]
-    }
+    // W34: explicit upward normal for top face. The water top quad is
+    // always nearly horizontal (corner heights wiggle within [0, 1])
+    // so the outward normal is essentially +Y. Cross-product attempts
+    // gave -Y for the SW,SE,NE corner order (caller convention is CW
+    // from above), and negating that produced an off-look from above
+    // per the user's repeated reports. Force-emit +Y which is the only
+    // physically meaningful outward direction for a water surface.
+    let _ = (v0, v1, v2);
+    [0.0, 1.0, 0.0]
 }
 
 
