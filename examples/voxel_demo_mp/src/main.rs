@@ -30,7 +30,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_greedy_with_special,
+    chunk_mesh_with_atlas_light_anim_and_special,
     raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
@@ -6533,10 +6533,14 @@ impl Voxel {
                 },
             )
         };
-        // W28.4: greedy mesher - merges coplanar same-material cube faces;
-        // special-shaped blocks (torches, slabs, ...) are still emitted
-        // by emit_special as before.
-        chunk_mesh_greedy_with_special(
+        // W28.4 deferred: greedy mesher merges multi-voxel faces but the
+        // resulting UV extends past the tile's atlas rect, sampling
+        // neighbour tiles (vertical stripes / wrong textures). Proper
+        // fix needs shader-side fract() tiling per quad - tracked as a
+        // W30 follow-up alongside UberGpuBuffer batching. Until then
+        // we revert to the per-voxel mesher which produces correct
+        // textures + still runs in worker threads.
+        chunk_mesh_with_atlas_light_anim_and_special(
             chunk,
             origin,
             uv_resolver,
@@ -15429,8 +15433,9 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    // W28.4: greedy mesher replaces naive per-face emission.
-    chunk_mesh_greedy_with_special(
+    // W28.4 deferred: see comment in build_lit_submeshes for the
+    // greedy mesher revert rationale (UV atlas bleed needs shader fix).
+    chunk_mesh_with_atlas_light_anim_and_special(
         chunk,
         origin,
         uv_resolver,
