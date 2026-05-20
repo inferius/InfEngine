@@ -133,6 +133,8 @@ mod wave24_tests;
 mod wave25_tests;
 #[cfg(test)]
 mod wave27_tests;
+#[cfg(test)]
+mod wave28_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
