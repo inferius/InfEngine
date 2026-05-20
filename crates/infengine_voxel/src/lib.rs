@@ -491,22 +491,25 @@ where
                         ]
                     };
 
-                    // CCW winding matching FACES convention:
-                    // positive normal: [0,0], [w,0], [w,h], [0,h]
-                    // negative normal: [w,0], [0,0], [0,h], [w,h]
+                    // W28.4 fix: corner order must match emit_element_quad's
+                    // index winding [0,2,1, 0,3,2] producing CCW triangles
+                    // viewed from the face normal direction. The original
+                    // ordering had corners 1 and 3 swapped, which inverted
+                    // the cross product and turned every greedy quad into
+                    // a backface (culled by FrontFace::Ccw + cull_mode::Back).
                     let corners = if side > 0 {
                         [
                             corner_pos(0.0, 0.0),
-                            corner_pos(w,   0.0),
-                            corner_pos(w,   h  ),
                             corner_pos(0.0, h  ),
+                            corner_pos(w,   h  ),
+                            corner_pos(w,   0.0),
                         ]
                     } else {
                         [
                             corner_pos(w,   0.0),
-                            corner_pos(0.0, 0.0),
-                            corner_pos(0.0, h  ),
                             corner_pos(w,   h  ),
+                            corner_pos(0.0, h  ),
+                            corner_pos(0.0, 0.0),
                         ]
                     };
 
@@ -712,10 +715,13 @@ where
                         c[va] = v0 as f32 + dv;
                         [origin.x + c[0], origin.y + c[1], origin.z + c[2]]
                     };
+                    // W28.4 fix: same winding fix as chunk_mesh_greedy -
+                    // swap corners 1 and 3 so the cross product points along
+                    // the face normal rather than against it.
                     let corners = if side > 0 {
-                        [corner_pos(0.0,0.0), corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h)]
+                        [corner_pos(0.0,0.0), corner_pos(0.0,h), corner_pos(w,h), corner_pos(w,0.0)]
                     } else {
-                        [corner_pos(w,0.0), corner_pos(0.0,0.0), corner_pos(0.0,h), corner_pos(w,h)]
+                        [corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h), corner_pos(0.0,0.0)]
                     };
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
@@ -1402,8 +1408,10 @@ mod tests {
         assert!((l[1] - 1.0).abs() < 1e-4, "expected 1, got {}", l[1]);
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_light(0.5, 0.25);
         let l = v.light();
-        assert!((l[0] - 0.5).abs() < 2e-3, "expected 0.5, got {}", l[0]);
-        assert!((l[1] - 0.25).abs() < 2e-3, "expected 0.25, got {}", l[1]);
+        // W28.6: light is packed to u8/255 so tolerance must allow
+        // 1/255 = ~0.004 quantisation loss.
+        assert!((l[0] - 0.5).abs() < 5e-3, "expected 0.5, got {}", l[0]);
+        assert!((l[1] - 0.25).abs() < 5e-3, "expected 0.25, got {}", l[1]);
     }
 
     #[test]
