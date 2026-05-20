@@ -165,6 +165,8 @@ mod panorama;
 mod jar_cache;
 #[allow(dead_code)]
 mod mob_skin;
+// W19.1: per-body-part UV-mapped cube meshes for all 7 mob kinds.
+mod mob_meshes;
 mod ui;
 mod worldgen;
 // W13.4: view-frustum culling for chunk meshes. Reduces draw calls by
