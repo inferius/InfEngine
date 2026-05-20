@@ -316,6 +316,55 @@ impl ResourcePack {
         // Block form: use the top face.
         self.block_face_ref(infengine_id, BlockFace::Top)
     }
+
+    /// W20.1 - UV rect for `block` as seen from `normal`.
+    ///
+    /// Tries `icon_ref` (which checks the item-icon table first,
+    /// then the block's top face) when `normal == [0,1,0]`, or
+    /// `block_face_ref` for other normals. Falls back to the
+    /// legacy 4x4 synthetic-atlas helper when the pack has no
+    /// entry for this block (placeholder pack or unknown id).
+    ///
+    /// This is the canonical UV resolver for all UI slot widgets
+    /// (hotbar, craft grid, recipe book) - fixes the mismatch that
+    /// occurred when an MC atlas was loaded but the UI still read
+    /// the legacy 4x4 grid.
+    pub(crate) fn icon_uv_for(
+        &self,
+        block: infengine_voxel::BlockId,
+        normal: [i8; 3],
+    ) -> [f32; 4] {
+        // Prefer icon_ref for the top-face case: it handles non-block
+        // items (tools, ingots, buckets) which have their own item
+        // texture rather than the block top.
+        if normal[1] > 0 {
+            if let Some(r) = self.icon_ref(block.0) {
+                return r.atlas_uv;
+            }
+        } else {
+            let face = if normal[1] < 0 {
+                BlockFace::Bottom
+            } else {
+                BlockFace::Sides
+            };
+            if let Some(r) = self.block_face_ref(block.0, face) {
+                return r.atlas_uv;
+            }
+        }
+        crate::block::atlas_uv_rect(block, normal)
+    }
+
+    /// W20.1 - Top-face (inventory icon) UV rect for `block`.
+    ///
+    /// Convenience wrapper around `icon_uv_for` using the `[0,1,0]`
+    /// normal. Matches `BlockRenderDispatcher.getBlockModel()
+    /// .getQuads(..., Direction.UP)` which drives MC inventory icons.
+    pub(crate) fn icon_uv_front(
+        &self,
+        block: infengine_voxel::BlockId,
+    ) -> [f32; 4] {
+        self.icon_uv_for(block, [0, 1, 0])
+    }
 }
 
 /// Which face of a cube the renderer asks the pack to resolve.

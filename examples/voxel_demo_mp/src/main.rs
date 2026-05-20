@@ -1013,6 +1013,9 @@ struct Voxel {
     /// `abilities.mayfly = true` indirectly via the E-key
     /// handler in `update_play`.
     creative_tab: creative_tab::CreativeTabState,
+    /// W20.4: live search query for the recipe book. Lowercased
+    /// substring match against recipe output display name.
+    recipe_book_query: String,
     /// W8.1: gate for the world simulation tick. Set to `true` only
     /// after the user explicitly enters a world via
     /// PlayOffline/NewWorld+enter/DirectConnect/JoinServer; the bin
@@ -5329,6 +5332,9 @@ impl Voxel {
             // W10.6: creative tab starts closed. Opens on E key
             // press in Creative mode.
             creative_tab: creative_tab::CreativeTabState::default(),
+            // W20.4: recipe book search query. Starts empty
+            // (show all recipes).
+            recipe_book_query: String::new(),
             // W8.1: bootstrap state has NO world loaded. The user
             // opts into world simulation by picking Singleplayer >
             // Hrat / Vytvorit or Multiplayer > Connect.
@@ -7855,10 +7861,9 @@ impl Voxel {
         let icon = |slot: Option<(BlockId, u8)>| -> Option<SlotIcon> {
             slot.and_then(|(b, c)| {
                 let bt = block_type(b.0);
-                let uv = resource_pack
-                    .icon_ref(b.0)
-                    .map(|r| r.atlas_uv)
-                    .unwrap_or_else(|| atlas_uv_rect(b, [0, 1, 0]));
+                // W20.2: use icon_uv_front which prefers the live MC pack
+                // atlas entry and falls back to the legacy 4x4 grid.
+                let uv = resource_pack.icon_uv_front(b);
                 self.registry
                     .get(b)
                     .map(|d| (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")))
@@ -7893,6 +7898,10 @@ impl Voxel {
         // selectable labels inside the egui closure.
         let mut creative_cat_local = self.creative_tab.category;
         let mut creative_close_clicked = false;
+        // W20.3: snapshot the just_opened flag so the egui closure can
+        // request search-box focus on the first frame. The flag is
+        // cleared in the post-egui section.
+        let creative_just_opened = self.creative_tab.just_opened;
         // Pending pick-up intents queued from the grid. Each
         // entry is the (block, count) to drop into the hotbar.
         let mut creative_picks: Vec<(BlockId, u8)> = Vec::new();
@@ -7955,11 +7964,13 @@ impl Voxel {
             match_recipe_named(&self.craft_grid);
         let craft_output_snapshot = craft_match.and_then(|(b, c, _)| {
             let bt = block_type(b.0);
+            // W20.2: use icon_uv_front for MC atlas compatibility.
+            let uv = self.resource_pack.icon_uv_front(b);
             self.registry.get(b).map(|d| {
                 (
                     d.color,
                     c,
-                    atlas_uv_rect(b, [0, 1, 0]),
+                    uv,
                     bt.map(|t| t.name).unwrap_or("?"),
                 )
             })
@@ -7983,6 +7994,8 @@ impl Voxel {
         // after the egui closure exits so the craft-grid mutation
         // can borrow `self` exclusively.
         let mut prefill_recipe_idx: Option<usize> = None;
+        // W20.4: recipe book search query snapshot.
+        let mut recipe_book_query_local = self.recipe_book_query.clone();
         let mut action_pause_to_settings = false;
         let mut action_back_settings = false;
         let mut action_main_menu = false;
@@ -8822,16 +8835,89 @@ impl Voxel {
                                 "Drop blocks into the 2x2 grid to craft. \
                                  Hold Shift for half-stacks, Ctrl/Cmd for one.",
                             );
+                            // W20.4: show which recipe matches the current
+                            // craft grid (if any).
+                            if let Some(name) = craft_recipe_name {
+                                ui.horizontal(|ui| {
+                                    ui.label("Crafting:");
+                                    ui.strong(name);
+                                });
+                            }
                             ui.separator();
+                            // W20.4: search box - filters recipes by output
+                            // item display name.
+                            ui.horizontal(|ui| {
+                                ui.label("Hledat:");
+                                ui.text_edit_singleline(
+                                    &mut recipe_book_query_local,
+                                );
+                            });
+                            ui.separator();
+                            // Build the filtered + grouped recipe list.
+                            // Group by derived category (output item's
+                            // ItemCategory). Within each group recipes
+                            // are shown in RECIPES table order.
+                            let q = recipe_book_query_local
+                                .trim()
+                                .to_lowercase();
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    for (ri, r) in
-                                        RECIPES.iter().enumerate()
-                                    {
+                                    // W20.4: category headers. Group
+                                    // recipes by ItemCategory of output.
+                                    // Categories appear in the order
+                                    // they first occur in RECIPES.
+                                    use crate::item::ItemCategory;
+                                    let cats = [
+                                        ("Bloky",     ItemCategory::BuildingBlock),
+                                        ("Dekorace",  ItemCategory::Decoration),
+                                        ("Nastroje",  ItemCategory::Tool),
+                                        ("Zbrane",    ItemCategory::Weapon),
+                                        ("Jidlo",     ItemCategory::Food),
+                                        ("Ostatni",   ItemCategory::Bucket),
+                                        ("Ostatni",   ItemCategory::Ingredient),
+                                    ];
+                                    // Collect unique category labels in
+                                    // first-seen order so the header
+                                    // sequence is deterministic.
+                                    let mut seen_cats: Vec<&str> = Vec::new();
+                                    for (ri, r) in RECIPES.iter().enumerate() {
+                                        let ic = crate::item::item_category(
+                                            r.output.0,
+                                        );
+                                        let cat_label = cats
+                                            .iter()
+                                            .find(|(_, c)| *c == ic)
+                                            .map(|(l, _)| *l)
+                                            .unwrap_or("Ostatni");
+                                        let out_name =
+                                            crate::item::item_display_name(
+                                                r.output.0,
+                                            );
+                                        let pass_filter = q.is_empty()
+                                            || out_name
+                                                .to_lowercase()
+                                                .contains(&q);
+                                        if !pass_filter {
+                                            continue;
+                                        }
+                                        // Emit a header the first time
+                                        // this category label appears.
+                                        if !seen_cats.contains(&cat_label) {
+                                            seen_cats.push(cat_label);
+                                            if !seen_cats.is_empty() {
+                                                ui.separator();
+                                            }
+                                            ui.strong(cat_label);
+                                        }
                                         ui.horizontal(|ui| {
                                             for (bid, n) in r.inputs {
                                                 let bt = block_type(*bid);
+                                                // W20.2: icon_uv_front prefers
+                                                // the live MC atlas entry.
+                                                let uv = self
+                                                    .resource_pack
+                                                    .icon_uv_front(BlockId(*bid));
                                                 let icon = self
                                                     .registry
                                                     .get(BlockId(*bid))
@@ -8839,10 +8925,7 @@ impl Voxel {
                                                         (
                                                             d.color,
                                                             *n,
-                                                            atlas_uv_rect(
-                                                                BlockId(*bid),
-                                                                [0, 1, 0],
-                                                            ),
+                                                            uv,
                                                             bt.map(|t| t.name)
                                                                 .unwrap_or("?"),
                                                         )
@@ -8857,6 +8940,11 @@ impl Voxel {
                                             }
                                             ui.label(" -> ");
                                             let out_bt = block_type(r.output.0);
+                                            // W20.2: icon_uv_front for recipe
+                                            // output icon.
+                                            let out_uv = self
+                                                .resource_pack
+                                                .icon_uv_front(BlockId(r.output.0));
                                             let out_icon = self
                                                 .registry
                                                 .get(BlockId(r.output.0))
@@ -8864,20 +8952,22 @@ impl Voxel {
                                                     (
                                                         d.color,
                                                         r.output.1,
-                                                        atlas_uv_rect(
-                                                            BlockId(r.output.0),
-                                                            [0, 1, 0],
-                                                        ),
+                                                        out_uv,
                                                         out_bt
                                                             .map(|t| t.name)
                                                             .unwrap_or("?"),
                                                     )
                                                 });
+                                            // W20.4: highlight the recipe
+                                            // that currently matches the
+                                            // craft grid.
+                                            let is_active = craft_recipe_name
+                                                == Some(r.name);
                                             let out_resp = draw_slot_widget(
                                                 ui,
                                                 out_icon,
                                                 atlas_tex_id,
-                                                false,
+                                                is_active,
                                                 egui::Sense::click(),
                                             )
                                             .on_hover_text(format!(
@@ -8916,7 +9006,13 @@ impl Voxel {
                             ui.label("E or Esc to close - klik na polozku ji vlozi do hotbaru");
                             ui.horizontal(|ui| {
                                 ui.label("Hledat:");
-                                ui.text_edit_singleline(&mut creative_query_local);
+                                // W20.3: request keyboard focus on the search
+                                // box on the first frame after the tab opens.
+                                let resp =
+                                    ui.text_edit_singleline(&mut creative_query_local);
+                                if creative_just_opened {
+                                    resp.request_focus();
+                                }
                             });
                             // W12.9 tab strip: All / Blocks / Decoration /
                             // Tools / Combat / Food / Misc. Click to filter.
@@ -8930,31 +9026,32 @@ impl Voxel {
                             });
                             ui.separator();
                             let entries = creative_tab::available_items();
-                            let filtered = creative_tab::filter_items_in_category(
+                            // W20.3: sort filtered entries by display name
+                            // within the active category.
+                            let mut filtered = creative_tab::filter_items_in_category(
                                 &entries,
                                 creative_cat_local,
                                 &creative_query_local,
                             );
+                            filtered.sort_by(|a, b| {
+                                crate::item::item_display_name(a.id)
+                                    .cmp(&crate::item::item_display_name(b.id))
+                            });
                             egui::ScrollArea::vertical()
                                 .max_height(360.0)
                                 .show(ui, |ui| {
                                     ui.horizontal_wrapped(|ui| {
                                         for entry in filtered.iter() {
-                                            // W12.9 icon resolve via the live ResourcePack
-                                            // atlas. Falls back to a tinted swatch via the
-                                            // existing draw_slot_widget code path.
+                                            // W20.2/W20.3: icon resolve via
+                                            // icon_uv_front (MC atlas first,
+                                            // 4x4 fallback). Falls back to a
+                                            // tinted swatch via the
+                                            // draw_slot_widget code path.
                                             let icon_slot: Option<SlotIcon> = {
                                                 let bt = block_type(entry.id);
                                                 let uv = self
                                                     .resource_pack
-                                                    .icon_ref(entry.id)
-                                                    .map(|r| r.atlas_uv)
-                                                    .unwrap_or_else(|| {
-                                                        atlas_uv_rect(
-                                                            BlockId(entry.id),
-                                                            [0, 1, 0],
-                                                        )
-                                                    });
+                                                    .icon_uv_front(BlockId(entry.id));
                                                 self.registry
                                                     .get(BlockId(entry.id))
                                                     .map(|d| {
@@ -8973,16 +9070,28 @@ impl Voxel {
                                                 icon_slot,
                                                 atlas_tex_id,
                                                 false,
-                                                egui::Sense::click(),
+                                                // W20.3: click_and_drag so right-click
+                                                // lands in secondary_clicked().
+                                                egui::Sense::click_and_drag(),
                                             )
                                             .on_hover_text(format!(
-                                                "{} (max stack {})",
+                                                "{} (max stack {})\nLMB: vozmout stack / RMB: vozmout 1",
                                                 name, entry.max_stack
                                             ));
+                                            // W20.3: LMB = full max_stack
+                                            // (existing behaviour).
                                             if resp.clicked() {
                                                 creative_picks.push((
                                                     BlockId(entry.id),
                                                     entry.max_stack,
+                                                ));
+                                            }
+                                            // W20.3: RMB = count 1 (matches
+                                            // MC creative-tab right-click).
+                                            if resp.secondary_clicked() {
+                                                creative_picks.push((
+                                                    BlockId(entry.id),
+                                                    1,
                                                 ));
                                             }
                                         }
@@ -10162,6 +10271,11 @@ impl Voxel {
         // W12.9 - apply the active category selection (clicked on the
         // tab strip during the egui closure).
         self.creative_tab.category = creative_cat_local;
+        // W20.3 - clear the just_opened one-shot flag so future
+        // frames don't repeatedly try to focus the search box.
+        if creative_just_opened {
+            self.creative_tab.just_opened = false;
+        }
         if creative_close_clicked {
             self.creative_tab.close();
         }
@@ -10320,6 +10434,8 @@ impl Voxel {
         // `action_start` lived on the legacy flat picker. The Wave 4
         // menu emits `MenuAction::PlayOffline { slug }` instead, which
         // `apply_menu_action` consumes below.
+        // W20.4: persist recipe book search query from the egui closure.
+        self.recipe_book_query = recipe_book_query_local;
         // Recipe-book auto-fill: try to pull every input stack
         // from `self.inventory` into the 2x2 craft grid. Returns
         // any earlier withdrawals if the recipe demands more
@@ -11289,6 +11405,9 @@ impl AppHandler for Voxel {
                         self.close_chest_ui();
                     } else if self.furnace_open.is_some() {
                         self.close_furnace_ui();
+                    } else if self.creative_tab.open {
+                        // W20.3: ESC closes the creative tab (same as E).
+                        self.creative_tab.close();
                     } else if mp {
                         self.mp_menu_open = !self.mp_menu_open;
                     } else {

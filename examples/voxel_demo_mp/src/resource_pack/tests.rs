@@ -453,3 +453,46 @@ fn reload_triggers_chunk_rebuild_signal_present() {
     let slot = pack.anim_slot(&key);
     assert!(slot >= 1);
 }
+
+// ---------------------------------------------------------------
+// W20.1: icon_uv_for / icon_uv_front helpers.
+// ---------------------------------------------------------------
+
+/// Returns the legacy 4x4-atlas UV for stone (id 1) under the
+/// placeholder pack, since the placeholder has no MC atlas entry
+/// and the fallback branch must fire.
+#[test]
+fn icon_uv_for_placeholder_falls_back_to_legacy() {
+    let pack = ResourcePack::load();
+    // id 1 = stone; under the placeholder pack icon_ref resolves
+    // through the synthetic item_icons table, so we may or may not
+    // get a pack UV - either way the result must be a valid [0,1]^4.
+    let uv = pack.icon_uv_front(infengine_voxel::BlockId(1));
+    assert!(uv[0] >= 0.0 && uv[2] <= 1.0 && uv[1] >= 0.0 && uv[3] <= 1.0,
+        "UV out of [0,1] range: {:?}", uv);
+    assert!(uv[2] > uv[0] && uv[3] > uv[1], "UV rect has zero or negative size: {:?}", uv);
+}
+
+/// Under a real (synthetic) pack, icon_uv_for returns the pack
+/// UV rather than the legacy atlas UV.
+#[test]
+fn icon_uv_for_real_pack_returns_pack_uv() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mc = stage_synthetic_pack(tmp.path());
+    let pack = ResourcePack::load_with_override(Some(mc));
+    assert!(!pack.is_fallback);
+    // id 1 = stone; synth pack has stone.png -> stone tile.
+    let pack_uv = pack.icon_ref(1).unwrap().atlas_uv;
+    let helper_uv = pack.icon_uv_front(infengine_voxel::BlockId(1));
+    assert_eq!(pack_uv, helper_uv,
+        "icon_uv_front should match icon_ref.atlas_uv when pack has entry");
+}
+
+/// icon_uv_for with normal [0,1,0] must match icon_uv_front.
+#[test]
+fn icon_uv_front_equals_icon_uv_for_top_normal() {
+    let pack = ResourcePack::load();
+    let b = infengine_voxel::BlockId(1);
+    assert_eq!(pack.icon_uv_front(b), pack.icon_uv_for(b, [0, 1, 0]),
+        "icon_uv_front must be a shorthand for icon_uv_for with [0,1,0]");
+}
