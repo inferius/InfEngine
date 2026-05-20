@@ -1008,11 +1008,92 @@ because their boundary faces depend on the new chunk's voxels.
   run `build_lit_submeshes` on the main thread (W25 could parallelise
   these too via `RemeshJob` dispatched to the worker pool).
 
-### Deferred (W25)
+### Shipped in W25
 
-Neighbour remeshes from `pending_remesh` still execute
-`build_lit_submeshes` on the main thread. The bulk of initial-load
-meshing is now parallelised; ongoing per-block edits remain
-main-thread. W25 could dispatch a `RemeshJob` variant (carries an
-`Arc<Chunk>` instead of regenerating) to fully empty the main-thread
-meshing path.
+Neighbour remeshes from `pending_remesh` and all block-edit remeshes
+are now fully parallel (see below).
+
+## Wave 25 - Parallel remesh dispatch
+
+### Goal
+
+Eliminate the last remaining synchronous `build_lit_submeshes` calls
+on the main thread. After W24, new-chunk meshing was parallelised via
+`Job::Generate`; block-edit and neighbour remeshes still blocked the
+main thread. W25 moves them to the worker pool.
+
+### Generate vs Remesh job split
+
+`WorkerPool` now accepts a `Job` enum with two variants:
+
+```
+Job::Generate(ChunkJob)   -- full worldgen + side-effect scan + mesh
+Job::Remesh(RemeshJob)    -- mesh-only; skips worldgen + scan
+```
+
+`RemeshJob` carries a clone of the chunk voxels (~8 KB), an
+`Arc<ResourcePack>`, a `HaloLighting` snapshot, and a `revision: u64`
+counter so stale results can be identified on delivery.
+
+`WorkerResult` is likewise an enum:
+
+```
+WorkerResult::Generated { coord, chunk, side_effects, submeshes }
+WorkerResult::Remeshed  { coord, revision, submeshes }
+```
+
+### Why block edits + neighbour remesh are now non-blocking
+
+`rebuild_chunks` no longer calls `build_lit_submeshes`. Instead it:
+
+1. Clones the chunk voxels from `World` (fast, ~8 KB memcpy).
+2. Snapshots the 6-neighbour `HaloLighting` grids (same pre-fetch as
+   Generate jobs).
+3. Bumps `chunk_revisions[coord]` to the next revision.
+4. Sends `Job::Remesh(RemeshJob { ... , revision })` to the pool.
+
+The actual meshing runs on a worker thread. On delivery the main thread
+pattern-matches `WorkerResult::Remeshed`, drops old GPU handles, and
+uploads the new submeshes. No `build_lit_submeshes` call on the main
+thread at all.
+
+Falling back to the synchronous `rebuild_chunks_sync` path (kept for
+headless tests and pre-init callers that have no worker pool).
+
+### Chunk-revision race guard
+
+MC reference: `LevelRenderer.setBlocksDirty()` schedules a
+`ChunkRenderDispatcher::CompiledChunk` rebuild on the chunk's render
+task queue - a later edit supersedes an earlier job for the same chunk.
+
+We mirror this: every `rebuild_chunks` call increments
+`chunk_revisions[coord]`. The `RemeshJob` captures the revision at
+dispatch time. On `WorkerResult::Remeshed` delivery the main thread
+compares `result.revision` vs `chunk_revisions[coord]`. If the result
+revision is strictly less than the current counter (i.e., another edit
+fired before this result arrived), the result is discarded. The second
+edit's result will arrive later with the higher revision and will be
+applied.
+
+This prevents a sequence like:
+
+```
+edit A -> revision 1 -> dispatch R1
+edit B -> revision 2 -> dispatch R2
+R1 arrives  (stale: 1 < 2) -> dropped
+R2 arrives  (current: 2 == 2) -> applied
+```
+
+without this guard, R2 would arrive and be applied, then R1 would
+overwrite it with a mesh that does not reflect edit B.
+
+### Budget constants
+
+- `RESULTS_PER_FRAME`: raised from 8 -> 32 (Generate + Remesh results
+  share the budget; time-cap on the frame keeps GPU upload cost bounded
+  regardless).
+- `REMESH_DEFERRED_PER_FRAME`: raised from 16 -> 64 (dispatching a
+  `Job::Remesh` is O(1) Arc clones + channel send, not O(mesh_size);
+  the hard ceiling is no longer the bottleneck).
+- Time-budget cap on the pending_remesh drain loop removed (was 4 ms
+  per frame; dispatch is now microseconds, not milliseconds).

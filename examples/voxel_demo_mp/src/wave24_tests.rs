@@ -78,17 +78,30 @@ fn mesh_chunk_in_worker_air_chunk_produces_no_vertices() {
 }
 
 // -----------------------------------------------------------------------
-// W24.4 - WorkerResult carries submeshes field
+// W24.4 / W25 - WorkerResult carries submeshes field
 // -----------------------------------------------------------------------
 
-/// WorkerResult has a submeshes field - confirms the struct shape.
+/// WorkerResult::Generated has all expected fields - confirms the enum
+/// shape after the W25 refactor to a two-variant enum.
 #[test]
-fn worker_result_has_submeshes_field() {
+fn worker_result_generated_has_submeshes_field() {
     use infengine_voxel::{Chunk, ChunkSubmesh};
-    let _r = crate::WorkerResult {
+    let _r = crate::WorkerResult::Generated {
         coord: [0, 0, 0],
         chunk: Chunk::empty(),
         side_effects: vec![],
+        submeshes: Vec::<ChunkSubmesh>::new(),
+    };
+}
+
+/// WorkerResult::Remeshed carries a revision counter and submeshes -
+/// confirms the W25 remesh variant shape.
+#[test]
+fn worker_result_remeshed_has_revision_and_submeshes() {
+    use infengine_voxel::ChunkSubmesh;
+    let _r = crate::WorkerResult::Remeshed {
+        coord: [1, 2, 3],
+        revision: 42,
         submeshes: Vec::<ChunkSubmesh>::new(),
     };
 }

@@ -126,6 +126,8 @@ mod wave17_tests;
 mod wave18_tests;
 #[cfg(test)]
 mod wave24_tests;
+#[cfg(test)]
+mod wave25_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -332,12 +334,14 @@ const VIEW_DISTANCE_MAX: i32 = 32;
 /// W23.3a: raised to 8 - the dedup set (W23.3c) and time-cap
 /// (W23.3b) prevent frame spikes; 8 keeps the queue draining fast
 /// enough to avoid the stutter the user reported post-load.
-const RESULTS_PER_FRAME: usize = 8;
-/// Hard upper bound on neighbour-remesh jobs drained from the deferred
-/// queue per frame (W13.2). The 4 ms soft time cap (W23.3b) usually
-/// stops the loop earlier; this is the safety ceiling.
-/// W23.3a: raised from 2 to 16.
-const REMESH_DEFERRED_PER_FRAME: usize = 16;
+/// W25.6: raised to 32 - Generate + Remesh results share this budget;
+/// time-cap (4 ms) keeps the frame safe regardless of count.
+const RESULTS_PER_FRAME: usize = 32;
+/// Hard upper bound on remesh dispatch calls per frame (W13.2). After
+/// W25 each call only enqueues a job (O(1) Arc clones) instead of
+/// doing synchronous meshing, so the ceiling is much higher.
+/// W25.5: raised from 16 to 64.
+const REMESH_DEFERRED_PER_FRAME: usize = 64;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`
@@ -744,6 +748,13 @@ struct Voxel {
     /// main thread only does the GPU buffer upload + neighbour
     /// remeshing.
     workers: Option<WorkerPool>,
+    /// W25: monotonically-increasing edit counter per chunk coord.
+    /// Incremented on every `rebuild_chunks` dispatch. Remesh results
+    /// carry the revision they snapshotted; stale results (older
+    /// revision than current) are discarded on delivery so a rapid
+    /// block-edit sequence never overwrites a newer mesh with an
+    /// older snapshot.
+    chunk_revisions: HashMap<ChunkCoord, u64>,
     /// Most recent ray hit while looking around in Play. Drives the
     /// crosshair / wireframe overlay and the RMB-place step. Skips
     /// `F_RAY_PASS` decorations (torch, flowers) so the player can
@@ -5185,6 +5196,7 @@ impl Voxel {
             pending_remesh: VecDeque::new(),
             pending_remesh_set: HashSet::new(),
             workers: None,
+            chunk_revisions: HashMap::new(),
             target: None,
             mine_target: None,
             player_pos: Vec3::new(0.0, 32.0, 0.0),
@@ -5967,12 +5979,12 @@ impl Voxel {
                     py: self.lighting.get([cc[0], cc[1] + 1, cc[2]]).cloned(),
                     ny: self.lighting.get([cc[0], cc[1] - 1, cc[2]]).cloned(),
                 };
-                let job = ChunkJob {
+                let job = Job::Generate(ChunkJob {
                     coord: cc,
                     ctx: ctx.clone(),
                     pack: Arc::clone(&pack_arc),
                     halo,
-                };
+                });
                 if pool.req_tx.send(job).is_err() {
                     self.pending_chunks.push_front(cc);
                     break;
@@ -5980,9 +5992,9 @@ impl Voxel {
             }
         }
 
-        // W13.1: Drain up to RESULTS_PER_FRAME finished chunks from
-        // the workers. Each result: insert chunk + GPU-upload submeshes.
-        // Neighbour re-mesh is DEFERRED (W13.2) to keep this path fast.
+        // W13.1 / W25: Drain up to RESULTS_PER_FRAME finished results
+        // from the workers. Handles both Generated (new chunk) and
+        // Remeshed (block-edit / neighbour update) variants.
         let mut delivered: Vec<WorkerResult> = Vec::new();
         if let Some(pool) = self.workers.as_ref() {
             while delivered.len() < RESULTS_PER_FRAME
@@ -5992,128 +6004,193 @@ impl Voxel {
             }
         }
         for result in delivered {
-            self.pending_set.remove(&result.coord);
-            // The chunk might have been unloaded above (player walked
-            // past it while the worker was busy). Drop stale data.
-            let dx = (result.coord[0] - player_chunk[0]).abs();
-            let dz = (result.coord[2] - player_chunk[2]).abs();
-            if dx > unload_dist || dz > unload_dist {
-                continue;
-            }
-            if self.world.chunk(result.coord).is_some() {
-                continue;
-            }
+            match result {
+                WorkerResult::Generated {
+                    coord,
+                    chunk,
+                    side_effects,
+                    submeshes,
+                } => {
+                    self.pending_set.remove(&coord);
+                    // The chunk might have been unloaded above (player
+                    // walked past it while the worker was busy). Drop
+                    // stale data.
+                    let dx = (coord[0] - player_chunk[0]).abs();
+                    let dz = (coord[2] - player_chunk[2]).abs();
+                    if dx > unload_dist || dz > unload_dist {
+                        continue;
+                    }
+                    if self.world.chunk(coord).is_some() {
+                        continue;
+                    }
 
-            // W13.2: Side-effects pre-computed by the worker thread.
-            // Fold them into the per-world indices here (main-thread
-            // only, no iteration needed).
-            let t0 = std::time::Instant::now();
-            for se in &result.side_effects {
-                match se {
-                    ChunkSideEffect::Snow(wv) => {
-                        self.snow_positions.entry(*wv).or_insert(1);
+                    // W13.2: Side-effects pre-computed by the worker.
+                    // Fold them into the per-world indices here (main-
+                    // thread only, no iteration needed).
+                    let t0 = std::time::Instant::now();
+                    for se in &side_effects {
+                        match se {
+                            ChunkSideEffect::Snow(wv) => {
+                                self.snow_positions.entry(*wv).or_insert(1);
+                            }
+                            ChunkSideEffect::Torch(wv) => {
+                                self.torch_positions.insert(*wv);
+                            }
+                            ChunkSideEffect::Liquid { pos, tick_offset } => {
+                                self.liquid_schedule.schedule(
+                                    *pos,
+                                    self.liquid_clock + tick_offset,
+                                );
+                                if self.liquid_positions.insert(*pos) {
+                                    self.liquid_mesh_dirty = true;
+                                }
+                            }
+                        }
                     }
-                    ChunkSideEffect::Torch(wv) => {
-                        self.torch_positions.insert(*wv);
-                    }
-                    ChunkSideEffect::Liquid { pos, tick_offset } => {
-                        self.liquid_schedule.schedule(
-                            *pos,
-                            self.liquid_clock + tick_offset,
+                    let side_effect_us = t0.elapsed().as_micros();
+                    if side_effect_us > CHUNK_PHASE_WARN_US {
+                        tracing::warn!(
+                            coord = ?coord,
+                            us = side_effect_us,
+                            "W13.1: side_effects fold exceeded threshold"
                         );
-                        if self.liquid_positions.insert(*pos) {
-                            self.liquid_mesh_dirty = true;
+                    }
+
+                    self.world.insert_chunk(coord, chunk);
+                    let cc = coord;
+
+                    // W24: Worker already built MC-atlas submeshes.
+                    // Upload them to GPU directly instead of going
+                    // through pending_remesh / build_lit_submeshes.
+                    if !submeshes.is_empty() {
+                        let atlas = self.voxel_atlas.clone();
+                        let renderer = self.renderer.as_mut().expect("renderer ready");
+                        for sub in submeshes {
+                            if sub.vertices.is_empty() || sub.indices.is_empty() {
+                                continue;
+                            }
+                            // Skip torch + snow: dedicated world-pass meshes.
+                            if block_skips_chunk_mesh(sub.block) {
+                                continue;
+                            }
+                            let handle = renderer.create_mesh(
+                                &format!(
+                                    "voxel_chunk_{}_{}_{}_b{}",
+                                    cc[0], cc[1], cc[2], sub.block.0
+                                ),
+                                &sub.vertices,
+                                &sub.indices,
+                            );
+                            if let Some(a) = atlas.clone() {
+                                renderer.bind_mesh_albedo_arc(handle, a);
+                            }
+                            self.chunk_meshes.push((cc, sub.block, handle));
+                        }
+                    }
+
+                    // Enqueue the 4 horizontal neighbours into
+                    // pending_remesh so their boundary faces update
+                    // (the new chunk's voxels affect which of their
+                    // faces are visible). The new chunk itself is NOT
+                    // enqueued - it was just meshed by the worker.
+                    // W23.3c: dedup via pending_remesh_set.
+                    for n in [
+                        [cc[0] - 1, cc[1], cc[2]],
+                        [cc[0] + 1, cc[1], cc[2]],
+                        [cc[0], cc[1], cc[2] - 1],
+                        [cc[0], cc[1], cc[2] + 1],
+                    ] {
+                        // Only enqueue if the neighbour is loaded -
+                        // pending / unloaded neighbours don't need a
+                        // re-mesh yet; they pick up correct faces when
+                        // they arrive.
+                        if self.world.chunk(n).is_some()
+                            && self.pending_remesh_set.insert(n)
+                        {
+                            self.pending_remesh.push_back(n);
+                        }
+                    }
+
+                    // Phase L.7: stamp a dirty voxel in the new chunk
+                    // so the next lighting tick re-floods it. One mark
+                    // per chunk is enough - the 3x3 halo around the
+                    // chunk centre subsumes the whole new chunk.
+                    let cs = CHUNK_SIZE as i32;
+                    self.lighting.mark_dirty([
+                        cc[0] * cs + cs / 2,
+                        cc[1] * cs + cs / 2,
+                        cc[2] * cs + cs / 2,
+                    ]);
+                }
+                WorkerResult::Remeshed {
+                    coord,
+                    revision,
+                    submeshes,
+                } => {
+                    // W25: Drop stale results - if the chunk was edited
+                    // again after this job was dispatched, chunk_revisions
+                    // will have a higher value. The newer job's result
+                    // will arrive later and contain the correct mesh.
+                    let current_rev = self
+                        .chunk_revisions
+                        .get(&coord)
+                        .copied()
+                        .unwrap_or(0);
+                    if revision < current_rev {
+                        continue;
+                    }
+
+                    // Drop old GPU handles for this chunk.
+                    {
+                        let renderer = self.renderer.as_mut().expect("renderer ready");
+                        let mut keep = Vec::with_capacity(self.chunk_meshes.len());
+                        for entry in self.chunk_meshes.drain(..) {
+                            if entry.0 == coord {
+                                renderer.remove_mesh(entry.2);
+                            } else {
+                                keep.push(entry);
+                            }
+                        }
+                        self.chunk_meshes = keep;
+                    }
+
+                    // Upload the new submeshes.
+                    if !submeshes.is_empty() {
+                        let atlas = self.voxel_atlas.clone();
+                        let renderer = self.renderer.as_mut().expect("renderer ready");
+                        for sub in submeshes {
+                            if sub.vertices.is_empty() || sub.indices.is_empty() {
+                                continue;
+                            }
+                            if block_skips_chunk_mesh(sub.block) {
+                                continue;
+                            }
+                            let handle = renderer.create_mesh(
+                                &format!(
+                                    "voxel_chunk_{}_{}_{}_b{}",
+                                    coord[0], coord[1], coord[2], sub.block.0
+                                ),
+                                &sub.vertices,
+                                &sub.indices,
+                            );
+                            if let Some(a) = atlas.clone() {
+                                renderer.bind_mesh_albedo_arc(handle, a);
+                            }
+                            self.chunk_meshes.push((coord, sub.block, handle));
                         }
                     }
                 }
             }
-            let side_effect_us = t0.elapsed().as_micros();
-            if side_effect_us > CHUNK_PHASE_WARN_US {
-                tracing::warn!(
-                    coord = ?result.coord,
-                    us = side_effect_us,
-                    "W13.1: side_effects fold exceeded threshold"
-                );
-            }
-
-            self.world.insert_chunk(result.coord, result.chunk);
-            let cc = result.coord;
-
-            // W24: Worker already built MC-atlas submeshes. Upload
-            // them to the GPU directly here instead of going through
-            // pending_remesh / build_lit_submeshes on the main thread.
-            // This is the primary perf win: meshing work is now
-            // parallelised across all worker threads.
-            if !result.submeshes.is_empty() {
-                let atlas = self.voxel_atlas.clone();
-                let renderer = self.renderer.as_mut().expect("renderer ready");
-                for sub in result.submeshes {
-                    if sub.vertices.is_empty() || sub.indices.is_empty() {
-                        continue;
-                    }
-                    // Skip torch + snow: dedicated world-pass meshes.
-                    if block_skips_chunk_mesh(sub.block) {
-                        continue;
-                    }
-                    let handle = renderer.create_mesh(
-                        &format!(
-                            "voxel_chunk_{}_{}_{}_b{}",
-                            cc[0], cc[1], cc[2], sub.block.0
-                        ),
-                        &sub.vertices,
-                        &sub.indices,
-                    );
-                    if let Some(a) = atlas.clone() {
-                        renderer.bind_mesh_albedo_arc(handle, a);
-                    }
-                    self.chunk_meshes.push((cc, sub.block, handle));
-                }
-            }
-
-            // Enqueue the 4 horizontal neighbours into pending_remesh
-            // so their boundary faces update (the new chunk's voxels
-            // affect which of their faces are visible). The new chunk
-            // itself is NOT enqueued - it was just meshed by the worker.
-            // W23.3c: dedup via pending_remesh_set.
-            for n in [
-                [cc[0] - 1, cc[1], cc[2]],
-                [cc[0] + 1, cc[1], cc[2]],
-                [cc[0], cc[1], cc[2] - 1],
-                [cc[0], cc[1], cc[2] + 1],
-            ] {
-                // Only enqueue if the neighbour is actually loaded -
-                // pending / unloaded neighbours don't need a re-mesh
-                // yet; they will pick up correct faces when they arrive.
-                if self.world.chunk(n).is_some()
-                    && self.pending_remesh_set.insert(n)
-                {
-                    self.pending_remesh.push_back(n);
-                }
-            }
-
-            // Phase L.7: stamp a dirty voxel in the new chunk so
-            // the next lighting tick re-floods it. One mark per
-            // chunk is enough - the 3x3 halo around the chunk centre
-            // subsumes the whole new chunk.
-            let cs = CHUNK_SIZE as i32;
-            self.lighting.mark_dirty([
-                cc[0] * cs + cs / 2,
-                cc[1] * cs + cs / 2,
-                cc[2] * cs + cs / 2,
-            ]);
         }
 
-        // W13.2 / W23.3b: Drain deferred neighbour re-meshes with a
-        // soft 4 ms time cap (W23.3b) so high-perf machines drain more
-        // per frame without blowing the budget on slow frames.
-        // REMESH_DEFERRED_PER_FRAME acts as a hard upper bound so a
-        // single very slow frame can't stall the loop arbitrarily long.
-        let remesh_budget = std::time::Duration::from_millis(4);
+        // W13.2 / W25.5: Drain deferred neighbour re-meshes. After W25
+        // each rebuild_chunks call dispatches a Job::Remesh to the
+        // worker pool (O(1) Arc clones) rather than doing synchronous
+        // meshing, so the time cap is removed and the ceiling is raised
+        // to REMESH_DEFERRED_PER_FRAME (64). Actual meshing cost is
+        // paid on the worker thread, not here.
         let mut remesh_done = 0;
-        let t_remesh = std::time::Instant::now();
-        while remesh_done < REMESH_DEFERRED_PER_FRAME
-            && t_remesh.elapsed() < remesh_budget
-        {
+        while remesh_done < REMESH_DEFERRED_PER_FRAME {
             let Some(coord) = self.pending_remesh.pop_front() else {
                 break;
             };
@@ -6125,14 +6202,6 @@ impl Voxel {
             }
             self.rebuild_chunks(&[coord]);
             remesh_done += 1;
-        }
-        let remesh_us = t_remesh.elapsed().as_micros();
-        if remesh_us > CHUNK_PHASE_WARN_US && remesh_done > 0 {
-            tracing::warn!(
-                count = remesh_done,
-                us = remesh_us,
-                "W13.1: deferred neighbour remesh exceeded threshold"
-            );
         }
     }
 
@@ -6399,12 +6468,68 @@ impl Voxel {
         affected
     }
 
+    /// W25: Dispatch remesh jobs for `coords` to the worker pool.
+    /// For each coord a `Job::Remesh` is enqueued carrying a voxel
+    /// snapshot + halo lighting. The actual mesh build runs off the
+    /// main thread; the result arrives as `WorkerResult::Remeshed` and
+    /// is GPU-uploaded in the next `stream_chunks` delivery pass.
+    ///
+    /// Falls back to `rebuild_chunks_sync` when no worker pool is
+    /// present (headless tests, early init) so all call sites remain
+    /// identical regardless of runtime mode.
     fn rebuild_chunks(&mut self, coords: &[ChunkCoord]) {
+        if self.workers.is_none() {
+            return self.rebuild_chunks_sync(coords);
+        }
+        let pack_arc = Arc::clone(&self.resource_pack);
+        for &coord in coords {
+            let Some(chunk) = self.world.chunk(coord) else {
+                continue;
+            };
+            // Snapshot voxels. Chunk is ~8 KB; clone is fast.
+            let chunk_snap = chunk.clone();
+
+            // Snapshot halo lighting (same pre-fetch used for Generate
+            // jobs in the dispatch path above).
+            let halo = HaloLighting {
+                own: self.lighting.get(coord).cloned(),
+                px: self.lighting.get([coord[0] + 1, coord[1], coord[2]]).cloned(),
+                nx: self.lighting.get([coord[0] - 1, coord[1], coord[2]]).cloned(),
+                pz: self.lighting.get([coord[0], coord[1], coord[2] + 1]).cloned(),
+                nz: self.lighting.get([coord[0], coord[1], coord[2] - 1]).cloned(),
+                py: self.lighting.get([coord[0], coord[1] + 1, coord[2]]).cloned(),
+                ny: self.lighting.get([coord[0], coord[1] - 1, coord[2]]).cloned(),
+            };
+
+            // Bump revision so any in-flight result for this coord that
+            // was snapshotted before this edit is discarded on delivery.
+            let rev = self.chunk_revisions.entry(coord).or_insert(0);
+            *rev += 1;
+            let revision = *rev;
+
+            let job = Job::Remesh(RemeshJob {
+                coord,
+                chunk: chunk_snap,
+                pack: Arc::clone(&pack_arc),
+                halo,
+                revision,
+            });
+            // If the send fails the pool is shutting down; ignore.
+            if let Some(pool) = self.workers.as_ref() {
+                let _ = pool.req_tx.send(job);
+            }
+        }
+    }
+
+    /// Synchronous fallback for `rebuild_chunks`. Used when no worker
+    /// pool is present (headless tests, pre-init). Builds submeshes on
+    /// the main thread and uploads them immediately.
+    fn rebuild_chunks_sync(&mut self, coords: &[ChunkCoord]) {
         let renderer = self.renderer.as_mut().expect("renderer ready");
         // Release old mesh handles for the affected chunks so the
         // mesh registry doesn't accumulate stale buffers across edits.
-        // Use a HashSet for O(1) lookup - at view_distance=32 chunk_meshes
-        // can be tens of thousands of entries.
+        // Use a HashSet for O(1) lookup - at view_distance=32
+        // chunk_meshes can be tens of thousands of entries.
         let coord_set: std::collections::HashSet<ChunkCoord> =
             coords.iter().copied().collect();
         let mut keep = Vec::with_capacity(self.chunk_meshes.len());
@@ -6427,10 +6552,9 @@ impl Voxel {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
-                // Skip torch + snow submeshes: both render
-                // through dedicated world-pass meshes (thin
-                // torch + thin snow slab) instead of as full
-                // cube voxels.
+                // Skip torch + snow submeshes: both render through
+                // dedicated world-pass meshes (thin torch + thin snow
+                // slab) instead of as full cube voxels.
                 if block_skips_chunk_mesh(sub.block) {
                     continue;
                 }
@@ -14626,19 +14750,42 @@ enum ChunkSideEffect {
 /// pool code and tests can refer to it as plain `HaloLighting`.
 use lighting::HaloLighting;
 
-/// Output from one worker thread: the generated chunk, pre-scanned
-/// side-effect list, and the pre-built MC-atlas submeshes.
-/// W24: submeshes are now computed in the worker (see
-/// `mesh_chunk_in_worker`) so the main thread only does GPU upload.
-struct WorkerResult {
-    coord: ChunkCoord,
-    chunk: Chunk,
-    /// W13.2: voxel-scan results computed off-thread.
-    side_effects: Vec<ChunkSideEffect>,
-    /// W24: MC-atlas submeshes built by the worker. Main thread
-    /// uploads these directly via `renderer.create_mesh` without
-    /// going through `pending_remesh` / `build_lit_submeshes`.
-    submeshes: Vec<infengine_voxel::ChunkSubmesh>,
+/// W25: output from one worker thread. Two variants:
+/// - `Generated`: new chunk from worldgen + side-effects + mesh.
+/// - `Remeshed`: remesh of an existing chunk (no worldgen, no side-effects).
+///
+/// The `revision` field on `Remeshed` carries the snapshot revision so
+/// the main thread can discard stale results when the chunk was edited
+/// again before the first remesh returned.
+enum WorkerResult {
+    /// W13 / W24: new chunk generated by `generate_chunk_at_ctx`.
+    Generated {
+        coord: ChunkCoord,
+        chunk: Chunk,
+        /// W13.2: voxel-scan results computed off-thread.
+        side_effects: Vec<ChunkSideEffect>,
+        /// W24: MC-atlas submeshes built by the worker.
+        submeshes: Vec<infengine_voxel::ChunkSubmesh>,
+    },
+    /// W25: remesh of an already-loaded chunk (block edit / neighbour
+    /// update). No worldgen, no side-effect scan.
+    Remeshed {
+        coord: ChunkCoord,
+        /// Revision at snapshot time. Main thread drops this result if
+        /// `chunk_revisions[coord]` has advanced past it.
+        revision: u64,
+        submeshes: Vec<infengine_voxel::ChunkSubmesh>,
+    },
+}
+
+/// W25: a single unit of work sent to a worker thread. Two variants:
+/// - `Generate`: full worldgen + mesh for a new chunk.
+/// - `Remesh`: mesh-only for an existing chunk snapshot.
+enum Job {
+    /// Full generation + mesh path (pre-W25 ChunkJob).
+    Generate(ChunkJob),
+    /// W25: remesh-only path; skips worldgen and side-effect scan.
+    Remesh(RemeshJob),
 }
 
 /// One unit of work for the chunk worker pool. Carries the per-job
@@ -14660,19 +14807,37 @@ struct ChunkJob {
     halo: HaloLighting,
 }
 
-/// Thread pool that runs `generate_chunk` + `chunk_mesh` off the main
-/// thread. The main thread enqueues `ChunkJob` requests on
-/// `req_tx`; workers produce `WorkerResult` on `res_rx`. Dropping the
-/// pool closes `req_tx`; the workers see `recv` return Err and exit.
+/// W25: remesh-only job. Carries a clone of the chunk's voxel data
+/// (Chunk is ~8 KB; clone is fast) so the worker can mesh without
+/// shared mutable state. No worldgen, no side-effect scan.
+struct RemeshJob {
+    coord: ChunkCoord,
+    /// Snapshot of the chunk voxels at dispatch time.
+    chunk: Chunk,
+    /// Resource pack snapshot for UV / anim lookup.
+    pack: Arc<resource_pack::ResourcePack>,
+    /// Pre-fetched light grids for own chunk + 6 neighbours.
+    halo: HaloLighting,
+    /// Revision counter at dispatch time. Used by the main thread to
+    /// discard stale results (a second edit arrived before this one
+    /// returned).
+    revision: u64,
+}
+
+/// Thread pool that runs `generate_chunk` + `chunk_mesh` (and W25:
+/// remesh-only jobs) off the main thread. The main thread enqueues
+/// `Job` requests on `req_tx`; workers produce `WorkerResult` on
+/// `res_rx`. Dropping the pool closes `req_tx`; the workers see
+/// `recv` return Err and exit.
 struct WorkerPool {
-    req_tx: Sender<ChunkJob>,
+    req_tx: Sender<Job>,
     res_rx: Receiver<WorkerResult>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl WorkerPool {
     fn spawn(num_workers: usize) -> Self {
-        let (req_tx, req_rx) = mpsc::channel::<ChunkJob>();
+        let (req_tx, req_rx) = mpsc::channel::<Job>();
         let req_rx = Arc::new(Mutex::new(req_rx));
         let (res_tx, res_rx) = mpsc::channel::<WorkerResult>();
         let mut threads = Vec::with_capacity(num_workers);
@@ -14694,76 +14859,105 @@ impl WorkerPool {
                                     Err(_) => return,
                                 }
                             };
-                            // Pure-ctx call - no atomic reads. The
-                            // ctx snapshot at enqueue is the
-                            // source of truth for this job; a dim
-                            // swap on the main thread between
-                            // enqueue + pickup can no longer
-                            // poison the gen.
-                            let chunk = worldgen::generate_chunk_at_ctx(job.coord, &job.ctx);
-                            let origin = World::chunk_world_origin(job.coord);
+                            match job {
+                                Job::Generate(gj) => {
+                                    // Pure-ctx call - no atomic reads. The
+                                    // ctx snapshot at enqueue is the source
+                                    // of truth for this job; a dim swap on
+                                    // the main thread between enqueue +
+                                    // pickup can no longer poison the gen.
+                                    let chunk = worldgen::generate_chunk_at_ctx(
+                                        gj.coord, &gj.ctx,
+                                    );
+                                    let origin = World::chunk_world_origin(gj.coord);
 
-                            // W13.2: Pre-scan voxels for side-effects
-                            // (snow / torch / liquid) so the main thread
-                            // doesn't have to iterate 4096 cells per
-                            // chunk on delivery.
-                            let cs = CHUNK_SIZE as i32;
-                            let ox = origin.x as i32;
-                            let oy = origin.y as i32;
-                            let oz = origin.z as i32;
-                            let mut side_effects: Vec<ChunkSideEffect> = Vec::new();
-                            for ly in 0..cs {
-                                for lz in 0..cs {
-                                    for lx in 0..cs {
-                                        let b = chunk.get(
-                                            lx as usize,
-                                            ly as usize,
-                                            lz as usize,
-                                        );
-                                        let wv = [ox + lx, oy + ly, oz + lz];
-                                        // Snow cap (block id 15).
-                                        if b.0 == 15 {
-                                            side_effects.push(
-                                                ChunkSideEffect::Snow(wv),
-                                            );
-                                        } else if b.0 == TORCH_ID
-                                            || b.0 == GLOWSTONE_ID
-                                        {
-                                            side_effects.push(
-                                                ChunkSideEffect::Torch(wv),
-                                            );
-                                        } else if let Some(lq) = liquid_for(b) {
-                                            side_effects.push(
-                                                ChunkSideEffect::Liquid {
-                                                    pos: wv,
-                                                    tick_offset: lq.tick_period.max(1) as u64,
-                                                },
-                                            );
+                                    // W13.2: Pre-scan voxels for side-effects
+                                    // (snow / torch / liquid) so the main
+                                    // thread doesn't have to iterate 4096
+                                    // cells per chunk on delivery.
+                                    let cs = CHUNK_SIZE as i32;
+                                    let ox = origin.x as i32;
+                                    let oy = origin.y as i32;
+                                    let oz = origin.z as i32;
+                                    let mut side_effects: Vec<ChunkSideEffect> = Vec::new();
+                                    for ly in 0..cs {
+                                        for lz in 0..cs {
+                                            for lx in 0..cs {
+                                                let b = chunk.get(
+                                                    lx as usize,
+                                                    ly as usize,
+                                                    lz as usize,
+                                                );
+                                                let wv = [ox + lx, oy + ly, oz + lz];
+                                                // Snow cap (block id 15).
+                                                if b.0 == 15 {
+                                                    side_effects.push(
+                                                        ChunkSideEffect::Snow(wv),
+                                                    );
+                                                } else if b.0 == TORCH_ID
+                                                    || b.0 == GLOWSTONE_ID
+                                                {
+                                                    side_effects.push(
+                                                        ChunkSideEffect::Torch(wv),
+                                                    );
+                                                } else if let Some(lq) = liquid_for(b) {
+                                                    side_effects.push(
+                                                        ChunkSideEffect::Liquid {
+                                                            pos: wv,
+                                                            tick_offset: lq.tick_period.max(1)
+                                                                as u64,
+                                                        },
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
+
+                                    // W24: Build MC-atlas submeshes in the
+                                    // worker using the pre-fetched halo
+                                    // lighting + pack snapshot. Main thread
+                                    // only does GPU upload.
+                                    let submeshes = mesh_chunk_in_worker(
+                                        &chunk,
+                                        gj.coord,
+                                        &gj.pack,
+                                        &gj.halo,
+                                    );
+
+                                    if res_tx
+                                        .send(WorkerResult::Generated {
+                                            coord: gj.coord,
+                                            chunk,
+                                            side_effects,
+                                            submeshes,
+                                        })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
                                 }
-                            }
-
-                            // W24: Build MC-atlas submeshes in the worker
-                            // using the pre-fetched halo lighting + pack
-                            // snapshot. Main thread only does GPU upload.
-                            let submeshes = mesh_chunk_in_worker(
-                                &chunk,
-                                job.coord,
-                                &job.pack,
-                                &job.halo,
-                            );
-
-                            if res_tx
-                                .send(WorkerResult {
-                                    coord: job.coord,
-                                    chunk,
-                                    side_effects,
-                                    submeshes,
-                                })
-                                .is_err()
-                            {
-                                return;
+                                Job::Remesh(rj) => {
+                                    // W25: mesh-only - no worldgen, no
+                                    // side-effect scan. The voxel snapshot
+                                    // was cloned on the main thread at
+                                    // dispatch time.
+                                    let submeshes = mesh_chunk_in_worker(
+                                        &rj.chunk,
+                                        rj.coord,
+                                        &rj.pack,
+                                        &rj.halo,
+                                    );
+                                    if res_tx
+                                        .send(WorkerResult::Remeshed {
+                                            coord: rj.coord,
+                                            revision: rj.revision,
+                                            submeshes,
+                                        })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
                             }
                         }
                     })
@@ -14785,7 +14979,7 @@ impl Drop for WorkerPool {
         // dummy that we then drop, which causes worker recv() to fail.
         // Replacing the field with a fresh channel and dropping is
         // equivalent; using `mem::replace` keeps the type stable.
-        let (dummy_tx, _) = mpsc::channel::<ChunkJob>();
+        let (dummy_tx, _) = mpsc::channel::<Job>();
         let _ = std::mem::replace(&mut self.req_tx, dummy_tx);
         for t in self.threads.drain(..) {
             let _ = t.join();
