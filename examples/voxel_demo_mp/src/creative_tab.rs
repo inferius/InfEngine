@@ -139,15 +139,23 @@ pub(crate) struct CreativeTabState {
     pub cursor: Option<(BlockId, u8)>,
     /// W12.9 - active tab. Defaults to All.
     pub category: CreativeCategory,
+    /// W20.3 - true on the first frame after open_now(). The egui
+    /// pass uses this to request keyboard focus on the search box
+    /// without polling every frame. Cleared after the first render.
+    pub just_opened: bool,
 }
 
 impl CreativeTabState {
     /// Open the tab with a fresh empty query.
+    ///
+    /// Sets `just_opened = true` so the first egui pass can
+    /// request focus on the search text box.
     pub(crate) fn open_now(&mut self) {
         self.open = true;
         self.query.clear();
         self.cursor = None;
         self.category = CreativeCategory::All;
+        self.just_opened = true;
     }
 
     /// Close the tab. Drops any held cursor stack (matches MC:
@@ -158,6 +166,7 @@ impl CreativeTabState {
         self.query.clear();
         self.cursor = None;
         self.category = CreativeCategory::All;
+        self.just_opened = false;
     }
 }
 
@@ -324,6 +333,7 @@ mod tests {
             query: "stale".into(),
             cursor: Some((BlockId(1), 64)),
             category: CreativeCategory::Tools,
+            just_opened: false,
         };
         state.open_now();
         assert!(state.open);
@@ -478,6 +488,30 @@ mod tests {
         };
         s.open_now();
         assert_eq!(s.category, CreativeCategory::All);
+    }
+
+    // ---------------------------------------------------------------
+    // W20.3: just_opened flag tests.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn open_now_sets_just_opened() {
+        // W20.3: open_now() must arm the one-shot flag so the next
+        // egui frame can request search-box focus.
+        let mut s = CreativeTabState::default();
+        assert!(!s.just_opened, "default must start with just_opened=false");
+        s.open_now();
+        assert!(s.just_opened, "open_now must set just_opened=true");
+    }
+
+    #[test]
+    fn close_clears_just_opened() {
+        // W20.3: close() must disarm the flag.
+        let mut s = CreativeTabState::default();
+        s.open_now();
+        assert!(s.just_opened);
+        s.close();
+        assert!(!s.just_opened, "close must clear just_opened");
     }
 
     #[test]
