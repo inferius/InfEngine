@@ -41,21 +41,30 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
     }
 }
 
-/// Resolve the full path to a mob skin PNG inside the user's MC
-/// asset tree. Returns `None` when the file doesn't exist; caller
-/// falls back to the kind's hard-coded color.
+/// Resolve the full path to a mob skin inside the user's MC
+/// asset tree. Tries `.tga` first (Bedrock / Java extracted packs),
+/// then `.png` (vanilla Java jar). Returns `None` when neither
+/// file exists; caller falls back to the kind's hard-coded color.
+///
+/// W29.3: added `.tga` probe so Bedrock-layout resource packs work
+/// without requiring the user to rename their files.
 pub(crate) fn mob_skin_path(
     assets_root: &Path,
     kind: MobKind,
 ) -> Option<PathBuf> {
     let (subdir, stem) = entity_texture_subpath(kind);
-    let p = assets_root
+    let base = assets_root
         .join("textures")
         .join("entity")
-        .join(subdir)
-        .join(format!("{stem}.png"));
-    if p.is_file() {
-        Some(p)
+        .join(subdir);
+    // Try TGA first (common in Bedrock packs + extracted Java jars).
+    let tga = base.join(format!("{stem}.tga"));
+    if tga.is_file() {
+        return Some(tga);
+    }
+    let png = base.join(format!("{stem}.png"));
+    if png.is_file() {
+        Some(png)
     } else {
         None
     }
@@ -261,6 +270,52 @@ mod tests {
             .join(format!("{stem}.png"));
         fs::create_dir_all(&dir).expect("mkdir at png path");
         assert!(mob_skin_path(&root, MobKind::Sheep).is_none());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // W29.3 - TGA fallback tests ------------------------------------------
+
+    /// W29.3: mob_skin_path resolves a .tga file when no .png exists.
+    #[test]
+    fn mob_skin_path_resolves_tga() {
+        let root = temp_root("tga_sheep");
+        let (sub, stem) = entity_texture_subpath(MobKind::Sheep);
+        let dir = root.join("textures").join("entity").join(sub);
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::write(dir.join(format!("{stem}.tga")), b"fake_tga").expect("write tga");
+        let p = mob_skin_path(&root, MobKind::Sheep).expect("should resolve tga");
+        assert!(p.to_string_lossy().ends_with(".tga"), "expected .tga path, got {p:?}");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// W29.3: .tga takes priority over .png when both exist.
+    #[test]
+    fn mob_skin_path_prefers_tga_over_png() {
+        let root = temp_root("tga_priority");
+        let (sub, stem) = entity_texture_subpath(MobKind::Zombie);
+        let dir = root.join("textures").join("entity").join(sub);
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::write(dir.join(format!("{stem}.tga")), b"fake_tga").expect("write tga");
+        fs::write(dir.join(format!("{stem}.png")), b"\x89PNG").expect("write png");
+        let p = mob_skin_path(&root, MobKind::Zombie).expect("should resolve");
+        assert!(p.to_string_lossy().ends_with(".tga"), "tga must win over png, got {p:?}");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// W29.3: full_skin_set_present works with all-TGA install.
+    #[test]
+    fn full_skin_set_present_with_tga_files() {
+        let root = temp_root("tga_full");
+        for k in [
+            MobKind::Sheep, MobKind::Zombie, MobKind::Chicken,
+            MobKind::Pig, MobKind::Cow, MobKind::Skeleton, MobKind::Spider,
+        ] {
+            let (sub, stem) = entity_texture_subpath(k);
+            let dir = root.join("textures").join("entity").join(sub);
+            fs::create_dir_all(&dir).expect("mkdir");
+            fs::write(dir.join(format!("{stem}.tga")), b"fake_tga").expect("write");
+        }
+        assert!(full_skin_set_present(&root), "all-TGA install must report full set");
         fs::remove_dir_all(&root).ok();
     }
 }
