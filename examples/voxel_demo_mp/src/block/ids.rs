@@ -178,6 +178,15 @@ pub(crate) const LIGHT_BLOCK_ID: u16 = 67;
 // decision the slabs split into top + bottom ids, stairs default
 // east-facing, doors split into lower + upper ids.
 
+// ---------------------------------------------------------------
+// W16 - Plant / flower ids (20..=22 already existed as BlockType
+// rows; exported here so special_models + the mesher can reference
+// them without bare literals).
+// ---------------------------------------------------------------
+pub(crate) const FLOWER_RED_ID: u16 = 20;
+pub(crate) const FLOWER_YELLOW_ID: u16 = 21;
+pub(crate) const FLOWER_BLUE_ID: u16 = 22;
+
 #[allow(dead_code)]
 pub(crate) const OAK_SLAB_ID: u16 = 68;
 #[allow(dead_code)]

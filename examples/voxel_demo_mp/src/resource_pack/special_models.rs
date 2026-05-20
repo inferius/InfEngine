@@ -66,23 +66,41 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/glass_pane" | "glass_pane" => Some(build_thin_pane()),
         "block/iron_bars" | "iron_bars" => Some(build_thin_pane()),
         "block/wall_post" | "wall_post" => Some(build_wall_post()),
+        // W16.1 - cross-pattern for plant blocks. The texture var is
+        // stored as the bare file stem; the mesher resolves it through
+        // `ResourcePack::block_texture` the same way cube faces work.
+        // The caller provides the texture name per-block so we accept
+        // the generic "cross/<tex>" key shape.
+        n if n.starts_with("block/cross/") => {
+            let tex = n.trim_start_matches("block/cross/");
+            Some(build_cross(tex))
+        }
         _ => None,
     }
 }
 
 /// Map an infengine block id to its special-model name, if any.
-/// Used by the future chunk mesher to override the default 6-face
-/// cube emission for known specials. Today this is consumed only
-/// by tests + by W9.x.3's `model_for_block` resolver.
+/// Used by the chunk mesher to override the default 6-face cube
+/// emission for known specials.
+///
+/// Cross-pattern plant blocks use the `"block/cross/<tex>"` key
+/// shape so `lookup()` can extract the per-block texture name from
+/// the key string without a second map lookup.
 pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     use crate::block::{
-        COBBLESTONE_SLAB_ID, COBBLESTONE_STAIRS_ID, COBBLESTONE_WALL_ID, GLASS_PANE_ID,
+        COBBLESTONE_SLAB_ID, COBBLESTONE_STAIRS_ID, COBBLESTONE_WALL_ID,
+        FLOWER_BLUE_ID, FLOWER_RED_ID, FLOWER_YELLOW_ID, GLASS_PANE_ID,
         IRON_BARS_ID, IRON_DOOR_ID, NETHER_BRICK_FENCE_ID, OAK_DOOR_ID,
-        OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID, OAK_SLAB_TOP_ID, OAK_STAIRS_ID,
-        STONE_SLAB_ID, STONE_STAIRS_ID, TORCH_ID,
+        OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID, OAK_SLAB_TOP_ID,
+        OAK_STAIRS_ID, STONE_SLAB_ID, STONE_STAIRS_ID, TORCH_ID,
     };
     match id {
         x if x == TORCH_ID => Some("block/torch"),
+        // W16 - cross-pattern plant blocks. Key encodes the texture
+        // stem so `lookup` can build the model without a second table.
+        x if x == FLOWER_RED_ID => Some("block/cross/poppy"),
+        x if x == FLOWER_YELLOW_ID => Some("block/cross/dandelion"),
+        x if x == FLOWER_BLUE_ID => Some("block/cross/blue_orchid"),
         // W12.2 - slab / fence / door / stairs / pane / bars / wall.
         x if x == OAK_SLAB_ID
             || x == STONE_SLAB_ID
@@ -426,6 +444,58 @@ pub(crate) fn build_bed_foot() -> BlockModel {
     }
 }
 
+/// MC `cross.json` shape - two quads forming an X, used for plant
+/// blocks (flowers, dandelions, short_grass, saplings).
+///
+/// Cite: `assets/minecraft/models/block/cross.json`.
+/// Each quad is a flat, infinitely-thin face that spans the full
+/// 16x16 tile in Y. The two quads are offset slightly off-centre
+/// (0.8 from the block edge rather than exactly 0 or 8) so they
+/// form a proper X that is visible from all horizontal directions.
+/// Both quads carry `shade: false` (matches MC's `"shade": false`
+/// in cross.json) so they don't darken on the underside.
+pub(crate) fn build_cross(texture: &str) -> BlockModel {
+    // Quad 1: runs north-south (along Z), tilted 45deg around Y.
+    let quad1 = ModelElement {
+        from: [0.8, 0.0, 8.0],
+        to: [15.2, 16.0, 8.0],
+        rotation: Some(ElementRotation {
+            origin: [8.0, 8.0, 8.0],
+            axis: RotationAxis::Y,
+            angle_deg: 45.0,
+            rescale: true,
+        }),
+        shade: false,
+        faces: ElementFaces {
+            north: Some(full_face(texture)),
+            south: Some(full_face(texture)),
+            ..Default::default()
+        },
+    };
+    // Quad 2: runs east-west (along X), tilted 45deg around Y.
+    let quad2 = ModelElement {
+        from: [8.0, 0.0, 0.8],
+        to: [8.0, 16.0, 15.2],
+        rotation: Some(ElementRotation {
+            origin: [8.0, 8.0, 8.0],
+            axis: RotationAxis::Y,
+            angle_deg: 45.0,
+            rescale: true,
+        }),
+        shade: false,
+        faces: ElementFaces {
+            east: Some(full_face(texture)),
+            west: Some(full_face(texture)),
+            ..Default::default()
+        },
+    };
+    BlockModel {
+        elements: vec![quad1, quad2],
+        textures: HashMap::new(),
+        ambient_occlusion: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,6 +746,123 @@ mod tests {
                 "id {id} has no resolvable special model",
             );
         }
+    }
+
+    // ---------------------------------------------------------------
+    // W16.1 - Cross-pattern model tests.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cross_model_has_two_elements_forming_x() {
+        let m = build_cross("poppy");
+        assert_eq!(m.elements.len(), 2, "cross needs exactly 2 quads");
+        // Quad 1: north + south faces present, east + west absent.
+        let q1 = &m.elements[0];
+        assert!(q1.faces.north.is_some(), "quad1 north face missing");
+        assert!(q1.faces.south.is_some(), "quad1 south face missing");
+        assert!(q1.faces.east.is_none(), "quad1 east should be absent");
+        assert!(q1.faces.west.is_none(), "quad1 west should be absent");
+        // Quad 2: east + west faces present, north + south absent.
+        let q2 = &m.elements[1];
+        assert!(q2.faces.east.is_some(), "quad2 east face missing");
+        assert!(q2.faces.west.is_some(), "quad2 west face missing");
+        assert!(q2.faces.north.is_none(), "quad2 north should be absent");
+        assert!(q2.faces.south.is_none(), "quad2 south should be absent");
+    }
+
+    #[test]
+    fn cross_model_quads_are_centered_at_block_origin() {
+        let m = build_cross("dandelion");
+        // Both quads rotate around the block centre (8, 8, 8) at 45 deg Y.
+        for (i, elem) in m.elements.iter().enumerate() {
+            let r = elem
+                .rotation
+                .unwrap_or_else(|| panic!("element {i} has no rotation"));
+            assert_eq!(r.origin, [8.0, 8.0, 8.0], "rotation origin not block centre");
+            assert_eq!(r.axis, RotationAxis::Y, "rotation axis must be Y");
+            assert!(
+                (r.angle_deg - 45.0).abs() < 1e-3,
+                "rotation angle must be 45 deg, got {}", r.angle_deg,
+            );
+            assert!(r.rescale, "cross quads must rescale to avoid gaps");
+        }
+    }
+
+    #[test]
+    fn cross_model_no_ambient_occlusion() {
+        let m = build_cross("blue_orchid");
+        assert!(!m.ambient_occlusion, "cross model must disable ambient occlusion");
+    }
+
+    #[test]
+    fn cross_model_shade_false_on_both_quads() {
+        let m = build_cross("poppy");
+        for (i, elem) in m.elements.iter().enumerate() {
+            assert!(!elem.shade, "element {i} shade must be false (matches cross.json)");
+        }
+    }
+
+    #[test]
+    fn cross_model_texture_name_propagates_to_faces() {
+        let m = build_cross("my_flower");
+        let q1 = &m.elements[0];
+        let q2 = &m.elements[1];
+        assert_eq!(q1.faces.north.as_ref().unwrap().texture, "my_flower");
+        assert_eq!(q1.faces.south.as_ref().unwrap().texture, "my_flower");
+        assert_eq!(q2.faces.east.as_ref().unwrap().texture, "my_flower");
+        assert_eq!(q2.faces.west.as_ref().unwrap().texture, "my_flower");
+    }
+
+    #[test]
+    fn lookup_cross_key_builds_model_with_texture() {
+        let m = lookup("block/cross/poppy").expect("cross/poppy should resolve");
+        assert_eq!(m.elements.len(), 2);
+        // Texture on face should match the trailing stem.
+        assert_eq!(
+            m.elements[0].faces.north.as_ref().unwrap().texture,
+            "poppy",
+        );
+    }
+
+    #[test]
+    fn flower_ids_route_to_distinct_cross_keys() {
+        use crate::block::{FLOWER_BLUE_ID, FLOWER_RED_ID, FLOWER_YELLOW_ID};
+        let red = name_for_block(FLOWER_RED_ID).expect("red flower routes");
+        let yellow = name_for_block(FLOWER_YELLOW_ID).expect("yellow flower routes");
+        let blue = name_for_block(FLOWER_BLUE_ID).expect("blue flower routes");
+        assert!(red.starts_with("block/cross/"), "red must use cross key");
+        assert!(yellow.starts_with("block/cross/"), "yellow must use cross key");
+        assert!(blue.starts_with("block/cross/"), "blue must use cross key");
+        // All three should have different texture stems.
+        assert_ne!(red, yellow);
+        assert_ne!(red, blue);
+        assert_ne!(yellow, blue);
+    }
+
+    #[test]
+    fn flower_model_for_block_resolves_cross_model() {
+        use crate::block::FLOWER_RED_ID;
+        let m = model_for_block(FLOWER_RED_ID).expect("flower should resolve to cross model");
+        assert_eq!(m.elements.len(), 2, "cross model has 2 quads");
+        assert!(!m.ambient_occlusion);
+    }
+
+    #[test]
+    fn cross_face_uvs_cover_full_tile() {
+        let m = build_cross("poppy");
+        // Full 16x16 tile UV (MC cross.json has full tile on each face).
+        let north_uv = m.elements[0].faces.north.as_ref().unwrap().uv;
+        assert_eq!(north_uv, [0.0, 0.0, 16.0, 16.0]);
+        let east_uv = m.elements[1].faces.east.as_ref().unwrap().uv;
+        assert_eq!(east_uv, [0.0, 0.0, 16.0, 16.0]);
+    }
+
+    #[test]
+    fn cross_model_quad1_spans_full_block_height() {
+        let m = build_cross("poppy");
+        let q1 = &m.elements[0];
+        assert_eq!(q1.from[1], 0.0, "quad1 bottom must be at y=0");
+        assert_eq!(q1.to[1], 16.0, "quad1 top must be at y=16");
     }
 
     #[test]
