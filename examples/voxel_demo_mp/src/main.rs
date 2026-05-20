@@ -11296,6 +11296,8 @@ impl Voxel {
                     let new_handle =
                         r.make_mesh_albedo(w, h, &self.resource_pack.atlas_rgba);
                     self.voxel_atlas = Some(new_handle);
+                    // W32: refresh global atlas for uber chunk pass.
+                    r.set_mesh_albedo(w, h, &self.resource_pack.atlas_rgba);
                     self.atlas_rgba =
                         Some((w, h, self.resource_pack.atlas_rgba.clone()));
                     // Wave 9.y: refresh the GPU animation table.
@@ -11483,6 +11485,14 @@ impl AppHandler for Voxel {
                 (w, h, self.resource_pack.atlas_rgba.clone())
             };
             self.voxel_atlas = Some(r.make_mesh_albedo(aw, ah, &atlas_rgba));
+            // W32 fix: the uber chunk render path binds the GLOBAL
+            // texture_bind_group via `draw_uber_chunks`, not a per-mesh
+            // albedo. We must promote the MC atlas to the global slot so
+            // chunks aren't drawn against the default 1x1 white texture.
+            // Without this, all chunk meshes render as flat tinted colour
+            // (which is exactly what the user observed in the W32 screenshot:
+            // green grass, brown dirt, red sand - tint colour but no texture).
+            r.set_mesh_albedo(aw, ah, &atlas_rgba);
             // Keep the pixel data around for the egui inventory UI.
             self.atlas_rgba = Some((aw, ah, atlas_rgba));
             // Wave 9.y: push the per-tile animation table to the
