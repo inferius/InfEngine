@@ -135,6 +135,8 @@ mod wave25_tests;
 mod wave27_tests;
 #[cfg(test)]
 mod wave28_tests;
+#[cfg(test)]
+mod wave29_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -6088,7 +6090,19 @@ impl Voxel {
         if let Some(pool) = self.workers.as_ref() {
             // W28.2: Cap dispatch per frame to 2x the number of workers
             // so we never flood the channel and starve the result drain.
-            let dispatch_cap = pool.worker_count() * 2;
+            // W29.5: During fast player movement (horizontal speed > 6 m/s,
+            // e.g. sprinting or flying) raise the cap to 32 so the leading
+            // edge of the view frustum fills in before the player crosses into
+            // void chunks. The channel is unbounded so overshooting is safe;
+            // the result drain budget clamps actual main-thread work.
+            let horiz_speed = (self.player_vel.x * self.player_vel.x
+                + self.player_vel.z * self.player_vel.z)
+                .sqrt();
+            let dispatch_cap = if horiz_speed > 6.0 {
+                32
+            } else {
+                pool.worker_count() * 2
+            };
             let ctx = self.current_worldgen_ctx();
             let pack_arc = Arc::clone(&self.resource_pack);
             // W28.1: pop from BinaryHeap (closest coord first).

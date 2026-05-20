@@ -321,14 +321,22 @@ impl ResourcePack {
     ///
     /// Tries `icon_ref` (which checks the item-icon table first,
     /// then the block's top face) when `normal == [0,1,0]`, or
-    /// `block_face_ref` for other normals. Falls back to the
-    /// legacy 4x4 synthetic-atlas helper when the pack has no
-    /// entry for this block (placeholder pack or unknown id).
+    /// `block_face_ref` for other normals.
+    ///
+    /// W29.1: when neither lookup hits (unknown block id OR a live MC
+    /// atlas is loaded but the block has no registered entry) we now
+    /// return a SAFE constant rect - the top-left 16x16 tile of the
+    /// current atlas - instead of the legacy 4x4 synthetic-atlas rect.
+    /// The legacy rect was calibrated for a 64x64 placeholder atlas;
+    /// on a 2048x2048 MC atlas it mapped the ENTIRE atlas into one
+    /// slot, producing the "rainbow stripes" visual bug reported in W29.
+    ///
+    /// Top-left tile: u0=0, v0=0, u1=16/atlas_w, v1=16/atlas_h.
+    /// On the placeholder pack (64x64) this is a single colour swatch.
+    /// On a live MC atlas (2048x2048) it is the stone tile at row 0.
     ///
     /// This is the canonical UV resolver for all UI slot widgets
-    /// (hotbar, craft grid, recipe book) - fixes the mismatch that
-    /// occurred when an MC atlas was loaded but the UI still read
-    /// the legacy 4x4 grid.
+    /// (hotbar, craft grid, recipe book).
     pub(crate) fn icon_uv_for(
         &self,
         block: infengine_voxel::BlockId,
@@ -351,7 +359,12 @@ impl ResourcePack {
                 return r.atlas_uv;
             }
         }
-        crate::block::atlas_uv_rect(block, normal)
+        // W29.1: safe fallback - top-left 16x16 tile of the atlas.
+        // Avoids the legacy 4x4 grid which was wrong for MC atlases.
+        let (aw, ah) = self.atlas_size;
+        let tile_u = 16.0 / aw as f32;
+        let tile_v = 16.0 / ah as f32;
+        [0.0, 0.0, tile_u, tile_v]
     }
 
     /// W20.1 - Top-face (inventory icon) UV rect for `block`.
