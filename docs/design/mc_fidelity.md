@@ -1097,3 +1097,78 @@ overwrite it with a mesh that does not reflect edit B.
   the hard ceiling is no longer the bottleneck).
 - Time-budget cap on the pending_remesh drain loop removed (was 4 ms
   per frame; dispatch is now microseconds, not milliseconds).
+
+## Wave 26 - Fix dispatch/upload overhead
+
+### Why W25 stuttered worse than the original
+
+W25 moved meshing off-thread but bumped per-frame budgets too high, so
+dispatch + GPU upload on the main thread did MORE work per frame than
+the original synchronous mesher:
+
+1. **Dispatch cost not free**: each `rebuild_chunks` call did
+   `chunk.clone()` (~8 KB malloc) plus constructing `HaloLighting` with
+   7 `Option<LightGrid>` clones (~7 x 4096 bytes = ~28 KB malloc). With
+   `REMESH_DEFERRED_PER_FRAME = 64` that was ~4 MB of allocator pressure
+   per frame on the main thread - enough to cause stutter by itself.
+
+2. **GPU upload churn**: `RESULTS_PER_FRAME = 32` drained up to 32
+   results per frame, each with up to 4 submeshes = up to 128 wgpu
+   buffer allocs + queue submits + bind group setups per frame.
+
+3. **O(n*R) mesh removal**: `chunk_meshes` was a flat `Vec`; removing
+   the old GPU handles for a chunk (Remeshed delivery) required scanning
+   the entire Vec - O(n) per result, O(n*R) per frame where n can be
+   tens of thousands at view_distance=8+.
+
+### Arc<LightGrid> (W26.1)
+
+`LightingState::grids` changed from `HashMap<ChunkCoord, LightGrid>` to
+`HashMap<ChunkCoord, Arc<LightGrid>>`. `HaloLighting` fields changed
+from `Option<LightGrid>` to `Option<Arc<LightGrid>>`.
+
+Effect: snapshotting halo lighting for a job is now 7 refcount bumps
+(~56 bytes) instead of 7 x 4096-byte copies (~28 KB). Mutable access
+(BFS engines) goes through `Arc::make_mut()` for copy-on-write
+semantics: unique arcs are mutated in place, shared arcs (held by an
+in-flight worker) get a fresh copy only when actually needed.
+
+MC reference: `ChunkLightProvider` in
+`net/minecraft/world/level/lighting/` holds light data in arrays that
+the chunk-rendering task accesses concurrently with the main thread; MC
+uses copy-on-write snapshots for the same reason.
+
+### Arc<Chunk> (W26.2) - deferred to W27
+
+The `chunk.clone()` (~8 KB) in `rebuild_chunks` is the remaining malloc
+per dispatch. Eliminating it requires changing `World::chunks` from
+`HashMap<ChunkCoord, Chunk>` to `HashMap<ChunkCoord, Arc<Chunk>>` in
+the `infengine_voxel` crate (public API change), updating all 65+
+call sites in `main.rs`, and fixing `voxel_demo_server`. Deferred to
+W27 to keep W26 scope manageable.
+
+### New per-frame budgets (W26.3)
+
+- `RESULTS_PER_FRAME`: 32 -> 4. GPU upload is expensive (wgpu buffer
+  alloc + queue submit + bind group per submesh); fewer per frame keeps
+  the main thread free.
+- `RESULTS_BUDGET_MS = 2`: new soft time cap on the GPU upload drain
+  loop. Caps wall-clock upload cost regardless of result count.
+- `REMESH_DEFERRED_PER_FRAME`: 64 -> 8. At 8 remesh dispatches/frame
+  and ~8 KB chunk clone per dispatch, allocator pressure drops from
+  ~512 KB/frame (was ~4 MB/frame at 64). Will drop to ~0 after W27
+  Arc<Chunk> lands.
+
+MC reference: `ChunkBuilder::compile()` runs N async render tasks per
+frame but caps GPU buffer uploads to ~4-8 per frame via
+`ChunkRenderDispatcher.maxTotalUploadSize` to prevent frame spikes.
+
+### O(1) chunk mesh removal (W26.4)
+
+`chunk_meshes` changed from `Vec<(ChunkCoord, BlockId, MeshHandle)>` to
+`HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>`. Per-chunk removal is
+now a single `HashMap::remove()` call instead of a full Vec scan.
+
+Affected paths: `WorkerResult::Remeshed` delivery, `rebuild_chunks_sync`
+(synchronous fallback), `stream_chunks` chunk-unload path, and all
+drain-all sites (dim switch, world reset, `/seed` command).
