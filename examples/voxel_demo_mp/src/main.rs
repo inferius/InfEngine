@@ -330,18 +330,22 @@ const VIEW_DISTANCE_CHUNKS: i32 = 4;
 /// W13.4: raised from 12 to 24. Follow-up: 24 -> 32.
 const VIEW_DISTANCE_MAX: i32 = 32;
 /// Maximum number of worker results whose GPU upload is processed per
-/// frame. W13.1: lowered from 4 to 2 for steady-state frame budgets.
-/// W23.3a: raised to 8 - the dedup set (W23.3c) and time-cap
-/// (W23.3b) prevent frame spikes; 8 keeps the queue draining fast
-/// enough to avoid the stutter the user reported post-load.
-/// W25.6: raised to 32 - Generate + Remesh results share this budget;
-/// time-cap (4 ms) keeps the frame safe regardless of count.
-const RESULTS_PER_FRAME: usize = 32;
+/// frame. W13.1: lowered from 4 to 2. W23.3a: raised to 8.
+/// W25.6: raised to 32 - Generate + Remesh results share this budget.
+/// W26.3: lowered back to 4 - GPU upload (wgpu buffer alloc + queue
+/// submit + bind group) is expensive; RESULTS_BUDGET_MS provides a
+/// soft time cap as a second guard.
+const RESULTS_PER_FRAME: usize = 4;
+/// Soft time budget (ms) for the GPU upload drain loop per frame.
+/// W26.3: caps wall-clock GPU upload cost regardless of result count.
+const RESULTS_BUDGET_MS: u64 = 2;
 /// Hard upper bound on remesh dispatch calls per frame (W13.2). After
 /// W25 each call only enqueues a job (O(1) Arc clones) instead of
-/// doing synchronous meshing, so the ceiling is much higher.
-/// W25.5: raised from 16 to 64.
-const REMESH_DEFERRED_PER_FRAME: usize = 64;
+/// doing synchronous meshing. W25.5: raised from 16 to 64.
+/// W26.3: lowered to 8 - dispatch still pays ~64 KB malloc per job
+/// (chunk clone; Arc<Chunk> refactor deferred to W27). At 8 jobs/frame
+/// that is ~512 KB/frame of allocator pressure vs ~4 MB/frame at 64.
+const REMESH_DEFERRED_PER_FRAME: usize = 8;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`
@@ -5992,12 +5996,16 @@ impl Voxel {
             }
         }
 
-        // W13.1 / W25: Drain up to RESULTS_PER_FRAME finished results
-        // from the workers. Handles both Generated (new chunk) and
-        // Remeshed (block-edit / neighbour update) variants.
+        // W13.1 / W25 / W26.3: Drain up to RESULTS_PER_FRAME finished
+        // results from the workers, with a RESULTS_BUDGET_MS soft cap
+        // on wall-clock GPU upload time. Handles both Generated (new
+        // chunk) and Remeshed (block-edit / neighbour update) variants.
         let mut delivered: Vec<WorkerResult> = Vec::new();
         if let Some(pool) = self.workers.as_ref() {
+            let drain_start = std::time::Instant::now();
+            let drain_budget = std::time::Duration::from_millis(RESULTS_BUDGET_MS);
             while delivered.len() < RESULTS_PER_FRAME
+                && drain_start.elapsed() < drain_budget
                 && let Ok(r) = pool.res_rx.try_recv()
             {
                 delivered.push(r);
