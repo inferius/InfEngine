@@ -45,7 +45,8 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
-use uber_buffer::UberMeshAllocator;
+use uber_buffer::{UberMeshAllocator, LAYER_CUTOUT, LAYER_OPAQUE, LAYER_TRANSLUCENT};
+pub use uber_buffer::{LAYER_CUTOUT as CHUNK_LAYER_CUTOUT, LAYER_OPAQUE as CHUNK_LAYER_OPAQUE, LAYER_TRANSLUCENT as CHUNK_LAYER_TRANSLUCENT};
 pub use particle_pass::{ParticleInstance as TexturedParticleInstance, ParticlePass};
 use tile_anims::TileAnimsResource;
 pub use tile_anims::{MAX_ANIM_SLOTS, TileAnimEntry, TileAnimsUniform};
@@ -138,7 +139,7 @@ pub struct Renderer {
     // All chunk meshes share a single vertex + index buffer allocated by
     // `uber`. Per-frame draw commands accumulate in `chunk_draw_queue_*`
     // and are flushed to the GPU via one `multi_draw_indexed_indirect` call
-    // per render layer (opaque + transparent) inside `render()`.
+    // per render layer (opaque + cutout + translucent) inside `render()`.
 
     /// Shared vertex/index pools for chunk meshes.
     uber: UberMeshAllocator,
@@ -148,10 +149,12 @@ pub struct Renderer {
     uber_next_id: u32,
     /// Per-frame opaque indirect draw commands queued by `queue_chunk_draw`.
     chunk_draw_queue_opaque: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
-    /// Per-frame transparent indirect draw commands.
-    chunk_draw_queue_transparent: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
-    /// GPU buffer for the per-frame indirect command list (opaque + transparent,
-    /// written at the start of each render call and used immediately).
+    /// Per-frame cutout (alpha-discard) indirect draw commands.
+    chunk_draw_queue_cutout: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    /// Per-frame translucent (alpha-blend) indirect draw commands.
+    chunk_draw_queue_translucent: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    /// GPU buffer for the per-frame indirect command list
+    /// (opaque + cutout + translucent, written at the start of each render call).
     uber_indirect_buf: wgpu::Buffer,
     /// GPU buffer for the per-frame per-chunk instance data (model/color/material).
     /// Written alongside indirect commands; indexed by `first_instance` in the
@@ -373,7 +376,8 @@ impl Renderer {
             uber,
             uber_next_id: 0x8000_0000, // high bit set avoids collisions with legacy handles
             chunk_draw_queue_opaque: Vec::new(),
-            chunk_draw_queue_transparent: Vec::new(),
+            chunk_draw_queue_cutout: Vec::new(),
+            chunk_draw_queue_translucent: Vec::new(),
             uber_indirect_buf,
             uber_instance_buf,
             uber_instance_capacity: UBER_INITIAL_INSTANCE_CAP,
@@ -579,15 +583,26 @@ impl Renderer {
         self.meshes.remove(handle)
     }
 
-    /// W32: Flag a chunk mesh as transparent (e.g. liquid surface).
-    /// Transparent chunk meshes are drawn in a separate sub-pass with
-    /// alpha blending + no depth write, same as the legacy transparent path.
-    pub fn set_chunk_mesh_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+    /// W33.3: Set the render layer for a chunk mesh.
+    ///
+    /// Layer constants (re-exported from uber_buffer):
+    ///   0 = OPAQUE      - depth-test + write ON, no blend.
+    ///   1 = CUTOUT      - same depth state, alpha-discard in shader.
+    ///   2 = TRANSLUCENT - depth-test ON, depth-write OFF, alpha blend.
+    pub fn set_chunk_mesh_layer(&mut self, handle: MeshHandle, layer: u8) {
         if self.uber.get(handle).is_some() {
-            self.uber.set_transparent(handle, transparent);
+            self.uber.set_layer(handle, layer);
         } else {
-            self.meshes.set_transparent(handle, transparent);
+            // Legacy per-buffer mesh: map to transparent bool.
+            self.meshes.set_transparent(handle, layer == LAYER_TRANSLUCENT);
         }
+    }
+
+    /// W32: backward-compat wrapper - flags a chunk mesh as translucent.
+    /// Prefer `set_chunk_mesh_layer` for new call sites.
+    pub fn set_chunk_mesh_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+        let layer = if transparent { LAYER_TRANSLUCENT } else { LAYER_OPAQUE };
+        self.set_chunk_mesh_layer(handle, layer);
     }
 
     /// W32: Queue a chunk mesh draw for the current frame.
@@ -621,10 +636,11 @@ impl Renderer {
                 base_vertex: (alloc.v_byte_off / std::mem::size_of::<MeshVertex>() as u64) as i32,
                 first_instance: 0, // patched during flush
             };
-            if alloc.transparent {
-                self.chunk_draw_queue_transparent.push((cmd, instance));
-            } else {
-                self.chunk_draw_queue_opaque.push((cmd, instance));
+            // W33.3: route to the correct per-layer queue.
+            match alloc.layer {
+                LAYER_CUTOUT      => self.chunk_draw_queue_cutout.push((cmd, instance)),
+                LAYER_TRANSLUCENT => self.chunk_draw_queue_translucent.push((cmd, instance)),
+                _                 => self.chunk_draw_queue_opaque.push((cmd, instance)),
             }
         } else {
             // Legacy fallback path (uber pool was full when this mesh was created).
@@ -1060,14 +1076,15 @@ impl Renderer {
         let mesh3d_count = self.mesh3d_queue.len() as u32;
         let debug3d_count = self.debug3d_vertices.len() as u32;
 
-        // W32: pack the opaque + transparent chunk draw queues and upload to
-        // GPU. Indirect args and instance data are interleaved: opaque commands
-        // first, then transparent. first_instance is patched here to select
-        // the right row in the per-frame uber instance buffer.
+        // W33.3: pack opaque + cutout + translucent chunk draw queues and upload
+        // to GPU. Indirect args and instance data are packed in layer order:
+        // opaque first, cutout second, translucent last. first_instance is
+        // patched here to select the right row in the per-frame instance buffer.
         let chunk_opaque_count = self.chunk_draw_queue_opaque.len() as u32;
-        let chunk_transparent_count = self.chunk_draw_queue_transparent.len() as u32;
+        let chunk_cutout_count  = self.chunk_draw_queue_cutout.len() as u32;
+        let chunk_translucent_count = self.chunk_draw_queue_translucent.len() as u32;
         let total_chunk_draws =
-            (chunk_opaque_count + chunk_transparent_count) as u64;
+            (chunk_opaque_count + chunk_cutout_count + chunk_translucent_count) as u64;
 
         if total_chunk_draws > 0 {
             // Grow per-frame buffers if needed (doubling strategy).
@@ -1104,7 +1121,8 @@ impl Renderer {
             for (idx, (base_cmd, inst)) in self
                 .chunk_draw_queue_opaque
                 .iter()
-                .chain(self.chunk_draw_queue_transparent.iter())
+                .chain(self.chunk_draw_queue_cutout.iter())
+                .chain(self.chunk_draw_queue_translucent.iter())
                 .enumerate()
             {
                 let mut cmd = *base_cmd;
@@ -1142,7 +1160,7 @@ impl Renderer {
 
         // Shadow depth pass first - writes the sun-perspective depth
         // map that the mesh fragment shader samples for occlusion.
-        let run_shadow = mesh3d_count > 0 || chunk_opaque_count > 0;
+        let run_shadow = mesh3d_count > 0 || chunk_opaque_count > 0 || chunk_cutout_count > 0;
         if run_shadow {
             let mut spass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::shadow_pass"),
@@ -1166,16 +1184,19 @@ impl Renderer {
                     self.mesh3d.instance_buffer(),
                 );
             }
-            // W32: shadow pass for uber chunk meshes (opaque only -
-            // transparent meshes like water don't cast shadows).
-            if chunk_opaque_count > 0 {
+            // W33.3: shadow pass for opaque + cutout chunk meshes.
+            // Translucent (water) doesn't cast hard shadows.
+            // Both opaque and cutout are packed first in the indirect buffer
+            // so we can pass their combined count to draw_uber (offset 0).
+            let shadow_count = chunk_opaque_count + chunk_cutout_count;
+            if shadow_count > 0 {
                 self.shadow.draw_uber(
                     &mut spass,
                     &self.uber.vertex_buf,
                     &self.uber.index_buf,
                     &self.uber_indirect_buf,
                     &self.uber_instance_buf,
-                    chunk_opaque_count,
+                    shadow_count,
                     self.has_indirect_first_instance,
                 );
             }
@@ -1223,9 +1244,8 @@ impl Renderer {
                     &self.mesh_albedos,
                 );
             }
-            // W32: flush uber chunk draws. The uber pipeline uses the same
-            // shader/layout as mesh3d but with a shared vertex+index buffer.
-            // Opaque draws first (depth-write on), transparent last.
+            // W33.3: flush uber chunk draws in layer order:
+            // opaque -> cutout (same pipeline, sorted separately) -> translucent.
             if total_chunk_draws > 0 {
                 self.mesh3d.draw_uber_chunks(
                     &mut rpass,
@@ -1237,7 +1257,8 @@ impl Renderer {
                     &self.lights.bind_group,
                     &self.tile_anims.bind_group,
                     chunk_opaque_count,
-                    chunk_transparent_count,
+                    chunk_cutout_count,
+                    chunk_translucent_count,
                     self.has_indirect_first_instance,
                 );
             }
@@ -1326,9 +1347,10 @@ impl Renderer {
         self.debug3d_vertices.clear();
         self.light_queue.clear();
         self.particle_instances.clear();
-        // W32: clear the per-frame chunk draw queues.
+        // W33.3: clear the per-frame chunk draw queues.
         self.chunk_draw_queue_opaque.clear();
-        self.chunk_draw_queue_transparent.clear();
+        self.chunk_draw_queue_cutout.clear();
+        self.chunk_draw_queue_translucent.clear();
         Ok(())
     }
 

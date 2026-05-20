@@ -1092,6 +1092,16 @@ impl Mesh3DPass {
     ///
     /// The caller must have already set @group(0) (camera) before calling
     /// this method; it sets groups 1-4 internally.
+    /// W33.3: draw_uber_chunks with 3 render layers: opaque, cutout, translucent.
+    ///
+    /// Indirect buffer layout (layer order, each element is DrawIndexedIndirectArgs):
+    ///   [0 .. opaque_count)                    - opaque
+    ///   [opaque_count .. +cutout_count)        - cutout (alpha-discard, same pipeline as opaque)
+    ///   [opaque_count+cutout_count .. +transl) - translucent (alpha-blend)
+    ///
+    /// Cutout uses the same `pipeline` as opaque (the fragment shader already
+    /// discards fragments with alpha < 0.5). A dedicated pipeline_cutout can
+    /// be added later for two-pass backface rendering of leaves.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_uber_chunks<'a>(
         &'a self,
@@ -1104,10 +1114,12 @@ impl Mesh3DPass {
         lights_bg: &'a wgpu::BindGroup,
         tile_anims_bg: &'a wgpu::BindGroup,
         opaque_count: u32,
-        transparent_count: u32,
+        cutout_count: u32,
+        translucent_count: u32,
         has_indirect_first_instance: bool,
     ) {
-        if opaque_count == 0 && transparent_count == 0 {
+        let total = opaque_count + cutout_count + translucent_count;
+        if total == 0 {
             return;
         }
 
@@ -1127,36 +1139,40 @@ impl Mesh3DPass {
             if has_indirect_first_instance {
                 rpass.multi_draw_indexed_indirect(indirect_buf, 0, opaque_count);
             } else {
-                // Fallback: loop of single indirect draws. Without
-                // INDIRECT_FIRST_INSTANCE first_instance must be 0, so all
-                // draws share instance slot 0. This means the model/color data
-                // for all chunks will be identical (the first instance's data).
-                // That is incorrect - the proper fix is to request the feature.
-                // Emit a one-time warning and fall back to the first-instance-0 loop.
                 for i in 0..opaque_count {
+                    rpass.draw_indexed_indirect(indirect_buf, i as u64 * indirect_stride);
+                }
+            }
+        }
+
+        // Cutout sub-pass: same pipeline as opaque (shader discards alpha < 0.5).
+        // Drawn as a separate batch so it can be sorted independently in future.
+        if cutout_count > 0 {
+            let cutout_offset = opaque_count as u64 * indirect_stride;
+            rpass.set_pipeline(&self.pipeline);
+            if has_indirect_first_instance {
+                rpass.multi_draw_indexed_indirect(indirect_buf, cutout_offset, cutout_count);
+            } else {
+                for i in 0..cutout_count {
                     rpass.draw_indexed_indirect(
                         indirect_buf,
-                        i as u64 * indirect_stride,
+                        cutout_offset + i as u64 * indirect_stride,
                     );
                 }
             }
         }
 
-        // Transparent sub-pass.
-        if transparent_count > 0 {
-            let transp_offset = opaque_count as u64 * indirect_stride;
+        // Translucent sub-pass: alpha blend, depth-write off.
+        if translucent_count > 0 {
+            let transl_offset = (opaque_count + cutout_count) as u64 * indirect_stride;
             rpass.set_pipeline(&self.pipeline_transparent);
             if has_indirect_first_instance {
-                rpass.multi_draw_indexed_indirect(
-                    indirect_buf,
-                    transp_offset,
-                    transparent_count,
-                );
+                rpass.multi_draw_indexed_indirect(indirect_buf, transl_offset, translucent_count);
             } else {
-                for i in 0..transparent_count {
+                for i in 0..translucent_count {
                     rpass.draw_indexed_indirect(
                         indirect_buf,
-                        transp_offset + i as u64 * indirect_stride,
+                        transl_offset + i as u64 * indirect_stride,
                     );
                 }
             }

@@ -34,6 +34,19 @@ const VERTEX_POOL_CAPACITY: u64 = VERTEX_POOL_BYTES / VERTEX_STRIDE;
 #[allow(dead_code)]
 const INDEX_POOL_CAPACITY: u64  = INDEX_POOL_BYTES  / INDEX_STRIDE;
 
+/// Render layer constants for uber chunk meshes.
+///
+/// W33.3: chunks are split into three draw lists with different pipeline
+/// states, matching MC's render layer model:
+///   0 = OPAQUE      - depth-test ON, depth-write ON, no blend. Front-to-back.
+///   1 = CUTOUT      - same depth state as opaque, alpha-discard (< 0.5) in
+///                     shader. Leaves, glass panes, doors with windows.
+///   2 = TRANSLUCENT - depth-test ON, depth-write OFF, alpha blend.
+///                     Water, stained glass. Drawn back-to-front per chunk.
+pub const LAYER_OPAQUE: u8 = 0;
+pub const LAYER_CUTOUT: u8 = 1;
+pub const LAYER_TRANSLUCENT: u8 = 2;
+
 /// One allocation record stored per live MeshHandle.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UberAlloc {
@@ -45,8 +58,8 @@ pub(crate) struct UberAlloc {
     pub i_byte_off: u64,
     /// Number of indices.
     pub i_count: u32,
-    /// Whether this mesh slot is transparent.
-    pub transparent: bool,
+    /// Render layer: LAYER_OPAQUE / LAYER_CUTOUT / LAYER_TRANSLUCENT.
+    pub layer: u8,
 }
 
 /// Freed slot that can be re-used by a future alloc.
@@ -115,7 +128,7 @@ impl UberMeshAllocator {
                 v_count: 0,
                 i_byte_off: 0,
                 i_count: 0,
-                transparent: false,
+                layer: LAYER_OPAQUE,
             });
             return true;
         }
@@ -163,7 +176,7 @@ impl UberMeshAllocator {
             v_count: vertices.len() as u32,
             i_byte_off: i_off,
             i_count: indices.len() as u32,
-            transparent: false,
+            layer: LAYER_OPAQUE,
         });
         true
     }
@@ -186,10 +199,11 @@ impl UberMeshAllocator {
         }
     }
 
-    /// Set the transparent flag for an existing allocation.
-    pub fn set_transparent(&mut self, handle: MeshHandle, transparent: bool) {
+    /// Set the render layer for an existing allocation.
+    /// Use the LAYER_* constants: LAYER_OPAQUE / LAYER_CUTOUT / LAYER_TRANSLUCENT.
+    pub fn set_layer(&mut self, handle: MeshHandle, layer: u8) {
         if let Some(a) = self.allocs.get_mut(&handle) {
-            a.transparent = transparent;
+            a.layer = layer;
         }
     }
 
