@@ -38,14 +38,17 @@
 pub(crate) mod biome;
 pub(crate) mod biome_table;
 pub(crate) mod cactus;
+pub(crate) mod caves;
 pub(crate) mod chunk;
 pub(crate) mod climate;
+pub(crate) mod dungeons;
 pub(crate) mod flowers;
 pub(crate) mod height;
 pub(crate) mod nether;
 #[cfg(test)]
 mod nether_baseline_test;
 pub(crate) mod ore;
+pub(crate) mod ravines;
 pub(crate) mod trees;
 
 // Public re-exports for the surface the rest of the bin + lib
@@ -160,6 +163,21 @@ pub fn dim_seed(base: u32, dim: &str) -> u32 {
 /// the global state. Callers pass `ctx.effective_seed()`.
 pub(crate) fn seed_offset_for(seed: u32) -> f32 {
     (seed.wrapping_mul(0x9E37_79B1) as f32 / u32::MAX as f32) * 1000.0
+}
+
+/// Cheap, deterministic 3D integer hash. Used by the cave, ravine,
+/// and dungeon generators so every random decision mixes the seed
+/// deterministically. Callers pass `ctx.effective_seed()` directly.
+pub(crate) fn hash3_for(x: i32, y: i32, z: i32, seed: u32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(0x27D4_EB2F);
+    h ^= (y as u32).wrapping_mul(0x9E37_79B1);
+    h ^= (z as u32).wrapping_mul(0x6C62_272E);
+    h ^= seed;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h
 }
 
 /// Cheap, deterministic 2D hash. Used for tree placement so two
