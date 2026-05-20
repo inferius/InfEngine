@@ -410,3 +410,117 @@ guards this contract.
   Would use a similar per-column hash + corridor-segment generation.
 - **Villages**: surface structure generation with multiple buildings.
   Requires a multi-chunk footprint resolver.
+
+## W18 - Textured particle pipeline
+
+Wave 18 replaces the legacy tinted-cube ambient particle system with
+a proper GPU billboard pipeline backed by a dedicated MC particle atlas.
+
+### W18.1 - wgpu billboard particle pass
+
+Source: `crates/infengine_render/src/particle_pass.rs`,
+        `crates/infengine_render/src/particle.wgsl`
+
+| Parameter | Value | Notes |
+|---|---|---|
+| Topology | TriangleStrip | 4 verts synthesised in vertex shader |
+| Quad size | 0.125 world units | matches MC close-range sprite appearance |
+| Max instances | 2048 | capped in instance buffer |
+| Blend mode | alpha blend, non-premultiplied | `SRC_ALPHA + (1-SRC_ALPHA)` |
+| Depth write | off | particles layer over world without z-fighting |
+| Depth test | off | full-screen overlay pass after mesh3d |
+| Billboard | spherical | cam_right/cam_up from view_proj_inv columns |
+| Atlas binding | @group(1) binding 0/1 | separate from block atlas at group 1 |
+
+Cite: MC client `ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT` -
+alpha-blended, no depth write, billboard-oriented quads.
+
+### W18.2 - Particle atlas builder
+
+Source: `examples/voxel_demo_mp/src/resource_pack/particle_atlas.rs`
+
+Packs MC `assets/minecraft/textures/particle/*.png` into a separate
+power-of-two atlas using a row-shelf algorithm. Sprites are keyed by
+file stem. Multi-frame strips (flame.png, 16x128 = 8 frames stacked
+vertically) are stored as one entry with `frames > 1`; callers step V
+downward by `frame_h = (v_max - v_min) / frames` to reach frame N.
+
+| Sprite | Format | Frames | Notes |
+|---|---|---|---|
+| smoke_0..smoke_7 | 16x16 each | 1 | 8 wisp variants |
+| flame | 16x128 | 8 | vertical strip |
+| lava | 16x16 | 1 | single droplet |
+| big_smoke_0..big_smoke_11 | 16x16 each | 1 | furnace plume |
+
+Atlas field added to `ResourcePack`; fallback/placeholder pack sets
+`particle_atlas = None` (no disk assets available).
+
+Cite: MC `assets/minecraft/textures/particle/` directory layout,
+`SmokeParticle.pickSprite` (8-frame cycle), `FlameParticle` (single
+strip), `LavaParticle` (one frame).
+
+### W18.3 - Textured emitters
+
+Source: `examples/voxel_demo_mp/src/main.rs`
+        (`emit_textured_flame`, `emit_textured_smoke`, `emit_textured_lava`)
+
+`tick_ambient_particles` now dual-emits:
+1. Legacy CPU `Particle` (tinted cube) - retained for debris/gravity/break effects.
+2. New `TexturedParticleInstance` - GPU billboard with particle-atlas UV.
+
+| Source | Sprite | Color | Size | Rate |
+|---|---|---|---|---|
+| Torch | flame strip, random frame | [1.0, 0.78, 0.40] orange | 0.125 | 5 Hz |
+| Fire block | flame strip, random frame | [1.0, 0.55, 0.20] deep orange | 0.125 | 7.5 Hz |
+| Fire (smoke) | smoke_0..7, random frame | [0.7, 0.7, 0.7] grey | 0.15 | ~2.5 Hz |
+| Lava source | lava sprite | [1.0, 0.45, 0.15] red-orange | 0.10 | 2.5 Hz |
+
+Fallback (no MC assets): white quad (uv_min=[0,0], uv_max=[1,1]); tint
+colour still applied, giving a tinted square instead of a sprite.
+
+### W18.4 - Chunk-mesh anim_id
+
+Source: `examples/voxel_demo_mp/src/resource_pack/mod.rs`
+        (`build_anim_index`, `anim_slot`, `anim_slot_for_ref`)
+
+`anim_id` vertex attribute (u32 at offset 40 in `MeshVertex`) is stamped
+by the chunk mesher via `anim_lookup(block, normal)`. 0 = static face,
+1..=32 = animated slot from `AnimRegistry`.
+
+| Animated texture | Typical slot | Source |
+|---|---|---|
+| water_still | 1 (first registered) | AnimRegistry::register |
+| lava_still | 2 | AnimRegistry::register |
+| fire_0 | 3 | AnimRegistry::register |
+
+The `AnimRegistry` has a 32-slot hard cap (matches `TileAnimsUniform`
+shader array size). Slot assignment is deterministic: textures are sorted
+by `TextureKey` string representation before registration.
+
+Static faces (`frames == 1` or `frametime_ms == 0`) always get slot 0.
+The mesh3d shader short-circuits on `anim_id == 0` (no UV scroll).
+
+### Wave 18 test count
+
+| Module | Tests added | Total |
+|---|---|---|
+| particle_pass.rs (W18.1) | 6 | 6 |
+| particle_atlas.rs (W18.2) | 11 | 17 |
+| wave18_tests.rs (W18.3+W18.4) | 6 | 23 |
+
+Total W18 tests: 23. Baseline (W17 end): 1401. New total: 1426.
+
+### Deferred W18 follow-ups
+
+- **Particle gravity + lifetime animation**: the GPU pass currently renders
+  each `TexturedParticleInstance` as a static sprite. Adding per-particle
+  lifetime tracking + frame cycling over age would require a particle
+  simulation step on the CPU or a compute shader.
+- **Particle depth sorting**: alpha-blended particles should ideally sort
+  back-to-front vs. the camera. Currently rendered in push order.
+- **Large particle atlas cap**: the packer is capped at 2048x2048. A pack
+  with many animated sprite sheets could overflow; deferred until profiling
+  shows real pressure.
+- **Integrate `big_smoke` with furnace emitters**: furnace + smoker blocks
+  could emit `big_smoke_0..11` plumes above their chimney; deferred to a
+  dedicated furnace-animation wave.
