@@ -1337,3 +1337,78 @@ place/remove, and greedy mesher face-count reduction.
 ### W28.13 - Documentation
 
 This section documents all Wave 28 changes in `docs/design/mc_fidelity.md`.
+
+## Wave 29 - Creative tab + mob skin + chunk priority fixes
+
+### W29.1 - Fix icon_uv_for fallback (rainbow stripes bug)
+
+`ResourcePack::icon_uv_for` previously fell back to `block::atlas_uv_rect`
+when neither `icon_ref` nor `block_face_ref` resolved an entry. That helper
+was calibrated for the 64x64 placeholder atlas (4x4 grid, 0.25 u_step); on
+a 2048x2048 MC atlas the same formula mapped the ENTIRE atlas into one slot,
+producing vertical rainbow stripes in the creative tab.
+
+Fix: fallback now returns `[0, 0, 16/atlas_w, 16/atlas_h]` - the top-left
+16x16 tile of whatever atlas is currently loaded. On the placeholder pack
+this is the same stone swatch. On a live MC atlas this is stone (first row).
+
+Tests added in `wave29_tests.rs`:
+- `icon_uv_for_unknown_block_returns_safe_constant`
+- `icon_uv_for_fallback_does_not_span_full_atlas`
+- `icon_uv_front_consistent_with_icon_uv_for`
+
+### W29.2 - Creative tab blacklist
+
+Added `CREATIVE_BLACKLIST: &[u16]` constant to `creative_tab.rs` and
+filtered it from `available_items()`. Excluded ids:
+- 36 (water source): use water bucket
+- 37 (lava source): use lava bucket
+- 47 (portal): spawns via flint+steel ignition only
+- 49 (fire): spawns via flint+steel / lava-burn only
+- 56 (soul_fire): technical world block
+- 78 (oak_door_upper): internal upper-half block, never held by player
+
+Mirrors MC's `Items.java` creative-mode tab exclusion logic.
+
+Tests: 7 tests in `wave29_tests.rs` covering each blacklisted id plus
+retained normal blocks (stone=1, torch=10, chest=41).
+
+### W29.3 - mob_skin_path resolves .tga + .png
+
+W19 regression: `mob_skin_path` in `mob_skin.rs` only probed `<mob>.png`.
+Many Bedrock resource packs ship `<mob>.tga`; so `full_skin_set_present`
+and `MobSkinSet::discover` returned `None` for every mob even when valid
+TGA files existed, causing all mob textures to vanish.
+
+Fix: `mob_skin_path` now tries `.tga` first, then `.png`.
+
+The sheep head loader and `load_non_sheep_mob_meshes` already handled
+both extensions via their local `try_open_entity` helper - this fix
+brings the public discovery API into parity.
+
+Tests in `mob_skin.rs`:
+- `mob_skin_path_resolves_tga`
+- `mob_skin_path_prefers_tga_over_png`
+- `full_skin_set_present_with_tga_files`
+
+### W29.4 - Deferred items
+
+- Fog distance tied to view_distance: no fog API in the renderer yet.
+  Deferred to a future wave when the renderer gains `set_fog_distance`.
+- Mob persistence (`mobs.save`): mobs are not persisted across world
+  reload; documented as a known limitation.
+
+### W29.5 - Boost chunk dispatch cap during fast movement
+
+Raised the per-frame chunk dispatch cap from `worker_count * 2` to `32`
+when the player's horizontal speed exceeds 6 m/s (sprinting / flying).
+Below the threshold the conservative cap applies. Addresses void-walking
+artifacts where the priority queue drained too slowly at the leading edge
+of a fast-moving player's view frustum.
+
+### W29.6 - Test suite
+
+`wave29_tests.rs`: 10 tests covering icon_uv_for safe fallback and the
+creative tab blacklist. Mob skin TGA tests live in `mob_skin.rs` (3 tests).
+Total test count after W29: 1495 pass, 7 pre-existing fail (MC-install
+detection tests that expect no MC assets but a real install is present).
