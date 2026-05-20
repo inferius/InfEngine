@@ -30,7 +30,8 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_with_atlas_light_anim_and_special, raycast_with,
+    chunk_mesh_greedy_with_special,
+    raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -6527,7 +6528,10 @@ impl Voxel {
                 },
             )
         };
-        chunk_mesh_with_atlas_light_anim_and_special(
+        // W28.4: greedy mesher - merges coplanar same-material cube faces;
+        // special-shaped blocks (torches, slabs, ...) are still emitted
+        // by emit_special as before.
+        chunk_mesh_greedy_with_special(
             chunk,
             origin,
             uv_resolver,
@@ -15390,7 +15394,8 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    chunk_mesh_with_atlas_light_anim_and_special(
+    // W28.4: greedy mesher replaces naive per-face emission.
+    chunk_mesh_greedy_with_special(
         chunk,
         origin,
         uv_resolver,
