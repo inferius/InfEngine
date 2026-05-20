@@ -30,6 +30,7 @@
 
 use std::time::Instant;
 
+use crate::VIEW_DISTANCE_MAX;
 use crate::game_mode::GameMode;
 use crate::world_save::layout::WorldSummary;
 
@@ -221,7 +222,7 @@ impl OptionsSnapshot {
     /// `apply_menu_action` so manually-edited config files can't
     /// inject out-of-range values via the menu.
     pub(crate) fn clamp(&mut self) {
-        self.view_distance = self.view_distance.clamp(2, 16);
+        self.view_distance = self.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8);
         self.fov_deg = self.fov_deg.clamp(30.0, 120.0);
         self.mouse_sensitivity = self.mouse_sensitivity.clamp(0.05, 4.0);
         // Truncate display name at 24 chars (same cap as

@@ -262,13 +262,11 @@ fn old_save_high_y_reads_return_none() {
 // W13.4 - View distance + frustum culling
 // -----------------------------------------------------------------------
 
-/// W13.4: VIEW_DISTANCE_MAX is 24.
+/// W13.4: VIEW_DISTANCE_MAX was raised to 24; W22.1 raised it further to 32.
+/// This test is kept as a compile-time lower-bound guard - >= 24.
 #[test]
 fn view_distance_constant_caps_at_24() {
-    assert_eq!(
-        crate::VIEW_DISTANCE_MAX, 24,
-        "VIEW_DISTANCE_MAX must be 24"
-    );
+    const { assert!(crate::VIEW_DISTANCE_MAX >= 24) };
 }
 
 /// W13.4: view_distance setting can be raised to VIEW_DISTANCE_MAX.
@@ -346,5 +344,46 @@ fn frustum_far_side_chunk_culled() {
     assert!(
         !frustum.is_chunk_visible([14, 0, 0]),
         "chunk at x=224..240 should be outside a 90-deg FOV frustum"
+    );
+}
+
+// -----------------------------------------------------------------------
+// W22.1 - Extreme view distance
+// -----------------------------------------------------------------------
+
+/// VIEW_DISTANCE_MAX must be 32 (W22.1).
+#[test]
+fn view_distance_max_is_32() {
+    assert_eq!(
+        crate::VIEW_DISTANCE_MAX, 32,
+        "VIEW_DISTANCE_MAX must be 32 to allow extreme render distances"
+    );
+}
+
+/// OptionsSnapshot::clamp must cap view_distance at VIEW_DISTANCE_MAX.
+#[test]
+fn options_clamp_view_distance_to_max() {
+    let mut opt = crate::menu::OptionsSnapshot {
+        player_name: "test".into(),
+        master_addr: String::new(),
+        view_distance: 200,
+        fov_deg: 60.0,
+        mouse_sensitivity: 1.0,
+        show_fps: false,
+        head_bob: false,
+        invert_mouse_y: false,
+        invert_wheel: false,
+        lock_cursor: false,
+        hide_cursor: false,
+        mc_assets_path: String::new(),
+        mc_assets_resolved: String::new(),
+        mc_assets_is_fallback: false,
+    };
+    opt.clamp();
+    assert_eq!(
+        opt.view_distance,
+        crate::VIEW_DISTANCE_MAX as u8,
+        "clamp(200) should produce VIEW_DISTANCE_MAX={}",
+        crate::VIEW_DISTANCE_MAX
     );
 }

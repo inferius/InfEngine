@@ -4,6 +4,7 @@
 use egui::{Slider, Vec2};
 
 use super::{MenuAction, MenuContext, MenuScreen, shared};
+use crate::VIEW_DISTANCE_MAX;
 
 /// Render the Options screen. Returns to Main on `Zpet`; emits
 /// `ApplyOptions` (with a cloned snapshot) on `Pouzit`.
@@ -35,7 +36,8 @@ pub(crate) fn draw(
 
     ui.separator();
     ui.add(
-        Slider::new(&mut ctx.options.view_distance, 2..=16)
+        Slider::new(&mut ctx.options.view_distance, 2..=VIEW_DISTANCE_MAX as u8)
+            .step_by(1.0)
             .text("Render distance (chunky)"),
     );
     ui.add(

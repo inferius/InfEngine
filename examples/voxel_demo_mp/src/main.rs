@@ -27,8 +27,8 @@ use infengine_editor::EditorUi;
 use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
-    BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, ChunkSubmesh, RayHit, World,
-    chunk_mesh_with_atlas, chunk_mesh_with_atlas_light_anim_and_special, raycast_with,
+    BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
+    chunk_mesh_with_atlas_light_anim_and_special, raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -2997,7 +2997,8 @@ impl Voxel {
                 }
                 "view_distance" => {
                     if let Ok(v) = value.parse::<u8>() {
-                        self.settings.view_distance = v.clamp(2, 12);
+                        self.settings.view_distance =
+                            v.clamp(2, VIEW_DISTANCE_MAX as u8);
                     }
                 }
                 "head_bob" => {
@@ -5896,9 +5897,11 @@ impl Voxel {
             }
         }
 
-        // Unload chunks beyond the keep radius. Collect first to
-        // avoid borrowing `self.world` immutably while mutating.
-        let to_unload: Vec<ChunkCoord> = self
+        // Unload chunks beyond the keep radius. Collect into a
+        // HashSet first to avoid O(n*m) Vec::contains inside the
+        // mesh drain loop - at view_distance=32 the unload list can
+        // be thousands of entries and the mesh list is similarly long.
+        let to_unload: std::collections::HashSet<ChunkCoord> = self
             .world
             .iter_chunks()
             .map(|(c, _)| *c)
@@ -5912,6 +5915,7 @@ impl Voxel {
             let renderer = self.renderer.as_mut().expect("renderer ready");
             let mut keep = Vec::with_capacity(self.chunk_meshes.len());
             for entry in self.chunk_meshes.drain(..) {
+                // O(1) hash lookup instead of O(n) Vec::contains.
                 if to_unload.contains(&entry.0) {
                     renderer.remove_mesh(entry.2);
                 } else {
@@ -6001,51 +6005,13 @@ impl Voxel {
             }
 
             self.world.insert_chunk(result.coord, result.chunk);
-
-            // GPU upload phase - main-thread bound.
-            let t1 = std::time::Instant::now();
             let cc = result.coord;
-            {
-                let renderer = self.renderer.as_mut().expect("renderer ready");
-                let atlas = self.voxel_atlas.clone();
-                for sub in result.submeshes {
-                    // Skip empty submeshes - registering a
-                    // zero-vertex mesh would panic the shadow
-                    // pass's `vertex_buffer.slice(..)`.
-                    if sub.vertices.is_empty() || sub.indices.is_empty() {
-                        continue;
-                    }
-                    // Skip blocks that own a dedicated render path
-                    // (torch, snow, water - everything marked
-                    // `F_DEDICATED_RENDER`). They get drawn by
-                    // per-voxel slab / pillar passes downstream.
-                    if block_skips_chunk_mesh(sub.block) {
-                        continue;
-                    }
-                    let handle = renderer.create_mesh(
-                        &format!("voxel_chunk_{}_{}_{}_b{}", cc[0], cc[1], cc[2], sub.block.0),
-                        &sub.vertices,
-                        &sub.indices,
-                    );
-                    if let Some(a) = atlas.clone() {
-                        renderer.bind_mesh_albedo_arc(handle, a);
-                    }
-                    self.chunk_meshes.push((cc, sub.block, handle));
-                }
-            }
-            let gpu_upload_us = t1.elapsed().as_micros();
-            if gpu_upload_us > CHUNK_PHASE_WARN_US {
-                tracing::warn!(
-                    coord = ?cc,
-                    us = gpu_upload_us,
-                    "W13.1: GPU upload phase exceeded threshold"
-                );
-            }
 
-            // W13.2: Enqueue neighbour re-mesh into the deferred queue
-            // instead of executing it synchronously. The deferred drain
-            // below processes REMESH_DEFERRED_PER_FRAME per frame so
-            // cost is amortised across frames and never spikes.
+            // W22.2: Workers no longer compute legacy submeshes.
+            // Enqueue the new chunk itself + its loaded neighbours
+            // into pending_remesh so build_lit_submeshes runs on the
+            // main thread with the proper MC atlas + special models.
+            self.pending_remesh.push_back(cc);
             for n in [
                 [cc[0] - 1, cc[1], cc[2]],
                 [cc[0] + 1, cc[1], cc[2]],
@@ -6061,11 +6027,9 @@ impl Voxel {
             }
 
             // Phase L.7: stamp a dirty voxel in the new chunk so
-            // the next lighting tick re-floods it (the worker's
-            // submeshes shipped with the default `[0.0, 1.0]`
-            // light placeholder). One mark per chunk is enough -
-            // the 3x3 halo around the chunk centre subsumes the
-            // whole new chunk.
+            // the next lighting tick re-floods it. One mark per
+            // chunk is enough - the 3x3 halo around the chunk centre
+            // subsumes the whole new chunk.
             let cs = CHUNK_SIZE as i32;
             self.lighting.mark_dirty([
                 cc[0] * cs + cs / 2,
@@ -8222,8 +8186,12 @@ impl Voxel {
                             .text("Mouse sensitivity"),
                     );
                     ui.add(
-                        egui::Slider::new(&mut settings_edit.view_distance, 2..=12)
-                            .text("Render distance (chunks)"),
+                        egui::Slider::new(
+                            &mut settings_edit.view_distance,
+                            2..=VIEW_DISTANCE_MAX as u8,
+                        )
+                        .step_by(1.0)
+                        .text("Render distance (chunks)"),
                     );
                     ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
                     ui.checkbox(
@@ -8572,8 +8540,9 @@ impl Voxel {
                             ui.add(
                                 egui::Slider::new(
                                     &mut settings_edit.view_distance,
-                                    2..=12,
+                                    2..=VIEW_DISTANCE_MAX as u8,
                                 )
+                                .step_by(1.0)
                                 .text("Render distance"),
                             );
                             ui.add(
@@ -14553,13 +14522,15 @@ enum ChunkSideEffect {
     Liquid { pos: [i32; 3], tick_offset: u64 },
 }
 
-/// Output from one worker thread: the generated chunk + its submeshes
-/// ready to upload as GPU buffers on the main thread, plus pre-scanned
+/// Output from one worker thread: the generated chunk plus pre-scanned
 /// side-effect list so main thread doesn't iterate all 4096 voxels.
+/// W22.2: the legacy `submeshes` field (chunk_mesh_with_atlas, 4x4-grid
+/// atlas) has been removed. The main thread runs build_lit_submeshes
+/// (MC atlas + special models + lighting) via the pending_remesh queue
+/// so workers only need to ship data, not GPU-ready geometry.
 struct WorkerResult {
     coord: ChunkCoord,
     chunk: Chunk,
-    submeshes: Vec<ChunkSubmesh>,
     /// W13.2: voxel-scan results computed off-thread.
     side_effects: Vec<ChunkSideEffect>,
 }
@@ -14617,7 +14588,10 @@ impl WorkerPool {
                             // poison the gen.
                             let chunk = worldgen::generate_chunk_at_ctx(job.coord, &job.ctx);
                             let origin = World::chunk_world_origin(job.coord);
-                            let submeshes = chunk_mesh_with_atlas(&chunk, origin, atlas_uv_rect, block_is_opaque);
+
+                            // W22.2: Meshing is deferred to build_lit_submeshes on
+                            // the main thread (via pending_remesh). Workers only
+                            // scan for side-effects so the struct stays data-only.
 
                             // W13.2: Pre-scan voxels for side-effects
                             // (snow / torch / liquid) so the main thread
@@ -14664,7 +14638,6 @@ impl WorkerPool {
                                 .send(WorkerResult {
                                     coord: job.coord,
                                     chunk,
-                                    submeshes,
                                     side_effects,
                                 })
                                 .is_err()

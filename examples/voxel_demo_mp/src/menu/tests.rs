@@ -181,10 +181,11 @@ fn invalidate_caches_marks_both_stale() {
 
 #[test]
 fn options_snapshot_clamp_caps_view_distance() {
+    // W22.1: cap raised from 16 to VIEW_DISTANCE_MAX (32).
     let mut opts = fresh_options();
     opts.view_distance = 99;
     opts.clamp();
-    assert_eq!(opts.view_distance, 16);
+    assert_eq!(opts.view_distance, crate::VIEW_DISTANCE_MAX as u8);
 }
 
 #[test]
