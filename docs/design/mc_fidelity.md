@@ -1589,10 +1589,110 @@ the same order of magnitude as MC's `VertexBuffer` pool.
 
 ### Deferred
 
-- W32.X: TLSF allocator for better free-list utilisation (W33)
-- W32.X: defragmentation pass when fragmentation exceeds threshold (W33)
+- W32.X: TLSF allocator for better free-list utilisation (DONE W33.2)
 - W32.X: separate render layers (opaque / cutout / translucent / water)
-  for correct alpha ordering within each layer (W34)
+  for correct alpha ordering within each layer (DONE W33.3)
+- W32.X: defragmentation pass when fragmentation exceeds threshold (backlog)
 - W32.X: mob batching (small benefit - max ~30 mobs visible) (backlog)
 - W32.X: per-chunk shadow indirect optimisation (currently uses same
   buffer as main pass; could use a dedicated shadow-only command list)
+
+## Wave 33
+
+### W33.1 - Per-face UV rotation final fix
+
+User-visible bug: textures appeared rotated 90deg or 180deg on side/top faces
+after the W31.3 per-face swap fix.
+
+Root cause: W31.3 used `if fa == 2` to choose between two wrong swap
+formulas. The Z-face branch swapped h/w so tex-u ran along the Y axis
+instead of Z. The X/Y branch had "bottom" corners at integer values
+(0, w, h) whose `fract() = 0` sampled the tile TOP, so the grass strip
+appeared at the face bottom instead of top.
+
+Fix: single universal `quad_uv_corners` formula for all 6 faces, no `if`
+branch. The winding already handles the side distinction:
+
+```
+const E: f32 = 0.001;
+let quad_uv_corners = [
+    [0.0f32, w - E],   // c0 = BL: tex(0, ~1)
+    [h - E,  w - E],   // c1 = BR: tex(~1, ~1)
+    [h - E,  0.0f32],  // c2 = TR: tex(~1, 0)
+    [0.0f32, 0.0f32],  // c3 = TL: tex(0, 0)
+];
+```
+
+Derivation:
+- `quad_uv.x` (tex-u) increases with `dv` (the `va`-axis offset).
+  Goes from 0 at left edge to `h-E` at right edge; `fract(h-E) ~= 1`.
+- `quad_uv.y` (tex-v) DECREASES with `du` (the `ua`-axis offset).
+  Inverted: `w-E` at the bottom of the face (du=0), `0` at top (du=w).
+  This places the grass strip at the TOP of side faces (high Y = low v).
+- For both `side > 0` and `side < 0`, the greedy winding already ensures
+  c0 is the "bottom-left" world corner. The UV formula is universal.
+
+Tiling for merged quads (w>1, h>1): the GPU interpolates `quad_uv`
+linearly; interior fragments get correct fractional values and `fract()`
+wraps at integer tile boundaries. The epsilon only affects the single
+corner pixel (masked by bilinear filter + seam clamp).
+
+Applied identically to `chunk_mesh_greedy` and `chunk_mesh_greedy_with_special`.
+
+New test: `greedy_mesh_quad_uv_corners_bl_br_tr_tl_all_faces` verifies
+that all 6 faces have the correct BL/BR/TR/TL quad_uv fract pattern.
+
+### W33.2 - TLSF segregated free list for UberMeshAllocator
+
+Replaced O(n) flat first-fit `Vec<FreeSlot>` with a 32-bucket
+power-of-2 segregated free list (Two-Level Segregated Fit, simplified).
+
+Algorithm:
+- `free(slot)`: push to `buckets[floor_log2(v_cap_bytes)]` - O(1).
+- `alloc(v_need, i_need)`: scan upward from `buckets[floor_log2(v_need)]`;
+  first bucket checks both caps, higher buckets only i_cap (v is guaranteed
+  by the bucket invariant). Worst case 32 iterations = O(1) amortised.
+
+Motivation: at view_distance=8 with constant player movement, chunks are
+freed and re-allocated at ~50/s. The old flat list grew to hundreds of
+entries; first-fit caused frame stalls. The new path is constant time.
+
+5 new unit tests in `uber_buffer::tests` cover log2 correctness, exact-fit,
+cross-bucket lookup, i_cap filter mismatch, and multi-slot reuse.
+
+### W33.3 - Render layer split: opaque / cutout / translucent
+
+Replaced `UberAlloc.transparent: bool` with `layer: u8`. Three layer constants:
+- `LAYER_OPAQUE = 0`: depth-test + write ON, no blend.
+- `LAYER_CUTOUT = 1`: same depth state, alpha-discard in shader (leaves, glass).
+- `LAYER_TRANSLUCENT = 2`: depth-test ON, depth-write OFF, alpha blend (water).
+
+Per-frame indirect command buffer layout: `[opaque | cutout | translucent]`.
+Shadow pass covers opaque + cutout (both write depth); translucent excluded.
+Cutout uses the same pipeline as opaque (shader already discards alpha < 0.5).
+A dedicated `pipeline_cutout` for two-pass backface leaves is deferred.
+
+Public API additions:
+- `Renderer::set_chunk_mesh_layer(handle, layer)` - new primary API.
+- `CHUNK_LAYER_OPAQUE / _CUTOUT / _TRANSLUCENT` re-exported from crate root.
+- `set_chunk_mesh_transparent(h, bool)` kept as a backward-compat wrapper.
+
+### W33.4 - Incremental two-queue lighting
+
+Deferred to W34. Current W28.5 partial implementation (emitter-only incremental
+updates) is correct and stable. Extending to blocker changes (solid <-> air
+transitions requiring a two-queue decrease/increase flood) requires careful
+BFS correctness work across `block_engine.rs` and `sky_engine.rs`.
+
+### Files changed
+
+- `crates/infengine_voxel/src/lib.rs`: W33.1 quad_uv fix + new UV test
+- `crates/infengine_render/src/uber_buffer.rs`: W33.2 TLSF + W33.3 layer field
+- `crates/infengine_render/src/lib.rs`: W33.3 three queues + set_chunk_mesh_layer
+- `crates/infengine_render/src/mesh3d.rs`: W33.3 draw_uber_chunks with cutout_count
+
+### Tests
+
+- `infengine_voxel`: new test `greedy_mesh_quad_uv_corners_bl_br_tr_tl_all_faces`
+- `infengine_render`: 36 pass / 0 fail (up from 30, +6 TLSF tests)
+- `voxel_demo_mp`: 1495 pass / 7 fail (pre-existing, unchanged)
