@@ -128,6 +128,8 @@ mod wave18_tests;
 mod wave24_tests;
 #[cfg(test)]
 mod wave25_tests;
+#[cfg(test)]
+mod wave27_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -305,10 +307,6 @@ impl RemoteInterp {
 const PVP_DAMAGE: f32 = 1.5;
 const PVP_REACH: f32 = 5.5;
 
-/// Initial chunk grid loaded eagerly before the player drops in. The
-/// world streams more chunks in as the player walks beyond this
-/// footprint.
-const INITIAL_CHUNKS: i32 = 3;
 /// Number of stacked chunk layers along the Y axis. Each chunk is
 /// `CHUNK_SIZE` (=16) tall.
 ///
@@ -764,6 +762,11 @@ struct Voxel {
     /// block-edit sequence never overwrites a newer mesh with an
     /// older snapshot.
     chunk_revisions: HashMap<ChunkCoord, u64>,
+    /// W27.4: number of `Job::Lighting` dispatches still in flight.
+    /// Incremented on dispatch, decremented on `WorkerResult::Lit`
+    /// delivery. The loading phase waits for this to reach 0 before
+    /// transitioning from `BuildingLighting` to `BuildingMeshes`.
+    pending_lighting_jobs: u32,
     /// Most recent ray hit while looking around in Play. Drives the
     /// crosshair / wireframe overlay and the RMB-place step. Skips
     /// `F_RAY_PASS` decorations (torch, flowers) so the player can
@@ -5208,6 +5211,7 @@ impl Voxel {
             pending_remesh_set: HashSet::new(),
             workers: None,
             chunk_revisions: HashMap::new(),
+            pending_lighting_jobs: 0,
             target: None,
             mine_target: None,
             player_pos: Vec3::new(0.0, 32.0, 0.0),
@@ -5876,9 +5880,15 @@ impl Voxel {
         self.pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        // W27.1: use the runtime view_distance so target_chunks matches the
+        // live count that stream_chunks will also use. Previously INITIAL_CHUNKS
+        // (=3) was used here but stream_chunks uses view_distance (default 4),
+        // causing the counter to show e.g. 1296/784 (100%) because the target
+        // was 7x7x16=784 but the live count rose to 9x9x16=1296.
+        let radius = self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
         let mut enqueued: u32 = 0;
-        for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
-            for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
+        for cz in -radius..=radius {
+            for cx in -radius..=radius {
                 for cy in 0..VERTICAL_CHUNKS {
                     let cc: ChunkCoord = [cx, cy, cz];
                     if self.pending_set.insert(cc) {
@@ -6194,6 +6204,32 @@ impl Voxel {
                         }
                     }
                 }
+                WorkerResult::Lit {
+                    new_grids,
+                    affected_for_remesh,
+                } => {
+                    // W27.5: Atomically swap in the new light grids
+                    // computed by the worker. Any snapshot held by an
+                    // in-flight remesh job sees the old Arc via COW.
+                    for (cc, grid) in new_grids {
+                        self.lighting.set_grid(cc, grid);
+                    }
+                    // Trigger a remesh of every chunk whose lighting
+                    // changed so the GPU picks up the new per-vertex
+                    // light values.
+                    for cc in affected_for_remesh {
+                        if self.world.chunk(cc).is_some()
+                            && self.pending_remesh_set.insert(cc)
+                        {
+                            self.pending_remesh.push_back(cc);
+                        }
+                    }
+                    // W27.4: a lighting job completed - decrement the
+                    // in-flight counter so the loading phase can
+                    // advance past BuildingLighting.
+                    self.pending_lighting_jobs =
+                        self.pending_lighting_jobs.saturating_sub(1);
+                }
             }
         }
 
@@ -6394,19 +6430,62 @@ impl Voxel {
         )
     }
 
-    /// Phase L.7: derive both light layers from scratch over
+    /// Phase L.7 / W27.4: derive both light layers from scratch over
     /// every loaded chunk. Used after `load_world` populates the
     /// block grid + after `switch_dim` (when the active dim's
     /// chunks completely change). Lighting is never persisted on
     /// disk - same convention as MC, which re-derives sky-light
     /// on chunk load via `LayerLightEngine` + block-light from
     /// emitter blocks.
+    ///
+    /// W27.4: When a worker pool is available, this dispatches ONE
+    /// big `Job::Lighting` (owned snapshot of ALL loaded chunks) to
+    /// the pool instead of running the BFS on the main thread. The
+    /// 2-minute main-thread freeze for 1300+ chunks is replaced by a
+    /// sub-second worker BFS. `pending_lighting_jobs` is incremented
+    /// so the loading phase waits for `WorkerResult::Lit` before
+    /// transitioning to `BuildingMeshes`.
+    ///
+    /// Without a worker pool (headless tests): runs synchronously as
+    /// before.
     fn rebuild_all_lighting(&mut self) {
         let coords: Vec<ChunkCoord> =
             self.world.iter_chunks().map(|(c, _)| *c).collect();
         if coords.is_empty() {
             return;
         }
+        // Clear the dirty set: the full re-derive subsumes every
+        // pending per-voxel mark so we don't re-flood on next tick.
+        let _ = self.lighting.take_dirty();
+
+        if let Some(pool) = self.workers.as_ref() {
+            // W27.4: build the owned snapshot for the worker.
+            // Clone every loaded chunk (~8 KB each). For 1296 chunks
+            // that is ~10 MB - a one-time allocation acceptable at
+            // load time.
+            let snap_entries: HashMap<ChunkCoord, Chunk> = coords
+                .iter()
+                .filter_map(|cc| self.world.chunk(*cc).map(|c| (*cc, c.clone())))
+                .collect();
+            // Warm-start from any existing grids (usually empty on
+            // first load; populated on dim switch).
+            let existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> = coords
+                .iter()
+                .filter_map(|cc| {
+                    self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
+                })
+                .collect();
+            let job = Job::Lighting(LightingJob {
+                affected: coords,
+                snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
+                existing_grids,
+            });
+            let _ = pool.req_tx.send(job);
+            self.pending_lighting_jobs += 1;
+            return;
+        }
+
+        // Fallback: synchronous BFS on main thread (tests / no workers).
         lighting::block_engine::propagate_block_light(
             &self.world,
             &mut self.lighting,
@@ -6417,58 +6496,102 @@ impl Voxel {
             &mut self.lighting,
             &coords,
         );
-        // Clear the dirty set: a full re-derive has subsumed
-        // every pending per-voxel mark, no need to re-flood
-        // anything on the next tick.
-        let _ = self.lighting.take_dirty();
     }
 
-    /// Drain the lighting dirty-set + run the conservative
-    /// re-flood across every chunk that contains a dirty voxel
-    /// PLUS the 3x3x3 chunk neighbourhood around it. The bigger
-    /// halo is what lets a torch placed near a chunk boundary
-    /// bleed light into the adjacent chunks even though the
-    /// torch's own voxel is in the centre chunk.
+    /// Drain the lighting dirty-set + dispatch a `Job::Lighting` to the
+    /// worker pool. The worker runs the conservative re-flood of every
+    /// dirty chunk + its 3x3x3 neighbour halo, then sends back
+    /// `WorkerResult::Lit`; the main thread swaps in the new grids and
+    /// enqueues the affected chunks for remesh on delivery.
     ///
-    /// Returns the unique set of chunks that need a mesh rebuild
-    /// (every chunk re-flooded). Callers funnel the result into
-    /// `rebuild_chunks` so the GPU buffers pick up the new
-    /// vertex light values.
+    /// W27.3: previously this ran the BFS synchronously on the main
+    /// thread and returned the affected chunk list. Now:
+    /// - With a worker pool: dispatches `Job::Lighting`; returns empty
+    ///   (remesh is triggered asynchronously by `WorkerResult::Lit`).
+    /// - Without a worker pool (headless tests): falls back to the old
+    ///   synchronous path and returns the affected list so the caller
+    ///   can remesh immediately.
     fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
         let dirty = self.lighting.take_dirty();
         if dirty.is_empty() {
             return Vec::new();
         }
         let cs = infengine_voxel::CHUNK_SIZE as i32;
-        let mut affected: HashSet<ChunkCoord> = HashSet::new();
+        let mut affected_set: HashSet<ChunkCoord> = HashSet::new();
         for v in &dirty {
             let cc = [
                 v[0].div_euclid(cs),
                 v[1].div_euclid(cs),
                 v[2].div_euclid(cs),
             ];
-            // 3x3x3 chunk halo around each dirty voxel. This is
-            // the "conservative full re-flood of the touched
-            // chunk + its 26 neighbours" the L.6 plan picks
-            // instead of MC's incremental two-phase unlight.
+            // 3x3x3 chunk halo around each dirty voxel. The bigger
+            // halo lets a torch near a chunk boundary bleed light
+            // into adjacent chunks (L.6 conservative strategy).
             for dx in -1..=1i32 {
                 for dy in -1..=1i32 {
                     for dz in -1..=1i32 {
-                        affected.insert([cc[0] + dx, cc[1] + dy, cc[2] + dz]);
+                        affected_set.insert([cc[0] + dx, cc[1] + dy, cc[2] + dz]);
                     }
                 }
             }
         }
         // Keep only chunks that actually exist in the world.
-        // Re-flooding a phantom chunk wastes work + writes
-        // light into a grid the renderer never queries.
-        let affected: Vec<ChunkCoord> = affected
+        let affected: Vec<ChunkCoord> = affected_set
             .into_iter()
             .filter(|cc| self.world.chunk(*cc).is_some())
             .collect();
         if affected.is_empty() {
             return Vec::new();
         }
+
+        // W27.3: if a worker pool is available, dispatch the BFS
+        // off the main thread. The result arrives as
+        // WorkerResult::Lit a few frames later.
+        if let Some(pool) = self.workers.as_ref() {
+            // Build the voxel snapshot: affected chunks + their 6
+            // face-neighbours so the BFS frontier is correct at
+            // chunk boundaries. ~27 chunks x ~8 KB = ~216 KB.
+            let mut snap_entries: HashMap<ChunkCoord, Chunk> = HashMap::new();
+            for cc in &affected {
+                if let Some(c) = self.world.chunk(*cc) {
+                    snap_entries.insert(*cc, c.clone());
+                }
+                // Include face-neighbours so the BFS doesn't lose
+                // data at chunk edges.
+                for n in [
+                    [cc[0] - 1, cc[1], cc[2]],
+                    [cc[0] + 1, cc[1], cc[2]],
+                    [cc[0], cc[1] - 1, cc[2]],
+                    [cc[0], cc[1] + 1, cc[2]],
+                    [cc[0], cc[1], cc[2] - 1],
+                    [cc[0], cc[1], cc[2] + 1],
+                ] {
+                    if let Some(c) = self.world.chunk(n) {
+                        snap_entries.entry(n).or_insert_with(|| c.clone());
+                    }
+                }
+            }
+            // Warm-start grids for affected chunks (cheap Arc clone).
+            let existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> = affected
+                .iter()
+                .filter_map(|cc| {
+                    self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
+                })
+                .collect();
+            let job = Job::Lighting(LightingJob {
+                affected,
+                snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
+                existing_grids,
+            });
+            let _ = pool.req_tx.send(job);
+            // Track the in-flight job so the loading phase can wait.
+            self.pending_lighting_jobs += 1;
+            // Remesh will be triggered by WorkerResult::Lit delivery.
+            return Vec::new();
+        }
+
+        // Fallback (no worker pool): synchronous BFS on main thread.
+        // Used by headless tests where WorkerPool is never spawned.
         lighting::block_engine::propagate_block_light(
             &self.world,
             &mut self.lighting,
@@ -13114,25 +13237,56 @@ impl AppHandler for Voxel {
                         // satisfies the compiler.
                         unreachable!()
                     };
-                // Once all chunks are in, run the post-load passes.
+                // Once all chunks are in, dispatch lighting + start meshes.
                 if live >= target && phase == LoadingPhase::GeneratingChunks {
                     // Phase: BuildingLighting.
                     if let AppState::Loading { ref mut phase, .. } = self.state {
                         *phase = LoadingPhase::BuildingLighting;
                     }
-                    // Lighting BFS is sub-second for 196 chunks.
+                    // W27.4: dispatch lighting BFS to worker pool so
+                    // the 2-minute main-thread freeze is replaced by a
+                    // sub-second worker BFS. Without workers (headless
+                    // tests) this runs synchronously as before.
                     self.rebuild_all_lighting();
-                    // Phase: BuildingMeshes.
-                    // W23.2: Do NOT call rebuild_all_meshes() here -
-                    // that was a blocking O(all_chunks) GPU upload that
-                    // caused the 10+ s freeze at 99%. Instead enqueue
-                    // every chunk into pending_remesh and let the normal
-                    // drain loop (REMESH_DEFERRED_PER_FRAME + 4 ms cap)
-                    // spread the work across the next ~200 ms. The loading
-                    // screen stays interactive and users see progress.
+                    // W27.4: if workers are running, stay in
+                    // BuildingLighting until WorkerResult::Lit arrives
+                    // (pending_lighting_jobs > 0). The per-frame tick
+                    // below handles the transition once the job lands.
+                    // If no workers (synchronous path), lighting is
+                    // already done -> fall through to BuildingMeshes now.
+                    if self.pending_lighting_jobs == 0 {
+                        // Synchronous path completed: go straight to
+                        // BuildingMeshes (same behaviour as pre-W27).
+                        if let AppState::Loading { ref mut phase, .. } = self.state {
+                            *phase = LoadingPhase::BuildingMeshes;
+                        }
+                        let all_coords: Vec<ChunkCoord> =
+                            self.world.iter_chunks().map(|(c, _)| *c).collect();
+                        for coord in all_coords {
+                            if self.pending_remesh_set.insert(coord) {
+                                self.pending_remesh.push_back(coord);
+                            }
+                        }
+                    }
+                    // Finalisation happens in the BuildingMeshes ->
+                    // Finalising gate below once pending_remesh drains.
+                }
+                // W27.4: once the lighting worker job returns, advance
+                // from BuildingLighting to BuildingMeshes.
+                if phase == LoadingPhase::BuildingLighting
+                    && self.pending_lighting_jobs == 0
+                    // Guard: workers may not have been used at all
+                    // (e.g. if we somehow end up here without workers).
+                    && self.workers.is_some()
+                {
                     if let AppState::Loading { ref mut phase, .. } = self.state {
                         *phase = LoadingPhase::BuildingMeshes;
                     }
+                    // W23.2: enqueue all chunks for deferred GPU upload.
+                    // WorkerResult::Lit already added affected chunks to
+                    // pending_remesh, but we add ALL coords here to
+                    // guarantee nothing is skipped (Lit may not have
+                    // arrived for every chunk if some had no grids yet).
                     let all_coords: Vec<ChunkCoord> =
                         self.world.iter_chunks().map(|(c, _)| *c).collect();
                     for coord in all_coords {
@@ -13140,8 +13294,6 @@ impl AppHandler for Voxel {
                             self.pending_remesh.push_back(coord);
                         }
                     }
-                    // Finalisation happens in the BuildingMeshes ->
-                    // Finalising gate below once pending_remesh drains.
                 }
                 // W23.2: once all deferred meshes are built, finalise.
                 if phase == LoadingPhase::BuildingMeshes
@@ -14764,9 +14916,10 @@ enum ChunkSideEffect {
 /// pool code and tests can refer to it as plain `HaloLighting`.
 use lighting::HaloLighting;
 
-/// W25: output from one worker thread. Two variants:
+/// W25 / W27: output from one worker thread. Three variants:
 /// - `Generated`: new chunk from worldgen + side-effects + mesh.
 /// - `Remeshed`: remesh of an existing chunk (no worldgen, no side-effects).
+/// - `Lit`: W27 lighting BFS result for a set of chunks.
 ///
 /// The `revision` field on `Remeshed` carries the snapshot revision so
 /// the main thread can discard stale results when the chunk was edited
@@ -14790,16 +14943,46 @@ enum WorkerResult {
         revision: u64,
         submeshes: Vec<infengine_voxel::ChunkSubmesh>,
     },
+    /// W27: lighting BFS result. The worker computed new LightGrids for
+    /// `affected` chunks; the main thread swaps them in and triggers a
+    /// remesh of every affected chunk so the GPU picks up new light values.
+    Lit {
+        /// Updated light grids, one per chunk in `affected`.
+        new_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
+        /// Chunks that should be remeshed now that their lighting changed.
+        affected_for_remesh: Vec<ChunkCoord>,
+    },
 }
 
-/// W25: a single unit of work sent to a worker thread. Two variants:
+/// W25 / W27: a single unit of work sent to a worker thread.
 /// - `Generate`: full worldgen + mesh for a new chunk.
 /// - `Remesh`: mesh-only for an existing chunk snapshot.
+/// - `Lighting`: W27 lighting BFS over an owned chunk snapshot.
 enum Job {
     /// Full generation + mesh path (pre-W25 ChunkJob).
     Generate(ChunkJob),
     /// W25: remesh-only path; skips worldgen and side-effect scan.
     Remesh(RemeshJob),
+    /// W27: lighting BFS over an owned snapshot of affected chunks +
+    /// their face-neighbours. No worldgen, no mesh.
+    Lighting(LightingJob),
+}
+
+/// W27: lighting BFS job. The main thread clones the affected chunks
+/// (and their 6 face-neighbours for BFS frontier correctness) into an
+/// owned snapshot so the worker can run BFS without any borrow into the
+/// live `World`. Cloning ~27 chunks x ~8 KB = ~216 KB per tick_lighting
+/// call; acceptable.
+struct LightingJob {
+    /// Chunks whose light grids must be recomputed. All entries must be
+    /// present in `snapshot`.
+    affected: Vec<ChunkCoord>,
+    /// Owned voxel snapshot: affected chunks + their 6 face-neighbours.
+    snapshot: lighting::ChunkSnapshot,
+    /// Existing light grids for `affected` (warm-start). The BFS clears
+    /// and re-floods so these are optional context; passing them avoids
+    /// a cold-start cost on subsequent tick_lighting calls.
+    existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
 }
 
 /// One unit of work for the chunk worker pool. Carries the per-job
@@ -14966,6 +15149,48 @@ impl WorkerPool {
                                             coord: rj.coord,
                                             revision: rj.revision,
                                             submeshes,
+                                        })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                                Job::Lighting(lj) => {
+                                    // W27: BFS over the owned chunk snapshot.
+                                    // Runs entirely in the worker - no borrows
+                                    // into the main-thread World.
+                                    // Warm-start from existing grids so the
+                                    // BFS clears + re-floods from scratch.
+                                    let mut local_state =
+                                        lighting::LightingState::with_grids(lj.existing_grids);
+                                    lighting::block_engine::propagate_block_light(
+                                        &lj.snapshot,
+                                        &mut local_state,
+                                        &lj.affected,
+                                    );
+                                    lighting::sky_engine::propagate_sky_light(
+                                        &lj.snapshot,
+                                        &mut local_state,
+                                        &lj.affected,
+                                    );
+                                    // Collect the updated grids for the
+                                    // affected chunks only. Arc::clone is
+                                    // cheap here (just a refcount bump on
+                                    // the freshly created arcs).
+                                    let new_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> =
+                                        lj.affected
+                                            .iter()
+                                            .filter_map(|cc| {
+                                                local_state
+                                                    .get(*cc)
+                                                    .map(|g| (*cc, Arc::clone(g)))
+                                            })
+                                            .collect();
+                                    let affected_for_remesh = lj.affected;
+                                    if res_tx
+                                        .send(WorkerResult::Lit {
+                                            new_grids,
+                                            affected_for_remesh,
                                         })
                                         .is_err()
                                     {

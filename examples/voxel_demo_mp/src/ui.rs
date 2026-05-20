@@ -180,8 +180,10 @@ pub(crate) enum AppState {
     /// and the post-load steps (lighting BFS, mesh upload) finish.
     Loading {
         /// Total number of chunks the bootstrap needs to generate.
-        /// Computed from `INITIAL_CHUNKS` + `VERTICAL_CHUNKS` in
-        /// `enter_world` before any chunk work starts.
+        /// Computed from `view_distance` + `VERTICAL_CHUNKS` in
+        /// `build_world` before any chunk work starts. Matches the
+        /// same radius used by `stream_chunks` so the counter
+        /// reaches 100% naturally without overshooting.
         target_chunks: u32,
         /// Chunks actually inserted into `self.world` so far.
         /// Updated every tick from `self.world.iter_chunks().count()`.
