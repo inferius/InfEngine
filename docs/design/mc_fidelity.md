@@ -1696,3 +1696,126 @@ BFS correctness work across `block_engine.rs` and `sky_engine.rs`.
 - `infengine_voxel`: new test `greedy_mesh_quad_uv_corners_bl_br_tr_tl_all_faces`
 - `infengine_render`: 36 pass / 0 fail (up from 30, +6 TLSF tests)
 - `voxel_demo_mp`: 1495 pass / 7 fail (pre-existing, unchanged)
+
+---
+
+## Wave 34
+
+Wave 34 shipped four changes: creative-tab icon name_map expansion,
+greedy mesher UV fix and re-enable, incremental lighting blocker
+extension, and a ghost-world DPI investigation.
+
+### W34.1 - name_map expansion (creative tab icons)
+
+`BLOCK_NAME_MAP` and `ITEM_NAME_MAP` in
+`examples/voxel_demo_mp/src/resource_pack/name_map.rs` previously
+covered only IDs 1-49. Wave 34.1 adds entries for:
+
+- IDs 50-67 (W11.3 emitter blocks): redstone_torch, soul_torch,
+  sea_lantern, jack_o_lantern, end_rod, magma, shroomlight, lantern,
+  soul_lantern, crying_obsidian, respawn_anchor, ender_chest (obsidian
+  fallback), redstone_lamp_on, redstone_ore, light_block_15.
+- IDs 68-82 (W12.2 shape blocks): oak_planks (slabs/stairs/fence),
+  stone (stone slab/stairs), cobblestone (cobblestone variants),
+  nether_bricks (nether brick fence), glass (glass_pane), iron_bars,
+  cobblestone (cobblestone_wall).
+- ITEM_NAME_MAP additions: redstone_torch (50-51), soul_torch (52-53),
+  end_rod (57), lantern (60), soul_lantern (61), oak_door (77-78),
+  iron_door (79).
+
+Aggregate test: `w34_name_map_covers_70_of_82` verifies at least 70 of
+82 ITEM_TYPES entries resolve through the name_map.
+
+### W34.2 - Greedy mesher per-face UV tables
+
+The greedy mesher in `crates/infengine_voxel/src/lib.rs` has been
+reverted twice due to UV rotation bugs. W34.2 derives explicit per-face
+`quad_uv` tables by matching each greedy corner position to the OLD
+(per-voxel) mesher UV assignment.
+
+**Derivation method:**
+- OLD UV pattern: `uvs = [(u0,v1),(u1,v1),(u1,v0),(u0,v0)]` indexed by corner order.
+- Shader: `final_uv = tile_uv0 + fract(quad_uv) * tile_size`.
+- For each face, map the greedy corner's world position to the OLD UV's texture
+  fractions, then compute the `quad_uv` value that produces those fractions.
+
+**Per-face quad_uv table (corners: side>0 = C0(0,0),C1(0,h),C2(w,h),C3(w,0);
+side<0 = C0(w,0),C1(w,h),C2(0,h),C3(0,0)):**
+
+| Face | Greedy corners = OLD | quad_uv formula |
+|------|---------------------|-----------------|
+| +X   | yes (Y=du, Z=dv)    | `[[0,w-E],[h-E,w-E],[h-E,0],[0,0]]` |
+| +Y   | yes (Z=du, X=dv)    | same as +X |
+| -Y   | yes (Z=du, X=dv)    | same as +X |
+| -X   | no (corners reordered) | `[[h-E,0],[0,0],[0,w-E],[h-E,w-E]]` |
+| +Z   | no (X,Y axes inverted) | `[[w-E,h-E],[w-E,0],[0,0],[0,h-E]]` |
+| -Z   | no (X,Y axes inverted) | same as +Z |
+
+where E = 0.001 (epsilon to avoid fract(integer) = 0 discontinuity).
+
+Both `chunk_mesh_greedy` and `chunk_mesh_greedy_with_special` updated.
+Both call sites in `voxel_demo_mp/main.rs` switched from
+`chunk_mesh_with_atlas_light_anim_and_special` to
+`chunk_mesh_greedy_with_special`.
+
+New test: `greedy_flat_floor_produces_one_quad_not_256` verifies that
+a 16x16 uniform floor produces 1 merged top quad (greedy) vs 256 (naive).
+
+### W34.3 - Incremental block-light for blocker changes
+
+`propagate_block_light_incremental` in
+`examples/voxel_demo_mp/src/lighting/block_engine.rs` gained a
+two-queue unlight BFS for the **blocker-added** case (transparent
+cell becoming opaque):
+
+1. If the changed cell holds a non-zero light value AND is now opaque,
+   seed the decrease-queue with that cell.
+2. Walk neighbours: cells whose stored value <= `source_level - decay`
+   were lit through this cell; zero them and enqueue. Cells with higher
+   stored values come from independent sources -> collect as relight seeds.
+3. Run standard propagation from all relight seeds.
+
+The **blocker-removed** case (opaque -> transparent) already worked:
+the else-branch gathered neighbour light as relight seeds, and the
+BFS naturally propagated through the now-transparent cell.
+
+`tick_lighting` in main.rs was updated to use the incremental path for
+single-voxel changes regardless of opacity, but still calls
+`propagate_sky_light` for blocker changes (sky columns need the full
+BFS engine at chunk boundaries).
+
+**Two-queue invariant**: The decrease-queue tracks the maximum level
+that can be sourced from the removed/blocked emitter at each cell.
+A cell is a "decreasing candidate" if its stored value is no more than
+what the source could have provided (source_level - step_decay). If it
+has a higher value, it has an independent source and becomes a relight seed.
+The increase-queue (relight) then re-floods the cleared region from surviving
+sources, restoring correct light without touching unaffected areas.
+
+### W34.4 - Ghost world DPI artifact (research only)
+
+Investigation documented in `docs/design/ghost_world_investigation.md`.
+
+Most likely cause: on Windows 11 with >100% DPI scale, `inner_size()`
+called during `on_start` (which runs in `resumed()` before the window
+is shown) returns the logical size (1280x720) rather than the physical
+size. The wgpu swapchain is configured for the smaller logical size;
+the OS compositor stretches the backbuffer to fill the physical window,
+potentially showing the previous-frame content in the upper-left.
+
+Suggested mitigation: after `Renderer::new`, immediately call
+`renderer.resize(window.size())` to force a reconfigure with the
+latest physical size. No code change applied (research task).
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/name_map.rs`: W34.1 entries + tests
+- `crates/infengine_voxel/src/lib.rs`: W34.2 per-face UV tables + flat-floor test
+- `examples/voxel_demo_mp/src/main.rs`: W34.2 greedy call sites + W34.3 tick_lighting
+- `examples/voxel_demo_mp/src/lighting/block_engine.rs`: W34.3 unlight BFS
+- `docs/design/ghost_world_investigation.md`: W34.4 investigation
+
+### Tests
+
+- `infengine_voxel`: 20 pass / 0 fail (up from 19, +1 flat-floor test)
+- `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged, +4 W34.1 tests)
