@@ -309,12 +309,14 @@ const VERTICAL_CHUNKS: i32 = 16;
 ///
 /// W13.4: renamed from VIEW_DISTANCE_CHUNKS; cap raised from 12 to 24.
 const VIEW_DISTANCE_CHUNKS: i32 = 4;
-/// Hard cap on the view_distance setting. MC "Far" is 32 but 24 is
-/// smooth on an RTX 4090 with frustum culling. Raising beyond this is
-/// possible by changing this constant; no other code change needed.
+/// Hard cap on the view_distance setting. MC "Far" is 32 chunks;
+/// matches the cap here. Beyond this an LOD layer (W13.5 follow-up)
+/// would be needed - synchronous voxel meshes at 48+ chunks would
+/// trash GPU memory + per-frame work. Frustum culling already drops
+/// 60-70% of chunks so the on-screen budget stays manageable.
 ///
-/// W13.4: raised from 12 to 24.
-const VIEW_DISTANCE_MAX: i32 = 24;
+/// W13.4: raised from 12 to 24. Follow-up: 24 -> 32.
+const VIEW_DISTANCE_MAX: i32 = 32;
 /// Maximum number of worker results whose GPU upload is processed per
 /// frame. Lowered from 4 to 2 (W13.1) so a burst of ready chunks
 /// never causes more than ~2 * create_mesh costs in one frame, keeping
@@ -326,10 +328,34 @@ const RESULTS_PER_FRAME: usize = 2;
 /// already-loaded neighbour are culled; deferring them spreads the
 /// CPU cost over multiple frames instead of stalling on delivery.
 const REMESH_DEFERRED_PER_FRAME: usize = 2;
-/// Number of background worker threads generating + meshing chunks.
-/// W13.2: raised from 2 to 4 so there are always ready results
-/// waiting for the main thread's RESULTS_PER_FRAME drain.
-const NUM_WORKERS: usize = 4;
+/// Minimum number of background worker threads generating + meshing
+/// chunks. The actual worker count is picked at startup via
+/// `pick_worker_count()` which reads `std::thread::available_parallelism`
+/// + reserves cores for the main thread + audio + net.
+///
+/// W13.2: raised from 2 to 4. Post-W13: now a floor, not a fixed value.
+const MIN_WORKERS: usize = 4;
+/// Upper cap on worker threads. Keeps the chunk-gen pool from
+/// monopolising a high-core-count machine + leaves headroom for
+/// the OS, audio, network, and the GPU driver. 24 is plenty for
+/// voxel gen at any reasonable view distance.
+const MAX_WORKERS: usize = 24;
+
+/// Choose worker-thread count based on the host machine's logical
+/// CPU count. Reserves 2 cores for the main thread + audio + net,
+/// floors at `MIN_WORKERS`, caps at `MAX_WORKERS`. Logs the decision.
+fn pick_worker_count() -> usize {
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(MIN_WORKERS);
+    let workers = logical.saturating_sub(2).clamp(MIN_WORKERS, MAX_WORKERS);
+    tracing::info!(
+        logical_cpus = logical,
+        chosen_workers = workers,
+        "worker pool sized"
+    );
+    workers
+}
 /// W13.1: warn threshold in microseconds. Any phase of the chunk
 /// integration path that exceeds this per-frame will emit a
 /// `tracing::warn!` so frame hitches are visible in the log.
@@ -1465,7 +1491,7 @@ impl Voxel {
         }
         // L.2: spin up workers first so `build_world` can push into
         // pending_chunks immediately.
-        self.workers = Some(WorkerPool::spawn(NUM_WORKERS));
+        self.workers = Some(WorkerPool::spawn(pick_worker_count()));
         // L.2: enqueue the initial chunks (returns immediately - no
         // generation happens on the main thread). Actual generation
         // runs via the worker pool as the loading-state tick drains
@@ -9562,21 +9588,52 @@ impl Voxel {
                                             }
                                         });
                                 }
+                                // W14: use a stable id_salt so we
+                                // can load/store the TextEditState
+                                // to set the cursor position after
+                                // an autocomplete accept.
                                 // `add_sized` forces the widget to
                                 // a hard 720x36 rect; the bare
                                 // `TextEdit::desired_width` hint
                                 // gets squashed by the parent
                                 // `Area`'s auto-shrink so the box
                                 // ended up tiny regardless.
+                                let te_id = ui.id().with("chat_input_te");
                                 let resp = ui.add_sized(
                                     [720.0, 36.0],
                                     egui::TextEdit::singleline(chat_buf)
+                                        .id(te_id)
                                         .font(egui::FontId::proportional(18.0))
                                         .margin(egui::Vec2::new(8.0, 6.0))
                                         .hint_text("press T to chat, Enter sends"),
                                 );
                                 resp.request_focus();
-                                // W11.5 - autocomplete state + key
+
+                                // W14.1/W14.2: if a previous frame
+                                // recorded a desired cursor position
+                                // (after accept), apply it now via
+                                // egui's TextEditState so the cursor
+                                // doesn't snap to the middle or stay
+                                // at the old position.
+                                if let Some(popup) = chat_completion.as_mut()
+                                    && let Some(pos) = popup.pending_cursor.take()
+                                {
+                                    if let Some(mut te_state) =
+                                        egui::TextEdit::load_state(
+                                            ctx, te_id,
+                                        )
+                                    {
+                                        let cc = egui::text::CCursor::new(pos);
+                                        te_state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::one(cc),
+                                        ));
+                                        egui::TextEdit::store_state(
+                                            ctx, te_id, te_state,
+                                        );
+                                    }
+                                }
+
+                                // W11.5/W14 - autocomplete state + key
                                 // handlers. Recompute popup when
                                 // input changes; route Tab / Esc /
                                 // Enter / arrows to the popup when
@@ -9592,13 +9649,34 @@ impl Voxel {
                                     .input(|i| i.key_pressed(egui::Key::Escape));
                                 let enter_pressed = ui
                                     .input(|i| i.key_pressed(egui::Key::Enter));
-                                // Recompute popup on input change.
+
+                                // W14.2: read the actual egui cursor
+                                // position from TextEditState so we
+                                // pass the real cursor offset to
+                                // `recompute_popup` instead of always
+                                // using buf.len(). This fixes
+                                // completions when the user edits in
+                                // the middle of the line.
+                                let te_cursor: usize =
+                                    egui::TextEdit::load_state(ctx, te_id)
+                                        .and_then(|s| {
+                                            s.cursor
+                                                .char_range()
+                                                .map(|r| r.primary.index)
+                                        })
+                                        .unwrap_or(chat_buf.len());
+
+                                // Recompute popup on input change or
+                                // cursor move. W14.2: also recompute
+                                // when cursor moves so completions
+                                // track the token under the cursor.
                                 let needs_recompute = match chat_completion
                                     .as_ref()
                                 {
                                     Some(p) => {
                                         p.input_snapshot.as_str()
                                             != chat_buf.as_str()
+                                            || p.cursor_snapshot != te_cursor
                                     }
                                     None => chat_buf.starts_with('/'),
                                 };
@@ -9609,7 +9687,7 @@ impl Voxel {
                                     *chat_completion =
                                         autocomplete::recompute_popup(
                                             chat_buf,
-                                            chat_buf.len(),
+                                            te_cursor,
                                             4, // host = full perm
                                             &ctx_ac,
                                             chat_completion.as_ref(),
@@ -9617,43 +9695,77 @@ impl Voxel {
                                 }
                                 let popup_active = chat_completion.is_some();
                                 if popup_active && esc_pressed {
+                                    // W14.3: Esc closes popup only,
+                                    // does NOT send the line.
                                     *chat_completion = None;
                                 } else if popup_active && tab_pressed {
+                                    // W14.3: Tab accepts the highlighted
+                                    // candidate + closes popup. The
+                                    // trailing space (added by
+                                    // apply_completion, W14.1) puts the
+                                    // cursor after the token so the user
+                                    // can type the next arg immediately.
                                     if let Some(popup) =
                                         chat_completion.as_mut()
                                     {
-                                        if popup.candidates.len() == 1 {
-                                            if let Some(c) = popup.selected() {
-                                                let (out, _) =
-                                                    autocomplete::apply_completion(
-                                                        chat_buf,
-                                                        chat_buf.len(),
-                                                        &c.replacement,
-                                                    );
-                                                *chat_buf = out;
-                                            }
-                                            *chat_completion = None;
+                                        if let Some(c) = popup.selected()
+                                            && !c.replacement.is_empty()
+                                        {
+                                            let repl = c.replacement.clone();
+                                            let (out, new_cur) =
+                                                autocomplete::apply_completion(
+                                                    chat_buf,
+                                                    te_cursor,
+                                                    &repl,
+                                                );
+                                            *chat_buf = out;
+                                            // Store desired cursor pos;
+                                            // applied next frame. W14.1.
+                                            popup.pending_cursor =
+                                                Some(new_cur);
                                         } else {
+                                            // Hint-only candidate (empty
+                                            // replacement): just cycle.
                                             popup.select_next();
                                         }
                                     }
+                                    // Close popup after Tab accept so
+                                    // user sees the result cleanly.
+                                    // W14.3: do NOT submit on Tab.
+                                    if chat_completion
+                                        .as_ref()
+                                        .and_then(|p| p.selected())
+                                        .map(|c| !c.replacement.is_empty())
+                                        .unwrap_or(false)
+                                    {
+                                        *chat_completion = None;
+                                    }
                                 } else if popup_active && enter_pressed {
-                                    // Enter w/ popup open: accept
-                                    // the highlighted candidate
-                                    // + DON'T send.
+                                    // W14.3: Enter w/ popup open ->
+                                    // accept highlighted candidate,
+                                    // close popup, AND submit the
+                                    // command (single keystroke UX).
+                                    let mut accepted = false;
                                     if let Some(popup) =
                                         chat_completion.as_ref()
                                         && let Some(c) = popup.selected()
+                                        && !c.replacement.is_empty()
                                     {
-                                        let (out, _) =
+                                        let (out, _new_cur) =
                                             autocomplete::apply_completion(
                                                 chat_buf,
-                                                chat_buf.len(),
+                                                te_cursor,
                                                 &c.replacement,
                                             );
                                         *chat_buf = out;
+                                        accepted = true;
                                     }
                                     *chat_completion = None;
+                                    // Submit immediately after accept
+                                    // so Enter = accept + send. W14.3.
+                                    if accepted {
+                                        chat_send_now = true;
+                                    }
                                 } else if popup_active
                                     && (up_pressed || down_pressed)
                                 {

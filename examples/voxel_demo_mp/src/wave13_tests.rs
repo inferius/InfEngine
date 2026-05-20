@@ -24,14 +24,16 @@ fn results_per_frame_is_two() {
     );
 }
 
-/// NUM_WORKERS raised to 4 so the pipeline stays ahead of the 2 result
-/// slots - workers generate faster than the main thread consumes.
+/// Worker count is dynamic now (post-W13 follow-up): picked at startup
+/// via `pick_worker_count()` based on `available_parallelism`. Floors at
+/// MIN_WORKERS=4 + caps at MAX_WORKERS=24. Test the bounds.
 #[test]
-fn num_workers_is_four() {
-    assert_eq!(
-        crate::NUM_WORKERS, 4,
-        "NUM_WORKERS must be 4 (was 2 before W13.1)"
-    );
+fn worker_count_bounds() {
+    assert_eq!(crate::MIN_WORKERS, 4, "MIN_WORKERS must be 4");
+    assert!(crate::MAX_WORKERS >= crate::MIN_WORKERS);
+    let picked = crate::pick_worker_count();
+    assert!(picked >= crate::MIN_WORKERS);
+    assert!(picked <= crate::MAX_WORKERS);
 }
 
 /// REMESH_DEFERRED_PER_FRAME limits neighbour remesh cost per frame.
