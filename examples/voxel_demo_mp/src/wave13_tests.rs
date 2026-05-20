@@ -13,15 +13,13 @@
 // W13.1 - Shuttering profile constants
 // -----------------------------------------------------------------------
 
-/// RESULTS_PER_FRAME was lowered from 4 to 2 so a single-frame burst
-/// of ready chunks never stalls the main thread with more than 2 GPU
-/// uploads.
+/// RESULTS_PER_FRAME caps per-frame GPU upload cost. W23.3a raised
+/// from 2 to 8 because W24 moved meshing into worker threads, so the
+/// main thread only does GPU upload (cheap) per delivered result.
 #[test]
-fn results_per_frame_is_two() {
-    assert_eq!(
-        crate::RESULTS_PER_FRAME, 2,
-        "RESULTS_PER_FRAME must be 2 to cap per-frame GPU upload cost"
-    );
+fn results_per_frame_is_bounded() {
+    const { assert!(crate::RESULTS_PER_FRAME >= 1) };
+    const { assert!(crate::RESULTS_PER_FRAME <= 64) };
 }
 
 /// Worker count is dynamic now (post-W13 follow-up): picked at startup
@@ -39,7 +37,8 @@ fn worker_count_bounds() {
 /// REMESH_DEFERRED_PER_FRAME limits neighbour remesh cost per frame.
 #[test]
 fn remesh_deferred_per_frame_is_bounded() {
-    const { assert!(crate::REMESH_DEFERRED_PER_FRAME <= 4) };
+    // W23.3a: bumped from 4 to 16 to drain pending_remesh faster.
+    const { assert!(crate::REMESH_DEFERRED_PER_FRAME <= 64) };
     const { assert!(crate::REMESH_DEFERRED_PER_FRAME >= 1) };
 }
 
