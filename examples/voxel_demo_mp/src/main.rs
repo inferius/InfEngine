@@ -1669,6 +1669,10 @@ impl Voxel {
     /// edit-apply path funnels through here so we only have one
     /// place that knows about torch bookkeeping.
     fn world_set_tracked(&mut self, voxel: [i32; 3], block: BlockId) {
+        // W28.5: record old emission before the world is mutated.
+        let old_block = self.world.get(voxel);
+        let old_emission = block::light_emission::light_emission_for_id(old_block.0);
+        let new_emission = block::light_emission::light_emission_for_id(block.0);
         self.world.set(voxel, block);
         // Both torches + glowstone act as point-light emitters.
         if block.0 == TORCH_ID || block.0 == GLOWSTONE_ID {
@@ -1783,10 +1787,9 @@ impl Voxel {
         // local light field - whether the new block is an
         // emitter (torch/glowstone/lava/fire), an opaque blocker
         // (carving out / sealing up sky columns), or just a
-        // transparent swap (water replacing leaves). We let the
-        // lighting tick figure out which chunks need a re-flood
-        // by adding the touched voxel to the dirty set.
-        self.lighting.mark_dirty(voxel);
+        // transparent swap (water replacing leaves). W28.5: record
+        // emission change so tick_lighting can use incremental path.
+        self.lighting.mark_dirty_with_change(voxel, old_emission, new_emission);
         // Wave 7: fire on_block_place / on_block_break for
         // every loaded plugin. Air (block.0 == 0) is treated
         // as a break; everything else is a place. player_id
@@ -6625,6 +6628,8 @@ impl Voxel {
     ///   can remesh immediately.
     fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
         let dirty = self.lighting.take_dirty();
+        // W28.5: also drain the per-change emission records.
+        let dirty_changes = self.lighting.take_dirty_changes();
         if dirty.is_empty() {
             return Vec::new();
         }
@@ -6704,16 +6709,44 @@ impl Voxel {
 
         // Fallback (no worker pool): synchronous BFS on main thread.
         // Used by headless tests where WorkerPool is never spawned.
-        lighting::block_engine::propagate_block_light(
-            &self.world,
-            &mut self.lighting,
-            &affected,
-        );
-        lighting::sky_engine::propagate_sky_light(
-            &self.world,
-            &mut self.lighting,
-            &affected,
-        );
+        //
+        // W28.5: use two-queue incremental update when every dirty
+        // voxel has a recorded emission change (common case: single
+        // torch place/remove). Falls back to full re-flood when the
+        // dirty set contains multiple voxels or sky-light-affecting
+        // changes (opaque block place/remove).
+        let use_incremental = dirty_changes.len() == dirty.len()
+            && dirty.len() == 1
+            && !dirty_changes.iter().any(|(pos, old_e, new_e)| {
+                // Sky-light changes (opaque block change) force full flood.
+                let old_opaque = old_e == &0 && block_is_opaque(self.world.get(*pos));
+                let new_opaque = new_e == &0 && block_is_opaque(self.world.get(*pos));
+                old_opaque || new_opaque
+            });
+
+        if use_incremental {
+            for (pos, old_e, new_e) in &dirty_changes {
+                lighting::block_engine::propagate_block_light_incremental(
+                    &self.world,
+                    &mut self.lighting,
+                    &affected,
+                    *pos,
+                    *old_e,
+                    *new_e,
+                );
+            }
+        } else {
+            lighting::block_engine::propagate_block_light(
+                &self.world,
+                &mut self.lighting,
+                &affected,
+            );
+            lighting::sky_engine::propagate_sky_light(
+                &self.world,
+                &mut self.lighting,
+                &affected,
+            );
+        }
         affected
     }
 

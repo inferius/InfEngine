@@ -216,3 +216,113 @@ pub(crate) fn propagate_block_light(
     let queue = seed_emitters(world, state, affected);
     propagate(world, state, affected, queue);
 }
+
+/// W28.5: Two-queue incremental block-light update.
+///
+/// Used when a single voxel changes (place/remove block or emitter).
+/// Instead of zeroing entire chunk regions and re-flooding, this
+/// mirrors MC's `BlockLightEngine` two-phase approach:
+///
+/// Phase 1 - Unlight: BFS that propagates light *removal* outward
+/// from `changed_pos`. Any cell whose stored value matches what the
+/// old emitter at `changed_pos` would have written (i.e. it cannot
+/// be sourced from elsewhere at that level) is zeroed and added to
+/// a relight queue.
+///
+/// Phase 2 - Relight: Standard propagation BFS seeded from all
+/// surviving light sources that border the unlighted region (plus
+/// the new emitter at `changed_pos`, if any).
+///
+/// `old_emission`: previous emission level at `changed_pos` (0 if
+/// the block was not an emitter before the change).
+/// `new_emission`: new emission level after the change (0 if the
+/// block is not an emitter now).
+/// `affected`: chunks that may be written. Usually the chunk of
+/// `changed_pos` plus its 26 face/edge/corner neighbours.
+pub(crate) fn propagate_block_light_incremental(
+    world: &impl LightingWorldAccess,
+    state: &mut LightingState,
+    affected: &[ChunkCoord],
+    changed_pos: [i32; 3],
+    old_emission: u8,
+    new_emission: u8,
+) {
+    // Phase 1: unlight. BFS that zeros cells and collects border
+    // cells that still have external light (relight seeds).
+    let mut relight: VecDeque<([i32; 3], u8)> = VecDeque::new();
+
+    if old_emission > 0 {
+        // Seed the unlight queue with the old emitter's former value.
+        let mut unlight: VecDeque<([i32; 3], u8)> = VecDeque::new();
+        let old_val = get_block_light(state, affected, changed_pos);
+        if old_val > 0 {
+            // Zero and seed from this cell.
+            if let Some(g) = {
+                let (cc, lc) = split(changed_pos);
+                if affected.contains(&cc) {
+                    Some((cc, lc))
+                } else {
+                    None
+                }
+            } {
+                let (cc, lc) = g;
+                state.ensure(cc).set_block(lc, 0);
+            }
+            unlight.push_back((changed_pos, old_val));
+        }
+
+        while let Some((pos, level)) = unlight.pop_front() {
+            for n in NEIGHBOURS {
+                let np = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+                let (ncc, nlc) = split(np);
+                if !affected.contains(&ncc) {
+                    continue;
+                }
+                let stored = state.get(ncc).map(|g| g.get_block(nlc)).unwrap_or(0);
+                if stored == 0 {
+                    continue;
+                }
+                let decay = step_decay(world.get_block(np));
+                // Cells that could only have been lit by `pos` at
+                // `level - decay` or less are candidates for removal.
+                if stored <= level.saturating_sub(decay) {
+                    // Zero and continue BFS.
+                    state.ensure(ncc).set_block(nlc, 0);
+                    unlight.push_back((np, stored));
+                } else {
+                    // This cell has stronger light from another source;
+                    // add it to the relight seeds so it re-floods the
+                    // cleared region.
+                    relight.push_back((np, stored));
+                }
+            }
+        }
+    } else {
+        // No old emitter: just gather relight seeds from the 6
+        // immediate neighbours of the changed cell (e.g. placed block
+        // that is now opaque - neighbours of the new block may need to
+        // retrace lighting around it).
+        for n in NEIGHBOURS {
+            let np = [changed_pos[0] + n[0], changed_pos[1] + n[1], changed_pos[2] + n[2]];
+            let (ncc, nlc) = split(np);
+            let stored = if affected.contains(&ncc) {
+                state.get(ncc).map(|g| g.get_block(nlc)).unwrap_or(0)
+            } else {
+                0
+            };
+            if stored > 0 {
+                relight.push_back((np, stored));
+            }
+        }
+    }
+
+    // Phase 2: seed the new emitter (if any) and propagate.
+    if new_emission > 0
+        && try_set_block_light(state, affected, changed_pos, new_emission).is_some()
+    {
+        relight.push_back((changed_pos, new_emission));
+    }
+
+    // Standard propagation from all relight seeds.
+    propagate(world, state, affected, relight);
+}

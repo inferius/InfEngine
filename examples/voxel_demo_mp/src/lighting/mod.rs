@@ -218,6 +218,13 @@ pub(crate) struct LightingState {
     /// Drained by `take_dirty` + fed back as chunk coords to the
     /// engines.
     pub(crate) dirty: HashSet<[i32; 3]>,
+    /// W28.5: optional per-voxel change record for incremental lighting.
+    /// Each entry is (world_pos, old_emission, new_emission). Populated
+    /// by `mark_dirty_with_change`; drained alongside `dirty` by
+    /// `take_dirty_changes`. When populated for every dirty voxel,
+    /// `tick_lighting` can use the two-queue incremental path instead of
+    /// full re-flood.
+    pub(crate) dirty_changes: Vec<([i32; 3], u8, u8)>,
 }
 
 impl LightingState {
@@ -231,6 +238,7 @@ impl LightingState {
     pub(crate) fn clear(&mut self) {
         self.grids.clear();
         self.dirty.clear();
+        self.dirty_changes.clear();
     }
 
     /// Mark `voxel` as needing a re-light on the next lighting
@@ -238,6 +246,26 @@ impl LightingState {
     /// modules; this just records the request.
     pub(crate) fn mark_dirty(&mut self, voxel: [i32; 3]) {
         self.dirty.insert(voxel);
+    }
+
+    /// W28.5: Like `mark_dirty` but also records the old + new emission
+    /// levels so `tick_lighting` can use the two-queue incremental path.
+    /// `old_emission`: block emission BEFORE the change (0 = not emitter).
+    /// `new_emission`: block emission AFTER the change (0 = not emitter).
+    pub(crate) fn mark_dirty_with_change(
+        &mut self,
+        voxel: [i32; 3],
+        old_emission: u8,
+        new_emission: u8,
+    ) {
+        self.dirty.insert(voxel);
+        self.dirty_changes.push((voxel, old_emission, new_emission));
+    }
+
+    /// W28.5: Drain the dirty_changes vec. Returns the vec (and leaves
+    /// an empty vec behind). Call alongside `take_dirty`.
+    pub(crate) fn take_dirty_changes(&mut self) -> Vec<([i32; 3], u8, u8)> {
+        std::mem::take(&mut self.dirty_changes)
     }
 
     /// Get-or-create the `LightGrid` for `chunk`. Brand-new entries
@@ -293,6 +321,7 @@ impl LightingState {
         Self {
             grids,
             dirty: HashSet::new(),
+            dirty_changes: Vec::new(),
         }
     }
 }
