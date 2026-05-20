@@ -102,6 +102,52 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
         infengine_id: 49, block: "fire_0",
         top: "fire_0", bottom: "fire_0", sides: "fire_0",
     },
+    // W11.3 emitter blocks (ids 50..=67).
+    // Torches: MC uses the same face texture for all sides.
+    BlockNameMap { infengine_id: 50, block: "redstone_torch", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 51, block: "redstone_torch", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 52, block: "soul_torch",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 53, block: "soul_torch",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 54, block: "sea_lantern",    top: "", bottom: "", sides: "" },
+    BlockNameMap {
+        infengine_id: 55, block: "jack_o_lantern",
+        top: "pumpkin_top", bottom: "pumpkin_top", sides: "jack_o_lantern",
+    },
+    BlockNameMap { infengine_id: 56, block: "soul_fire_0",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 57, block: "end_rod",        top: "end_rod_top", bottom: "end_rod_top", sides: "end_rod" },
+    BlockNameMap { infengine_id: 58, block: "magma",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 59, block: "shroomlight",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 60, block: "lantern",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 61, block: "soul_lantern",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 62, block: "crying_obsidian", top: "", bottom: "", sides: "" },
+    BlockNameMap {
+        infengine_id: 63, block: "respawn_anchor_top",
+        top: "respawn_anchor_top", bottom: "respawn_anchor_bottom", sides: "respawn_anchor_side0",
+    },
+    // Ender chest - MC ships it as an entity model; use obsidian as
+    // a reasonable flat-face stand-in.
+    BlockNameMap {
+        infengine_id: 64, block: "obsidian",
+        top: "obsidian", bottom: "obsidian", sides: "obsidian",
+    },
+    BlockNameMap { infengine_id: 65, block: "redstone_lamp_on",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 66, block: "redstone_ore",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 67, block: "light_block_15",    top: "", bottom: "", sides: "" },
+    // W12.2 slab / stair / fence / door / pane / bars / wall
+    // (ids 68..=82). For shapes that have no distinct top texture,
+    // map to the full-block parent texture.
+    BlockNameMap { infengine_id: 68, block: "oak_planks",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 69, block: "stone",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 70, block: "cobblestone",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 71, block: "oak_planks",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 72, block: "oak_planks",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 73, block: "stone",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 74, block: "cobblestone",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 75, block: "oak_planks",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 76, block: "nether_bricks",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 80, block: "glass",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 81, block: "iron_bars",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 82, block: "cobblestone",      top: "", bottom: "", sides: "" },
 ];
 
 /// Look up the (block, top, bottom, sides) MC names for an infengine
@@ -148,6 +194,18 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     ItemNameMap { infengine_id: 43, item: "iron_ingot" },
     // Flint and steel
     ItemNameMap { infengine_id: 48, item: "flint_and_steel" },
+    // W11.3 emitter items - torches use item texture not block face.
+    ItemNameMap { infengine_id: 50, item: "redstone_torch" },
+    ItemNameMap { infengine_id: 51, item: "redstone_torch" },
+    ItemNameMap { infengine_id: 52, item: "soul_torch" },
+    ItemNameMap { infengine_id: 53, item: "soul_torch" },
+    ItemNameMap { infengine_id: 60, item: "lantern" },
+    ItemNameMap { infengine_id: 61, item: "soul_lantern" },
+    ItemNameMap { infengine_id: 57, item: "end_rod" },
+    // W12.2 door items - MC ships doors as flat item sprites.
+    ItemNameMap { infengine_id: 77, item: "oak_door" },
+    ItemNameMap { infengine_id: 78, item: "oak_door" },
+    ItemNameMap { infengine_id: 79, item: "iron_door" },
 ];
 
 pub(crate) fn lookup_item(id: u16) -> Option<&'static str> {
@@ -176,5 +234,76 @@ mod tests {
     fn unknown_ids_return_none() {
         assert!(lookup_block(9999).is_none());
         assert!(lookup_item(9999).is_none());
+    }
+
+    // W34.1 - new emitter block entries (ids 50..=67).
+    #[test]
+    fn w34_emitter_blocks_in_map() {
+        assert_eq!(lookup_block(50).map(|m| m.block), Some("redstone_torch"));
+        assert_eq!(lookup_block(51).map(|m| m.block), Some("redstone_torch"));
+        assert_eq!(lookup_block(52).map(|m| m.block), Some("soul_torch"));
+        assert_eq!(lookup_block(53).map(|m| m.block), Some("soul_torch"));
+        assert_eq!(lookup_block(54).map(|m| m.block), Some("sea_lantern"));
+        assert_eq!(lookup_block(55).map(|m| m.block), Some("jack_o_lantern"));
+        assert_eq!(lookup_block(56).map(|m| m.block), Some("soul_fire_0"));
+        assert_eq!(lookup_block(57).map(|m| m.block), Some("end_rod"));
+        assert_eq!(lookup_block(58).map(|m| m.block), Some("magma"));
+        assert_eq!(lookup_block(59).map(|m| m.block), Some("shroomlight"));
+        assert_eq!(lookup_block(60).map(|m| m.block), Some("lantern"));
+        assert_eq!(lookup_block(61).map(|m| m.block), Some("soul_lantern"));
+        assert_eq!(lookup_block(62).map(|m| m.block), Some("crying_obsidian"));
+        assert_eq!(lookup_block(63).map(|m| m.top),   Some("respawn_anchor_top"));
+        assert_eq!(lookup_block(65).map(|m| m.block), Some("redstone_lamp_on"));
+        assert_eq!(lookup_block(66).map(|m| m.block), Some("redstone_ore"));
+        assert_eq!(lookup_block(67).map(|m| m.block), Some("light_block_15"));
+    }
+
+    // W34.1 - new slab/stair/fence/door/pane entries (ids 68..=82).
+    #[test]
+    fn w34_shape_blocks_in_map() {
+        assert_eq!(lookup_block(68).map(|m| m.block), Some("oak_planks"));
+        assert_eq!(lookup_block(69).map(|m| m.block), Some("stone"));
+        assert_eq!(lookup_block(70).map(|m| m.block), Some("cobblestone"));
+        assert_eq!(lookup_block(71).map(|m| m.block), Some("oak_planks"));
+        assert_eq!(lookup_block(72).map(|m| m.block), Some("oak_planks"));
+        assert_eq!(lookup_block(73).map(|m| m.block), Some("stone"));
+        assert_eq!(lookup_block(74).map(|m| m.block), Some("cobblestone"));
+        assert_eq!(lookup_block(75).map(|m| m.block), Some("oak_planks"));
+        assert_eq!(lookup_block(76).map(|m| m.block), Some("nether_bricks"));
+        assert_eq!(lookup_block(80).map(|m| m.block), Some("glass"));
+        assert_eq!(lookup_block(81).map(|m| m.block), Some("iron_bars"));
+        assert_eq!(lookup_block(82).map(|m| m.block), Some("cobblestone"));
+    }
+
+    // W34.1 - torch / door item overrides.
+    #[test]
+    fn w34_item_overrides() {
+        assert_eq!(lookup_item(50), Some("redstone_torch"));
+        assert_eq!(lookup_item(51), Some("redstone_torch"));
+        assert_eq!(lookup_item(52), Some("soul_torch"));
+        assert_eq!(lookup_item(53), Some("soul_torch"));
+        assert_eq!(lookup_item(57), Some("end_rod"));
+        assert_eq!(lookup_item(60), Some("lantern"));
+        assert_eq!(lookup_item(61), Some("soul_lantern"));
+        assert_eq!(lookup_item(77), Some("oak_door"));
+        assert_eq!(lookup_item(78), Some("oak_door"));
+        assert_eq!(lookup_item(79), Some("iron_door"));
+    }
+
+    // W34.1 - aggregate: at least 70 of 82 ITEM_TYPES entries resolve
+    // through either lookup_block or lookup_item.
+    #[test]
+    fn w34_name_map_covers_70_of_82() {
+        // All IDs present in ITEM_TYPES (ids 1..=82, skipping none).
+        let item_ids: Vec<u16> = (1u16..=82).collect();
+        let resolved = item_ids
+            .iter()
+            .filter(|&&id| lookup_item(id).is_some() || lookup_block(id).is_some())
+            .count();
+        assert!(
+            resolved >= 70,
+            "Only {resolved} of {} IDs resolve through name_map (need >= 70)",
+            item_ids.len()
+        );
     }
 }
