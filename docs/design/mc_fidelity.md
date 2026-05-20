@@ -1513,3 +1513,86 @@ AO (ambient occlusion) deferred.
 
 Total test count after W30: see CI output (lib + bin tests).
 Pre-existing fail count stays at 7 (MC-install detection tests).
+
+## Wave 32 - UberGpuBuffer batching
+
+### Problem
+
+At view_distance=8, rendering ~512 visible chunks each with 1-5 submeshes
+produced 2000-5000 `draw_mesh_pbr` calls per frame. Each call triggered
+three GPU state changes: `set_vertex_buffer`, `set_index_buffer`,
+`draw_indexed`. CPU-side wgpu/driver overhead was the primary bottleneck;
+GPU was mostly idle.
+
+### Solution: shared vertex/index pool + multi_draw_indexed_indirect
+
+All chunk meshes share two fixed-size GPU buffers:
+- Vertex pool: 128 MB / 40 bytes per vertex = ~3.3 M vertices
+  (covers ~1600 chunks of typical greedy-meshed density with 2x headroom)
+- Index pool:  32 MB / 4 bytes per index = ~8 M indices
+
+Per-frame draw submission:
+1. `queue_chunk_draw(handle, model, color, ...)` pushes a
+   `DrawIndexedIndirectArgs` + `MeshInstance` into a per-frame Vec. O(1).
+2. At `render()` time, the Vec is uploaded to a GPU indirect command buffer
+   and a separate instance buffer.
+3. One `multi_draw_indexed_indirect(buf, offset, count)` call per layer
+   (opaque + transparent) dispatches all chunk draws in one GPU call.
+
+Result: 2000-5000 draw calls -> 1-4 GPU calls (two layers x two passes:
+main + shadow). CPU bottleneck is effectively eliminated for chunk geometry.
+
+### Allocator design
+
+`UberMeshAllocator` (crates/infengine_render/src/uber_buffer.rs):
+- Primary path: bump allocator. O(1) alloc, monotonic watermark.
+- Free path: slot pushed to `Vec<FreeSlot>` when chunk unloads.
+- Next alloc checks free list first (first-fit). O(n) worst case but
+  n is small (free list size ~ # unloaded chunks in flight).
+- Defragmentation / TLSF deferred to W33.
+
+### wgpu feature requirements
+
+`INDIRECT_FIRST_INSTANCE` (WebGPU / DX12 / Vulkan / Metal): needed so
+`first_instance` in the indirect args can index the per-frame instance
+buffer. Requested at adapter init; fallback to a loop of
+`draw_indexed_indirect` calls (one per chunk) if unavailable. Even the
+fallback avoids per-draw vertex/index rebinds.
+
+`INDIRECT_EXECUTION` (downlevel flag): required for `draw_indexed_indirect`
+itself. Supported by all wgpu primary backends.
+
+### MC reference
+
+Minecraft's `SectionRenderDispatcher` builds per-section vertex/index
+buffers and issues `multi_draw_indirect` (or `MultiDrawIndirectFirstVertexID`
+on older GL) via its equivalent of this path. The 128 MB pool size follows
+the same order of magnitude as MC's `VertexBuffer` pool.
+
+### Files changed
+
+- `crates/infengine_render/src/uber_buffer.rs` (new): UberMeshAllocator
+- `crates/infengine_render/src/lib.rs`: new fields + API (create_chunk_mesh,
+  remove_chunk_mesh, queue_chunk_draw, set_chunk_mesh_transparent)
+- `crates/infengine_render/src/mesh3d.rs`: Mesh3DPass::draw_uber_chunks
+- `crates/infengine_render/src/shadow.rs`: ShadowPass::draw_uber
+- `examples/voxel_demo_mp/src/main.rs`: all chunk create/remove/draw
+  sites migrated to the uber API
+
+### Tests
+
+- `uber_buffer::tests::uber_alloc_constants_are_sane`
+- `uber_buffer::tests::free_slot_first_fit_reuse`
+- `uber_buffer::tests::uber_alloc_offsets_non_overlapping`
+- infengine_render: 30 pass / 0 fail (up from 27, +3 uber tests)
+- voxel_demo_mp: 1495 pass / 7 fail (pre-existing, unchanged)
+
+### Deferred
+
+- W32.X: TLSF allocator for better free-list utilisation (W33)
+- W32.X: defragmentation pass when fragmentation exceeds threshold (W33)
+- W32.X: separate render layers (opaque / cutout / translucent / water)
+  for correct alpha ordering within each layer (W34)
+- W32.X: mob batching (small benefit - max ~30 mobs visible) (backlog)
+- W32.X: per-chunk shadow indirect optimisation (currently uses same
+  buffer as main pass; could use a dedicated shadow-only command list)
