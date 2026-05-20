@@ -33,6 +33,7 @@ use std::path::PathBuf;
 
 pub(crate) mod anim_registry;
 pub(crate) mod blockstates;
+pub(crate) mod element_mesh;
 pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod models;

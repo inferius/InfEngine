@@ -28,7 +28,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, ChunkSubmesh, RayHit, World,
-    chunk_mesh_with_atlas, raycast_with,
+    chunk_mesh_with_atlas, chunk_mesh_with_atlas_light_anim_and_special, raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig, run};
@@ -6114,55 +6114,101 @@ impl Voxel {
             }
             atlas_uv_rect(block, normal)
         };
-        infengine_voxel::chunk_mesh_with_atlas_and_light_and_anim(
+        // W16.2: light + anim helpers captured by both the cube path
+        // and the emit_special closure.
+        let light_lookup = |air_local: [i32; 3]| -> [f32; 2] {
+            let world = [
+                world_origin[0] + air_local[0],
+                world_origin[1] + air_local[1],
+                world_origin[2] + air_local[2],
+            ];
+            let other_cc = [
+                world[0].div_euclid(cs),
+                world[1].div_euclid(cs),
+                world[2].div_euclid(cs),
+            ];
+            let other_lc = [
+                world[0].rem_euclid(cs) as u32,
+                world[1].rem_euclid(cs) as u32,
+                world[2].rem_euclid(cs) as u32,
+            ];
+            match lighting.get(other_cc) {
+                Some(g) => [
+                    g.get_block(other_lc) as f32 / 15.0,
+                    g.get_sky(other_lc) as f32 / 15.0,
+                ],
+                None => [0.0, 1.0],
+            }
+        };
+        let anim_lookup = |block: BlockId, normal: [i8; 3]| -> u32 {
+            let face = if normal[1] > 0 {
+                resource_pack::BlockFace::Top
+            } else if normal[1] < 0 {
+                resource_pack::BlockFace::Bottom
+            } else {
+                resource_pack::BlockFace::Sides
+            };
+            pack.block_face_ref(block.0, face)
+                .map(|t| pack.anim_slot_for_ref(t) as u32)
+                .unwrap_or(0)
+        };
+        // W16.2: `emit_special` closure - for blocks with a registered
+        // special model, emit per-element geometry and return `true` so
+        // the cube path is skipped. For all other blocks return `false`.
+        let chunk_ref = chunk;
+        let voxel_origin_ref = origin;
+        let emit_special = move |block: BlockId,
+                                 voxel_origin: glam::Vec3,
+                                 verts: &mut Vec<MeshVertex>,
+                                 idxs: &mut Vec<u32>| {
+            // Compute voxel local coords from world position.
+            let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
+            let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
+            let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+            resource_pack::element_mesh::emit_block_elements(
+                block.0,
+                voxel_origin,
+                verts,
+                idxs,
+                pack,
+                |delta: [i8; 3]| -> [f32; 2] {
+                    // Air-side cell relative to the voxel.
+                    let air = [
+                        world_origin[0] + lx + delta[0] as i32,
+                        world_origin[1] + ly + delta[1] as i32,
+                        world_origin[2] + lz + delta[2] as i32,
+                    ];
+                    light_lookup(air)
+                },
+                |_tex: &str| -> u32 {
+                    // Static anim id for element faces (anim is
+                    // rare for special-model blocks).
+                    0
+                },
+                |delta: [i8; 3]| -> bool {
+                    let nx = lx + delta[0] as i32;
+                    let ny = ly + delta[1] as i32;
+                    let nz = lz + delta[2] as i32;
+                    if (0..CHUNK_SIZE as i32).contains(&nx)
+                        && (0..CHUNK_SIZE as i32).contains(&ny)
+                        && (0..CHUNK_SIZE as i32).contains(&nz)
+                    {
+                        let nb = chunk_ref.get(nx as usize, ny as usize, nz as usize);
+                        block_is_opaque(nb)
+                    } else {
+                        false
+                    }
+                },
+            )
+        };
+        chunk_mesh_with_atlas_light_anim_and_special(
             chunk,
             origin,
             uv_resolver,
             block_is_opaque,
-            |air_local, _normal| {
-                // Convert in-chunk local to world coord then back
-                // to the owning chunk's local. `air_local` may be
-                // outside `0..16` for boundary faces.
-                let world = [
-                    world_origin[0] + air_local[0],
-                    world_origin[1] + air_local[1],
-                    world_origin[2] + air_local[2],
-                ];
-                let other_cc = [
-                    world[0].div_euclid(cs),
-                    world[1].div_euclid(cs),
-                    world[2].div_euclid(cs),
-                ];
-                let other_lc = [
-                    world[0].rem_euclid(cs) as u32,
-                    world[1].rem_euclid(cs) as u32,
-                    world[2].rem_euclid(cs) as u32,
-                ];
-                match lighting.get(other_cc) {
-                    Some(g) => [
-                        g.get_block(other_lc) as f32 / 15.0,
-                        g.get_sky(other_lc) as f32 / 15.0,
-                    ],
-                    None => [0.0, 1.0], // no lighting yet -> full sky
-                }
-            },
-            |block, normal| {
-                // W9.y.4: look up the animation slot for this
-                // block's face in the resource pack. Water /
-                // lava / fire side faces return their registered
-                // slot id; static tiles return 0 so the shader
-                // skips the UV scroll branch.
-                let face = if normal[1] > 0 {
-                    resource_pack::BlockFace::Top
-                } else if normal[1] < 0 {
-                    resource_pack::BlockFace::Bottom
-                } else {
-                    resource_pack::BlockFace::Sides
-                };
-                pack.block_face_ref(block.0, face)
-                    .map(|t| pack.anim_slot_for_ref(t) as u32)
-                    .unwrap_or(0)
-            },
+            |air_local, _normal| light_lookup(air_local),
+            anim_lookup,
+            emit_special,
         )
     }
 

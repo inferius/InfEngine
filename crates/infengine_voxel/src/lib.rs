@@ -281,6 +281,52 @@ where
     L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
     A: Fn(BlockId, [i8; 3]) -> u32,
 {
+    // W16.2 shim: no special-model dispatch; every block uses the
+    // legacy cube path.  The `*_and_special` variant below is the
+    // real workhorse after W16.2.
+    chunk_mesh_with_atlas_light_anim_and_special(
+        chunk,
+        origin,
+        uv_rect,
+        is_opaque,
+        light_at,
+        anim_id_at,
+        |_block, _voxel_origin, _verts, _idxs| false,
+    )
+}
+
+/// Like `chunk_mesh_with_atlas_and_light_and_anim` but an extra
+/// `emit_special` closure gives the caller a chance to override
+/// the default 6-face cube geometry for special-shaped blocks
+/// (torches, slabs, stairs, cross-pattern plants, ...).
+///
+/// `emit_special(block, voxel_world_origin, vertices, indices)`
+/// is called BEFORE the cube path for every non-air voxel.
+/// If the closure returns `true`, the cube path is skipped for
+/// that voxel (the closure took responsibility for emitting all
+/// geometry). Returning `false` falls through to the standard
+/// 6-face cube emission.
+///
+/// The `light_at` and `anim_id_at` callbacks are NOT forwarded to
+/// `emit_special`; the closure is expected to capture them (or
+/// equivalent) from the outer scope when it needs lighting/anim.
+#[allow(clippy::too_many_arguments)]
+pub fn chunk_mesh_with_atlas_light_anim_and_special<F, O, L, A, S>(
+    chunk: &Chunk,
+    origin: Vec3,
+    uv_rect: F,
+    is_opaque: O,
+    light_at: L,
+    anim_id_at: A,
+    mut emit_special: S,
+) -> Vec<ChunkSubmesh>
+where
+    F: Fn(BlockId, [i8; 3]) -> [f32; 4],
+    O: Fn(BlockId) -> bool,
+    L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
+    A: Fn(BlockId, [i8; 3]) -> u32,
+    S: FnMut(BlockId, Vec3, &mut Vec<MeshVertex>, &mut Vec<u32>) -> bool,
+{
     let mut per_block: HashMap<BlockId, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
 
     for z in 0..CHUNK_SIZE {
@@ -298,6 +344,14 @@ where
                 let entry = per_block
                     .entry(block)
                     .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
+
+                // W16.2: let the caller override geometry for
+                // special-shaped blocks (torch, slab, cross, ...).
+                // If the closure signals it handled this voxel,
+                // skip the default 6-face cube path entirely.
+                if emit_special(block, p, &mut entry.0, &mut entry.1) {
+                    continue;
+                }
 
                 // For each axis-aligned neighbour, emit a quad when
                 // the neighbour is air.
@@ -469,6 +523,47 @@ fn emit_quad_lit_anim(
             .with_uv(uvs[i])
             .with_light(light[0], light[1])
             .with_anim_id(anim_id),
+        );
+    }
+    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+}
+
+/// Emit one quad from four pre-computed world-space corners.
+///
+/// W16.2: used by the demo's `emit_special` closure when walking
+/// per-element model geometry (torches, slabs, cross-pattern plants,
+/// stairs). The caller has already applied element `from`/`to` scaling
+/// and any `ElementRotation` transform.
+///
+/// `corners` - four world-space positions in CCW order as seen from
+/// the face's outward normal.
+/// `normal`  - face normal (need not be unit length; used for
+/// lighting look-up only).
+/// `uv_rect` - `[u0, v0, u1, v1]` in atlas space (same layout as
+/// `uv_rect` closures).
+/// `light`   - `[block_light_norm, sky_light_norm]` (0..=1 each).
+/// `anim_id` - animation slot (0 = static).
+pub fn emit_element_quad(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    corners: [[f32; 3]; 4],
+    normal: [f32; 3],
+    uv_rect: [f32; 4],
+    light: [f32; 2],
+    anim_id: u32,
+) {
+    let base = vertices.len() as u32;
+    let [u0, v0, u1, v1] = uv_rect;
+    // UV layout matches `emit_quad_lit_anim`: corners are CCW from
+    // the outside, UVs assigned bottom-left -> bottom-right ->
+    // top-right -> top-left.
+    let uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+    for (i, corner) in corners.iter().enumerate() {
+        vertices.push(
+            MeshVertex::new(*corner, normal)
+                .with_uv(uvs[i])
+                .with_light(light[0], light[1])
+                .with_anim_id(anim_id),
         );
     }
     indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
@@ -931,5 +1026,141 @@ mod tests {
                 assert_eq!(v.anim_id, 32);
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // W16.2 - `chunk_mesh_with_atlas_light_anim_and_special` tests.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn default_cube_block_still_renders_six_faces_via_special_path() {
+        // When `emit_special` returns false for every block, the
+        // output must match the legacy cube path exactly.
+        let mut chunk = Chunk::empty();
+        chunk.set(8, 8, 8, BlockId(1));
+        let subs = chunk_mesh_with_atlas_light_anim_and_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |_, _| [0.0, 1.0],
+            |_, _| 0u32,
+            |_block, _origin, _verts, _idxs| false, // never handle
+        );
+        let total_indices: usize = subs.iter().map(|s| s.indices.len()).sum();
+        // 6 faces * 6 indices = 36.
+        assert_eq!(total_indices, 36, "cube should still emit 36 indices");
+    }
+
+    #[test]
+    fn emit_special_true_suppresses_cube_path() {
+        // If emit_special returns true, the cube geometry is NOT added.
+        let mut chunk = Chunk::empty();
+        chunk.set(0, 0, 0, BlockId(99));
+        let subs = chunk_mesh_with_atlas_light_anim_and_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| false, // not opaque
+            |_, _| [0.0, 1.0],
+            |_, _| 0u32,
+            // Claim handling but emit nothing = empty mesh.
+            |_block, _origin, _verts, _idxs| true,
+        );
+        let total: usize = subs.iter().map(|s| s.vertices.len()).sum();
+        assert_eq!(total, 0, "emit_special=true should suppress cube path");
+    }
+
+    #[test]
+    fn emit_special_can_inject_custom_geometry() {
+        // emit_special injects exactly 4 vertices + 6 indices for
+        // one custom quad.
+        let mut chunk = Chunk::empty();
+        chunk.set(4, 4, 4, BlockId(7));
+        let subs = chunk_mesh_with_atlas_light_anim_and_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| false,
+            |_, _| [0.0, 1.0],
+            |_, _| 0u32,
+            |_block, origin, verts, idxs| {
+                // Inject a dummy horizontal quad at voxel top.
+                emit_element_quad(
+                    verts,
+                    idxs,
+                    [
+                        [origin.x, origin.y + 1.0, origin.z],
+                        [origin.x + 1.0, origin.y + 1.0, origin.z],
+                        [origin.x + 1.0, origin.y + 1.0, origin.z + 1.0],
+                        [origin.x, origin.y + 1.0, origin.z + 1.0],
+                    ],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0, 1.0],
+                    [0.0, 1.0],
+                    0,
+                );
+                true // handled
+            },
+        );
+        let total_v: usize = subs.iter().map(|s| s.vertices.len()).sum();
+        let total_i: usize = subs.iter().map(|s| s.indices.len()).sum();
+        assert_eq!(total_v, 4, "custom quad = 4 vertices");
+        assert_eq!(total_i, 6, "custom quad = 6 indices");
+    }
+
+    #[test]
+    fn emit_special_selective_override_mixed_blocks() {
+        // Block 1 uses special (returns true, emits nothing).
+        // Block 2 falls through to cube (returns false).
+        let mut chunk = Chunk::empty();
+        chunk.set(0, 0, 0, BlockId(1)); // special
+        chunk.set(15, 15, 15, BlockId(2)); // cube
+        let subs = chunk_mesh_with_atlas_light_anim_and_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.0, 0.0, 1.0, 1.0],
+            |_| true,
+            |_, _| [0.0, 1.0],
+            |_, _| 0u32,
+            |block, _origin, _verts, _idxs| block == BlockId(1),
+        );
+        // Block 1 contributed 0 vertices.
+        let b1_verts: usize = subs
+            .iter()
+            .filter(|s| s.block == BlockId(1))
+            .map(|s| s.vertices.len())
+            .sum();
+        // Block 2 emits 6 * 4 = 24 vertices (6 cube faces).
+        let b2_verts: usize = subs
+            .iter()
+            .filter(|s| s.block == BlockId(2))
+            .map(|s| s.vertices.len())
+            .sum();
+        assert_eq!(b1_verts, 0, "special block contributes no verts");
+        assert_eq!(b2_verts, 24, "cube block contributes 24 verts");
+    }
+
+    #[test]
+    fn emit_element_quad_produces_four_vertices_six_indices() {
+        let mut verts = Vec::new();
+        let mut idxs = Vec::new();
+        emit_element_quad(
+            &mut verts,
+            &mut idxs,
+            [
+                [0.0, 0.5, 0.0],
+                [1.0, 0.5, 0.0],
+                [1.0, 0.5, 1.0],
+                [0.0, 0.5, 1.0],
+            ],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.5, 0.8],
+            3,
+        );
+        assert_eq!(verts.len(), 4);
+        assert_eq!(idxs.len(), 6);
+        assert!(verts.iter().all(|v| v.anim_id == 3));
     }
 }
