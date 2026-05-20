@@ -16,6 +16,7 @@ mod gltf_load;
 mod grid;
 mod lights;
 mod mesh3d;
+mod particle_pass;
 mod shadow;
 mod sprite;
 mod tile_anims;
@@ -43,6 +44,7 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
+pub use particle_pass::{ParticleInstance as TexturedParticleInstance, ParticlePass};
 use tile_anims::TileAnimsResource;
 pub use tile_anims::{MAX_ANIM_SLOTS, TileAnimEntry, TileAnimsUniform};
 
@@ -122,6 +124,12 @@ pub struct Renderer {
     /// via [`Renderer::set_sun_intensity`]; default 3.0 mirrors
     /// the previous shader-side constant.
     sun_intensity: f32,
+    /// Wave 18.1: textured billboard particle pass. Renders after
+    /// the opaque mesh3d pass with alpha-blend + depth-read-only
+    /// so particles composite over the voxel scene correctly.
+    pub particle_pass: ParticlePass,
+    /// Queued textured particle instances for the current frame.
+    particle_instances: Vec<TexturedParticleInstance>,
 }
 
 impl Renderer {
@@ -246,6 +254,11 @@ impl Renderer {
             DEPTH_FORMAT,
             &camera_3d_resource.layout,
         );
+        let particle_pass = ParticlePass::new(
+            &device,
+            config.format,
+            &camera_3d_resource.layout,
+        );
         let mut meshes = Mesh3DRegistry::default();
         let (cube_v, cube_i) = mesh3d::cube_geometry_public();
         let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
@@ -281,6 +294,8 @@ impl Renderer {
             tile_anims,
             sun_dir: glam::Vec3::new(0.4, 0.9, 0.5),
             sun_intensity: 3.0,
+            particle_pass,
+            particle_instances: Vec::new(),
         })
     }
 
@@ -704,6 +719,67 @@ impl Renderer {
         self.sun_intensity = intensity.max(0.0);
     }
 
+    /// Wave 18.1: queue one textured billboard particle for the next
+    /// frame.  Cleared automatically after `render()`.
+    pub fn queue_textured_particle(&mut self, inst: TexturedParticleInstance) {
+        self.particle_instances.push(inst);
+    }
+
+    /// Wave 18.1: replace the particle atlas texture used by the
+    /// textured-billboard pass.  Delegates to `ParticlePass::set_atlas`.
+    pub fn set_particle_atlas(&mut self, atlas: &wgpu::Texture) {
+        self.particle_pass.set_atlas(&self.device, atlas);
+    }
+
+    /// Wave 18.1: build a wgpu `Texture` from a raw RGBA pixel buffer
+    /// and bind it as the particle atlas.  Convenience wrapper used by
+    /// the voxel demo resource-pack load path.
+    pub fn load_particle_atlas_rgba(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        assert!(
+            rgba.len() as u32 >= width * height * 4,
+            "particle atlas buffer too small for {width}x{height}"
+        );
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("infengine_render::particle_atlas_tex"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.particle_pass.set_atlas(&self.device, &texture);
+    }
+
     /// Wave 9.y: refresh the per-tile animation uniform that the
     /// mesh3d shader samples when a vertex carries `anim_id != 0`.
     /// Callers build a `TileAnimsUniform` snapshot from their
@@ -771,6 +847,11 @@ impl Renderer {
         let light_count = self.light_queue.len();
         self.lights
             .upload(&self.queue, &self.light_queue, light_count);
+        // Wave 18.1: upload textured particle instances.
+        let particle_count = self.particle_instances.len() as u32;
+        self.particle_pass
+            .upload(&self.device, &self.queue, &self.particle_instances);
+
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
         let mesh3d_count = self.mesh3d_queue.len() as u32;
@@ -860,6 +941,32 @@ impl Renderer {
             self.debug3d.draw(&mut rpass, debug3d_count);
         }
 
+        // Wave 18.1: textured billboard particles. Rendered after the
+        // opaque 3D scene (mesh3d_pass already ran the clear) but
+        // before the 2D overlay so HUD elements appear on top.
+        // The particle pass uses no depth attachment: it runs in a
+        // dedicated LoadOp::Load pass so we don't need to carry the
+        // depth texture here.
+        if particle_count > 0 {
+            let mut ppass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("infengine_render::particle_pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            ppass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
+            self.particle_pass.draw(&mut ppass, particle_count);
+        }
+
         {
             // Clear-or-load the color attachment: if the 3D pass ran it
             // already cleared and populated the surface, otherwise this
@@ -906,6 +1013,7 @@ impl Renderer {
         self.mesh3d_queue.clear();
         self.debug3d_vertices.clear();
         self.light_queue.clear();
+        self.particle_instances.clear();
         Ok(())
     }
 
