@@ -122,6 +122,8 @@ mod wave13_tests;
 mod wave16_tests;
 #[cfg(test)]
 mod wave17_tests;
+#[cfg(test)]
+mod wave18_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -1381,6 +1383,11 @@ struct Voxel {
     sheep_head_mesh: Option<MeshHandle>,
     /// CPU particle system: short-lived debris on every block break.
     particles: infengine_particles::ParticleSystem,
+    /// W18.3: textured billboard particles waiting to be flushed to
+    /// the GPU particle pass at the start of the next render frame.
+    /// Populated by `tick_ambient_particles` (flame/smoke/lava) and
+    /// drained (cleared) at the end of each render call.
+    textured_particles: Vec<infengine_render::TexturedParticleInstance>,
     /// Shared atlas bind group for the voxel chunk submeshes. Built
     /// once in `on_start`; every new chunk submesh clones the Arc
     /// instead of uploading a fresh texture.
@@ -3109,6 +3116,12 @@ impl Voxel {
         ];
         // Cheap xorshift seeded by frame counter + source pos.
         let mut frame_seed: u32 = (self.net_tick as u32) ^ 0xDEADBEEF;
+        // W18.3: grab a borrow of the particle atlas once so the per-
+        // source loops below can resolve sprite UVs without repeated
+        // Option-deref. `particle_atlas` is `None` for the placeholder
+        // pack; the textured emitter helpers fall back to a white quad.
+        let pa = self.resource_pack.particle_atlas.as_ref();
+
         // Walk torches first (most numerous), then fires, then
         // lava sources. Each contributes one flame + an optional
         // smoke wisp.
@@ -3123,7 +3136,16 @@ impl Voxel {
             if !accumulator_fires(&mut frame_seed, target_per_source) {
                 continue;
             }
+            // Legacy CPU particle (tinted cube) for collision/gravity.
             spawn_flame_particle(&mut self.particles, pos, &mut frame_seed, [1.0, 0.78, 0.40]);
+            // W18.3: also push a textured billboard for the GPU pass.
+            emit_textured_flame(
+                &mut self.textured_particles,
+                pa,
+                pos,
+                &mut frame_seed,
+                [1.0, 0.78, 0.40],
+            );
             spawned += 1;
         }
         let fires: Vec<[i32; 3]> = self.fires.keys().copied().collect();
@@ -3138,6 +3160,13 @@ impl Voxel {
                 continue;
             }
             spawn_flame_particle(&mut self.particles, pos, &mut frame_seed, [1.0, 0.55, 0.20]);
+            emit_textured_flame(
+                &mut self.textured_particles,
+                pa,
+                pos,
+                &mut frame_seed,
+                [1.0, 0.55, 0.20],
+            );
             // Fire also coughs a smoke wisp at ~1/3 the flame rate.
             if accumulator_fires(&mut frame_seed, 0.33) {
                 // W9.y.5: sample the MC smoke_0..7 sprite set
@@ -3154,6 +3183,13 @@ impl Voxel {
                     pos,
                     &mut frame_seed,
                     mc_tint,
+                );
+                // W18.3: textured smoke wisp.
+                emit_textured_smoke(
+                    &mut self.textured_particles,
+                    pa,
+                    pos,
+                    &mut frame_seed,
                 );
             }
             spawned += 1;
@@ -3184,6 +3220,13 @@ impl Voxel {
                 continue;
             }
             spawn_flame_particle(&mut self.particles, &pos, &mut frame_seed, [1.0, 0.45, 0.15]);
+            // W18.3: lava drip uses the dedicated lava sprite.
+            emit_textured_lava(
+                &mut self.textured_particles,
+                pa,
+                &pos,
+                &mut frame_seed,
+            );
             spawned += 1;
         }
     }
@@ -5259,6 +5302,7 @@ impl Voxel {
                 });
                 s
             },
+            textured_particles: Vec::new(),
             edit_history: Vec::new(),
             known_client_ids: HashSet::new(),
             last_state_save: None,
@@ -10657,6 +10701,15 @@ impl Voxel {
                     r.upload_tile_anims(
                         &self.resource_pack.build_tile_anims_uniform(),
                     );
+                    // W18.2: push the particle atlas to the GPU so
+                    // the billboard pass can sample textured sprites.
+                    // Fallback packs have no particle atlas; in that
+                    // case the particle pass keeps whatever atlas it
+                    // had (or the default empty one) - tinted quads
+                    // render white but don't crash.
+                    if let Some(pa) = &self.resource_pack.particle_atlas {
+                        r.load_particle_atlas_rgba(pa.width, pa.height, &pa.rgba);
+                    }
                 }
                 self.egui_atlas = None;
                 // W9.y.6: a fresh resource pack may have new
@@ -10833,6 +10886,15 @@ impl AppHandler for Voxel {
             // circuits on anim_id == 0 so static tiles are
             // unaffected.
             r.upload_tile_anims(&self.resource_pack.build_tile_anims_uniform());
+            // W18.2: push the particle sprite atlas to the GPU at
+            // startup so the billboard pass is ready when the first
+            // particle is queued. Fallback packs have no atlas
+            // (particle_atlas == None); in that case the pass uses
+            // its built-in 1x1 white texture and tinted-quad particles
+            // still render (just without MC sprite detail).
+            if let Some(pa) = &self.resource_pack.particle_atlas {
+                r.load_particle_atlas_rgba(pa.width, pa.height, &pa.rgba);
+            }
             // Sheep body texture: a plain wool tile. We deliberately
             // don't use the Minecraft entity `sheep.tga` here -
             // that's a UV-mapped atlas for a multi-cube model
@@ -13844,6 +13906,14 @@ impl AppHandler for Voxel {
         // so chunk faces draw on top when a particle ends up
         // inside a block.
         renderer.draw_particles(&self.particles);
+        // W18.3: flush textured billboard particles (torch flame,
+        // smoke wisps, lava drips) accumulated since the last tick.
+        // queue_textured_particle is O(1) per call; the Renderer
+        // uploads them all at once at the start of the particle pass.
+        for tp in &self.textured_particles {
+            renderer.queue_textured_particle(*tp);
+        }
+        self.textured_particles.clear();
         let model = Mat4::IDENTITY.to_cols_array();
         // W13.4: build frustum from the current view-projection so we
         // can skip draw_mesh_pbr for chunks outside the visible cone.
@@ -14437,6 +14507,147 @@ fn spawn_smoke_particle(
         size: 0.10,
         age: 0.0,
         lifetime: 1.8,
+    });
+}
+
+// W18.3: textured billboard particle emitters.
+// These mirror the legacy `spawn_flame/smoke/lava_particle` helpers
+// but produce `TexturedParticleInstance`s that are rendered by the
+// GPU particle pass (billboard shader + separate particle atlas) instead
+// of the legacy cube particle system. The two systems can coexist: the
+// CPU system handles debris/break effects; the GPU pass handles
+// ambient torch/fire/lava ambient sprites.
+
+/// Emit a textured flame quad above `pos` into `out`.  Uses the
+/// `particle_atlas`'s "flame" sprite strip; falls back to a solid
+/// orange quad when the atlas is absent (placeholder pack).
+fn emit_textured_flame(
+    out: &mut Vec<infengine_render::TexturedParticleInstance>,
+    particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
+    pos: &[i32; 3],
+    seed: &mut u32,
+    color: [f32; 3],
+) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let jitter_x = (rand(seed) - 0.5) * 0.3;
+    let jitter_z = (rand(seed) - 0.5) * 0.3;
+    // Pick a random flame frame so nearby torches don't all flash
+    // in sync. The flame strip has 8 frames; when the atlas is
+    // absent we use uv_min/uv_max == [0,0]/[1,1] (whole white
+    // 1x1 texture built into ParticlePass).
+    let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
+        let n_frames = pa.frame_count("flame").max(1);
+        let frame = (rand(seed) * n_frames as f32) as u32 % n_frames;
+        if let Some(uv) = pa.sprite_uv("flame", frame) {
+            ([uv[0], uv[1]], [uv[2], uv[3]])
+        } else {
+            ([0.0f32, 0.0], [1.0, 1.0])
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0])
+    };
+    out.push(infengine_render::TexturedParticleInstance {
+        center_world: [
+            pos[0] as f32 + 0.5 + jitter_x,
+            pos[1] as f32 + 0.8,
+            pos[2] as f32 + 0.5 + jitter_z,
+        ],
+        size: 0.125,
+        uv_min,
+        uv_max,
+        color: [color[0], color[1], color[2], 0.95],
+    });
+}
+
+/// Emit a textured smoke quad above `pos` into `out`. Cycles the
+/// `smoke_0..7` sprites from the particle atlas; falls back to a
+/// grey quad when the atlas is absent.
+fn emit_textured_smoke(
+    out: &mut Vec<infengine_render::TexturedParticleInstance>,
+    particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
+    pos: &[i32; 3],
+    seed: &mut u32,
+) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let jitter_x = (rand(seed) - 0.5) * 0.5;
+    let jitter_z = (rand(seed) - 0.5) * 0.5;
+    // Pick a random smoke frame at spawn time. The legacy system
+    // cycled the frame over the particle's lifetime (W9.y.5); the
+    // GPU pass renders a static sprite, so we pick once at birth.
+    let (uv_min, uv_max, alpha) = if let Some(pa) = particle_atlas {
+        let frame = (rand(seed) * 8.0) as u32 % 8;
+        let name = match frame {
+            0 => "smoke_0", 1 => "smoke_1", 2 => "smoke_2", 3 => "smoke_3",
+            4 => "smoke_4", 5 => "smoke_5", 6 => "smoke_6", _ => "smoke_7",
+        };
+        if let Some(uv) = pa.sprite_uv(name, 0) {
+            ([uv[0], uv[1]], [uv[2], uv[3]], 0.7f32)
+        } else {
+            ([0.0f32, 0.0], [1.0, 1.0], 0.5)
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0], 0.5)
+    };
+    out.push(infengine_render::TexturedParticleInstance {
+        center_world: [
+            pos[0] as f32 + 0.5 + jitter_x,
+            pos[1] as f32 + 1.1,
+            pos[2] as f32 + 0.5 + jitter_z,
+        ],
+        size: 0.15,
+        uv_min,
+        uv_max,
+        // Grey tint: MC smoke is off-white/grey.
+        color: [0.7, 0.7, 0.7, alpha],
+    });
+}
+
+/// Emit a textured lava drip quad above `pos` into `out`. Uses the
+/// single-frame `lava` sprite from the particle atlas.
+fn emit_textured_lava(
+    out: &mut Vec<infengine_render::TexturedParticleInstance>,
+    particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
+    pos: &[i32; 3],
+    seed: &mut u32,
+) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let jitter_x = (rand(seed) - 0.5) * 0.4;
+    let jitter_z = (rand(seed) - 0.5) * 0.4;
+    let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
+        if let Some(uv) = pa.sprite_uv("lava", 0) {
+            ([uv[0], uv[1]], [uv[2], uv[3]])
+        } else {
+            ([0.0f32, 0.0], [1.0, 1.0])
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0])
+    };
+    out.push(infengine_render::TexturedParticleInstance {
+        center_world: [
+            pos[0] as f32 + 0.5 + jitter_x,
+            pos[1] as f32 + 0.6,
+            pos[2] as f32 + 0.5 + jitter_z,
+        ],
+        size: 0.10,
+        uv_min,
+        uv_max,
+        // MC lava particle is a warm orange-red.
+        color: [1.0, 0.45, 0.15, 1.0],
     });
 }
 
