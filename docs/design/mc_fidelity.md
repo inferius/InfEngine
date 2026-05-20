@@ -610,3 +610,95 @@ When no resource pack is detected or the entity texture file is absent:
   texture) is not yet rendered on top of the entity-texture body.
 - **Second skin layer (64x64 humanoid)**: the outer armor/clothing layer
   (rows 32-64 on zombie/skeleton 64x64 texture) is not rendered.
+
+## Wave 20 - Inventory + recipe book + creative tab UI fixes
+
+### W20.1 - icon_uv_for / icon_uv_front helpers
+
+Two new methods on `ResourcePack`
+(`examples/voxel_demo_mp/src/resource_pack/mod.rs`):
+
+- `icon_uv_for(block, normal) -> [f32; 4]`: resolves the UV rect for
+  a block face. Tries `icon_ref` (which checks the item-icon table for
+  tools/buckets/food, then the block top face) for the `[0,1,0]` normal,
+  or `block_face_ref` for other normals. Falls back to the legacy
+  `atlas_uv_rect` (4x4 synthetic grid) when the pack has no entry.
+- `icon_uv_front(block) -> [f32; 4]`: shorthand for
+  `icon_uv_for(block, [0,1,0])`. Matches what
+  `BlockRenderDispatcher.getBlockModel().getQuads(..., Direction.UP)`
+  produces for MC inventory icons.
+
+### W20.2 - UV bug fix in slot widgets
+
+Four call sites that still used `atlas_uv_rect` for icon UVs in
+the UI pass were replaced with `icon_uv_front` / `icon_uv_for`:
+
+1. `main.rs` hotbar icon closure (`icon()` lambda) - now calls
+   `resource_pack.icon_uv_front(b)`.
+2. `main.rs` craft output snapshot (`craft_output_snapshot`) - replaced
+   `atlas_uv_rect(b, [0,1,0])` with `resource_pack.icon_uv_front(b)`.
+3. `main.rs` recipe book input slot icons - replaced per-ingredient
+   `atlas_uv_rect` call.
+4. `main.rs` recipe book output slot icon - replaced output
+   `atlas_uv_rect` call.
+
+The creative tab at the `8953` site (the `unwrap_or_else` fallback
+inside the `icon_ref` chain) was already correct and was updated to
+`icon_uv_front` in the same pass.
+
+MC source refs:
+- `net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen.java`
+- `net/minecraft/client/gui/components/spectator/RecipeBookComponent.java`
+
+### W20.3 - Creative tab polish
+
+Changes in `creative_tab.rs` + `main.rs`:
+
+- **Search box auto-focus**: `CreativeTabState` gained a `just_opened`
+  one-shot flag. `open_now()` sets it; the egui pass calls
+  `resp.request_focus()` on the search `TextEdit` and clears the flag
+  the frame after.
+- **ESC closes the creative tab**: the ESC key handler in
+  `update_play` now closes `creative_tab` before falling through to
+  the mp-menu / pause logic, mirroring the `E` key path.
+- **Right-click = count 1**: the grid slot widget now uses
+  `Sense::click_and_drag()` so `secondary_clicked()` fires. RMB adds
+  a stack of exactly 1 to the hotbar; LMB still gives `max_stack`.
+  Matches MC `CreativeModeInventoryScreen` pick-up behaviour.
+- **Sort by display name**: the filtered entries are sorted by
+  `item_display_name` before rendering so items within a category
+  appear in alphabetical order.
+
+### W20.4 - Recipe book polish
+
+Changes in `main.rs`:
+
+- **Search box**: a new `recipe_book_query: String` field on `Voxel`
+  persists the live filter. The recipe book window renders a `Hledat:`
+  text-edit; recipes are shown only when their output item's display
+  name contains the query (case-insensitive substring).
+- **Category headers**: recipes are grouped by the `ItemCategory` of
+  their output (Bloky / Dekorace / Nastroje / Zbrane / Jidlo /
+  Ostatni). A bold header is emitted the first time each category is
+  encountered in the (already search-filtered) table.
+- **Current match indicator**: if `craft_recipe_name` is set (the
+  2x2 craft grid currently matches a recipe), a `Crafting: <name>`
+  line is shown at the top of the recipe book window.
+- **Highlighted output slot**: the output slot widget of the matching
+  recipe uses `selected=true` so it draws with the gold outline.
+
+MC source refs:
+- `net/minecraft/client/gui/components/spectator/RecipeBookComponent.java`
+- `net/minecraft/client/gui/screens/recipebook/RecipeBookTabButton.java`
+
+### Deferred follow-ups
+
+- **Drag-to-specific-hotbar-slot from creative tab**: the current
+  click path always calls `deposit_in_hotbar` (first empty / top-up).
+  A true drag-to-slot would require extending `SlotKind` with a
+  `Creative` variant and wiring a `dnd_drag_source` on the creative
+  grid entries. Tracked for W21.
+- **Recipe categories as a first-class enum**: `Recipe` has no
+  `category` field; W20 derives it from `item_category(output.id)` at
+  render time. A static `RecipeCategory` field would make the sort
+  order deterministic without depending on `item_category`.
