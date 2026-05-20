@@ -867,3 +867,73 @@ This eliminates the dead `chunk_mesh_with_atlas` call and shrinks
   into workers would unlock full parallel meshing at the cost of
   passing the `ResourcePack` + `LightingState` snapshots through the
   job queue. Deferred as a future wave.
+
+## Wave 23 - Loading + streaming perf hotfix
+
+### W23.1 - Splash text alpha pulse (layout stability)
+
+The main menu "Now with chunks!" splash used a scale-pulse
+(0.95..1.05x of 16 px base size). Changing `RichText::size` each
+frame resizes the label bounding box, which egui's vertical layout
+propagates upward - the button stack visibly shifted every frame.
+
+Fix: alpha-pulse instead (0.6..1.0 opacity, ~1.6 s period). The
+label stays at a fixed 16 px height so the surrounding layout is
+stable. Italic + yellow colour preserved.
+
+### W23.2 - Remove blocking rebuild_all_meshes at load end
+
+After all chunks arrived (`phase == GeneratingChunks && live >= target`)
+the old code called `rebuild_all_meshes()` synchronously. At
+`view_distance=4` that is ~1296 chunks * several `create_mesh` +
+`bind_mesh_albedo_arc` GPU calls each = 10+ s blocking on the main
+thread while the loading screen showed 99%.
+
+The chunks had ALREADY been meshed individually by `stream_chunks`
+via the `pending_remesh` queue as each one arrived - `rebuild_all_meshes`
+was therefore redundant (it discarded and re-created the same meshes).
+
+Fix: on entering `BuildingMeshes` phase, push every chunk into
+`pending_remesh`. The normal per-frame drain loop (16 chunks per
+frame + 4 ms soft cap) spreads the re-lighting mesh across ~200 ms
+while the loading screen shows "Stavim chunky..." making visible
+progress. The transition to `Playing` now gates on
+`pending_remesh.is_empty()` instead of happening immediately.
+
+MC source reference: `ChunkRenderDispatcher.compile()` schedules
+N compile tasks per frame asynchronously; we approximate this via
+the per-frame budget approach.
+
+### W23.3 - In-game chunk streaming stutter fixes
+
+Three sub-fixes applied to `stream_chunks`:
+
+**W23.3a - Raised per-frame budgets**
+
+`RESULTS_PER_FRAME`: 2 -> 8.
+`REMESH_DEFERRED_PER_FRAME`: 2 -> 16.
+
+The old 2/2 values were tuned for a conservative worst case but
+actively caused queue flooding during normal play - the complaint
+was that the game stuttered badly after loading.
+
+**W23.3b - 4 ms soft time cap on remesh drain**
+
+The drain loop is now also bounded by `Duration::from_millis(4)`.
+On fast hardware more chunks drain per frame; on a slow frame the
+loop exits early. `REMESH_DEFERRED_PER_FRAME` (16) is the hard
+ceiling. Matches MC's `ChunkRenderDispatcher` time-slice approach.
+
+**W23.3c - Dedup pending_remesh via HashSet mirror**
+
+Added `pending_remesh_set: HashSet<ChunkCoord>` as a mirror of
+`pending_remesh`. Each enqueue site now guards with
+`pending_remesh_set.insert(coord)` - a chunk already in the queue
+is silently skipped. Pop sites call `pending_remesh_set.remove`.
+All `clear()` calls drain both structures.
+
+Without dedup: 5 chunks arriving in one frame each list the same
+neighbour, pushing it 5 times into the queue. At `view_distance=32`
+(67600 chunks) the queue could accumulate thousands of redundant
+entries per second, keeping `REMESH_DEFERRED_PER_FRAME` permanently
+maxed out and causing persistent stutter.
