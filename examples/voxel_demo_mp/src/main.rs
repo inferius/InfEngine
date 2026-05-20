@@ -1684,6 +1684,15 @@ impl Voxel {
         let old_emission = block::light_emission::light_emission_for_id(old_block.0);
         let new_emission = block::light_emission::light_emission_for_id(block.0);
         self.world.set(voxel, block);
+        // W32 fix: force lighting tick to fire on the next frame instead
+        // of waiting up to 100 ms for the 10 Hz throttle. Without this,
+        // breaking a block emits the first Remesh job with the OLD halo
+        // lighting (chunk still dark from when it was enclosed). The
+        // newly meshed surfaces then look dark/black for a few frames
+        // until the lighting BFS catches up and triggers a second remesh.
+        // Resetting the accumulator over the period means the very next
+        // on_update tick dispatches Job::Lighting alongside the Remesh.
+        self.last_lighting_tick_s = LIGHTING_TICK_PERIOD_S;
         // Both torches + glowstone act as point-light emitters.
         if block.0 == TORCH_ID || block.0 == GLOWSTONE_ID {
             self.torch_positions.insert(voxel);
