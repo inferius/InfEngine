@@ -287,6 +287,7 @@ mod tests {
             atlas_rgba: vec![0u8; 256 * 256 * 4],
             anim_registry: crate::resource_pack::anim_registry::AnimRegistry::new(),
             anim_slots: HashMap::new(),
+            particle_atlas: None,
         }
     }
 
@@ -497,6 +498,7 @@ mod tests {
             atlas_rgba,
             anim_registry: crate::resource_pack::anim_registry::AnimRegistry::new(),
             anim_slots: HashMap::new(),
+            particle_atlas: None,
         }
     }
 

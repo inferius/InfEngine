@@ -38,6 +38,7 @@ pub(crate) mod fallback;
 pub(crate) mod mcmeta;
 pub(crate) mod models;
 pub(crate) mod name_map;
+pub(crate) mod particle_atlas;
 pub(crate) mod particles;
 pub(crate) mod paths;
 pub(crate) mod sounds;
@@ -149,6 +150,12 @@ pub(crate) struct ResourcePack {
     /// helper returns `STATIC_SLOT` (0) for those. Keyed by the
     /// same `TextureKey` shape as `textures`.
     pub(crate) anim_slots: HashMap<TextureKey, u8>,
+    /// Wave 18.2: standalone particle atlas (separate from the block
+    /// atlas so the ParticlePass can bind its own texture group
+    /// without disturbing the mesh3d albedo binding).  `None` when
+    /// the particle texture directory was not found or contains no
+    /// PNGs (placeholder pack or no MC install).
+    pub(crate) particle_atlas: Option<particle_atlas::ParticleAtlasData>,
 }
 
 impl ResourcePack {
@@ -192,6 +199,16 @@ impl ResourcePack {
                                 "MC animated tiles registered",
                             );
                         }
+                        // Wave 18.2: build separate particle atlas.
+                        let part_atlas =
+                            particle_atlas::build_particle_atlas(&root);
+                        if let Some(ref pa) = part_atlas {
+                            tracing::info!(
+                                sprites = pa.sprite_names().count(),
+                                width = pa.width,
+                                "particle atlas built",
+                            );
+                        }
                         ResourcePack {
                             textures: atlas.textures,
                             item_icons: atlas.item_icons,
@@ -202,6 +219,7 @@ impl ResourcePack {
                             atlas_rgba: atlas.atlas_rgba,
                             anim_registry: reg,
                             anim_slots: slots,
+                            particle_atlas: part_atlas,
                         }
                     }
                     None => {

@@ -75,6 +75,8 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         // shader's anim_id == 0 fast path holds.
         anim_registry: super::anim_registry::AnimRegistry::new(),
         anim_slots: HashMap::new(),
+        // Wave 18.2: no particle atlas in the placeholder pack.
+        particle_atlas: None,
     }
 }
 
