@@ -1548,6 +1548,16 @@ struct Voxel {
     /// display name + a tint colour. The `/plugins` chat
     /// command lists these.
     pub(crate) plugin_blocks: Vec<PluginBlock>,
+    /// W28.9: Cached icon UV table - maps item id -> UV rect.
+    /// Rebuilt only when the animation frame changes so we avoid
+    /// ~200 HashMap inserts per frame on the UI hot path.
+    icon_uv_table: HashMap<u16, [f32; 4]>,
+    /// W28.9: The `app_time_ms / icon_anim_period_ms` value at which
+    /// `icon_uv_table` was last built. When this changes we rebuild.
+    icon_uv_table_frame: u32,
+    /// W28.9: Preallocated Vec for the stream_chunks delivered buffer.
+    /// Cleared each frame instead of allocating a new Vec.
+    stream_delivered: Vec<WorkerResult>,
 }
 
 /// One block kind contributed by a plugin via
@@ -5521,6 +5531,11 @@ impl Voxel {
             }),
             plugins: Some(plugin::PluginRegistry::new()),
             plugin_blocks: Vec::new(),
+            // W28.9: cache starts empty; filled on first render_ui call.
+            icon_uv_table: HashMap::new(),
+            icon_uv_table_frame: u32::MAX,
+            // W28.9: preallocated drain buffer for stream_chunks.
+            stream_delivered: Vec::with_capacity(32),
         }
     }
 
@@ -6100,23 +6115,26 @@ impl Voxel {
             }
         }
 
-        // W13.1 / W25 / W26.3 / W28.7: Drain finished results from the
-        // workers. Budget (max results + wall-clock ms) scales up during
-        // Loading so the initial pipeline empties fast, then drops back
-        // to conservative values during Playing to keep frame time stable.
+        // W13.1 / W25 / W26.3 / W28.7 / W28.9: Drain finished results from
+        // the workers. Budget scales up during Loading. Re-use the
+        // preallocated stream_delivered Vec to avoid per-frame alloc.
         let (results_cap, budget_ms) = self.current_results_budget();
-        let mut delivered: Vec<WorkerResult> = Vec::new();
+        self.stream_delivered.clear();
         if let Some(pool) = self.workers.as_ref() {
             let drain_start = std::time::Instant::now();
             let drain_budget = std::time::Duration::from_millis(budget_ms);
-            while delivered.len() < results_cap
+            while self.stream_delivered.len() < results_cap
                 && drain_start.elapsed() < drain_budget
                 && let Ok(r) = pool.res_rx.try_recv()
             {
-                delivered.push(r);
+                self.stream_delivered.push(r);
             }
         }
-        for result in delivered {
+        // Drain the delivered results - swap out to avoid borrow issues.
+        // stream_delivered gets its capacity back at end of scope when
+        // it's swapped back in by the final assign.
+        let mut delivered = std::mem::take(&mut self.stream_delivered);
+        for result in delivered.drain(..) {
             match result {
                 WorkerResult::Generated {
                     coord,
@@ -6318,6 +6336,8 @@ impl Voxel {
                 }
             }
         }
+        // W28.9: return the drained Vec's capacity to the cached field.
+        self.stream_delivered = delivered;
 
         // W13.2 / W25.5: Drain deferred neighbour re-meshes. After W25
         // each rebuild_chunks call dispatches a Job::Remesh to the
@@ -8196,21 +8216,24 @@ impl Voxel {
         // W9.3 + W9.4: per-item UV resolver that the container UI
         // threads into its slot painter. Bound up here so the egui
         // closure can borrow it alongside the rest of the per-frame
-        // snapshots. Animated items (water bucket - if MC's
-        // bucket_water.png ever animates - etc.) advance to the
-        // current frame via `TextureRef::uv_at`.
+        // snapshots. Animated items advance to the current frame via
+        // `TextureRef::uv_at`.
+        // W28.9: rebuild the icon_uv_table only when the 50 ms animation
+        // tick changes (MC uses ~50 ms / 20fps for item icon anims).
+        // This saves ~200 HashMap inserts per frame at 60 fps.
         let app_time_ms = self.app_start.elapsed().as_millis() as u32;
-        let icon_uv_table: HashMap<u16, [f32; 4]> = {
-            let mut t = HashMap::new();
+        let anim_frame = app_time_ms / 50;
+        if anim_frame != self.icon_uv_table_frame {
+            self.icon_uv_table_frame = anim_frame;
+            self.icon_uv_table.clear();
             for it in crate::item::ITEM_TYPES.iter() {
                 if let Some(r) = self.resource_pack.icon_ref(it.id) {
-                    t.insert(it.id, r.uv_at(app_time_ms));
+                    self.icon_uv_table.insert(it.id, r.uv_at(app_time_ms));
                 }
             }
-            t
-        };
+        }
         let icon_uv_resolver = |id: u16| -> Option<[f32; 4]> {
-            icon_uv_table.get(&id).copied()
+            self.icon_uv_table.get(&id).copied()
         };
         // Snapshot tuple: (color, count, uv_rect_for_top_face). UV
         // is only used when the egui atlas texture is loaded;
