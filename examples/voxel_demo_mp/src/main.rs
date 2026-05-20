@@ -16026,8 +16026,15 @@ fn water_face_normal(
     v2: [f32; 3],
     _v3: [f32; 3],
 ) -> [f32; 3] {
-    let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
-    let b = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+    // W34 fix: cross product order was (v1-v0) x (v2-v0) which for the
+    // top-face corner walking emit_quad (SW, SE, NE, NW = CCW from above)
+    // produced a normal pointing -Y (down). The shader's lighting pass
+    // then treated the water surface as facing the seabed - viewed from
+    // above the player got back-face lighting (dark / nearly invisible).
+    // Swapping operands flips the normal to +Y so the surface lights
+    // correctly when seen from the player's typical above-water vantage.
+    let a = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+    let b = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
     let n = [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
