@@ -6297,8 +6297,20 @@ impl Voxel {
                         .copied()
                         .unwrap_or(0);
                     if revision < current_rev {
+                        tracing::debug!(
+                            coord = ?coord,
+                            arrived_rev = revision,
+                            current_rev,
+                            "W32 debug: stale Remeshed result dropped"
+                        );
                         continue;
                     }
+                    tracing::debug!(
+                        coord = ?coord,
+                        revision,
+                        submeshes = submeshes.len(),
+                        "W32 debug: Remeshed result kept"
+                    );
 
                     // Drop old GPU handles for this chunk.
                     // W26.4: O(1) HashMap remove instead of O(n) Vec filter.
@@ -6786,26 +6798,13 @@ impl Voxel {
             return self.rebuild_chunks_sync(coords);
         }
         let pack_arc = Arc::clone(&self.resource_pack);
-        // W32 fix: drop old GPU meshes IMMEDIATELY on dispatch so a block
-        // edit visibly updates next frame instead of waiting for the worker
-        // result. Without this proactive removal, a broken block stayed
-        // visible for the full worker round-trip (could be many frames
-        // when the channel backs up) - user reported the voxel "physically
-        // gone but visually staying". The new mesh uploads when
-        // WorkerResult::Remeshed arrives; until then the player sees a
-        // brief hole where the block was. MC does the same: setBlocksDirty
-        // schedules a section rebuild but the section's old chunk-render
-        // is cleared from the visible set immediately.
-        {
-            let renderer = self.renderer.as_mut().expect("renderer ready");
-            for &coord in coords {
-                if let Some(old_subs) = self.chunk_meshes.remove(&coord) {
-                    for (_block, handle) in old_subs {
-                        renderer.remove_chunk_mesh(handle);
-                    }
-                }
-            }
-        }
+        // W32 NOTE: proactive mesh-removal-on-dispatch was tried but caused
+        // visible whole-chunk flicker on every edit (entire chunk disappeared
+        // for the worker round-trip, then re-appeared). Reverted - the
+        // WorkerResult::Remeshed handler removes + uploads atomically when
+        // the result arrives. If voxels "stick" visually after an edit, the
+        // bug is in result delivery (worker panic, channel disconnect, or
+        // revision-guard mis-drop), NOT in dispatch timing.
         for &coord in coords {
             let Some(chunk) = self.world.chunk(coord) else {
                 continue;
