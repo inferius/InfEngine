@@ -15375,14 +15375,24 @@ impl WorkerPool {
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        // Close the request channel by replacing the sender with a dummy
-        // and dropping it; workers see recv() return Err and exit.
-        // W28.10: use cb_unbounded for the dummy sender.
+        // W31.1: Signal workers to stop by closing the request channel
+        // (replace req_tx with a disconnected dummy; workers see recv()
+        // return Err and exit their loop). We do NOT join the threads here:
+        // a worker mid-BFS (lighting job) won't notice the disconnect until
+        // AFTER the BFS completes, so joining would block the main thread for
+        // hundreds of milliseconds - exactly the menu-return freeze the user
+        // reported. Dropping a JoinHandle without calling .join() detaches the
+        // thread; it runs to natural completion in the background and its
+        // resources (Arc<ResourcePack>, chunk snapshots, lighting grids) are
+        // released when the thread exits. GPU resources are never held by
+        // workers, so detaching is safe.
         let (dummy_tx, _) = cb_unbounded::<Job>();
         let _ = std::mem::replace(&mut self.req_tx, dummy_tx);
-        for t in self.threads.drain(..) {
-            let _ = t.join();
-        }
+        // Drop all handles (detach). Workers exit on the next recv() Err or
+        // when they finish their current job and see the closed channel.
+        let n = self.threads.len();
+        self.threads.clear();
+        info!("worker pool: signalled {n} workers to stop (detached)");
     }
 }
 
