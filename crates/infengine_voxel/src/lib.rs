@@ -525,23 +525,87 @@ where
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // W33.1: greedy meshing repeatedly produced rotated /
-                    // mirrored textures across multiple repair attempts. The
-                    // per-face quad_uv mapping is more elaborate than a
-                    // shared formula can express - each of the 6 face axes
-                    // has its own (du, dv) -> (tex_u, tex_v) projection
-                    // that needs an explicit per-face lookup. Deferred
-                    // pending a proper shader-side per-face UV remap design.
-                    // For now we still emit a quad_uv table so greedy
-                    // compiles; the per-voxel mesher is the production path
-                    // (configured in voxel_demo_mp/main.rs).
+                    // W34.2: explicit per-face quad_uv tables derived by
+                    // matching each greedy corner position to the OLD
+                    // (per-voxel) mesher's UV assignment.
+                    //
+                    // OLD mesher UV: uvs = [(u0,v1),(u1,v1),(u1,v0),(u0,v0)]
+                    // Shader: final_uv = tile_uv0 + fract(quad_uv) * tile_size
+                    // So fract(quad_uv[i]) == (uvs[i] - [u0,v0]) / tile_size.
+                    //
+                    // Corners for side>0: [(0,0),(0,h),(w,h),(w,0)]
+                    // Corners for side<0: [(w,0),(w,h),(0,h),(0,0)]
+                    //
+                    // Derivation per face (fa=face axis, ua=u axis, va=v axis):
+                    //
+                    // +X (fa=0,ua=1=Y,va=2=Z), side>0 = OLD order matched:
+                    //   frac_u=Z=dv, frac_v=1-Y=1-du
+                    //   C0(0,0):[0,w-E]  C1(0,h):[h-E,w-E]  C2(w,h):[h-E,0]  C3(w,0):[0,0]
+                    //
+                    // -X (fa=0,ua=1=Y,va=2=Z), side<0, greedy != OLD order:
+                    //   frac_u=1-Z=1-dv, frac_v=1-Y=1-du
+                    //   C0(w,0):[h-E,0]  C1(w,h):[0,0]  C2(0,h):[0,w-E]  C3(0,0):[h-E,w-E]
+                    //
+                    // +Y (fa=1,ua=2=Z,va=0=X), side>0 = OLD order matched:
+                    //   frac_u=X=dv, frac_v=1-Z=1-du
+                    //   C0(0,0):[0,w-E]  C1(0,h):[h-E,w-E]  C2(w,h):[h-E,0]  C3(w,0):[0,0]
+                    //
+                    // -Y (fa=1,ua=2=Z,va=0=X), side<0 = OLD order matched:
+                    //   frac_u=X=dv, frac_v=1-Z=1-du
+                    //   C0(w,0):[0,w-E]  C1(w,h):[h-E,w-E]  C2(0,h):[h-E,0]  C3(0,0):[0,0]
+                    //   (same formula as +X/+Y because -Y side<0 corners happen to
+                    //   map to the same (du,dv)->(frac_u,frac_v) relationship)
+                    //
+                    // +Z (fa=2,ua=0=X,va=1=Y), side>0, greedy != OLD order:
+                    //   frac_u=1-X=1-du, frac_v=1-Y=1-dv
+                    //   C0(0,0):[w-E,h-E]  C1(0,h):[w-E,0]  C2(w,h):[0,0]  C3(w,0):[0,h-E]
+                    //
+                    // -Z (fa=2,ua=0=X,va=1=Y), side<0, greedy != OLD order:
+                    //   frac_u=X=du, frac_v=1-Y=1-dv
+                    //   C0(w,0):[w-E,h-E]  C1(w,h):[w-E,0]  C2(0,h):[0,0]  C3(0,0):[0,h-E]
                     const E: f32 = 0.001;
-                    let quad_uv_corners = [
-                        [0.0f32, w - E],
-                        [h - E,  w - E],
-                        [h - E,  0.0f32],
-                        [0.0f32, 0.0f32],
-                    ];
+                    let quad_uv_corners: [[f32; 2]; 4] = match face.normal {
+                        // +X, +Y, -Y: C0=(0,0),C1=(0,h),C2=(w,h),C3=(w,0)
+                        //   quad_uv = [dv_edge, (w-du)_edge]
+                        [1, 0, 0] | [0, 1, 0] => [
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                        ],
+                        // -Y: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
+                        //   same texture projection as group above
+                        [0, -1, 0] => [
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                        ],
+                        // -X: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
+                        //   frac_u=1-dv (inverted Z), frac_v=1-du (inverted Y)
+                        [-1, 0, 0] => [
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                        ],
+                        // +Z: C0=(0,0),C1=(0,h),C2=(w,h),C3=(w,0)
+                        //   frac_u=1-du (inverted X), frac_v=1-dv (inverted Y)
+                        [0, 0, 1] => [
+                            [w - E, h - E],
+                            [w - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   h - E],
+                        ],
+                        // -Z: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
+                        //   frac_u=du (X), frac_v=1-dv (inverted Y)
+                        _ => [
+                            [w - E, h - E],
+                            [w - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   h - E],
+                        ],
+                    };
 
                     let normal_f32 = [
                         face.normal[0] as f32,
@@ -748,21 +812,47 @@ where
                     } else {
                         [corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h), corner_pos(0.0,0.0)]
                     };
-                    // W30.3 + W33.1: tile-fract emit with universal UV orientation.
+                    // W30.3 + W34.2: tile-fract emit with per-face UV table.
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // W33.1: same universal formula as chunk_mesh_greedy.
-                    // See that function for the full derivation.
+                    // W34.2: same explicit per-face table as chunk_mesh_greedy.
+                    // See that function for the full derivation comment.
                     const E: f32 = 0.001;
-                    let quad_uv_corners = [
-                        [0.0f32, w - E],
-                        [h - E,  w - E],
-                        [h - E,  0.0f32],
-                        [0.0f32, 0.0f32],
-                    ];
+                    let quad_uv_corners: [[f32; 2]; 4] = match face.normal {
+                        [1, 0, 0] | [0, 1, 0] => [
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                        ],
+                        [0, -1, 0] => [
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                        ],
+                        [-1, 0, 0] => [
+                            [h - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   w - E],
+                            [h - E, w - E],
+                        ],
+                        [0, 0, 1] => [
+                            [w - E, h - E],
+                            [w - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   h - E],
+                        ],
+                        _ => [
+                            [w - E, h - E],
+                            [w - E, 0.0  ],
+                            [0.0,   0.0  ],
+                            [0.0,   h - E],
+                        ],
+                    };
                     let nf = [face.normal[0] as f32, face.normal[1] as f32, face.normal[2] as f32];
                     let entry = per_block
                         .entry(block)
@@ -1802,5 +1892,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    // W34.2: greedy merging reduces triangle count on uniform surfaces.
+    // A 16x16 flat floor (all same block, all top faces visible) should
+    // produce exactly 1 merged quad per direction, not 256 quads.
+    #[test]
+    fn greedy_flat_floor_produces_one_quad_not_256() {
+        let cs = CHUNK_SIZE;
+        let mut chunk = Chunk::empty();
+        // Fill y=0 row with block id 1.
+        for x in 0..cs {
+            for z in 0..cs {
+                chunk.set(x, 0, z, BlockId(1));
+            }
+        }
+        let subs = chunk_mesh_greedy(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.25f32, 0.25f32, 0.75f32, 0.75f32],
+            |_| true,
+            |_, _| [0.0f32, 1.0f32],
+            |_, _| 0u32,
+        );
+        assert_eq!(subs.len(), 1);
+        // Top face: 1 merged quad (4 verts). Bottom face: 1 merged quad (4
+        // verts). 4 side strips (each 16x1 merged -> 4 verts each).
+        // Total faces: top(1) + bottom(1) + sides(4) = 6 quads, 24 verts,
+        // but many side faces are internal (between block and air) so
+        // each of the 4 outer edge walls gives 1 quad.
+        // Key assertion: top face = 1 quad, not 256.
+        let top_verts: usize = subs[0]
+            .vertices
+            .chunks(4)
+            .filter(|quad| {
+                quad.iter().any(|v| {
+                    let n = v.normal();
+                    (n[1] - 1.0f32).abs() < 0.5
+                })
+            })
+            .count();
+        // One merged quad for the top face = 1 group of 4 vertices.
+        assert_eq!(top_verts, 1, "greedy should merge 16x16 top face into 1 quad, got {top_verts}");
+
+        // Naive mesher would produce 256 quads for top face.
+        let naive_subs = chunk_mesh_with_atlas_light_anim_and_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.25f32, 0.25f32, 0.75f32, 0.75f32],
+            |_| true,
+            |_, _| [0.0f32, 1.0f32],
+            |_, _| 0u32,
+            |_, _, _, _| false,
+        );
+        let naive_top_verts: usize = naive_subs
+            .iter()
+            .flat_map(|s| s.vertices.chunks(4))
+            .filter(|quad| {
+                quad.iter().any(|v| {
+                    let n = v.normal();
+                    (n[1] - 1.0f32).abs() < 0.5
+                })
+            })
+            .count();
+        assert_eq!(
+            naive_top_verts, 256,
+            "naive should produce 256 top quads, got {naive_top_verts}"
+        );
     }
 }
