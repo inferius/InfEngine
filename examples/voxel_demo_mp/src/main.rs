@@ -396,6 +396,13 @@ const STAMINA_MAX: f32 = 100.0;
 /// liquid that has `drains_air = true`; refills 4x as fast
 /// after surfacing.
 const AIR_MAX_SEC: f32 = 15.0;
+/// W15.3: test-visible re-export of `STAMINA_MAX` so
+/// `game_mode_runtime_tests` can assert exact values.
+#[cfg(test)]
+pub(crate) const STAMINA_MAX_TEST: f32 = STAMINA_MAX;
+/// W15.3: test-visible re-export of `AIR_MAX_SEC`.
+#[cfg(test)]
+pub(crate) const AIR_MAX_SEC_TEST: f32 = AIR_MAX_SEC;
 /// Drowning damage rate after the air meter hits zero.
 const DROWN_DAMAGE_PER_SEC: f32 = 2.0;
 const STAMINA_DRAIN: f32 = 20.0;
@@ -6486,7 +6493,14 @@ impl Voxel {
         }
         // Stamina accounting: drain while sprinting, regen
         // otherwise. Clamped to [0, STAMINA_MAX] each tick.
-        if self.sprinting {
+        // W15.3: Creative / invulnerable players never drain stamina -
+        // mirrors MC's Player::serverAiStep which skips the food/
+        // exhaustion deduction in Creative (GameType.isCreative()).
+        if self.abilities.invulnerable {
+            // Snap to full so a mode-switch mid-sprint refills
+            // immediately rather than waiting for the regen ramp.
+            self.stamina = STAMINA_MAX;
+        } else if self.sprinting {
             self.stamina = (self.stamina - STAMINA_DRAIN * dt).max(0.0);
         } else {
             self.stamina =
@@ -6562,7 +6576,11 @@ impl Voxel {
                 self.grounded = false;
                 // Jumping costs a flat 5 stamina so spamming the
                 // bunny-hop drains the pool. Floor at 0.
-                self.stamina = (self.stamina - 5.0).max(0.0);
+                // W15.3: Creative / invulnerable players never pay
+                // the jump cost (mirrors MC's exhaustion skip).
+                if !self.abilities.invulnerable {
+                    self.stamina = (self.stamina - 5.0).max(0.0);
+                }
                 // Sprint-jump boost: add forward kick so a moving
                 // jump covers more ground than a stand-still jump.
                 if self.sprinting {
@@ -7016,24 +7034,33 @@ impl Voxel {
         // surface so a quick breath buys plenty of dive time.
         // Independent of `liquid_under` so the surfacing
         // transition fires even when feet are still wet.
-        let eye_liquid = if self.fly_mode {
-            None
+        //
+        // W15.3: Creative / invulnerable players never lose air.
+        // Mirrors MC's LocalPlayer::aiStep which skips the
+        // `decreaseAirSupply` path when `isCreative()`. Snap to
+        // AIR_MAX_SEC so a mode switch mid-dive refills instantly.
+        if self.abilities.invulnerable {
+            self.player_air = AIR_MAX_SEC;
         } else {
-            submerged_liquid_eye(&self.world, self.player_pos)
-        };
-        if let Some(eye_liq) = eye_liquid
-            && eye_liq.drains_air
-        {
-            self.player_air = (self.player_air - dt).max(0.0);
-            if self.player_air <= 0.0 {
-                self.apply_player_damage_kind(
-                    DROWN_DAMAGE_PER_SEC * dt,
-                    DamageKind::Drown,
-                );
+            let eye_liquid = if self.fly_mode {
+                None
+            } else {
+                submerged_liquid_eye(&self.world, self.player_pos)
+            };
+            if let Some(eye_liq) = eye_liquid
+                && eye_liq.drains_air
+            {
+                self.player_air = (self.player_air - dt).max(0.0);
+                if self.player_air <= 0.0 {
+                    self.apply_player_damage_kind(
+                        DROWN_DAMAGE_PER_SEC * dt,
+                        DamageKind::Drown,
+                    );
+                }
+            } else {
+                self.player_air =
+                    (self.player_air + dt * 4.0).min(AIR_MAX_SEC);
             }
-        } else {
-            self.player_air =
-                (self.player_air + dt * 4.0).min(AIR_MAX_SEC);
         }
         let in_water = liquid_under.is_some();
         // Splash on the air -> water transition: short droplet
@@ -11611,7 +11638,11 @@ impl AppHandler for Voxel {
         }
         // Combat consumes a flat 3 stamina per attack so the
         // sprint pool is shared between movement and fighting.
-        if attack_player.is_some() || attack_mob.is_some() {
+        // W15.3: Creative / invulnerable players are exempt from
+        // the combat stamina cost (they already ignore mob damage).
+        if (attack_player.is_some() || attack_mob.is_some())
+            && !self.abilities.invulnerable
+        {
             self.stamina = (self.stamina - 3.0).max(0.0);
         }
         // Player-vs-player attack: dispatch to server-side damage
