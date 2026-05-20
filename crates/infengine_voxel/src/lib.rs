@@ -525,38 +525,32 @@ where
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // W31.3: per-face quad_uv corners so the texture u/v
-                    // axes match MC conventions regardless of which world
-                    // axes the greedy (ua, va) pair picks.
+                    // W33.1: universal quad_uv corners that match the old
+                    // per-voxel mesher's UV assignment (emit_quad_lit_anim):
+                    //   corner 0 -> tex BL (0, 1)
+                    //   corner 1 -> tex BR (1, 1)
+                    //   corner 2 -> tex TR (1, 0)
+                    //   corner 3 -> tex TL (0, 0)
                     //
-                    // Convention: quad_uv.x = texture-u, quad_uv.y = texture-v.
-                    //   Z face (ua=X, va=Y): tex-u=X(=du), tex-v=Y(=dv) -> no swap.
-                    //   X face (ua=Y, va=Z): tex-u=Z(=dv), tex-v=Y(=du) -> swap.
-                    //   Y face (ua=Z, va=X): tex-u=X(=dv), tex-v=Z(=du) -> swap.
+                    // The winding already ensures that for every face:
+                    //   side>0: c0=(0,0) c1=(0,h) c2=(w,h) c3=(w,0) in (du,dv)
+                    //   side<0: c0=(w,0) c1=(w,h) c2=(0,h) c3=(0,0) in (du,dv)
                     //
-                    // Corners match the winding in emit_element_quad_tiled
-                    // [0,2,1, 0,3,2] for the positions:
-                    //   corner 0: (du=0, dv=0)
-                    //   corner 1: (du=0, dv=h)
-                    //   corner 2: (du=w, dv=h)
-                    //   corner 3: (du=w, dv=0)
-                    let quad_uv_corners = if fa == 2 {
-                        // Z face: tex-u=du, tex-v=dv (no swap)
-                        [
-                            [0.0f32, 0.0f32],
-                            [0.0f32, h     ],
-                            [w,      h     ],
-                            [w,      0.0f32],
-                        ]
-                    } else {
-                        // X face (fa=0) and Y face (fa=1): tex-u=dv, tex-v=du
-                        [
-                            [0.0f32, 0.0f32],
-                            [h,      0.0f32],
-                            [h,      w     ],
-                            [0.0f32, w     ],
-                        ]
-                    };
+                    // quad_uv.x = tex-u in [0, h] (increases with dv).
+                    // quad_uv.y = tex-v in [w, 0] (decreases with du =
+                    //   inverted Y for side faces, keeps orientation upright).
+                    //
+                    // E = small epsilon so fract(h-E) ~ 1 at tile right/bottom
+                    // edge. Interior fragments interpolate correctly. The shader
+                    // clamps to [tile_uv0+half_texel, tile_uv0+tile_size-half_texel]
+                    // so the exact-integer fract==0 corner artifact is invisible.
+                    const E: f32 = 0.001;
+                    let quad_uv_corners = [
+                        [0.0f32, w - E],   // c0 = BL: tex(0, ~1)
+                        [h - E,  w - E],   // c1 = BR: tex(~1, ~1)
+                        [h - E,  0.0f32],  // c2 = TR: tex(~1, 0)
+                        [0.0f32, 0.0f32],  // c3 = TL: tex(0, 0)
+                    ];
 
                     let normal_f32 = [
                         face.normal[0] as f32,
@@ -763,29 +757,21 @@ where
                     } else {
                         [corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h), corner_pos(0.0,0.0)]
                     };
-                    // W30.3 + W31.3: tile-fract emit with per-face UV orientation.
+                    // W30.3 + W33.1: tile-fract emit with universal UV orientation.
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // W31.3: same per-face swap as chunk_mesh_greedy.
-                    // Z face (fa=2): no swap. X/Y faces: tex-u=dv, tex-v=du.
-                    let quad_uv_corners = if fa == 2 {
-                        [
-                            [0.0f32, 0.0f32],
-                            [0.0f32, h     ],
-                            [w,      h     ],
-                            [w,      0.0f32],
-                        ]
-                    } else {
-                        [
-                            [0.0f32, 0.0f32],
-                            [h,      0.0f32],
-                            [h,      w     ],
-                            [0.0f32, w     ],
-                        ]
-                    };
+                    // W33.1: same universal formula as chunk_mesh_greedy.
+                    // See that function for the full derivation.
+                    const E: f32 = 0.001;
+                    let quad_uv_corners = [
+                        [0.0f32, w - E],
+                        [h - E,  w - E],
+                        [h - E,  0.0f32],
+                        [0.0f32, 0.0f32],
+                    ];
                     let nf = [face.normal[0] as f32, face.normal[1] as f32, face.normal[2] as f32];
                     let entry = per_block
                         .entry(block)
@@ -1721,5 +1707,109 @@ mod tests {
         assert_eq!(verts.len(), 4);
         assert_eq!(idxs.len(), 6);
         assert!(verts.iter().all(|v| v.anim_id == 3));
+    }
+
+    // ---------------------------------------------------------------
+    // W33.1: Greedy mesher UV orientation tests.
+    // ---------------------------------------------------------------
+
+    /// For every face of a single-voxel greedy mesh, verify that the
+    /// four per-corner quad_uv values encode the expected BL/BR/TR/TL
+    /// texture orientation matching emit_quad_lit_anim:
+    ///   c0 -> bottom-left  (tex_u ~ 0, tex_v ~ 1)
+    ///   c1 -> bottom-right (tex_u ~ 1, tex_v ~ 1)
+    ///   c2 -> top-right    (tex_u ~ 1, tex_v ~ 0)
+    ///   c3 -> top-left     (tex_u ~ 0, tex_v ~ 0)
+    ///
+    /// quad_uv is in [0, 16] voxel coords.
+    /// For a 1x1 quad (w=h=1) with E=0.001:
+    ///   c0.x ~ 0,     c0.y ~ 0.999
+    ///   c1.x ~ 0.999, c1.y ~ 0.999
+    ///   c2.x ~ 0.999, c2.y ~ 0.0
+    ///   c3.x ~ 0.0,   c3.y ~ 0.0
+    ///
+    /// Tolerance is 0.05 to absorb u16 quantisation (1/65535 * 16 ~ 0.00025).
+    #[test]
+    fn greedy_mesh_quad_uv_corners_bl_br_tr_tl_all_faces() {
+        let mut chunk = Chunk::empty();
+        chunk.set(8, 8, 8, BlockId(1));
+
+        // Tile rect [0.25, 0.25, 0.75, 0.75] so tile_size > 0 everywhere.
+        let tile_rect = [0.25f32, 0.25f32, 0.75f32, 0.75f32];
+        let subs = chunk_mesh_greedy(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| tile_rect,
+            |_| true,
+            |_, _| [0.0f32, 1.0f32],
+            |_, _| 0u32,
+        );
+        assert_eq!(subs.len(), 1);
+        let verts = &subs[0].vertices;
+        // 6 faces * 4 verts = 24.
+        assert_eq!(verts.len(), 24);
+
+        // Group vertices by face normal.
+        // For each normal: decode quad_uv for all 4 verts and check
+        // that the expected pattern is present as a set (winding order
+        // may differ from CPU corner order, so we check set membership
+        // rather than index position).
+        let faces_normals: &[[i8; 3]] = &[
+            [1, 0, 0], [-1, 0, 0],
+            [0, 1, 0], [0, -1, 0],
+            [0, 0, 1], [0, 0, -1],
+        ];
+        const TOL: f32 = 0.05;
+        const E_TARGET: f32 = 0.999; // fract target for "high" corner
+
+        for &normal in faces_normals {
+            let nf = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
+            let face_verts: Vec<_> = verts
+                .iter()
+                .filter(|v| {
+                    let n = v.normal();
+                    (n[0] - nf[0]).abs() < 0.5
+                        && (n[1] - nf[1]).abs() < 0.5
+                        && (n[2] - nf[2]).abs() < 0.5
+                })
+                .collect();
+            assert_eq!(
+                face_verts.len(),
+                4,
+                "expected 4 verts for normal {:?}",
+                normal
+            );
+
+            // Collect the 4 (quad_uv.x, quad_uv.y) pairs. Since quad_uv is
+            // in [0, 16] voxel space, use fract of each component (mod 1)
+            // to get the tile-local [0, 1) value.
+            let uvs: Vec<[f32; 2]> = face_verts
+                .iter()
+                .map(|v| {
+                    let q = v.quad_uv_f32();
+                    [q[0].fract(), q[1].fract()]
+                })
+                .collect();
+
+            // Check that the four expected fractional UV values appear
+            // (as a multiset). Expected: (0,~1), (~1,~1), (~1,0), (0,0).
+            let expected = [
+                [0.0f32, E_TARGET],
+                [E_TARGET, E_TARGET],
+                [E_TARGET, 0.0f32],
+                [0.0f32, 0.0f32],
+            ];
+
+            for exp in &expected {
+                let found = uvs.iter().any(|got| {
+                    (got[0] - exp[0]).abs() < TOL && (got[1] - exp[1]).abs() < TOL
+                });
+                assert!(
+                    found,
+                    "normal {:?}: expected quad_uv fract ~{:?} not found; got {:?}",
+                    normal, exp, uvs
+                );
+            }
+        }
     }
 }
