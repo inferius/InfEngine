@@ -16,9 +16,8 @@ use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use super::biome::Biome;
 use super::biome_table::biome_from_climate;
-use super::height::cave_at;
 use super::ore::pick_stone_or_ore;
-use super::{WorldgenCtx, cactus, flowers, trees};
+use super::{WorldgenCtx, cactus, caves, dungeons, flowers, ravines, trees};
 
 /// Per-(wx, wz) climate sample. Each component is normalised to
 /// roughly `[-1, 1]`. Re-derived deterministically from the world
@@ -124,6 +123,12 @@ pub(crate) fn realistic_height(climate: Climate, biome: Biome) -> i32 {
 /// Surface block id for the given biome. The Realistic generator
 /// uses these for the y==h cap; sub-surface blocks come from
 /// `near_surface_block`.
+///
+/// W17.4 fix: Mountain biome below the snow line previously returned
+/// stone (id 1), making the terrain look uniformly grey. Now:
+/// - h < 22  -> grass (lower mountain slopes, same as forest)
+/// - 22 <= h < 34 -> stone (bare rocky mid-slope)
+/// - h >= 34 -> snow cap
 pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
     match biome {
         Biome::Desert | Biome::Beach => BlockId(4), // sand
@@ -133,10 +138,12 @@ pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
         Biome::Taiga | Biome::Tundra => BlockId(15), // snow cap
         Biome::SnowyMountain => BlockId(15),
         Biome::Mountain => {
-            if h >= 26 {
-                BlockId(15)
+            if h >= 34 {
+                BlockId(15) // snow peak
+            } else if h >= 22 {
+                BlockId(1) // bare stone mid-slope
             } else {
-                BlockId(1)
+                BlockId(3) // grass lower slope
             }
         }
     }
@@ -152,8 +159,8 @@ pub(crate) fn near_surface_block(biome: Biome) -> BlockId {
 
 /// Realistic chunk generator. Climate -> biome -> per-cell
 /// height + surface + ore. Negative-elevation cells under sea
-/// level fill with water; everywhere else carves caves the same
-/// way Classic does.
+/// level fill with water. W17 adds 3D-noise cave carving,
+/// ravines, and dungeon rooms.
 pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
@@ -175,9 +182,8 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             }
             return BlockId::AIR;
         }
-        if wy < h - 3 && cave_at(wx, wy as f32, wz) {
-            return BlockId::AIR;
-        }
+        // W17.1: 3D-noise cave carver replaces the old cave_at call.
+        // The per-chunk pass below handles carving after terrain fill.
         if wy == h {
             surface_block(biome, h)
         } else if wy >= h - 3 {
@@ -186,12 +192,18 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });
-    // Decoration passes - reuse the Classic placement helpers for
-    // now (E.4 introduces species dispatch). Flowers + cactus run
-    // unchanged; trees stay oak-only until E.4b.
+    // W17.1: 3D-noise cave carver pass. Runs before decorations so
+    // trees/flowers are never placed on caved-out ground.
+    caves::carve(&mut chunk, coord, ctx);
+    // W17.2: ravine carver pass.
+    ravines::carve(&mut chunk, coord, ctx);
+    // Decoration passes.
     trees::place_realistic_from_coord(&mut chunk, coord, ctx);
     flowers::place_realistic_from_coord(&mut chunk, coord, ctx);
     cactus::place_realistic_from_coord(&mut chunk, coord, ctx);
+    // W17.3: dungeon room pass (runs last, after decorations, so it
+    // can write cobblestone walls over any mis-placed decoration).
+    dungeons::place(&mut chunk, coord, ctx);
     chunk
 }
 
