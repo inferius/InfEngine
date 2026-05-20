@@ -5910,6 +5910,19 @@ impl Voxel {
         enqueued
     }
 
+    /// W28.7: Return (max_results, budget_ms) tuned for the current app
+    /// state. During Loading use higher values so the initial chunk
+    /// pipeline drains as fast as GPU uploads allow. During Playing use
+    /// conservative values to keep frame time bounded.
+    #[inline]
+    fn current_results_budget(&self) -> (usize, u64) {
+        if matches!(self.state, AppState::Loading { .. }) {
+            (32, 8)
+        } else {
+            (RESULTS_PER_FRAME, RESULTS_BUDGET_MS)
+        }
+    }
+
     /// Streaming step: queue missing chunks within `VIEW_DISTANCE`
     /// of the player, unload chunks beyond `UNLOAD_DISTANCE`, then
     /// process up to `RESULTS_PER_FRAME` queued chunks this frame.
@@ -6015,15 +6028,16 @@ impl Voxel {
             }
         }
 
-        // W13.1 / W25 / W26.3: Drain up to RESULTS_PER_FRAME finished
-        // results from the workers, with a RESULTS_BUDGET_MS soft cap
-        // on wall-clock GPU upload time. Handles both Generated (new
-        // chunk) and Remeshed (block-edit / neighbour update) variants.
+        // W13.1 / W25 / W26.3 / W28.7: Drain finished results from the
+        // workers. Budget (max results + wall-clock ms) scales up during
+        // Loading so the initial pipeline empties fast, then drops back
+        // to conservative values during Playing to keep frame time stable.
+        let (results_cap, budget_ms) = self.current_results_budget();
         let mut delivered: Vec<WorkerResult> = Vec::new();
         if let Some(pool) = self.workers.as_ref() {
             let drain_start = std::time::Instant::now();
-            let drain_budget = std::time::Duration::from_millis(RESULTS_BUDGET_MS);
-            while delivered.len() < RESULTS_PER_FRAME
+            let drain_budget = std::time::Duration::from_millis(budget_ms);
+            while delivered.len() < results_cap
                 && drain_start.elapsed() < drain_budget
                 && let Ok(r) = pool.res_rx.try_recv()
             {
