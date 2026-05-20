@@ -36,23 +36,22 @@ pub(crate) fn draw(
                 .color(Color32::from_rgb(160, 180, 200)),
         );
 
-        // --- Splash text (W21.1) ---
-        // Yellow italic line with a subtle pulse animation.
-        // egui 0.33 does not expose a convenient per-widget
-        // rotation API (Painter rotation requires shape-level
-        // transforms which clash with the ui.label sizing pass),
-        // so the splash is rendered upright as a first cut.
-        // A rotation follow-up is tracked as a deferred item.
+        // --- Splash text (W21.1, W23.1) ---
+        // Yellow italic line with a subtle alpha pulse animation.
+        // W23.1: switched from scale-pulse to alpha-pulse so the
+        // label's bounding box stays constant (fixed 16 px) and
+        // the surrounding layout (button stack) does not shift up/down
+        // every frame. Alpha oscillates between 0.6 and 1.0.
         if let Some(splash) = ctx.splash_text {
             let t = ui.input(|i| i.time) as f32;
-            // Scale pulses between 0.95 and 1.05.
-            let scale = (t * 4.0).sin() * 0.05 + 1.0;
-            let base_size = 16.0;
+            // Alpha cycles 0.6 -> 1.0 -> 0.6 with a ~1.6 s period.
+            let a = (0.6 + 0.4 * ((t * 4.0).sin() * 0.5 + 0.5)).clamp(0.6, 1.0);
+            let alpha = (a * 255.0) as u8;
             ui.label(
                 RichText::new(splash)
-                    .size(base_size * scale)
+                    .size(16.0)
                     .italics()
-                    .color(Color32::from_rgb(255, 255, 0)),
+                    .color(Color32::from_rgba_unmultiplied(255, 255, 0, alpha)),
             );
             // Request repaint so the pulse animates every frame.
             ui.ctx().request_repaint();
