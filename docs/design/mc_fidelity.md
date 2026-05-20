@@ -1232,3 +1232,108 @@ later and triggers remesh.
 an existing grid. Any `HaloLighting` snapshot held by an in-flight
 remesh job sees the old `Arc` via COW - no race between the lighting
 worker and the mesh worker.
+
+## Wave 28 - Full perf overhaul
+
+Performance improvements across the chunk streaming pipeline and render path.
+All items shipped in a single wave to avoid incremental regressions.
+
+### W28.1 - Priority queue for pending chunks
+
+`Voxel::pending_chunks` changed from `VecDeque<ChunkCoord>` to
+`BinaryHeap<PendingChunk>`. `PendingChunk` stores `neg_dist_sq: i64`
+(negated squared distance from player) so `BinaryHeap::pop` returns the
+closest chunk first. Tie-breaking on `coord` makes the order deterministic.
+
+### W28.2 - Per-frame dispatch cap
+
+The chunk-dispatch loop now caps at `workers * 2` jobs per frame so the
+crossbeam channel is never flooded. Counter resets each tick.
+
+### W28.3 - Vertical chunk range
+
+`Voxel::vertical_chunk_range(player_y)` computes `cy +/- 3` clamped to
+`[0, VERTICAL_CHUNKS-1]`. `build_world` and `stream_chunks` use this so only
+6-7 Y-slices around the player load at any time (was 16).
+
+### W28.4 - Greedy meshing
+
+`infengine_voxel::chunk_mesh_greedy` and `chunk_mesh_greedy_with_special`
+merge coplanar same-material faces (same block+light+anim_id quantised to
+4-bit steps) into larger quads using the Mikola Lysenko greedy algorithm.
+Special-shaped blocks handled by `emit_special` are emitted first; the cube
+path skips them. Typical terrain: 30-60% fewer opaque faces. Both demo
+mesher call sites use `chunk_mesh_greedy_with_special`.
+
+UV scaling: the merged quad UV rect is widened proportionally to the
+rectangle's voxel extents so tiling block textures repeat correctly.
+
+### W28.5 - Two-queue incremental block-light update
+
+`propagate_block_light_incremental(world, state, affected, pos, old_e, new_e)`
+mirrors MC's two-phase `BlockLightEngine`:
+
+1. Unlight BFS: zero cells reachable only from the old emitter.
+2. Relight BFS: propagate surviving + new emitter light into cleared region.
+
+`LightingState` gains `dirty_changes: Vec<([i32;3], u8, u8)>` and
+`mark_dirty_with_change`. `world_set_tracked` records the old/new emission
+before mutating the world. `tick_lighting` uses the incremental path for
+single emitter-only changes; falls back to full re-flood for opaque block
+changes or multi-voxel dirty sets.
+
+### W28.6 - Vertex format packing
+
+`MeshVertex` packed from 44 to 28 bytes (36% reduction):
+
+| field      | old type  | new type  | offset |
+|------------|-----------|-----------|--------|
+| position   | `[f32;3]` | `[f32;3]` | 0      |
+| normal_pad | `[f32;3]` | `[i8;4]`  | 12     |
+| uv_packed  | `[f32;2]` | `[u16;2]` | 16     |
+| light_pad  | `[f32;2]` | `[u8;4]`  | 20     |
+| anim_id    | `u32`     | `u32`     | 24     |
+
+wgpu vertex attributes updated to Sint8x4, Uint16x2, Unorm8x4.
+`mesh3d.wgsl` VertexInput decodes packed values in the vertex shader.
+Decode helper methods `.normal()/.uv()/.light()` added for tests.
+
+### W28.7 - Phase-adaptive budgets
+
+`current_results_budget() -> (usize, u64)` returns `(32, 8ms)` during
+`LoadingPhase` and `(4, 2ms)` during `Playing`. Keeps the loading phase
+fast without starving the game loop.
+
+### W28.8 - Diagnostic spam removal
+
+Removed 3 `tracing::warn!` calls that fired every frame in `render_ui`
+and before the renderer draw call.
+
+### W28.9 - Icon UV table cache + stream_delivered reuse
+
+`icon_uv_table` is rebuilt only when the animation tick counter changes
+(50ms intervals). `stream_delivered: Vec<WorkerResult>` uses
+`std::mem::take`/`drain`/reassign to reuse capacity across frames.
+
+### W28.10 - crossbeam-channel MPMC
+
+`std::sync::mpsc` replaced with `crossbeam_channel` unbounded MPMC channels.
+Removes the `Arc<Mutex<Receiver>>` wrapper; workers call `req_rx.recv()`
+directly. Eliminates lock contention under high worker counts.
+
+### W28.11 - Mob frustum culling
+
+`Frustum::contains_point(point: Vec3) -> bool` added with a 2-voxel margin.
+The mob render loop builds `mob_frustum` once per frame and skips any mob
+whose position is outside the frustum.
+
+### W28.12 - Test suite
+
+`wave28_tests.rs`: 18 tests covering PendingChunk heap ordering,
+`vertical_chunk_range` boundary conditions, `MeshVertex` encode/decode
+round-trips, `Frustum::contains_point`, incremental lighting torch
+place/remove, and greedy mesher face-count reduction.
+
+### W28.13 - Documentation
+
+This section documents all Wave 28 changes in `docs/design/mc_fidelity.md`.
