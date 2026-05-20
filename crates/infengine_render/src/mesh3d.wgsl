@@ -15,6 +15,15 @@ struct CameraUniform {
     //     (1.0 noon, 0.04 midnight, smoothstep through dawn/dusk).
     // z/w = reserved.
     time: vec4<f32>,
+    // W30.5: fog parameters.
+    // x = fog_start (world units, distance where fog begins).
+    // y = fog_end   (world units, distance where fog is fully opaque).
+    // fog is disabled when fog_start == fog_end == 0.
+    // z/w = reserved.
+    fog: vec4<f32>,
+    // W30.5: sky/fog colour (linear RGB). Used as the fog target colour
+    // when fog_end > fog_start.
+    sky_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -82,17 +91,20 @@ fn animated_uv(base_uv: vec2<f32>, anim_id: u32, time_ms: f32) -> vec2<f32> {
     return vec2<f32>(base_uv.x, base_uv.y + f32(frame) * anim.v_step);
 }
 
-// W28.6: packed vertex input. CPU-side types and offsets:
-//   loc 0: position  [f32;3]  Float32x3  -> vec3<f32>   (passthrough)
-//   loc 1: normal    [i8;4]   Sint8x4    -> vec4<i32>   (decode: .xyz / 127.0)
-//   loc 2: uv        [u16;2]  Uint16x2   -> vec2<u32>   (decode: f32(c) / 65535.0)
-//   loc 9: light     [u8;4]   Unorm8x4   -> vec4<f32>   (already [0,1]; use .xy)
-//  loc 10: anim_id   u32      Uint32     -> u32          (passthrough)
+// W30.1: packed vertex input. CPU-side types and offsets:
+//   loc 0: position   [f32;3]  Float32x3  -> vec3<f32>   (passthrough)
+//   loc 1: normal     [i8;4]   Sint8x4    -> vec4<i32>   (decode: .xyz / 127.0)
+//   loc 2: uv         [u16;2]  Uint16x2   -> vec2<u32>   (decode: f32(c) / 65535.0) legacy
+//   loc 9: light      [u8;4]   Unorm8x4   -> vec4<f32>   (already [0,1]; use .xy)
+//  loc 10: anim_id    u32      Uint32     -> u32          (passthrough)
+//  loc 11: tile_uv0   [u16;2]  Uint16x2   -> vec2<u32>   (atlas origin / 65535.0)
+//  loc 12: tile_size  [u16;2]  Uint16x2   -> vec2<u32>   (atlas extents / 65535.0)
+//  loc 13: quad_uv    [u16;2]  Uint16x2   -> vec2<u32>   (per-corner uv / 65535.0 * 16.0)
 struct VertexInput {
     @location(0) position: vec3<f32>,
     // Sint8x4 -> vec4<i32> in WGSL.
     @location(1) normal_packed: vec4<i32>,
-    // Uint16x2 -> vec2<u32> in WGSL.
+    // Uint16x2 -> vec2<u32> in WGSL. Legacy - superseded by tile_uv0/tile_size/quad_uv.
     @location(2) uv_packed: vec2<u32>,
     @location(3) inst_row0: vec4<f32>,
     @location(4) inst_row1: vec4<f32>,
@@ -103,6 +115,13 @@ struct VertexInput {
     // Unorm8x4 -> vec4<f32> already in [0, 1]. .x = block, .y = sky.
     @location(9) light_packed: vec4<f32>,
     @location(10) anim_id: u32,
+    // W30.1: tile atlas bounds. tile_uv0 = atlas origin; tile_size = atlas extents.
+    // Both packed as u16 = component * 65535.
+    @location(11) tile_uv0_packed: vec2<u32>,
+    @location(12) tile_size_packed: vec2<u32>,
+    // W30.1: per-corner UV in [0, 16] voxel coords.
+    // Packed as u16 = (component / 16.0) * 65535.0.
+    @location(13) quad_uv_packed: vec2<u32>,
 };
 
 struct VertexOutput {
@@ -125,20 +144,38 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let world4 = model * vec4<f32>(in.position, 1.0);
     let normal_mat = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
 
-    // W28.6: decode packed inputs.
+    // W30.1: decode packed inputs.
     // Sint8x4 components are i32 in WGSL [-128, 127]; scale to [-1, 1].
     let normal = vec3<f32>(
         f32(in.normal_packed.x) / 127.0,
         f32(in.normal_packed.y) / 127.0,
         f32(in.normal_packed.z) / 127.0,
     );
-    // Uint16x2 components are u32 [0, 65535]; scale to [0, 1].
-    let uv = vec2<f32>(
-        f32(in.uv_packed.x) / 65535.0,
-        f32(in.uv_packed.y) / 65535.0,
-    );
     // Unorm8x4 already in [0, 1]; .xy = (block, sky).
     let light = in.light_packed.xy;
+
+    // W30.1: tile-fract UV computation.
+    // tile_uv0 and tile_size are in [0, 1] atlas space (/ 65535.0).
+    // quad_uv is in [0, 16] voxel space (/ 65535.0 * 16.0).
+    // Final UV stays within [tile_uv0, tile_uv0 + tile_size] regardless of
+    // how large the merged greedy quad is because fract() wraps the tiling.
+    //
+    // For per-voxel (non-greedy) quads: tile_size=0 so
+    //   tile_uv = tile_uv0 + fract(0) * 0 = tile_uv0
+    // which equals the legacy uv_packed value (set by with_uv -> tile_uv0).
+    let tile_uv0 = vec2<f32>(
+        f32(in.tile_uv0_packed.x) / 65535.0,
+        f32(in.tile_uv0_packed.y) / 65535.0,
+    );
+    let tile_size = vec2<f32>(
+        f32(in.tile_size_packed.x) / 65535.0,
+        f32(in.tile_size_packed.y) / 65535.0,
+    );
+    let quad_uv = vec2<f32>(
+        f32(in.quad_uv_packed.x) / 65535.0 * 16.0,
+        f32(in.quad_uv_packed.y) / 65535.0 * 16.0,
+    );
+    let tile_uv = tile_uv0 + fract(quad_uv) * tile_size;
 
     var out: VertexOutput;
     out.clip = camera.view_proj * world4;
@@ -146,7 +183,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_normal = normalize(normal_mat * normal);
     out.color = in.inst_color;
     out.material = in.inst_material;
-    out.uv = uv;
+    out.uv = tile_uv;
     out.light = light;
     out.anim_id = in.anim_id;
     return out;
@@ -369,5 +406,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sky_light_norm = clamp(in.light.y, 0.0, 1.0);
     let effective_light = max(block_light_norm, sky_light_norm * day_factor);
     let light_mult = 0.05 + 0.95 * effective_light;
-    return vec4<f32>((direct + ambient) * light_mult, alpha);
+    var lit_color = (direct + ambient) * light_mult;
+
+    // W30.5: distance fog. Blends lit geometry toward sky_color over
+    // the range [fog_start, fog_end]. Disabled when fog_end <= fog_start
+    // or both are zero (default no-fog state).
+    let fog_start = camera.fog.x;
+    let fog_end = camera.fog.y;
+    if fog_end > fog_start {
+        let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
+        let fog_factor = smoothstep(fog_start, fog_end, world_dist);
+        lit_color = mix(lit_color, camera.sky_color.rgb, fog_factor);
+    }
+
+    return vec4<f32>(lit_color, alpha);
 }

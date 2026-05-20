@@ -151,10 +151,12 @@ fn mesh_vertex_anim_id_clamps_at_32() {
     assert_eq!(v.anim_id, 32);
 }
 
-/// Struct size is exactly 28 bytes.
+/// Struct size check. W30.1 extended MeshVertex from 28 to 40 bytes by
+/// adding tile_uv0/tile_size/quad_uv for shader-side atlas tile fract.
 #[test]
 fn mesh_vertex_size_28_bytes() {
-    assert_eq!(std::mem::size_of::<MeshVertex>(), 28);
+    // W30.1: size is now 40 bytes (was 28). Kept test name for history.
+    assert_eq!(std::mem::size_of::<MeshVertex>(), 40);
 }
 
 // ---------------------------------------------------------------------------

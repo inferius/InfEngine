@@ -719,6 +719,22 @@ impl Renderer {
         self.sun_intensity = intensity.max(0.0);
     }
 
+    /// W30.5: Configure distance fog for the 3D mesh shader.
+    ///
+    /// `fog_start` - world-unit distance where fog begins blending in.
+    ///              Typically `(view_distance - 2) * CHUNK_SIZE`.
+    /// `fog_end`   - world-unit distance where fog reaches full opacity.
+    ///              Typically `view_distance * CHUNK_SIZE * 0.95`.
+    /// `sky_color` - linear RGB colour the geometry fades toward (match
+    ///              the renderer's clear_color).
+    ///
+    /// Passing `fog_start >= fog_end` or both zero disables fog.
+    pub fn set_fog(&mut self, fog_start: f32, fog_end: f32, sky_color: [f32; 3]) {
+        self.camera_3d.fog_start = fog_start.max(0.0);
+        self.camera_3d.fog_end = fog_end.max(0.0);
+        self.camera_3d.sky_color = sky_color;
+    }
+
     /// Wave 18.1: queue one textured billboard particle for the next
     /// frame.  Cleared automatically after `render()`.
     pub fn queue_textured_particle(&mut self, inst: TexturedParticleInstance) {

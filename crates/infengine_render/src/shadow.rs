@@ -28,6 +28,35 @@ use crate::mesh3d::{Mesh3DRegistry, MeshBatch, MeshInstance, MeshVertex};
 pub(crate) const SHADOW_MAP_SIZE: u32 = 2048;
 pub(crate) const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+// W30.6 - Shadow pass ghost-world audit result:
+//
+// A smaller duplicate of the world was visible in an earlier screenshot
+// (upper-left corner). Retrospective hypothesis: shadow pass leak.
+//
+// Investigation summary (W30):
+//
+// 1. No debug overlay: searched the codebase for "debug_shadow",
+//    "show_shadow_map", "draw_shadow_debug", "shadow_overlay". None found.
+//    There is no code path that draws the shadow map as a screen-space quad.
+//
+// 2. Shadow map usage: the `shadow_map` depth texture is created with
+//    `RENDER_ATTACHMENT | TEXTURE_BINDING`. It is never bound as a
+//    COLOR attachment anywhere - only as a depth-stencil attachment in
+//    the shadow pass render-pass descriptor (depth-only, `color_attachments: &[]`)
+//    and as a SAMPLER input (TextureSampleType::Depth) at @group(2) binding 1
+//    in the main mesh pipeline.
+//
+// 3. Render order: shadow pass runs first (depth-only), before the main
+//    mesh3d pass. The encoder submits exactly: shadow pass -> mesh3d pass ->
+//    particle pass -> 2D pass -> overlay. The shadow map is not in the
+//    surface texture's render pipeline as a color output at any point.
+//
+// 4. Conclusion: the shadow pass is NOT the cause of the ghost-world artifact.
+//    The most likely explanation remains a Windows/wgpu DPI artifact or a
+//    stale surface texture from a resize race. No shadow code change required.
+//    This comment documents the investigation so the shadow pass is not
+//    re-investigated in future waves.
+
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct ShadowUniform {

@@ -513,13 +513,28 @@ where
                         ]
                     };
 
-                    // Scale the UV rect by the rectangle dimensions.
+                    // W30.3: use tile-fract emit so UV stays within the atlas
+                    // tile rect even for merged quads spanning multiple voxels.
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
                     let [u0t, v0t, u1t, v1t] = base_uv;
-                    let tile_w = u1t - u0t;
-                    let tile_h = v1t - v0t;
-                    let uv_scaled = [u0t, v0t, u0t + tile_w * w, v0t + tile_h * h];
+                    let tile_uv0 = [u0t, v0t];
+                    let tile_size = [u1t - u0t, v1t - v0t];
+                    // Per-corner quad_uv in [0, w] x [0, h] voxel coords.
+                    // The UV layout matches emit_element_quad's corner order:
+                    //   corner 0 = (0, 0)
+                    //   corner 1 = (0, h)
+                    //   corner 2 = (w, h)
+                    //   corner 3 = (w, 0)
+                    // Same ordering for both side > 0 and side < 0; the
+                    // difference between positive and negative faces is only in
+                    // the world-space corner positions, not in the UV coords.
+                    let quad_uv_corners = [
+                        [0.0f32, 0.0f32],
+                        [0.0f32, h     ],
+                        [w,      h     ],
+                        [w,      0.0f32],
+                    ];
 
                     let normal_f32 = [
                         face.normal[0] as f32,
@@ -531,12 +546,14 @@ where
                         .entry(block)
                         .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
 
-                    emit_element_quad(
+                    emit_element_quad_tiled(
                         &mut entry.0,
                         &mut entry.1,
                         corners,
                         normal_f32,
-                        uv_scaled,
+                        tile_uv0,
+                        tile_size,
+                        quad_uv_corners,
                         light,
                         key.anim,
                     );
@@ -723,15 +740,28 @@ where
                     } else {
                         [corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h), corner_pos(0.0,0.0)]
                     };
+                    // W30.3: tile-fract emit (same as chunk_mesh_greedy).
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
                     let [u0t, v0t, u1t, v1t] = base_uv;
-                    let uv_scaled = [u0t, v0t, u0t + (u1t - u0t) * w, v0t + (v1t - v0t) * h];
+                    let tile_uv0 = [u0t, v0t];
+                    let tile_size = [u1t - u0t, v1t - v0t];
+                    let quad_uv_corners = [
+                        [0.0f32, 0.0f32],
+                        [0.0f32, h     ],
+                        [w,      h     ],
+                        [w,      0.0f32],
+                    ];
                     let nf = [face.normal[0] as f32, face.normal[1] as f32, face.normal[2] as f32];
                     let entry = per_block
                         .entry(block)
                         .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
-                    emit_element_quad(&mut entry.0, &mut entry.1, corners, nf, uv_scaled, light, key.anim);
+                    emit_element_quad_tiled(
+                        &mut entry.0, &mut entry.1,
+                        corners, nf,
+                        tile_uv0, tile_size, quad_uv_corners,
+                        light, key.anim,
+                    );
                 }
             }
         }
@@ -1010,6 +1040,42 @@ pub fn emit_element_quad(
         vertices.push(
             MeshVertex::new(*corner, normal)
                 .with_uv(uvs[i])
+                .with_light(light[0], light[1])
+                .with_anim_id(anim_id),
+        );
+    }
+    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+}
+
+/// W30.3: Greedy-mesh variant of `emit_element_quad` that populates the
+/// W30.1 tile-fract vertex attributes. Each corner gets a distinct
+/// `quad_uv` so the shader's `fract(quad_uv) * tile_size` always stays
+/// within the atlas tile's rect regardless of how large the merged quad is.
+///
+/// `corners`      - four world-space positions in CCW order.
+/// `normal`       - face normal.
+/// `tile_uv0`     - atlas tile origin `[u0, v0]` in `[0, 1]` space.
+/// `tile_size`    - atlas tile extents `[u1-u0, v1-v0]` in `[0, 1]` space.
+/// `quad_uv_corners` - per-corner UV in voxel coords; x in `[0, w]`, y in `[0, h]`.
+/// `light`        - `[block_light, sky_light]` normalised.
+/// `anim_id`      - animation slot (0 = static).
+#[allow(clippy::too_many_arguments)]
+pub fn emit_element_quad_tiled(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    corners: [[f32; 3]; 4],
+    normal: [f32; 3],
+    tile_uv0: [f32; 2],
+    tile_size: [f32; 2],
+    quad_uv_corners: [[f32; 2]; 4],
+    light: [f32; 2],
+    anim_id: u32,
+) {
+    let base = vertices.len() as u32;
+    for (i, corner) in corners.iter().enumerate() {
+        vertices.push(
+            MeshVertex::new(*corner, normal)
+                .with_tile_uv(tile_uv0, tile_size, quad_uv_corners[i])
                 .with_light(light[0], light[1])
                 .with_anim_id(anim_id),
         );

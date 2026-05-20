@@ -1412,3 +1412,104 @@ of a fast-moving player's view frustum.
 creative tab blacklist. Mob skin TGA tests live in `mob_skin.rs` (3 tests).
 Total test count after W29: 1495 pass, 7 pre-existing fail (MC-install
 detection tests that expect no MC assets but a real install is present).
+
+## Wave 30 - Greedy mesh re-enable + fog + shadow audit
+
+### W30.1 - Vertex layout extension (40 bytes per vertex)
+
+`MeshVertex` in `crates/infengine_render/src/mesh3d.rs` extended from 28 to
+40 bytes by adding three new `[u16; 2]` fields:
+
+| field       | offset | bytes | wgpu format | description |
+|-------------|--------|-------|-------------|-------------|
+| position    | 0      | 12    | Float32x3   | world-space XYZ |
+| normal_pad  | 12     | 4     | Sint8x4     | normal * 127, 4th byte = 0 |
+| uv_packed   | 16     | 4     | Uint16x2    | legacy UV (/ 65535.0) |
+| light_pad   | 20     | 4     | Unorm8x4    | block/sky light |
+| anim_id     | 24     | 4     | Uint32      | animation slot |
+| tile_uv0    | 28     | 4     | Uint16x2    | atlas tile origin / 65535 |
+| tile_size   | 32     | 4     | Uint16x2    | atlas tile extents / 65535 |
+| quad_uv     | 36     | 4     | Uint16x2    | per-corner [0,16] / 65535 * 16 |
+
+Backward compat: `with_uv(uv)` sets `tile_uv0 = uv_packed` and `tile_size = 0`
+so the shader outputs `tile_uv0 + fract(0) * 0 = tile_uv0 = uv` unchanged.
+
+### W30.2 - Shader fract approach for atlas tiling
+
+`mesh3d.wgsl` vertex shader computes:
+
+```
+tile_uv = tile_uv0 + fract(quad_uv) * tile_size
+```
+
+where `quad_uv` carries the per-corner UV in voxel coordinates (e.g. `[0, w]
+x [0, h]` for a `w x h` merged quad). `fract()` wraps the tiling so the
+final UV always stays within `[tile_uv0, tile_uv0 + tile_size]` regardless
+of how large the merged quad is. This fixes the W28.4 UV-bleed bug where
+merged quads sampled neighbouring atlas tiles.
+
+New vertex inputs in `VertexInput`: `@location(11) tile_uv0_packed`,
+`@location(12) tile_size_packed`, `@location(13) quad_uv_packed`.
+
+### W30.3 - Greedy meshing re-enabled (perf delta)
+
+`chunk_mesh_greedy_with_special` is now the default mesher in both
+`build_lit_submeshes` and `mesh_chunk_in_worker` in `voxel_demo_mp/main.rs`.
+The W28.4 revert comment is replaced with a W30.3 note.
+
+A new `emit_element_quad_tiled` function in `infengine_voxel/src/lib.rs`
+populates the tile attrs for greedy quads. Per-voxel quads still use
+`emit_element_quad` which calls `with_uv` -> compatible fallback path.
+
+Estimated performance delta: fully uniform chunks reduce from O(N^2) faces
+to 6 faces (one per axis direction). Typical mixed terrain sees 30-60%
+fewer faces. At 40 bytes/vertex vs 28 bytes/vertex (43% larger) the net
+upload bandwidth still wins because face count dominates vertex size.
+
+### W30.4 - Tests
+
+New tests in `crates/infengine_render/src/mesh3d.rs`:
+- `with_tile_uv_round_trips`: verifies pack/decode round-trip within
+  quantisation tolerance.
+- `with_uv_sets_tile_uv0_and_zero_size`: verifies backward compat path.
+- Updated `mesh_vertex_size_matches_attribute_layout` to expect 40 bytes.
+
+### W30.5 - Fog at view_distance = 32
+
+`Camera3DUniform` extended with `fog: [f32; 4]` (fog_start, fog_end) and
+`sky_color: [f32; 4]` at offsets 160 and 176. The fragment shader applies
+`smoothstep(fog_start, fog_end, dist)` to blend geometry toward sky color.
+
+`Renderer::set_fog(fog_start, fog_end, sky_color)` exposes the API.
+`voxel_demo_mp` calls it each frame with:
+- `fog_start = (view_distance - 2) * 16`
+- `fog_end = view_distance * 16 * 0.95`
+- `sky_color = current sky tint` (same value passed to set_clear_color)
+
+Chunks at the view edge now fade smoothly to sky colour instead of hard
+pop-clipping.
+
+### W30.6 - Shadow pass investigation outcome
+
+Investigated the ghost-world artifact (smaller duplicate world visible in
+upper-left corner of an earlier screenshot). Hypothesis was a shadow pass
+leak (shadow map rendered into the surface as a color attachment).
+
+Result: NOT the shadow pass. Evidence:
+- No debug overlay code exists in the codebase (searched for
+  `debug_shadow`, `show_shadow_map`, `draw_shadow_debug`, `shadow_overlay`).
+- Shadow map is created with `RENDER_ATTACHMENT | TEXTURE_BINDING` but is
+  only ever bound as a depth-stencil attachment (depth-only pass, zero color
+  attachments) and as a `TextureSampleType::Depth` sampler input.
+- Render order is correct: shadow -> mesh3d -> particle -> 2D -> overlay.
+
+Investigation documented in `crates/infengine_render/src/shadow.rs` above
+`SHADOW_MAP_SIZE`. Most likely cause: Windows/wgpu DPI artifact on resize.
+
+### W30.7 - Deferred
+
+UberGpuBuffer batching (W30.X.x) deferred as a separate massive refactor.
+AO (ambient occlusion) deferred.
+
+Total test count after W30: see CI output (lib + bin tests).
+Pre-existing fail count stays at 7 (MC-install detection tests).

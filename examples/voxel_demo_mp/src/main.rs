@@ -30,7 +30,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_with_atlas_light_anim_and_special,
+    chunk_mesh_greedy_with_special,
     raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
@@ -6547,14 +6547,11 @@ impl Voxel {
                 },
             )
         };
-        // W28.4 deferred: greedy mesher merges multi-voxel faces but the
-        // resulting UV extends past the tile's atlas rect, sampling
-        // neighbour tiles (vertical stripes / wrong textures). Proper
-        // fix needs shader-side fract() tiling per quad - tracked as a
-        // W30 follow-up alongside UberGpuBuffer batching. Until then
-        // we revert to the per-voxel mesher which produces correct
-        // textures + still runs in worker threads.
-        chunk_mesh_with_atlas_light_anim_and_special(
+        // W30.3: greedy mesher re-enabled. The W28.4 UV-bleed bug is fixed by
+        // the shader-side tile fract in W30.1/W30.2 - each vertex now carries
+        // tile_uv0/tile_size/quad_uv and the shader computes
+        // tile_uv0 + fract(quad_uv) * tile_size which stays within the atlas tile.
+        chunk_mesh_greedy_with_special(
             chunk,
             origin,
             uv_resolver,
@@ -13743,6 +13740,16 @@ impl AppHandler for Voxel {
         }
         renderer.set_sun_dir(sun_dir);
         renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
+        // W30.5: distance fog. Start fading 2 chunks before the view edge,
+        // reach full sky colour 0.5 chunks before the load boundary.
+        // This hides the hard pop-clip at view_distance edges.
+        {
+            let cs = CHUNK_SIZE as f32;
+            let vd = self.settings.view_distance as f32;
+            let fog_start = (vd - 2.0).max(0.0) * cs;
+            let fog_end = vd * cs * 0.95;
+            renderer.set_fog(fog_start, fog_end, [sky[0], sky[1], sky[2]]);
+        }
         // Tie sun intensity to the real (un-clamped) elevation so
         // night is actually dim. We recompute the raw direction
         // here because `day_night` clamps the dir vector when the
@@ -15447,9 +15454,8 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    // W28.4 deferred: see comment in build_lit_submeshes for the
-    // greedy mesher revert rationale (UV atlas bleed needs shader fix).
-    chunk_mesh_with_atlas_light_anim_and_special(
+    // W30.3: greedy mesher re-enabled (UV bleed fixed by shader tile fract).
+    chunk_mesh_greedy_with_special(
         chunk,
         origin,
         uv_resolver,

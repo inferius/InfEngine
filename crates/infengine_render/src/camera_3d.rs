@@ -27,6 +27,17 @@ pub struct Camera3D {
     /// bright. Defaults to 1.0 (full daylight); hosts without a
     /// day cycle can leave it alone.
     pub day_factor: f32,
+    /// W30.5: Distance at which fog starts blending (world units).
+    /// Fragments closer than this distance are not fogged.
+    /// Default: 0.0 (no fog).
+    pub fog_start: f32,
+    /// W30.5: Distance at which fog reaches full opacity (world units).
+    /// Default: 0.0 (no fog - same as fog_start means no visible fog).
+    pub fog_end: f32,
+    /// W30.5: Sky / fog color used for the fog blend. Linear RGB, matches
+    /// the renderer's clear_color. Default: (0, 0, 0) (fades to black, set
+    /// via Renderer::set_fog to match the actual sky color).
+    pub sky_color: [f32; 3],
 }
 
 impl Camera3D {
@@ -41,6 +52,9 @@ impl Camera3D {
             z_far: 200.0,
             time_seconds: 0.0,
             day_factor: 1.0,
+            fog_start: 0.0,
+            fog_end: 0.0,
+            sky_color: [0.0, 0.0, 0.0],
         }
     }
 
@@ -67,6 +81,13 @@ pub(crate) struct Camera3DUniform {
     /// for future "global" shader inputs (sky tint, wind
     /// strength, ...).
     time: [f32; 4],
+    /// W30.5: `(fog_start, fog_end, 0, 0)` in world units.
+    /// `fog_start` = distance where fog begins blending in.
+    /// `fog_end` = distance where fog reaches full opacity.
+    /// fog_start == fog_end == 0 means no fog (disabled).
+    fog: [f32; 4],
+    /// W30.5: `(r, g, b, 1)` sky/fog colour in linear RGB.
+    sky_color: [f32; 4],
 }
 
 impl Camera3DUniform {
@@ -77,6 +98,8 @@ impl Camera3DUniform {
             view_proj_inv: vp.inverse().to_cols_array_2d(),
             camera_pos: [c.position.x, c.position.y, c.position.z, 1.0],
             time: [c.time_seconds, c.day_factor.clamp(0.0, 1.0), 0.0, 0.0],
+            fog: [c.fog_start.max(0.0), c.fog_end.max(0.0), 0.0, 0.0],
+            sky_color: [c.sky_color[0], c.sky_color[1], c.sky_color[2], 1.0],
         }
     }
 }

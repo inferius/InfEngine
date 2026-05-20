@@ -12,19 +12,38 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-/// Vertex format used by `Mesh3DPass`. W28.6: packed to 28 bytes (was 44).
+/// Vertex format used by `Mesh3DPass`. W30.1: extended to 40 bytes for
+/// shader-side tile fract support enabling greedy meshing.
 ///
-/// Layout (28 bytes, all 4-byte aligned for wgpu):
+/// Layout (40 bytes, all 4-byte aligned for wgpu):
 ///
 /// - `position`   `[f32; 3]`  offset  0  (12 B)  Float32x3 @ loc 0
 /// - `normal_pad` `[i8; 4]`   offset 12  ( 4 B)  Sint8x4   @ loc 1 (first 3 = normal*127, 4th = 0)
-/// - `uv_packed`  `[u16; 2]`  offset 16  ( 4 B)  Uint16x2  @ loc 2 (component / 65535.0)
+/// - `uv_packed`  `[u16; 2]`  offset 16  ( 4 B)  Uint16x2  @ loc 2 (component / 65535.0) legacy
 /// - `light_pad`  `[u8; 4]`   offset 20  ( 4 B)  Unorm8x4  @ loc 9 ([0]=block [1]=sky)
 /// - `anim_id`    `u32`       offset 24  ( 4 B)  Uint32    @ loc 10
+/// - `tile_uv0`   `[u16; 2]`  offset 28  ( 4 B)  Uint16x2  @ loc 11 (atlas u0/v0 / 65535.0)
+/// - `tile_size`  `[u16; 2]`  offset 32  ( 4 B)  Uint16x2  @ loc 12 (atlas tile w/h / 65535.0)
+/// - `quad_uv`    `[u16; 2]`  offset 36  ( 4 B)  Uint16x2  @ loc 13 (per-voxel UV in [0,16] packed as val/16*65535)
+/// - `_pad`       `[u16; 1]`  alias inside quad_uv (struct is [u16;2] = 4 B total, see above)
 ///
-/// Total: 28 bytes (saves 16 B vs old 44 B layout).
+/// Wait - quad_uv is 4 bytes ([u16;2]) so offsets are:
+/// 28: tile_uv0 [u16;2] = 4 B
+/// 32: tile_size [u16;2] = 4 B
+/// 36: quad_uv [u16;2] = 4 B
+/// Total: 40 bytes.
 ///
-/// Public API (`.new` / `.with_uv` / `.with_light` / `.with_anim_id`) unchanged.
+/// Greedy-meshing quads set `tile_uv0`/`tile_size` to the atlas tile bounds
+/// and `quad_uv` to per-corner coords in [0, w] x [0, h]. The shader
+/// computes `tile_uv0 + fract(quad_uv) * tile_size` which tiles the texture
+/// correctly without sampling neighbouring tiles.
+///
+/// Per-voxel (non-greedy) quads set `quad_uv` to [0, 1] range UVs and
+/// `tile_uv0 = uv_packed` position, `tile_size` = tile extents, so
+/// `fract(quad_uv) == quad_uv` and the shader produces the same result.
+///
+/// Public API (`.new` / `.with_uv` / `.with_light` / `.with_anim_id` /
+/// `.with_tile_uv`) unchanged for non-greedy paths.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct MeshVertex {
@@ -32,12 +51,20 @@ pub struct MeshVertex {
     pub position: [f32; 3],
     /// Normal components packed as i8 * 127; 4th byte = padding 0.
     pub normal_pad: [i8; 4],
-    /// UV coordinates packed as u16 = component * 65535.
+    /// UV coordinates packed as u16 = component * 65535. Legacy field;
+    /// the shader now uses tile_uv0/tile_size/quad_uv for final UV.
     pub uv_packed: [u16; 2],
     /// Light values packed as unorm8: [block_light, sky_light, 0, 0].
     pub light_pad: [u8; 4],
     /// Animation slot id (0 = static, 1..=32 = animated tile).
     pub anim_id: u32,
+    /// W30.1: Atlas tile origin packed as u16 = component * 65535.
+    pub tile_uv0: [u16; 2],
+    /// W30.1: Atlas tile size (u1-u0, v1-v0) packed as u16 = component * 65535.
+    pub tile_size: [u16; 2],
+    /// W30.1: Per-corner UV in [0, w] x [0, h] voxel coords.
+    /// Packed as u16 = (component / 16.0) * 65535.0 to support range [0, 16].
+    pub quad_uv: [u16; 2],
 }
 
 impl MeshVertex {
@@ -60,6 +87,13 @@ impl MeshVertex {
             // Default: no block light (0), full sky (255 = 1.0).
             light_pad: [0, 255, 0, 0],
             anim_id: 0,
+            // W30.1: default tile attrs - identity tiling (single voxel quad).
+            // tile_uv0=0, tile_size=65535 (= 1.0 in [0,1]), quad_uv=(0,0).
+            // The shader produces uv = 0 + fract(0) * 1 = 0 which is
+            // safe but invisible - callers must set with_uv or with_tile_uv.
+            tile_uv0: [0, 0],
+            tile_size: [65535, 65535],
+            quad_uv: [0, 0],
         }
     }
 
@@ -67,6 +101,42 @@ impl MeshVertex {
         self.uv_packed = [
             (uv[0].clamp(0.0, 1.0) * 65535.0) as u16,
             (uv[1].clamp(0.0, 1.0) * 65535.0) as u16,
+        ];
+        // W30.1: keep tile attrs consistent with a per-voxel quad that
+        // samples exactly `uv`. tile_uv0 = uv, tile_size = (0,0) means
+        // the shader always outputs tile_uv0 + fract(quad_uv)*0 = tile_uv0 = uv.
+        // quad_uv stays (0,0).
+        self.tile_uv0 = self.uv_packed;
+        self.tile_size = [0, 0];
+        self.quad_uv = [0, 0];
+        self
+    }
+
+    /// W30.1: Set tile atlas bounds + per-corner UV for greedy-merged quads.
+    ///
+    /// `tile_uv0` - atlas origin `[u0, v0]` in `[0, 1]` space.
+    /// `tile_size` - atlas tile extents `[u1-u0, v1-v0]` in `[0, 1]` space.
+    /// `quad_uv`  - per-corner UV in `[0, w] x [0, h]` voxel coords
+    ///              (w/h can exceed 1.0 for merged quads, max = CHUNK_SIZE = 16).
+    ///
+    /// The shader computes `final_uv = tile_uv0 + fract(quad_uv) * tile_size`
+    /// which keeps sampling within `[tile_uv0, tile_uv0 + tile_size]` regardless
+    /// of how large the merged quad is.
+    pub fn with_tile_uv(mut self, tile_uv0: [f32; 2], tile_size: [f32; 2], quad_uv: [f32; 2]) -> Self {
+        self.tile_uv0 = [
+            (tile_uv0[0].clamp(0.0, 1.0) * 65535.0) as u16,
+            (tile_uv0[1].clamp(0.0, 1.0) * 65535.0) as u16,
+        ];
+        self.tile_size = [
+            (tile_size[0].clamp(0.0, 1.0) * 65535.0) as u16,
+            (tile_size[1].clamp(0.0, 1.0) * 65535.0) as u16,
+        ];
+        // quad_uv range is [0, 16] (max CHUNK_SIZE voxels). Pack into u16
+        // by dividing by 16 first so [0,16] maps to [0, 65535].
+        const QUAD_UV_SCALE: f32 = 16.0;
+        self.quad_uv = [
+            (quad_uv[0].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0) as u16,
+            (quad_uv[1].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0) as u16,
         ];
         self
     }
@@ -90,7 +160,7 @@ impl MeshVertex {
         self
     }
 
-    // W28.6: decode helpers for tests and debug inspection.
+    // W28.6 / W30.1: decode helpers for tests and debug inspection.
 
     /// Decode normal back to f32 components.
     #[inline]
@@ -117,6 +187,33 @@ impl MeshVertex {
         [
             self.light_pad[0] as f32 / 255.0,
             self.light_pad[1] as f32 / 255.0,
+        ]
+    }
+
+    /// W30.1: Decode tile_uv0 back to f32 [u0, v0].
+    #[inline]
+    pub fn tile_uv0_f32(&self) -> [f32; 2] {
+        [
+            self.tile_uv0[0] as f32 / 65535.0,
+            self.tile_uv0[1] as f32 / 65535.0,
+        ]
+    }
+
+    /// W30.1: Decode tile_size back to f32 [dw, dh].
+    #[inline]
+    pub fn tile_size_f32(&self) -> [f32; 2] {
+        [
+            self.tile_size[0] as f32 / 65535.0,
+            self.tile_size[1] as f32 / 65535.0,
+        ]
+    }
+
+    /// W30.1: Decode quad_uv back to f32 [u, v] in [0, 16] range.
+    #[inline]
+    pub fn quad_uv_f32(&self) -> [f32; 2] {
+        [
+            self.quad_uv[0] as f32 / 65535.0 * 16.0,
+            self.quad_uv[1] as f32 / 65535.0 * 16.0,
         ]
     }
 }
@@ -526,12 +623,15 @@ impl Mesh3DPass {
             push_constant_ranges: &[],
         });
 
-        // W28.6: packed vertex layout (28 bytes, see MeshVertex).
+        // W30.1: packed vertex layout (40 bytes, see MeshVertex).
         // loc 0: position  [f32;3] @ offset  0  Float32x3
         // loc 1: normal    [i8;4]  @ offset 12  Sint8x4
         // loc 2: uv        [u16;2] @ offset 16  Uint16x2
         // loc 9: light     [u8;4]  @ offset 20  Unorm8x4
         // loc10: anim_id   u32     @ offset 24  Uint32
+        // loc11: tile_uv0  [u16;2] @ offset 28  Uint16x2  (atlas u0/v0)
+        // loc12: tile_size [u16;2] @ offset 32  Uint16x2  (atlas dw/dh)
+        // loc13: quad_uv   [u16;2] @ offset 36  Uint16x2  (per-corner [0,16])
         let vertex_attrs = [
             wgpu::VertexAttribute {
                 offset: 0,
@@ -557,6 +657,21 @@ impl Mesh3DPass {
                 offset: 24,
                 shader_location: 10,
                 format: wgpu::VertexFormat::Uint32,
+            },
+            wgpu::VertexAttribute {
+                offset: 28,
+                shader_location: 11,
+                format: wgpu::VertexFormat::Uint16x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 32,
+                shader_location: 12,
+                format: wgpu::VertexFormat::Uint16x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 36,
+                shader_location: 13,
+                format: wgpu::VertexFormat::Uint16x2,
             },
         ];
 
@@ -969,9 +1084,10 @@ mod tests {
 
     #[test]
     fn mesh_vertex_size_matches_attribute_layout() {
-        // W28.6: position (12) + normal_pad (4) + uv_packed (4)
-        // + light_pad (4) + anim_id (4) = 28 bytes.
-        assert_eq!(std::mem::size_of::<MeshVertex>(), 28);
+        // W30.1: position (12) + normal_pad (4) + uv_packed (4)
+        // + light_pad (4) + anim_id (4) + tile_uv0 (4) + tile_size (4)
+        // + quad_uv (4) = 40 bytes.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 40);
     }
 
     #[test]
@@ -1012,7 +1128,7 @@ mod tests {
 
     #[test]
     fn mesh_vertex_anim_id_offset_is_24() {
-        // W28.6: packed layout. anim_id is at offset 24 (was 40).
+        // W30.1: packed layout. anim_id is at offset 24.
         // Critical: if any field shifts this offset, the GPU reads the
         // wrong bytes and animated tiles get random slot ids.
         let mut v = MeshVertex::new([0.0; 3], [0.0; 3]);
@@ -1025,8 +1141,40 @@ mod tests {
     }
 
     #[test]
-    fn mesh_vertex_size_is_28() {
-        // W28.6: packed layout must be exactly 28 bytes.
-        assert_eq!(std::mem::size_of::<MeshVertex>(), 28);
+    fn with_tile_uv_round_trips() {
+        // W30.1: tile_uv0/tile_size/quad_uv pack + decode round-trips within
+        // expected quantisation error.
+        let v = MeshVertex::new([0.0; 3], [0.0; 3])
+            .with_tile_uv([0.25, 0.5], [0.0625, 0.0625], [2.0, 3.0]);
+        let uv0 = v.tile_uv0_f32();
+        let sz = v.tile_size_f32();
+        let quv = v.quad_uv_f32();
+        // tile_uv0 tolerance: 1/65535 ~ 1.5e-5
+        assert!((uv0[0] - 0.25).abs() < 2e-4, "tile_uv0.x off: {}", uv0[0]);
+        assert!((uv0[1] - 0.5).abs() < 2e-4, "tile_uv0.y off: {}", uv0[1]);
+        assert!((sz[0] - 0.0625).abs() < 2e-4, "tile_size.x off: {}", sz[0]);
+        assert!((sz[1] - 0.0625).abs() < 2e-4, "tile_size.y off: {}", sz[1]);
+        // quad_uv tolerance: 16/65535 ~ 2.4e-4
+        assert!((quv[0] - 2.0).abs() < 5e-3, "quad_uv.x off: {}", quv[0]);
+        assert!((quv[1] - 3.0).abs() < 5e-3, "quad_uv.y off: {}", quv[1]);
+    }
+
+    #[test]
+    fn with_uv_sets_tile_uv0_and_zero_size() {
+        // W30.1: with_uv compat - tile_uv0 = uv, tile_size = 0 (shader
+        // outputs tile_uv0 + fract(0) * 0 = tile_uv0 = uv).
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_uv([0.5, 0.75]);
+        let uv = v.uv();
+        let t0 = v.tile_uv0_f32();
+        let ts = v.tile_size_f32();
+        assert!((uv[0] - t0[0]).abs() < 2e-5, "tile_uv0.x != uv.x");
+        assert!((uv[1] - t0[1]).abs() < 2e-5, "tile_uv0.y != uv.y");
+        assert_eq!(ts, [0.0, 0.0], "tile_size should be 0 for with_uv path");
+    }
+
+    #[test]
+    fn mesh_vertex_size_is_40() {
+        // W30.1: extended layout must be exactly 40 bytes.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 40);
     }
 }
