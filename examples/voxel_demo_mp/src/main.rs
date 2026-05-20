@@ -14305,11 +14305,19 @@ impl AppHandler for Voxel {
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };
-            // Water gets the animated caustic-ripple shader path;
-            // lava (no flow texture authored yet) keeps the plain
-            // PBR path. Both will eventually share a "flowing
-            // surface" pipeline.
-            if *liquid_id == WATER_ID {
+            // W34: route BOTH water + lava through the water-marker
+            // shader path. The liquid mesh writes per-vertex flow into
+            // the `uv` slot (push_quad_flow); the regular PBR sampling
+            // path interpreted that as atlas UV and sampled the wrong
+            // tile -> lava appeared as static noise (per user's screen).
+            // Water-marker branch ignores `uv` for sampling (sets
+            // tex=white) and uses `color * ripple` so the per-block
+            // colour from BLOCK_TYPES gives the right tint (water blue,
+            // lava orange) + the ripple shader provides the animated
+            // flow look. MC's lava also has an animated flowing surface;
+            // approximating it via the same shader as water is
+            // visually acceptable until a dedicated lava shader lands.
+            if *liquid_id == WATER_ID || *liquid_id == LAVA_ID {
                 renderer.draw_mesh_water(
                     *handle,
                     Mat4::IDENTITY.to_cols_array(),
