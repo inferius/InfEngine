@@ -6770,21 +6770,28 @@ impl Voxel {
         // Fallback (no worker pool): synchronous BFS on main thread.
         // Used by headless tests where WorkerPool is never spawned.
         //
-        // W28.5: use two-queue incremental update when every dirty
-        // voxel has a recorded emission change (common case: single
-        // torch place/remove). Falls back to full re-flood when the
-        // dirty set contains multiple voxels or sky-light-affecting
-        // changes (opaque block place/remove).
-        let use_incremental = dirty_changes.len() == dirty.len()
-            && dirty.len() == 1
-            && !dirty_changes.iter().any(|(pos, old_e, new_e)| {
-                // Sky-light changes (opaque block change) force full flood.
-                let old_opaque = old_e == &0 && block_is_opaque(self.world.get(*pos));
-                let new_opaque = new_e == &0 && block_is_opaque(self.world.get(*pos));
-                old_opaque || new_opaque
-            });
+        // W28.5 + W34.3: use two-queue incremental update when every
+        // dirty voxel has a recorded emission change. W34.3 extends
+        // this to also cover block-light blocker changes (opaque
+        // block place/remove): propagate_block_light_incremental now
+        // handles the unlight phase for added blockers.
+        //
+        // Sky-light still requires the full propagate_sky_light engine
+        // when an opaque block changes (sky columns are not amenable to
+        // simple two-queue BFS at chunk boundaries). Block-light-only
+        // changes (emitter add/remove with no opaciy change) stay on
+        // the fast incremental path.
+        let all_changes_recorded = dirty_changes.len() == dirty.len() && dirty.len() == 1;
+        let has_blocker_change = dirty_changes.iter().any(|(pos, old_e, new_e)| {
+            let is_opaque_now = !self.world.get(*pos).is_air()
+                && block_is_opaque(self.world.get(*pos));
+            // A change is a blocker change if emission is 0 on both sides
+            // and either the block is now opaque (placed solid) or
+            // the block was an emitter that also happened to be opaque.
+            old_e == &0 && new_e == &0 || is_opaque_now
+        });
 
-        if use_incremental {
+        if all_changes_recorded {
             for (pos, old_e, new_e) in &dirty_changes {
                 lighting::block_engine::propagate_block_light_incremental(
                     &self.world,
@@ -6793,6 +6800,14 @@ impl Voxel {
                     *pos,
                     *old_e,
                     *new_e,
+                );
+            }
+            // Sky light needs the full engine if opacity changed.
+            if has_blocker_change {
+                lighting::sky_engine::propagate_sky_light(
+                    &self.world,
+                    &mut self.lighting,
+                    &affected,
                 );
             }
         } else {

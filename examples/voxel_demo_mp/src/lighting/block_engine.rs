@@ -298,20 +298,76 @@ pub(crate) fn propagate_block_light_incremental(
             }
         }
     } else {
-        // No old emitter: just gather relight seeds from the 6
-        // immediate neighbours of the changed cell (e.g. placed block
-        // that is now opaque - neighbours of the new block may need to
-        // retrace lighting around it).
-        for n in NEIGHBOURS {
-            let np = [changed_pos[0] + n[0], changed_pos[1] + n[1], changed_pos[2] + n[2]];
-            let (ncc, nlc) = split(np);
-            let stored = if affected.contains(&ncc) {
-                state.get(ncc).map(|g| g.get_block(nlc)).unwrap_or(0)
+        // No old emitter. Handle two sub-cases:
+        //
+        // (a) Blocker added (transparent -> opaque): the cell used to
+        //     hold light that propagated through it. We must unlight
+        //     the shadow region and re-flood from surviving sources.
+        //     Detect this by checking whether the block at changed_pos
+        //     is now opaque and had a non-zero stored value.
+        //
+        // (b) Blocker removed (opaque -> transparent) OR neutral swap
+        //     (air<->air, water<->leaves): just gather neighbour light
+        //     as relight seeds. The re-propagation will carry light
+        //     into the now-transparent cell.
+        let stored_at_pos = {
+            let (cc, lc) = split(changed_pos);
+            if affected.contains(&cc) {
+                state.get(cc).map(|g| g.get_block(lc)).unwrap_or(0)
             } else {
                 0
-            };
-            if stored > 0 {
-                relight.push_back((np, stored));
+            }
+        };
+        let block_now_opaque = !world.get_block(changed_pos).is_air()
+            && step_decay(world.get_block(changed_pos)) == OPAQUE_DECAY;
+        if block_now_opaque && stored_at_pos > 0 {
+            // W34.3 - blocker added: seed the unlight BFS from the
+            // placed cell so the shadow region is cleared before the
+            // relight phase fills it from surviving sources.
+            let mut unlight: VecDeque<([i32; 3], u8)> = VecDeque::new();
+            if let Some(g) = {
+                let (cc, lc) = split(changed_pos);
+                if affected.contains(&cc) { Some((cc, lc)) } else { None }
+            } {
+                let (cc, lc) = g;
+                state.ensure(cc).set_block(lc, 0);
+            }
+            unlight.push_back((changed_pos, stored_at_pos));
+            while let Some((pos, level)) = unlight.pop_front() {
+                for n in NEIGHBOURS {
+                    let np = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+                    let (ncc, nlc) = split(np);
+                    if !affected.contains(&ncc) {
+                        continue;
+                    }
+                    let nb_stored = state.get(ncc).map(|g| g.get_block(nlc)).unwrap_or(0);
+                    if nb_stored == 0 {
+                        continue;
+                    }
+                    let decay = step_decay(world.get_block(np));
+                    if nb_stored <= level.saturating_sub(decay) {
+                        state.ensure(ncc).set_block(nlc, 0);
+                        unlight.push_back((np, nb_stored));
+                    } else {
+                        relight.push_back((np, nb_stored));
+                    }
+                }
+            }
+        } else {
+            // Blocker removed or neutral swap: gather neighbours as
+            // relight seeds. The removed cell is now transparent so
+            // standard BFS propagation will carry light through it.
+            for n in NEIGHBOURS {
+                let np = [changed_pos[0] + n[0], changed_pos[1] + n[1], changed_pos[2] + n[2]];
+                let (ncc, nlc) = split(np);
+                let stored = if affected.contains(&ncc) {
+                    state.get(ncc).map(|g| g.get_block(nlc)).unwrap_or(0)
+                } else {
+                    0
+                };
+                if stored > 0 {
+                    relight.push_back((np, stored));
+                }
             }
         }
     }
