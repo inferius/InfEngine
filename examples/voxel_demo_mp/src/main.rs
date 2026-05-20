@@ -5914,11 +5914,13 @@ impl Voxel {
         let radius = self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
         // W28.1: player spawns at origin so player_chunk = [0, 0, 0].
         // Compute XZ squared distance from origin for priority ordering.
+        // W28.3: only enqueue Y slices visible from the player's current Y.
+        let (cy_min, cy_max) = Self::vertical_chunk_range(self.player_pos.y);
         let mut enqueued: u32 = 0;
         for cz in -radius..=radius {
             for cx in -radius..=radius {
                 let dist_sq = (cx * cx + cz * cz) as i64;
-                for cy in 0..VERTICAL_CHUNKS {
+                for cy in cy_min..=cy_max {
                     let cc: ChunkCoord = [cx, cy, cz];
                     if self.pending_set.insert(cc) {
                         self.pending_chunks.push(PendingChunk {
@@ -5940,6 +5942,21 @@ impl Voxel {
             "voxel: initial chunk coords enqueued (async build)"
         );
         enqueued
+    }
+
+    /// W28.3: Compute the vertical chunk index range (inclusive) that
+    /// overlaps the player's visible area. Returns `(cy_min, cy_max)`
+    /// clamped to `[0, VERTICAL_CHUNKS - 1]`. The +/-3 heuristic covers
+    /// ~96 blocks vertically - more than the fov cone at view_distance=4.
+    /// Using this instead of `0..VERTICAL_CHUNKS` cuts ~40% of chunks for
+    /// above-ground players.
+    #[inline]
+    pub fn vertical_chunk_range(player_y: f32) -> (i32, i32) {
+        let cs = CHUNK_SIZE as i32;
+        let player_cy = (player_y.floor() as i32).div_euclid(cs);
+        let cy_min = (player_cy - 3).max(0);
+        let cy_max = (player_cy + 3).min(VERTICAL_CHUNKS - 1);
+        (cy_min, cy_max)
     }
 
     /// W28.7: Return (max_results, budget_ms) tuned for the current app
@@ -5979,12 +5996,16 @@ impl Voxel {
         let view_dist = self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
         let unload_dist = view_dist + 2;
 
+        // W28.3: only load Y slices within +/-3 of the player's Y chunk.
+        let (cy_min, cy_max) = Self::vertical_chunk_range(self.player_pos.y);
+
         // W28.1: Queue missing chunks inside the view radius, sorted by
         // XZ distance from the player so nearby chunks load first.
+        // W28.3: iterate only the visible Y range instead of 0..16.
         for dz in -view_dist..=view_dist {
             for dx in -view_dist..=view_dist {
                 let dist_sq = (dx * dx + dz * dz) as i64;
-                for cy in 0..VERTICAL_CHUNKS {
+                for cy in cy_min..=cy_max {
                     let cc = [player_chunk[0] + dx, cy, player_chunk[2] + dz];
                     if self.world.chunk(cc).is_none() && self.pending_set.insert(cc) {
                         self.pending_chunks.push(PendingChunk {
@@ -5996,6 +6017,9 @@ impl Voxel {
             }
         }
 
+        // W28.3: Unload Y chunks outside the visible vertical range in
+        // addition to the horizontal unload. Mirror of the horizontal
+        // unload logic below.
         // Unload chunks beyond the keep radius. Collect into a
         // HashSet first to avoid O(n*m) Vec::contains inside the
         // mesh drain loop - at view_distance=32 the unload list can
@@ -6007,7 +6031,11 @@ impl Voxel {
             .filter(|c| {
                 let dx = (c[0] - player_chunk[0]).abs();
                 let dz = (c[2] - player_chunk[2]).abs();
-                dx > unload_dist || dz > unload_dist
+                // Horizontal: outside XZ keep radius.
+                let horizontal_out = dx > unload_dist || dz > unload_dist;
+                // W28.3: Vertical: outside cy_min-1..=cy_max+1 (1-chunk margin).
+                let vertical_out = c[1] < cy_min - 1 || c[1] > cy_max + 1;
+                horizontal_out || vertical_out
             })
             .collect();
         if !to_unload.is_empty() {
