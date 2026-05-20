@@ -14289,6 +14289,14 @@ impl AppHandler for Voxel {
                 renderer.draw_mesh_pbr(*cube, head.to_cols_array(), head_color, 0.0, 0.7);
             }
         }
+        // W28.11: Build frustum for mob culling. Mobs behind the player
+        // or off to the side don't need draw_mesh_pbr calls. Re-use the
+        // same Frustum type as the chunk culling path.
+        let mob_frustum = {
+            let cam = renderer.camera_3d();
+            Frustum::from_view_proj(cam.view_projection())
+        };
+
         // Render every known sheep (server: from `mobs`, client:
         // from `remote_mobs` populated by `vx.mob`). Sheep are
         // boxy white cubes with a small head cube on top for
@@ -14396,6 +14404,11 @@ impl AppHandler for Voxel {
 
                 let base_x = mob.pos[0] + lunge_fwd.x;
                 let base_z = mob.pos[2] + lunge_fwd.z;
+
+                // W28.11: frustum cull mobs outside the view cone.
+                if !mob_frustum.contains_point(Vec3::new(base_x, mob.pos[1], base_z)) {
+                    continue;
+                }
 
                 match mob.kind {
                     // ---- Sheep ------------------------------------------

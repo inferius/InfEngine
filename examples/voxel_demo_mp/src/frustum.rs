@@ -132,6 +132,21 @@ impl Frustum {
         true
     }
 
+    /// Returns `true` if a single point is inside (not behind all planes)
+    /// the frustum. Adds a 2-voxel margin so mobs near the edge are not
+    /// culled while their bounding volume is still partially visible.
+    /// W28.11: used for mob frustum culling.
+    #[inline]
+    pub fn contains_point(&self, point: Vec3) -> bool {
+        const MARGIN: f32 = 2.0;
+        for plane in &self.planes {
+            if plane.signed_distance(point) < -MARGIN {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Convenience wrapper for a chunk coord. Each chunk is a cube of
     /// `CHUNK_SIZE` voxels starting at `World::chunk_world_origin`.
     #[inline]
