@@ -9617,20 +9617,16 @@ impl Voxel {
                                 // at the old position.
                                 if let Some(popup) = chat_completion.as_mut()
                                     && let Some(pos) = popup.pending_cursor.take()
+                                    && let Some(mut te_state) =
+                                        egui::TextEdit::load_state(ctx, te_id)
                                 {
-                                    if let Some(mut te_state) =
-                                        egui::TextEdit::load_state(
-                                            ctx, te_id,
-                                        )
-                                    {
-                                        let cc = egui::text::CCursor::new(pos);
-                                        te_state.cursor.set_char_range(Some(
-                                            egui::text::CCursorRange::one(cc),
-                                        ));
-                                        egui::TextEdit::store_state(
-                                            ctx, te_id, te_state,
-                                        );
-                                    }
+                                    let cc = egui::text::CCursor::new(pos);
+                                    te_state.cursor.set_char_range(Some(
+                                        egui::text::CCursorRange::one(cc),
+                                    ));
+                                    egui::TextEdit::store_state(
+                                        ctx, te_id, te_state,
+                                    );
                                 }
 
                                 // W11.5/W14 - autocomplete state + key
@@ -9705,6 +9701,8 @@ impl Voxel {
                                     // apply_completion, W14.1) puts the
                                     // cursor after the token so the user
                                     // can type the next arg immediately.
+                                    let mut tab_accepted_cursor: Option<usize> =
+                                        None;
                                     if let Some(popup) =
                                         chat_completion.as_mut()
                                     {
@@ -9719,25 +9717,37 @@ impl Voxel {
                                                     &repl,
                                                 );
                                             *chat_buf = out;
-                                            // Store desired cursor pos;
-                                            // applied next frame. W14.1.
-                                            popup.pending_cursor =
-                                                Some(new_cur);
+                                            tab_accepted_cursor = Some(new_cur);
                                         } else {
                                             // Hint-only candidate (empty
                                             // replacement): just cycle.
                                             popup.select_next();
                                         }
                                     }
-                                    // Close popup after Tab accept so
-                                    // user sees the result cleanly.
-                                    // W14.3: do NOT submit on Tab.
-                                    if chat_completion
-                                        .as_ref()
-                                        .and_then(|p| p.selected())
-                                        .map(|c| !c.replacement.is_empty())
-                                        .unwrap_or(false)
-                                    {
+                                    if let Some(new_cur) = tab_accepted_cursor {
+                                        // Apply cursor now (persisted in
+                                        // egui data; takes effect when
+                                        // TextEdit next renders). W14.1.
+                                        if let Some(mut te_state) =
+                                            egui::TextEdit::load_state(
+                                                ctx, te_id,
+                                            )
+                                        {
+                                            let cc =
+                                                egui::text::CCursor::new(new_cur);
+                                            te_state.cursor.set_char_range(
+                                                Some(
+                                                    egui::text::CCursorRange::one(
+                                                        cc,
+                                                    ),
+                                                ),
+                                            );
+                                            egui::TextEdit::store_state(
+                                                ctx, te_id, te_state,
+                                            );
+                                        }
+                                        // Close popup after Tab accept.
+                                        // W14.3: do NOT submit on Tab.
                                         *chat_completion = None;
                                     }
                                 } else if popup_active && enter_pressed {
@@ -9751,13 +9761,34 @@ impl Voxel {
                                         && let Some(c) = popup.selected()
                                         && !c.replacement.is_empty()
                                     {
-                                        let (out, _new_cur) =
+                                        let (out, new_cur) =
                                             autocomplete::apply_completion(
                                                 chat_buf,
                                                 te_cursor,
                                                 &c.replacement,
                                             );
                                         *chat_buf = out;
+                                        // Apply cursor pos. W14.1.
+                                        if let Some(mut te_state) =
+                                            egui::TextEdit::load_state(
+                                                ctx, te_id,
+                                            )
+                                        {
+                                            let cc =
+                                                egui::text::CCursor::new(
+                                                    new_cur,
+                                                );
+                                            te_state.cursor.set_char_range(
+                                                Some(
+                                                    egui::text::CCursorRange::one(
+                                                        cc,
+                                                    ),
+                                                ),
+                                            );
+                                            egui::TextEdit::store_state(
+                                                ctx, te_id, te_state,
+                                            );
+                                        }
                                         accepted = true;
                                     }
                                     *chat_completion = None;
