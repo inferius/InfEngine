@@ -170,13 +170,27 @@ impl CreativeTabState {
     }
 }
 
+/// W29.2: Item ids that must NOT appear in the creative tab.
+///
+/// Mirrors MC's `Items.java` logic where technical / non-placeable
+/// blocks are excluded from the creative-mode inventory:
+///   - 36 (water source)  - not a placeable item; use water bucket.
+///   - 37 (lava source)   - not a placeable item; use lava bucket.
+///   - 47 (portal)        - spawns via flint+steel ignition only.
+///   - 49 (fire)          - spawns via flint+steel / lava-burn only.
+///   - 56 (soul_fire)     - same as fire; technical world block.
+///   - 78 (oak_door_upper) - internal upper-half block; never held.
+pub(crate) const CREATIVE_BLACKLIST: &[u16] = &[36, 37, 47, 49, 56, 78];
+
 /// Build the full list of creative-tab entries. Walks
-/// `ITEM_TYPES` and emits one entry per registered item. The
-/// list is stable; callers cache it and re-filter via
+/// `ITEM_TYPES`, strips technical / non-giftable items via
+/// `CREATIVE_BLACKLIST`, and emits one entry per remaining item.
+/// The list is stable; callers cache it and re-filter via
 /// `filter_items` on every search-string keystroke.
 pub(crate) fn available_items() -> Vec<CreativeEntry> {
     ITEM_TYPES
         .iter()
+        .filter(|it| !CREATIVE_BLACKLIST.contains(&it.id))
         .map(CreativeEntry::from_item)
         .collect()
 }
