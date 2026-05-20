@@ -6330,9 +6330,13 @@ impl Voxel {
         let renderer = self.renderer.as_mut().expect("renderer ready");
         // Release old mesh handles for the affected chunks so the
         // mesh registry doesn't accumulate stale buffers across edits.
+        // Use a HashSet for O(1) lookup - at view_distance=32 chunk_meshes
+        // can be tens of thousands of entries.
+        let coord_set: std::collections::HashSet<ChunkCoord> =
+            coords.iter().copied().collect();
         let mut keep = Vec::with_capacity(self.chunk_meshes.len());
         for entry in self.chunk_meshes.drain(..) {
-            if coords.contains(&entry.0) {
+            if coord_set.contains(&entry.0) {
                 renderer.remove_mesh(entry.2);
             } else {
                 keep.push(entry);
@@ -8523,7 +8527,8 @@ impl Voxel {
                                     "Snow",
                                 );
                             });
-                            // FOV slider in degrees.
+                            // FOV slider in degrees. step_by(1.0) prevents
+                            // the 1-frame display lag on integer snapping.
                             let mut fov_deg = dbg_fov_rad.to_degrees();
                             if ui
                                 .add(
@@ -8531,6 +8536,7 @@ impl Voxel {
                                         &mut fov_deg,
                                         30.0..=110.0,
                                     )
+                                    .step_by(1.0)
                                     .text("FOV"),
                                 )
                                 .changed()

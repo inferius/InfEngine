@@ -42,6 +42,7 @@ pub(crate) fn draw(
     );
     ui.add(
         Slider::new(&mut ctx.options.fov_deg, 30.0..=120.0)
+            .step_by(1.0)
             .text("FOV (stupne)"),
     );
     ui.add(
