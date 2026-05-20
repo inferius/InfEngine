@@ -2056,24 +2056,18 @@ impl Voxel {
             // shimmer.
             let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
             // Top face: emit only when the voxel above isn't
-            // the same liquid (i.e. we're not buried inside a
-            // falling column).
+            // the same liquid. Original SW->SE->NE->NW corner order
+            // restored so the water-flow shader ripple animation
+            // matches what it had before W34. The shader-side
+            // normal +Y is computed in water_face_normal directly
+            // (no corner-order dependency).
             let above_same =
                 self.world.get([vx, vy + 1, vz]).0 == liquid_id;
             if !above_same {
-                // W34 fix: emit corners in CCW order from above
-                // (SW -> NW -> NE -> SE) so the index pattern
-                // [0,1,2, 0,2,3] in push_quad_flow produces a
-                // triangle whose geometric normal points +Y.
-                // The previous order (SW, SE, NE, NW) was CW from
-                // above, giving -Y geometric normal which made
-                // water invisible/dark from the player's typical
-                // above-water vantage point regardless of the
-                // shader normal stored in the vertices.
-                let t0 = [fx, fy + h00, fz];                  // SW
-                let t1 = [fx, fy + h01, fz + 1.0];            // NW
-                let t2 = [fx + 1.0, fy + h11, fz + 1.0];      // NE
-                let t3 = [fx + 1.0, fy + h10, fz];            // SE
+                let t0 = [fx, fy + h00, fz];
+                let t1 = [fx + 1.0, fy + h10, fz];
+                let t2 = [fx + 1.0, fy + h11, fz + 1.0];
+                let t3 = [fx, fy + h01, fz + 1.0];
                 let normal = water_face_normal(t0, t1, t2, t3);
                 push_quad_flow(
                     vertices, indices, t0, t1, t2, t3, normal, flow,
@@ -10801,14 +10795,24 @@ impl Voxel {
             let mut hotbar_view: [Option<(BlockId, u8)>; HOTBAR_SLOTS] =
                 [None; HOTBAR_SLOTS];
             hotbar_view.copy_from_slice(&self.inventory[..HOTBAR_SLOTS]);
+            let sel = self.selected_slot.min(HOTBAR_SLOTS - 1);
             for pick in creative_picks {
                 let (block, max_stack) = pick;
                 let stack = (block, max_stack);
-                let _ = creative_tab::deposit_in_hotbar(
+                let deposited = creative_tab::deposit_in_hotbar(
                     &mut hotbar_view,
                     stack,
                     max_stack,
                 );
+                if !deposited {
+                    // W34 fix: when the hotbar is full of other items,
+                    // creative click should OVERWRITE the currently
+                    // selected slot. MC's creative click semantics:
+                    // "pick replaces what's in your hand". Without this
+                    // fallback the click was silently rejected if no
+                    // empty/topup slot was available.
+                    hotbar_view[sel] = Some((block, max_stack));
+                }
             }
             self.inventory[..HOTBAR_SLOTS]
                 .copy_from_slice(&hotbar_view[..HOTBAR_SLOTS]);
@@ -16035,18 +16039,21 @@ fn water_face_normal(
     v2: [f32; 3],
     _v3: [f32; 3],
 ) -> [f32; 3] {
-    // W34: caller now passes corners in CCW order (SW -> NW -> NE -> SE)
-    // so the standard (v1-v0) x (v2-v0) cross product produces +Y normal
-    // for a flat water surface. The previous (SW, SE, NE, NW) emit order
-    // was CW from above and required swapping operands here as a
-    // workaround - that workaround is no longer needed.
+    // W34 final: caller emits corners in SW->SE->NE->NW order (CW from
+    // above when viewed at flat surface). Cross (v1-v0)x(v2-v0) gives
+    // -Y. We negate the result so the shader-side stored normal points
+    // +Y. The geometric triangle winding stays CW (= -Y) but with the
+    // transparent pipeline's cull_mode::None both sides draw anyway,
+    // and the +Y normal makes lighting compute correctly for the typical
+    // above-water vantage.
     let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
     let b = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-    let n = [
+    let raw = [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ];
+    let n = [-raw[0], -raw[1], -raw[2]];
     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
     if len < 1e-6 {
         [0.0, 1.0, 0.0]
