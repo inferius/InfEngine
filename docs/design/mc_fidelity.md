@@ -318,3 +318,95 @@ asserts:
 Any addition to the W12.2 slab/fence/door/stairs family must
 bump the contiguous range AND extend the routing assertion so
 a silent regression trips the lock.
+
+## W17 - Cave / Ravine / Dungeon parameters
+
+Wave 17 adds three underground feature passes to the `Realistic`
+generator. `Classic` stays vanilla-flat (no caves, no ravines, no
+dungeons).
+
+### W17.1 - 3D-noise cave carver
+
+Source: `examples/voxel_demo_mp/src/worldgen/caves.rs`
+
+Algorithm: two octaves of trilinearly-interpolated hash-based noise,
+multiplied together. Cave voids form where the product exceeds a
+threshold. Quintic smoothstep on interpolation weights.
+
+| Parameter | Value | Notes |
+|---|---|---|
+| CAVE_SCALE_A | 12.0 | Large-feature frequency (broad caves) |
+| CAVE_SCALE_B | 6.0 | Fine-feature frequency (narrow passages) |
+| THRESHOLD_NORMAL (wy >= 10) | 0.82 * 0.82 = 0.6724 | ~5% underground voxels carved |
+| THRESHOLD_DEEP (wy < 10) | 0.70 * 0.70 = 0.49 | ~10% carved, denser lava-zone caves |
+| Floor guard | wy <= 0 | Never carved |
+| Surface guard | non-stone blocks | Grass/sand/water/bedrock preserved |
+
+MC ballpark: ~5-8% of underground volume. Our normal-depth target is 5%.
+
+### W17.2 - Ravine carver
+
+Source: `examples/voxel_demo_mp/src/worldgen/ravines.rs`
+
+Algorithm: per-(chunk_x, chunk_z) column hash decides if a ravine
+spawns. Ravine shape is an axis-aligned ellipsoid (x-aligned or
+z-aligned, chosen randomly). Carves all stone-like blocks inside.
+
+| Parameter | Value | Notes |
+|---|---|---|
+| RAVINE_CHUNK_RATE | 64 | ~1/64 chunk columns spawn a ravine |
+| HALF_LENGTH range | 8..24 | Long-axis half-size in blocks |
+| HALF_WIDTH range | 2..6 | Short-axis half-size in blocks |
+| HALF_HEIGHT range | 8..24 | Vertical half-size in blocks |
+| CY range | 10..50 | World-Y centre of the ravine |
+| RAVINE_FLOOR_Y | 2 | Floor guard (never carves at y <= 2) |
+| Neighbourhood check | +/-2 chunk columns | Ravines may overhang neighbours |
+
+MC ballpark: ~1/64 chunks. Our rate matches.
+
+### W17.3 - Dungeon rooms
+
+Source: `examples/voxel_demo_mp/src/worldgen/dungeons.rs`
+
+Algorithm: per-(chunk_x, chunk_z) hash decides if a dungeon spawns.
+Room is a 7x7x5 (outer) cobblestone box, hollow interior, with a
+spawner-placeholder at the centre floor and 1-2 empty chest blocks.
+
+| Parameter | Value | Notes |
+|---|---|---|
+| DUNGEON_RATE | 200 | ~1/200 chunk columns spawn a dungeon |
+| Outer dimensions | 7 x 5 x 7 (W x H x D) | 1-block cobblestone shell |
+| Inner dimensions | 5 x 3 x 5 | Air interior |
+| Y range | 8..=32 | Outer-box floor world-Y |
+| Chests | 1 or 2 | Empty (loot tables deferred) |
+| Spawner | BlockId(8) cobblestone | TODO: real tile-entity spawner |
+| Neighbourhood check | +/-1 chunk column | Room fits within one column |
+
+MC ballpark: ~1/200 chunks. Our rate matches.
+
+### W17.4 - Surface block polish
+
+Fixed: `Mountain` biome below the snow line previously returned stone
+(id 1) for all h < 26, making terrain look uniformly grey. New rules:
+
+| Height range | Mountain surface block |
+|---|---|
+| h < 22 | grass (id 3) - lower slopes |
+| 22 <= h < 34 | stone (id 1) - bare rocky mid-slope |
+| h >= 34 | snow (id 15) - peak |
+
+All other biomes unchanged. Integration test
+`wave17_tests::realistic_gen_non_mountain_surface_is_not_grey_stone`
+guards this contract.
+
+### Deferred W17 follow-ups
+
+- **Real spawner tile-entity**: dungeon centre uses cobblestone
+  placeholder. Implementing mob spawners requires per-block entity
+  state (tile entity) + mob-kind selection + activation range logic.
+- **Dungeon loot tables**: chests are placed empty. Loot generation
+  requires an item-pool system + RNG seeded from the dungeon position.
+- **Mineshafts**: long tunnel networks with wooden supports + rails.
+  Would use a similar per-column hash + corridor-segment generation.
+- **Villages**: surface structure generation with multiple buildings.
+  Requires a multi-chunk footprint resolver.
