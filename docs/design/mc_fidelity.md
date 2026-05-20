@@ -1172,3 +1172,63 @@ now a single `HashMap::remove()` call instead of a full Vec scan.
 Affected paths: `WorkerResult::Remeshed` delivery, `rebuild_chunks_sync`
 (synchronous fallback), `stream_chunks` chunk-unload path, and all
 drain-all sites (dim switch, world reset, `/seed` command).
+
+## Wave 27 - Lighting BFS off main thread + loader counter fix
+
+### Loader counter mismatch (W27.1)
+
+Before W27, `build_world` enqueued `INITIAL_CHUNKS=3` radius ->
+7x7x16=784 chunks as the `target_chunks`. But `stream_chunks` runs
+during loading with `view_distance=4` -> 9x9x16=1296, so the
+loading counter showed "1296/784 (100%)" - nonsensical.
+
+**Fix**: `build_world` now uses `self.settings.view_distance` (clamped
+the same way `stream_chunks` does) to compute the initial enqueue
+radius. `target_chunks` matches the live footprint, counter reaches
+100% cleanly. `INITIAL_CHUNKS` constant removed.
+
+### Lighting BFS off main thread (W27.2 - W27.5)
+
+**Root cause of 2-minute loading freeze**: `rebuild_all_lighting` ran
+the full BFS synchronously over ALL loaded chunks (1300+ at
+`view_distance=4`) before transitioning to the Playing state. For a
+complex world this took 1-2 minutes on the main thread.
+
+**Root cause of gameplay stutter**: `tick_lighting` ran block + sky BFS
+over a 27-chunk halo (the dirty chunk + 26 neighbours) synchronously at
+~10 Hz on the main thread. Every block edit introduced a frame spike.
+
+**Solution**: introduced `LightingWorldAccess` trait so the BFS engines
+can run against both the live `World` (main thread) and an owned
+`ChunkSnapshot` (worker thread). Workers never borrow from the
+main-thread World; the main thread clones the affected chunks into the
+snapshot before dispatch.
+
+- `propagate_block_light` + `propagate_sky_light` now take
+  `&impl LightingWorldAccess` instead of `&World`.
+- `ChunkSnapshot { chunks: HashMap<ChunkCoord, Chunk> }` implements
+  `LightingWorldAccess` for the worker side.
+- New `Job::Lighting(LightingJob)` / `WorkerResult::Lit` variants carry
+  the owned snapshot + return the new `Arc<LightGrid>` values.
+- `tick_lighting`: with worker pool -> dispatches `Job::Lighting` (~216
+  KB snapshot for a 27-chunk halo); main thread returns immediately;
+  remesh is triggered on `WorkerResult::Lit` delivery. Without worker
+  pool (headless tests): synchronous fallback unchanged.
+- `rebuild_all_lighting`: with worker pool -> dispatches ONE
+  `Job::Lighting` for all loaded chunks. `pending_lighting_jobs`
+  counter lets the loading phase wait for `WorkerResult::Lit` before
+  advancing to `BuildingMeshes`. Without worker pool: synchronous as
+  before.
+
+**MC reference**: `LightingProvider` runs on a background thread
+scheduler; chunks marked dirty enqueue light tasks via
+`LightChunkGetter`. We now mirror this: dirty chunks enqueue a
+`LightingJob` to the worker pool; the result arrives a few frames
+later and triggers remesh.
+
+### Arc<LightGrid> swap (W27.5)
+
+`LightingState::set_grid(coord, Arc<LightGrid>)` atomically replaces
+an existing grid. Any `HaloLighting` snapshot held by an in-flight
+remesh job sees the old `Arc` via COW - no race between the lighting
+worker and the mesh worker.
