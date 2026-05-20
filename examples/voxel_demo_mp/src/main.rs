@@ -7675,28 +7675,6 @@ impl Voxel {
 
     fn render_ui(&mut self, window: &EngineWindow) {
         let state = self.state;
-        // DEBUG: log AppState + world_loaded + menu screen on the
-        // very first frame + every 2s after so we can diagnose the
-        // white-screen-at-startup. Cheap; remove when fixed.
-        static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
-            std::sync::Mutex::new(None);
-        if let Ok(mut g) = LAST_LOG.lock() {
-            let now = std::time::Instant::now();
-            let due = g
-                .map(|t| now.duration_since(t) > std::time::Duration::from_secs(2))
-                .unwrap_or(true);
-            if due {
-                *g = Some(now);
-                tracing::warn!(
-                    state = ?state,
-                    world_loaded = self.world_loaded,
-                    menu_screen = ?self.menu.screen,
-                    ui_some = self.ui.is_some(),
-                    renderer_some = self.renderer.is_some(),
-                    "render_ui debug"
-                );
-            }
-        }
         let fps = self.fps_ema;
         let show_fps = self.settings.show_fps;
         let dim = self.current_dim.clone();
@@ -14838,45 +14816,8 @@ impl AppHandler for Voxel {
                 }
             }
         }
-        // DIAGNOSTIC: log right before renderer.render() call so we
-        // know we even got to it. If we don't see "about to render"
-        // the bin is panicking / returning earlier in on_update.
-        {
-            static LAST: std::sync::Mutex<Option<std::time::Instant>> =
-                std::sync::Mutex::new(None);
-            if let Ok(mut g) = LAST.lock() {
-                let now = std::time::Instant::now();
-                let due = g
-                    .map(|t| now.duration_since(t).as_secs() > 2)
-                    .unwrap_or(true);
-                if due {
-                    *g = Some(now);
-                    tracing::warn!(
-                        ui_is_some = ui.is_some(),
-                        "about to render"
-                    );
-                }
-            }
-        }
         let render_result = if let Some(ui) = ui {
-            renderer.render(|d, q, e, v, s| {
-                static LAST: std::sync::Mutex<Option<std::time::Instant>> =
-                    std::sync::Mutex::new(None);
-                if let Ok(mut g) = LAST.lock() {
-                    let now = std::time::Instant::now();
-                    let due = g
-                        .map(|t| now.duration_since(t).as_secs() > 2)
-                        .unwrap_or(true);
-                    if due {
-                        *g = Some(now);
-                        tracing::warn!(
-                            size = ?s,
-                            "egui overlay fired"
-                        );
-                    }
-                }
-                ui.render(d, q, e, v, s)
-            })
+            renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
         } else {
             renderer.render(|_, _, _, _, _| {})
         };
