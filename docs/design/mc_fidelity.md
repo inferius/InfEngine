@@ -806,3 +806,64 @@ The "Paused" heading uses 36 px bold white text (vs the old
   is discovered, the current fallback is a solid dark-navy fill. A
   procedural tiled "dirt" pattern (drawn via `egui::Painter` quads)
   would match MC's fallback more closely.
+
+## Wave 22 - Extreme view distance + worker streamline + misc cleanup
+
+### W22.1 - Extreme view distance (VIEW_DISTANCE_MAX = 32)
+
+`VIEW_DISTANCE_MAX` was already set to 32 in `main.rs` but several
+gate sites still capped at 12 or 16:
+
+- Both egui view-distance sliders (in-game settings panel + debug
+  panel) now use `2..=VIEW_DISTANCE_MAX as u8` with `.step_by(1.0)`.
+- The config-file parser `"view_distance"` branch clamp raised to
+  `VIEW_DISTANCE_MAX`.
+- `menu/mod.rs` `OptionsSnapshot::clamp` raised from `clamp(2,16)`
+  to `clamp(2, VIEW_DISTANCE_MAX as u8)`.
+- `menu/options.rs` slider raised from `2..=16` to
+  `2..=VIEW_DISTANCE_MAX as u8`.
+
+Performance fix for large distances: `stream_chunks` converted
+`to_unload: Vec<ChunkCoord>` to a `HashSet<ChunkCoord>` so the
+per-mesh-entry lookup is O(1) instead of O(n). Similarly
+`rebuild_chunks` now builds a temporary `HashSet` from its `coords`
+slice before draining `chunk_meshes`, removing an O(chunk_meshes * coords)
+inner scan.
+
+At `view_distance=32` the worst-case loaded chunk count is
+`(2*32+1)^2 * 16 = 67600` chunks.
+
+### W22.2 - Worker pool: drop legacy submesh computation
+
+Workers previously ran `chunk_mesh_with_atlas` (legacy 4x4-grid
+atlas) and shipped a `submeshes: Vec<ChunkSubmesh>` field in
+`WorkerResult`. The main thread immediately discarded these on the
+next deferred-remesh tick when `build_lit_submeshes` ran the proper
+MC-atlas + special-models + lighting path.
+
+Implemented option (a): workers now ship `chunk + side_effects` only.
+The new chunk is pushed to `pending_remesh` at delivery so
+`build_lit_submeshes` fires on the very next deferred-drain cycle.
+This eliminates the dead `chunk_mesh_with_atlas` call and shrinks
+`WorkerResult` payload.
+
+### W22.3 - Misc cleanup
+
+- **Autocomplete**: no open TODOs or FIXMEs found.
+- **Mob persistence**: confirmed already implemented in
+  `world_save/runtime/helpers/entities.rs` - `build_dimension_entities_from`
+  + `apply_dimension_entities` serialise/restore the full mob list.
+- **Recipe book**: W20.2 `icon_uv_front` routes through the MC atlas
+  at all 4 sites; no regression found.
+- **Slider step lag**: added `.step_by(1.0)` to `fov_deg` sliders in
+  the debug panel (`main.rs`) and the Options screen (`menu/options.rs`).
+
+### Deferred follow-ups
+
+- **Mob persistence - velocity**: `vel` is stored as `[0.0,0.0,0.0]`
+  in `MobSave`; mobs restart stationary on load. Tracking momentum
+  across save/load would require a `vel` field in `MobSave`.
+- **Parallel meshing (W22.2 option b)**: routing `build_lit_submeshes`
+  into workers would unlock full parallel meshing at the cost of
+  passing the `ResourcePack` + `LightingState` snapshots through the
+  job queue. Deferred as a future wave.
