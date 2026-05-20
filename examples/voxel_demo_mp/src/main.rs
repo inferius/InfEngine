@@ -1383,6 +1383,11 @@ struct Voxel {
     /// Falls back to flat-colour rendering on `player_cube` when
     /// the source `sheep.tga` is missing.
     sheep_head_mesh: Option<MeshHandle>,
+    /// W19.2: per-body-part textured mesh handles for the 6 non-sheep mob
+    /// kinds. Each `Option<MeshHandle>` is `None` until the entity texture
+    /// for that kind is found on disk during `on_start`. The render loop
+    /// falls back to the tinted `player_cube` when absent.
+    mob_meshes: mob_meshes::MobMeshes,
     /// CPU particle system: short-lived debris on every block break.
     particles: infengine_particles::ParticleSystem,
     /// W18.3: textured billboard particles waiting to be flushed to
@@ -5279,6 +5284,7 @@ impl Voxel {
             liquid_mesh_dirty: true,
             sheep_mesh: None,
             sheep_head_mesh: None,
+            mob_meshes: Default::default(),
             voxel_atlas: None,
             atlas_rgba: None,
             egui_atlas: None,
@@ -10976,6 +10982,11 @@ impl AppHandler for Voxel {
                     );
                     self.sheep_head_mesh = Some(mesh);
                 }
+                // W19.2: load entity textures + upload per-part meshes for
+                // the 6 remaining mob kinds. The `entity/<mob>/<mob>.tga`
+                // convention mirrors the sheep path above. Both .tga and
+                // .png are tried so Java and Bedrock resource packs work.
+                self.mob_meshes = load_non_sheep_mob_meshes(dir, r);
             }
         }
         // W8.1: the worker pool + initial world build + safe-spawn
@@ -14911,6 +14922,142 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
         uv(14, 0),
     );
     (verts, indices)
+}
+
+/// W19.2 - Discover and upload entity texture meshes for the 6 non-sheep
+/// mob kinds (Zombie, Chicken, Pig, Cow, Skeleton, Spider).
+///
+/// For each kind:
+/// 1. Search `<texture_dir>/../entity/<mob>/<mob>.tga` and `.png`.
+///    (Same fallback pattern as the sheep head loader above.)
+/// 2. Load via `image::open`, force alpha = 255.
+/// 3. Build per-part cube meshes via `mob_meshes::build_mob_part_mesh`.
+/// 4. Upload + bind via `r.create_mesh` / `r.make_mesh_albedo` /
+///    `r.bind_mesh_albedo_arc`.
+///
+/// Returns a fully populated `MobMeshes` (all `None` for any mob whose
+/// texture file wasn't found on disk).
+fn load_non_sheep_mob_meshes(
+    texture_dir: &std::path::Path,
+    r: &mut Renderer,
+) -> mob_meshes::MobMeshes {
+    use mob_meshes::{MobMeshes, MobPart, build_mob_part_mesh};
+
+    let entity_root = texture_dir
+        .parent()
+        .unwrap_or(texture_dir)
+        .join("entity");
+
+    /// Try .tga then .png in the canonical MC entity sub-directory.
+    /// Returns the image bytes as an RGBA `image::RgbaImage`, or `None`
+    /// if neither file exists or the image can't be decoded.
+    fn try_open_entity(
+        entity_root: &std::path::Path,
+        mob: &str,
+    ) -> Option<image::RgbaImage> {
+        let mob_dir = entity_root.join(mob);
+        let candidates = [
+            mob_dir.join(format!("{mob}.tga")),
+            mob_dir.join(format!("{mob}.png")),
+            // Some Bedrock packs flatten the entity dir:
+            entity_root.join(format!("{mob}.tga")),
+            entity_root.join(format!("{mob}.png")),
+        ];
+        let path = candidates.iter().find(|p| p.is_file())?;
+        let mut img = image::open(path).ok()?.to_rgba8();
+        // Force alpha=255 so the cutout shader path can't punch holes
+        // through soft edges in .tga files with pre-multiplied alpha.
+        for px in img.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        Some(img)
+    }
+
+    /// Upload a single mesh part and return its handle.
+    fn upload_part(
+        r: &mut Renderer,
+        label: &str,
+        part: MobPart,
+        img: &image::RgbaImage,
+    ) -> MeshHandle {
+        let (verts, indices) = build_mob_part_mesh(part, img.width(), img.height());
+        let albedo = r.make_mesh_albedo(img.width(), img.height(), img);
+        let mesh = r.create_mesh(label, &verts, &indices);
+        r.bind_mesh_albedo_arc(mesh, albedo);
+        mesh
+    }
+
+    let mut mm = MobMeshes::default();
+
+    // ---- Zombie (64x64) ----------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "zombie") {
+        let (w, h) = (img.width(), img.height());
+        mm.zombie_head      = Some(upload_part(r, "voxel_demo_mp::zombie_head",      MobPart::ZombieHead,     &img));
+        mm.zombie_body      = Some(upload_part(r, "voxel_demo_mp::zombie_body",      MobPart::ZombieBody,     &img));
+        mm.zombie_right_arm = Some(upload_part(r, "voxel_demo_mp::zombie_right_arm", MobPart::ZombieRightArm, &img));
+        mm.zombie_left_arm  = Some(upload_part(r, "voxel_demo_mp::zombie_left_arm",  MobPart::ZombieLeftArm,  &img));
+        mm.zombie_right_leg = Some(upload_part(r, "voxel_demo_mp::zombie_right_leg", MobPart::ZombieRightLeg, &img));
+        mm.zombie_left_leg  = Some(upload_part(r, "voxel_demo_mp::zombie_left_leg",  MobPart::ZombieLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "zombie entity texture bound (6 parts)");
+    }
+
+    // ---- Chicken (64x32) ---------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "chicken") {
+        let (w, h) = (img.width(), img.height());
+        mm.chicken_head      = Some(upload_part(r, "voxel_demo_mp::chicken_head",      MobPart::ChickenHead,     &img));
+        mm.chicken_body      = Some(upload_part(r, "voxel_demo_mp::chicken_body",      MobPart::ChickenBody,     &img));
+        mm.chicken_right_leg = Some(upload_part(r, "voxel_demo_mp::chicken_right_leg", MobPart::ChickenRightLeg, &img));
+        mm.chicken_left_leg  = Some(upload_part(r, "voxel_demo_mp::chicken_left_leg",  MobPart::ChickenLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "chicken entity texture bound (4 parts)");
+    }
+
+    // ---- Pig (64x64) -------------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "pig") {
+        let (w, h) = (img.width(), img.height());
+        mm.pig_head           = Some(upload_part(r, "voxel_demo_mp::pig_head",           MobPart::PigHead,          &img));
+        mm.pig_body           = Some(upload_part(r, "voxel_demo_mp::pig_body",           MobPart::PigBody,          &img));
+        mm.pig_right_front_leg = Some(upload_part(r, "voxel_demo_mp::pig_rf_leg", MobPart::PigRightFrontLeg, &img));
+        mm.pig_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::pig_lf_leg", MobPart::PigLeftFrontLeg,  &img));
+        mm.pig_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::pig_rb_leg", MobPart::PigRightBackLeg,  &img));
+        mm.pig_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::pig_lb_leg", MobPart::PigLeftBackLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "pig entity texture bound (6 parts)");
+    }
+
+    // ---- Cow (64x64) -------------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "cow") {
+        let (w, h) = (img.width(), img.height());
+        mm.cow_head            = Some(upload_part(r, "voxel_demo_mp::cow_head",    MobPart::CowHead,          &img));
+        mm.cow_body            = Some(upload_part(r, "voxel_demo_mp::cow_body",    MobPart::CowBody,          &img));
+        mm.cow_right_front_leg = Some(upload_part(r, "voxel_demo_mp::cow_rf_leg", MobPart::CowRightFrontLeg, &img));
+        mm.cow_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::cow_lf_leg", MobPart::CowLeftFrontLeg,  &img));
+        mm.cow_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::cow_rb_leg", MobPart::CowRightBackLeg,  &img));
+        mm.cow_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::cow_lb_leg", MobPart::CowLeftBackLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "cow entity texture bound (6 parts)");
+    }
+
+    // ---- Skeleton (64x32) --------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "skeleton") {
+        let (w, h) = (img.width(), img.height());
+        mm.skeleton_head      = Some(upload_part(r, "voxel_demo_mp::skeleton_head",      MobPart::SkeletonHead,     &img));
+        mm.skeleton_body      = Some(upload_part(r, "voxel_demo_mp::skeleton_body",      MobPart::SkeletonBody,     &img));
+        mm.skeleton_right_arm = Some(upload_part(r, "voxel_demo_mp::skeleton_right_arm", MobPart::SkeletonRightArm, &img));
+        mm.skeleton_left_arm  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_arm",  MobPart::SkeletonLeftArm,  &img));
+        mm.skeleton_right_leg = Some(upload_part(r, "voxel_demo_mp::skeleton_right_leg", MobPart::SkeletonRightLeg, &img));
+        mm.skeleton_left_leg  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_leg",  MobPart::SkeletonLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "skeleton entity texture bound (6 parts)");
+    }
+
+    // ---- Spider (64x32) ----------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_root, "spider") {
+        let (w, h) = (img.width(), img.height());
+        mm.spider_head  = Some(upload_part(r, "voxel_demo_mp::spider_head",  MobPart::SpiderHead,  &img));
+        mm.spider_body0 = Some(upload_part(r, "voxel_demo_mp::spider_body0", MobPart::SpiderBody0, &img));
+        mm.spider_body1 = Some(upload_part(r, "voxel_demo_mp::spider_body1", MobPart::SpiderBody1, &img));
+        mm.spider_leg   = Some(upload_part(r, "voxel_demo_mp::spider_leg",   MobPart::SpiderLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "spider entity texture bound (4 parts)");
+    }
+
+    mm
 }
 
 /// Periodic chicken feather-lay gate (Q.3). Free fn so the test

@@ -31,7 +31,7 @@
 //! - `net/minecraft/client/model/monster/spider/SpiderModel.java`
 //! - `net/minecraft/client/model/monster/skeleton/SkeletonModel.java`
 
-use infengine_render::MeshVertex;
+use infengine_render::{MeshHandle, MeshVertex};
 
 // ---------------------------------------------------------------------------
 // MobPart enum
@@ -390,6 +390,94 @@ pub(crate) fn build_box_uv_mesh(
     );
 
     (verts, indices)
+}
+
+// ---------------------------------------------------------------------------
+// MobMeshes - per-kind GPU handle storage
+// ---------------------------------------------------------------------------
+
+/// Holds GPU mesh handles for every body part of every supported mob kind.
+/// Each `Option<MeshHandle>` is `None` until the entity texture for that
+/// kind is found on disk and uploaded during `on_start`. The render loop
+/// checks `is_some()` and falls back to the tinted `player_cube` when
+/// the handle is absent.
+///
+/// W19.2: populated by the asset-load block in `on_start`.
+/// W19.3: consumed by the mob render dispatch.
+#[derive(Default)]
+pub(crate) struct MobMeshes {
+    // ---- Zombie ------------------------------------------------------------
+    pub(crate) zombie_head: Option<MeshHandle>,
+    pub(crate) zombie_body: Option<MeshHandle>,
+    pub(crate) zombie_right_arm: Option<MeshHandle>,
+    pub(crate) zombie_left_arm: Option<MeshHandle>,
+    pub(crate) zombie_right_leg: Option<MeshHandle>,
+    pub(crate) zombie_left_leg: Option<MeshHandle>,
+
+    // ---- Chicken -----------------------------------------------------------
+    pub(crate) chicken_head: Option<MeshHandle>,
+    pub(crate) chicken_body: Option<MeshHandle>,
+    pub(crate) chicken_right_leg: Option<MeshHandle>,
+    pub(crate) chicken_left_leg: Option<MeshHandle>,
+
+    // ---- Pig ---------------------------------------------------------------
+    pub(crate) pig_head: Option<MeshHandle>,
+    pub(crate) pig_body: Option<MeshHandle>,
+    pub(crate) pig_right_front_leg: Option<MeshHandle>,
+    pub(crate) pig_left_front_leg: Option<MeshHandle>,
+    pub(crate) pig_right_back_leg: Option<MeshHandle>,
+    pub(crate) pig_left_back_leg: Option<MeshHandle>,
+
+    // ---- Cow ---------------------------------------------------------------
+    pub(crate) cow_head: Option<MeshHandle>,
+    pub(crate) cow_body: Option<MeshHandle>,
+    pub(crate) cow_right_front_leg: Option<MeshHandle>,
+    pub(crate) cow_left_front_leg: Option<MeshHandle>,
+    pub(crate) cow_right_back_leg: Option<MeshHandle>,
+    pub(crate) cow_left_back_leg: Option<MeshHandle>,
+
+    // ---- Skeleton ----------------------------------------------------------
+    pub(crate) skeleton_head: Option<MeshHandle>,
+    pub(crate) skeleton_body: Option<MeshHandle>,
+    pub(crate) skeleton_right_arm: Option<MeshHandle>,
+    pub(crate) skeleton_left_arm: Option<MeshHandle>,
+    pub(crate) skeleton_right_leg: Option<MeshHandle>,
+    pub(crate) skeleton_left_leg: Option<MeshHandle>,
+
+    // ---- Spider ------------------------------------------------------------
+    pub(crate) spider_head: Option<MeshHandle>,
+    pub(crate) spider_body0: Option<MeshHandle>,
+    pub(crate) spider_body1: Option<MeshHandle>,
+    pub(crate) spider_leg: Option<MeshHandle>,
+}
+
+// W19.3 dispatch uses these helpers; suppress dead_code until then.
+#[allow(dead_code)]
+impl MobMeshes {
+    /// True iff at least one part mesh was loaded for zombie.
+    pub(crate) fn zombie_loaded(&self) -> bool {
+        self.zombie_head.is_some()
+    }
+    /// True iff at least one part mesh was loaded for chicken.
+    pub(crate) fn chicken_loaded(&self) -> bool {
+        self.chicken_head.is_some()
+    }
+    /// True iff at least one part mesh was loaded for pig.
+    pub(crate) fn pig_loaded(&self) -> bool {
+        self.pig_head.is_some()
+    }
+    /// True iff at least one part mesh was loaded for cow.
+    pub(crate) fn cow_loaded(&self) -> bool {
+        self.cow_head.is_some()
+    }
+    /// True iff at least one part mesh was loaded for skeleton.
+    pub(crate) fn skeleton_loaded(&self) -> bool {
+        self.skeleton_head.is_some()
+    }
+    /// True iff at least one part mesh was loaded for spider.
+    pub(crate) fn spider_loaded(&self) -> bool {
+        self.spider_head.is_some()
+    }
 }
 
 // ---------------------------------------------------------------------------
