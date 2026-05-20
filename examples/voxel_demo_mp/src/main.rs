@@ -2061,10 +2061,19 @@ impl Voxel {
             let above_same =
                 self.world.get([vx, vy + 1, vz]).0 == liquid_id;
             if !above_same {
-                let t0 = [fx, fy + h00, fz];
-                let t1 = [fx + 1.0, fy + h10, fz];
-                let t2 = [fx + 1.0, fy + h11, fz + 1.0];
-                let t3 = [fx, fy + h01, fz + 1.0];
+                // W34 fix: emit corners in CCW order from above
+                // (SW -> NW -> NE -> SE) so the index pattern
+                // [0,1,2, 0,2,3] in push_quad_flow produces a
+                // triangle whose geometric normal points +Y.
+                // The previous order (SW, SE, NE, NW) was CW from
+                // above, giving -Y geometric normal which made
+                // water invisible/dark from the player's typical
+                // above-water vantage point regardless of the
+                // shader normal stored in the vertices.
+                let t0 = [fx, fy + h00, fz];                  // SW
+                let t1 = [fx, fy + h01, fz + 1.0];            // NW
+                let t2 = [fx + 1.0, fy + h11, fz + 1.0];      // NE
+                let t3 = [fx + 1.0, fy + h10, fz];            // SE
                 let normal = water_face_normal(t0, t1, t2, t3);
                 push_quad_flow(
                     vertices, indices, t0, t1, t2, t3, normal, flow,
@@ -16026,15 +16035,13 @@ fn water_face_normal(
     v2: [f32; 3],
     _v3: [f32; 3],
 ) -> [f32; 3] {
-    // W34 fix: cross product order was (v1-v0) x (v2-v0) which for the
-    // top-face corner walking emit_quad (SW, SE, NE, NW = CCW from above)
-    // produced a normal pointing -Y (down). The shader's lighting pass
-    // then treated the water surface as facing the seabed - viewed from
-    // above the player got back-face lighting (dark / nearly invisible).
-    // Swapping operands flips the normal to +Y so the surface lights
-    // correctly when seen from the player's typical above-water vantage.
-    let a = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-    let b = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    // W34: caller now passes corners in CCW order (SW -> NW -> NE -> SE)
+    // so the standard (v1-v0) x (v2-v0) cross product produces +Y normal
+    // for a flat water surface. The previous (SW, SE, NE, NW) emit order
+    // was CW from above and required swapping operands here as a
+    // workaround - that workaround is no longer needed.
+    let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let b = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
     let n = [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
