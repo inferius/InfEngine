@@ -525,21 +525,38 @@ where
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    // Per-corner quad_uv in [0, w] x [0, h] voxel coords.
-                    // The UV layout matches emit_element_quad's corner order:
-                    //   corner 0 = (0, 0)
-                    //   corner 1 = (0, h)
-                    //   corner 2 = (w, h)
-                    //   corner 3 = (w, 0)
-                    // Same ordering for both side > 0 and side < 0; the
-                    // difference between positive and negative faces is only in
-                    // the world-space corner positions, not in the UV coords.
-                    let quad_uv_corners = [
-                        [0.0f32, 0.0f32],
-                        [0.0f32, h     ],
-                        [w,      h     ],
-                        [w,      0.0f32],
-                    ];
+                    // W31.3: per-face quad_uv corners so the texture u/v
+                    // axes match MC conventions regardless of which world
+                    // axes the greedy (ua, va) pair picks.
+                    //
+                    // Convention: quad_uv.x = texture-u, quad_uv.y = texture-v.
+                    //   Z face (ua=X, va=Y): tex-u=X(=du), tex-v=Y(=dv) -> no swap.
+                    //   X face (ua=Y, va=Z): tex-u=Z(=dv), tex-v=Y(=du) -> swap.
+                    //   Y face (ua=Z, va=X): tex-u=X(=dv), tex-v=Z(=du) -> swap.
+                    //
+                    // Corners match the winding in emit_element_quad_tiled
+                    // [0,2,1, 0,3,2] for the positions:
+                    //   corner 0: (du=0, dv=0)
+                    //   corner 1: (du=0, dv=h)
+                    //   corner 2: (du=w, dv=h)
+                    //   corner 3: (du=w, dv=0)
+                    let quad_uv_corners = if fa == 2 {
+                        // Z face: tex-u=du, tex-v=dv (no swap)
+                        [
+                            [0.0f32, 0.0f32],
+                            [0.0f32, h     ],
+                            [w,      h     ],
+                            [w,      0.0f32],
+                        ]
+                    } else {
+                        // X face (fa=0) and Y face (fa=1): tex-u=dv, tex-v=du
+                        [
+                            [0.0f32, 0.0f32],
+                            [h,      0.0f32],
+                            [h,      w     ],
+                            [0.0f32, w     ],
+                        ]
+                    };
 
                     let normal_f32 = [
                         face.normal[0] as f32,
@@ -746,18 +763,29 @@ where
                     } else {
                         [corner_pos(w,0.0), corner_pos(w,h), corner_pos(0.0,h), corner_pos(0.0,0.0)]
                     };
-                    // W30.3: tile-fract emit (same as chunk_mesh_greedy).
+                    // W30.3 + W31.3: tile-fract emit with per-face UV orientation.
                     let base_uv = mask_uv[idx0];
                     let light = mask_light[idx0];
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
-                    let quad_uv_corners = [
-                        [0.0f32, 0.0f32],
-                        [0.0f32, h     ],
-                        [w,      h     ],
-                        [w,      0.0f32],
-                    ];
+                    // W31.3: same per-face swap as chunk_mesh_greedy.
+                    // Z face (fa=2): no swap. X/Y faces: tex-u=dv, tex-v=du.
+                    let quad_uv_corners = if fa == 2 {
+                        [
+                            [0.0f32, 0.0f32],
+                            [0.0f32, h     ],
+                            [w,      h     ],
+                            [w,      0.0f32],
+                        ]
+                    } else {
+                        [
+                            [0.0f32, 0.0f32],
+                            [h,      0.0f32],
+                            [h,      w     ],
+                            [0.0f32, w     ],
+                        ]
+                    };
                     let nf = [face.normal[0] as f32, face.normal[1] as f32, face.normal[2] as f32];
                     let entry = per_block
                         .entry(block)

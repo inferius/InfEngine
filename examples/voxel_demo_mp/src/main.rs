@@ -30,7 +30,7 @@ use infengine_net::{NetClient, NetServer};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 use infengine_voxel::{
     BlockDef, BlockId, BlockRegistry, CHUNK_SIZE, Chunk, ChunkCoord, RayHit, World,
-    chunk_mesh_with_atlas_light_anim_and_special,
+    chunk_mesh_greedy_with_special,
     raycast_with,
 };
 use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
@@ -6554,14 +6554,9 @@ impl Voxel {
                 },
             )
         };
-        // W30 deferred again: greedy mesher's per-face UV orientation needs
-        // a per-axis remap (X face: tex_u=Z tex_v=Y; Y face: tex_u=X tex_v=Z;
-        // Z face: tex_u=X tex_v=Y) AND the shader fract introduces a 1-pixel
-        // tile-seam artifact at integer voxel boundaries within merged
-        // quads. Per-voxel mesher is correct + still parallelized in worker
-        // threads via W24. Re-enable when per-face UV remap + tile seam
-        // padding shipped in W31.
-        chunk_mesh_with_atlas_light_anim_and_special(
+        // W31.3: greedy mesher re-enabled. Per-face UV orientation fixed
+        // (X/Y faces swap tex_u/tex_v), tile seam clamped in shader.
+        chunk_mesh_greedy_with_special(
             chunk,
             origin,
             uv_resolver,
@@ -15496,8 +15491,8 @@ fn mesh_chunk_in_worker(
         )
     };
 
-    // W30 deferred: see build_lit_submeshes for revert rationale.
-    chunk_mesh_with_atlas_light_anim_and_special(
+    // W31.3: greedy mesher re-enabled (same as build_lit_submeshes path).
+    chunk_mesh_greedy_with_special(
         chunk,
         origin,
         uv_resolver,

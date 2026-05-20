@@ -315,10 +315,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // into the atlas rect [tile_uv0, tile_uv0 + tile_size]. When
         // tile_size = 0 (per-voxel mesher set up via with_uv), the
         // formula collapses to in.uv = tile_uv0 = legacy UV.
+        //
+        // W31.3: clamp the result to the interior of the tile to prevent
+        // the 1-pixel seam artifact at integer voxel boundaries inside
+        // merged greedy quads. fract(N.0) can land on exactly 0.0 or
+        // 1.0 at tile edges due to floating-point precision, causing
+        // the sampler to bleed into the adjacent tile. Clamping to
+        // [tile_uv0 + half_texel, tile_uv0 + tile_size - half_texel]
+        // keeps the UV strictly inside this tile's texels.
         let tile_size = in.tile_size_out;
         var final_uv: vec2<f32>;
         if tile_size.x > 0.0 && tile_size.y > 0.0 {
-            final_uv = in.tile_uv0_out + fract(in.quad_uv_out) * tile_size;
+            let raw_uv = in.tile_uv0_out + fract(in.quad_uv_out) * tile_size;
+            let atlas_dim = vec2<f32>(textureDimensions(albedo_tex));
+            let half_texel = 0.5 / atlas_dim;
+            final_uv = clamp(
+                raw_uv,
+                in.tile_uv0_out + half_texel,
+                in.tile_uv0_out + tile_size - half_texel,
+            );
         } else {
             final_uv = in.uv;
         }
