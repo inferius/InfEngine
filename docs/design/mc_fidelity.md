@@ -524,3 +524,89 @@ Total W18 tests: 23. Baseline (W17 end): 1401. New total: 1426.
 - **Integrate `big_smoke` with furnace emitters**: furnace + smoker blocks
   could emit `big_smoke_0..11` plumes above their chimney; deferred to a
   dedicated furnace-animation wave.
+
+## Wave 19 - Mob skins + per-body-part UV
+
+Wave 19 introduces MC entity-texture UV mapping for all 7 mob kinds.
+Each kind gets per-face UVs derived directly from the Java model sources.
+
+### MC source class references
+
+| Mob | Java source file |
+|---|---|
+| Zombie | `net/minecraft/client/model/HumanoidModel.java` |
+| Skeleton | `net/minecraft/client/model/monster/skeleton/SkeletonModel.java` |
+| Pig | `net/minecraft/client/model/animal/pig/PigModel.java` + `QuadrupedModel.java` |
+| Cow | `net/minecraft/client/model/animal/cow/CowModel.java` + `QuadrupedModel.java` |
+| Chicken | `net/minecraft/client/model/animal/chicken/AdultChickenModel.java` |
+| Spider | `net/minecraft/client/model/monster/spider/SpiderModel.java` |
+| Sheep | Existing `build_sheep_head_mesh` in `main.rs` (unchanged) |
+
+All sourced from MC 26.1.2 at:
+`J:/Temp/template-mod-template-26.1.2/sources/minecraft-merged-52430b475d-26.1.2-sources/`
+
+### Mobs covered and part counts
+
+| Mob | Parts | UV atlas size |
+|---|---|---|
+| Sheep | 2 (body wool-tile + head entity-texture) | 64x32 (entity) |
+| Zombie | 6 (head, body, R-arm, L-arm, R-leg, L-leg) | 64x64 |
+| Chicken | 4 (head, body, R-leg, L-leg) | 64x32 |
+| Pig | 6 (head, body, RF-leg, LF-leg, RB-leg, LB-leg) | 64x64 |
+| Cow | 6 (head, body, RF-leg, LF-leg, RB-leg, LB-leg) | 64x64 |
+| Skeleton | 6 (head, body, R-arm, L-arm, R-leg, L-leg) | 64x32 |
+| Spider | 4 types (head, thorax, abdomen, leg - leg drawn x8) | 64x32 |
+
+Total upload: up to 32 GPU mesh handles (each with its own albedo).
+
+### Resource pack file paths searched
+
+For each mob `<mob>` in `{zombie, chicken, pig, cow, skeleton, spider}`:
+1. `<texture_dir>/../entity/<mob>/<mob>.tga`
+2. `<texture_dir>/../entity/<mob>/<mob>.png`
+3. `<texture_dir>/../entity/<mob>.tga`  (bedrock-flat fallback)
+4. `<texture_dir>/../entity/<mob>.png`  (bedrock-flat fallback)
+
+For sheep head (existing path, unchanged):
+1. `<texture_dir>/../entity/sheep/sheep.tga`
+2. `<texture_dir>/../entity/sheep/sheep.png`
+3. `<texture_dir>/sheep.tga`
+4. `<texture_dir>/sheep.png`
+
+### MC box-UV layout formula
+
+For a cube of size `w x h x d` at texture origin `(u0, v0)` (y-down):
+
+```
+face     pixel rect
+top      (u0+d, v0)         .. (u0+d+w,   v0+d)
+bottom   (u0+d+w, v0)       .. (u0+d+w+w, v0+d)
+right    (u0,     v0+d)     .. (u0+d,     v0+d+h)
+front    (u0+d,   v0+d)     .. (u0+d+w,   v0+d+h)
+left     (u0+d+w, v0+d)     .. (u0+d+w+d, v0+d+h)
+back     (u0+d+w+d, v0+d)   .. (u0+d+w+d+w, v0+d+h)
+```
+
+Implemented in `build_box_uv_mesh()` in
+`examples/voxel_demo_mp/src/mob_meshes.rs`.
+
+### Fallback behaviour
+
+When no resource pack is detected or the entity texture file is absent:
+- Each mob kind renders as a 2-cube silhouette (body + head) using the
+  existing `player_cube` mesh tinted with the kind's hard-coded colour.
+- Sheep fall back to the procedural-atlas wool tile on the body cube.
+- The fallback is tested implicitly by the lib test suite which runs
+  without any GPU context (all `MobMeshes` handles stay `None`).
+
+### Deferred follow-ups
+
+- **Per-mob walk animation**: limb rotation (xRot swing) driven by
+  `walk_bob` phase - currently all parts use the same rigid body_rot.
+  MC `setupAnim()` per-kind logic is a W20+ candidate.
+- **Skin variants**: mooshroom (cow variant), wither skeleton, cave
+  spider - each needs its own subdir search path.
+- **Sheep wool overlay**: the fur/wool layer (separate `sheep_fur.tga`
+  texture) is not yet rendered on top of the entity-texture body.
+- **Second skin layer (64x64 humanoid)**: the outer armor/clothing layer
+  (rows 32-64 on zombie/skeleton 64x64 texture) is not rendered.
