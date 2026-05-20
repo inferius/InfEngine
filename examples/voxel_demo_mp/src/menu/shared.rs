@@ -8,8 +8,116 @@
 //! Note: while the helpers live in their own module, they don't
 //! own any state; each one takes the parent `egui::Ui` + the
 //! current frame's data references.
+//!
+//! W21.3: buttons now carry MC-flavoured stone/beige background
+//! colours, a 2 px border, and a subtle shadow on the label.
 
-use egui::{Color32, RichText, Sense, Vec2};
+use egui::{Color32, RichText, Sense, Stroke, Vec2};
+
+// ---------------------------------------------------------------------------
+// Button colours (W21.3)
+// ---------------------------------------------------------------------------
+
+/// Stone-grey fill used for normal (un-hovered) MC-style buttons.
+const BTN_BG: Color32 = Color32::from_rgb(84, 84, 84);
+/// Slightly lighter fill shown on hover.
+const BTN_BG_HOVER: Color32 = Color32::from_rgb(106, 106, 106);
+/// Even lighter fill while the mouse button is held down.
+const BTN_BG_PRESS: Color32 = Color32::from_rgb(60, 60, 60);
+/// Disabled-state fill (very dark grey).
+const BTN_BG_DISABLED: Color32 = Color32::from_rgb(50, 50, 50);
+/// Bright border highlight - the top/left 1 px edge.
+const BTN_BORDER_LIGHT: Color32 = Color32::from_rgb(170, 170, 170);
+/// Dark border shadow - the bottom/right 1 px edge.
+const BTN_BORDER_DARK: Color32 = Color32::from_rgb(40, 40, 40);
+/// Label text colour for active buttons.
+const BTN_LABEL: Color32 = Color32::from_rgb(255, 255, 160);
+/// Label text colour for disabled buttons.
+const BTN_LABEL_DISABLED: Color32 = Color32::from_rgb(100, 100, 100);
+/// Drop-shadow offset in pixels for the label.
+const SHADOW_OFFSET: f32 = 1.5;
+/// Corner rounding for the button rectangle.
+const BTN_ROUNDING: f32 = 2.0;
+
+// ---------------------------------------------------------------------------
+// Helpers for drawing MC-style buttons
+// ---------------------------------------------------------------------------
+
+/// Draw a single MC-style button of the given size. Returns true
+/// exactly on the click frame.
+fn mc_button_sized(
+    ui: &mut egui::Ui,
+    label: &str,
+    desired: Vec2,
+    enabled: bool,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+
+        let bg = if !enabled {
+            BTN_BG_DISABLED
+        } else if resp.is_pointer_button_down_on() {
+            BTN_BG_PRESS
+        } else if resp.hovered() {
+            BTN_BG_HOVER
+        } else {
+            BTN_BG
+        };
+
+        // Background fill.
+        painter.rect_filled(rect, BTN_ROUNDING, bg);
+
+        // 1 px highlight on top + left edges.
+        painter.line_segment(
+            [rect.left_top(), rect.right_top()],
+            Stroke::new(1.0, BTN_BORDER_LIGHT),
+        );
+        painter.line_segment(
+            [rect.left_top(), rect.left_bottom()],
+            Stroke::new(1.0, BTN_BORDER_LIGHT),
+        );
+        // 1 px shadow on bottom + right edges.
+        painter.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(1.0, BTN_BORDER_DARK),
+        );
+        painter.line_segment(
+            [rect.right_top(), rect.right_bottom()],
+            Stroke::new(1.0, BTN_BORDER_DARK),
+        );
+
+        // Label with a 1.5 px drop shadow.
+        let text_colour = if enabled { BTN_LABEL } else { BTN_LABEL_DISABLED };
+        let shadow_colour = Color32::from_rgba_unmultiplied(0, 0, 0, 160);
+        let font_id = egui::FontId::proportional(14.0);
+        let centre = rect.center();
+
+        // Shadow pass - offset down-right.
+        painter.text(
+            centre + egui::vec2(SHADOW_OFFSET, SHADOW_OFFSET),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font_id.clone(),
+            shadow_colour,
+        );
+        // Main label.
+        painter.text(
+            centre,
+            egui::Align2::CENTER_CENTER,
+            label,
+            font_id,
+            text_colour,
+        );
+    }
+
+    enabled && resp.clicked()
+}
+
+// ---------------------------------------------------------------------------
+// Public button widgets
+// ---------------------------------------------------------------------------
 
 /// Big MC-style menu button. Fixed 320x32 footprint matches the
 /// proportions in the user's MC reference screenshots; the
@@ -19,31 +127,18 @@ use egui::{Color32, RichText, Sense, Vec2};
 /// Returns `true` exactly on the click frame so the caller can
 /// emit a `MenuAction` once per click.
 pub(crate) fn big_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
-    let desired = Vec2::new(320.0, 32.0);
-    if enabled {
-        let resp = ui.add_sized(desired, egui::Button::new(label));
-        resp.clicked()
-    } else {
-        // Greyed-out variant: same footprint, no click. We could
-        // use `ui.add_enabled` here but rolling it manually keeps
-        // the colour control in this module.
-        let resp = ui.add_sized(
-            desired,
-            egui::Button::new(RichText::new(label).color(Color32::from_gray(120))),
-        );
-        // Swallow the response so the click never fires even if
-        // egui's add_enabled wrapper isn't perfectly tight.
-        let _ = resp;
-        false
-    }
+    mc_button_sized(ui, label, Vec2::new(320.0, 32.0), enabled)
 }
 
 /// Narrower button variant for tertiary actions ("Zpet",
 /// "Obnovit"). Same 32 px height so the button bar lines up.
 pub(crate) fn small_button(ui: &mut egui::Ui, label: &str) -> bool {
-    let desired = Vec2::new(140.0, 32.0);
-    ui.add_sized(desired, egui::Button::new(label)).clicked()
+    mc_button_sized(ui, label, Vec2::new(140.0, 32.0), true)
 }
+
+// ---------------------------------------------------------------------------
+// Footer helpers
+// ---------------------------------------------------------------------------
 
 /// Footer label "Playing as: <name>" shown on every screen.
 pub(crate) fn footer_identity(ui: &mut egui::Ui, name: &str) {
@@ -62,6 +157,55 @@ pub(crate) fn footer_seed(ui: &mut egui::Ui, seed: u32) {
             .small()
             .italics(),
     );
+}
+
+/// W21.4: combined single-line footer showing player identity +
+/// world seed on one row. When a real MC resource pack is loaded
+/// (`pack_block_count > 0`), a bottom-left `egui::Area` shows
+/// the pack name + block count.
+pub(crate) fn footer_combined(
+    ui: &mut egui::Ui,
+    name: &str,
+    seed: u32,
+    pack_name: &str,
+    pack_block_count: usize,
+) {
+    // Single horizontal row: "Playing as: Michal | Seed: 12345"
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("Playing as: {name}"))
+                .color(Color32::from_rgb(180, 200, 200))
+                .small()
+                .italics(),
+        );
+        ui.label(
+            RichText::new("|")
+                .color(Color32::from_rgb(100, 120, 120))
+                .small(),
+        );
+        ui.label(
+            RichText::new(format!("Seed: {seed}"))
+                .color(Color32::from_rgb(150, 180, 180))
+                .small()
+                .italics(),
+        );
+    });
+
+    // Pack indicator in a bottom-left Area (outside the ui flow).
+    if pack_block_count > 0 {
+        egui::Area::new(egui::Id::new("menu_pack_footer"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -8.0])
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "MC pack: {pack_name} | {pack_block_count} blocks"
+                    ))
+                    .color(Color32::from_rgb(120, 160, 120))
+                    .small()
+                    .italics(),
+                );
+            });
+    }
 }
 
 /// Footer label "v0.0.1" anchored to the bottom-right via

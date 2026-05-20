@@ -8023,6 +8023,26 @@ impl Voxel {
             self.menu.worlds_cache.clone();
         let saved_servers_snapshot: Vec<menu::SavedServer> =
             self.menu.saved_servers.clone();
+        // W21.1: snapshot splash text before borrowing so the
+        // closure can carry it into MenuContext without a live
+        // borrow on `self.menu.splash_text`.
+        let menu_splash_text: Option<String> = self.menu.splash_text.clone();
+        // W21.4: resource-pack display info for the footer.
+        let menu_pack_block_count = if self.resource_pack.is_fallback {
+            0usize
+        } else {
+            self.resource_pack.textures.len()
+        };
+        let menu_pack_name: String = if self.resource_pack.is_fallback {
+            String::new()
+        } else {
+            self.resource_pack
+                .source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Vanilla")
+                .to_string()
+        };
         // Split `&mut self.menu` into two disjoint `&mut` borrows
         // of `screen` + `options` so the dispatcher can take one
         // while the `MenuContext` carries the other.
@@ -8121,6 +8141,12 @@ impl Voxel {
                             world_seed: menu_world_seed,
                             engine_version: menu_engine_version,
                             browser_querying,
+                            // W21.1: splash text snapshot.
+                            splash_text: menu_splash_text
+                                .as_deref(),
+                            // W21.4: pack info for footer.
+                            pack_name: &menu_pack_name,
+                            pack_block_count: menu_pack_block_count,
                         };
                         menu::draw(
                             ui,
@@ -8163,32 +8189,26 @@ impl Voxel {
                     });
             }
             AppState::Paused => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(80.0);
-                        ui.heading("Paused");
-                        ui.add_space(20.0);
-                        if ui.button("Resume").clicked() {
+                // W21.5: delegate to menu::pause::draw so the
+                // pause overlay uses the same MC-style buttons as
+                // the main menu.
+                let mut pause_actions: Vec<menu::pause::PauseAction> =
+                    Vec::new();
+                menu::pause::draw(ctx, menu_world_seed, &mut pause_actions);
+                for pa in pause_actions {
+                    use menu::pause::PauseAction;
+                    match pa {
+                        PauseAction::Resume => {
                             action_resume = true;
                         }
-                        if ui.button("Settings").clicked() {
+                        PauseAction::Settings => {
                             action_pause_to_settings = true;
                         }
-                        if ui.button("Main Menu").clicked() {
+                        PauseAction::MainMenu => {
                             action_main_menu = true;
                         }
-                        ui.add_space(20.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Seed: {}",
-                                menu_world_seed
-                            ))
-                            .color(egui::Color32::from_rgb(150, 180, 180))
-                            .small()
-                            .italics(),
-                        );
-                    });
-                });
+                    }
+                }
             }
             AppState::Settings { .. } => {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -10592,6 +10612,8 @@ impl Voxel {
             // last visited (Singleplayer / Multiplayer / Options) so
             // the Pause panel "Main Menu" button appeared to do nothing.
             self.menu.screen = menu::MenuScreen::Main;
+            // W21.1: pick a fresh splash line on return from gameplay.
+            self.menu.enter_main();
             self.state = AppState::MainMenu;
         }
         // Wave 4 (Phase G.6 + G.7): the legacy `action_to_direct /
@@ -10619,7 +10641,14 @@ impl Voxel {
         use menu::MenuAction;
         match action {
             MenuAction::SwitchScreen(target) => {
+                // W21.1: pick a fresh splash line when the user
+                // returns to the Main screen from a sub-screen.
+                let arriving_main =
+                    matches!(target, menu::MenuScreen::Main);
                 self.menu.apply_switch(target);
+                if arriving_main {
+                    self.menu.enter_main();
+                }
                 // Auto-refresh the server list when the user
                 // enters the Multiplayer screen so it doesn't sit
                 // empty waiting for them to click Obnovit.
@@ -15862,6 +15891,9 @@ fn main() -> ExitCode {
         resizable: true,
     };
     let mut voxel = Voxel::new_with_net(net);
+    // W21.1: pick initial splash text so it's ready before the
+    // first Main screen draw.
+    voxel.menu.enter_main();
     // W5.1: apply the CLI --worldgen flag to the active dim's
     // per-dim worldgen entry. Replaces the deleted global atomic.
     if let Some(g) = cli_worldgen {

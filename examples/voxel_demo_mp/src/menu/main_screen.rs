@@ -1,4 +1,7 @@
-//! Main menu screen. Four big buttons + identity/seed footer.
+//! Main menu screen. Title banner, animated splash text, four big
+//! buttons, and combined footer. W21.1 redesign.
+
+use egui::{Color32, RichText};
 
 use super::{
     MenuAction, MenuContext, MenuScreen, default_multiplayer,
@@ -16,9 +19,46 @@ pub(crate) fn draw(
     actions: &mut Vec<MenuAction>,
 ) {
     ui.vertical_centered(|ui| {
-        ui.add_space(60.0);
-        ui.heading("InfEngine - Voxel Demo");
-        ui.add_space(40.0);
+        ui.add_space(48.0);
+
+        // --- Title banner (W21.1) ---
+        // "InfEngine" in large bold text.
+        ui.label(
+            RichText::new("InfEngine")
+                .size(56.0)
+                .strong()
+                .color(Color32::from_rgb(255, 255, 255)),
+        );
+        // Subtitle line.
+        ui.label(
+            RichText::new("Voxel Demo")
+                .size(18.0)
+                .color(Color32::from_rgb(160, 180, 200)),
+        );
+
+        // --- Splash text (W21.1) ---
+        // Yellow italic line with a subtle pulse animation.
+        // egui 0.33 does not expose a convenient per-widget
+        // rotation API (Painter rotation requires shape-level
+        // transforms which clash with the ui.label sizing pass),
+        // so the splash is rendered upright as a first cut.
+        // A rotation follow-up is tracked as a deferred item.
+        if let Some(splash) = ctx.splash_text {
+            let t = ui.input(|i| i.time) as f32;
+            // Scale pulses between 0.95 and 1.05.
+            let scale = (t * 4.0).sin() * 0.05 + 1.0;
+            let base_size = 16.0;
+            ui.label(
+                RichText::new(splash)
+                    .size(base_size * scale)
+                    .italics()
+                    .color(Color32::from_rgb(255, 255, 0)),
+            );
+            // Request repaint so the pulse animates every frame.
+            ui.ctx().request_repaint();
+        }
+
+        ui.add_space(32.0);
 
         if shared::big_button(ui, "Hra jednoho hrace", true) {
             actions.push(MenuAction::SwitchScreen(default_singleplayer()));
@@ -36,10 +76,18 @@ pub(crate) fn draw(
             actions.push(MenuAction::Quit);
         }
 
-        ui.add_space(40.0);
-        shared::footer_identity(ui, &ctx.options.player_name);
-        shared::footer_seed(ui, ctx.world_seed);
+        ui.add_space(32.0);
+
+        // --- Combined footer (W21.4) ---
+        shared::footer_combined(
+            ui,
+            &ctx.options.player_name,
+            ctx.world_seed,
+            ctx.pack_name,
+            ctx.pack_block_count,
+        );
     });
+
     // Bottom-right version footer. Anchored on the egui context so
     // the central panel doesn't have to reserve space for it.
     shared::footer_version(ui.ctx(), ctx.engine_version);

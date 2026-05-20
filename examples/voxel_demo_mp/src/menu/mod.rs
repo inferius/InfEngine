@@ -38,6 +38,7 @@ pub(crate) mod main_screen;
 pub(crate) mod multiplayer;
 pub(crate) mod new_world;
 pub(crate) mod options;
+pub(crate) mod pause;
 pub(crate) mod shared;
 pub(crate) mod singleplayer;
 
@@ -264,6 +265,15 @@ pub(crate) struct MenuContext<'a> {
     pub(crate) engine_version: &'a str,
     /// "Refresh in progress" flag for the multiplayer screen.
     pub(crate) browser_querying: bool,
+    /// W21.1: current splash text line from `Menu::splash_text`.
+    /// `None` before the first `enter_main` call.
+    pub(crate) splash_text: Option<&'a str>,
+    /// W21.4: MC resource pack display name ("Vanilla", "Custom",
+    /// ...). Shown in the footer when `pack_block_count > 0`.
+    pub(crate) pack_name: &'a str,
+    /// W21.4: number of block textures in the loaded resource
+    /// pack. 0 when running on the fallback/placeholder atlas.
+    pub(crate) pack_block_count: usize,
 }
 
 /// Holds the screen + transient form buffers + the world-list
@@ -283,6 +293,11 @@ pub(crate) struct Menu {
     /// worlds cache.
     pub(crate) saved_servers: Vec<SavedServer>,
     pub(crate) saved_servers_at: Option<Instant>,
+    /// W21.1: current splash text line. Picked fresh in
+    /// `enter_main()`; stays constant until the user leaves +
+    /// re-enters the Main screen so the text doesn't flicker
+    /// each frame.
+    pub(crate) splash_text: Option<String>,
 }
 
 /// How often the menu re-scans the worlds dir + saved-servers
@@ -290,6 +305,53 @@ pub(crate) struct Menu {
 /// and well under the 60 Hz UI tick.
 pub(crate) const CACHE_TTL: std::time::Duration =
     std::time::Duration::from_millis(500);
+
+/// Pool of splash text lines shown on the Main screen.
+/// Mirrors the pool in MC's `TitleScreen.java`. Pure ASCII only.
+pub(crate) const SPLASH_LINES: &[&str] = &[
+    "Now with mob skins!",
+    "Open source!",
+    "Made in Rust!",
+    "Now Compiling!",
+    "Wave 21!",
+    "100% Procedural!",
+    "Yo dawg I heard you like blocks",
+    "Now with diamond pickaxes!",
+    "Made by Michal!",
+    "Caves and Cliffs - free DLC!",
+    "Now with chunks!",
+    "Creeper? Aw man.",
+    "Also try InfEngine!",
+    "No NaN voxels!",
+    "Borrow checked!",
+    "cargo clippy: no warnings!",
+    "Multithreaded!",
+    "Infinite terrain!",
+    "Underground caves!",
+    "Procedural dungeons!",
+    "Day/night cycle!",
+    "Mob physics!",
+    "Multiplayer!",
+    "LAN + master server!",
+    "Cubic chunks!",
+    "Written in safe Rust!",
+    "Best voxel engine of 2026!",
+    "Runs on Wayland AND X11!",
+    "Windows too!",
+    "Fast mesher!",
+];
+
+/// Pick a fresh splash line using a simple time-based index so
+/// each call to `enter_main` gets a different line.
+fn pick_splash() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let idx = (nanos as usize) % SPLASH_LINES.len();
+    SPLASH_LINES[idx].to_string()
+}
 
 impl Menu {
     /// Build a fresh menu in the `Main` screen with the runtime's
@@ -303,7 +365,15 @@ impl Menu {
             worlds_cache_at: None,
             saved_servers: Vec::new(),
             saved_servers_at: None,
+            splash_text: None,
         }
+    }
+
+    /// W21.1: called whenever the Main screen is (re-)entered.
+    /// Picks a fresh splash line from `SPLASH_LINES` so re-entry
+    /// from a sub-screen shows a different quip.
+    pub(crate) fn enter_main(&mut self) {
+        self.splash_text = Some(pick_splash());
     }
 
     /// Returns true if the worlds cache is older than `CACHE_TTL`
@@ -578,4 +648,113 @@ pub(crate) fn draw(
         _ => None,
     });
     *screen_ref = switch_target.unwrap_or(next);
+}
+
+/// Top-level draw dispatcher that also carries the `Menu` struct
+/// so animated state (splash text) can be refreshed on screen
+/// transitions. Called from `main.rs` in place of `draw`.
+pub(crate) fn draw_with_menu(
+    ui: &mut egui::Ui,
+    menu: &mut Menu,
+    ctx: &mut MenuContext<'_>,
+    actions: &mut Vec<MenuAction>,
+) {
+    // Snapshot the current screen for the transition matrix.
+    let was_main = matches!(menu.screen, MenuScreen::Main);
+    // Borrow the screen ref separately so the menu can be
+    // updated after the draw call.
+    let screen = std::mem::replace(&mut menu.screen, MenuScreen::Main);
+    let next = match screen {
+        MenuScreen::Main => {
+            main_screen::draw(ui, ctx, actions);
+            MenuScreen::Main
+        }
+        MenuScreen::Singleplayer {
+            mut selected_slug,
+            mut search,
+            mut new_world_open,
+            mut confirm_delete,
+        } => {
+            singleplayer::draw(
+                ui,
+                ctx,
+                &mut selected_slug,
+                &mut search,
+                &mut new_world_open,
+                &mut confirm_delete,
+                actions,
+            );
+            MenuScreen::Singleplayer {
+                selected_slug,
+                search,
+                new_world_open,
+                confirm_delete,
+            }
+        }
+        MenuScreen::Multiplayer {
+            mut selected_addr,
+            mut search,
+            mut direct_connect_open,
+            mut add_server_open,
+            mut confirm_remove,
+        } => {
+            multiplayer::draw(
+                ui,
+                ctx,
+                &mut selected_addr,
+                &mut search,
+                &mut direct_connect_open,
+                &mut add_server_open,
+                &mut confirm_remove,
+                actions,
+            );
+            MenuScreen::Multiplayer {
+                selected_addr,
+                search,
+                direct_connect_open,
+                add_server_open,
+                confirm_remove,
+            }
+        }
+        MenuScreen::Options => {
+            options::draw(ui, ctx, actions);
+            MenuScreen::Options
+        }
+        MenuScreen::NewWorld {
+            mut name,
+            mut seed,
+            mut generator,
+            mut game_mode,
+        } => {
+            new_world::draw(
+                ui,
+                ctx,
+                &mut name,
+                &mut seed,
+                &mut generator,
+                &mut game_mode,
+                actions,
+            );
+            MenuScreen::NewWorld {
+                name,
+                seed,
+                generator,
+                game_mode,
+            }
+        }
+        MenuScreen::InGame => MenuScreen::InGame,
+    };
+    let switch_target = actions.iter().rev().find_map(|a| match a {
+        MenuAction::SwitchScreen(t) => Some(t.clone()),
+        _ => None,
+    });
+    let resolved = switch_target.unwrap_or(next);
+    // W21.1: if we just arrived at Main (either from a sub-screen
+    // SwitchScreen or on the very first draw), pick a fresh
+    // splash line so re-entry shows a different quip.
+    let arriving_main = matches!(resolved, MenuScreen::Main) && !was_main;
+    if arriving_main || menu.splash_text.is_none() {
+        menu.enter_main();
+    }
+    menu.screen = resolved;
 }
