@@ -28,6 +28,7 @@ infengine_net = { path = "../../crates/infengine_net" }
 infengine_particles = { path = "../../crates/infengine_particles" }
 infengine_audio = { path = "../../crates/infengine_audio" }
 infengine_sdk = { path = "../../crates/infengine_sdk" }
+crossbeam-channel = "0.5"
 libloading = "0.8"
 egui = { workspace = true }
 glam = { workspace = true }

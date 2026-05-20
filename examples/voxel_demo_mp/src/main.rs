@@ -18,8 +18,10 @@
 
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::process::ExitCode;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+// W28.10: crossbeam-channel replaces std::sync::mpsc. MPMC receiver can be
+// cloned directly without Mutex, eliminating lock contention under load.
+use crossbeam_channel::{Receiver, Sender, unbounded as cb_unbounded};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use glam::{Mat4, Vec3};
@@ -15102,27 +15104,22 @@ impl WorkerPool {
     }
 
     fn spawn(num_workers: usize) -> Self {
-        let (req_tx, req_rx) = mpsc::channel::<Job>();
-        let req_rx = Arc::new(Mutex::new(req_rx));
-        let (res_tx, res_rx) = mpsc::channel::<WorkerResult>();
+        // W28.10: crossbeam-channel MPMC - receiver is Cloneable, no Mutex needed.
+        let (req_tx, req_rx) = cb_unbounded::<Job>();
+        let (res_tx, res_rx) = cb_unbounded::<WorkerResult>();
         let mut threads = Vec::with_capacity(num_workers);
         for i in 0..num_workers {
-            let req_rx = Arc::clone(&req_rx);
+            let req_rx = req_rx.clone();
             let res_tx = res_tx.clone();
             threads.push(
                 thread::Builder::new()
                     .name(format!("voxel_worker_{i}"))
                     .spawn(move || {
                         loop {
-                            // Briefly lock the shared receiver to grab the
-                            // next job. The lock is held only across one
-                            // recv() call; generation runs lock-free.
-                            let job = {
-                                let rx = req_rx.lock().expect("worker mutex");
-                                match rx.recv() {
-                                    Ok(j) => j,
-                                    Err(_) => return,
-                                }
+                            // W28.10: crossbeam recv() blocks without Mutex.
+                            let job = match req_rx.recv() {
+                                Ok(j) => j,
+                                Err(_) => return,
                             };
                             match job {
                                 Job::Generate(gj) => {
@@ -15282,11 +15279,10 @@ impl WorkerPool {
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        // Close the request channel by replacing the sender with a
-        // dummy that we then drop, which causes worker recv() to fail.
-        // Replacing the field with a fresh channel and dropping is
-        // equivalent; using `mem::replace` keeps the type stable.
-        let (dummy_tx, _) = mpsc::channel::<Job>();
+        // Close the request channel by replacing the sender with a dummy
+        // and dropping it; workers see recv() return Err and exit.
+        // W28.10: use cb_unbounded for the dummy sender.
+        let (dummy_tx, _) = cb_unbounded::<Job>();
         let _ = std::mem::replace(&mut self.req_tx, dummy_tx);
         for t in self.threads.drain(..) {
             let _ = t.join();
