@@ -22,11 +22,77 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use infengine_voxel::{CHUNK_SIZE, ChunkCoord};
+use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 pub(crate) mod grid;
 pub(crate) mod block_engine;
 pub(crate) mod sky_engine;
+
+// ---------------------------------------------------------------------------
+// W27.2: LightingWorldAccess - thin read-only trait so BFS engines can run
+// against both the live `World` (main thread) and an owned `ChunkSnapshot`
+// (worker thread). The worker owns its own snapshot and never borrows from
+// the main-thread World.
+// ---------------------------------------------------------------------------
+
+/// Read-only voxel access needed by the BFS lighting engines.
+///
+/// Two implementations:
+/// - `&World` (main thread): reads the live world directly.
+/// - `&ChunkSnapshot` (worker thread): reads an owned map of cloned chunks.
+///
+/// The propagate_* functions in block_engine + sky_engine accept
+/// `&impl LightingWorldAccess` so they compile for both call sites.
+pub(crate) trait LightingWorldAccess {
+    /// Look up the block at world voxel coord `pos`. Returns air
+    /// (`BlockId::AIR`) for positions outside any loaded chunk.
+    fn get_block(&self, pos: [i32; 3]) -> BlockId;
+}
+
+impl LightingWorldAccess for World {
+    #[inline]
+    fn get_block(&self, pos: [i32; 3]) -> BlockId {
+        self.get(pos)
+    }
+}
+
+/// W27.2: Owned snapshot of a set of chunks used by worker-thread BFS.
+/// Built on the main thread by cloning the relevant `Chunk`s; the worker
+/// reads it without any borrow into the main-thread `World`.
+pub(crate) struct ChunkSnapshot {
+    /// Owned chunk map: chunk coord -> voxel data.
+    pub(crate) chunks: HashMap<ChunkCoord, Chunk>,
+}
+
+impl ChunkSnapshot {
+    /// Build a snapshot from an iterator of `(coord, chunk)` pairs.
+    pub(crate) fn from_iter(iter: impl IntoIterator<Item = (ChunkCoord, Chunk)>) -> Self {
+        Self {
+            chunks: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl LightingWorldAccess for ChunkSnapshot {
+    #[inline]
+    fn get_block(&self, pos: [i32; 3]) -> BlockId {
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            pos[0].div_euclid(cs),
+            pos[1].div_euclid(cs),
+            pos[2].div_euclid(cs),
+        ];
+        let lc = [
+            pos[0].rem_euclid(cs) as usize,
+            pos[1].rem_euclid(cs) as usize,
+            pos[2].rem_euclid(cs) as usize,
+        ];
+        self.chunks
+            .get(&cc)
+            .map(|c| c.get(lc[0], lc[1], lc[2]))
+            .unwrap_or(BlockId::AIR)
+    }
+}
 
 #[cfg(test)]
 mod grid_tests;
@@ -208,6 +274,26 @@ impl LightingState {
     #[allow(dead_code)] // wired up in a follow-up commit that streams chunks out.
     pub(crate) fn forget(&mut self, chunk: ChunkCoord) {
         self.grids.remove(&chunk);
+    }
+
+    /// W27.5: Insert or replace the light grid for `chunk` with a
+    /// pre-computed `Arc<LightGrid>` from a worker-thread BFS result.
+    /// The worker creates a fresh `Arc` (unique refcount); the main
+    /// thread atomically stores it here. Any snapshot held by an
+    /// in-flight remesh job sees the old `Arc` via COW - no race.
+    pub(crate) fn set_grid(&mut self, chunk: ChunkCoord, grid: Arc<LightGrid>) {
+        self.grids.insert(chunk, grid);
+    }
+
+    /// W27.2: Build a `LightingState` pre-seeded with existing light
+    /// grids. Used by the worker thread to warm-start the BFS from
+    /// existing values rather than from all-zero. Clones the Arc
+    /// handles (cheap) - does NOT copy grid bytes.
+    pub(crate) fn with_grids(grids: HashMap<ChunkCoord, Arc<LightGrid>>) -> Self {
+        Self {
+            grids,
+            dirty: HashSet::new(),
+        }
     }
 }
 

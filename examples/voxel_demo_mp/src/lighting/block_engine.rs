@@ -25,9 +25,9 @@
 
 use std::collections::VecDeque;
 
-use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord, World};
+use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
 
-use super::{LightingState, block_emission};
+use super::{LightingState, LightingWorldAccess, block_emission};
 use crate::block::block_is_opaque;
 
 /// One step decay through any transparent block (air, water, leaves,
@@ -138,7 +138,7 @@ fn get_block_light(state: &LightingState, affected: &[ChunkCoord], pos: [i32; 3]
 /// see them. Each emitter cell also has its own grid entry written
 /// so the BFS-propagate step sees the source level.
 fn seed_emitters(
-    world: &World,
+    world: &impl LightingWorldAccess,
     state: &mut LightingState,
     affected: &[ChunkCoord],
 ) -> VecDeque<([i32; 3], u8)> {
@@ -150,7 +150,7 @@ fn seed_emitters(
             for y in 0..CHUNK_SIZE as i32 {
                 for x in 0..CHUNK_SIZE as i32 {
                     let p = [base[0] + x, base[1] + y, base[2] + z];
-                    let id = world.get(p).0;
+                    let id = world.get_block(p).0;
                     let emit = block_emission(id);
                     if emit > 0
                         && let Some(v) = try_set_block_light(state, affected, p, emit)
@@ -165,7 +165,7 @@ fn seed_emitters(
 }
 
 /// BFS-propagate the seeded queue across the affected region.
-fn propagate(world: &World, state: &mut LightingState, affected: &[ChunkCoord], mut queue: VecDeque<([i32; 3], u8)>) {
+fn propagate(world: &impl LightingWorldAccess, state: &mut LightingState, affected: &[ChunkCoord], mut queue: VecDeque<([i32; 3], u8)>) {
     while let Some((pos, level)) = queue.pop_front() {
         if level <= 1 {
             // A 1-light cell can only push 0 -> nothing to add.
@@ -182,7 +182,7 @@ fn propagate(world: &World, state: &mut LightingState, affected: &[ChunkCoord], 
         }
         for n in NEIGHBOURS {
             let np = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
-            let nb = world.get(np);
+            let nb = world.get_block(np);
             let decay = step_decay(nb);
             let new_level = level.saturating_sub(decay);
             if new_level == 0 {
@@ -208,7 +208,7 @@ fn propagate(world: &World, state: &mut LightingState, affected: &[ChunkCoord], 
 /// chunks we haven't been asked to relight (call sites compensate
 /// by including the 8 neighbour chunks of any edited chunk).
 pub(crate) fn propagate_block_light(
-    world: &World,
+    world: &impl LightingWorldAccess,
     state: &mut LightingState,
     affected: &[ChunkCoord],
 ) {

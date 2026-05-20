@@ -20,9 +20,9 @@
 
 use std::collections::VecDeque;
 
-use infengine_voxel::{CHUNK_SIZE, ChunkCoord, World};
+use infengine_voxel::{CHUNK_SIZE, ChunkCoord};
 
-use super::LightingState;
+use super::{LightingState, LightingWorldAccess};
 use super::block_engine::step_decay;
 use crate::block::block_is_opaque;
 
@@ -145,7 +145,7 @@ fn affected_columns(affected: &[ChunkCoord]) -> Vec<(i32, i32)> {
 /// MC's `SkyLightEngine.checkNode` does the same: opens the column
 /// then re-floods adjacent cells.
 fn column_walk(
-    world: &World,
+    world: &impl LightingWorldAccess,
     state: &mut LightingState,
     affected: &[ChunkCoord],
     y_min: i32,
@@ -156,7 +156,7 @@ fn column_walk(
         let mut light = SKY_FULL;
         for y in (y_min..=y_max).rev() {
             let p = [x, y, z];
-            let b = world.get(p);
+            let b = world.get_block(p);
             // Air is never opaque; `block_is_opaque` treats
             // unknown ids as opaque so we have to short-circuit
             // air ourselves (matches block_engine::step_decay).
@@ -180,7 +180,7 @@ fn column_walk(
 }
 
 fn propagate(
-    world: &World,
+    world: &impl LightingWorldAccess,
     state: &mut LightingState,
     affected: &[ChunkCoord],
     mut queue: VecDeque<([i32; 3], u8)>,
@@ -195,7 +195,7 @@ fn propagate(
         }
         for n in NEIGHBOURS {
             let np = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
-            let nb = world.get(np);
+            let nb = world.get_block(np);
             let decay = step_decay(nb);
             let new_level = level.saturating_sub(decay);
             if new_level == 0 {
@@ -218,7 +218,7 @@ fn propagate(
 ///    the standard 1-per-step decay through transparent voxels
 ///    (15 through opaque, killing the branch).
 pub(crate) fn propagate_sky_light(
-    world: &World,
+    world: &impl LightingWorldAccess,
     state: &mut LightingState,
     affected: &[ChunkCoord],
 ) {
