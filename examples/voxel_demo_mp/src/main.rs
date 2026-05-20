@@ -2161,10 +2161,12 @@ impl Voxel {
             }
             let label = format!("voxel_liquid_{liquid_id}");
             let h = renderer.create_mesh(&label, &vertices, &indices);
-            if block_is_transparent_render(BlockId(liquid_id)) {
-                renderer.set_mesh_transparent(h, true);
-            }
+            // W34: liquid meshes stay opaque so the pass routes them via
+            // the default mesh3d pipeline (depth-write on, no alpha blend
+            // ordering issues). Translucent water returns when proper
+            // back-to-front sort + depth ordering is in place.
             self.liquid_mesh_handles.insert(liquid_id, h);
+            let _ = block_is_transparent_render;
         }
         self.liquid_mesh_dirty = false;
     }
@@ -14280,12 +14282,18 @@ impl AppHandler for Voxel {
             let Some(bt) = block_type(*liquid_id) else {
                 continue;
             };
-            // Per-liquid alpha + roughness: water reads more
-            // translucent + smooth, lava nearly opaque + matte.
+            // W34: force liquid alpha to 1.0 (fully opaque). Previously
+            // water=0.65 / lava=0.92 routed both through the alpha-blend
+            // transparent pipeline with depth_write=off. The combo of
+            // alpha blend + the user's particular view angles produced
+            // invisible-from-above / weird-from-below water + lava
+            // appearance. Going opaque keeps liquids visible regardless
+            // of viewing angle and depth ordering; MC-style translucent
+            // water can return when the depth + sort is properly wired.
             let (alpha, rough) = match *liquid_id {
-                WATER_ID => (0.65_f32, 0.18_f32),
-                LAVA_ID => (0.92, 0.55),
-                _ => (0.75, 0.30),
+                WATER_ID => (1.0_f32, 0.18_f32),
+                LAVA_ID => (1.0, 0.55),
+                _ => (1.0, 0.30),
             };
             // Water gets the animated caustic-ripple shader path;
             // lava (no flow texture authored yet) keeps the plain
