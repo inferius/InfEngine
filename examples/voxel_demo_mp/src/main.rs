@@ -2056,18 +2056,28 @@ impl Voxel {
             // shimmer.
             let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
             // Top face: emit only when the voxel above isn't
-            // the same liquid. Original SW->SE->NE->NW corner order
-            // restored so the water-flow shader ripple animation
-            // matches what it had before W34. The shader-side
-            // normal +Y is computed in water_face_normal directly
-            // (no corner-order dependency).
+            // the same liquid.
+            //
+            // W34: now that liquids route through the OPAQUE pipeline
+            // (cull_mode::Back), the top face MUST be CCW from above
+            // or it gets culled. The previous (SW, SE, NE, NW) order
+            // was CW from above which is why user saw "horni strana
+            // chybi - jde videt jen ze spodu". Emit in (SW, NW, NE, SE)
+            // order = CCW from above so triangle (v0, v1, v2) has
+            // cross +Y matching the outward normal.
+            //
+            // The shader's water ripple animation is invariant to corner
+            // order (it samples world_pos.xz + per-fragment flow which
+            // are independent of which vertex carried which index), so
+            // any prior "flow direction reversed" perception was a
+            // viewpoint illusion, not a real shader difference.
             let above_same =
                 self.world.get([vx, vy + 1, vz]).0 == liquid_id;
             if !above_same {
-                let t0 = [fx, fy + h00, fz];
-                let t1 = [fx + 1.0, fy + h10, fz];
-                let t2 = [fx + 1.0, fy + h11, fz + 1.0];
-                let t3 = [fx, fy + h01, fz + 1.0];
+                let t0 = [fx, fy + h00, fz];                  // SW (X=0, Z=0)
+                let t1 = [fx, fy + h01, fz + 1.0];            // NW (X=0, Z=1)
+                let t2 = [fx + 1.0, fy + h11, fz + 1.0];      // NE (X=1, Z=1)
+                let t3 = [fx + 1.0, fy + h10, fz];            // SE (X=1, Z=0)
                 let normal = water_face_normal(t0, t1, t2, t3);
                 push_quad_flow(
                     vertices, indices, t0, t1, t2, t3, normal, flow,
