@@ -124,6 +124,8 @@ mod wave16_tests;
 mod wave17_tests;
 #[cfg(test)]
 mod wave18_tests;
+#[cfg(test)]
+mod wave24_tests;
 // Phase L (Wave 3): per-voxel block + sky lighting subsystem.
 // `LightingState` lives on `Voxel`; engines flood emitter + day
 // light into per-chunk `LightGrid`s nibble-packed at 4 bits per
@@ -1434,7 +1436,9 @@ struct Voxel {
     /// uv lookup, item icons, sound event registry + the source
     /// path (shown on the settings page). Always present; uses
     /// the placeholder pack when no MC install was discovered.
-    resource_pack: resource_pack::ResourcePack,
+    /// W24: wrapped in Arc so worker threads can clone a reference
+    /// and read concurrently during parallel chunk meshing.
+    resource_pack: Arc<resource_pack::ResourcePack>,
     /// Master-server endpoint the in-game browser queries. Settable
     /// via `--master <addr>` argv; defaults to the configured
     /// public master.
@@ -5302,7 +5306,7 @@ impl Voxel {
             egui_panorama: None,
             panorama_scroll: 0.0,
             texture_dir: None,
-            resource_pack: resource_pack::ResourcePack::load(),
+            resource_pack: Arc::new(resource_pack::ResourcePack::load()),
             particles: {
                 // Particle system starts with one "ambient" emitter
                 // (rate=0, max=0) that only contributes its gravity
@@ -5944,12 +5948,30 @@ impl Voxel {
         // thread and ship a copy with every job. If switch_dim
         // fires between enqueue and pickup, the worker still gens
         // against the captured ctx, not the stomped atomics.
+        // W24: also snapshot the resource pack Arc + pre-fetch the
+        // 6-neighbour halo lighting so the worker can mesh the chunk
+        // without touching main-thread state.
         if let Some(pool) = self.workers.as_ref() {
             let ctx = self.current_worldgen_ctx();
+            let pack_arc = Arc::clone(&self.resource_pack);
             while let Some(cc) = self.pending_chunks.pop_front() {
+                // Pre-fetch halo lighting for this chunk coord.
+                // Missing neighbours fall back to None -> [0.0, 1.0]
+                // in the worker, matching the main-thread fallback.
+                let halo = HaloLighting {
+                    own: self.lighting.get(cc).cloned(),
+                    px: self.lighting.get([cc[0] + 1, cc[1], cc[2]]).cloned(),
+                    nx: self.lighting.get([cc[0] - 1, cc[1], cc[2]]).cloned(),
+                    pz: self.lighting.get([cc[0], cc[1], cc[2] + 1]).cloned(),
+                    nz: self.lighting.get([cc[0], cc[1], cc[2] - 1]).cloned(),
+                    py: self.lighting.get([cc[0], cc[1] + 1, cc[2]]).cloned(),
+                    ny: self.lighting.get([cc[0], cc[1] - 1, cc[2]]).cloned(),
+                };
                 let job = ChunkJob {
                     coord: cc,
                     ctx: ctx.clone(),
+                    pack: Arc::clone(&pack_arc),
+                    halo,
                 };
                 if pool.req_tx.send(job).is_err() {
                     self.pending_chunks.push_front(cc);
@@ -6017,15 +6039,42 @@ impl Voxel {
             self.world.insert_chunk(result.coord, result.chunk);
             let cc = result.coord;
 
-            // W22.2: Workers no longer compute legacy submeshes.
-            // Enqueue the new chunk itself + its loaded neighbours
-            // into pending_remesh so build_lit_submeshes runs on the
-            // main thread with the proper MC atlas + special models.
-            // W23.3c: dedup via pending_remesh_set - multiple arriving
-            // chunks can name the same neighbour; only enqueue once.
-            if self.pending_remesh_set.insert(cc) {
-                self.pending_remesh.push_back(cc);
+            // W24: Worker already built MC-atlas submeshes. Upload
+            // them to the GPU directly here instead of going through
+            // pending_remesh / build_lit_submeshes on the main thread.
+            // This is the primary perf win: meshing work is now
+            // parallelised across all worker threads.
+            if !result.submeshes.is_empty() {
+                let atlas = self.voxel_atlas.clone();
+                let renderer = self.renderer.as_mut().expect("renderer ready");
+                for sub in result.submeshes {
+                    if sub.vertices.is_empty() || sub.indices.is_empty() {
+                        continue;
+                    }
+                    // Skip torch + snow: dedicated world-pass meshes.
+                    if block_skips_chunk_mesh(sub.block) {
+                        continue;
+                    }
+                    let handle = renderer.create_mesh(
+                        &format!(
+                            "voxel_chunk_{}_{}_{}_b{}",
+                            cc[0], cc[1], cc[2], sub.block.0
+                        ),
+                        &sub.vertices,
+                        &sub.indices,
+                    );
+                    if let Some(a) = atlas.clone() {
+                        renderer.bind_mesh_albedo_arc(handle, a);
+                    }
+                    self.chunk_meshes.push((cc, sub.block, handle));
+                }
             }
+
+            // Enqueue the 4 horizontal neighbours into pending_remesh
+            // so their boundary faces update (the new chunk's voxels
+            // affect which of their faces are visible). The new chunk
+            // itself is NOT enqueued - it was just meshed by the worker.
+            // W23.3c: dedup via pending_remesh_set.
             for n in [
                 [cc[0] - 1, cc[1], cc[2]],
                 [cc[0] + 1, cc[1], cc[2]],
@@ -10827,7 +10876,7 @@ impl Voxel {
                     Some(std::path::PathBuf::from(trimmed))
                 };
                 self.resource_pack =
-                    resource_pack::ResourcePack::load_with_override(override_path);
+                    Arc::new(resource_pack::ResourcePack::load_with_override(override_path));
                 self.settings.mc_assets_path = if trimmed.is_empty() {
                     None
                 } else {
@@ -10957,9 +11006,9 @@ impl AppHandler for Voxel {
         // hits the same placeholder). The GPU upload below picks
         // up whichever atlas this leaves us with.
         if let Some(override_path) = self.settings.mc_assets_path.clone() {
-            self.resource_pack = resource_pack::ResourcePack::load_with_override(
+            self.resource_pack = Arc::new(resource_pack::ResourcePack::load_with_override(
                 Some(std::path::PathBuf::from(override_path)),
-            );
+            ));
         }
         self.session_started = Some(std::time::Instant::now());
         // Drop the MOTD lines into the local chat log on
@@ -14572,17 +14621,24 @@ enum ChunkSideEffect {
     Liquid { pos: [i32; 3], tick_offset: u64 },
 }
 
-/// Output from one worker thread: the generated chunk plus pre-scanned
-/// side-effect list so main thread doesn't iterate all 4096 voxels.
-/// W22.2: the legacy `submeshes` field (chunk_mesh_with_atlas, 4x4-grid
-/// atlas) has been removed. The main thread runs build_lit_submeshes
-/// (MC atlas + special models + lighting) via the pending_remesh queue
-/// so workers only need to ship data, not GPU-ready geometry.
+/// W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.
+/// Defined in `lighting::HaloLighting`; re-exported here so the worker
+/// pool code and tests can refer to it as plain `HaloLighting`.
+use lighting::HaloLighting;
+
+/// Output from one worker thread: the generated chunk, pre-scanned
+/// side-effect list, and the pre-built MC-atlas submeshes.
+/// W24: submeshes are now computed in the worker (see
+/// `mesh_chunk_in_worker`) so the main thread only does GPU upload.
 struct WorkerResult {
     coord: ChunkCoord,
     chunk: Chunk,
     /// W13.2: voxel-scan results computed off-thread.
     side_effects: Vec<ChunkSideEffect>,
+    /// W24: MC-atlas submeshes built by the worker. Main thread
+    /// uploads these directly via `renderer.create_mesh` without
+    /// going through `pending_remesh` / `build_lit_submeshes`.
+    submeshes: Vec<infengine_voxel::ChunkSubmesh>,
 }
 
 /// One unit of work for the chunk worker pool. Carries the per-job
@@ -14591,9 +14647,17 @@ struct WorkerResult {
 /// the player saw when the request was made. Without this, a
 /// `switch_dim` between enqueue and pickup poisoned the result
 /// (the worker would read fresh atomics from the wrong dim).
+///
+/// W24: also carries `Arc<ResourcePack>` + `HaloLighting` so the
+/// worker can build the full MC-atlas mesh without shared mutable
+/// state.
 struct ChunkJob {
     coord: ChunkCoord,
     ctx: worldgen::WorldgenCtx,
+    /// W24: resource pack snapshot for UV / anim lookup.
+    pack: Arc<resource_pack::ResourcePack>,
+    /// W24: pre-fetched light grids for own chunk + 6 neighbours.
+    halo: HaloLighting,
 }
 
 /// Thread pool that runs `generate_chunk` + `chunk_mesh` off the main
@@ -14639,10 +14703,6 @@ impl WorkerPool {
                             let chunk = worldgen::generate_chunk_at_ctx(job.coord, &job.ctx);
                             let origin = World::chunk_world_origin(job.coord);
 
-                            // W22.2: Meshing is deferred to build_lit_submeshes on
-                            // the main thread (via pending_remesh). Workers only
-                            // scan for side-effects so the struct stays data-only.
-
                             // W13.2: Pre-scan voxels for side-effects
                             // (snow / torch / liquid) so the main thread
                             // doesn't have to iterate 4096 cells per
@@ -14684,11 +14744,22 @@ impl WorkerPool {
                                 }
                             }
 
+                            // W24: Build MC-atlas submeshes in the worker
+                            // using the pre-fetched halo lighting + pack
+                            // snapshot. Main thread only does GPU upload.
+                            let submeshes = mesh_chunk_in_worker(
+                                &chunk,
+                                job.coord,
+                                &job.pack,
+                                &job.halo,
+                            );
+
                             if res_tx
                                 .send(WorkerResult {
                                     coord: job.coord,
                                     chunk,
                                     side_effects,
+                                    submeshes,
                                 })
                                 .is_err()
                             {
@@ -14720,6 +14791,117 @@ impl Drop for WorkerPool {
             let _ = t.join();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// W24: Free function called from worker threads to build MC-atlas submeshes
+// without touching the main-thread Voxel state. Mirrors `build_lit_submeshes`
+// but reads from `HaloLighting` + `Arc<ResourcePack>` instead of self.
+// ---------------------------------------------------------------------------
+
+/// Build MC-atlas submeshes for `chunk` in a worker thread.
+///
+/// Replicates the closure setup in `Voxel::build_lit_submeshes` but
+/// captures `pack` + `halo` instead of `&self.resource_pack` /
+/// `&self.lighting`. Safe to call from any thread.
+fn mesh_chunk_in_worker(
+    chunk: &Chunk,
+    coord: ChunkCoord,
+    pack: &resource_pack::ResourcePack,
+    halo: &HaloLighting,
+) -> Vec<infengine_voxel::ChunkSubmesh> {
+    let origin = World::chunk_world_origin(coord);
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    let world_origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
+
+    // UV resolver: prefer MC pack atlas entry, fall back to legacy 4x4.
+    let uv_resolver = |block: BlockId, normal: [i8; 3]| -> [f32; 4] {
+        let face = if normal[1] > 0 {
+            resource_pack::BlockFace::Top
+        } else if normal[1] < 0 {
+            resource_pack::BlockFace::Bottom
+        } else {
+            resource_pack::BlockFace::Sides
+        };
+        if let Some(r) = pack.block_face_ref(block.0, face) {
+            return r.atlas_uv;
+        }
+        atlas_uv_rect(block, normal)
+    };
+
+    // Light lookup: translate local coord to world, ask the halo.
+    let light_lookup = |air_local: [i32; 3]| -> [f32; 2] {
+        let world = [
+            world_origin[0] + air_local[0],
+            world_origin[1] + air_local[1],
+            world_origin[2] + air_local[2],
+        ];
+        halo.lookup(coord, world)
+    };
+
+    let anim_lookup = |block: BlockId, normal: [i8; 3]| -> u32 {
+        let face = if normal[1] > 0 {
+            resource_pack::BlockFace::Top
+        } else if normal[1] < 0 {
+            resource_pack::BlockFace::Bottom
+        } else {
+            resource_pack::BlockFace::Sides
+        };
+        pack.block_face_ref(block.0, face)
+            .map(|t| pack.anim_slot_for_ref(t) as u32)
+            .unwrap_or(0)
+    };
+
+    // emit_special: special-model geometry for non-cube blocks.
+    let voxel_origin_ref = origin;
+    let emit_special = move |block: BlockId,
+                             voxel_origin: glam::Vec3,
+                             verts: &mut Vec<MeshVertex>,
+                             idxs: &mut Vec<u32>| {
+        let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
+        let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
+        let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+        resource_pack::element_mesh::emit_block_elements(
+            block.0,
+            voxel_origin,
+            verts,
+            idxs,
+            pack,
+            |delta: [i8; 3]| -> [f32; 2] {
+                let air = [
+                    world_origin[0] + lx + delta[0] as i32,
+                    world_origin[1] + ly + delta[1] as i32,
+                    world_origin[2] + lz + delta[2] as i32,
+                ];
+                halo.lookup(coord, air)
+            },
+            |_tex: &str| -> u32 { 0 },
+            |delta: [i8; 3]| -> bool {
+                let nx = lx + delta[0] as i32;
+                let ny = ly + delta[1] as i32;
+                let nz = lz + delta[2] as i32;
+                if (0..CHUNK_SIZE as i32).contains(&nx)
+                    && (0..CHUNK_SIZE as i32).contains(&ny)
+                    && (0..CHUNK_SIZE as i32).contains(&nz)
+                {
+                    let nb = chunk.get(nx as usize, ny as usize, nz as usize);
+                    block_is_opaque(nb)
+                } else {
+                    false
+                }
+            },
+        )
+    };
+
+    chunk_mesh_with_atlas_light_anim_and_special(
+        chunk,
+        origin,
+        uv_resolver,
+        block_is_opaque,
+        |air_local, _normal| light_lookup(air_local),
+        anim_lookup,
+        emit_special,
+    )
 }
 
 // `Biome`, `WORLD_SEED`, `world_seed`, `set_world_seed`,

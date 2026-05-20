@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use infengine_voxel::ChunkCoord;
+use infengine_voxel::{CHUNK_SIZE, ChunkCoord};
 
 pub(crate) mod grid;
 pub(crate) mod block_engine;
@@ -37,6 +37,89 @@ mod day_factor_tests;
 mod mesh_integration_tests;
 
 pub(crate) use grid::LightGrid;
+
+// ---------------------------------------------------------------------------
+// W24: HaloLighting - snapshot of own + 6-neighbour LightGrids shipped with
+// a ChunkJob so the worker can bake per-vertex lighting off the main thread.
+// ---------------------------------------------------------------------------
+
+/// W24: Snapshot of the 6-neighbour light grids that the mesher
+/// needs when building faces on chunk boundaries. Pre-fetched on the
+/// main thread and shipped with each ChunkJob so workers can
+/// bake per-vertex lighting without accessing the main-thread
+/// LightingState.
+///
+/// Each slot holds a cloned `LightGrid` (4096 bytes). `None` means the
+/// neighbour chunk's lighting hasn't been computed yet; the mesher
+/// falls back to `[0.0, 1.0]` (no block light, full sky) - the same
+/// fallback used by the main-thread `build_lit_submeshes`.
+///
+/// `Default` yields all-None (all slots missing = all lighting fallback).
+#[derive(Clone, Default)]
+pub(crate) struct HaloLighting {
+    /// Own chunk's light grid.
+    pub(crate) own: Option<LightGrid>,
+    /// +X neighbour (dx=+1, dy=0, dz=0).
+    pub(crate) px: Option<LightGrid>,
+    /// -X neighbour.
+    pub(crate) nx: Option<LightGrid>,
+    /// +Z neighbour.
+    pub(crate) pz: Option<LightGrid>,
+    /// -Z neighbour.
+    pub(crate) nz: Option<LightGrid>,
+    /// +Y neighbour.
+    pub(crate) py: Option<LightGrid>,
+    /// -Y neighbour.
+    pub(crate) ny: Option<LightGrid>,
+}
+
+impl HaloLighting {
+    /// Look up `[block_light, sky_light]` for a world-voxel coordinate
+    /// `world` that may lie in the own chunk or in one of the 6
+    /// direct neighbours. `own_coord` is the chunk coord this halo
+    /// belongs to (used to compute the delta).
+    ///
+    /// Returns `[0.0, 1.0]` (no block light, full sky) when the
+    /// required grid is absent.
+    pub(crate) fn lookup(&self, own_coord: ChunkCoord, world: [i32; 3]) -> [f32; 2] {
+        let cs = CHUNK_SIZE as i32;
+        let other_cc = [
+            world[0].div_euclid(cs),
+            world[1].div_euclid(cs),
+            world[2].div_euclid(cs),
+        ];
+        let other_lc = [
+            world[0].rem_euclid(cs) as u32,
+            world[1].rem_euclid(cs) as u32,
+            world[2].rem_euclid(cs) as u32,
+        ];
+        let grid = if other_cc == own_coord {
+            self.own.as_ref()
+        } else {
+            let delta = [
+                other_cc[0] - own_coord[0],
+                other_cc[1] - own_coord[1],
+                other_cc[2] - own_coord[2],
+            ];
+            match delta {
+                [1, 0, 0] => self.px.as_ref(),
+                [-1, 0, 0] => self.nx.as_ref(),
+                [0, 0, 1] => self.pz.as_ref(),
+                [0, 0, -1] => self.nz.as_ref(),
+                [0, 1, 0] => self.py.as_ref(),
+                [0, -1, 0] => self.ny.as_ref(),
+                _ => None,
+            }
+        };
+        match grid {
+            Some(g) => [
+                g.get_block(other_lc) as f32 / 15.0,
+                g.get_sky(other_lc) as f32 / 15.0,
+            ],
+            None => [0.0, 1.0],
+        }
+    }
+}
 
 /// Per-`Voxel` lighting state: one `LightGrid` per loaded chunk
 /// plus a dirty-set of world voxel positions that need re-lighting
@@ -159,5 +242,96 @@ pub(crate) fn compute_day_factor(day_time: f32, day_length_s: f32) -> f32 {
         NIGHT_FLOOR + (DAY_PEAK - NIGHT_FLOOR) * s
     } else {
         DAY_PEAK
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W24: HaloLighting unit tests - run via `cargo test --lib`.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod halo_tests {
+    use super::{HaloLighting, LightGrid};
+
+    /// LightGrid is Clone; cloned copy preserves nibble values.
+    #[test]
+    fn light_grid_clone_preserves_values() {
+        let mut g = LightGrid::empty();
+        g.set_block([0, 0, 0], 10);
+        g.set_sky([1, 1, 1], 15);
+        let c = g.clone();
+        assert_eq!(c.get_block([0, 0, 0]), 10);
+        assert_eq!(c.get_sky([1, 1, 1]), 15);
+        // Mutating a second clone doesn't affect the first.
+        let mut g2 = g.clone();
+        g2.set_block([0, 0, 0], 5);
+        assert_eq!(c.get_block([0, 0, 0]), 10, "original clone unaffected");
+    }
+
+    /// All-None halo (default) returns the fallback [0.0, 1.0] everywhere.
+    #[test]
+    fn halo_none_grids_return_fallback() {
+        let halo = HaloLighting::default();
+        assert_eq!(halo.lookup([0, 0, 0], [0, 0, 0]), [0.0, 1.0]);
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        assert_eq!(halo.lookup([0, 0, 0], [cs, 0, 0]), [0.0, 1.0]);
+    }
+
+    /// Lookup reads from own grid when world coord maps to own chunk.
+    #[test]
+    fn halo_own_grid_lookup() {
+        let mut own = LightGrid::empty();
+        own.set_block([3, 4, 5], 7);
+        own.set_sky([3, 4, 5], 14);
+        let halo = HaloLighting { own: Some(own), ..Default::default() };
+        let v = halo.lookup([0, 0, 0], [3, 4, 5]);
+        assert!((v[0] - 7.0 / 15.0).abs() < 1e-5, "block light mismatch");
+        assert!((v[1] - 14.0 / 15.0).abs() < 1e-5, "sky light mismatch");
+    }
+
+    /// Lookup reads from px grid for world coords in the +X chunk.
+    #[test]
+    fn halo_px_grid_lookup() {
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let mut px = LightGrid::empty();
+        px.set_block([0, 0, 0], 12);
+        let halo = HaloLighting { px: Some(px), ..Default::default() };
+        // World [cs, 0, 0] = local (0,0,0) in chunk [1,0,0] = px slot.
+        let v = halo.lookup([0, 0, 0], [cs, 0, 0]);
+        assert!((v[0] - 12.0 / 15.0).abs() < 1e-5, "block light from px grid");
+    }
+
+    /// Lookup reads from nx grid for world coords in the -X chunk.
+    #[test]
+    fn halo_nx_grid_lookup() {
+        let mut nx = LightGrid::empty();
+        nx.set_block([15, 0, 0], 9);
+        let halo = HaloLighting { nx: Some(nx), ..Default::default() };
+        // World [-1, 0, 0] = local (15,0,0) in chunk [-1,0,0] = nx slot.
+        let v = halo.lookup([0, 0, 0], [-1, 0, 0]);
+        assert!((v[0] - 9.0 / 15.0).abs() < 1e-5, "block light from nx grid");
+    }
+
+    /// Diagonal neighbour (chunk [+1,+1,0]) falls through to fallback.
+    #[test]
+    fn halo_diagonal_returns_fallback() {
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let mut diag = LightGrid::empty();
+        diag.set_block([0, 0, 0], 8);
+        // Put the grid in px but request the diagonal chunk.
+        let halo = HaloLighting { px: Some(diag), ..Default::default() };
+        // World [cs, cs, 0] = chunk [1, 1, 0] = diagonal, no slot.
+        let v = halo.lookup([0, 0, 0], [cs, cs, 0]);
+        assert_eq!(v, [0.0, 1.0], "diagonal neighbour -> fallback");
+    }
+
+    /// HaloLighting itself is Clone.
+    #[test]
+    fn halo_lighting_is_clone() {
+        let mut own = LightGrid::empty();
+        own.set_block([0, 0, 0], 5);
+        let halo = HaloLighting { own: Some(own), ..Default::default() };
+        let cloned = halo.clone();
+        let v = cloned.lookup([0, 0, 0], [0, 0, 0]);
+        assert!((v[0] - 5.0 / 15.0).abs() < 1e-5);
     }
 }

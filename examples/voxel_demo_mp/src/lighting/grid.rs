@@ -32,7 +32,11 @@ pub(crate) const LIGHT_LAYER_BYTES: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZ
 /// The grid is `Box`-allocated so a `Voxel` field that owns a
 /// `HashMap<ChunkCoord, LightGrid>` doesn't blow the stack on a
 /// hot insertion.
-#[derive(Debug)]
+///
+/// W24: `Clone` is derived so workers can receive a snapshot copy
+/// of the 6-neighbour halo without sharing a reference into the
+/// main-thread lighting state.
+#[derive(Debug, Clone)]
 pub(crate) struct LightGrid {
     block: Box<[u8; LIGHT_LAYER_BYTES]>,
     sky: Box<[u8; LIGHT_LAYER_BYTES]>,
