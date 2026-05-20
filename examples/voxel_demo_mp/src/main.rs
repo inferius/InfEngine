@@ -878,6 +878,12 @@ struct Voxel {
     /// melee attacks on mobs.
     lmb_held: bool,
     rmb_held: bool,
+    /// Rising-edge of the LMB this frame. Set true on the frame the
+    /// button transitions from up to down, cleared at end of tick.
+    /// Used by the creative insta-break path so each click destroys
+    /// exactly one block instead of chaining across the 2-3 frames
+    /// `lmb_held` is observed true per physical click.
+    lmb_just_pressed: bool,
     /// Active mining session. `None` when the player isn't holding
     /// LMB on a voxel; populated with the targeted cell + the time
     /// elapsed / required to break the block. Cancels when LMB
@@ -5286,6 +5292,7 @@ impl Voxel {
             t_prev: false,
             lmb_pending: false,
             rmb_pending: false,
+            lmb_just_pressed: false,
             lmb_held: false,
             rmb_held: false,
             mining: None,
@@ -11784,6 +11791,14 @@ impl AppHandler for Voxel {
             match (state, button) {
                 (ElementState::Pressed, MouseButton::Left) => {
                     self.lmb_pending = true;
+                    // W30 fix: only set just_pressed on the rising edge
+                    // (transition from up to down). winit may fire multiple
+                    // Pressed events on a single click; this guard makes
+                    // creative insta-break fire exactly once per physical
+                    // click regardless.
+                    if !self.lmb_held {
+                        self.lmb_just_pressed = true;
+                    }
                     self.lmb_held = true;
                 }
                 (ElementState::Released, MouseButton::Left) => {
@@ -12303,6 +12318,10 @@ impl AppHandler for Voxel {
         let rmb = self.rmb_pending;
         self.lmb_pending = false;
         self.rmb_pending = false;
+        // W30 fix: lmb_just_pressed is consumed by the creative insta-
+        // break path further down. Stale "true" with no target voxel
+        // is harmless since the next Pressed event would set it to
+        // true again (idempotent).
         // The currently-held block: contents of the selected hotbar
         // slot. `None` = empty hand (or 0-count remnant).
         let selected_block = self.inventory[self.selected_slot].map(|(b, _)| b);
@@ -12464,9 +12483,19 @@ impl AppHandler for Voxel {
                 // check). Mirrors MC's
                 // `ServerPlayerGameMode::destroyBlock` when
                 // `Abilities.instabuild = true`.
+                //
+                // W30 fix: gate on lmb_just_pressed so holding LMB
+                // doesn't chain-break 3+ blocks per single click.
+                // The user's hardware fires lmb_held=true for ~3
+                // frames per physical click; without this guard
+                // each click destroys all blocks under the
+                // crosshair across those frames.
                 if self.abilities.instabuild {
-                    self.mining = None;
-                    mine_break = Some(hit.voxel);
+                    if self.lmb_just_pressed {
+                        self.lmb_just_pressed = false;
+                        self.mining = None;
+                        mine_break = Some(hit.voxel);
+                    }
                 } else {
                 // Restart the session if either the target voxel
                 // changed or the block at the target has been

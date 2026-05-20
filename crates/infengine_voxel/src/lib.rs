@@ -339,9 +339,14 @@ where
     // For a face with normal along +X: face_axis=0, u_axis=1(Y), v_axis=2(Z)
     // The slice index `d` steps from 0 to cs along face_axis.
     for face in FACES {
+        // W30 fix: pick (ua, va) so ua x va = +face_axis (right-hand rule).
+        // X face: Y x Z = +X. Y face: Z x X = +Y. Z face: X x Y = +Z.
+        // The previous Y mapping (0, 2) produced X x Z = -Y which inverted
+        // the winding for +/-Y faces -> top/bottom faces of every chunk were
+        // emitted as backfaces and culled.
         let (fa, ua, va) = match face.normal {
             [n, 0, 0] if n != 0 => (0, 1, 2),
-            [0, n, 0] if n != 0 => (1, 0, 2),
+            [0, n, 0] if n != 0 => (1, 2, 0),
             _ => (2, 0, 1),
         };
         let side = if face.normal[fa] > 0 { 1i32 } else { -1i32 };
@@ -629,9 +634,10 @@ where
     // Second pass: greedy meshing for non-special voxels.
     // Mirrors chunk_mesh_greedy but skips cells in special_mask.
     for face in FACES {
+        // W30 fix: see chunk_mesh_greedy for the Y-axis handedness rationale.
         let (fa, ua, va) = match face.normal {
             [n, 0, 0] if n != 0 => (0, 1, 2),
-            [0, n, 0] if n != 0 => (1, 0, 2),
+            [0, n, 0] if n != 0 => (1, 2, 0),
             _ => (2, 0, 1),
         };
         let side = if face.normal[fa] > 0 { 1i32 } else { -1i32 };
