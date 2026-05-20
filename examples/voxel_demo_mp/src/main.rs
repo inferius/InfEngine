@@ -6035,10 +6035,15 @@ impl Voxel {
         // 6-neighbour halo lighting so the worker can mesh the chunk
         // without touching main-thread state.
         if let Some(pool) = self.workers.as_ref() {
+            // W28.2: Cap dispatch per frame to 2x the number of workers
+            // so we never flood the channel and starve the result drain.
+            let dispatch_cap = pool.worker_count() * 2;
             let ctx = self.current_worldgen_ctx();
             let pack_arc = Arc::clone(&self.resource_pack);
             // W28.1: pop from BinaryHeap (closest coord first).
-            while let Some(pending) = self.pending_chunks.pop() {
+            let mut dispatched = 0usize;
+            while dispatched < dispatch_cap {
+                let Some(pending) = self.pending_chunks.pop() else { break };
                 let cc = pending.coord;
                 // Pre-fetch halo lighting for this chunk coord.
                 // Missing neighbours fall back to None -> [0.0, 1.0]
@@ -6059,11 +6064,11 @@ impl Voxel {
                     halo,
                 });
                 if pool.req_tx.send(job).is_err() {
-                    // Channel full - requeue with the same priority so
-                    // it remains at the front of the heap next frame.
+                    // Channel closed - requeue and abort.
                     self.pending_chunks.push(pending);
                     break;
                 }
+                dispatched += 1;
             }
         }
 
@@ -15027,6 +15032,11 @@ struct WorkerPool {
 }
 
 impl WorkerPool {
+    /// W28.2: Number of worker threads in the pool.
+    pub(crate) fn worker_count(&self) -> usize {
+        self.threads.len()
+    }
+
     fn spawn(num_workers: usize) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<Job>();
         let req_rx = Arc::new(Mutex::new(req_rx));
