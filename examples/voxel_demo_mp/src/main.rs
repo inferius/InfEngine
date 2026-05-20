@@ -326,16 +326,16 @@ const VIEW_DISTANCE_CHUNKS: i32 = 4;
 /// W13.4: raised from 12 to 24. Follow-up: 24 -> 32.
 const VIEW_DISTANCE_MAX: i32 = 32;
 /// Maximum number of worker results whose GPU upload is processed per
-/// frame. Lowered from 4 to 2 (W13.1) so a burst of ready chunks
-/// never causes more than ~2 * create_mesh costs in one frame, keeping
-/// steady-state frame time well under 16 ms.
-const RESULTS_PER_FRAME: usize = 2;
-/// Maximum number of neighbour-remesh jobs drained from the deferred
-/// queue per frame (W13.2). Neighbours must be re-meshed after a new
-/// chunk arrives so boundary faces between the fresh chunk and an
-/// already-loaded neighbour are culled; deferring them spreads the
-/// CPU cost over multiple frames instead of stalling on delivery.
-const REMESH_DEFERRED_PER_FRAME: usize = 2;
+/// frame. W13.1: lowered from 4 to 2 for steady-state frame budgets.
+/// W23.3a: raised to 8 - the dedup set (W23.3c) and time-cap
+/// (W23.3b) prevent frame spikes; 8 keeps the queue draining fast
+/// enough to avoid the stutter the user reported post-load.
+const RESULTS_PER_FRAME: usize = 8;
+/// Hard upper bound on neighbour-remesh jobs drained from the deferred
+/// queue per frame (W13.2). The 4 ms soft time cap (W23.3b) usually
+/// stops the loop earlier; this is the safety ceiling.
+/// W23.3a: raised from 2 to 16.
+const REMESH_DEFERRED_PER_FRAME: usize = 16;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`
@@ -732,6 +732,11 @@ struct Voxel {
     /// bounded slice (REMESH_DEFERRED_PER_FRAME) is drained each
     /// frame so the cost is spread out rather than spiking.
     pending_remesh: VecDeque<ChunkCoord>,
+    /// W23.3c: mirror set for pending_remesh. Allows O(1) dedup so
+    /// the same coord is never enqueued twice even when multiple
+    /// arriving chunks list it as a neighbour. Cleared in sync with
+    /// pending_remesh (pop removes from set; clear drains both).
+    pending_remesh_set: HashSet<ChunkCoord>,
     /// Worker pool the streaming code dispatches generation to. CPU-
     /// heavy `generate_chunk` + `chunk_mesh` run on the workers; the
     /// main thread only does the GPU buffer upload + neighbour
@@ -4979,6 +4984,7 @@ impl Voxel {
             self.pending_chunks.clear();
             self.pending_set.clear();
             self.pending_remesh.clear();
+            self.pending_remesh_set.clear();
         }
         if let Some(t) = teleport_request {
             self.player_pos = Vec3::new(t.pos[0], t.pos[1], t.pos[2]);
@@ -5173,6 +5179,7 @@ impl Voxel {
             pending_chunks: VecDeque::new(),
             pending_set: HashSet::new(),
             pending_remesh: VecDeque::new(),
+            pending_remesh_set: HashSet::new(),
             workers: None,
             target: None,
             mine_target: None,
@@ -5598,6 +5605,7 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.pending_remesh.clear();
+        self.pending_remesh_set.clear();
         // Open UIs reference position-keyed containers that
         // belong to the parked dim. Close them on switch so the
         // player doesn't see a stale chest panel.
@@ -5744,6 +5752,7 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.pending_remesh.clear();
+        self.pending_remesh_set.clear();
         self.snow_positions.clear();
         self.torch_positions.clear();
         self.emitter_positions.clear();
@@ -5835,6 +5844,7 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.pending_remesh.clear();
+        self.pending_remesh_set.clear();
         let mut enqueued: u32 = 0;
         for cz in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
             for cx in -INITIAL_CHUNKS..=INITIAL_CHUNKS {
@@ -6011,7 +6021,11 @@ impl Voxel {
             // Enqueue the new chunk itself + its loaded neighbours
             // into pending_remesh so build_lit_submeshes runs on the
             // main thread with the proper MC atlas + special models.
-            self.pending_remesh.push_back(cc);
+            // W23.3c: dedup via pending_remesh_set - multiple arriving
+            // chunks can name the same neighbour; only enqueue once.
+            if self.pending_remesh_set.insert(cc) {
+                self.pending_remesh.push_back(cc);
+            }
             for n in [
                 [cc[0] - 1, cc[1], cc[2]],
                 [cc[0] + 1, cc[1], cc[2]],
@@ -6021,7 +6035,9 @@ impl Voxel {
                 // Only enqueue if the neighbour is actually loaded -
                 // pending / unloaded neighbours don't need a re-mesh
                 // yet; they will pick up correct faces when they arrive.
-                if self.world.chunk(n).is_some() {
+                if self.world.chunk(n).is_some()
+                    && self.pending_remesh_set.insert(n)
+                {
                     self.pending_remesh.push_back(n);
                 }
             }
@@ -6038,14 +6054,22 @@ impl Voxel {
             ]);
         }
 
-        // W13.2: Drain deferred neighbour re-meshes at a bounded rate
-        // so they don't pile up but also don't blow a frame budget.
+        // W13.2 / W23.3b: Drain deferred neighbour re-meshes with a
+        // soft 4 ms time cap (W23.3b) so high-perf machines drain more
+        // per frame without blowing the budget on slow frames.
+        // REMESH_DEFERRED_PER_FRAME acts as a hard upper bound so a
+        // single very slow frame can't stall the loop arbitrarily long.
+        let remesh_budget = std::time::Duration::from_millis(4);
         let mut remesh_done = 0;
         let t_remesh = std::time::Instant::now();
-        while remesh_done < REMESH_DEFERRED_PER_FRAME {
+        while remesh_done < REMESH_DEFERRED_PER_FRAME
+            && t_remesh.elapsed() < remesh_budget
+        {
             let Some(coord) = self.pending_remesh.pop_front() else {
                 break;
             };
+            // W23.3c: mirror set - keep in sync with the queue.
+            self.pending_remesh_set.remove(&coord);
             // Skip if the chunk was unloaded between enqueue and now.
             if self.world.chunk(coord).is_none() {
                 continue;
@@ -12915,10 +12939,30 @@ impl AppHandler for Voxel {
                     // Lighting BFS is sub-second for 196 chunks.
                     self.rebuild_all_lighting();
                     // Phase: BuildingMeshes.
+                    // W23.2: Do NOT call rebuild_all_meshes() here -
+                    // that was a blocking O(all_chunks) GPU upload that
+                    // caused the 10+ s freeze at 99%. Instead enqueue
+                    // every chunk into pending_remesh and let the normal
+                    // drain loop (REMESH_DEFERRED_PER_FRAME + 4 ms cap)
+                    // spread the work across the next ~200 ms. The loading
+                    // screen stays interactive and users see progress.
                     if let AppState::Loading { ref mut phase, .. } = self.state {
                         *phase = LoadingPhase::BuildingMeshes;
                     }
-                    self.rebuild_all_meshes();
+                    let all_coords: Vec<ChunkCoord> =
+                        self.world.iter_chunks().map(|(c, _)| *c).collect();
+                    for coord in all_coords {
+                        if self.pending_remesh_set.insert(coord) {
+                            self.pending_remesh.push_back(coord);
+                        }
+                    }
+                    // Finalisation happens in the BuildingMeshes ->
+                    // Finalising gate below once pending_remesh drains.
+                }
+                // W23.2: once all deferred meshes are built, finalise.
+                if phase == LoadingPhase::BuildingMeshes
+                    && self.pending_remesh.is_empty()
+                {
                     // Phase: Finalising - post-load bookkeeping.
                     if let AppState::Loading { ref mut phase, .. } = self.state {
                         *phase = LoadingPhase::Finalising;
