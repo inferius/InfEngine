@@ -23,8 +23,11 @@ use glam::{Mat4, Vec3, Vec4};
 use infengine_render::MeshVertex;
 
 use super::models::{CubeFace, ElementFaces, ElementRotation, ModelFace, RotationAxis};
-use super::special_models::model_for_block;
+use super::special_models::model_for_block_with_neighbors;
 use super::ResourcePack;
+
+// Re-export so callers can build NeighborStates without reaching into blockstates.
+pub(crate) use super::blockstates::NeighborStates;
 
 /// Attempt to emit model-element geometry for `block_id` at
 /// `voxel_origin` (world-space corner of the voxel).
@@ -34,6 +37,10 @@ use super::ResourcePack;
 /// Returns `false` if the block has no special model (cube path
 /// should proceed as normal).
 ///
+/// `neighbors` carries the horizontal connection flags (north/south/
+/// east/west/up/down) used by multipart blockstates (fences, walls,
+/// panes). Pass `NeighborStates::default()` when caller does not yet
+/// provide this info - unconditional parts still render correctly.
 /// `uv_for_face` is called for each element face to resolve the
 /// atlas UV rect `[u0, v0, u1, v1]`.
 /// `light_at_neighbour` is called with the axis-aligned neighbour
@@ -48,12 +55,14 @@ pub(crate) fn emit_block_elements(
     vertices: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
     pack: &ResourcePack,
+    neighbors: NeighborStates,
     light_at_neighbour: impl Fn([i8; 3]) -> [f32; 2],
     anim_id_for_face: impl Fn(&str) -> u32,
     neighbour_opaque: impl Fn([i8; 3]) -> bool,
 ) -> bool {
-    // W38.1: pass pack so JSON model loader is tried first.
-    let Some(model) = model_for_block(block_id, pack) else {
+    // W40.1: use neighbor-aware lookup so multipart blockstates
+    // (fences, walls, panes) show connection arms correctly.
+    let Some(model) = model_for_block_with_neighbors(block_id, pack, &neighbors) else {
         return false;
     };
 
@@ -457,6 +466,7 @@ mod tests {
             &mut verts,
             &mut idxs,
             &pack,
+            NeighborStates::default(),
             |_| [0.0, 1.0],
             |_| 0,
             |_| false,
@@ -480,6 +490,7 @@ mod tests {
             &mut verts,
             &mut idxs,
             &pack,
+            NeighborStates::default(),
             |_| [0.0, 1.0],
             |_| 0,
             |_| false, // no neighbours opaque
@@ -512,6 +523,7 @@ mod tests {
             &mut verts,
             &mut idxs,
             &pack,
+            NeighborStates::default(),
             |_| [0.0, 1.0],
             |_| 0,
             |_| false,
@@ -533,6 +545,7 @@ mod tests {
             &mut verts,
             &mut idxs,
             &pack,
+            NeighborStates::default(),
             |_| [0.0, 1.0],
             |_| 0,
             |_| false,

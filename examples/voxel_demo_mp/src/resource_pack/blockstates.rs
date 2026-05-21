@@ -116,38 +116,124 @@ impl BlockStateProps {
     }
 }
 
+/// Neighbour connection flags for multipart blockstate resolution.
+///
+/// MC fences/walls/panes/bars use `"north": "true"` / `"false"` conditions
+/// to pick which arm models to show. The engine samples the 4 horizontal
+/// neighbours and passes this struct down to the multipart selector.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct NeighborStates {
+    pub(crate) north: bool,
+    pub(crate) south: bool,
+    pub(crate) east: bool,
+    pub(crate) west: bool,
+    pub(crate) up: bool,
+    pub(crate) down: bool,
+}
+
+impl NeighborStates {
+    /// Look up the boolean value of a direction property by name.
+    /// Returns `None` for unknown property names.
+    pub(crate) fn get_bool(&self, prop: &str) -> Option<bool> {
+        match prop {
+            "north" => Some(self.north),
+            "south" => Some(self.south),
+            "east"  => Some(self.east),
+            "west"  => Some(self.west),
+            "up"    => Some(self.up),
+            "down"  => Some(self.down),
+            _ => None,
+        }
+    }
+}
+
+/// A single condition inside a multipart `when` clause.
+/// Supports the simple `{ "prop": "value" }` form and the
+/// `{ "OR": [ ... ] }` compound form.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MultipartCondition {
+    /// All key=value pairs must match (AND of pairs).
+    All(Vec<(String, String)>),
+    /// Any of the sub-conditions must match (OR).
+    AnyOf(Vec<MultipartCondition>),
+}
+
+impl MultipartCondition {
+    /// True when the condition matches the given neighbour states.
+    pub(crate) fn matches_neighbors(&self, n: &NeighborStates) -> bool {
+        match self {
+            MultipartCondition::All(pairs) => {
+                pairs.iter().all(|(k, v)| {
+                    n.get_bool(k).map(|b| {
+                        if v == "true" { b } else { !b }
+                    }).unwrap_or(false)
+                })
+            }
+            MultipartCondition::AnyOf(subs) => {
+                subs.iter().any(|c| c.matches_neighbors(n))
+            }
+        }
+    }
+}
+
+/// One part in a `multipart` blockstates array.
+/// `when` is `None` for unconditional parts (always applied).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MultipartPart {
+    pub(crate) when: Option<MultipartCondition>,
+    pub(crate) apply: ModelRef,
+}
+
 /// Parsed blockstates file. For variant-form blocks we keep the
 /// ordered (key, model) list so a default-pick + multi-prop match
-/// share the same data path. Multipart blocks land here with
-/// `variants` empty + `is_multipart = true`.
+/// share the same data path. Multipart blocks store the parts list;
+/// `variants` is empty for them.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BlockState {
     pub(crate) variants: Vec<(BlockStateKey, ModelRef)>,
     pub(crate) is_multipart: bool,
+    /// Populated only when `is_multipart == true`.
+    pub(crate) parts: Vec<MultipartPart>,
 }
 
 impl BlockState {
-    /// True when the file declared `multipart`. Wave 9.x defers
-    /// multipart geometry (fences with neighbour-connection
-    /// logic) so this flag is mostly informational today.
+    /// True when the file declared `multipart`. W40.1 now resolves
+    /// multipart geometry via `select_multipart_models`.
     pub(crate) fn is_multipart(&self) -> bool {
         self.is_multipart
     }
 
     /// Return the first variant's `ModelRef`, or `None` when the
-    /// blockstate is multipart (deferred) or has no variants at all.
+    /// blockstate is multipart or has no variants at all.
     ///
-    /// W39: used by `resolve_block_model` as the "pick first" policy
-    /// before full state-matching is wired in. Works for all simple
-    /// variant-form blockstates (stone, dirt, oak_log, ...) as well
-    /// as multi-variant files where we just want a representative
-    /// model. Multipart files (fences, walls, redstone) still fall
-    /// through to the special_models hand-coded table.
+    /// W39: used by `resolve_block_model` as the "pick first" policy.
+    /// Works for all simple variant-form blockstates. Multipart files
+    /// route through `select_multipart_models` instead.
     pub(crate) fn first_variant_model(&self) -> Option<&ModelRef> {
         if self.is_multipart {
             return None;
         }
         self.variants.first().map(|(_, m)| m)
+    }
+
+    /// Return all model refs whose `when` condition matches `neighbors`.
+    /// Unconditional parts (no `when`) are always included.
+    /// Returns an empty slice for non-multipart blockstates.
+    pub(crate) fn select_multipart_models<'a>(
+        &'a self,
+        neighbors: &NeighborStates,
+    ) -> Vec<&'a ModelRef> {
+        if !self.is_multipart {
+            return Vec::new();
+        }
+        self.parts
+            .iter()
+            .filter(|p| match &p.when {
+                None => true,
+                Some(cond) => cond.matches_neighbors(neighbors),
+            })
+            .map(|p| &p.apply)
+            .collect()
     }
 }
 
@@ -188,15 +274,57 @@ pub(crate) fn parse(text: &str) -> Option<BlockState> {
         return Some(BlockState {
             variants,
             is_multipart: false,
+            parts: Vec::new(),
         });
     }
-    if v.get("multipart").is_some() {
+    if let Some(multipart_arr) = v.get("multipart").and_then(|x| x.as_array()) {
+        let parts = multipart_arr
+            .iter()
+            .filter_map(parse_multipart_part)
+            .collect();
         return Some(BlockState {
             variants: Vec::new(),
             is_multipart: true,
+            parts,
         });
     }
     None
+}
+
+/// Parse one element of the `multipart` array.
+fn parse_multipart_part(v: &Value) -> Option<MultipartPart> {
+    // `apply` is required; `when` is optional.
+    let apply_val = v.get("apply")?;
+    let apply = match apply_val {
+        Value::Array(arr) => arr.first().and_then(parse_model_ref)?,
+        _ => parse_model_ref(apply_val)?,
+    };
+    let when = v.get("when").and_then(parse_multipart_condition);
+    Some(MultipartPart { when, apply })
+}
+
+/// Parse a `when` object. Supports:
+/// - `{ "prop": "value", ... }` -> `MultipartCondition::All`
+/// - `{ "OR": [ ... ] }` -> `MultipartCondition::AnyOf`
+fn parse_multipart_condition(v: &Value) -> Option<MultipartCondition> {
+    let obj = v.as_object()?;
+    // OR form
+    if let Some(or_arr) = obj.get("OR").and_then(|x| x.as_array()) {
+        let subs: Vec<_> = or_arr.iter().filter_map(parse_multipart_condition).collect();
+        if subs.is_empty() {
+            return None;
+        }
+        return Some(MultipartCondition::AnyOf(subs));
+    }
+    // Simple key=value form
+    let pairs: Vec<(String, String)> = obj
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect();
+    if pairs.is_empty() {
+        return None;
+    }
+    Some(MultipartCondition::All(pairs))
 }
 
 fn parse_model_ref(v: &Value) -> Option<ModelRef> {
@@ -380,6 +508,7 @@ mod tests {
                 ModelRef::new("block/torch"),
             )],
             is_multipart: false,
+            parts: Vec::new(),
         };
         let m = select_variant(&state, &BlockStateProps::new().with("facing", "north"))
             .expect("default variant");
@@ -398,6 +527,7 @@ mod tests {
                 ),
             ],
             is_multipart: false,
+            parts: Vec::new(),
         };
         let p = BlockStateProps::new()
             .with("facing", "north")
@@ -443,5 +573,104 @@ mod tests {
     #[test]
     fn parse_malformed_json_returns_none() {
         assert!(parse("{ no").is_none());
+    }
+
+    // ---- W40.1: multipart parsing tests ----
+
+    #[test]
+    fn parse_multipart_stores_parts() {
+        // Minimal oak_fence-like multipart JSON.
+        let text = r#"{
+            "multipart": [
+                { "apply": { "model": "block/oak_fence_post" } },
+                { "when": { "north": "true" },
+                  "apply": { "model": "block/oak_fence_side", "uvlock": true } },
+                { "when": { "south": "true" },
+                  "apply": { "model": "block/oak_fence_side", "y": 180, "uvlock": true } }
+            ]
+        }"#;
+        let s = parse(text).expect("parsed");
+        assert!(s.is_multipart());
+        assert_eq!(s.parts.len(), 3);
+        // First part: no condition.
+        assert!(s.parts[0].when.is_none());
+        assert_eq!(s.parts[0].apply.model, "block/oak_fence_post");
+        // Second part: north=true condition.
+        assert!(s.parts[1].when.is_some());
+        assert_eq!(s.parts[1].apply.model, "block/oak_fence_side");
+        assert!(s.parts[1].apply.uvlock);
+        // Third part: south=true, y=180.
+        assert_eq!(s.parts[2].apply.y, 180);
+    }
+
+    #[test]
+    fn select_multipart_unconditional_always_included() {
+        let text = r#"{
+            "multipart": [
+                { "apply": { "model": "block/fence_post" } }
+            ]
+        }"#;
+        let s = parse(text).expect("parsed");
+        let refs = s.select_multipart_models(&NeighborStates::default());
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].model, "block/fence_post");
+    }
+
+    #[test]
+    fn select_multipart_conditional_north_arm() {
+        let text = r#"{
+            "multipart": [
+                { "apply": { "model": "block/fence_post" } },
+                { "when": { "north": "true" },
+                  "apply": { "model": "block/fence_side" } }
+            ]
+        }"#;
+        let s = parse(text).expect("parsed");
+        // Without north connection: only post.
+        let no_north = NeighborStates { north: false, ..Default::default() };
+        let refs = s.select_multipart_models(&no_north);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].model, "block/fence_post");
+        // With north connection: post + side.
+        let with_north = NeighborStates { north: true, ..Default::default() };
+        let refs2 = s.select_multipart_models(&with_north);
+        assert_eq!(refs2.len(), 2);
+        assert_eq!(refs2[1].model, "block/fence_side");
+    }
+
+    #[test]
+    fn select_multipart_or_condition() {
+        let text = r#"{
+            "multipart": [
+                { "when": { "OR": [
+                    { "north": "true" },
+                    { "south": "true" }
+                  ] },
+                  "apply": { "model": "block/fence_side" }
+                }
+            ]
+        }"#;
+        let s = parse(text).expect("parsed");
+        // south=true should match the OR.
+        let refs = s.select_multipart_models(&NeighborStates { south: true, ..Default::default() });
+        assert_eq!(refs.len(), 1);
+        // neither north nor south: no match.
+        let refs2 = s.select_multipart_models(&NeighborStates::default());
+        assert_eq!(refs2.len(), 0);
+    }
+
+    #[test]
+    fn neighbor_states_get_bool_round_trip() {
+        let n = NeighborStates {
+            north: true, south: false, east: true,
+            west: false, up: true, down: false,
+        };
+        assert_eq!(n.get_bool("north"), Some(true));
+        assert_eq!(n.get_bool("south"), Some(false));
+        assert_eq!(n.get_bool("east"),  Some(true));
+        assert_eq!(n.get_bool("west"),  Some(false));
+        assert_eq!(n.get_bool("up"),    Some(true));
+        assert_eq!(n.get_bool("down"),  Some(false));
+        assert_eq!(n.get_bool("unknown"), None);
     }
 }

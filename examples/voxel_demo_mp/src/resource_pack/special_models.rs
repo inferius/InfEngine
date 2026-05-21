@@ -182,7 +182,8 @@ pub(crate) fn resolve_block_model(
 /// Legacy fallback (special_models `lookup` table) handles:
 ///
 ///   - Placeholder pack (no blockstate JSON on disk).
-///   - Multipart blockstates (fences, walls) deferred in W39.
+///   - Multipart blockstates (fences, walls): now handled via
+///     `model_for_block_with_neighbors` when neighbors are available.
 ///   - Cross-pattern plants keyed as `"block/cross/<tex>"`.
 pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
     // W39: full MC blockstate -> variant -> model pipeline.
@@ -191,6 +192,56 @@ pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<Blo
     }
     // Legacy fallback: hand-coded special_models for cross/<tex>
     // shapes AND for the placeholder pack path.
+    name_for_block(id).and_then(lookup)
+}
+
+/// Resolve a block model taking neighbour connection flags into account.
+///
+/// W40.1: extends `resolve_block_model` to handle multipart blockstates.
+/// For multipart blocks (fences, walls, panes, bars) the matching parts
+/// are merged into a single `BlockModel` by concatenating their element
+/// lists. Variant-form blocks delegate to `resolve_block_model` unchanged.
+pub(crate) fn resolve_block_model_with_neighbors(
+    pack: &super::ResourcePack,
+    id: u16,
+    neighbors: &blockstates::NeighborStates,
+) -> Option<BlockModel> {
+    let map_entry = name_map::lookup_block(id)?;
+    let block_name = map_entry.block;
+    let state = blockstates::load_blockstate(pack, block_name)?;
+    if !state.is_multipart() {
+        // Delegate to the standard variant path.
+        let model_ref = state.first_variant_model()?;
+        return models::load_model(pack, &model_ref.model);
+    }
+    // Multipart: collect all matching parts, merge elements.
+    let matching = state.select_multipart_models(neighbors);
+    if matching.is_empty() {
+        return None;
+    }
+    // Load the first model as the base; append elements from the rest.
+    let mut merged = models::load_model(pack, &matching[0].model)?;
+    for model_ref in &matching[1..] {
+        if let Some(part_model) = models::load_model(pack, &model_ref.model) {
+            merged.elements.extend(part_model.elements);
+        }
+    }
+    Some(merged)
+}
+
+/// Neighbour-aware variant of `model_for_block`.
+///
+/// W40.1: tries the multipart-aware pipeline first; then the variant
+/// pipeline; then the hand-coded special_models fallback.
+pub(crate) fn model_for_block_with_neighbors(
+    id: u16,
+    pack: &super::ResourcePack,
+    neighbors: &blockstates::NeighborStates,
+) -> Option<BlockModel> {
+    if let Some(m) = resolve_block_model_with_neighbors(pack, id, neighbors) {
+        return Some(m);
+    }
+    // Fall back to legacy hand-coded table (placeholder pack / cross plants).
     name_for_block(id).and_then(lookup)
 }
 

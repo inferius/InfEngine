@@ -136,6 +136,7 @@ fn first_variant_model_returns_none_for_empty_variants() {
     let s = blockstates::BlockState {
         variants: Vec::new(),
         is_multipart: false,
+        parts: Vec::new(),
     };
     assert!(s.first_variant_model().is_none());
 }

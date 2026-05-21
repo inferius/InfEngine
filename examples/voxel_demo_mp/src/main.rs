@@ -6577,12 +6577,38 @@ impl Voxel {
             let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
             let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
             let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+            // W40.1: compute horizontal neighbour connection flags so
+            // multipart blockstates (fences, walls, panes) show arms.
+            // A neighbour "connects" when it carries the same block id.
+            let same_id = |dx: i32, dy: i32, dz: i32| -> bool {
+                let nx = lx + dx;
+                let ny = ly + dy;
+                let nz = lz + dz;
+                if (0..CHUNK_SIZE as i32).contains(&nx)
+                    && (0..CHUNK_SIZE as i32).contains(&ny)
+                    && (0..CHUNK_SIZE as i32).contains(&nz)
+                {
+                    chunk_ref.get(nx as usize, ny as usize, nz as usize).0 == block.0
+                } else {
+                    false
+                }
+            };
+            let neighbors = resource_pack::element_mesh::NeighborStates {
+                // MC north = -Z, south = +Z, east = +X, west = -X.
+                north: same_id(0, 0, -1),
+                south: same_id(0, 0,  1),
+                east:  same_id( 1, 0, 0),
+                west:  same_id(-1, 0, 0),
+                up:    same_id(0,  1, 0),
+                down:  same_id(0, -1, 0),
+            };
             resource_pack::element_mesh::emit_block_elements(
                 block.0,
                 voxel_origin,
                 verts,
                 idxs,
                 pack,
+                neighbors,
                 |delta: [i8; 3]| -> [f32; 2] {
                     // Air-side cell relative to the voxel.
                     let air = [
@@ -15623,12 +15649,35 @@ fn mesh_chunk_in_worker(
         let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
         let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
         let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+        // W40.1: compute neighbour connection flags for multipart.
+        let same_id = |dx: i32, dy: i32, dz: i32| -> bool {
+            let nx = lx + dx;
+            let ny = ly + dy;
+            let nz = lz + dz;
+            if (0..CHUNK_SIZE as i32).contains(&nx)
+                && (0..CHUNK_SIZE as i32).contains(&ny)
+                && (0..CHUNK_SIZE as i32).contains(&nz)
+            {
+                chunk.get(nx as usize, ny as usize, nz as usize).0 == block.0
+            } else {
+                false
+            }
+        };
+        let neighbors = resource_pack::element_mesh::NeighborStates {
+            north: same_id(0, 0, -1),
+            south: same_id(0, 0,  1),
+            east:  same_id( 1, 0, 0),
+            west:  same_id(-1, 0, 0),
+            up:    same_id(0,  1, 0),
+            down:  same_id(0, -1, 0),
+        };
         resource_pack::element_mesh::emit_block_elements(
             block.0,
             voxel_origin,
             verts,
             idxs,
             pack,
+            neighbors,
             |delta: [i8; 3]| -> [f32; 2] {
                 let air = [
                     world_origin[0] + lx + delta[0] as i32,

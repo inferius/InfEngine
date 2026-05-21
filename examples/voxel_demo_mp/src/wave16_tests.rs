@@ -137,6 +137,7 @@ fn single_voxel_special_mesh(block_id: u16) -> (Vec<MeshVertex>, Vec<u32>) {
                 verts,
                 idxs,
                 &pack,
+                resource_pack::element_mesh::NeighborStates::default(),
                 |_| [0.0, 1.0],
                 |_| 0,
                 |_| false,
@@ -255,6 +256,7 @@ fn e2e_stone_cube_still_emits_six_faces() {
         |block, vox_origin, verts, idxs| {
             emit_block_elements(
                 block.0, vox_origin, verts, idxs, &pack,
+                resource_pack::element_mesh::NeighborStates::default(),
                 |_| [0.0, 1.0], |_| 0, |_| false,
             )
         },
