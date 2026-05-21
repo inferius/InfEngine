@@ -1999,3 +1999,88 @@ fire now uses only legacy rising smoke. The function is kept with
 
 - `infengine_voxel`: 20 pass / 0 fail (unchanged)
 - `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged)
+
+---
+
+## Wave 38
+
+### W38.1 - JSON model loader wired into runtime (architectural shift)
+
+Prior to this wave the chunk mesher resolved block shapes exclusively
+through the hand-coded `special_models` table, ignoring the fully-
+functional JSON parent-chain loader (`resource_pack::models::load_model`)
+that has existed since Wave 9.
+
+The user observed: "Proc to vlastne neprevezmeme z minecraftu to
+modelovani veci, vzdyt tam to musi mit uz vyreseny univerzalne ne?"
+(Why don't we just take the modeling from Minecraft, it must already
+have a universal solution?) - which is exactly right.
+
+**Change:**
+`special_models::model_for_block(id: u16)` is now
+`model_for_block(id: u16, pack: &ResourcePack)`.
+
+Resolution order:
+1. `load_model(pack, "block/<name>")` - reads MC's JSON from the user's
+   local install (or any pack with `assets/minecraft/models/block/`).
+   This covers every block MC ships a model for without any hand-coding.
+2. Hand-coded `lookup(name)` fallback - used when:
+   - Placeholder pack is active (no MC install, no JSON files).
+   - The JSON file is missing or unparseable (partial pack).
+   - The block uses a special key shape like `block/cross/<tex>` that
+     has no direct JSON counterpart (cross-pattern plants).
+
+**Impact:** With a real MC pack installed, all blocks that MC ships
+geometry for will now render using the exact MC JSON model. The hand-
+coded table remains as a CI/offline fallback so tests still pass
+without a local MC install.
+
+**Call sites updated:**
+- `resource_pack::element_mesh::emit_block_elements` (the main mesher
+  entry point) - now passes `pack` through.
+- `wave12_audit_tests.rs`, `wave16_tests.rs` - tests updated to supply
+  the placeholder pack.
+- All test calls inside `special_models.rs` itself.
+
+### W38.2 - Non-torch emitter particles
+
+Previously only `TORCH_ID` (id 10) added blocks to `torch_positions`,
+which is the set used to drive ambient flame/smoke particles each tick.
+`GLOWSTONE_ID` was also in the gate - incorrect, since glowstone is a
+solid block with no open flame.
+
+**Change:** Introduced `flame_emitter(id)` predicate that covers:
+- Regular torch + wall torch: id 10
+- Redstone torch + wall variant: ids 50, 51
+- Soul torch + wall variant: ids 52, 53
+
+Glowstone stays in `emitter_positions` (point light) but does NOT emit
+flame/smoke particles.
+
+The `torch_positions.insert` gate in both `world_set_tracked` and the
+chunk side-effect scanner now uses `flame_emitter()`.
+
+**Per-emitter flame tint:** `flame_tint_for(id)` returns:
+- Regular torch: `[1.0, 0.78, 0.40]` (warm orange)
+- Redstone torch: `[1.0, 0.20, 0.10]` (red)
+- Soul torch: `[0.20, 0.75, 1.0]` (cyan-blue)
+
+The particle spawn loop looks up the block id via `emitter_positions`
+(which already tracks all light-emitting blocks) so the tint is applied
+per-emitter without a separate world lookup.
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`:
+  `model_for_block` signature + JSON-first resolution logic
+- `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`:
+  pass `pack` to `model_for_block`
+- `examples/voxel_demo_mp/src/wave12_audit_tests.rs`: pack arg
+- `examples/voxel_demo_mp/src/wave16_tests.rs`: pack arg
+- `examples/voxel_demo_mp/src/main.rs`: `flame_emitter()`,
+  `flame_tint_for()`, updated torch_positions gate, per-block tint
+  in particle spawn loop
+
+### Tests
+
+- `voxel_demo_mp`: 1502 pass / 7 fail (pre-existing unchanged)
