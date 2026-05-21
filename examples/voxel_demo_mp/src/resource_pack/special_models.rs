@@ -178,9 +178,13 @@ fn cube_all_faces(texture: &str) -> ElementFaces {
 /// Torch stick - mirrors `template_torch.json` exactly. Note that
 /// MC samples a sub-rect of the torch texture for the side faces
 /// (the lit tip), so we keep the `[7, 6, 9, 16]` UV for sides.
+///
+/// W36.2: texture key changed from "torch" to "torch_on" so it matches
+/// the MC pack filename `torch_on.png`. The placeholder pack registers
+/// both "torch" and "torch_on" for block id 10 (see fallback.rs).
 pub(crate) fn build_torch() -> BlockModel {
     let mut textures = HashMap::new();
-    textures.insert("torch".to_string(), "torch".to_string());
+    textures.insert("torch_on".to_string(), "torch_on".to_string());
     BlockModel {
         elements: vec![ModelElement {
             from: [7.0, 0.0, 7.0],
@@ -189,12 +193,12 @@ pub(crate) fn build_torch() -> BlockModel {
             shade: false,
             faces: ElementFaces {
                 // Cite: template_torch.json down/up/sides.
-                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch", Some(CubeFace::Down))),
-                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch", None)),
-                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch_on", Some(CubeFace::Down))),
+                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch_on", None)),
+                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
             },
         }],
         textures,
@@ -205,9 +209,11 @@ pub(crate) fn build_torch() -> BlockModel {
 /// Wall torch - the `template_torch_wall.json` shape: a 2-wide
 /// torch tilted `-22.5deg` around Z so the flame leans away from
 /// the wall. Origin sits at the wall mount, NOT the floor.
+///
+/// W36.2: texture key changed to "torch_on" to match MC pack filename.
 pub(crate) fn build_wall_torch() -> BlockModel {
     let mut textures = HashMap::new();
-    textures.insert("torch".to_string(), "torch".to_string());
+    textures.insert("torch_on".to_string(), "torch_on".to_string());
     BlockModel {
         elements: vec![ModelElement {
             // Cite: template_torch_wall.json from/to/rotation.
@@ -221,12 +227,12 @@ pub(crate) fn build_wall_torch() -> BlockModel {
             }),
             shade: false,
             faces: ElementFaces {
-                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch", None)),
-                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch", None)),
-                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
-                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch_on", None)),
+                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch_on", None)),
+                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
+                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch_on", None)),
             },
         }],
         textures,

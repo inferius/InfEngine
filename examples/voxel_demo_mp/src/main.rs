@@ -3266,6 +3266,21 @@ impl Voxel {
                 &mut frame_seed,
                 [1.0, 0.78, 0.40],
             );
+            // W36.3: torch smoke - uses the legacy CPU particle which
+            // has per-particle velocity so it visibly rises upward.
+            // Spawn at ~1/4 rate (one smoke wisp per four flame bursts).
+            if accumulator_fires(&mut frame_seed, 0.25) {
+                let mc_tint = resource_pack::particles::smoke_tint_at(
+                    &self.resource_pack,
+                    0.0,
+                );
+                spawn_smoke_particle(
+                    &mut self.particles,
+                    pos,
+                    &mut frame_seed,
+                    mc_tint,
+                );
+            }
             spawned += 1;
         }
         let fires: Vec<[i32; 3]> = self.fires.keys().copied().collect();
@@ -3304,13 +3319,9 @@ impl Voxel {
                     &mut frame_seed,
                     mc_tint,
                 );
-                // W18.3: textured smoke wisp.
-                emit_textured_smoke(
-                    &mut self.textured_particles,
-                    pa,
-                    pos,
-                    &mut frame_seed,
-                );
+                // W36.3: textured smoke disabled - the static billboard
+                // had no velocity so it appeared to sink. Legacy CPU
+                // smoke (above) rises correctly via velocity field.
             }
             spawned += 1;
         }
@@ -5257,12 +5268,10 @@ impl Voxel {
         let mut registry = BlockRegistry::new();
         // Drive the runtime block registry from the BLOCK_TYPES
         // table so adding a new block kind is a one-place change.
+        // W36.1: apply per-block PBR overrides from block_pbr().
         for bt in BLOCK_TYPES {
-            let def = if bt.transparent {
-                BlockDef::transparent(bt.name, bt.color)
-            } else {
-                BlockDef::solid(bt.name, bt.color)
-            };
+            let (metallic, roughness) = block::block_pbr(bt.id);
+            let def = BlockDef::with_pbr(bt.name, bt.color, bt.transparent, metallic, roughness);
             registry.insert(BlockId(bt.id), def);
         }
         Self {
@@ -15944,6 +15953,12 @@ fn emit_textured_flame(
 /// Emit a textured smoke quad above `pos` into `out`. Cycles the
 /// `smoke_0..7` sprites from the particle atlas; falls back to a
 /// grey quad when the atlas is absent.
+///
+/// W36.3: no longer called - static billboard had no velocity so it
+/// appeared to sink. Kept for reference; callers were migrated to the
+/// legacy CPU particle path (`spawn_smoke_particle`) which has a
+/// rising velocity field. Remove in a future cleanup pass.
+#[allow(dead_code)]
 fn emit_textured_smoke(
     out: &mut Vec<infengine_render::TexturedParticleInstance>,
     particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,

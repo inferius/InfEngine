@@ -370,3 +370,40 @@ pub(crate) fn tool_effectiveness(
     };
     (mult, drop_ok)
 }
+
+// ---------------------------------------------------------------
+// W36.1 - Per-block PBR overrides.
+// ---------------------------------------------------------------
+
+/// Return (metallic, roughness) for a block id.
+///
+/// Most terrain is fully dielectric (metallic=0) and almost matte
+/// (roughness=0.95) to prevent the Cook-Torrance specular peak from
+/// washing out dark albedo values. Specific materials override:
+///
+/// - obsidian: roughness=1.0 (fully matte, no specular at all)
+/// - glass/glass_pane: roughness=0.05 (smooth, sharp reflection)
+/// - iron_ore/iron_bars: metallic=0.4, roughness=0.5
+/// - iron block (door/bars grouped): metallic=0.6, roughness=0.4
+/// - glowstone/sea_lantern: roughness=1.0 (matte emissive look)
+///
+/// Default for every other block: metallic=0.0, roughness=0.95.
+#[inline]
+pub(crate) fn block_pbr(id: u16) -> (f32, f32) {
+    match id {
+        // Obsidian - fully matte so dark albedo stays vibrant.
+        OBSIDIAN_ID => (0.0, 1.0),
+        // Crying obsidian - same treatment.
+        62 => (0.0, 1.0),
+        // Glass + glass pane - very smooth for a crisp specular edge.
+        9 | 80 => (0.0, 0.05),
+        // Iron ore - slight metallic sheen.
+        14 => (0.4, 0.5),
+        // Iron door + iron bars - more metallic than raw ore.
+        79 | 81 => (0.6, 0.4),
+        // Glowstone + sea lantern - matte to let emissive colour pop.
+        28 | 54 => (0.0, 1.0),
+        // Default: dielectric, almost matte.
+        _ => (0.0, 0.95),
+    }
+}

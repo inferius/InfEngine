@@ -57,7 +57,10 @@ impl BlockDef {
             name: name.into(),
             color,
             metallic: 0.0,
-            roughness: 0.85,
+            // 0.95 instead of the old 0.85: almost-matte default so
+            // the Cook-Torrance specular peak doesn't wash out dark
+            // terrain albedo. Per-block overrides applied in main.rs.
+            roughness: 0.95,
             transparent: false,
         }
     }
@@ -69,8 +72,26 @@ impl BlockDef {
             name: name.into(),
             color,
             metallic: 0.0,
-            roughness: 0.85,
+            roughness: 0.95,
             transparent: true,
+        }
+    }
+
+    /// Variant with explicit PBR parameters. Used by callers that
+    /// tune metallic/roughness per block kind (W36.1).
+    pub fn with_pbr(
+        name: impl Into<String>,
+        color: [f32; 3],
+        transparent: bool,
+        metallic: f32,
+        roughness: f32,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            metallic,
+            roughness,
+            transparent,
         }
     }
 }
