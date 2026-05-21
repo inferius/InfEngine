@@ -44,9 +44,11 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 7,  block: "oak_planks",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 8,  block: "cobblestone", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 9,  block: "glass",       top: "", bottom: "", sides: "" },
-    // W36.2: MC filename is "torch_on.png" (lit torch); "torch.png"
-    // is the pre-1.13 name, not present in modern packs.
-    BlockNameMap { infengine_id: 10, block: "torch_on", top: "", bottom: "", sides: "" },
+    // W37 fix: MC 26.x ships block/torch.png (lit, default). The W36.2
+    // "torch_on" rename was based on a pre-1.13 era filename that no
+    // longer applies - reverting to "torch" so icon lookup hits the
+    // real tile.
+    BlockNameMap { infengine_id: 10, block: "torch", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 11, block: "white_wool",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 12, block: "raw_beef",    top: "", bottom: "", sides: "" }, // item-only, no block tex
     BlockNameMap { infengine_id: 13, block: "coal_ore",    top: "", bottom: "", sides: "" },

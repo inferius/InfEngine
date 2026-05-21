@@ -59,13 +59,9 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         if let Some(item_name) = name_map::lookup_item(bt.id) {
             item_icons.insert(item_name.to_string(), top_ref);
         }
-        // W36.2: register "torch_on" as an alias for the torch tile so
-        // the torch special model (which uses "torch_on" as texture key
-        // to match the MC pack filename) resolves correctly even when MC
-        // is not installed and only the placeholder atlas is available.
-        if bt.id == crate::block::TORCH_ID {
-            textures.insert(TextureKey::Block("torch_on".to_string()), top_ref);
-        }
+        // W37 fix: "torch_on" alias removed since W37 reverts torch
+        // texture key to plain "torch" (modern MC filename).
+        let _ = bt.id;
     }
 
     // W37: register the magenta "__missing" sentinel using the legacy
