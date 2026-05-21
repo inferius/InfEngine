@@ -40,6 +40,7 @@ mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
     BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, GLOWSTONE_ID, LAVA_ID,
+    REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
     block_category, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
@@ -12745,7 +12746,15 @@ impl AppHandler for Voxel {
                 let tier = tool_tier(held);
                 let needed = block_required_tier(broken);
                 if !suppress_drops && tier >= needed {
-                    self.spawn_drop(broken, voxel);
+                    // W35.2: wall-torch variants drop the floor-torch
+                    // item so the player always gets a single holdable
+                    // torch stack (mirrors MC's BlockStateToItemMap).
+                    let drop_id = match broken.0 {
+                        x if x == REDSTONE_WALL_TORCH_ID => REDSTONE_TORCH_ID,
+                        x if x == SOUL_WALL_TORCH_ID => SOUL_TORCH_ID,
+                        _ => broken.0,
+                    };
+                    self.spawn_drop(BlockId(drop_id), voxel);
                 }
                 // Chest break: drain the per-position container's
                 // contents as item drops at the same voxel, then
@@ -13108,11 +13117,18 @@ impl AppHandler for Voxel {
                             scoop_voxel,
                         )
                     {
-                        self.world_set_tracked(voxel, BlockId::AIR);
+                        // W35.4: In creative (instabuild) the bucket
+                        // never fills - it stays empty like MC creative.
+                        // The liquid source block is NOT removed either.
+                        if !self.abilities.instabuild {
+                            self.world_set_tracked(voxel, BlockId::AIR);
+                        }
                         let coords = Self::affected_chunks(voxel);
                         self.rebuild_chunks(&coords);
-                        self.inventory[self.selected_slot] =
-                            Some((BlockId(filled), 1));
+                        if !self.abilities.instabuild {
+                            self.inventory[self.selected_slot] =
+                                Some((BlockId(filled), 1));
+                        }
                         let edit = EditMsg {
                             x: voxel[0],
                             y: voxel[1],
@@ -13173,8 +13189,13 @@ impl AppHandler for Voxel {
                         self.liquid_level.insert(target_voxel, 0);
                         let coords = Self::affected_chunks(target_voxel);
                         self.rebuild_chunks(&coords);
-                        self.inventory[self.selected_slot] =
-                            Some((BlockId(BUCKET_EMPTY_ID), 1));
+                        // W35.4: In creative (instabuild) the bucket
+                        // never empties - it stays filled like MC
+                        // creative mode. Only survival mode swaps it.
+                        if !self.abilities.instabuild {
+                            self.inventory[self.selected_slot] =
+                                Some((BlockId(BUCKET_EMPTY_ID), 1));
+                        }
                         let edit = EditMsg {
                             x: target_voxel[0],
                             y: target_voxel[1],
@@ -13273,7 +13294,13 @@ impl AppHandler for Voxel {
                 // air OR another `F_NO_PLACE` decoration doesn't
                 // count as support - torches can't hang off
                 // torches / flowers.
-                let torch_unsupported = block.0 == TORCH_ID && {
+                let is_torch_item = matches!(
+                    block.0,
+                    x if x == TORCH_ID
+                        || x == REDSTONE_TORCH_ID
+                        || x == SOUL_TORCH_ID
+                );
+                let torch_unsupported = is_torch_item && {
                     let q = target_voxel;
                     let unsupportive = |b: BlockId| {
                         b.is_air() || block_is_placement_blocked(b)
@@ -13290,12 +13317,30 @@ impl AppHandler for Voxel {
                     .all(|v| unsupportive(self.world.get(*v)));
                     below_air && walls_clear
                 };
+                // W35.2: auto-switch torch to wall variant when the
+                // player places on a horizontal face (hit normal
+                // has no Y component). The item held stays the same;
+                // only the placed world block changes. Mirrors MC
+                // BlockTorch.getStateForPlacement which picks between
+                // Block.torch and Block.wall_torch based on the
+                // attachment face.
+                let placed_block = if hit.normal[1] == 0 {
+                    match block.0 {
+                        x if x == REDSTONE_TORCH_ID =>
+                            BlockId(REDSTONE_WALL_TORCH_ID),
+                        x if x == SOUL_TORCH_ID =>
+                            BlockId(SOUL_WALL_TORCH_ID),
+                        _ => block,
+                    }
+                } else {
+                    block
+                };
                 if !overlaps && !torch_unsupported && !occupied {
                     let edit = EditMsg {
                         x: target_voxel[0],
                         y: target_voxel[1],
                         z: target_voxel[2],
-                        block: block.0,
+                        block: placed_block.0,
                     };
                     // Record sticky torch orientation from the
                     // ray hit normal so a later neighbour change
@@ -13323,7 +13368,7 @@ impl AppHandler for Voxel {
                             None
                         };
                     if is_client {
-                        self.world_set_tracked(target_voxel, block);
+                        self.world_set_tracked(target_voxel, placed_block);
                         let coords = Self::affected_chunks(target_voxel);
                         self.rebuild_chunks(&coords);
                         if let NetRole::Client { client, pending_edits, .. } = &mut self.net {
@@ -13344,7 +13389,7 @@ impl AppHandler for Voxel {
                             }
                         }
                     } else {
-                        self.world_set_tracked(target_voxel, block);
+                        self.world_set_tracked(target_voxel, placed_block);
                         let coords = Self::affected_chunks(target_voxel);
                         self.rebuild_chunks(&coords);
                         if let NetRole::Server { server, .. } = &self.net {
