@@ -2213,3 +2213,122 @@ New test module: `resource_pack/pipeline_tests.rs` (16 tests):
   wave that carries per-block state on voxels.
 - Door blockstate variants (ids 77/78/79): multi-state facing=N/E/S/W
   + half=lower/upper. Deferred until state-matching lands.
+
+---
+
+## Wave 40
+
+### Goals
+
+W40.2: Bulk-import MC blocks/items to grow ITEM_TYPES to >= 350 so
+the creative inventory window shows a much richer palette of blocks.
+
+W40.1: Implement multipart blockstate resolution so fences, walls,
+glass panes, iron bars, and other connection-based blocks show the
+correct arms when placed next to each other.
+
+### What shipped
+
+#### W40.2 - Bulk MC item/block registry import
+
+- `BLOCK_TYPES` extended from 168 to 323 entries (+155 blocks):
+  - Stained glass x16 (ids 169..=184) - transparent, keep_alpha.
+  - Concrete x16 (ids 185..=200) - solid building blocks.
+  - Concrete powder x16 (ids 201..=216) - solid building blocks.
+  - Carpet x16 (ids 217..=232) - thin, F_DEDICATED_RENDER.
+  - Mangrove wood: log, planks, leaves, roots (ids 233..=236).
+  - Cherry wood: log, planks, leaves (ids 237..=239).
+  - Crimson wood: stem, planks, hyphae (ids 240..=242).
+  - Warped wood: stem, planks, hyphae (ids 243..=245).
+  - Deepslate ores: redstone, lapis, emerald, copper (ids 246..=249).
+  - Nether ores: quartz ore, gold ore (ids 250..=251).
+  - Ancient debris (id 252).
+  - Nether building blocks: nether_bricks, red_nether_bricks,
+    blackstone, polished_blackstone, basalt, smooth_basalt (ids 253..=258).
+  - End blocks: end_stone_bricks, purpur_block, purpur_pillar,
+    dragon_egg (ids 259..=262).
+  - Prismarine family: prismarine, prismarine_bricks, dark_prismarine
+    (ids 263..=265).
+  - Copper blocks: copper, exposed, weathered, oxidized, cut (ids 266..=270).
+  - Amethyst: amethyst_block, budding_amethyst, amethyst_cluster (ids 271..=273).
+  - Netherite tools: pickaxe, sword, shovel, axe, hoe (ids 274..=278).
+  - Netherite ingot + scrap (ids 279..=280).
+  - More food: pumpkin_pie, golden_apple, baked_potato, raw/cooked
+    porkchop, mutton, cod, salmon, dried_kelp (ids 281..=292).
+  - Mob drops: rotten_flesh, bone, ender_pearl, blaze_rod, ghast_tear,
+    slime_ball, gunpowder, spider_eye, string (ids 293..=301).
+  - Misc ingredients: stick, leather, paper, book, map, compass, clock,
+    redstone_dust, glowstone_dust, prismarine_shard, prismarine_crystals,
+    nautilus_shell, heart_of_the_sea, lapis_lazuli, diamond, emerald,
+    gold_ingot, sugar, blaze_powder, magma_cream, fermented_spider_eye,
+    amethyst_shard (ids 302..=323).
+- `ITEM_TYPES` extended from 168 to 350 entries:
+  - Matching rows for all 155 new block ids (169..=323).
+  - 27 item-only entries (ids 324..=350): iron_ingot, coal, quartz,
+    flint, copper_ingot, raw_iron/gold/copper, hoes x5, wheat,
+    seeds x4, raw_beef, potato, carrot, beetroot, mushroom_stew,
+    bowl, ink_sac, glow_ink_sac, echo_shard.
+- `BLOCK_NAME_MAP` extended: 155 new entries mapping new block ids to
+  MC asset names (with per-face overrides for logs, basalt, etc.).
+- `ITEM_NAME_MAP` extended: entries for all new non-block items
+  (tools, food, mob drops, ingredients, item-only extras).
+- New test `w40_item_types_at_least_350` in `item_tests.rs`.
+
+#### W40.1 - Multipart blockstate resolution
+
+- `NeighborStates` struct (north/south/east/west/up/down booleans)
+  added to `blockstates.rs`.
+- `MultipartCondition` enum (All / AnyOf) with `matches_neighbors`.
+- `MultipartPart` struct (optional `when` + `apply: ModelRef`).
+- `BlockState.parts: Vec<MultipartPart>` field; `parse()` now fully
+  populates multipart rules instead of discarding them.
+- `BlockState::select_multipart_models(neighbors)` returns all
+  matching part model refs.
+- `resolve_block_model_with_neighbors(pack, id, neighbors)` in
+  `special_models.rs`: for multipart blocks, loads all matching part
+  models and merges their element lists into a single `BlockModel`.
+- `model_for_block_with_neighbors` convenience wrapper.
+- `emit_block_elements` gains `neighbors: NeighborStates` parameter;
+  `NeighborStates` re-exported from `element_mesh` for callers.
+- Both mesher call sites in `main.rs` compute per-voxel
+  `NeighborStates` by checking same-block-id neighbours in the chunk.
+- 5 new tests in `blockstates.rs`: multipart parsing, unconditional
+  parts, conditional north arm, OR condition, NeighborStates round-trip.
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/block/registry.rs`: +155 BlockType rows.
+- `examples/voxel_demo_mp/src/item/mod.rs`: +182 ItemType rows
+  (155 block mirrors + 27 item-only).
+- `examples/voxel_demo_mp/src/item/item_tests.rs`: w40 count test.
+- `examples/voxel_demo_mp/src/resource_pack/name_map.rs`:
+  +155 BLOCK_NAME_MAP + +54 ITEM_NAME_MAP entries.
+- `examples/voxel_demo_mp/src/resource_pack/blockstates.rs`:
+  NeighborStates, MultipartCondition, MultipartPart, updated parse().
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`:
+  resolve_block_model_with_neighbors, model_for_block_with_neighbors.
+- `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`:
+  neighbors param, NeighborStates re-export.
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  parts field added to BlockState literal.
+- `examples/voxel_demo_mp/src/wave16_tests.rs`:
+  NeighborStates::default() in test calls.
+- `examples/voxel_demo_mp/src/main.rs`:
+  NeighborStates wired at both emit_block_elements call sites.
+- `docs/design/mc_fidelity.md`: this section.
+
+### Tests
+
+- bin: 1524 pass / 7 fail (7 pre-existing; +5 W40.1 tests).
+- lib: 589 pass / 0 fail.
+- clippy: 0 warnings.
+- ITEM_TYPES.len() = 350 (>= 350 target met).
+
+### Deferred
+
+- Fence/wall connection check: currently matches only same-block-id
+  neighbours. A proper "connectable" predicate (e.g. any solid block
+  connects to a wall) is deferred.
+- Chest pairing (double-chest form): requires entity-model render path,
+  not yet wired.
+- Door blockstate variants: deferred (needs per-voxel state storage).
