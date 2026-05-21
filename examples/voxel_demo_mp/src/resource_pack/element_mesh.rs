@@ -263,9 +263,20 @@ fn emit_faces_for_element(
         // bare stem, or use the block's face entry if the name is
         // a variable that was never resolved.
         let clean_name = tex_name.trim_start_matches('#');
+        // W37 fix: fall back to the magenta __missing sentinel when
+        // the texture name isn't registered. The previous
+        // [0.0, 0.0, 1.0, 1.0] fallback covered the WHOLE atlas as
+        // one face's UV which made torches / special-model blocks
+        // render as a chaotic mosaic of every atlas tile (user's
+        // "mix spritu" report). The missing sentinel makes such
+        // blocks visibly magenta-checkered so the user knows the
+        // texture key didn't resolve.
         let atlas_uv = pack
             .block_texture(clean_name)
             .map(|t| t.atlas_uv)
+            .or_else(|| {
+                pack.block_texture("__missing").map(|t| t.atlas_uv)
+            })
             .unwrap_or([0.0, 0.0, 1.0, 1.0]);
 
         // Scale UV from MC 16ths to 0..1.

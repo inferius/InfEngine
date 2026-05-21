@@ -318,6 +318,22 @@ impl Renderer {
         let mut meshes = Mesh3DRegistry::default();
         let (cube_v, cube_i) = mesh3d::cube_geometry_public();
         let cube_handle = meshes.insert(&device, "infengine_render::cube", &cube_v, &cube_i);
+
+        // W38: bind a dedicated 1x1 white texture to the built-in
+        // cube so legacy draw paths (debug cubes, break particles via
+        // draw_particles, sprite billboards) sample white regardless
+        // of what the global texture_bind_group currently holds. After
+        // W32 the global slot carries the MC atlas - cube vertices use
+        // UV (0..1, 0..1) which on the atlas sampled the WHOLE atlas
+        // (every tile mashed together = "mix spritu" user reported
+        // for break particles + any cube draw).
+        let mut mesh_albedos: std::collections::HashMap<MeshHandle, AlbedoHandle> =
+            std::collections::HashMap::new();
+        let white_pixel = [0xFFu8, 0xFF, 0xFF, 0xFF];
+        let cube_albedo_bg =
+            mesh3d.make_albedo_bind_group(&device, &queue, 1, 1, &white_pixel);
+        mesh_albedos.insert(cube_handle, std::sync::Arc::new(cube_albedo_bg));
+
         let depth_view = create_depth_view(&device, config.width, config.height);
 
         // W32: allocate uber GPU pools and per-frame staging buffers.
@@ -365,7 +381,7 @@ impl Renderer {
             show_grid: true,
             debug3d,
             debug3d_vertices: Vec::new(),
-            mesh_albedos: std::collections::HashMap::new(),
+            mesh_albedos,
             lights: lights_res,
             light_queue: Vec::new(),
             tile_anims,
