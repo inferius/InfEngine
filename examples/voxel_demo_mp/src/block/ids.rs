@@ -217,3 +217,38 @@ pub(crate) const GLASS_PANE_ID: u16 = 80;
 pub(crate) const IRON_BARS_ID: u16 = 81;
 #[allow(dead_code)]
 pub(crate) const COBBLESTONE_WALL_ID: u16 = 82;
+
+// ---------------------------------------------------------------
+// W35.3 - Stone variants + wood variants + wool + building blocks.
+// IDs 83..=97.
+// ---------------------------------------------------------------
+#[allow(dead_code)]
+pub(crate) const GRANITE_ID: u16 = 83;
+#[allow(dead_code)]
+pub(crate) const DIORITE_ID: u16 = 84;
+#[allow(dead_code)]
+pub(crate) const ANDESITE_ID: u16 = 85;
+#[allow(dead_code)]
+pub(crate) const BRICKS_ID: u16 = 86;
+#[allow(dead_code)]
+pub(crate) const SMOOTH_STONE_ID: u16 = 87;
+#[allow(dead_code)]
+pub(crate) const BIRCH_LOG_ID: u16 = 88;
+#[allow(dead_code)]
+pub(crate) const BIRCH_PLANKS_ID: u16 = 89;
+#[allow(dead_code)]
+pub(crate) const BIRCH_LEAVES_ID: u16 = 90;
+#[allow(dead_code)]
+pub(crate) const BLUE_WOOL_ID: u16 = 91;
+#[allow(dead_code)]
+pub(crate) const RED_WOOL_ID: u16 = 92;
+#[allow(dead_code)]
+pub(crate) const YELLOW_WOOL_ID: u16 = 93;
+#[allow(dead_code)]
+pub(crate) const GREEN_WOOL_ID: u16 = 94;
+#[allow(dead_code)]
+pub(crate) const TUFF_ID: u16 = 95;
+#[allow(dead_code)]
+pub(crate) const DEEPSLATE_ID: u16 = 96;
+#[allow(dead_code)]
+pub(crate) const CALCITE_ID: u16 = 97;

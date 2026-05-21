@@ -744,4 +744,114 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
         sides: TileSpec { col: 1, row: 2, files: &["cobblestone.png"], keep_alpha: false },
     },
+    // ---------------------------------------------------------------
+    // W35.3 - Stone variants + wood variants + wool colours +
+    //         building blocks. IDs 83..=97.
+    // Colors sampled from the average of the matching MC texture.
+    // ---------------------------------------------------------------
+    // Granite - warm pinkish igneous stone.
+    BlockType {
+        id: 83, name: "granite", color: [0.68, 0.48, 0.40], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["granite.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["granite.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["granite.png", "stone.png"], keep_alpha: false },
+    },
+    // Diorite - light grey flecked igneous stone.
+    BlockType {
+        id: 84, name: "diorite", color: [0.82, 0.82, 0.82], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diorite.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diorite.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diorite.png", "stone.png"], keep_alpha: false },
+    },
+    // Andesite - dark grey igneous stone.
+    BlockType {
+        id: 85, name: "andesite", color: [0.58, 0.58, 0.58], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["andesite.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["andesite.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["andesite.png", "stone.png"], keep_alpha: false },
+    },
+    // Bricks - red clay bricks.
+    BlockType {
+        id: 86, name: "bricks", color: [0.68, 0.38, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bricks.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bricks.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bricks.png", "stone.png"], keep_alpha: false },
+    },
+    // Smooth stone - polished stone slab top texture on all faces.
+    BlockType {
+        id: 87, name: "smooth_stone", color: [0.55, 0.55, 0.58], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["smooth_stone.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["smooth_stone.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["smooth_stone.png", "stone.png"], keep_alpha: false },
+    },
+    // Birch log - pale white-black bark.
+    BlockType {
+        id: 88, name: "birch_log", color: [0.88, 0.86, 0.72], transparent: false, flags: 0,
+        top: TileSpec { col: 3, row: 1, files: &["birch_log_top.png", "log_oak_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["birch_log_top.png", "log_oak_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["birch_log.png", "log_oak.png"], keep_alpha: false },
+    },
+    // Birch planks - cream coloured planks.
+    BlockType {
+        id: 89, name: "birch_planks", color: [0.90, 0.84, 0.60], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
+    },
+    // Birch leaves - bright yellow-green.
+    BlockType {
+        id: 90, name: "birch_leaves", color: [0.70, 0.85, 0.32], transparent: true, flags: 0,
+        top: TileSpec { col: 1, row: 1, files: &["birch_leaves.png", "leaves_oak.tga"], keep_alpha: true },
+        bottom: TileSpec { col: 1, row: 1, files: &["birch_leaves.png", "leaves_oak.tga"], keep_alpha: true },
+        sides: TileSpec { col: 1, row: 1, files: &["birch_leaves.png", "leaves_oak.tga"], keep_alpha: true },
+    },
+    // Blue wool.
+    BlockType {
+        id: 91, name: "blue_wool", color: [0.22, 0.32, 0.72], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["blue_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["blue_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["blue_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    // Red wool.
+    BlockType {
+        id: 92, name: "red_wool", color: [0.74, 0.18, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["red_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["red_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["red_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    // Yellow wool.
+    BlockType {
+        id: 93, name: "yellow_wool", color: [0.92, 0.82, 0.16], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["yellow_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["yellow_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["yellow_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    // Green wool.
+    BlockType {
+        id: 94, name: "green_wool", color: [0.28, 0.52, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["green_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["green_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["green_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    // Tuff - dark mottled volcanic rock. Added in 1.17.
+    BlockType {
+        id: 95, name: "tuff", color: [0.46, 0.46, 0.42], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["tuff.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["tuff.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["tuff.png", "stone.png"], keep_alpha: false },
+    },
+    // Deepslate - very dark grey, heavier than stone. Added in 1.17.
+    BlockType {
+        id: 96, name: "deepslate", color: [0.30, 0.30, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_top.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_top.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate.png", "stone.png"], keep_alpha: false },
+    },
+    // Calcite - bright white mineral, part of the dripstone cave biome.
+    BlockType {
+        id: 97, name: "calcite", color: [0.92, 0.92, 0.90], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["calcite.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["calcite.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["calcite.png", "stone.png"], keep_alpha: false },
+    },
 ];

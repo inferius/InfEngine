@@ -148,6 +148,28 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 80, block: "glass",            top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 81, block: "iron_bars",        top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 82, block: "cobblestone",      top: "", bottom: "", sides: "" },
+    // W35.3 - Stone variants + wood variants + wool + building blocks.
+    BlockNameMap { infengine_id: 83, block: "granite",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 84, block: "diorite",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 85, block: "andesite",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 86, block: "bricks",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 87, block: "smooth_stone",     top: "", bottom: "", sides: "" },
+    BlockNameMap {
+        infengine_id: 88, block: "birch_log",
+        top: "birch_log_top", bottom: "birch_log_top", sides: "birch_log",
+    },
+    BlockNameMap { infengine_id: 89, block: "birch_planks",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 90, block: "birch_leaves",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 91, block: "blue_wool",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 92, block: "red_wool",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 93, block: "yellow_wool",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 94, block: "green_wool",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 95, block: "tuff",             top: "", bottom: "", sides: "" },
+    BlockNameMap {
+        infengine_id: 96, block: "deepslate",
+        top: "deepslate_top", bottom: "deepslate_top", sides: "deepslate",
+    },
+    BlockNameMap { infengine_id: 97, block: "calcite",          top: "", bottom: "", sides: "" },
 ];
 
 /// Look up the (block, top, bottom, sides) MC names for an infengine

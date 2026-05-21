@@ -566,6 +566,85 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: Some(82), max_stack: 64, icon: None,
         category: ItemCategory::Decoration,
     },
+    // ---- W35.3: Stone variants ----
+    ItemType {
+        id: 83, name: "granite", display: None,
+        places: Some(83), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 84, name: "diorite", display: None,
+        places: Some(84), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 85, name: "andesite", display: None,
+        places: Some(85), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 86, name: "bricks", display: None,
+        places: Some(86), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 87, name: "smooth_stone", display: Some("Smooth Stone"),
+        places: Some(87), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W35.3: Birch wood ----
+    ItemType {
+        id: 88, name: "birch_log", display: Some("Birch Log"),
+        places: Some(88), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 89, name: "birch_planks", display: Some("Birch Planks"),
+        places: Some(89), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 90, name: "birch_leaves", display: Some("Birch Leaves"),
+        places: Some(90), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W35.3: Wool colour variants ----
+    ItemType {
+        id: 91, name: "blue_wool", display: Some("Blue Wool"),
+        places: Some(91), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 92, name: "red_wool", display: Some("Red Wool"),
+        places: Some(92), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 93, name: "yellow_wool", display: Some("Yellow Wool"),
+        places: Some(93), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 94, name: "green_wool", display: Some("Green Wool"),
+        places: Some(94), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W35.3: More building blocks ----
+    ItemType {
+        id: 95, name: "tuff", display: None,
+        places: Some(95), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 96, name: "deepslate", display: None,
+        places: Some(96), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 97, name: "calcite", display: None,
+        places: Some(97), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
 ];
 
 // ---------------------------------------------------------------
