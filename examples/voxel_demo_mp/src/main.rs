@@ -3498,6 +3498,7 @@ impl Voxel {
                 size: 0.12,
                 age: 0.0,
                 lifetime: 0.5,
+                gravity_scale: 1.0,
             });
         }
     }
@@ -3533,6 +3534,7 @@ impl Voxel {
                 size: 0.08,
                 age: 0.0,
                 lifetime: 0.3,
+                gravity_scale: 1.0,
             });
         }
     }
@@ -7362,6 +7364,7 @@ impl Voxel {
                                 size: 0.08,
                                 age: 0.0,
                                 lifetime: 0.30,
+                                gravity_scale: 1.0,
                             },
                         );
                     }
@@ -7612,6 +7615,7 @@ impl Voxel {
                         size,
                         age: 0.0,
                         lifetime: life,
+                        gravity_scale: 1.0,
                     },
                 );
             }
@@ -7787,6 +7791,7 @@ impl Voxel {
                             size: 0.07,
                             age: 0.0,
                             lifetime: 0.45,
+                            gravity_scale: 1.0,
                         },
                     );
                 }
@@ -15953,6 +15958,9 @@ fn spawn_flame_particle(
         size: 0.08,
         age: 0.0,
         lifetime: 1.2,
+        // W45.3: gravity_scale = 0.0 - flame wisps rise upward and
+        // must not be pulled down by the ambient emitter's gravity.
+        gravity_scale: 0.0,
     });
 }
 
@@ -15995,6 +16003,10 @@ fn spawn_smoke_particle(
         size: 0.10,
         age: 0.0,
         lifetime: 1.8,
+        // W45.3: gravity_scale = 0.0 so the ambient emitter's -10 m/s^2
+        // downward gravity does not cancel the upward drift velocity.
+        // Smoke wisps must rise, not fall.
+        gravity_scale: 0.0,
     });
 }
 
@@ -16006,9 +16018,16 @@ fn spawn_smoke_particle(
 // CPU system handles debris/break effects; the GPU pass handles
 // ambient torch/fire/lava ambient sprites.
 
-/// Emit a textured flame quad above `pos` into `out`.  Uses the
+/// Emit textured flame quads above `pos` into `out`.  Uses the
 /// `particle_atlas`'s "flame" sprite strip; falls back to a solid
 /// orange quad when the atlas is absent (placeholder pack).
+///
+/// W45.4: anti-jump fix (Option C). Instead of one random-frame quad,
+/// we emit `FLAME_LAYERS` overlapping quads each showing a different
+/// animation frame at slightly different alpha. This way multiple
+/// adjacent frames of the flame strip coexist in the scene at once,
+/// and the visual averages out to a smooth perceived animation rather
+/// than one frame flipping to a random other frame each tick.
 fn emit_textured_flame(
     out: &mut Vec<infengine_render::TexturedParticleInstance>,
     particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
@@ -16016,40 +16035,60 @@ fn emit_textured_flame(
     seed: &mut u32,
     color: [f32; 3],
 ) {
+    // Number of frame layers emitted per source per call.
+    // 3 layers means frames [N, N+1, N+2] overlap; fade factors
+    // keep the brightest layer dominant so texture detail reads
+    // clearly while the others provide smooth transition blending.
+    const FLAME_LAYERS: u32 = 3;
+
     let rand = |s: &mut u32| -> f32 {
         *s ^= *s << 13;
         *s ^= *s >> 17;
         *s ^= *s << 5;
         (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
     };
-    let jitter_x = (rand(seed) - 0.5) * 0.3;
-    let jitter_z = (rand(seed) - 0.5) * 0.3;
-    // Pick a random flame frame so nearby torches don't all flash
-    // in sync. The flame strip has 8 frames; when the atlas is
-    // absent we use uv_min/uv_max == [0,0]/[1,1] (whole white
-    // 1x1 texture built into ParticlePass).
-    let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
-        let n_frames = pa.frame_count("flame").max(1);
-        let frame = (rand(seed) * n_frames as f32) as u32 % n_frames;
-        if let Some(uv) = pa.sprite_uv("flame", frame) {
-            ([uv[0], uv[1]], [uv[2], uv[3]])
+
+    let n_frames = particle_atlas
+        .map(|pa| pa.frame_count("flame").max(1))
+        .unwrap_or(1);
+    // Base frame chosen randomly; subsequent layers cycle forward.
+    // Advance seed first so different sources stay visually distinct.
+    let base_frame = (rand(seed) * n_frames as f32) as u32 % n_frames;
+
+    for layer in 0..FLAME_LAYERS {
+        let frame = (base_frame + layer) % n_frames;
+        // Slight jitter per layer keeps layers from perfectly overlapping.
+        let jitter_x = (rand(seed) - 0.5) * 0.18;
+        let jitter_z = (rand(seed) - 0.5) * 0.18;
+        // Alpha: primary frame is full, subsequent frames fade.
+        // Layer 0 = 0.95, 1 = 0.55, 2 = 0.30. This gives the visual
+        // impression of the current frame dominating while the next
+        // frame is already partially visible (smooth crossfade).
+        let alphas = [0.95f32, 0.55, 0.30];
+        let alpha = alphas[layer as usize];
+
+        let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
+            if let Some(uv) = pa.sprite_uv("flame", frame) {
+                ([uv[0], uv[1]], [uv[2], uv[3]])
+            } else {
+                ([0.0f32, 0.0], [1.0, 1.0])
+            }
         } else {
             ([0.0f32, 0.0], [1.0, 1.0])
-        }
-    } else {
-        ([0.0f32, 0.0], [1.0, 1.0])
-    };
-    out.push(infengine_render::TexturedParticleInstance {
-        center_world: [
-            pos[0] as f32 + 0.5 + jitter_x,
-            pos[1] as f32 + 0.8,
-            pos[2] as f32 + 0.5 + jitter_z,
-        ],
-        size: 0.125,
-        uv_min,
-        uv_max,
-        color: [color[0], color[1], color[2], 0.95],
-    });
+        };
+
+        out.push(infengine_render::TexturedParticleInstance {
+            center_world: [
+                pos[0] as f32 + 0.5 + jitter_x,
+                pos[1] as f32 + 0.8,
+                pos[2] as f32 + 0.5 + jitter_z,
+            ],
+            size: 0.125,
+            uv_min,
+            uv_max,
+            color: [color[0], color[1], color[2], alpha],
+        });
+    }
 }
 
 /// Emit a textured smoke quad above `pos` into `out`. Cycles the

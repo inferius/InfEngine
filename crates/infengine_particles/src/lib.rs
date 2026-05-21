@@ -19,6 +19,12 @@ use serde::{Deserialize, Serialize};
 /// One simulated particle. `age` counts seconds since spawn so
 /// downstream code can fade colour / size with a normalised
 /// fraction (`age / lifetime`).
+///
+/// `gravity_scale` multiplies the emitter gravity vector before it is
+/// applied to this particle's velocity each tick. Set to 0.0 to make
+/// a particle completely immune to gravity (e.g. smoke wisps that
+/// must rise). The default value via `Default` is 1.0 (full gravity).
+/// W45.3: added to fix smoke/torch particles drifting down instead of up.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Particle {
     pub position: [f32; 3],
@@ -27,6 +33,13 @@ pub struct Particle {
     pub size: f32,
     pub age: f32,
     pub lifetime: f32,
+    /// Gravity multiplier. 0.0 = no gravity, 1.0 = full emitter gravity.
+    #[serde(default = "default_gravity_scale")]
+    pub gravity_scale: f32,
+}
+
+fn default_gravity_scale() -> f32 {
+    1.0
 }
 
 impl Particle {
@@ -168,6 +181,7 @@ impl ParticleSystem {
                     size: e.size_start,
                     age: 0.0,
                     lifetime: e.lifetime,
+                    gravity_scale: 1.0,
                 });
             }
         }
@@ -185,17 +199,18 @@ impl ParticleSystem {
             // Linear euler.
             let pos = Vec3::from_array(p.position);
             let mut vel = Vec3::from_array(p.velocity);
-            // Apply gravity from the first emitter whose particles
-            // we're integrating. Cheap heuristic: take the closest
-            // emitter's gravity vector. Most scenes have one
-            // dominant emitter so this stays correct in practice;
-            // the unit test covers the single-emitter case.
+            // Apply gravity from the first emitter, scaled by the
+            // particle's own gravity_scale. gravity_scale = 0.0 means
+            // the particle is immune to gravity (e.g. smoke wisps that
+            // must rise). W45.3: previously all particles got full
+            // gravity which caused smoke with +Y velocity to reverse
+            // direction within the first tick.
             if let Some(g) = self
                 .emitters
                 .first()
                 .map(|e| Vec3::from_array(e.gravity))
             {
-                vel += g * dt;
+                vel += g * (dt * p.gravity_scale);
             }
             let new_pos = pos + vel * dt;
             p.position = new_pos.to_array();

@@ -471,6 +471,7 @@ pub(crate) fn cmd_fw(
                 size: 0.18,
                 age: 0.0,
                 lifetime: 0.7 - t * 0.4,
+                gravity_scale: 1.0,
             },
         );
     }
@@ -510,6 +511,7 @@ pub(crate) fn cmd_fw(
                 size: 0.18,
                 age: 0.0,
                 lifetime: 1.6,
+                gravity_scale: 1.0,
             },
         );
     }

@@ -395,6 +395,7 @@ mod tests {
             size: 0.12,
             age: 0.6,
             lifetime: 1.2,
+            gravity_scale: 1.0,
         };
         let inst = instance_from(&p, EmitterKind::Smoke, &atlas);
         assert_eq!(inst.position, p.position);
