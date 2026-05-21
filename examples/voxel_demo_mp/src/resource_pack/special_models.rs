@@ -142,6 +142,12 @@ fn resolve_from_special_table(id: u16) -> ResolvedBlockState {
 pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
     match name {
         "block/torch" | "torch" => Some(build_torch()),
+        // W45.2: redstone + soul torch fallback paths (placeholder pack with
+        // no MC JSON on disk). Hand-build them as torch-stick geometry with
+        // their respective texture names so the placeholder pack still
+        // renders something sensible.
+        "block/redstone_torch" | "redstone_torch" => Some(build_redstone_torch()),
+        "block/soul_torch" | "soul_torch" => Some(build_soul_torch()),
         "block/wall_torch" | "wall_torch" => Some(build_wall_torch()),
         "block/slab" | "slab" => Some(build_slab_bottom()),
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
@@ -184,15 +190,15 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     };
     match id {
         x if x == TORCH_ID => Some("block/torch"),
-        // W37: redstone + soul torch variants use the same torch model
-        // but with their own atlas textures - keyed by the cross/<tex>
-        // pattern that lookup() resolves to build_cross with the named
-        // tile. The texture stem matches the MC asset filename
-        // (redstone_torch.png, soul_torch.png).
-        50 => Some("block/cross/redstone_torch"),
-        51 => Some("block/cross/redstone_torch"),
-        52 => Some("block/cross/soul_torch"),
-        53 => Some("block/cross/soul_torch"),
+        // W45.2: redstone + soul torch variants now route through the real
+        // MC JSON blockstate (block/redstone_torch.json, block/soul_torch.json)
+        // exactly like the regular torch. The old "block/cross/<tex>" hack
+        // rendered them as flat X-cross quads which looked wrong; the JSON
+        // model is the proper torch-stick geometry with the correct texture.
+        50 => Some("block/redstone_torch"),
+        51 => Some("block/redstone_torch"),
+        52 => Some("block/soul_torch"),
+        53 => Some("block/soul_torch"),
         // W16 - cross-pattern plant blocks. Key encodes the texture
         // stem so `lookup` can build the model without a second table.
         x if x == FLOWER_RED_ID => Some("block/cross/poppy"),
@@ -261,24 +267,21 @@ pub(crate) fn resolve_block_model(
 ///
 /// W39.2: was the primary path. W41.1: delegates to the cache
 /// so no disk I/O occurs during meshing.
+/// W45.5: W42 gate removed. All blocks now route through the JSON
+/// pipeline. Safety nets in place:
+///   - W43.1: emit_block_elements returns Err when zero faces emit,
+///     so the chunk mesher's cube path takes over for any model that
+///     resolves but produces no visible faces.
+///   - W44.5: air-as-opaque bug fixed, so cullface decisions are correct.
+///   - W45.1: name_map entries corrected (slab/stair/fence/door IDs now
+///     carry the real MC blockstate name, not "oak_planks"/"stone").
 ///
-/// Legacy fallback (special_models `lookup` table) handles:
-///
-///   - Placeholder pack (no blockstate JSON on disk).
-///   - Multipart blockstates (fences, walls): now handled via
-///     `model_for_block_with_neighbors` when neighbors are available.
-///   - Cross-pattern plants keyed as `"block/cross/<tex>"`.
+/// Resolution order:
+///   1. `pack.block_models` cache (blockstate JSON -> model JSON).
+///      Single or Multipart (unconditional parts merged).
+///   2. Hand-coded `lookup` table (placeholder pack / cross plants).
+///   3. None -> chunk mesher uses the greedy cube path.
 pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
-    // W42 revert: only return a model for blocks with a registered
-    // SPECIAL shape (torch/fence/slab/stair/door/cross/...). Universal
-    // JSON routing of cube blocks (W39) caused mesh holes - the JSON
-    // path returned Some(BlockModel) but emit_block_elements silently
-    // dropped faces (texture mismatch, cullface format diff, ...),
-    // skipping the cube fallback path. Cube blocks back through the
-    // proven cube path; JSON path stays for blocks where the hand-
-    // coded table marks them as special-shaped.
-    let mc_name = name_for_block(id)?;
-    // Cache lookup for special-shaped blocks only.
     if let Some(entry) = pack.block_models.get(&id) {
         match entry {
             ResolvedBlockState::Single(m) => return Some(m.clone()),
@@ -302,8 +305,7 @@ pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<Blo
             ResolvedBlockState::None => {}
         }
     }
-    // Fall through to hand-coded table (placeholder pack path).
-    let _ = mc_name;
+    // Fall through to hand-coded table (placeholder pack / cross plants).
     name_for_block(id).and_then(lookup)
 }
 
@@ -353,20 +355,17 @@ pub(crate) fn resolve_block_model_with_neighbors(
 /// W40.1: tries the multipart-aware pipeline first; then the variant
 /// pipeline; then the hand-coded special_models fallback.
 /// W41.1: reads from cache (no disk I/O during meshing).
+/// W45.5: W42 gate removed. All blocks with a cache entry route
+/// through the multipart-aware JSON pipeline.
 pub(crate) fn model_for_block_with_neighbors(
     id: u16,
     pack: &super::ResourcePack,
     neighbors: &blockstates::NeighborStates,
 ) -> Option<BlockModel> {
-    // W42 revert: gate on name_for_block (= only special-shaped blocks
-    // route through JSON/multipart pipeline). Cube blocks return None
-    // so the chunk mesher's cube path emits them. The mesh-hole bug
-    // user reported came from cube blocks going through emit_special
-    // which silently dropped faces.
-    name_for_block(id)?;
     if let Some(m) = resolve_block_model_with_neighbors(pack, id, neighbors) {
         return Some(m);
     }
+    // Fall through to hand-coded table (placeholder pack / cross plants).
     name_for_block(id).and_then(lookup)
 }
 
@@ -685,6 +684,59 @@ pub(crate) fn build_bed_foot() -> BlockModel {
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
+    }
+}
+
+/// Redstone torch stick - same geometry as `build_torch()` but the
+/// texture key is "redstone_torch" so it samples the correct atlas tile.
+/// Used as the placeholder-pack fallback when no MC JSON is on disk.
+/// W45.2: primary path now goes through block/redstone_torch.json.
+pub(crate) fn build_redstone_torch() -> BlockModel {
+    let mut textures = HashMap::new();
+    textures.insert("torch".to_string(), "redstone_torch".to_string());
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [7.0, 0.0, 7.0],
+            to: [9.0, 10.0, 9.0],
+            rotation: None,
+            shade: false,
+            faces: ElementFaces {
+                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch", Some(CubeFace::Down))),
+                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch", None)),
+                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+            },
+        }],
+        textures,
+        ambient_occlusion: false,
+    }
+}
+
+/// Soul torch stick - same geometry as `build_torch()` but texture
+/// key is "soul_torch". Used as placeholder-pack fallback.
+/// W45.2: primary path now goes through block/soul_torch.json.
+pub(crate) fn build_soul_torch() -> BlockModel {
+    let mut textures = HashMap::new();
+    textures.insert("torch".to_string(), "soul_torch".to_string());
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [7.0, 0.0, 7.0],
+            to: [9.0, 10.0, 9.0],
+            rotation: None,
+            shade: false,
+            faces: ElementFaces {
+                down: Some(uv_face([7.0, 13.0, 9.0, 15.0], "torch", Some(CubeFace::Down))),
+                up: Some(uv_face([7.0, 6.0, 9.0, 8.0], "torch", None)),
+                north: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                east: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                south: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+                west: Some(uv_face([7.0, 6.0, 9.0, 16.0], "torch", None)),
+            },
+        }],
+        textures,
+        ambient_occlusion: false,
     }
 }
 
@@ -1171,5 +1223,69 @@ mod tests {
         let e = &m.elements[0];
         let north = e.faces.north.as_ref().unwrap();
         assert_eq!(north.uv, [0.0, 0.0, 16.0, 8.0]);
+    }
+
+    // ---------------------------------------------------------------
+    // W45.2 - Redstone/soul torch JSON routing tests.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn w45_redstone_torch_routes_to_block_redstone_torch() {
+        // W45.2: ids 50 + 51 (redstone_torch, redstone_wall_torch) must
+        // now map to "block/redstone_torch" - no longer the cross hack.
+        assert_eq!(name_for_block(50), Some("block/redstone_torch"));
+        assert_eq!(name_for_block(51), Some("block/redstone_torch"));
+    }
+
+    #[test]
+    fn w45_soul_torch_routes_to_block_soul_torch() {
+        // W45.2: ids 52 + 53 (soul_torch, soul_wall_torch) use JSON path.
+        assert_eq!(name_for_block(52), Some("block/soul_torch"));
+        assert_eq!(name_for_block(53), Some("block/soul_torch"));
+    }
+
+    #[test]
+    fn w45_lookup_redstone_torch_builds_stick_geometry() {
+        // Fallback lookup must produce torch-stick geometry (1 element,
+        // from=[7,0,7] to=[9,10,9]) with "redstone_torch" texture.
+        let m = lookup("block/redstone_torch").expect("redstone torch fallback");
+        assert_eq!(m.elements.len(), 1);
+        let e = &m.elements[0];
+        assert_eq!(e.from, [7.0, 0.0, 7.0]);
+        assert_eq!(e.to, [9.0, 10.0, 9.0]);
+        // Texture map: "torch" -> "redstone_torch"
+        assert_eq!(m.textures.get("torch").map(|s| s.as_str()), Some("redstone_torch"));
+        assert!(!m.ambient_occlusion);
+    }
+
+    #[test]
+    fn w45_lookup_soul_torch_builds_stick_geometry() {
+        let m = lookup("block/soul_torch").expect("soul torch fallback");
+        assert_eq!(m.elements.len(), 1);
+        let e = &m.elements[0];
+        assert_eq!(e.from, [7.0, 0.0, 7.0]);
+        assert_eq!(e.to, [9.0, 10.0, 9.0]);
+        assert_eq!(m.textures.get("torch").map(|s| s.as_str()), Some("soul_torch"));
+    }
+
+    #[test]
+    fn w45_redstone_torch_model_for_block_resolves() {
+        let pack = placeholder();
+        // Both redstone torch IDs must resolve a model (via placeholder fallback).
+        let m50 = model_for_block(50, &pack).expect("redstone torch id=50");
+        let m51 = model_for_block(51, &pack).expect("redstone torch id=51");
+        assert_eq!(m50.elements.len(), 1);
+        assert_eq!(m51.elements.len(), 1);
+        // Geometry same as regular torch.
+        assert_eq!(m50.elements[0].from, [7.0, 0.0, 7.0]);
+    }
+
+    #[test]
+    fn w45_soul_torch_model_for_block_resolves() {
+        let pack = placeholder();
+        let m52 = model_for_block(52, &pack).expect("soul torch id=52");
+        let m53 = model_for_block(53, &pack).expect("soul torch id=53");
+        assert_eq!(m52.elements.len(), 1);
+        assert_eq!(m53.elements.len(), 1);
     }
 }
