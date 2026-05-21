@@ -2687,3 +2687,150 @@ Added to `pipeline_tests.rs`:
   (blocked: test environment needs file system access to that path).
 - W44.6 universal JSON path re-enable (prerequisite: fix name_map.rs shape
   block entries, e.g., OAK_SLAB_ID -> "oak_slab" not "oak_planks").
+
+---
+
+## Wave 45
+
+### W45.1 - name_map audit + correction
+
+Audited every entry in `BLOCK_NAME_MAP` against the real MC 26.1.2 texture
+directory at
+`C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\textures\block\`.
+
+**Mismatches found and fixed:**
+
+| ID  | Field   | Old value           | New value          | Reason |
+|-----|---------|---------------------|--------------------|--------|
+| 35  | block/top/sides | red_bed / red_bed_top / red_bed_side | oak_planks / "" / "" | Bed is entity model; no block textures exist |
+| 57  | top/bottom | end_rod_top | end_rod | end_rod_top.png does not exist; single texture |
+| 67  | block   | light_block_15     | glowstone          | No light_block_15.png; uses item sprite |
+| 68  | block   | oak_planks         | oak_slab           | Blockstate name for JSON pipeline |
+| 69  | block   | stone              | stone_slab         | Blockstate name for JSON pipeline |
+| 70  | block   | cobblestone        | cobblestone_slab   | Blockstate name for JSON pipeline |
+| 71  | block   | oak_planks         | oak_slab           | Blockstate name for JSON pipeline |
+| 72  | block   | oak_planks         | oak_stairs         | Blockstate name for JSON pipeline |
+| 73  | block   | stone              | stone_stairs       | Blockstate name for JSON pipeline |
+| 74  | block   | cobblestone        | cobblestone_stairs | Blockstate name for JSON pipeline |
+| 75  | block   | oak_planks         | oak_fence          | Blockstate name for JSON pipeline |
+| 76  | block   | nether_bricks      | nether_brick_fence | Blockstate name for JSON pipeline |
+| 80  | block   | glass              | glass_pane         | Blockstate name for JSON pipeline |
+| 82  | block   | cobblestone        | cobblestone_wall   | Blockstate name for JSON pipeline |
+| 242 | block/sides | crimson_hyphae | crimson_stem / crimson_stem_top | No hyphae.png; JSON uses stem |
+| 245 | block/sides | warped_hyphae  | warped_stem / warped_stem_top  | No hyphae.png; JSON uses stem |
+
+**New test:** `w45_block_name_map_textures_exist_in_mc_pack` - walks all
+`BLOCK_NAME_MAP` entries and asserts each non-empty texture name resolves to a
+real `.png` in the MC 26.1.2 block texture dir. Skips silently when no pack
+is cached. Also added `w45_corrected_entries` spot-check test.
+
+**Shape block IDs (68-82) note:** the `block` field now holds the MC
+*blockstate* name (e.g. "oak_slab") rather than a texture name. When the
+MC pack is present the universal JSON pipeline loads the correct model via
+blockstate lookup; when absent the geometry comes from the hand-coded
+special_models table and the per-face top/bottom/sides fields are unused.
+
+### W45.2 - MC JSON torch models for redstone/soul torches
+
+The old code routed redstone_torch (ids 50/51) and soul_torch (ids 52/53)
+through a fake `"block/cross/<tex>"` key that rendered them as flat X-cross
+quads (wrong shape for a torch).
+
+**Fix:** `name_for_block(50/51)` now returns `"block/redstone_torch"` and
+`name_for_block(52/53)` returns `"block/soul_torch"`. These names match real
+MC blockstate files (`assets/minecraft/blockstates/redstone_torch.json` etc.)
+which chain to `template_redstone_torch.json` - the proper torch-stick
+geometry identical to the regular `template_torch.json`.
+
+When the MC pack is absent the `lookup()` fallback builds torch-stick models
+via new `build_redstone_torch()` / `build_soul_torch()` functions.
+
+The regular torch (id=10 -> "block/torch") was already working correctly via
+JSON since W39; this wave brings redstone and soul torches to the same level.
+
+**6 new tests** in `special_models.rs` cover routing assertions, fallback
+geometry checks, and `model_for_block` resolution for all 4 torch IDs.
+
+### W45.3 - Smoke direction fix
+
+**Root cause:** `ParticleSystem::tick` in `crates/infengine_particles/src/lib.rs`
+applied the first emitter's gravity vector (`[0, -10, 0]`) to ALL particles in
+the pool, including manually-pushed particles from `spawn_smoke_particle` and
+`spawn_flame_particle`. With -10 m/s^2 downward acceleration, a smoke wisp
+starting at +0.3 m/s upward reversed direction within the first tick (< 33 ms).
+
+**Fix:** Added `gravity_scale: f32` field to `Particle` (serde default = 1.0).
+`tick()` multiplies emitter gravity by `p.gravity_scale` before adding to
+velocity. Setting `gravity_scale = 0.0` for smoke and flame wisps makes them
+immune to the ambient gravity emitter while preserving full gravity on debris,
+rain, snow, firework, and splash particles (all set to 1.0).
+
+### W45.4 - Flame animation smooth (Option C)
+
+**Root cause:** `emit_textured_flame` picked one random atlas frame per call.
+With torch emitters firing every ~3 ticks, consecutive frames were random and
+visually unrelated, producing a "jumpy" flash.
+
+**Fix (Option C - CPU multi-layer):** emit `FLAME_LAYERS = 3` overlapping
+billboard quads per call, each showing frame `base + i` at decreasing alpha
+(0.95, 0.55, 0.30). At any given time three adjacent animation frames coexist
+in the scene; the visual average reads as a smooth crossfade-like animation
+without GPU shader changes.
+
+Option A (per-particle frame counter + shader UV animation) is deferred as
+a future enhancement.
+
+**Test updated:** `wave18_tests::torch_emits_flame_textured_particle_with_atlas_uv`
+now asserts 3 particles per call and checks per-layer alpha.
+
+### W45.5 - Universal JSON pipeline re-enable
+
+The W42 gate (`name_for_block(id)?` guard in `model_for_block` and
+`model_for_block_with_neighbors`) is removed. All blocks now route through the
+`pack.block_models` JSON cache first; the hand-coded `lookup` table remains
+as fallback for placeholder pack and cross-pattern plants.
+
+**Safety nets** that make this safe:
+- **W43.1**: `emit_block_elements` returns `Err` when zero faces emitted;
+  the chunk mesher always falls back to the cube path on failure.
+- **W44.5**: air-as-opaque bug fixed; cullface decisions are correct.
+- **W45.1**: shape block `BLOCK_NAME_MAP` entries now carry real blockstate
+  names so the cache loads the correct slab/stair/fence JSON models.
+
+**pipeline_tests.rs** test `w44_cube_all_model_up_face_emitted_when_air_above`
+updated: with W45.5, stone (id=1) with air above now emits the up face via the
+JSON pipeline (expects `result = true`, 4 verts).
+
+### Files changed
+
+- `crates/infengine_particles/src/lib.rs`:
+  W45.3 - gravity_scale field on Particle, applied in tick().
+- `examples/voxel_demo_mp/src/main.rs`:
+  W45.3 - spawn_smoke_particle + spawn_flame_particle set gravity_scale=0.0;
+  all other Particle literals set gravity_scale=1.0.
+  W45.4 - emit_textured_flame emits FLAME_LAYERS=3 overlapping frame quads.
+- `examples/voxel_demo_mp/src/chat/cmds_misc.rs`: W45.3 gravity_scale=1.0
+- `examples/voxel_demo_mp/src/particle_pass.rs`: W45.3 gravity_scale=1.0
+- `examples/voxel_demo_mp/src/resource_pack/name_map.rs`:
+  W45.1 - corrected 16 entries; 2 new tests.
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`:
+  W45.2 - redstone/soul torch routing + fallback builders + 6 tests.
+  W45.5 - W42 gate removed from model_for_block + model_for_block_with_neighbors.
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  W45.5 - updated w44 test to reflect new stone JSON routing.
+- `examples/voxel_demo_mp/src/wave18_tests.rs`:
+  W45.4 - updated flame test to expect 3 particles + per-layer alpha.
+
+### Test counts
+
+- bin: 1542 pass / 7 fail (same 7 pre-existing failures from MC pack detection).
+- infengine_particles: 3 pass / 0 fail.
+- clippy: 0 warnings.
+
+### Deferred
+
+- W45.4 Option A: GPU-side per-particle frame animation (extend TexturedParticleInstance
+  with frame_idx + frame_count, animate UV in billboard shader). Deferred as
+  a future polish wave.
+- Extended flower IDs (139-147): not in name_for_block, render as full cubes.
+  Needs cross-model entries added to name_for_block.
