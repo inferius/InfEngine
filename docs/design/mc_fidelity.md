@@ -2573,3 +2573,117 @@ New tests in `element_mesh.rs`:
 - W43.2 debug logging (`RUST_LOG=voxel_demo_mp::resource_pack=debug` gate
   for texture resolution chain per face) - structural audit complete, logging
   deferred as low priority since root cause is confirmed.
+
+---
+
+## Wave 44
+
+### Goal
+
+Deep audit of JSON model pipeline + diagnostic logging to identify why
+faces drop on surface special-model blocks.
+
+### Root cause - air-as-opaque (W44.4)
+
+`block_is_opaque` in `block/mod.rs`:
+
+```rust
+pub(crate) fn block_is_opaque(b: BlockId) -> bool {
+    block_type(b.0).map(|t| !t.transparent).unwrap_or(true)
+}
+```
+
+AIR (id=0) has no `BlockType` entry, so `block_type(0)` returns `None`
+and `unwrap_or(true)` makes `block_is_opaque(AIR) = true`.
+
+The `neighbour_opaque` closure passed to `emit_block_elements` (called from
+both `build_lit_submeshes` and `mesh_chunk_in_worker` in `main.rs`) called
+`block_is_opaque(nb)` directly without first checking `nb.is_air()`. This
+caused every face with `cullface` pointing toward an air neighbour to be
+incorrectly culled.
+
+Affected: all special-model blocks (torch, slab, door, stairs, fence...) that
+have `cullface` declarations on any face adjacent to air.
+
+### Fix (W44.5)
+
+Both `neighbour_opaque` closures changed from:
+
+```rust
+block_is_opaque(nb)
+```
+
+to:
+
+```rust
+!nb.is_air() && block_is_opaque(nb)
+```
+
+Minimal, targeted fix. The greedy cube mesher (`chunk_mesh_greedy_with_special`)
+already checked `nb.is_air()` first - this brings the JSON pipeline path in line.
+
+### Diagnostic logging (W44.1)
+
+Added to `element_mesh.rs`:
+
+- `static MESHER_DEBUG: AtomicBool` - runtime toggle (no recompile needed).
+- `pub(crate) fn enable_mesher_debug_logging(on: bool)` - call from main.rs
+  on F4 keypress to dump per-face cullface decisions at `tracing::debug!` level.
+- `emit_faces_for_element` now accepts `block_id: u16` and `dbg: bool`
+  parameters and logs: element bounds, cullface direction, neighbour_opaque
+  result, and final face count per block.
+
+### Cross-pattern plant audit (W44.3)
+
+Flowers (ids 20-22, poppy/dandelion/blue_orchid) correctly route through
+`name_for_block` -> cross model via `build_cross()`. Cross models have no
+`cullface` on any face, so they always emit correctly.
+
+Extended flower IDs (139-147, allium etc.) are NOT in `name_for_block` and
+fall through to the cube mesher as full cubes. Visually wrong shape but
+`transparent: true` so they do not cause missing faces on blocks below.
+Fixing these requires name_map entries - deferred.
+
+### W44.6 (universal JSON pipeline re-enable) - deferred
+
+The W42 gate (`name_for_block(id)?` in `model_for_block_with_neighbors`)
+remains active. Re-enable requires fixing `name_map.rs` first: shape block
+IDs (68-82) map to wrong MC names (e.g., OAK_SLAB_ID=68 -> "oak_planks"
+instead of "oak_slab"). Without that fix, slabs would resolve to full-cube
+oak_planks models from cache and display incorrectly.
+
+### Regression tests (W44.1)
+
+Added to `pipeline_tests.rs`:
+
+1. `w44_torch_down_face_not_culled_by_air_below`: torch (TORCH_ID) with all
+   `neighbour_opaque = false` (all air). Expects `result = true`, all faces
+   emitted (24 verts).
+
+2. `w44_cube_all_model_up_face_emitted_when_air_above`: stone (id=1) via
+   W42 gate returns false (cube mesher handles it). Documents the gate
+   contract.
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`:
+  W44.1 - AtomicBool MESHER_DEBUG, enable_mesher_debug_logging(), per-face
+  debug logging in emit_block_elements and emit_faces_for_element.
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  W44.1 - two W44 regression tests.
+- `examples/voxel_demo_mp/src/main.rs`:
+  W44.5 - !nb.is_air() guard in both neighbour_opaque closures
+  (build_lit_submeshes + mesh_chunk_in_worker).
+
+### Test counts
+
+- bin: 1534 pass / 7 fail (same 7 pre-existing; +2 W44 tests).
+- clippy: 0 warnings.
+
+### Deferred
+
+- W44.2 standalone diagnostic test against real MC pack at
+  `C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\`
+  (blocked: test environment needs file system access to that path).
+- W44.6 universal JSON path re-enable (prerequisite: fix name_map.rs shape
+  block entries, e.g., OAK_SLAB_ID -> "oak_slab" not "oak_planks").
