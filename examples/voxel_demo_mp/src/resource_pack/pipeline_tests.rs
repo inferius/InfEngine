@@ -450,3 +450,79 @@ fn model_for_block_returns_none_for_stone_on_placeholder() {
     let m = model_for_block(1, &pack);
     assert!(m.is_none(), "stone should not resolve on placeholder pack");
 }
+
+// ---------------------------------------------------------------
+// W41.1: block model cache tests.
+// ---------------------------------------------------------------
+
+/// Cache is populated on placeholder pack: torch must be Single.
+#[test]
+fn w41_cache_torch_is_single_on_placeholder() {
+    use crate::block::TORCH_ID;
+    use super::special_models::ResolvedBlockState;
+    let pack = super::fallback::placeholder_pack();
+    let entry = pack.block_models.get(&TORCH_ID).expect("torch in cache");
+    assert!(
+        matches!(entry, ResolvedBlockState::Single(_)),
+        "torch must resolve to Single from the hand-coded table",
+    );
+}
+
+/// Stone is None on placeholder pack (no JSON + no special_models entry).
+#[test]
+fn w41_cache_stone_is_none_on_placeholder() {
+    use super::special_models::ResolvedBlockState;
+    let pack = super::fallback::placeholder_pack();
+    let entry = pack.block_models.get(&1).expect("stone in cache (None variant)");
+    assert!(
+        matches!(entry, ResolvedBlockState::None),
+        "stone must be None on placeholder (no JSON, not in special_models table)",
+    );
+}
+
+/// Cache is populated on a synthetic MC pack: stone resolves Single.
+#[test]
+fn w41_cache_stone_single_on_synthetic_pack() {
+    use super::special_models::ResolvedBlockState;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_blockstate(root, "stone", r#"{ "variants": { "": { "model": "block/stone" } } }"#);
+    stage_cube_chain(root);
+    write_model(root, "block/stone", r#"{ "parent": "block/cube_all", "textures": { "all": "stone" } }"#);
+    let pack = pack_at(root);
+    // pack_at uses placeholder_pack + sets source. Cache was built during
+    // placeholder_pack(); we need to rebuild for the synthetic source.
+    let mut pack = pack;
+    super::special_models::build_block_model_cache(&mut pack);
+    let entry = pack.block_models.get(&1).expect("stone in cache");
+    assert!(
+        matches!(entry, ResolvedBlockState::Single(_)),
+        "stone must be Single after cache rebuild on synthetic pack",
+    );
+}
+
+/// W41.1 performance sanity: 10 000 calls to
+/// `resolve_block_model_with_neighbors` on the placeholder pack
+/// complete in under 50 ms. This verifies the cache eliminates
+/// per-call disk I/O overhead.
+#[test]
+fn w41_cache_resolution_is_fast() {
+    use crate::block::TORCH_ID;
+    use super::element_mesh::NeighborStates;
+    use super::special_models::resolve_block_model_with_neighbors;
+    let pack = super::fallback::placeholder_pack();
+    let neighbors = NeighborStates::default();
+    let ids: Vec<u16> = vec![1, 2, 3, 5, 7, 8, TORCH_ID, 68, 75, 82];
+    let t0 = std::time::Instant::now();
+    for _ in 0..1000 {
+        for &id in &ids {
+            let _ = resolve_block_model_with_neighbors(&pack, id, &neighbors);
+        }
+    }
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed.as_millis() < 50,
+        "10 000 cache lookups took {}ms, expected < 50ms",
+        elapsed.as_millis(),
+    );
+}

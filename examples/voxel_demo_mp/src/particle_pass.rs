@@ -238,6 +238,8 @@ mod tests {
             anim_registry: crate::resource_pack::anim_registry::AnimRegistry::new(),
             anim_slots: HashMap::new(),
             particle_atlas: None,
+            // W41.1: test helper; cache not needed for particle_pass tests.
+            block_models: HashMap::new(),
         }
     }
 

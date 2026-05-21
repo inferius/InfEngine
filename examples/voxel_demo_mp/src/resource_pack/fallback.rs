@@ -75,7 +75,12 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         TextureRef::placeholder(missing_uv),
     );
 
-    ResourcePack {
+    // W41.1: placeholder pack has no JSON models on disk so the
+    // cache is populated from the hand-coded special_models table
+    // only. We call build_block_model_cache after construction so
+    // cross-shape plants + slabs + torches are available in-cache
+    // even without a real MC install.
+    let mut pack = ResourcePack {
         textures,
         item_icons,
         sounds: HashMap::new(),
@@ -91,7 +96,11 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         anim_slots: HashMap::new(),
         // Wave 18.2: no particle atlas in the placeholder pack.
         particle_atlas: None,
-    }
+        // W41.1: start empty; filled below.
+        block_models: HashMap::new(),
+    };
+    super::special_models::build_block_model_cache(&mut pack);
+    pack
 }
 
 fn build_placeholder_atlas() -> (u32, u32, Vec<u8>) {

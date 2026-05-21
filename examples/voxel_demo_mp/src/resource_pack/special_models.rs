@@ -45,6 +45,93 @@ use super::models::{
 };
 use super::{blockstates, models, name_map};
 
+// ---------------------------------------------------------------------------
+// W41.1: cached resolved block state
+// ---------------------------------------------------------------------------
+
+/// Pre-resolved per-block model data. Built once at pack load by
+/// `build_block_model_cache` and stored in `ResourcePack::block_models`.
+/// The chunk mesher reads from here instead of hitting the disk per-voxel.
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedBlockState {
+    /// Single model for all states (variant-form blocks: stone, oak_log, ...).
+    Single(BlockModel),
+    /// Multipart block (fences, walls, panes). Each entry is an
+    /// (optional condition, model) pair. `None` condition = unconditional
+    /// (always applied). The mesher merges matching parts in-memory.
+    Multipart(Vec<(Option<blockstates::MultipartCondition>, BlockModel)>),
+    /// No MC blockstate / model data found. Fall back to the hand-coded
+    /// special_models table or the default cube render path.
+    None,
+}
+
+/// Populate `pack.block_models` for every entry in `BLOCK_NAME_MAP`.
+/// Called once at end of `ResourcePack::load`. For the placeholder pack
+/// (no JSON on disk) most ids land in `ResolvedBlockState::None` and the
+/// mesher falls back to the hand-coded table - same behaviour as before W41.
+pub(crate) fn build_block_model_cache(pack: &mut super::ResourcePack) {
+    use super::name_map::BLOCK_NAME_MAP;
+    let mut cache = HashMap::with_capacity(BLOCK_NAME_MAP.len());
+    for entry in BLOCK_NAME_MAP {
+        let id = entry.infengine_id;
+        let resolved = resolve_for_cache(pack, id);
+        cache.insert(id, resolved);
+    }
+    pack.block_models = cache;
+}
+
+/// Resolve one block id to a `ResolvedBlockState` for the cache.
+/// Reads disk ONCE per id (at cache-build time); during meshing the
+/// cache is consulted instead.
+fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState {
+    // id -> MC block name.
+    let Some(map_entry) = name_map::lookup_block(id) else {
+        return resolve_from_special_table(id);
+    };
+    let block_name = map_entry.block;
+
+    // Load blockstate JSON (may miss on placeholder pack -> fall through).
+    let Some(state) = blockstates::load_blockstate(pack, block_name) else {
+        // No blockstate on disk. Try hand-coded special_models table
+        // so the placeholder pack still works.
+        return resolve_from_special_table(id);
+    };
+
+    if state.is_multipart() {
+        // Pre-load every part's model.
+        let mut parts: Vec<(Option<blockstates::MultipartCondition>, BlockModel)> =
+            Vec::with_capacity(state.parts.len());
+        for part in &state.parts {
+            if let Some(m) = models::load_model(pack, &part.apply.model) {
+                parts.push((part.when.clone(), m));
+            }
+        }
+        if parts.is_empty() {
+            return resolve_from_special_table(id);
+        }
+        ResolvedBlockState::Multipart(parts)
+    } else {
+        // Variant-form: pick first matching model (full state-matching deferred).
+        let Some(model_ref) = state.first_variant_model() else {
+            return resolve_from_special_table(id);
+        };
+        match models::load_model(pack, &model_ref.model) {
+            Some(m) => ResolvedBlockState::Single(m),
+            None => resolve_from_special_table(id),
+        }
+    }
+}
+
+/// Try the hand-coded special_models table as a final fallback.
+fn resolve_from_special_table(id: u16) -> ResolvedBlockState {
+    if let Some(name) = name_for_block(id)
+        && let Some(m) = lookup(name)
+    {
+        return ResolvedBlockState::Single(m);
+    }
+    ResolvedBlockState::None
+}
+
 /// Resolve a model name to a hand-built `BlockModel`. Returns
 /// `None` for names that should fall through to the JSON loader
 /// (or the default cube_all fallback). The W9.x.1 parser's lookup
@@ -170,14 +257,10 @@ pub(crate) fn resolve_block_model(
     models::load_model(pack, &model_ref.model)
 }
 
-/// Convenience: try the full MC blockstate -> model pipeline first,
-/// then fall back to the hand-coded special_models table.
+/// Convenience: resolve a block model (no neighbor awareness).
 ///
-/// W39.2: replaces the W38.1 path which only tried the JSON model
-/// loader keyed off `name_for_block`. The new path goes through the
-/// full MC universal chain so any block that has a `name_map` entry,
-/// a blockstates JSON, and a model JSON (possibly via parent chain)
-/// will resolve correctly without a hand-coded entry.
+/// W39.2: was the primary path. W41.1: delegates to the cache
+/// so no disk I/O occurs during meshing.
 ///
 /// Legacy fallback (special_models `lookup` table) handles:
 ///
@@ -186,53 +269,91 @@ pub(crate) fn resolve_block_model(
 ///     `model_for_block_with_neighbors` when neighbors are available.
 ///   - Cross-pattern plants keyed as `"block/cross/<tex>"`.
 pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
-    // W39: full MC blockstate -> variant -> model pipeline.
+    // W41.1: read from cache (populated at load time).
+    if let Some(entry) = pack.block_models.get(&id) {
+        return match entry {
+            ResolvedBlockState::Single(m) => Some(m.clone()),
+            // For multipart without neighbor info: return first unconditional part.
+            ResolvedBlockState::Multipart(parts) => {
+                let mut elements = Vec::new();
+                let mut textures = std::collections::HashMap::new();
+                let mut ambient_occlusion = true;
+                for (cond, model) in parts {
+                    if cond.is_none() {
+                        elements.extend(model.elements.clone());
+                        for (k, v) in &model.textures {
+                            textures.insert(k.clone(), v.clone());
+                        }
+                        ambient_occlusion = model.ambient_occlusion;
+                    }
+                }
+                if elements.is_empty() {
+                    // No unconditional parts: fall through to legacy table.
+                    name_for_block(id).and_then(lookup)
+                } else {
+                    Some(BlockModel { elements, textures, ambient_occlusion })
+                }
+            }
+            ResolvedBlockState::None => {
+                // Cache says no MC data: try legacy hand-coded table.
+                name_for_block(id).and_then(lookup)
+            }
+        };
+    }
+    // Id not in cache (e.g. cache not built yet in tests).
+    // W39 fallback: full MC blockstate -> variant -> model pipeline.
     if let Some(m) = resolve_block_model(pack, id) {
         return Some(m);
     }
-    // Legacy fallback: hand-coded special_models for cross/<tex>
-    // shapes AND for the placeholder pack path.
     name_for_block(id).and_then(lookup)
 }
 
 /// Resolve a block model taking neighbour connection flags into account.
 ///
 /// W40.1: extends `resolve_block_model` to handle multipart blockstates.
-/// For multipart blocks (fences, walls, panes, bars) the matching parts
-/// are merged into a single `BlockModel` by concatenating their element
-/// lists. Variant-form blocks delegate to `resolve_block_model` unchanged.
+/// W41.1: reads from the pre-built `pack.block_models` cache instead of
+/// hitting disk. No file I/O during meshing.
 pub(crate) fn resolve_block_model_with_neighbors(
     pack: &super::ResourcePack,
     id: u16,
     neighbors: &blockstates::NeighborStates,
 ) -> Option<BlockModel> {
-    let map_entry = name_map::lookup_block(id)?;
-    let block_name = map_entry.block;
-    let state = blockstates::load_blockstate(pack, block_name)?;
-    if !state.is_multipart() {
-        // Delegate to the standard variant path.
-        let model_ref = state.first_variant_model()?;
-        return models::load_model(pack, &model_ref.model);
-    }
-    // Multipart: collect all matching parts, merge elements.
-    let matching = state.select_multipart_models(neighbors);
-    if matching.is_empty() {
-        return None;
-    }
-    // Load the first model as the base; append elements from the rest.
-    let mut merged = models::load_model(pack, &matching[0].model)?;
-    for model_ref in &matching[1..] {
-        if let Some(part_model) = models::load_model(pack, &model_ref.model) {
-            merged.elements.extend(part_model.elements);
+    match pack.block_models.get(&id)? {
+        ResolvedBlockState::None => None,
+        ResolvedBlockState::Single(m) => Some(m.clone()),
+        ResolvedBlockState::Multipart(parts) => {
+            // Merge all matching parts in-memory - no disk I/O.
+            let mut elements = Vec::new();
+            let mut textures = std::collections::HashMap::new();
+            let mut ambient_occlusion = true;
+            for (cond, model) in parts {
+                let matches = match cond {
+                    None => true,
+                    Some(c) => c.matches_neighbors(neighbors),
+                };
+                if matches {
+                    elements.extend(model.elements.clone());
+                    // Merge textures; later parts override earlier ones.
+                    for (k, v) in &model.textures {
+                        textures.insert(k.clone(), v.clone());
+                    }
+                    ambient_occlusion = model.ambient_occlusion;
+                }
+            }
+            if elements.is_empty() {
+                None
+            } else {
+                Some(BlockModel { elements, textures, ambient_occlusion })
+            }
         }
     }
-    Some(merged)
 }
 
 /// Neighbour-aware variant of `model_for_block`.
 ///
 /// W40.1: tries the multipart-aware pipeline first; then the variant
 /// pipeline; then the hand-coded special_models fallback.
+/// W41.1: reads from cache (no disk I/O during meshing).
 pub(crate) fn model_for_block_with_neighbors(
     id: u16,
     pack: &super::ResourcePack,
@@ -241,7 +362,8 @@ pub(crate) fn model_for_block_with_neighbors(
     if let Some(m) = resolve_block_model_with_neighbors(pack, id, neighbors) {
         return Some(m);
     }
-    // Fall back to legacy hand-coded table (placeholder pack / cross plants).
+    // Fall back to legacy hand-coded table (placeholder pack / cross plants /
+    // blocks whose cache entry is None).
     name_for_block(id).and_then(lookup)
 }
 

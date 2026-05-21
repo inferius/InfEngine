@@ -31,6 +31,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub(crate) use special_models::ResolvedBlockState;
+
 pub(crate) mod anim_registry;
 pub(crate) mod blockstates;
 pub(crate) mod element_mesh;
@@ -159,6 +161,12 @@ pub(crate) struct ResourcePack {
     /// the particle texture directory was not found or contains no
     /// PNGs (placeholder pack or no MC install).
     pub(crate) particle_atlas: Option<particle_atlas::ParticleAtlasData>,
+    /// W41.1: pre-resolved block model cache. Populated once at pack
+    /// load time by `special_models::build_block_model_cache`. Keyed
+    /// by infengine block id. The chunk mesher reads from this cache
+    /// instead of hitting the disk per-voxel, eliminating the
+    /// 50+-second freeze on world load that W40.1 introduced.
+    pub(crate) block_models: HashMap<u16, ResolvedBlockState>,
 }
 
 impl ResourcePack {
@@ -212,7 +220,7 @@ impl ResourcePack {
                                 "particle atlas built",
                             );
                         }
-                        ResourcePack {
+                        let mut pack = ResourcePack {
                             textures: atlas.textures,
                             item_icons: atlas.item_icons,
                             sounds: sounds_reg,
@@ -223,7 +231,19 @@ impl ResourcePack {
                             anim_registry: reg,
                             anim_slots: slots,
                             particle_atlas: part_atlas,
-                        }
+                            block_models: HashMap::new(),
+                        };
+                        // W41.1: build the model cache AFTER the pack is
+                        // fully constructed (textures + source path ready).
+                        let t0 = std::time::Instant::now();
+                        special_models::build_block_model_cache(&mut pack);
+                        let elapsed_ms = t0.elapsed().as_millis();
+                        tracing::info!(
+                            count = pack.block_models.len(),
+                            elapsed_ms,
+                            "W41.1 block model cache built",
+                        );
+                        pack
                     }
                     None => {
                         tracing::warn!(
