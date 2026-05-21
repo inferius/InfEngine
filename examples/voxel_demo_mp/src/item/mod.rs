@@ -1012,6 +1012,938 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 64, icon: None,
         category: ItemCategory::Food,
     },
+    // ---- W40.2: Stained glass (ids 169..=184) ----
+    ItemType {
+        id: 169, name: "white_stained_glass", display: Some("White Stained Glass"),
+        places: Some(169), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 170, name: "orange_stained_glass", display: Some("Orange Stained Glass"),
+        places: Some(170), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 171, name: "magenta_stained_glass", display: Some("Magenta Stained Glass"),
+        places: Some(171), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 172, name: "light_blue_stained_glass", display: Some("Light Blue Stained Glass"),
+        places: Some(172), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 173, name: "yellow_stained_glass", display: Some("Yellow Stained Glass"),
+        places: Some(173), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 174, name: "lime_stained_glass", display: Some("Lime Stained Glass"),
+        places: Some(174), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 175, name: "pink_stained_glass", display: Some("Pink Stained Glass"),
+        places: Some(175), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 176, name: "gray_stained_glass", display: Some("Gray Stained Glass"),
+        places: Some(176), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 177, name: "light_gray_stained_glass", display: Some("Light Gray Stained Glass"),
+        places: Some(177), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 178, name: "cyan_stained_glass", display: Some("Cyan Stained Glass"),
+        places: Some(178), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 179, name: "purple_stained_glass", display: Some("Purple Stained Glass"),
+        places: Some(179), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 180, name: "blue_stained_glass", display: Some("Blue Stained Glass"),
+        places: Some(180), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 181, name: "brown_stained_glass", display: Some("Brown Stained Glass"),
+        places: Some(181), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 182, name: "green_stained_glass", display: Some("Green Stained Glass"),
+        places: Some(182), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 183, name: "red_stained_glass", display: Some("Red Stained Glass"),
+        places: Some(183), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 184, name: "black_stained_glass", display: Some("Black Stained Glass"),
+        places: Some(184), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Concrete (ids 185..=200) ----
+    ItemType {
+        id: 185, name: "white_concrete", display: Some("White Concrete"),
+        places: Some(185), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 186, name: "orange_concrete", display: Some("Orange Concrete"),
+        places: Some(186), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 187, name: "magenta_concrete", display: Some("Magenta Concrete"),
+        places: Some(187), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 188, name: "light_blue_concrete", display: Some("Light Blue Concrete"),
+        places: Some(188), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 189, name: "yellow_concrete", display: Some("Yellow Concrete"),
+        places: Some(189), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 190, name: "lime_concrete", display: Some("Lime Concrete"),
+        places: Some(190), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 191, name: "pink_concrete", display: Some("Pink Concrete"),
+        places: Some(191), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 192, name: "gray_concrete", display: Some("Gray Concrete"),
+        places: Some(192), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 193, name: "light_gray_concrete", display: Some("Light Gray Concrete"),
+        places: Some(193), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 194, name: "cyan_concrete", display: Some("Cyan Concrete"),
+        places: Some(194), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 195, name: "purple_concrete", display: Some("Purple Concrete"),
+        places: Some(195), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 196, name: "blue_concrete", display: Some("Blue Concrete"),
+        places: Some(196), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 197, name: "brown_concrete", display: Some("Brown Concrete"),
+        places: Some(197), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 198, name: "green_concrete", display: Some("Green Concrete"),
+        places: Some(198), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 199, name: "red_concrete", display: Some("Red Concrete"),
+        places: Some(199), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 200, name: "black_concrete", display: Some("Black Concrete"),
+        places: Some(200), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Concrete powder (ids 201..=216) ----
+    ItemType {
+        id: 201, name: "white_concrete_powder", display: Some("White Concrete Powder"),
+        places: Some(201), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 202, name: "orange_concrete_powder", display: Some("Orange Concrete Powder"),
+        places: Some(202), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 203, name: "magenta_concrete_powder", display: Some("Magenta Concrete Powder"),
+        places: Some(203), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 204, name: "light_blue_concrete_powder", display: Some("Light Blue Concrete Powder"),
+        places: Some(204), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 205, name: "yellow_concrete_powder", display: Some("Yellow Concrete Powder"),
+        places: Some(205), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 206, name: "lime_concrete_powder", display: Some("Lime Concrete Powder"),
+        places: Some(206), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 207, name: "pink_concrete_powder", display: Some("Pink Concrete Powder"),
+        places: Some(207), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 208, name: "gray_concrete_powder", display: Some("Gray Concrete Powder"),
+        places: Some(208), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 209, name: "light_gray_concrete_powder", display: Some("Light Gray Concrete Powder"),
+        places: Some(209), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 210, name: "cyan_concrete_powder", display: Some("Cyan Concrete Powder"),
+        places: Some(210), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 211, name: "purple_concrete_powder", display: Some("Purple Concrete Powder"),
+        places: Some(211), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 212, name: "blue_concrete_powder", display: Some("Blue Concrete Powder"),
+        places: Some(212), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 213, name: "brown_concrete_powder", display: Some("Brown Concrete Powder"),
+        places: Some(213), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 214, name: "green_concrete_powder", display: Some("Green Concrete Powder"),
+        places: Some(214), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 215, name: "red_concrete_powder", display: Some("Red Concrete Powder"),
+        places: Some(215), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 216, name: "black_concrete_powder", display: Some("Black Concrete Powder"),
+        places: Some(216), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Carpet (ids 217..=232) ----
+    ItemType {
+        id: 217, name: "white_carpet", display: Some("White Carpet"),
+        places: Some(217), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 218, name: "orange_carpet", display: Some("Orange Carpet"),
+        places: Some(218), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 219, name: "magenta_carpet", display: Some("Magenta Carpet"),
+        places: Some(219), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 220, name: "light_blue_carpet", display: Some("Light Blue Carpet"),
+        places: Some(220), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 221, name: "yellow_carpet", display: Some("Yellow Carpet"),
+        places: Some(221), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 222, name: "lime_carpet", display: Some("Lime Carpet"),
+        places: Some(222), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 223, name: "pink_carpet", display: Some("Pink Carpet"),
+        places: Some(223), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 224, name: "gray_carpet", display: Some("Gray Carpet"),
+        places: Some(224), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 225, name: "light_gray_carpet", display: Some("Light Gray Carpet"),
+        places: Some(225), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 226, name: "cyan_carpet", display: Some("Cyan Carpet"),
+        places: Some(226), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 227, name: "purple_carpet", display: Some("Purple Carpet"),
+        places: Some(227), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 228, name: "blue_carpet", display: Some("Blue Carpet"),
+        places: Some(228), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 229, name: "brown_carpet", display: Some("Brown Carpet"),
+        places: Some(229), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 230, name: "green_carpet", display: Some("Green Carpet"),
+        places: Some(230), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 231, name: "red_carpet", display: Some("Red Carpet"),
+        places: Some(231), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 232, name: "black_carpet", display: Some("Black Carpet"),
+        places: Some(232), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Mangrove wood (ids 233..=236) ----
+    ItemType {
+        id: 233, name: "mangrove_log", display: Some("Mangrove Log"),
+        places: Some(233), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 234, name: "mangrove_planks", display: Some("Mangrove Planks"),
+        places: Some(234), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 235, name: "mangrove_leaves", display: Some("Mangrove Leaves"),
+        places: Some(235), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 236, name: "mangrove_roots", display: Some("Mangrove Roots"),
+        places: Some(236), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Cherry wood (ids 237..=239) ----
+    ItemType {
+        id: 237, name: "cherry_log", display: Some("Cherry Log"),
+        places: Some(237), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 238, name: "cherry_planks", display: Some("Cherry Planks"),
+        places: Some(238), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 239, name: "cherry_leaves", display: Some("Cherry Leaves"),
+        places: Some(239), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Crimson wood (ids 240..=242) ----
+    ItemType {
+        id: 240, name: "crimson_stem", display: Some("Crimson Stem"),
+        places: Some(240), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 241, name: "crimson_planks", display: Some("Crimson Planks"),
+        places: Some(241), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 242, name: "crimson_hyphae", display: Some("Crimson Hyphae"),
+        places: Some(242), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Warped wood (ids 243..=245) ----
+    ItemType {
+        id: 243, name: "warped_stem", display: Some("Warped Stem"),
+        places: Some(243), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 244, name: "warped_planks", display: Some("Warped Planks"),
+        places: Some(244), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 245, name: "warped_hyphae", display: Some("Warped Hyphae"),
+        places: Some(245), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Deepslate ores (ids 246..=249) ----
+    ItemType {
+        id: 246, name: "deepslate_redstone_ore", display: Some("Deepslate Redstone Ore"),
+        places: Some(246), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 247, name: "deepslate_lapis_ore", display: Some("Deepslate Lapis Ore"),
+        places: Some(247), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 248, name: "deepslate_emerald_ore", display: Some("Deepslate Emerald Ore"),
+        places: Some(248), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 249, name: "deepslate_copper_ore", display: Some("Deepslate Copper Ore"),
+        places: Some(249), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Nether ores (ids 250..=251) ----
+    ItemType {
+        id: 250, name: "nether_quartz_ore", display: Some("Nether Quartz Ore"),
+        places: Some(250), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 251, name: "nether_gold_ore", display: Some("Nether Gold Ore"),
+        places: Some(251), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Ancient debris (id 252) ----
+    ItemType {
+        id: 252, name: "ancient_debris", display: Some("Ancient Debris"),
+        places: Some(252), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Nether building blocks (ids 253..=258) ----
+    ItemType {
+        id: 253, name: "nether_bricks", display: Some("Nether Bricks"),
+        places: Some(253), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 254, name: "red_nether_bricks", display: Some("Red Nether Bricks"),
+        places: Some(254), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 255, name: "blackstone", display: None,
+        places: Some(255), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 256, name: "polished_blackstone", display: Some("Polished Blackstone"),
+        places: Some(256), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 257, name: "basalt", display: None,
+        places: Some(257), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 258, name: "smooth_basalt", display: Some("Smooth Basalt"),
+        places: Some(258), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: End blocks (ids 259..=262) ----
+    ItemType {
+        id: 259, name: "end_stone_bricks", display: Some("End Stone Bricks"),
+        places: Some(259), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 260, name: "purpur_block", display: Some("Purpur Block"),
+        places: Some(260), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 261, name: "purpur_pillar", display: Some("Purpur Pillar"),
+        places: Some(261), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 262, name: "dragon_egg", display: Some("Dragon Egg"),
+        places: Some(262), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Prismarine family (ids 263..=265) ----
+    ItemType {
+        id: 263, name: "prismarine", display: None,
+        places: Some(263), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 264, name: "prismarine_bricks", display: Some("Prismarine Bricks"),
+        places: Some(264), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 265, name: "dark_prismarine", display: Some("Dark Prismarine"),
+        places: Some(265), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Copper blocks (ids 266..=270) ----
+    ItemType {
+        id: 266, name: "copper_block", display: Some("Copper Block"),
+        places: Some(266), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 267, name: "exposed_copper", display: Some("Exposed Copper"),
+        places: Some(267), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 268, name: "weathered_copper", display: Some("Weathered Copper"),
+        places: Some(268), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 269, name: "oxidized_copper", display: Some("Oxidized Copper"),
+        places: Some(269), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 270, name: "cut_copper", display: Some("Cut Copper"),
+        places: Some(270), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W40.2: Amethyst (ids 271..=273) ----
+    ItemType {
+        id: 271, name: "amethyst_block", display: Some("Amethyst Block"),
+        places: Some(271), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 272, name: "budding_amethyst", display: Some("Budding Amethyst"),
+        places: Some(272), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 273, name: "amethyst_cluster", display: Some("Amethyst Cluster"),
+        places: Some(273), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W40.2: Netherite tools (ids 274..=278) ----
+    ItemType {
+        id: 274, name: "pickaxe_netherite", display: Some("Netherite Pickaxe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 275, name: "sword_netherite", display: Some("Netherite Sword"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Weapon,
+    },
+    ItemType {
+        id: 276, name: "shovel_netherite", display: Some("Netherite Shovel"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 277, name: "axe_netherite", display: Some("Netherite Axe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 278, name: "hoe_netherite", display: Some("Netherite Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    // ---- W40.2: Netherite ingot + scrap (ids 279..=280) ----
+    ItemType {
+        id: 279, name: "netherite_ingot", display: Some("Netherite Ingot"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 280, name: "netherite_scrap", display: Some("Netherite Scrap"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    // ---- W40.2: More food items (ids 281..=292) ----
+    ItemType {
+        id: 281, name: "pumpkin_pie", display: Some("Pumpkin Pie"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 282, name: "golden_apple", display: Some("Golden Apple"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 283, name: "baked_potato", display: Some("Baked Potato"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 284, name: "raw_porkchop", display: Some("Raw Porkchop"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 285, name: "cooked_porkchop", display: Some("Cooked Porkchop"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 286, name: "raw_mutton", display: Some("Raw Mutton"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 287, name: "cooked_mutton", display: Some("Cooked Mutton"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 288, name: "raw_cod", display: Some("Raw Cod"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 289, name: "cooked_cod", display: Some("Cooked Cod"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 290, name: "raw_salmon", display: Some("Raw Salmon"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 291, name: "cooked_salmon", display: Some("Cooked Salmon"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 292, name: "dried_kelp", display: Some("Dried Kelp"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    // ---- W40.2: Mob drops (ids 293..=301) ----
+    ItemType {
+        id: 293, name: "rotten_flesh", display: Some("Rotten Flesh"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 294, name: "bone", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 295, name: "ender_pearl", display: Some("Ender Pearl"),
+        places: None, max_stack: 16, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 296, name: "blaze_rod", display: Some("Blaze Rod"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 297, name: "ghast_tear", display: Some("Ghast Tear"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 298, name: "slime_ball", display: Some("Slime Ball"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 299, name: "gunpowder", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 300, name: "spider_eye", display: Some("Spider Eye"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 301, name: "string", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    // ---- W40.2: Misc ingredients (ids 302..=323) ----
+    ItemType {
+        id: 302, name: "stick", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 303, name: "leather", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 304, name: "paper", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 305, name: "book", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 306, name: "map", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 307, name: "compass", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 308, name: "clock", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 309, name: "redstone_dust", display: Some("Redstone Dust"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 310, name: "glowstone_dust", display: Some("Glowstone Dust"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 311, name: "prismarine_shard", display: Some("Prismarine Shard"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 312, name: "prismarine_crystals", display: Some("Prismarine Crystals"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 313, name: "nautilus_shell", display: Some("Nautilus Shell"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 314, name: "heart_of_the_sea", display: Some("Heart of the Sea"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 315, name: "lapis_lazuli", display: Some("Lapis Lazuli"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 316, name: "diamond", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 317, name: "emerald", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 318, name: "gold_ingot", display: Some("Gold Ingot"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 319, name: "sugar", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 320, name: "blaze_powder", display: Some("Blaze Powder"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 321, name: "magma_cream", display: Some("Magma Cream"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 322, name: "fermented_spider_eye", display: Some("Fermented Spider Eye"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 323, name: "amethyst_shard", display: Some("Amethyst Shard"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    // ---- W40.2: Extra item-only entries (ids 324..=350) ----
+    ItemType {
+        id: 324, name: "iron_ingot", display: Some("Iron Ingot"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 325, name: "coal", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 326, name: "quartz", display: Some("Nether Quartz"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 327, name: "flint", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 328, name: "copper_ingot", display: Some("Copper Ingot"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 329, name: "raw_iron", display: Some("Raw Iron"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 330, name: "raw_gold", display: Some("Raw Gold"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 331, name: "raw_copper", display: Some("Raw Copper"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 332, name: "wooden_hoe", display: Some("Wooden Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 333, name: "stone_hoe", display: Some("Stone Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 334, name: "iron_hoe", display: Some("Iron Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 335, name: "gold_hoe", display: Some("Golden Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 336, name: "diamond_hoe", display: Some("Diamond Hoe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 337, name: "wheat", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 338, name: "wheat_seeds", display: Some("Wheat Seeds"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 339, name: "pumpkin_seeds", display: Some("Pumpkin Seeds"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 340, name: "melon_seeds", display: Some("Melon Seeds"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 341, name: "beetroot_seeds", display: Some("Beetroot Seeds"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 342, name: "raw_beef", display: Some("Raw Beef"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 343, name: "potato", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 344, name: "carrot", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 345, name: "beetroot", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 346, name: "mushroom_stew", display: Some("Mushroom Stew"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 347, name: "bowl", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 348, name: "ink_sac", display: Some("Ink Sac"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 349, name: "glow_ink_sac", display: Some("Glow Ink Sac"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
+    ItemType {
+        id: 350, name: "echo_shard", display: Some("Echo Shard"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Ingredient,
+    },
 ];
 
 // ---------------------------------------------------------------

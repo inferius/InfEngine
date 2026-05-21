@@ -65,6 +65,16 @@ fn w37_item_types_at_least_150() {
     );
 }
 
+// W40.2 - bulk MC item/block registry import brings total to >= 350.
+#[test]
+fn w40_item_types_at_least_350() {
+    assert!(
+        ITEM_TYPES.len() >= 350,
+        "ITEM_TYPES has {} entries, need >= 350 after W40.2 bulk import",
+        ITEM_TYPES.len(),
+    );
+}
+
 // ---------------------------------------------------------------
 // max_stack contract.
 // ---------------------------------------------------------------
