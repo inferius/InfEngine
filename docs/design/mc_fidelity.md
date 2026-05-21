@@ -2331,4 +2331,92 @@ correct arms when placed next to each other.
   connects to a wall) is deferred.
 - Chest pairing (double-chest form): requires entity-model render path,
   not yet wired.
+
+---
+
+## Wave 41
+
+### W41.1 - Block model cache (critical perf fix)
+
+Root cause of the 50+-second chunk-load regression introduced by W40.1:
+`resolve_block_model_with_neighbors` was calling `blockstates::load_blockstate`
++ `models::load_model` (which walks the `walk_chain` parent chain reading JSON
+files via `fs::read_to_string`) for every non-air voxel during chunk meshing.
+A 16x16x16 chunk of stone = 4096 file-read attempts per chunk. World load
+with multiple chunks = minutes of I/O stall.
+
+Fix: pre-resolve all block models at pack load time into a
+`HashMap<u16, ResolvedBlockState>` stored on `ResourcePack`. The cache covers
+every entry in `BLOCK_NAME_MAP` (all ~320 registered block ids). During meshing,
+`resolve_block_model_with_neighbors` and `model_for_block` read from the cache -
+zero disk I/O per voxel.
+
+#### ResolvedBlockState enum
+
+```
+pub(crate) enum ResolvedBlockState {
+    Single(BlockModel),   // variant-form blocks (stone, oak_log, ...)
+    Multipart(Vec<(Option<MultipartCondition>, BlockModel)>), // fences, walls
+    None,                 // no MC data; fall back to hand-coded table / cube
+}
+```
+
+Resolution at cache-build time:
+1. `name_map::lookup_block(id)` -> MC block name.
+2. `blockstates::load_blockstate(pack, name)` -> `BlockState` (may fail on
+   placeholder pack - falls through to hand-coded `special_models` table).
+3. For variant-form: `first_variant_model()` -> `models::load_model()`.
+4. For multipart: pre-load every part's `BlockModel` + store with condition.
+5. Fallback: `resolve_from_special_table(id)` -> `lookup(name)`.
+
+#### Startup timing
+
+Cache is built at end of `ResourcePack::load_with_override` after atlas +
+animation setup. Instrumented with `tracing::info!("W41.1 block model cache
+built", count, elapsed_ms)`. Expected build time with real MC pack: ~100-500ms
+(one-time cost at startup). Placeholder pack: near-zero (hand-coded table only).
+
+#### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/mod.rs`:
+  `pub(crate) use special_models::ResolvedBlockState` re-export;
+  `block_models: HashMap<u16, ResolvedBlockState>` field on `ResourcePack`;
+  cache build + timing in `load_with_override`.
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`:
+  `ResolvedBlockState` enum; `build_block_model_cache`; `resolve_for_cache`;
+  `resolve_from_special_table`; `resolve_block_model_with_neighbors` rewritten
+  to read cache; `model_for_block` updated to read cache.
+- `examples/voxel_demo_mp/src/resource_pack/fallback.rs`:
+  `placeholder_pack()` calls `build_block_model_cache` after construction.
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  4 new W41.1 tests (cache_torch_is_single, cache_stone_is_none,
+  cache_stone_single_on_synthetic_pack, cache_resolution_is_fast).
+- `examples/voxel_demo_mp/src/wave18_tests.rs`,
+  `examples/voxel_demo_mp/src/resource_pack/particles.rs`,
+  `examples/voxel_demo_mp/src/particle_pass.rs`:
+  Added `block_models: HashMap::new()` to test-helper `ResourcePack`
+  constructors.
+
+#### Tests
+
+- bin: 1528 pass / 7 fail (same 7 pre-existing; +4 W41.1 tests).
+- clippy: 0 warnings.
+- `w41_cache_resolution_is_fast`: 10 000 lookups complete in < 50ms.
+
+### W41.2 - State matching for stairs/doors/slabs
+
+**Deferred to W42.**
+
+Reason: adding per-voxel facing/state requires changing the `Chunk` data
+format (`data: Vec<BlockId>` -> needs a state slot per voxel), which cascades
+into the chunk serialization format, network protocol, and all chunk read/write
+sites. Scope too large for W41.
+
+Current behaviour: all stairs, doors, and slabs render with the first variant
+from the blockstate JSON (facing=east for stairs, half=bottom for slabs,
+etc.). Visually correct shape, fixed orientation until W42 adds state bits.
+
+The W41.1 cache already pre-loads the correct variant models (first variant
+of each blockstate), so W42 only needs to extend the cache lookup key to
+include per-voxel state and wire placement facing into the chunk data.
 - Door blockstate variants: deferred (needs per-voxel state storage).
