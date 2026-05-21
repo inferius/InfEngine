@@ -51,6 +51,9 @@ mod tests;
 #[cfg(test)]
 mod models_tests;
 
+#[cfg(test)]
+mod pipeline_tests;
+
 /// A single texture entry inside the runtime atlas - either a static
 /// 16x16 tile or the head of an animation strip whose frames live
 /// sequentially below `atlas_uv`.
