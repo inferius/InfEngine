@@ -18,6 +18,13 @@
 //!
 //! Callers: see `build_lit_submeshes` in `main.rs` which captures
 //! lighting + anim lookups and forwards them here.
+//!
+//! W44.1: debug logging gated by `RUST_LOG=voxel_demo_mp::resource_pack=debug`
+//! OR by the runtime toggle `enable_mesher_debug_logging(true)`. The
+//! toggle allows one-frame capture from a keypress (F4) without
+//! restarting with env-var set.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::{Mat4, Vec3, Vec4};
 use infengine_render::MeshVertex;
@@ -28,6 +35,31 @@ use super::ResourcePack;
 
 // Re-export so callers can build NeighborStates without reaching into blockstates.
 pub(crate) use super::blockstates::NeighborStates;
+
+// ---------------------------------------------------------------------------
+// W44.1: runtime debug logging toggle.
+// ---------------------------------------------------------------------------
+
+/// When `true`, emit per-face tracing::debug! lines inside
+/// `emit_block_elements`. Toggle via `enable_mesher_debug_logging`.
+/// The env-var gate (`RUST_LOG=...=debug`) is a second, independent
+/// gate: logs only fire when BOTH are enabled.
+static MESHER_DEBUG: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable per-frame mesher debug logging at runtime.
+///
+/// Intended usage: bind to F4 in main.rs, enable for one frame, then
+/// disable so the log spam doesn't continue every chunk remesh.
+///
+/// ```ignore
+/// // In key-press handler:
+/// resource_pack::element_mesh::enable_mesher_debug_logging(true);
+/// // After one mesh rebuild:
+/// resource_pack::element_mesh::enable_mesher_debug_logging(false);
+/// ```
+pub(crate) fn enable_mesher_debug_logging(on: bool) {
+    MESHER_DEBUG.store(on, Ordering::Relaxed);
+}
 
 /// Attempt to emit model-element geometry for `block_id` at
 /// `voxel_origin` (world-space corner of the voxel).
@@ -77,6 +109,8 @@ pub(crate) fn emit_block_elements(
     // return false so the caller's cube path handles the block.
     let verts_before = vertices.len();
 
+    let dbg = MESHER_DEBUG.load(Ordering::Relaxed);
+
     for elem in &model.elements {
         // Scale from MC 16ths to world units: 1 voxel = 1.0 world unit.
         let from = Vec3::new(
@@ -93,8 +127,19 @@ pub(crate) fn emit_block_elements(
         // Precompute the rotation matrix for this element (if any).
         let rot_mat = elem.rotation.map(build_rotation_mat);
 
+        // W44.1: debug logging.
+        if dbg {
+            tracing::debug!(
+                block_id,
+                elem_from = ?elem.from,
+                elem_to = ?elem.to,
+                "emit_block_elements: processing element",
+            );
+        }
+
         // Emit each declared face.
         emit_faces_for_element(
+            block_id,
             &elem.faces,
             from,
             to,
@@ -106,6 +151,18 @@ pub(crate) fn emit_block_elements(
             &light_at_neighbour,
             &anim_id_for_face,
             &neighbour_opaque,
+            dbg,
+        );
+    }
+
+    let faces_emitted = (vertices.len() - verts_before) / 4;
+    if dbg {
+        tracing::debug!(
+            block_id,
+            elements = model.elements.len(),
+            faces_emitted,
+            verts_total = vertices.len() - verts_before,
+            "emit_block_elements result",
         );
     }
 
@@ -246,6 +303,7 @@ const BOX_FACES: &[BoxFace] = &[
 /// Emit the declared faces of a single `ModelElement` AABB.
 #[allow(clippy::too_many_arguments)]
 fn emit_faces_for_element(
+    block_id: u16,
     faces: &ElementFaces,
     from: Vec3,
     to: Vec3,
@@ -257,6 +315,7 @@ fn emit_faces_for_element(
     light_at_neighbour: &impl Fn([i8; 3]) -> [f32; 2],
     anim_id_for_face: &impl Fn(&str) -> u32,
     neighbour_opaque: &impl Fn([i8; 3]) -> bool,
+    dbg: bool,
 ) {
     for box_face in BOX_FACES {
         // Pick the declared face for this direction.
@@ -274,11 +333,33 @@ fn emit_faces_for_element(
 
         // Cullface: if the model says to cull when the axis-aligned
         // neighbour in `cullface`'s direction is opaque, skip.
-        if let Some(cf) = model_face.cullface {
+        let culled = if let Some(cf) = model_face.cullface {
             let delta = cube_face_to_normal(cf);
-            if neighbour_opaque(delta) {
-                continue;
+            let opaque = neighbour_opaque(delta);
+            if dbg {
+                tracing::debug!(
+                    block_id,
+                    box_face = ?box_face.cube_face,
+                    cullface = ?cf,
+                    delta = ?delta,
+                    neighbour_opaque = opaque,
+                    "face evaluation",
+                );
             }
+            opaque
+        } else {
+            if dbg {
+                tracing::debug!(
+                    block_id,
+                    box_face = ?box_face.cube_face,
+                    cullface = "none",
+                    "face evaluation (no cullface - always emit)",
+                );
+            }
+            false
+        };
+        if culled {
+            continue;
         }
 
         // Resolve texture -> atlas UV.
