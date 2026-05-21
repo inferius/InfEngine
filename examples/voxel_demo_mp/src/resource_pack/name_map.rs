@@ -68,9 +68,12 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
         top: "cactus_top", bottom: "cactus_bottom", sides: "cactus_side",
     },
     BlockNameMap { infengine_id: 28, block: "glowstone", top: "", bottom: "", sides: "" },
+    // Bed - MC ships as entity model; no block face textures exist.
+    // Use oak_planks as a flat-face fallback for all faces.
+    // W45.1: removed nonexistent "red_bed_top"/"red_bed_side" references.
     BlockNameMap {
-        infengine_id: 35, block: "red_bed",
-        top: "red_bed_top", bottom: "oak_planks", sides: "red_bed_side",
+        infengine_id: 35, block: "oak_planks",
+        top: "", bottom: "", sides: "",
     },
     // Liquids - MC's animated names. `water_still` + `lava_still`
     // both ship as 16x(16*N) vertical strips with `.mcmeta` siblings.
@@ -118,7 +121,10 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
         top: "pumpkin_top", bottom: "pumpkin_top", sides: "jack_o_lantern",
     },
     BlockNameMap { infengine_id: 56, block: "soul_fire_0",   top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 57, block: "end_rod",        top: "end_rod_top", bottom: "end_rod_top", sides: "end_rod" },
+    // W45.1: end_rod_top.png does not exist in MC 26.1.2; single "end_rod"
+    // texture covers all faces. The JSON model (block/end_rod.json) references
+    // only "#end_rod" throughout.
+    BlockNameMap { infengine_id: 57, block: "end_rod",        top: "end_rod", bottom: "end_rod", sides: "end_rod" },
     BlockNameMap { infengine_id: 58, block: "magma",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 59, block: "shroomlight",    top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 60, block: "lantern",        top: "", bottom: "", sides: "" },
@@ -136,22 +142,27 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     },
     BlockNameMap { infengine_id: 65, block: "redstone_lamp_on",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 66, block: "redstone_ore",      top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 67, block: "light_block_15",    top: "", bottom: "", sides: "" },
-    // W12.2 slab / stair / fence / door / pane / bars / wall
-    // (ids 68..=82). For shapes that have no distinct top texture,
-    // map to the full-block parent texture.
-    BlockNameMap { infengine_id: 68, block: "oak_planks",       top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 69, block: "stone",            top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 70, block: "cobblestone",      top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 71, block: "oak_planks",       top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 72, block: "oak_planks",       top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 73, block: "stone",            top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 74, block: "cobblestone",      top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 75, block: "oak_planks",       top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 76, block: "nether_bricks",    top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 80, block: "glass",            top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 81, block: "iron_bars",        top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 82, block: "cobblestone",      top: "", bottom: "", sides: "" },
+    // W45.1: light_block_15.png does not exist; MC 26.1.2 ships light blocks
+    // as invisible blocks whose model points to an item sprite. Using
+    // "glowstone" as the nearest visible flat-face fallback.
+    BlockNameMap { infengine_id: 67, block: "glowstone",         top: "", bottom: "", sides: "" },
+    // W12.2 / W45.1 slab / stair / fence / door / pane / bars / wall
+    // (ids 68..=82). "block" field now holds the actual MC blockstate name
+    // so the universal JSON pipeline (W45.5) can load the correct model.
+    // The per-face top/bottom/sides fields are kept for the fallback cube
+    // path when no MC pack is present.
+    BlockNameMap { infengine_id: 68, block: "oak_slab",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 69, block: "stone_slab",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 70, block: "cobblestone_slab",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 71, block: "oak_slab",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 72, block: "oak_stairs",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 73, block: "stone_stairs",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 74, block: "cobblestone_stairs",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 75, block: "oak_fence",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 76, block: "nether_brick_fence",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 80, block: "glass_pane",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 81, block: "iron_bars",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 82, block: "cobblestone_wall",    top: "", bottom: "", sides: "" },
     // W35.3 - Stone variants + wood variants + wool + building blocks.
     BlockNameMap { infengine_id: 83, block: "granite",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 84, block: "diorite",          top: "", bottom: "", sides: "" },
@@ -358,11 +369,15 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     // W40.2: Crimson wood (ids 240..=242).
     BlockNameMap { infengine_id: 240, block: "crimson_stem",   top: "crimson_stem_top", bottom: "crimson_stem_top", sides: "crimson_stem" },
     BlockNameMap { infengine_id: 241, block: "crimson_planks", top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 242, block: "crimson_hyphae", top: "", bottom: "", sides: "" },
+    // W45.1: crimson_hyphae.png does not exist in MC 26.1.2. The JSON model
+    // (crimson_hyphae.json) uses crimson_stem for all faces.
+    BlockNameMap { infengine_id: 242, block: "crimson_stem",    top: "crimson_stem_top", bottom: "crimson_stem_top", sides: "crimson_stem" },
     // W40.2: Warped wood (ids 243..=245).
     BlockNameMap { infengine_id: 243, block: "warped_stem",   top: "warped_stem_top", bottom: "warped_stem_top", sides: "warped_stem" },
     BlockNameMap { infengine_id: 244, block: "warped_planks", top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 245, block: "warped_hyphae", top: "", bottom: "", sides: "" },
+    // W45.1: warped_hyphae.png does not exist in MC 26.1.2. The JSON model
+    // (warped_hyphae.json) uses warped_stem for all faces.
+    BlockNameMap { infengine_id: 245, block: "warped_stem",     top: "warped_stem_top", bottom: "warped_stem_top", sides: "warped_stem" },
     // W40.2: Deepslate ores (ids 246..=249).
     BlockNameMap { infengine_id: 246, block: "deepslate_redstone_ore", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 247, block: "deepslate_lapis_ore",    top: "", bottom: "", sides: "" },
@@ -661,24 +676,28 @@ mod tests {
         assert_eq!(lookup_block(63).map(|m| m.top),   Some("respawn_anchor_top"));
         assert_eq!(lookup_block(65).map(|m| m.block), Some("redstone_lamp_on"));
         assert_eq!(lookup_block(66).map(|m| m.block), Some("redstone_ore"));
-        assert_eq!(lookup_block(67).map(|m| m.block), Some("light_block_15"));
+        // W45.1: light_block_15 -> glowstone (fallback; no block_15 texture).
+        assert_eq!(lookup_block(67).map(|m| m.block), Some("glowstone"));
     }
 
-    // W34.1 - new slab/stair/fence/door/pane entries (ids 68..=82).
+    // W34.1 / W45.1 - shape block entries (ids 68..=82).
+    // W45.1 updated "block" fields to the actual MC blockstate name so the
+    // universal JSON pipeline (W45.5) resolves the correct slab/stair/fence
+    // model instead of a full-cube oak_planks/stone/cobblestone model.
     #[test]
     fn w34_shape_blocks_in_map() {
-        assert_eq!(lookup_block(68).map(|m| m.block), Some("oak_planks"));
-        assert_eq!(lookup_block(69).map(|m| m.block), Some("stone"));
-        assert_eq!(lookup_block(70).map(|m| m.block), Some("cobblestone"));
-        assert_eq!(lookup_block(71).map(|m| m.block), Some("oak_planks"));
-        assert_eq!(lookup_block(72).map(|m| m.block), Some("oak_planks"));
-        assert_eq!(lookup_block(73).map(|m| m.block), Some("stone"));
-        assert_eq!(lookup_block(74).map(|m| m.block), Some("cobblestone"));
-        assert_eq!(lookup_block(75).map(|m| m.block), Some("oak_planks"));
-        assert_eq!(lookup_block(76).map(|m| m.block), Some("nether_bricks"));
-        assert_eq!(lookup_block(80).map(|m| m.block), Some("glass"));
+        assert_eq!(lookup_block(68).map(|m| m.block), Some("oak_slab"));
+        assert_eq!(lookup_block(69).map(|m| m.block), Some("stone_slab"));
+        assert_eq!(lookup_block(70).map(|m| m.block), Some("cobblestone_slab"));
+        assert_eq!(lookup_block(71).map(|m| m.block), Some("oak_slab"));
+        assert_eq!(lookup_block(72).map(|m| m.block), Some("oak_stairs"));
+        assert_eq!(lookup_block(73).map(|m| m.block), Some("stone_stairs"));
+        assert_eq!(lookup_block(74).map(|m| m.block), Some("cobblestone_stairs"));
+        assert_eq!(lookup_block(75).map(|m| m.block), Some("oak_fence"));
+        assert_eq!(lookup_block(76).map(|m| m.block), Some("nether_brick_fence"));
+        assert_eq!(lookup_block(80).map(|m| m.block), Some("glass_pane"));
         assert_eq!(lookup_block(81).map(|m| m.block), Some("iron_bars"));
-        assert_eq!(lookup_block(82).map(|m| m.block), Some("cobblestone"));
+        assert_eq!(lookup_block(82).map(|m| m.block), Some("cobblestone_wall"));
     }
 
     // W34.1 - torch / door item overrides.
@@ -745,5 +764,105 @@ mod tests {
         assert_eq!(lookup_item(164), Some("cooked_beef"));
         assert_eq!(lookup_item(165), Some("chicken_raw"));
         assert_eq!(lookup_item(168), Some("melon_slice"));
+    }
+
+    // W45.1: audit BLOCK_NAME_MAP "block", "top", "bottom", "sides" fields
+    // against real MC 26.1.2 block textures. Skipped if the cached pack is
+    // not present (CI / machines without MC). Checks that every non-empty
+    // name resolves to a real .png file in
+    //   <pack>/assets/minecraft/textures/block/<name>.png
+    //
+    // Names that intentionally point to item textures (e.g. tools) are in
+    // ITEM_NAME_MAP, not BLOCK_NAME_MAP, so this test only covers entries
+    // that are truly expected to exist in the block texture folder.
+    //
+    // The set of IDs that are item-only (no block texture) is excluded via
+    // ITEM_ONLY_IDS. Everything else must resolve or the test fails.
+    #[test]
+    fn w45_block_name_map_textures_exist_in_mc_pack() {
+        // Known path for the cached MC pack (Windows user-specific).
+        let pack_dir = std::path::Path::new(
+            r"C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\textures\block",
+        );
+        if !pack_dir.exists() {
+            // No MC pack present - skip silently.
+            return;
+        }
+
+        // IDs whose "block" field is NOT a texture name:
+        // - Item-only IDs: tools, food, ingots (ITEM_NAME_MAP handles them)
+        // - Shape block IDs (68..=82): "block" is the MC *blockstate* name
+        //   (e.g. "oak_slab") for the universal JSON pipeline, not a texture.
+        //   Their texture comes from the JSON model's texture declarations.
+        const ITEM_ONLY_IDS: &[u16] = &[
+            12,  // raw_beef - item only
+            35,  // red_bed - entity model, no block textures
+            68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, // shape blocks
+            217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)
+            154, 155, 156, 157, 158, 159, 160, 161, // gold/diamond tools
+            162, 163, 164, 165, 166, 167, 168,       // food items
+            274, 275, 276, 277, 278,                  // netherite tools
+            279, 280,                                  // netherite ingot/scrap
+            281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, // food
+            293, 294, 295, 296, 297, 298, 299, 300, 301, // mob drops
+            302, 303, 304, 305, 306, 307, 308, 309, 310, // ingredients
+            311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, // ingredients
+        ];
+
+        let check = |name: &str, id: u16, field: &str| {
+            if name.is_empty() {
+                return; // empty = fallback to block name, not checked separately
+            }
+            let path = pack_dir.join(format!("{name}.png"));
+            assert!(
+                path.exists(),
+                "id={id} field={field} name=\"{name}\" not found at {}",
+                path.display()
+            );
+        };
+
+        for entry in BLOCK_NAME_MAP {
+            let id = entry.infengine_id;
+            if ITEM_ONLY_IDS.contains(&id) {
+                continue;
+            }
+            // Only check the "block" field as a texture name when the entry
+            // has no per-face overrides. When top/bottom/sides are provided,
+            // the "block" field is used as the MC *blockstate* name (for the
+            // universal JSON pipeline), not as a direct texture name. Example:
+            // id=3 grass_block has block="grass_block" (blockstate name) but
+            // individual top="grass_block_top", bottom="dirt", sides="grass_block_side".
+            let has_face_overrides = !entry.top.is_empty()
+                || !entry.bottom.is_empty()
+                || !entry.sides.is_empty();
+            if !has_face_overrides {
+                check(entry.block, id, "block");
+            }
+            check(entry.top, id, "top");
+            check(entry.bottom, id, "bottom");
+            check(entry.sides, id, "sides");
+        }
+    }
+
+    // W45.1 spot checks for corrected entries.
+    #[test]
+    fn w45_corrected_entries() {
+        // end_rod: top/bottom now use "end_rod" not the nonexistent "end_rod_top"
+        let e = lookup_block(57).unwrap();
+        assert_eq!(e.top, "end_rod");
+        assert_eq!(e.bottom, "end_rod");
+        // light_block_15 -> glowstone fallback
+        assert_eq!(lookup_block(67).unwrap().block, "glowstone");
+        // crimson_hyphae -> crimson_stem
+        assert_eq!(lookup_block(242).unwrap().block, "crimson_stem");
+        // warped_hyphae -> warped_stem
+        assert_eq!(lookup_block(245).unwrap().block, "warped_stem");
+        // shape blocks use MC blockstate names
+        assert_eq!(lookup_block(68).unwrap().block, "oak_slab");
+        assert_eq!(lookup_block(72).unwrap().block, "oak_stairs");
+        assert_eq!(lookup_block(75).unwrap().block, "oak_fence");
+        assert_eq!(lookup_block(76).unwrap().block, "nether_brick_fence");
+        assert_eq!(lookup_block(80).unwrap().block, "glass_pane");
+        assert_eq!(lookup_block(82).unwrap().block, "cobblestone_wall");
     }
 }
