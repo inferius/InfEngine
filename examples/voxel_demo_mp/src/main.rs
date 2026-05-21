@@ -39,7 +39,7 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
-    BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, GLOWSTONE_ID, LAVA_ID,
+    BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, LAVA_ID,
     REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
     TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
     block_category, block_is_liquid,
@@ -1694,8 +1694,11 @@ impl Voxel {
         // Resetting the accumulator over the period means the very next
         // on_update tick dispatches Job::Lighting alongside the Remesh.
         self.last_lighting_tick_s = LIGHTING_TICK_PERIOD_S;
-        // Both torches + glowstone act as point-light emitters.
-        if block.0 == TORCH_ID || block.0 == GLOWSTONE_ID {
+        // W38.2: any open-flame block gets a particle emitter entry.
+        // Mirrors MC's flame/smoke spawn list. Glowstone emits light
+        // but is a solid block with no open flame, so it stays in
+        // emitter_positions only (point light, no particles).
+        if flame_emitter(block.0) {
             self.torch_positions.insert(voxel);
         } else {
             self.torch_positions.remove(&voxel);
@@ -3256,15 +3259,21 @@ impl Voxel {
             if !accumulator_fires(&mut frame_seed, target_per_source) {
                 continue;
             }
+            // W38.2: per-emitter flame tint. Look up the block id via
+            // emitter_positions (covers all flame emitters since they all
+            // satisfy light_emission_for_id > 0). Falls back to orange.
+            let block_id = self.emitter_positions.get(pos).copied()
+                .unwrap_or(TORCH_ID);
+            let flame_tint = flame_tint_for(block_id);
             // Legacy CPU particle (tinted cube) for collision/gravity.
-            spawn_flame_particle(&mut self.particles, pos, &mut frame_seed, [1.0, 0.78, 0.40]);
+            spawn_flame_particle(&mut self.particles, pos, &mut frame_seed, flame_tint);
             // W18.3: also push a textured billboard for the GPU pass.
             emit_textured_flame(
                 &mut self.textured_particles,
                 pa,
                 pos,
                 &mut frame_seed,
-                [1.0, 0.78, 0.40],
+                flame_tint,
             );
             // W36.3: torch smoke - uses the legacy CPU particle which
             // has per-particle velocity so it visibly rises upward.
@@ -15402,9 +15411,9 @@ impl WorkerPool {
                                                     side_effects.push(
                                                         ChunkSideEffect::Snow(wv),
                                                     );
-                                                } else if b.0 == TORCH_ID
-                                                    || b.0 == GLOWSTONE_ID
-                                                {
+                                                // W38.2: any open-flame block
+                                                // registers a particle emitter.
+                                                } else if flame_emitter(b.0) {
                                                     side_effects.push(
                                                         ChunkSideEffect::Torch(wv),
                                                     );
@@ -15808,6 +15817,39 @@ fn day_night(time: f32) -> (Vec3, [f32; 3]) {
 // ---------------------------------------------------------------
 // W9.5: ambient particle helpers used by `tick_ambient_particles`.
 // ---------------------------------------------------------------
+
+/// W38.2: Returns true for blocks that should emit ambient flame/smoke
+/// particles each tick. Mirrors MC's open-flame spawn list. Note this
+/// is DIFFERENT from light_emission - glowstone emits light but no
+/// flame (solid block), while certain emitter variants emit particles
+/// but not necessarily maximum light.
+fn flame_emitter(id: u16) -> bool {
+    // TORCH_ID = 10, redstone torches = 50/51, soul torches = 52/53.
+    matches!(
+        id,
+        x if x == TORCH_ID
+            || x == REDSTONE_TORCH_ID
+            || x == REDSTONE_WALL_TORCH_ID
+            || x == SOUL_TORCH_ID
+            || x == SOUL_WALL_TORCH_ID
+    )
+}
+
+/// W38.2: Per-emitter flame colour. MC torch variants each have a
+/// distinct flame hue:
+///   - Regular torch       -> warm orange [1.0, 0.78, 0.40]
+///   - Redstone torch      -> red         [1.0, 0.20, 0.10]
+///   - Soul torch          -> cyan-blue   [0.20, 0.75, 1.0]
+fn flame_tint_for(id: u16) -> [f32; 3] {
+    if id == REDSTONE_TORCH_ID || id == REDSTONE_WALL_TORCH_ID {
+        [1.0, 0.20, 0.10]
+    } else if id == SOUL_TORCH_ID || id == SOUL_WALL_TORCH_ID {
+        [0.20, 0.75, 1.0]
+    } else {
+        // Regular torch + any unregistered emitter -> warm orange.
+        [1.0, 0.78, 0.40]
+    }
+}
 
 /// True when `pos` is within `radius` of the player.
 fn within_radius(player: [f32; 3], pos: &[i32; 3], radius: f32) -> bool {
