@@ -178,9 +178,12 @@ impl CreativeTabState {
 ///   - 37 (lava source)   - not a placeable item; use lava bucket.
 ///   - 47 (portal)        - spawns via flint+steel ignition only.
 ///   - 49 (fire)          - spawns via flint+steel / lava-burn only.
+///   - 51 (redstone_wall_torch) - W35.2: wall variant auto-selected on
+///     placement; only the base torch shows in creative.
+///   - 53 (soul_wall_torch)     - W35.2: same rationale as id 51.
 ///   - 56 (soul_fire)     - same as fire; technical world block.
 ///   - 78 (oak_door_upper) - internal upper-half block; never held.
-pub(crate) const CREATIVE_BLACKLIST: &[u16] = &[36, 37, 47, 49, 56, 78];
+pub(crate) const CREATIVE_BLACKLIST: &[u16] = &[36, 37, 47, 49, 51, 53, 56, 78];
 
 /// Build the full list of creative-tab entries. Walks
 /// `ITEM_TYPES`, strips technical / non-giftable items via
