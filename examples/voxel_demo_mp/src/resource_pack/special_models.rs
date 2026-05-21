@@ -269,11 +269,19 @@ pub(crate) fn resolve_block_model(
 ///     `model_for_block_with_neighbors` when neighbors are available.
 ///   - Cross-pattern plants keyed as `"block/cross/<tex>"`.
 pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
-    // W41.1: read from cache (populated at load time).
+    // W42 revert: only return a model for blocks with a registered
+    // SPECIAL shape (torch/fence/slab/stair/door/cross/...). Universal
+    // JSON routing of cube blocks (W39) caused mesh holes - the JSON
+    // path returned Some(BlockModel) but emit_block_elements silently
+    // dropped faces (texture mismatch, cullface format diff, ...),
+    // skipping the cube fallback path. Cube blocks back through the
+    // proven cube path; JSON path stays for blocks where the hand-
+    // coded table marks them as special-shaped.
+    let mc_name = name_for_block(id)?;
+    // Cache lookup for special-shaped blocks only.
     if let Some(entry) = pack.block_models.get(&id) {
-        return match entry {
-            ResolvedBlockState::Single(m) => Some(m.clone()),
-            // For multipart without neighbor info: return first unconditional part.
+        match entry {
+            ResolvedBlockState::Single(m) => return Some(m.clone()),
             ResolvedBlockState::Multipart(parts) => {
                 let mut elements = Vec::new();
                 let mut textures = std::collections::HashMap::new();
@@ -287,24 +295,15 @@ pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<Blo
                         ambient_occlusion = model.ambient_occlusion;
                     }
                 }
-                if elements.is_empty() {
-                    // No unconditional parts: fall through to legacy table.
-                    name_for_block(id).and_then(lookup)
-                } else {
-                    Some(BlockModel { elements, textures, ambient_occlusion })
+                if !elements.is_empty() {
+                    return Some(BlockModel { elements, textures, ambient_occlusion });
                 }
             }
-            ResolvedBlockState::None => {
-                // Cache says no MC data: try legacy hand-coded table.
-                name_for_block(id).and_then(lookup)
-            }
-        };
+            ResolvedBlockState::None => {}
+        }
     }
-    // Id not in cache (e.g. cache not built yet in tests).
-    // W39 fallback: full MC blockstate -> variant -> model pipeline.
-    if let Some(m) = resolve_block_model(pack, id) {
-        return Some(m);
-    }
+    // Fall through to hand-coded table (placeholder pack path).
+    let _ = mc_name;
     name_for_block(id).and_then(lookup)
 }
 
@@ -359,11 +358,15 @@ pub(crate) fn model_for_block_with_neighbors(
     pack: &super::ResourcePack,
     neighbors: &blockstates::NeighborStates,
 ) -> Option<BlockModel> {
+    // W42 revert: gate on name_for_block (= only special-shaped blocks
+    // route through JSON/multipart pipeline). Cube blocks return None
+    // so the chunk mesher's cube path emits them. The mesh-hole bug
+    // user reported came from cube blocks going through emit_special
+    // which silently dropped faces.
+    name_for_block(id)?;
     if let Some(m) = resolve_block_model_with_neighbors(pack, id, neighbors) {
         return Some(m);
     }
-    // Fall back to legacy hand-coded table (placeholder pack / cross plants /
-    // blocks whose cache entry is None).
     name_for_block(id).and_then(lookup)
 }
 

@@ -409,11 +409,9 @@ fn ten_common_blocks_resolve_on_synthetic_pack() {
         (54, "sea_lantern"),
     ];
     let mut resolved = 0usize;
-    for &(id, name) in test_ids {
+    for &(id, _name) in test_ids {
         if resolve_block_model(&pack, id).is_some() {
             resolved += 1;
-        } else {
-            eprintln!("  MISS: id={id} ({name})");
         }
     }
     assert!(
