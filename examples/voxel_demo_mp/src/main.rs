@@ -6632,7 +6632,11 @@ impl Voxel {
                         && (0..CHUNK_SIZE as i32).contains(&nz)
                     {
                         let nb = chunk_ref.get(nx as usize, ny as usize, nz as usize);
-                        block_is_opaque(nb)
+                        // W44.5: air (id=0) has no BlockType entry so
+                        // block_is_opaque(AIR) returned true via
+                        // unwrap_or(true). Check is_air() first so that
+                        // faces toward air are never culled.
+                        !nb.is_air() && block_is_opaque(nb)
                     } else {
                         false
                     }
@@ -15696,7 +15700,10 @@ fn mesh_chunk_in_worker(
                     && (0..CHUNK_SIZE as i32).contains(&nz)
                 {
                     let nb = chunk.get(nx as usize, ny as usize, nz as usize);
-                    block_is_opaque(nb)
+                    // W44.5: air (id=0) has no BlockType entry so
+                    // block_is_opaque(AIR) returned true via
+                    // unwrap_or(true). Check is_air() first.
+                    !nb.is_air() && block_is_opaque(nb)
                 } else {
                     false
                 }
