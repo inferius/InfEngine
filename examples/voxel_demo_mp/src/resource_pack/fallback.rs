@@ -68,6 +68,17 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         }
     }
 
+    // W37: register the magenta "__missing" sentinel using the legacy
+    // 4x4 grid's top-left UV. The placeholder pack is the
+    // is_fallback=true variant + already has no texture detail, so
+    // having __missing map to the first tile is acceptable. MC-atlas
+    // textures.rs path paints + registers a true magenta-black checker.
+    let missing_uv = [0.0, 0.0, u_step, v_step];
+    textures.insert(
+        TextureKey::Block("__missing".to_string()),
+        TextureRef::placeholder(missing_uv),
+    );
+
     ResourcePack {
         textures,
         item_icons,

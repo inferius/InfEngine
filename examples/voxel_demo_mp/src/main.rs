@@ -6511,7 +6511,11 @@ impl Voxel {
             if let Some(r) = pack.block_face_ref(block.0, face) {
                 return r.atlas_uv;
             }
-            atlas_uv_rect(block, normal)
+            // W37: fall through to the magenta missing-texture sentinel
+            // baked into the atlas at pack time so unmapped blocks read
+            // as the obvious "no texture" pattern, not the legacy 4x4
+            // grid which collides with random MC tiles.
+            pack.icon_uv_for(block, normal)
         };
         // W16.2: light + anim helpers captured by both the cube path
         // and the emit_special closure.

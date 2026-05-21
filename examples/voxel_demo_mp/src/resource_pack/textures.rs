@@ -260,6 +260,58 @@ fn try_pack_at(entries: &[PackEntry], size: u32) -> Option<AtlasOutput> {
         let _ = e.is_particle;
         placed += 1;
     }
+
+    // W37: paint a magenta-black "missing texture" sentinel tile in the
+    // atlas + register it under the well-known key `__missing`. Callers
+    // that fail to resolve a block / item name look this up and render
+    // the obvious magenta checker instead of falling back to the
+    // top-left atlas tile (which on a typical MC atlas is the stone
+    // texture and was confusing the user - "vetsina ikon je
+    // cobblestone"). Pattern matches the MC / Source-engine "missing
+    // texture" standard.
+    if cursor_x + TILE_PX > w {
+        cursor_y += shelf_h;
+        cursor_x = 0;
+        shelf_h = 0;
+    }
+    if cursor_y + TILE_PX <= h {
+        let missing_x = cursor_x;
+        let missing_y = cursor_y;
+        for ty in 0..TILE_PX {
+            for tx in 0..TILE_PX {
+                let px = missing_x + tx;
+                let py = missing_y + ty;
+                let idx = ((py * w + px) * 4) as usize;
+                let cell = (tx / 8 + ty / 8) % 2;
+                // Magenta / black 8x8 checkerboard.
+                if cell == 0 {
+                    rgba[idx] = 0xFF;
+                    rgba[idx + 1] = 0x00;
+                    rgba[idx + 2] = 0xFF;
+                } else {
+                    rgba[idx] = 0x00;
+                    rgba[idx + 1] = 0x00;
+                    rgba[idx + 2] = 0x00;
+                }
+                rgba[idx + 3] = 0xFF;
+            }
+        }
+        let missing_uv = uv_of(missing_x, missing_y, TILE_PX, TILE_PX, w, h);
+        textures.insert(
+            TextureKey::Block("__missing".to_string()),
+            TextureRef {
+                atlas_uv: missing_uv,
+                frames: 1,
+                frametime_ms: 0,
+                interpolate: false,
+            },
+        );
+        // Bump cursor + shelf height for completeness (no further tiles
+        // placed but keep state consistent).
+        let _ = cursor_x;
+        let _ = shelf_h;
+    }
+
     tracing::info!(size = w, placed, "MC atlas packed");
     Some(AtlasOutput {
         atlas_size: (w, h),
@@ -347,11 +399,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mc = stage_minimal_pack(tmp.path());
         let out = load_atlas(&mc).expect("expected an atlas");
-        // 3 block + 2 item entries = 5 total.
-        assert_eq!(out.textures.len(), 5);
+        // 3 block + 2 item entries + W37 __missing sentinel = 6 total.
+        assert_eq!(out.textures.len(), 6);
         assert!(out.textures.contains_key(&TextureKey::Block("stone".to_string())));
         assert!(out.textures.contains_key(&TextureKey::Item("iron_ingot".to_string())));
         assert!(out.item_icons.contains_key("iron_ingot"));
+        assert!(out.textures.contains_key(&TextureKey::Block("__missing".to_string())));
     }
 
     #[test]

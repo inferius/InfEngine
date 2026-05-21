@@ -359,8 +359,18 @@ impl ResourcePack {
                 return r.atlas_uv;
             }
         }
-        // W29.1: safe fallback - top-left 16x16 tile of the atlas.
-        // Avoids the legacy 4x4 grid which was wrong for MC atlases.
+        // W37: clear "missing texture" sentinel (magenta-black checker)
+        // baked into the atlas at pack time. Way more obvious than the
+        // top-left tile which on the MC atlas was the stone texture and
+        // confused users ("vetsina ikon je cobblestone"). Falls back to
+        // the legacy top-left rect if the missing tile somehow isn't
+        // registered (placeholder atlas pre-W37 or future variants).
+        if let Some(missing) = self
+            .textures
+            .get(&TextureKey::Block("__missing".to_string()))
+        {
+            return missing.atlas_uv;
+        }
         let (aw, ah) = self.atlas_size;
         let tile_u = 16.0 / aw as f32;
         let tile_v = 16.0 / ah as f32;
