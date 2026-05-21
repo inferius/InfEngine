@@ -31,7 +31,8 @@ fn placeholder_pack() -> resource_pack::ResourcePack {
 fn oak_slab_renders_as_bottom_half() {
     // Slab bottom: model top face is at y = 8/16 = 0.5.
     use crate::block::OAK_SLAB_ID;
-    let m = special_models::model_for_block(OAK_SLAB_ID)
+    let pack = placeholder_pack();
+    let m = special_models::model_for_block(OAK_SLAB_ID, &pack)
         .expect("oak slab must have a special model");
     let e = &m.elements[0];
     let y_top = e.to[1] / 16.0;
@@ -46,7 +47,8 @@ fn oak_slab_renders_as_bottom_half() {
 #[test]
 fn oak_slab_top_renders_as_top_half() {
     // Slab top: model spans y = 8..16 -> world 0.5..1.0.
-    let m = special_models::model_for_block(OAK_SLAB_TOP_ID)
+    let pack = placeholder_pack();
+    let m = special_models::model_for_block(OAK_SLAB_TOP_ID, &pack)
         .expect("oak slab top must have a special model");
     let e = &m.elements[0];
     let y_bottom = e.from[1] / 16.0;
@@ -67,7 +69,8 @@ fn oak_slab_top_renders_as_top_half() {
 
 #[test]
 fn oak_stairs_renders_two_elements() {
-    let m = special_models::model_for_block(OAK_STAIRS_ID)
+    let pack = placeholder_pack();
+    let m = special_models::model_for_block(OAK_STAIRS_ID, &pack)
         .expect("oak stairs must have a special model");
     assert_eq!(
         m.elements.len(), 2,
@@ -82,7 +85,8 @@ fn oak_stairs_renders_two_elements() {
 
 #[test]
 fn oak_fence_renders_center_post() {
-    let m = special_models::model_for_block(OAK_FENCE_ID)
+    let pack = placeholder_pack();
+    let m = special_models::model_for_block(OAK_FENCE_ID, &pack)
         .expect("oak fence must have a special model");
     // Fence post: single 4x16x4 centre column.
     assert_eq!(m.elements.len(), 1, "fence post has exactly 1 element");
@@ -93,7 +97,8 @@ fn oak_fence_renders_center_post() {
 
 #[test]
 fn oak_door_renders_thin_slab() {
-    let m = special_models::model_for_block(OAK_DOOR_ID)
+    let pack = placeholder_pack();
+    let m = special_models::model_for_block(OAK_DOOR_ID, &pack)
         .expect("oak door must have a special model");
     let e = &m.elements[0];
     // Door is 3/16 thick on the X axis.

@@ -20,7 +20,7 @@ use crate::block::{
 };
 use crate::creative_tab::CreativeCategory;
 use crate::item::{ItemCategory, ITEM_TYPES};
-use crate::resource_pack::special_models::{model_for_block, name_for_block};
+use crate::resource_pack::{fallback, special_models::{model_for_block, name_for_block}};
 
 /// Every W12.2 id. Pinned here so a future block addition that
 /// shifts the slab/fence/door range raises an obvious diff.
@@ -66,13 +66,16 @@ fn wave_12_locked() {
     // 3. Each W12.2 block routes through special_models. The chunk
     // mesher dispatches via this function; missing entries would
     // emit a default cube + lose the slab/stairs/door shape.
+    // W38.1: model_for_block now takes a pack; use placeholder so the
+    // hand-coded table is exercised (no MC JSON files in CI).
+    let pack = fallback::placeholder_pack();
     for &id in W12_2_IDS {
         assert!(
             name_for_block(id).is_some(),
             "W12.2 id {id} has no special_models routing",
         );
         assert!(
-            model_for_block(id).is_some(),
+            model_for_block(id, &pack).is_some(),
             "W12.2 id {id} model lookup falls through",
         );
     }

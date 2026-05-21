@@ -52,7 +52,8 @@ pub(crate) fn emit_block_elements(
     anim_id_for_face: impl Fn(&str) -> u32,
     neighbour_opaque: impl Fn([i8; 3]) -> bool,
 ) -> bool {
-    let Some(model) = model_for_block(block_id) else {
+    // W38.1: pass pack so JSON model loader is tried first.
+    let Some(model) = model_for_block(block_id, pack) else {
         return false;
     };
 

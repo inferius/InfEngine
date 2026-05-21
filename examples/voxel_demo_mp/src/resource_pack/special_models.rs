@@ -135,10 +135,39 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     }
 }
 
-/// Convenience: resolve `name_for_block` then `lookup`, returning
-/// the `BlockModel` if the block has a registered special shape.
-pub(crate) fn model_for_block(id: u16) -> Option<BlockModel> {
-    name_for_block(id).and_then(lookup)
+/// Convenience: resolve `name_for_block` then try the JSON loader first,
+/// falling back to the hand-coded table when the pack has no matching file.
+///
+/// W38.1: JSON model path added. Resolution order:
+///   1. MC's `assets/minecraft/models/block/<name>.json` via `load_model`.
+///      This covers every block the MC pack ships a model for, including
+///      blocks not listed in the hand-coded table below.
+///   2. Hand-coded special_models table (`lookup`). Used when:
+///      - The placeholder pack is active (no MC install).
+///      - The JSON file is missing or unparseable (partial pack).
+///      - The block uses a special key shape like `"block/cross/<tex>"`
+///        that has no direct JSON counterpart (cross-pattern plants).
+pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
+    let mc_name = name_for_block(id);
+    if let Some(name) = mc_name {
+        // For cross/<tex> key shapes there is no matching JSON file;
+        // skip the loader and go directly to the hand-coded table.
+        if !name.contains("/cross/") {
+            // Strip the "block/" prefix: load_model expects "block/<stem>".
+            let json_key = if name.starts_with("block/") {
+                name.to_string()
+            } else {
+                format!("block/{name}")
+            };
+            if let Some(jm) = super::models::load_model(pack, &json_key) {
+                return Some(jm);
+            }
+        }
+        // Fallback to hand-coded table (placeholder pack or missing JSON).
+        lookup(name)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------
@@ -515,6 +544,13 @@ pub(crate) fn build_cross(texture: &str) -> BlockModel {
 mod tests {
     use super::*;
 
+    /// W38.1: all model_for_block tests need a pack.  The placeholder
+    /// pack has no JSON model files so the loader always falls back to
+    /// the hand-coded table, preserving existing test behaviour.
+    fn placeholder() -> crate::resource_pack::ResourcePack {
+        crate::resource_pack::fallback::placeholder_pack()
+    }
+
     #[test]
     fn torch_emits_one_element_with_six_faces() {
         let m = build_torch();
@@ -632,7 +668,8 @@ mod tests {
     #[test]
     fn model_for_block_returns_full_torch_model() {
         use crate::block::TORCH_ID;
-        let m = model_for_block(TORCH_ID).expect("torch model");
+        let pack = placeholder();
+        let m = model_for_block(TORCH_ID, &pack).expect("torch model");
         assert_eq!(m.elements.len(), 1);
         assert_eq!(m.elements[0].from, [7.0, 0.0, 7.0]);
     }
@@ -680,7 +717,8 @@ mod tests {
         use crate::block::OAK_SLAB_ID;
         // Slab model: `to[1] = 8.0`, which means top face sits
         // at y = 8/16 = 0.5 in voxel-local space.
-        let m = model_for_block(OAK_SLAB_ID).expect("oak slab routes");
+        let pack = placeholder();
+        let m = model_for_block(OAK_SLAB_ID, &pack).expect("oak slab routes");
         let e = &m.elements[0];
         let y_top_frac = e.to[1] / 16.0;
         assert!(
@@ -692,7 +730,8 @@ mod tests {
     #[test]
     fn door_lower_emits_thin_slab_quad() {
         use crate::block::OAK_DOOR_ID;
-        let m = model_for_block(OAK_DOOR_ID).expect("oak door routes");
+        let pack = placeholder();
+        let m = model_for_block(OAK_DOOR_ID, &pack).expect("oak door routes");
         let e = &m.elements[0];
         assert!((e.to[0] - 3.0).abs() < 1e-3, "door not 3/16 thick");
         assert_eq!(e.to[1], 16.0);
@@ -702,7 +741,8 @@ mod tests {
     #[test]
     fn fence_post_visible_in_chunk_mesh() {
         use crate::block::OAK_FENCE_ID;
-        let m = model_for_block(OAK_FENCE_ID).expect("oak fence routes");
+        let pack = placeholder();
+        let m = model_for_block(OAK_FENCE_ID, &pack).expect("oak fence routes");
         let e = &m.elements[0];
         assert_eq!(e.from, [6.0, 0.0, 6.0]);
         assert_eq!(e.to, [10.0, 16.0, 10.0]);
@@ -711,7 +751,8 @@ mod tests {
     #[test]
     fn stairs_emits_two_elements() {
         use crate::block::OAK_STAIRS_ID;
-        let m = model_for_block(OAK_STAIRS_ID).expect("oak stairs routes");
+        let pack = placeholder();
+        let m = model_for_block(OAK_STAIRS_ID, &pack).expect("oak stairs routes");
         assert_eq!(m.elements.len(), 2);
         assert_eq!(m.elements[0].to, [16.0, 8.0, 16.0]);
         assert_eq!(m.elements[1].from, [8.0, 8.0, 0.0]);
@@ -720,8 +761,9 @@ mod tests {
     #[test]
     fn glass_pane_and_iron_bars_share_post_shape() {
         use crate::block::{GLASS_PANE_ID, IRON_BARS_ID};
-        let gp = model_for_block(GLASS_PANE_ID).expect("glass pane routes");
-        let ib = model_for_block(IRON_BARS_ID).expect("iron bars routes");
+        let pack = placeholder();
+        let gp = model_for_block(GLASS_PANE_ID, &pack).expect("glass pane routes");
+        let ib = model_for_block(IRON_BARS_ID, &pack).expect("iron bars routes");
         assert_eq!(gp.elements[0].from, [7.0, 0.0, 7.0]);
         assert_eq!(gp.elements[0].to, [9.0, 16.0, 9.0]);
         assert_eq!(ib.elements[0].from, [7.0, 0.0, 7.0]);
@@ -731,7 +773,8 @@ mod tests {
     #[test]
     fn cobblestone_wall_post_centre_only() {
         use crate::block::COBBLESTONE_WALL_ID;
-        let m = model_for_block(COBBLESTONE_WALL_ID).expect("wall routes");
+        let pack = placeholder();
+        let m = model_for_block(COBBLESTONE_WALL_ID, &pack).expect("wall routes");
         let e = &m.elements[0];
         assert_eq!(e.from, [4.0, 0.0, 4.0]);
         assert_eq!(e.to, [12.0, 16.0, 12.0]);
@@ -755,9 +798,10 @@ mod tests {
 
     #[test]
     fn every_w12_block_resolves_a_model() {
+        let pack = placeholder();
         for &id in w12_ids() {
             assert!(
-                model_for_block(id).is_some(),
+                model_for_block(id, &pack).is_some(),
                 "id {id} has no resolvable special model",
             );
         }
@@ -857,7 +901,8 @@ mod tests {
     #[test]
     fn flower_model_for_block_resolves_cross_model() {
         use crate::block::FLOWER_RED_ID;
-        let m = model_for_block(FLOWER_RED_ID).expect("flower should resolve to cross model");
+        let pack = placeholder();
+        let m = model_for_block(FLOWER_RED_ID, &pack).expect("flower should resolve to cross model");
         assert_eq!(m.elements.len(), 2, "cross model has 2 quads");
         assert!(!m.ambient_occlusion);
     }
@@ -883,7 +928,8 @@ mod tests {
     #[test]
     fn nether_brick_fence_uses_post_geometry() {
         use crate::block::NETHER_BRICK_FENCE_ID;
-        let m = model_for_block(NETHER_BRICK_FENCE_ID).expect("nb fence routes");
+        let pack = placeholder();
+        let m = model_for_block(NETHER_BRICK_FENCE_ID, &pack).expect("nb fence routes");
         let e = &m.elements[0];
         // Same fence-post 4x16x4 centre as oak.
         assert_eq!(e.from, [6.0, 0.0, 6.0]);
