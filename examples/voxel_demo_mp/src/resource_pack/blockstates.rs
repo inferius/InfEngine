@@ -133,6 +133,22 @@ impl BlockState {
     pub(crate) fn is_multipart(&self) -> bool {
         self.is_multipart
     }
+
+    /// Return the first variant's `ModelRef`, or `None` when the
+    /// blockstate is multipart (deferred) or has no variants at all.
+    ///
+    /// W39: used by `resolve_block_model` as the "pick first" policy
+    /// before full state-matching is wired in. Works for all simple
+    /// variant-form blockstates (stone, dirt, oak_log, ...) as well
+    /// as multi-variant files where we just want a representative
+    /// model. Multipart files (fences, walls, redstone) still fall
+    /// through to the special_models hand-coded table.
+    pub(crate) fn first_variant_model(&self) -> Option<&ModelRef> {
+        if self.is_multipart {
+            return None;
+        }
+        self.variants.first().map(|(_, m)| m)
+    }
 }
 
 /// Look up a blockstates file under `pack.source/blockstates/<name>.json`.

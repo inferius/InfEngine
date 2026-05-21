@@ -43,6 +43,7 @@ use super::models::{
     BlockModel, CubeFace, ElementFaces, ElementRotation, ModelElement,
     ModelFace, RotationAxis,
 };
+use super::{blockstates, models, name_map};
 
 /// Resolve a model name to a hand-built `BlockModel`. Returns
 /// `None` for names that should fall through to the JSON loader
@@ -135,39 +136,62 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     }
 }
 
-/// Convenience: resolve `name_for_block` then try the JSON loader first,
-/// falling back to the hand-coded table when the pack has no matching file.
+/// Resolve a block id to its MC block model via the full
+/// blockstate -> variant -> model chain. Returns `None` when ANY
+/// step fails (caller falls back to the special_models hand-coded
+/// table or the default cube path).
 ///
-/// W38.1: JSON model path added. Resolution order:
-///   1. MC's `assets/minecraft/models/block/<name>.json` via `load_model`.
-///      This covers every block the MC pack ships a model for, including
-///      blocks not listed in the hand-coded table below.
-///   2. Hand-coded special_models table (`lookup`). Used when:
-///      - The placeholder pack is active (no MC install).
-///      - The JSON file is missing or unparseable (partial pack).
-///      - The block uses a special key shape like `"block/cross/<tex>"`
-///        that has no direct JSON counterpart (cross-pattern plants).
+/// W39.1: this is the primary resolution path for all blocks.
+/// Resolution steps:
+///   1. `name_map::lookup_block(id)` -> MC block name.
+///   2. `blockstates::load_blockstate(pack, name)` -> `BlockState`.
+///   3. `BlockState::first_variant_model()` -> `ModelRef` (first
+///      variant; full state-matching deferred).
+///   4. `models::load_model(pack, model_ref.model)` -> `BlockModel`
+///      (walks the parent chain, resolves `#var` texture refs).
+///
+/// Multipart blockstates (fences, walls, redstone) still return
+/// `None` here so the special_models hand-coded table gets a chance.
+pub(crate) fn resolve_block_model(
+    pack: &super::ResourcePack,
+    id: u16,
+) -> Option<BlockModel> {
+    // Step 1: id -> MC block name.
+    let map_entry = name_map::lookup_block(id)?;
+    let block_name = map_entry.block;
+    // Step 2: load blockstate JSON.
+    let state = blockstates::load_blockstate(pack, block_name)?;
+    // Step 3: pick first variant (full state-matching deferred).
+    let model_ref = state.first_variant_model()?;
+    // Step 4: load the model JSON (handles parent chain).
+    // model_ref.model is already namespace-stripped by the blockstates
+    // parser (strip_namespace is called in parse_model_ref). It may be
+    // "block/stone", "block/oak_log", etc.
+    models::load_model(pack, &model_ref.model)
+}
+
+/// Convenience: try the full MC blockstate -> model pipeline first,
+/// then fall back to the hand-coded special_models table.
+///
+/// W39.2: replaces the W38.1 path which only tried the JSON model
+/// loader keyed off `name_for_block`. The new path goes through the
+/// full MC universal chain so any block that has a `name_map` entry,
+/// a blockstates JSON, and a model JSON (possibly via parent chain)
+/// will resolve correctly without a hand-coded entry.
+///
+/// Legacy fallback (special_models `lookup` table) handles:
+///
+///   - Placeholder pack (no blockstate JSON on disk).
+///   - Multipart blockstates (fences, walls) deferred in W39.
+///   - Cross-pattern plants keyed as `"block/cross/<tex>"`.
 pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<BlockModel> {
-    let mc_name = name_for_block(id);
-    if let Some(name) = mc_name {
-        // For cross/<tex> key shapes there is no matching JSON file;
-        // skip the loader and go directly to the hand-coded table.
-        if !name.contains("/cross/") {
-            // Strip the "block/" prefix: load_model expects "block/<stem>".
-            let json_key = if name.starts_with("block/") {
-                name.to_string()
-            } else {
-                format!("block/{name}")
-            };
-            if let Some(jm) = super::models::load_model(pack, &json_key) {
-                return Some(jm);
-            }
-        }
-        // Fallback to hand-coded table (placeholder pack or missing JSON).
-        lookup(name)
-    } else {
-        None
+    // W39: full MC blockstate -> variant -> model pipeline.
+    if let Some(m) = resolve_block_model(pack, id) {
+        return Some(m);
     }
+    // Legacy fallback: hand-coded special_models for cross/<tex>
+    // shapes AND for the placeholder pack path.
+    name_for_block(id).and_then(lookup)
 }
 
 // ---------------------------------------------------------------
