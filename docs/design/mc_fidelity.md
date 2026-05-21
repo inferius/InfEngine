@@ -1928,3 +1928,74 @@ Survival mode behavior is unchanged in both cases.
 
 - `infengine_voxel`: 20 pass / 0 fail (unchanged)
 - `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged)
+
+## Wave 36
+
+### W36.1 - Per-block PBR tuning
+
+Obsidian and several other blocks received explicit PBR material parameters instead
+of the old global default (metallic=0, roughness=0.85). The 0.85 roughness produced
+a wide Cook-Torrance specular peak that washed out dark albedo values - obsidian
+looked faded and "glassy" instead of deep purple-black.
+
+New defaults: metallic=0.0, roughness=0.95 for terrain blocks.
+
+Per-block overrides (see `block::block_pbr()` in `mod.rs`):
+
+| Block(s)                      | metallic | roughness | Rationale                          |
+|-------------------------------|----------|-----------|------------------------------------|
+| obsidian (id 46)              | 0.0      | 1.0       | Fully matte - dark albedo pops     |
+| crying_obsidian (id 62)       | 0.0      | 1.0       | Same treatment                     |
+| glass (id 9), glass_pane (80) | 0.0      | 0.05      | Smooth, crisp specular edge        |
+| iron_ore (id 14)              | 0.4      | 0.5       | Slight metallic ore sheen          |
+| iron_door (79), iron_bars (81)| 0.6      | 0.4       | More metallic than raw ore         |
+| glowstone (28), sea_lantern(54)| 0.0     | 1.0       | Matte lets emissive colour pop     |
+| all others                    | 0.0      | 0.95      | Almost-matte default               |
+
+The `BlockDef::with_pbr()` constructor was added to `infengine_voxel` to allow
+explicit metallic/roughness at construction time. The registry loop in `main.rs`
+now calls `block_pbr(id)` before inserting each `BlockDef`.
+
+### W36.2 - Torch mesh visible
+
+Root cause: the torch special model (built by `special_models::build_torch()`)
+referenced texture key `"torch"` for all face UVs. When a real MC resource pack
+is present, the atlas scanner registers the torch texture under key `"torch_on"`
+(from filename `torch_on.png`) - not `"torch"`. The lookup `pack.block_texture("torch")`
+returned `None`, defaulting to the fallback UV `[0, 0, 1, 1]` - sampling the whole
+atlas as a miniature sprite on every torch face.
+
+Fix:
+- `build_torch()` and `build_wall_torch()` now use texture key `"torch_on"`.
+- `fallback.rs` placeholder pack registers `"torch_on"` as an alias for the torch
+  tile (block id 10) so the model resolves correctly without MC installed.
+- `name_map.rs` entry for id 10 updated from `block: "torch"` to `block: "torch_on"`.
+
+### W36.3 - Smoke rises upward
+
+`TexturedParticleInstance` (GPU particle pass) has no velocity or lifetime fields.
+The `emit_textured_smoke()` helper emitted a static billboard each tick at a fixed
+`pos.y + 1.1`, creating a hovering static blob that visually appeared to sink
+relative to the rising flame particles above it.
+
+Fix: migrated torch smoke to the legacy CPU `ParticleSystem` via
+`spawn_smoke_particle()`, which carries a per-particle velocity `[0, 0.3..0.5, 0]`
+so smoke visibly drifts upward. Torches now emit one smoke wisp per ~4 flame bursts.
+The `emit_textured_smoke()` call on fire blocks was also removed (same issue);
+fire now uses only legacy rising smoke. The function is kept with
+`#[allow(dead_code)]` because `wave18_tests.rs` exercises it directly.
+
+### Files changed
+
+- `crates/infengine_voxel/src/lib.rs`: `BlockDef::with_pbr()` + roughness default 0.95
+- `examples/voxel_demo_mp/src/block/mod.rs`: `block_pbr()` function
+- `examples/voxel_demo_mp/src/main.rs`: registry loop uses `block_pbr`; torch smoke;
+  disable `emit_textured_smoke`
+- `examples/voxel_demo_mp/src/resource_pack/fallback.rs`: "torch_on" alias for id 10
+- `examples/voxel_demo_mp/src/resource_pack/name_map.rs`: id 10 block -> "torch_on"
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`: torch texture -> "torch_on"
+
+### Tests
+
+- `infengine_voxel`: 20 pass / 0 fail (unchanged)
+- `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged)
