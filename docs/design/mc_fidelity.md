@@ -2084,3 +2084,132 @@ per-emitter without a separate world lookup.
 ### Tests
 
 - `voxel_demo_mp`: 1502 pass / 7 fail (pre-existing unchanged)
+
+## Wave 39 - Full MC blockstate -> model pipeline
+
+### Goal
+
+Every block id should resolve through MC's universal
+blockstate -> variant -> model chain, not a hand-coded lookup
+table. This wave wires the full pipeline so any block that has a
+`name_map` entry, a `blockstates/<name>.json`, and a model file
+(possibly via parent chain) renders correctly on a live MC pack
+without requiring a hand-coded special-model entry.
+
+### W39.1 - Pipeline function
+
+New `resolve_block_model(pack, id)` in
+`resource_pack/special_models.rs`:
+
+1. `name_map::lookup_block(id)` -> MC block name.
+2. `blockstates::load_blockstate(pack, block_name)` -> `BlockState`.
+3. `BlockState::first_variant_model()` -> `ModelRef` (first
+   variant; full per-state matching deferred).
+4. `models::load_model(pack, model_ref.model)` -> `BlockModel`
+   (walks parent chain, resolves #var texture refs).
+
+Returns `None` when any step fails: multipart blockstates, missing
+blockstate JSON, or missing model JSON all yield None and fall
+through to the legacy path.
+
+Helper added to `blockstates.rs`:
+`BlockState::first_variant_model() -> Option<&ModelRef>` - returns
+the first (key, model) pair's model ref, or None for multipart
+or empty variants.
+
+### W39.2 - model_for_block updated
+
+`special_models::model_for_block` now calls `resolve_block_model`
+first. If it returns Some, that result is used. Otherwise falls
+back to `name_for_block(id).and_then(lookup)` - the existing
+hand-coded special_models table.
+
+On a placeholder pack (no blockstate JSON on disk), the new path
+always returns None, so behavior is unchanged.
+
+On a live MC pack, the new path resolves all simple variant-form
+blocks (stone, dirt, grass_block, oak_log, cobblestone, glass,
+oak_planks, sand, wool, sea_lantern, ...) directly from their
+blockstate + model JSON files without any hand-coded mapping.
+
+### W39.4 - name_map coverage audit (Task D)
+
+Total block IDs in BLOCK_TYPES: 1..=168.
+
+IDs in BLOCK_NAME_MAP: 1-15, 20-22, 26-28, 35-37, 41-42, 44-47,
+49-67, 68-76, 80-82, 83-168.
+
+Block IDs that are ACTUAL placeable blocks but MISSING from
+BLOCK_NAME_MAP (so resolve_block_model cannot find their blockstate):
+
+| ID | Name | Reason missing |
+|----|------|----------------|
+| 77 | oak_door | item-only sprite in ITEM_NAME_MAP; shape handled by special_models::name_for_block |
+| 78 | oak_door_upper | same (upper half) |
+| 79 | iron_door | same (item-only) |
+
+Item-only IDs also missing from BLOCK_NAME_MAP (not relevant to
+block rendering - they have no placeable block form or are pure
+tool/food items):
+16-19 (pickaxes, feather), 23-25 (swords), 29-34 (shovels, axes),
+38-40 (buckets), 43 (iron_ingot), 48 (flint_and_steel).
+
+Conclusion: 77, 78, 79 (doors) are the only placeable blocks
+without a BLOCK_NAME_MAP entry. They are covered by the legacy
+special_models path (`name_for_block` + `lookup`). Adding them
+to BLOCK_NAME_MAP is deferred since their MC blockstate uses the
+`half=lower/upper,facing=north/east/...` variant scheme that
+requires state-matching (W39 ships first-variant-only).
+
+### W39.5 - Tests
+
+New test module: `resource_pack/pipeline_tests.rs` (16 tests):
+
+- `first_variant_model_*` - 3 unit tests for the new BlockState method.
+- `resolve_stone_returns_cube_all_model` - full pipeline for id 1.
+- `resolve_dirt_*`, `resolve_grass_block_*`, `resolve_oak_log_*`,
+  `resolve_cobblestone_*`, `resolve_glass_*`, `resolve_oak_planks_*`,
+  `resolve_sand_*` - individual per-block pipeline tests.
+- `resolve_torch_returns_none_for_no_blockstate_file` - torch falls
+  through to special_models (no blockstate JSON in synthetic pack).
+- `resolve_gravel_returns_none_no_name_map_entry` - documents gap.
+- `ten_common_blocks_resolve_on_synthetic_pack` - aggregate: all 10
+  common blocks (stone, dirt, grass_block, sand, oak_log, oak_planks,
+  cobblestone, glass, white_wool, sea_lantern) resolve on a staged pack.
+- `model_for_block_falls_back_to_special_models_on_placeholder` -
+  torch still resolves via hand-coded table on placeholder pack.
+- `model_for_block_returns_none_for_stone_on_placeholder` - stone has
+  no special-model hand-code, so returns None on placeholder pack
+  (cube path handles it).
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/blockstates.rs`:
+  `BlockState::first_variant_model()` added.
+- `examples/voxel_demo_mp/src/resource_pack/special_models.rs`:
+  `resolve_block_model()` added; `model_for_block` updated to use
+  it as the primary path.
+- `examples/voxel_demo_mp/src/resource_pack/mod.rs`:
+  `mod pipeline_tests` added.
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  new file with 16 pipeline tests.
+- `docs/design/mc_fidelity.md`: this section.
+
+### Tests
+
+- bin: 1518 pass / 7 fail (7 pre-existing; +16 new pipeline tests).
+- lib: 589 pass / 0 fail.
+- clippy: 0 warnings.
+
+### Deferred
+
+- Task C (cube path through JSON): all blocks now go through
+  resolve_block_model first, but when that returns None (placeholder
+  pack) the cube path is still the fallback. Full "cube path dead"
+  change deferred - it would require the live MC pack to be present
+  in CI.
+- State-matching: `first_variant_model` picks the first variant.
+  Full `select_variant(state, props)` wiring deferred to a future
+  wave that carries per-block state on voxels.
+- Door blockstate variants (ids 77/78/79): multi-state facing=N/E/S/W
+  + half=lower/upper. Deferred until state-matching lands.
