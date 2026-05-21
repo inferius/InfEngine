@@ -726,11 +726,9 @@ fn w44_torch_down_face_not_culled_by_air_below() {
 /// (neighbour_opaque returning false for [0,1,0]), the up face IS
 /// emitted.
 ///
-/// Since the W42 gate prevents stone (id=1) from going through
-/// `emit_block_elements` normally, this test rebuilds the cache on a
-/// synthetic pack where stone resolves, and verifies the geometry
-/// contract: with the W44.5 fix, air is never treated as opaque so
-/// the up face is always emitted when there's air above.
+/// W45.5: W42 gate removed. Stone (id=1) now routes through the JSON
+/// pipeline when the cache has a model for it. This test verifies that
+/// the up face is correctly emitted when there is air above.
 #[test]
 fn w44_cube_all_model_up_face_emitted_when_air_above() {
     use glam::Vec3;
@@ -740,7 +738,6 @@ fn w44_cube_all_model_up_face_emitted_when_air_above() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     stage_cube_chain(root);
-    // Stage stone blockstate using "w43_emit" test helper approach.
     // Stage a blockstate for id=1 (stone) so the cache rebuilds with stone.
     stage_stone(root);
 
@@ -755,12 +752,7 @@ fn w44_cube_all_model_up_face_emitted_when_air_above() {
     let e = &model.elements[0];
     assert!(e.faces.up.as_ref().unwrap().cullface.is_some(), "up face has cullface");
 
-    // Now call emit_block_elements with stone id.
-    // IMPORTANT: the W42 gate in model_for_block_with_neighbors uses
-    // name_for_block(1) = None which would prevent stone from being
-    // processed. So this test exercises the CONTRACT of emit_block_elements
-    // via the w43 test's approach: directly call with neighbour_opaque
-    // that returns false (air above) vs true (opaque above).
+    // W45.5: W42 gate removed. Stone now goes through emit_block_elements.
     //
     // Case 1: all neighbours opaque -> all faces culled -> returns false.
     {
@@ -775,20 +767,20 @@ fn w44_cube_all_model_up_face_emitted_when_air_above() {
             NeighborStates::default(),
             |_| [0.0, 1.0],
             |_| 0,
-            |_: [i8; 3]| true, // all opaque -> all faces culled
+            |_: [i8; 3]| true, // all opaque -> all cullface faces culled
         );
-        // W42 gate: name_for_block(1) = None -> returns false immediately.
-        // This is expected - stone uses the cube mesher path.
+        // All 6 faces have cullface and all neighbours are opaque, so
+        // no faces emit -> result is false (nothing rendered).
         assert!(
             !result,
-            "W44.5 consistency: stone returns false on placeholder (W42 gate active)",
+            "stone: all neighbours opaque -> no faces emitted (W44.5 + W45.5)",
         );
         assert!(verts.is_empty());
     }
-    // Case 2: up is air (false), all others opaque. With W42 gate stone
-    // still returns false (no model via name_for_block). This confirms the
-    // W42 gate is still active and cube blocks use the cube mesher.
-    // The W44.5 fix applies to the main.rs closure, not here.
+    // Case 2: up is air (false), all others opaque. The up face has no
+    // cullface-match with opaque neighbour above since it IS cullface=Up
+    // and the UP neighbour is air (neighbour_opaque returns false), so
+    // the up face should be emitted. Other 5 faces are culled.
     {
         let mut verts: Vec<MeshVertex> = Vec::new();
         let mut idxs: Vec<u32> = Vec::new();
@@ -803,10 +795,12 @@ fn w44_cube_all_model_up_face_emitted_when_air_above() {
             |_| 0,
             |delta: [i8; 3]| !(delta[0] == 0 && delta[1] == 1 && delta[2] == 0),
         );
-        // W42 gate still active for stone -> returns false.
+        // W45.5: stone now routes through JSON path -> up face emits.
         assert!(
-            !result,
-            "stone with W42 gate returns false (uses cube path)",
+            result,
+            "stone with air above should emit up face via JSON pipeline (W45.5)",
         );
+        // Up face = 4 verts (one quad).
+        assert_eq!(verts.len(), 4, "only the up face should emit (4 verts)");
     }
 }
