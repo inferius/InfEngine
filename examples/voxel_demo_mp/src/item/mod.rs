@@ -645,6 +645,373 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: Some(97), max_stack: 64, icon: None,
         category: ItemCategory::BuildingBlock,
     },
+    // ---- W37.2: Wool colour variants (remaining 11) ----
+    ItemType {
+        id: 98, name: "orange_wool", display: Some("Orange Wool"),
+        places: Some(98), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 99, name: "magenta_wool", display: Some("Magenta Wool"),
+        places: Some(99), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 100, name: "light_blue_wool", display: Some("Light Blue Wool"),
+        places: Some(100), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 101, name: "lime_wool", display: Some("Lime Wool"),
+        places: Some(101), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 102, name: "pink_wool", display: Some("Pink Wool"),
+        places: Some(102), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 103, name: "gray_wool", display: Some("Gray Wool"),
+        places: Some(103), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 104, name: "light_gray_wool", display: Some("Light Gray Wool"),
+        places: Some(104), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 105, name: "cyan_wool", display: Some("Cyan Wool"),
+        places: Some(105), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 106, name: "purple_wool", display: Some("Purple Wool"),
+        places: Some(106), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 107, name: "brown_wool", display: Some("Brown Wool"),
+        places: Some(107), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 108, name: "black_wool", display: Some("Black Wool"),
+        places: Some(108), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W37.2: Stone family extras ----
+    ItemType {
+        id: 109, name: "mossy_cobblestone", display: Some("Mossy Cobblestone"),
+        places: Some(109), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 110, name: "stone_bricks", display: Some("Stone Bricks"),
+        places: Some(110), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 111, name: "mossy_stone_bricks", display: Some("Mossy Stone Bricks"),
+        places: Some(111), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 112, name: "cracked_stone_bricks", display: Some("Cracked Stone Bricks"),
+        places: Some(112), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 113, name: "chiseled_stone_bricks", display: Some("Chiseled Stone Bricks"),
+        places: Some(113), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 114, name: "polished_granite", display: Some("Polished Granite"),
+        places: Some(114), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 115, name: "polished_diorite", display: Some("Polished Diorite"),
+        places: Some(115), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 116, name: "polished_andesite", display: Some("Polished Andesite"),
+        places: Some(116), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Ores ----
+    ItemType {
+        id: 117, name: "gold_ore", display: Some("Gold Ore"),
+        places: Some(117), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 118, name: "diamond_ore", display: Some("Diamond Ore"),
+        places: Some(118), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 119, name: "redstone_ore", display: Some("Redstone Ore"),
+        places: Some(119), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 120, name: "lapis_ore", display: Some("Lapis Ore"),
+        places: Some(120), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 121, name: "emerald_ore", display: Some("Emerald Ore"),
+        places: Some(121), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 122, name: "copper_ore", display: Some("Copper Ore"),
+        places: Some(122), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Deepslate ore variants ----
+    ItemType {
+        id: 123, name: "deepslate_coal_ore", display: Some("Deepslate Coal Ore"),
+        places: Some(123), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 124, name: "deepslate_iron_ore", display: Some("Deepslate Iron Ore"),
+        places: Some(124), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 125, name: "deepslate_diamond_ore", display: Some("Deepslate Diamond Ore"),
+        places: Some(125), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 126, name: "deepslate_gold_ore", display: Some("Deepslate Gold Ore"),
+        places: Some(126), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Wood variants - acacia ----
+    ItemType {
+        id: 127, name: "acacia_log", display: Some("Acacia Log"),
+        places: Some(127), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 128, name: "acacia_planks", display: Some("Acacia Planks"),
+        places: Some(128), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 129, name: "acacia_leaves", display: Some("Acacia Leaves"),
+        places: Some(129), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Spruce ----
+    ItemType {
+        id: 130, name: "spruce_log", display: Some("Spruce Log"),
+        places: Some(130), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 131, name: "spruce_planks", display: Some("Spruce Planks"),
+        places: Some(131), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 132, name: "spruce_leaves", display: Some("Spruce Leaves"),
+        places: Some(132), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Jungle ----
+    ItemType {
+        id: 133, name: "jungle_log", display: Some("Jungle Log"),
+        places: Some(133), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 134, name: "jungle_planks", display: Some("Jungle Planks"),
+        places: Some(134), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 135, name: "jungle_leaves", display: Some("Jungle Leaves"),
+        places: Some(135), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Dark oak ----
+    ItemType {
+        id: 136, name: "dark_oak_log", display: Some("Dark Oak Log"),
+        places: Some(136), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 137, name: "dark_oak_planks", display: Some("Dark Oak Planks"),
+        places: Some(137), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 138, name: "dark_oak_leaves", display: Some("Dark Oak Leaves"),
+        places: Some(138), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Flowers ----
+    ItemType {
+        id: 139, name: "allium", display: None,
+        places: Some(139), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 140, name: "azure_bluet", display: Some("Azure Bluet"),
+        places: Some(140), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 141, name: "red_tulip", display: Some("Red Tulip"),
+        places: Some(141), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 142, name: "orange_tulip", display: Some("Orange Tulip"),
+        places: Some(142), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 143, name: "white_tulip", display: Some("White Tulip"),
+        places: Some(143), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 144, name: "pink_tulip", display: Some("Pink Tulip"),
+        places: Some(144), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 145, name: "oxeye_daisy", display: Some("Oxeye Daisy"),
+        places: Some(145), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 146, name: "cornflower", display: None,
+        places: Some(146), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 147, name: "lily_of_the_valley", display: Some("Lily of the Valley"),
+        places: Some(147), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    // ---- W37.2: Misc terrain ----
+    ItemType {
+        id: 148, name: "end_stone", display: Some("End Stone"),
+        places: Some(148), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 149, name: "soul_sand", display: Some("Soul Sand"),
+        places: Some(149), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 150, name: "soul_soil", display: Some("Soul Soil"),
+        places: Some(150), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 151, name: "bone_block", display: Some("Bone Block"),
+        places: Some(151), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 152, name: "mycelium", display: None,
+        places: Some(152), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    ItemType {
+        id: 153, name: "podzol", display: None,
+        places: Some(153), max_stack: 64, icon: None,
+        category: ItemCategory::BuildingBlock,
+    },
+    // ---- W37.2: Gold + diamond tools ----
+    ItemType {
+        id: 154, name: "pickaxe_gold", display: Some("Golden Pickaxe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 155, name: "pickaxe_diamond", display: Some("Diamond Pickaxe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 156, name: "sword_gold", display: Some("Golden Sword"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Weapon,
+    },
+    ItemType {
+        id: 157, name: "sword_diamond", display: Some("Diamond Sword"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Weapon,
+    },
+    ItemType {
+        id: 158, name: "shovel_gold", display: Some("Golden Shovel"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 159, name: "shovel_diamond", display: Some("Diamond Shovel"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 160, name: "axe_gold", display: Some("Golden Axe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    ItemType {
+        id: 161, name: "axe_diamond", display: Some("Diamond Axe"),
+        places: None, max_stack: 1, icon: None,
+        category: ItemCategory::Tool,
+    },
+    // ---- W37.2: Food items (item-only, places = None) ----
+    ItemType {
+        id: 162, name: "apple", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 163, name: "bread", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 164, name: "cooked_beef", display: Some("Cooked Beef (Steak)"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 165, name: "raw_chicken", display: Some("Raw Chicken"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 166, name: "cooked_chicken", display: Some("Cooked Chicken"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 167, name: "cookie", display: None,
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
+    ItemType {
+        id: 168, name: "melon_slice", display: Some("Melon Slice"),
+        places: None, max_stack: 64, icon: None,
+        category: ItemCategory::Food,
+    },
 ];
 
 // ---------------------------------------------------------------

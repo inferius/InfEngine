@@ -172,6 +172,110 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
         top: "deepslate_top", bottom: "deepslate_top", sides: "deepslate",
     },
     BlockNameMap { infengine_id: 97, block: "calcite",          top: "", bottom: "", sides: "" },
+    // W37.2 - wool colour variants (ids 98..=108).
+    BlockNameMap { infengine_id: 98,  block: "orange_wool",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 99,  block: "magenta_wool",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 100, block: "light_blue_wool", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 101, block: "lime_wool",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 102, block: "pink_wool",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 103, block: "gray_wool",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 104, block: "light_gray_wool", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 105, block: "cyan_wool",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 106, block: "purple_wool",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 107, block: "brown_wool",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 108, block: "black_wool",      top: "", bottom: "", sides: "" },
+    // Stone family extras (ids 109..=116).
+    BlockNameMap { infengine_id: 109, block: "mossy_cobblestone",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 110, block: "stone_bricks",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 111, block: "mossy_stone_bricks",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 112, block: "cracked_stone_bricks", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 113, block: "chiseled_stone_bricks",top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 114, block: "polished_granite",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 115, block: "polished_diorite",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 116, block: "polished_andesite",    top: "", bottom: "", sides: "" },
+    // Ores (ids 117..=126).
+    BlockNameMap { infengine_id: 117, block: "gold_ore",               top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 118, block: "diamond_ore",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 119, block: "redstone_ore",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 120, block: "lapis_ore",              top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 121, block: "emerald_ore",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 122, block: "copper_ore",             top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 123, block: "deepslate_coal_ore",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 124, block: "deepslate_iron_ore",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 125, block: "deepslate_diamond_ore",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 126, block: "deepslate_gold_ore",     top: "", bottom: "", sides: "" },
+    // Wood variants: acacia (ids 127..=129).
+    BlockNameMap {
+        infengine_id: 127, block: "acacia_log",
+        top: "acacia_log_top", bottom: "acacia_log_top", sides: "acacia_log",
+    },
+    BlockNameMap { infengine_id: 128, block: "acacia_planks",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 129, block: "acacia_leaves",  top: "", bottom: "", sides: "" },
+    // Spruce (ids 130..=132).
+    BlockNameMap {
+        infengine_id: 130, block: "spruce_log",
+        top: "spruce_log_top", bottom: "spruce_log_top", sides: "spruce_log",
+    },
+    BlockNameMap { infengine_id: 131, block: "spruce_planks",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 132, block: "spruce_leaves",  top: "", bottom: "", sides: "" },
+    // Jungle (ids 133..=135).
+    BlockNameMap {
+        infengine_id: 133, block: "jungle_log",
+        top: "jungle_log_top", bottom: "jungle_log_top", sides: "jungle_log",
+    },
+    BlockNameMap { infengine_id: 134, block: "jungle_planks",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 135, block: "jungle_leaves",  top: "", bottom: "", sides: "" },
+    // Dark oak (ids 136..=138).
+    BlockNameMap {
+        infengine_id: 136, block: "dark_oak_log",
+        top: "dark_oak_log_top", bottom: "dark_oak_log_top", sides: "dark_oak_log",
+    },
+    BlockNameMap { infengine_id: 137, block: "dark_oak_planks", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 138, block: "dark_oak_leaves", top: "", bottom: "", sides: "" },
+    // Flowers (ids 139..=147).
+    BlockNameMap { infengine_id: 139, block: "allium",             top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 140, block: "azure_bluet",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 141, block: "red_tulip",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 142, block: "orange_tulip",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 143, block: "white_tulip",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 144, block: "pink_tulip",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 145, block: "oxeye_daisy",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 146, block: "cornflower",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 147, block: "lily_of_the_valley", top: "", bottom: "", sides: "" },
+    // Misc terrain (ids 148..=153).
+    BlockNameMap { infengine_id: 148, block: "end_stone",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 149, block: "soul_sand",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 150, block: "soul_soil",          top: "", bottom: "", sides: "" },
+    BlockNameMap {
+        infengine_id: 151, block: "bone_block",
+        top: "bone_block_top", bottom: "bone_block_top", sides: "bone_block_side",
+    },
+    BlockNameMap {
+        infengine_id: 152, block: "mycelium",
+        top: "mycelium_top", bottom: "dirt", sides: "mycelium_side",
+    },
+    BlockNameMap {
+        infengine_id: 153, block: "podzol",
+        top: "podzol_top", bottom: "dirt", sides: "podzol_side",
+    },
+    // Gold + diamond tools (ids 154..=161). No block texture; icons
+    // resolve via ITEM_NAME_MAP to MC item sprites.
+    BlockNameMap { infengine_id: 154, block: "golden_pickaxe",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 155, block: "diamond_pickaxe", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 156, block: "golden_sword",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 157, block: "diamond_sword",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 158, block: "golden_shovel",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 159, block: "diamond_shovel",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 160, block: "golden_axe",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 161, block: "diamond_axe",     top: "", bottom: "", sides: "" },
+    // Food items (ids 162..=168). Block face resolves via ITEM_NAME_MAP.
+    BlockNameMap { infengine_id: 162, block: "apple",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 163, block: "bread",           top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 164, block: "cooked_beef",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 165, block: "chicken_raw",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 166, block: "chicken_cooked",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 167, block: "cookie",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 168, block: "melon_slice",     top: "", bottom: "", sides: "" },
 ];
 
 /// Look up the (block, top, bottom, sides) MC names for an infengine
@@ -230,6 +334,23 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     ItemNameMap { infengine_id: 77, item: "oak_door" },
     ItemNameMap { infengine_id: 78, item: "oak_door" },
     ItemNameMap { infengine_id: 79, item: "iron_door" },
+    // W37.2 gold + diamond tools.
+    ItemNameMap { infengine_id: 154, item: "golden_pickaxe" },
+    ItemNameMap { infengine_id: 155, item: "diamond_pickaxe" },
+    ItemNameMap { infengine_id: 156, item: "golden_sword" },
+    ItemNameMap { infengine_id: 157, item: "diamond_sword" },
+    ItemNameMap { infengine_id: 158, item: "golden_shovel" },
+    ItemNameMap { infengine_id: 159, item: "diamond_shovel" },
+    ItemNameMap { infengine_id: 160, item: "golden_axe" },
+    ItemNameMap { infengine_id: 161, item: "diamond_axe" },
+    // W37.2 food item sprites.
+    ItemNameMap { infengine_id: 162, item: "apple" },
+    ItemNameMap { infengine_id: 163, item: "bread" },
+    ItemNameMap { infengine_id: 164, item: "cooked_beef" },
+    ItemNameMap { infengine_id: 165, item: "chicken_raw" },
+    ItemNameMap { infengine_id: 166, item: "chicken_cooked" },
+    ItemNameMap { infengine_id: 167, item: "cookie" },
+    ItemNameMap { infengine_id: 168, item: "melon_slice" },
 ];
 
 pub(crate) fn lookup_item(id: u16) -> Option<&'static str> {
@@ -329,5 +450,39 @@ mod tests {
             "Only {resolved} of {} IDs resolve through name_map (need >= 70)",
             item_ids.len()
         );
+    }
+
+    // W37.2 - spot-check new block entries (wool, ores, wood, terrain).
+    #[test]
+    fn w37_new_blocks_in_name_map() {
+        assert_eq!(lookup_block(98).map(|m| m.block),  Some("orange_wool"));
+        assert_eq!(lookup_block(108).map(|m| m.block), Some("black_wool"));
+        assert_eq!(lookup_block(110).map(|m| m.block), Some("stone_bricks"));
+        assert_eq!(lookup_block(118).map(|m| m.block), Some("diamond_ore"));
+        assert_eq!(lookup_block(127).map(|m| m.block), Some("acacia_log"));
+        assert_eq!(lookup_block(127).map(|m| m.top),   Some("acacia_log_top"));
+        assert_eq!(lookup_block(130).map(|m| m.top),   Some("spruce_log_top"));
+        assert_eq!(lookup_block(145).map(|m| m.block), Some("oxeye_daisy"));
+        assert_eq!(lookup_block(151).map(|m| m.top),   Some("bone_block_top"));
+        assert_eq!(lookup_block(152).map(|m| m.top),   Some("mycelium_top"));
+        assert_eq!(lookup_block(162).map(|m| m.block), Some("apple"));
+    }
+
+    // W37.2 - spot-check new tool + food item-name overrides.
+    #[test]
+    fn w37_new_item_overrides() {
+        assert_eq!(lookup_item(154), Some("golden_pickaxe"));
+        assert_eq!(lookup_item(155), Some("diamond_pickaxe"));
+        assert_eq!(lookup_item(156), Some("golden_sword"));
+        assert_eq!(lookup_item(157), Some("diamond_sword"));
+        assert_eq!(lookup_item(158), Some("golden_shovel"));
+        assert_eq!(lookup_item(159), Some("diamond_shovel"));
+        assert_eq!(lookup_item(160), Some("golden_axe"));
+        assert_eq!(lookup_item(161), Some("diamond_axe"));
+        assert_eq!(lookup_item(162), Some("apple"));
+        assert_eq!(lookup_item(163), Some("bread"));
+        assert_eq!(lookup_item(164), Some("cooked_beef"));
+        assert_eq!(lookup_item(165), Some("chicken_raw"));
+        assert_eq!(lookup_item(168), Some("melon_slice"));
     }
 }

@@ -854,4 +854,467 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["calcite.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["calcite.png", "stone.png"], keep_alpha: false },
     },
+    // ---------------------------------------------------------------
+    // W37.2 - Bulk MC item/block registry import.
+    //
+    // IDs 98..=173. All entries follow the same atlas-fallback
+    // pattern as W35.3: primary file is the canonical MC texture
+    // name; fallback is a representative vanilla stone/planks tile
+    // so the block always renders even without a resource pack.
+    //
+    // Wool colors (ids 98..=108). White wool (id 11) + blue/red/
+    // yellow/green (ids 91..=94) already existed; we add the
+    // remaining 11 dye variants here.
+    // ---------------------------------------------------------------
+    BlockType {
+        id: 98, name: "orange_wool", color: [0.88, 0.52, 0.15], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["orange_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["orange_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["orange_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 99, name: "magenta_wool", color: [0.78, 0.28, 0.72], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["magenta_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["magenta_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["magenta_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 100, name: "light_blue_wool", color: [0.42, 0.68, 0.90], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["light_blue_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["light_blue_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["light_blue_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 101, name: "lime_wool", color: [0.52, 0.82, 0.22], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["lime_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["lime_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["lime_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 102, name: "pink_wool", color: [0.92, 0.58, 0.65], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["pink_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["pink_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["pink_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 103, name: "gray_wool", color: [0.40, 0.40, 0.40], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["gray_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["gray_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["gray_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 104, name: "light_gray_wool", color: [0.68, 0.68, 0.68], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["light_gray_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["light_gray_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["light_gray_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 105, name: "cyan_wool", color: [0.18, 0.52, 0.58], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cyan_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cyan_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cyan_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 106, name: "purple_wool", color: [0.50, 0.18, 0.68], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["purple_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["purple_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["purple_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 107, name: "brown_wool", color: [0.52, 0.32, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["brown_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["brown_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["brown_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 108, name: "black_wool", color: [0.12, 0.12, 0.12], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["black_wool.png", "white_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["black_wool.png", "white_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["black_wool.png", "white_wool.png"], keep_alpha: false },
+    },
+    // Stone family extras (ids 109..=116).
+    BlockType {
+        id: 109, name: "mossy_cobblestone", color: [0.38, 0.48, 0.36], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["mossy_cobblestone.png", "cobblestone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["mossy_cobblestone.png", "cobblestone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["mossy_cobblestone.png", "cobblestone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 110, name: "stone_bricks", color: [0.50, 0.50, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["stone_bricks.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["stone_bricks.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["stone_bricks.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 111, name: "mossy_stone_bricks", color: [0.40, 0.52, 0.40], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["mossy_stone_bricks.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["mossy_stone_bricks.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["mossy_stone_bricks.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 112, name: "cracked_stone_bricks", color: [0.48, 0.48, 0.52], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cracked_stone_bricks.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cracked_stone_bricks.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cracked_stone_bricks.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 113, name: "chiseled_stone_bricks", color: [0.52, 0.52, 0.56], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chiseled_stone_bricks.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chiseled_stone_bricks.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chiseled_stone_bricks.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 114, name: "polished_granite", color: [0.72, 0.52, 0.44], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["polished_granite.png", "granite.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_granite.png", "granite.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_granite.png", "granite.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 115, name: "polished_diorite", color: [0.86, 0.86, 0.86], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["polished_diorite.png", "diorite.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_diorite.png", "diorite.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_diorite.png", "diorite.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 116, name: "polished_andesite", color: [0.62, 0.62, 0.62], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["polished_andesite.png", "andesite.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_andesite.png", "andesite.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_andesite.png", "andesite.png"], keep_alpha: false },
+    },
+    // Ores (ids 117..=124). Coal (13) + iron (14) already exist.
+    BlockType {
+        id: 117, name: "gold_ore", color: [0.88, 0.78, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["gold_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["gold_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["gold_ore.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 118, name: "diamond_ore", color: [0.45, 0.85, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diamond_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diamond_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diamond_ore.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 119, name: "redstone_ore", color: [0.72, 0.22, 0.22], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["redstone_ore.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 120, name: "lapis_ore", color: [0.28, 0.42, 0.72], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["lapis_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["lapis_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["lapis_ore.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 121, name: "emerald_ore", color: [0.28, 0.75, 0.38], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["emerald_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["emerald_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["emerald_ore.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 122, name: "copper_ore", color: [0.72, 0.45, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["copper_ore.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["copper_ore.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["copper_ore.png", "stone.png"], keep_alpha: false },
+    },
+    // Deepslate ore variants (ids 123..=126).
+    BlockType {
+        id: 123, name: "deepslate_coal_ore", color: [0.28, 0.28, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_coal_ore.png", "deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_coal_ore.png", "deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_coal_ore.png", "deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 124, name: "deepslate_iron_ore", color: [0.52, 0.48, 0.45], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_iron_ore.png", "deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_iron_ore.png", "deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_iron_ore.png", "deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 125, name: "deepslate_diamond_ore", color: [0.34, 0.56, 0.56], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_diamond_ore.png", "deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_diamond_ore.png", "deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_diamond_ore.png", "deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 126, name: "deepslate_gold_ore", color: [0.60, 0.56, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_gold_ore.png", "deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_gold_ore.png", "deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_gold_ore.png", "deepslate.png"], keep_alpha: false },
+    },
+    // Wood variants: acacia (ids 127..=129).
+    BlockType {
+        id: 127, name: "acacia_log", color: [0.60, 0.42, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 3, row: 1, files: &["acacia_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["acacia_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["acacia_log.png", "oak_log.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 128, name: "acacia_planks", color: [0.82, 0.52, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 2, files: &["acacia_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["acacia_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["acacia_planks.png", "oak_planks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 129, name: "acacia_leaves", color: [0.30, 0.52, 0.22], transparent: true, flags: 0,
+        top: TileSpec { col: 1, row: 1, files: &["acacia_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        bottom: TileSpec { col: 1, row: 1, files: &["acacia_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        sides: TileSpec { col: 1, row: 1, files: &["acacia_leaves.png", "oak_leaves.png"], keep_alpha: true },
+    },
+    // Spruce (ids 130..=132).
+    BlockType {
+        id: 130, name: "spruce_log", color: [0.40, 0.30, 0.20], transparent: false, flags: 0,
+        top: TileSpec { col: 3, row: 1, files: &["spruce_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["spruce_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["spruce_log.png", "oak_log.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 131, name: "spruce_planks", color: [0.58, 0.40, 0.25], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 2, files: &["spruce_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["spruce_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["spruce_planks.png", "oak_planks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 132, name: "spruce_leaves", color: [0.22, 0.40, 0.18], transparent: true, flags: 0,
+        top: TileSpec { col: 1, row: 1, files: &["spruce_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        bottom: TileSpec { col: 1, row: 1, files: &["spruce_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        sides: TileSpec { col: 1, row: 1, files: &["spruce_leaves.png", "oak_leaves.png"], keep_alpha: true },
+    },
+    // Jungle (ids 133..=135).
+    BlockType {
+        id: 133, name: "jungle_log", color: [0.50, 0.38, 0.24], transparent: false, flags: 0,
+        top: TileSpec { col: 3, row: 1, files: &["jungle_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["jungle_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["jungle_log.png", "oak_log.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 134, name: "jungle_planks", color: [0.68, 0.50, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 2, files: &["jungle_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["jungle_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["jungle_planks.png", "oak_planks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 135, name: "jungle_leaves", color: [0.28, 0.55, 0.20], transparent: true, flags: 0,
+        top: TileSpec { col: 1, row: 1, files: &["jungle_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        bottom: TileSpec { col: 1, row: 1, files: &["jungle_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        sides: TileSpec { col: 1, row: 1, files: &["jungle_leaves.png", "oak_leaves.png"], keep_alpha: true },
+    },
+    // Dark oak (ids 136..=138).
+    BlockType {
+        id: 136, name: "dark_oak_log", color: [0.28, 0.20, 0.12], transparent: false, flags: 0,
+        top: TileSpec { col: 3, row: 1, files: &["dark_oak_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 3, row: 1, files: &["dark_oak_log_top.png", "oak_log_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 1, files: &["dark_oak_log.png", "oak_log.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 137, name: "dark_oak_planks", color: [0.38, 0.25, 0.15], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 2, files: &["dark_oak_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["dark_oak_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["dark_oak_planks.png", "oak_planks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 138, name: "dark_oak_leaves", color: [0.20, 0.40, 0.14], transparent: true, flags: 0,
+        top: TileSpec { col: 1, row: 1, files: &["dark_oak_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        bottom: TileSpec { col: 1, row: 1, files: &["dark_oak_leaves.png", "oak_leaves.png"], keep_alpha: true },
+        sides: TileSpec { col: 1, row: 1, files: &["dark_oak_leaves.png", "oak_leaves.png"], keep_alpha: true },
+    },
+    // Flowers (ids 139..=147). Poppy (20), dandelion (21), blue_orchid
+    // (22) already exist; adding remaining common flowers.
+    BlockType {
+        id: 139, name: "allium", color: [0.65, 0.45, 0.90], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["allium.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["allium.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["allium.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 140, name: "azure_bluet", color: [0.78, 0.85, 0.90], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["azure_bluet.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["azure_bluet.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["azure_bluet.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 141, name: "red_tulip", color: [0.85, 0.28, 0.22], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["red_tulip.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["red_tulip.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["red_tulip.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 142, name: "orange_tulip", color: [0.92, 0.58, 0.22], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["orange_tulip.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["orange_tulip.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["orange_tulip.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 143, name: "white_tulip", color: [0.92, 0.92, 0.90], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["white_tulip.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["white_tulip.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["white_tulip.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 144, name: "pink_tulip", color: [0.95, 0.72, 0.78], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["pink_tulip.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["pink_tulip.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["pink_tulip.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 145, name: "oxeye_daisy", color: [0.92, 0.92, 0.82], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["oxeye_daisy.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["oxeye_daisy.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["oxeye_daisy.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 146, name: "cornflower", color: [0.38, 0.55, 0.95], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["cornflower.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["cornflower.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["cornflower.png", "poppy.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 147, name: "lily_of_the_valley", color: [0.95, 0.98, 0.92], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["lily_of_the_valley.png", "poppy.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["lily_of_the_valley.png", "poppy.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["lily_of_the_valley.png", "poppy.png"], keep_alpha: true },
+    },
+    // Misc terrain (ids 148..=153).
+    BlockType {
+        id: 148, name: "end_stone", color: [0.90, 0.90, 0.72], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["end_stone.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["end_stone.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["end_stone.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 149, name: "soul_sand", color: [0.38, 0.28, 0.22], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["soul_sand.png", "sand.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["soul_sand.png", "sand.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["soul_sand.png", "sand.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 150, name: "soul_soil", color: [0.32, 0.24, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["soul_soil.png", "sand.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["soul_soil.png", "sand.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["soul_soil.png", "sand.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 151, name: "bone_block", color: [0.88, 0.88, 0.80], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bone_block_top.png", "bone_block_side.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bone_block_top.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bone_block_side.png", "stone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 152, name: "mycelium", color: [0.55, 0.42, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["mycelium_top.png", "dirt.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["dirt.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["mycelium_side.png", "dirt.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 153, name: "podzol", color: [0.40, 0.28, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["podzol_top.png", "dirt.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["dirt.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["podzol_side.png", "dirt.png"], keep_alpha: false },
+    },
+    // Gold / diamond tools (ids 154..=161).
+    // Tools have transparent=false + no flags (same as pickaxe_wood).
+    BlockType {
+        id: 154, name: "pickaxe_gold", color: [0.92, 0.80, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["golden_pickaxe.png", "gold_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["golden_pickaxe.png", "gold_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["golden_pickaxe.png", "gold_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 155, name: "pickaxe_diamond", color: [0.45, 0.85, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diamond_pickaxe.png", "diamond_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diamond_pickaxe.png", "diamond_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diamond_pickaxe.png", "diamond_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 156, name: "sword_gold", color: [0.92, 0.80, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["golden_sword.png", "gold_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["golden_sword.png", "gold_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["golden_sword.png", "gold_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 157, name: "sword_diamond", color: [0.45, 0.85, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diamond_sword.png", "diamond_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diamond_sword.png", "diamond_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diamond_sword.png", "diamond_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 158, name: "shovel_gold", color: [0.92, 0.80, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["golden_shovel.png", "gold_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["golden_shovel.png", "gold_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["golden_shovel.png", "gold_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 159, name: "shovel_diamond", color: [0.45, 0.85, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diamond_shovel.png", "diamond_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diamond_shovel.png", "diamond_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diamond_shovel.png", "diamond_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 160, name: "axe_gold", color: [0.92, 0.80, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["golden_axe.png", "gold_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["golden_axe.png", "gold_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["golden_axe.png", "gold_ore.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 161, name: "axe_diamond", color: [0.45, 0.85, 0.85], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["diamond_axe.png", "diamond_ore.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["diamond_axe.png", "diamond_ore.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["diamond_axe.png", "diamond_ore.png"], keep_alpha: false },
+    },
+    // Food items - item-only, no block form. Stored here so the
+    // 1:1 BLOCK_TYPES / ITEM_TYPES mirror stays intact (ids
+    // 162..=168). Colors are indicative; these resolve via the
+    // ITEM_NAME_MAP to MC item sprites rather than block textures.
+    BlockType {
+        id: 162, name: "apple", color: [0.85, 0.22, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["apple.png", "red_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["apple.png", "red_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["apple.png", "red_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 163, name: "bread", color: [0.75, 0.55, 0.30], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["bread.png", "sandstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["bread.png", "sandstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["bread.png", "sandstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 164, name: "cooked_beef", color: [0.58, 0.30, 0.18], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cooked_beef.png", "netherrack.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cooked_beef.png", "netherrack.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cooked_beef.png", "netherrack.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 165, name: "raw_chicken", color: [0.92, 0.72, 0.65], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chicken_raw.png", "pink_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chicken_raw.png", "pink_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chicken_raw.png", "pink_wool.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 166, name: "cooked_chicken", color: [0.72, 0.55, 0.35], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chicken_cooked.png", "sandstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chicken_cooked.png", "sandstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chicken_cooked.png", "sandstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 167, name: "cookie", color: [0.78, 0.58, 0.35], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cookie.png", "sandstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cookie.png", "sandstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cookie.png", "sandstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 168, name: "melon_slice", color: [0.72, 0.88, 0.40], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["melon_slice.png", "melon_side.png", "lime_wool.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["melon_slice.png", "melon_side.png", "lime_wool.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["melon_slice.png", "melon_side.png", "lime_wool.png"], keep_alpha: false },
+    },
 ];
