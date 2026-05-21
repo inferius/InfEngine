@@ -424,8 +424,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Hemispheric ambient: a small sky + ground term.
-    let ambient_up = vec3<f32>(0.20, 0.22, 0.28);
-    let ambient_down = vec3<f32>(0.08, 0.08, 0.10);
+    // W35.1: raised and warmed to match MC's more saturated look.
+    // Previous values (0.20, 0.22, 0.28) were too cold and dark,
+    // desaturating colours like obsidian. New values are brighter
+    // with a neutral-warm tint instead of the blue tint.
+    let ambient_up = vec3<f32>(0.34, 0.36, 0.40);
+    let ambient_down = vec3<f32>(0.18, 0.17, 0.16);
     let amb_t = (n.y * 0.5) + 0.5;
     let ambient = mix(ambient_down, ambient_up, amb_t) * albedo;
 
