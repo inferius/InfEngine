@@ -1819,3 +1819,112 @@ latest physical size. No code change applied (research task).
 
 - `infengine_voxel`: 20 pass / 0 fail (up from 19, +1 flat-floor test)
 - `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged, +4 W34.1 tests)
+
+---
+
+## Wave 35
+
+### W35.1 - Color saturation / ambient lighting fix
+
+**Root cause**: the hemispheric ambient term in `mesh3d.wgsl` used
+cold blue-tinted values `(0.20, 0.22, 0.28)` for the sky hemi and
+`(0.08, 0.08, 0.10)` for the ground hemi. This added a pervasive
+blue wash that desaturated all blocks - most visibly obsidian which
+appeared as a muted grey-purple instead of MC's vibrant black-purple.
+
+The surface format (selected as sRGB in `lib.rs`) and the atlas
+upload format (`Rgba8UnormSrgb` in `mesh3d.rs`) are both correct; the
+sRGB pipeline was already in place.
+
+**Fix**: raised and warmed the ambient coefficients:
+
+- `ambient_up`:  `(0.20, 0.22, 0.28)` -> `(0.34, 0.36, 0.40)`
+- `ambient_down`: `(0.08, 0.08, 0.10)` -> `(0.18, 0.17, 0.16)`
+
+The new values are ~65% brighter overall and have a warm-neutral tint
+(very slightly warm at the ground, slightly blue-neutral at the sky)
+instead of a cold blue tint. This brings saturation closer to MC's
+look while keeping the hemispheric sky/ground gradient.
+
+### W35.2 - Wall-torch unification
+
+MC has one torch item that auto-selects the wall-torch block when placed
+on a side face. We now do the same for `redstone_torch` / `soul_torch`:
+
+- `redstone_wall_torch` (id 51) and `soul_wall_torch` (id 53) added to
+  `CREATIVE_BLACKLIST` - hidden from the creative inventory.
+- Block placement code in `main.rs` computes `placed_block`: when
+  `hit.normal[1] == 0` (side face), `REDSTONE_TORCH_ID` is mapped to
+  `REDSTONE_WALL_TORCH_ID` and `SOUL_TORCH_ID` to `SOUL_WALL_TORCH_ID`
+  before writing the world block and broadcast edit.
+- Mining drop remap: a mined wall-torch variant drops the floor-torch
+  item so the inventory always gets the holdable/placeable id.
+
+The plain `torch` (id 10) already handled wall vs. floor via the
+`torch_orient` map and specialized rendering - no change needed there.
+
+### W35.3 - Item registry expansion (+15 blocks)
+
+Added 15 new block+item pairs covering four categories (ids 83..=97):
+
+| ID | Name | Category |
+|----|------|----------|
+| 83 | granite | BuildingBlock |
+| 84 | diorite | BuildingBlock |
+| 85 | andesite | BuildingBlock |
+| 86 | bricks | BuildingBlock |
+| 87 | smooth_stone | BuildingBlock |
+| 88 | birch_log | BuildingBlock |
+| 89 | birch_planks | BuildingBlock |
+| 90 | birch_leaves | BuildingBlock |
+| 91 | blue_wool | Decoration |
+| 92 | red_wool | Decoration |
+| 93 | yellow_wool | Decoration |
+| 94 | green_wool | Decoration |
+| 95 | tuff | BuildingBlock |
+| 96 | deepslate | BuildingBlock |
+| 97 | calcite | BuildingBlock |
+
+Each entry touches three files: `block/registry.rs` (BlockType + color),
+`block/ids.rs` (ID constant), `item/mod.rs` (ItemType), and
+`resource_pack/name_map.rs` (MC asset name for texture lookup).
+
+Block textures fall back gracefully to `stone.png` / `planks_oak.png` /
+`leaves_oak.tga` / `white_wool.png` when the MC asset pack is absent.
+
+Deferred to W36: oak_slab_top hidden from creative, iron_door_upper
+hidden, polished variants (polished_granite etc.), orange/lime/cyan/
+magenta/purple/light_blue/brown/pink/black/light_gray/gray wool, more
+food crops, sea_lantern + prismarine, beacon, end_stone.
+
+### W35.4 - Creative bucket never fills or empties
+
+In `instabuild` (creative) mode:
+
+- **Empty bucket aimed at water/lava source**: the source block is NOT
+  removed and the inventory slot stays as an empty bucket. Mirrors MC's
+  `ItemBucket.use` path which skips the fill + remove step when
+  `player.getAbilities().instabuild`.
+- **Filled bucket placed into the world**: the liquid source block IS
+  placed, but the inventory slot stays as the filled bucket (does not
+  convert to empty). Mirrors MC's same abilities gate.
+
+Survival mode behavior is unchanged in both cases.
+
+### Files changed
+
+- `crates/infengine_render/src/mesh3d.wgsl`: W35.1 ambient values
+- `examples/voxel_demo_mp/src/main.rs`: W35.4 instabuild bucket gates +
+  W35.2 torch auto-wall-variant placement + drop remap
+- `examples/voxel_demo_mp/src/creative_tab.rs`: W35.2 CREATIVE_BLACKLIST
+  adds ids 51 + 53
+- `examples/voxel_demo_mp/src/block/registry.rs`: W35.3 ids 83..=97
+- `examples/voxel_demo_mp/src/block/ids.rs`: W35.3 ID constants
+- `examples/voxel_demo_mp/src/item/mod.rs`: W35.3 ItemType rows
+- `examples/voxel_demo_mp/src/resource_pack/name_map.rs`: W35.3 MC asset
+  name entries
+
+### Tests
+
+- `infengine_voxel`: 20 pass / 0 fail (unchanged)
+- `voxel_demo_mp`: 1499 pass / 7 fail (pre-existing unchanged)
