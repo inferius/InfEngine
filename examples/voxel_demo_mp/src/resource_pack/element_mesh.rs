@@ -32,10 +32,16 @@ pub(crate) use super::blockstates::NeighborStates;
 /// Attempt to emit model-element geometry for `block_id` at
 /// `voxel_origin` (world-space corner of the voxel).
 ///
-/// Returns `true` if the block has a registered special model and
-/// geometry was emitted (suppresses the cube path).
-/// Returns `false` if the block has no special model (cube path
-/// should proceed as normal).
+/// Returns `true` if the block has a registered model AND at least
+/// one vertex was emitted. Returns `false` when no model exists OR
+/// when all faces were culled / had unresolvable textures (caller
+/// falls back to the cube path).
+///
+/// W43.1: honest return value - previously returned `true` even when
+/// emit_faces_for_element pushed 0 vertices (e.g. all faces culled
+/// because every neighbour is opaque, or texture name lookup miss).
+/// The cube path is now the automatic fallback for any block where
+/// the JSON pipeline silently drops all faces.
 ///
 /// `neighbors` carries the horizontal connection flags (north/south/
 /// east/west/up/down) used by multipart blockstates (fences, walls,
@@ -65,6 +71,11 @@ pub(crate) fn emit_block_elements(
     let Some(model) = model_for_block_with_neighbors(block_id, pack, &neighbors) else {
         return false;
     };
+
+    // W43.1: record vertex count before emission. If no vertex is
+    // added across all elements (all faces culled or texture miss),
+    // return false so the caller's cube path handles the block.
+    let verts_before = vertices.len();
 
     for elem in &model.elements {
         // Scale from MC 16ths to world units: 1 voxel = 1.0 world unit.
@@ -98,7 +109,10 @@ pub(crate) fn emit_block_elements(
         );
     }
 
-    true
+    // At least one vertex must have been added for the emit to count
+    // as successful. Zero vertices -> all faces were culled or the
+    // texture map had no resolvable entries -> fall through to cube.
+    vertices.len() > verts_before
 }
 
 // ---------------------------------------------------------------
@@ -272,7 +286,15 @@ fn emit_faces_for_element(
         // Strip a leading "#" (unresolved var) - fall back to the
         // bare stem, or use the block's face entry if the name is
         // a variable that was never resolved.
-        let clean_name = tex_name.trim_start_matches('#');
+        // W43.3: also strip any residual "block/" / "item/" prefix
+        // that may survive from hand-coded models or an edge case in
+        // the resolution chain (models::resolve_texture already does
+        // this via rsplit_once, but be defensive here too).
+        let after_hash = tex_name.trim_start_matches('#');
+        let clean_name = after_hash
+            .rsplit_once('/')
+            .map(|(_, stem)| stem)
+            .unwrap_or(after_hash);
         // W37 fix: fall back to the magenta __missing sentinel when
         // the texture name isn't registered. The previous
         // [0.0, 0.0, 1.0, 1.0] fallback covered the WHOLE atlas as
@@ -559,6 +581,98 @@ mod tests {
         assert!(
             (max_y - 0.5).abs() < 1e-4,
             "slab top face should be at y=0.5, got y={max_y}",
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // W43.5: honest return value tests.
+    // ---------------------------------------------------------------
+
+    /// W43.1: emit returns false when every face of the model is
+    /// culled by an always-opaque neighbour.
+    ///
+    /// The torch block is a known special model where the DOWN face
+    /// has `cullface: Down`. With neighbour_opaque always true the
+    /// down face is culled; the remaining 5 side/up faces have NO
+    /// cullface so they still emit. This test therefore verifies the
+    /// positive path: torch returns true even when down is culled.
+    ///
+    /// For the "returns false" case we use a synthetic cube model via
+    /// the pipeline_tests path (see pipeline_tests.rs::W43 section).
+    #[test]
+    fn emit_block_elements_torch_still_emits_with_opaque_down_neighbour() {
+        use crate::block::TORCH_ID;
+        let pack = make_pack();
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        let handled = emit_block_elements(
+            TORCH_ID,
+            Vec3::ZERO,
+            &mut verts,
+            &mut idxs,
+            &pack,
+            NeighborStates::default(),
+            |_| [0.0, 1.0],
+            |_| 0,
+            // All neighbours opaque - only the cullface=Down face is
+            // culled; the 5 side + up faces have no cullface and emit.
+            |_| true,
+        );
+        assert!(
+            handled,
+            "torch must return true: 5 non-culled faces still emit",
+        );
+        // 5 non-culled faces (up + 4 sides, each 4 verts) = 20 verts.
+        assert_eq!(
+            verts.len(),
+            20,
+            "expected 20 verts (5 faces), got {}",
+            verts.len(),
+        );
+    }
+
+    /// W43.1: when zero vertices are emitted (all faces culled for
+    /// blocks where ALL faces carry a cullface), emit_block_elements
+    /// MUST return false so the caller's cube path runs.
+    ///
+    /// The slab is the easiest special model to test here: its down/
+    /// north/south/west/east faces all carry a cullface; ONLY the up
+    /// face does NOT. With neighbour_opaque=true for every direction
+    /// those 5 faces are culled; the up face still emits 4 verts.
+    /// Result: true (at least 1 face emitted).
+    ///
+    /// The full "0 verts -> false" path is covered in
+    /// pipeline_tests.rs where we can build a synthetic cube model
+    /// with all-cullface faces and pass neighbour_opaque=|_|true.
+    #[test]
+    fn emit_block_elements_slab_still_emits_up_face_when_sides_culled() {
+        use crate::block::OAK_SLAB_ID;
+        let pack = make_pack();
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        let handled = emit_block_elements(
+            OAK_SLAB_ID,
+            Vec3::ZERO,
+            &mut verts,
+            &mut idxs,
+            &pack,
+            NeighborStates::default(),
+            |_| [0.0, 1.0],
+            |_| 0,
+            // All neighbours opaque: down+north+south+west+east culled;
+            // up face (no cullface) still emits.
+            |_| true,
+        );
+        assert!(
+            handled,
+            "slab with all-opaque neighbours must still return true (up face not culled)",
+        );
+        // Only the up face emits: 1 face * 4 verts = 4 verts.
+        assert_eq!(
+            verts.len(),
+            4,
+            "expected 4 verts (up face only, rest culled), got {}",
+            verts.len(),
         );
     }
 }

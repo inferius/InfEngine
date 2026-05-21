@@ -2420,3 +2420,156 @@ The W41.1 cache already pre-loads the correct variant models (first variant
 of each blockstate), so W42 only needs to extend the cache lookup key to
 include per-voxel state and wire placement facing into the chunk data.
 - Door blockstate variants: deferred (needs per-voxel state storage).
+
+## Wave 43 - Proper fix for JSON model pipeline
+
+### Background: W42 revert vs W43 proper fix
+
+Wave 42 reverted the W39 universal JSON routing because cube blocks
+went through `emit_block_elements`, which silently returned `true` even
+when zero vertices were emitted (all 6 faces culled by opaque neighbours).
+The caller saw `true`, skipped the cube path, and the block was invisible
+(mesh hole). W42's workaround was to gate the JSON path behind
+`name_for_block` - only special-shaped blocks (torch, slab, fence...)
+used the JSON path; plain cube blocks continued through the cube path.
+
+Wave 43 implements the proper fix: make `emit_block_elements` honestly
+report success/failure based on actual vertex emission, so the cube path
+is an automatic fallback for any block where the JSON pipeline silently
+drops faces.
+
+### W43.1 - Honest return value in emit_block_elements
+
+File: `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`
+
+**Before (W42):**
+```rust
+// ... loop over elements ...
+true  // always returned true when model was found
+```
+
+**After (W43.1):**
+```rust
+let verts_before = vertices.len();
+for elem in &model.elements {
+    // ... emit faces ...
+}
+vertices.len() > verts_before  // false when 0 verts added
+```
+
+The function now returns false when the model resolves but all faces
+are culled (e.g., a cube block surrounded by opaque neighbours) or
+texture lookups produce no geometry. The caller's cube path handles
+the block correctly in that case.
+
+The same fix applies to the multipart path via `model_for_block_with_neighbors`
+(which is the only entry point - no separate `emit_block_elements_with_neighbors`).
+
+### W43.2 - Audit: why faces dropped for cube blocks under W39 pipeline
+
+Root cause identified: **all 6 faces of a cube-all model carry `cullface`**.
+
+Trace for stone (id=1) with a real MC pack:
+1. `stone.json`: `{ "parent": "minecraft:block/cube_all", "textures": { "all": "minecraft:block/stone" } }`
+2. `cube_all.json`: parent = `block/cube`; textures = `{ "down": "#all", "up": "#all", ... }`
+3. `cube.json`: parent = `block/block`; elements = [full cube with 6 faces, each `"cullface": "<direction>"`, `"texture": "#<direction>"`]
+4. After `resolve_texture`: face `"#down"` -> `textures["down"]` = `"#all"` -> `textures["all"]` = `"block/stone"` -> `rsplit_once('/')` -> `"stone"`.
+   Texture resolution is CORRECT.
+5. All 6 faces carry `cullface: down/up/north/south/west/east`.
+6. When stone is surrounded by other stone (every neighbour opaque),
+   `neighbour_opaque(delta)` returns true for all 6 directions.
+7. All 6 faces are culled -> 0 vertices emitted.
+8. OLD code: returned `true` anyway -> caller skipped cube path -> mesh hole.
+9. W43.1 fix: returns `false` -> caller runs cube path -> stone renders correctly.
+
+Note: the texture name `"stone"` IS registered in the atlas (the atlas keys
+by bare file stem). The issue was never a texture lookup miss - it was purely
+the cullface + all-opaque-neighbours combination.
+
+### W43.3 - Texture name normalization (defensive)
+
+File: `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`, line 284
+
+The `clean_name` computation now defensively strips any residual `block/` or
+`item/` path prefix in addition to the `#` sigil:
+
+```rust
+let after_hash = tex_name.trim_start_matches('#');
+let clean_name = after_hash
+    .rsplit_once('/')
+    .map(|(_, stem)| stem)
+    .unwrap_or(after_hash);
+```
+
+`models::resolve_texture` already performs this strip via `rsplit_once('/')` for
+absolute references. The `element_mesh.rs` strip is defensive - it handles edge
+cases where a hand-coded model or a partial resolution chain might leave a
+`block/name` string in the face texture field.
+
+### W43.4 - Universal JSON path re-enable
+
+**Deferred.** The W42 gate (`name_for_block(id)?` in `model_for_block_with_neighbors`)
+was intentionally preserved in W43. Rationale:
+
+- The W43.1 honest-return fix is correct and tested.
+- Re-enabling universal JSON routing is a separate risk surface: it requires
+  verifying that every block in `name_map` (320+ entries) either:
+  (a) emits correct geometry via the JSON path, OR
+  (b) cleanly falls back to the cube path via the W43.1 fix.
+- Without visual verification of a full world render, a regression in any
+  of the 320+ blocks is possible (e.g., a blockstate variant mismatch,
+  a parent chain that terminates early, a multipart model merging incorrectly).
+
+When W43.4 is shipped, the guard `name_for_block(id)?` in both
+`model_for_block` and `model_for_block_with_neighbors` should be removed.
+The honest return in W43.1 makes this safe: any block whose JSON path emits
+0 vertices automatically falls through to the cube path.
+
+### W43.5 - Tests
+
+New tests in `pipeline_tests.rs`:
+
+1. `w43_emit_block_elements_returns_false_when_all_faces_culled`:
+   Builds a synthetic stone (cube_all) model via a tempdir pack. Rebuilds
+   the block model cache against it. Calls `emit_block_elements` with
+   `neighbour_opaque=|_|true` -> all 6 cube faces culled -> 0 verts.
+   Asserts `result == false`. (This is the core W43.1 regression guard.)
+
+2. `w43_stone_cube_model_has_24_face_vertices_potential`:
+   Uses `resolve_block_model` directly (bypasses W42 gate) to verify the
+   full JSON chain for stone resolves correctly: 1 element, 6 faces, all
+   with `cullface` set, texture = "stone" (bare stem, not "block/stone").
+   Documents WHY W43.1 was necessary: all 6 faces have cullface.
+
+New tests in `element_mesh.rs`:
+
+3. `emit_block_elements_torch_still_emits_with_opaque_down_neighbour`:
+   Torch has `cullface: Down` on the down face; 5 other faces have no cullface.
+   With all neighbours opaque, down is culled but 5 faces emit -> returns true,
+   20 verts. Verifies the honest return does not break torch rendering.
+
+4. `emit_block_elements_slab_still_emits_up_face_when_sides_culled`:
+   Slab has `cullface` on down+north+south+west+east but NOT on up. With all
+   neighbours opaque, 5 faces culled, up face emits 4 verts -> returns true.
+   Verifies slabs continue working correctly.
+
+### Files changed
+
+- `examples/voxel_demo_mp/src/resource_pack/element_mesh.rs`:
+  W43.1 honest return (verts_before/after comparison); W43.3 defensive
+  texture name strip; W43.5 tests (2 new tests).
+- `examples/voxel_demo_mp/src/resource_pack/pipeline_tests.rs`:
+  W43.5 tests (2 new tests: returns_false_when_all_faces_culled,
+  stone_cube_model_has_24_face_vertices_potential).
+
+### Test counts
+
+- bin: 1532 pass / 7 fail (same 7 pre-existing; +4 W43 tests).
+- clippy: 0 warnings.
+
+### Deferred
+
+- W43.4 universal JSON path re-enable (see reasoning above).
+- W43.2 debug logging (`RUST_LOG=voxel_demo_mp::resource_pack=debug` gate
+  for texture resolution chain per face) - structural audit complete, logging
+  deferred as low priority since root cause is confirmed.

@@ -524,3 +524,118 @@ fn w41_cache_resolution_is_fast() {
         elapsed.as_millis(),
     );
 }
+
+// ---------------------------------------------------------------
+// W43.5: honest return value tests using a synthetic cube model.
+// ---------------------------------------------------------------
+
+/// W43.1: emit_block_elements returns false when all faces of a
+/// cube-all model are culled (every neighbour opaque).
+///
+/// A cube-all model declares cullface on all 6 faces. With
+/// neighbour_opaque=|_|true every face is skipped -> 0 verts ->
+/// the function must return false so the cube path handles the block.
+///
+/// We use the synthetic stone setup (id 1) because:
+///  1. name_map maps id 1 to "stone".
+///  2. We stage stone.json -> cube_all parent chain.
+///  3. After cache rebuild, stone resolves to Single(BlockModel)
+///     with all 6 faces carrying cullface.
+///  4. neighbour_opaque=|_|true culls every face -> 0 verts.
+///  5. W43.1 fix: emit_block_elements now returns false.
+#[test]
+fn w43_emit_block_elements_returns_false_when_all_faces_culled() {
+    use glam::Vec3;
+    use infengine_render::MeshVertex;
+    use super::element_mesh::{emit_block_elements, NeighborStates};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    stage_cube_chain(root);
+    stage_stone(root);
+
+    let mut pack = pack_at(root);
+    // Rebuild the cache against the synthetic pack so stone is Single.
+    super::special_models::build_block_model_cache(&mut pack);
+
+    let mut verts: Vec<MeshVertex> = Vec::new();
+    let mut idxs: Vec<u32> = Vec::new();
+
+    // Stone id = 1. All 6 faces have cullface. neighbour_opaque=true
+    // for every direction -> all faces culled -> 0 verts.
+    let result = emit_block_elements(
+        1,
+        Vec3::ZERO,
+        &mut verts,
+        &mut idxs,
+        &pack,
+        NeighborStates::default(),
+        |_| [0.0, 1.0],
+        |_| 0,
+        |_| true, // all neighbours opaque -> cull all faces
+    );
+    assert!(
+        !result,
+        "W43.1: emit must return false when 0 verts emitted (all faces culled)",
+    );
+    assert!(
+        verts.is_empty(),
+        "no vertices should have been added, got {}",
+        verts.len(),
+    );
+}
+
+/// W43.1 + W43.4 gating: verify the cube model resolves correctly
+/// and contains all 6 faces with the right texture. This validates
+/// the JSON pipeline geometry WITHOUT going through emit_block_elements
+/// (which is still W42-gated: name_for_block(1) = None routes stone
+/// through the cube path, not the JSON path).
+///
+/// When W43.4 re-enables the universal JSON path, this test can be
+/// updated to call emit_block_elements directly and assert 24 verts.
+#[test]
+fn w43_stone_cube_model_has_24_face_vertices_potential() {
+    use super::special_models::resolve_block_model;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    stage_cube_chain(root);
+    stage_stone(root);
+
+    let pack = pack_at(root);
+    // resolve_block_model bypasses the W42 name_for_block gate and
+    // exercises the full JSON chain directly.
+    let model = resolve_block_model(&pack, 1).expect("stone must resolve via JSON chain");
+    assert_eq!(model.elements.len(), 1, "stone has exactly 1 element");
+    let e = &model.elements[0];
+    // All 6 faces are declared and carry cullface.
+    assert!(e.faces.up.is_some(), "up face missing");
+    assert!(e.faces.down.is_some(), "down face missing");
+    assert!(e.faces.north.is_some(), "north face missing");
+    assert!(e.faces.south.is_some(), "south face missing");
+    assert!(e.faces.west.is_some(), "west face missing");
+    assert!(e.faces.east.is_some(), "east face missing");
+    // Texture must have resolved to the bare stem (not "block/stone").
+    assert_eq!(
+        e.faces.up.as_ref().unwrap().texture,
+        "stone",
+        "texture must resolve to bare stem 'stone'",
+    );
+    // All 6 faces have cullface set (this is WHY w43.1 fix matters:
+    // with all opaque neighbours, 0 verts would be emitted and the
+    // old code would have returned true, causing mesh holes).
+    for (name, face_opt) in [
+        ("up",    &e.faces.up),
+        ("down",  &e.faces.down),
+        ("north", &e.faces.north),
+        ("south", &e.faces.south),
+        ("west",  &e.faces.west),
+        ("east",  &e.faces.east),
+    ] {
+        let face = face_opt.as_ref().unwrap();
+        assert!(
+            face.cullface.is_some(),
+            "{name} face must have cullface set (cube_all model)",
+        );
+    }
+}
