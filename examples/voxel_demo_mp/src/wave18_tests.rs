@@ -44,26 +44,33 @@ fn torch_emits_flame_textured_particle_with_atlas_uv() {
     let mut s = mk_seed(42);
     crate::emit_textured_flame(&mut out, Some(&atlas), &pos, &mut s, [1.0, 0.78, 0.40]);
 
-    assert_eq!(out.len(), 1, "exactly one particle emitted per call");
-    let p = &out[0];
+    // W45.4: emit_textured_flame now emits FLAME_LAYERS=3 overlapping
+    // quads per call (anti-jump fix, Option C). Verify we get 3.
+    assert_eq!(out.len(), 3, "W45.4: three overlapping frame layers per call");
+
+    // Primary layer (index 0) carries the highest alpha.
+    let p0 = &out[0];
     // Center y should be near pos[1] + 0.8 = 64.8 (with jitter <= 0.2).
     assert!(
-        (p.center_world[1] - 64.8).abs() < 0.25,
+        (p0.center_world[1] - 64.8).abs() < 0.25,
         "center_y={} should be near 64.8",
-        p.center_world[1],
+        p0.center_world[1],
     );
     // UV must not be the fallback [0,0,1,1]. The flame strip in
     // synth_atlas has v_max = 0.25 for frame 0; any selected frame has
-    // v_max <= 0.25 * frames_picked + 0.25 but the strip UVs are all
-    // sub-1.0 in v.  A simple bound: uv_max[1] < 0.4 (well within the
-    // strip but safely below the no-atlas fallback of 1.0).
-    let v_max = p.uv_max[1];
+    // v_max <= 0.25 (or 0.50 or 0.75 for subsequent frames, all < 1.0).
+    // A simple bound: uv_max[1] < 1.0 (within the strip, not the fallback).
+    let v_max = p0.uv_max[1];
     assert!(
-        v_max < 0.4,
-        "uv_max.v={v_max} should be within flame strip (< 0.4), not white fallback 1.0",
+        v_max < 1.0,
+        "uv_max.v={v_max} should be within flame strip (< 1.0), not white fallback 1.0",
     );
-    // Alpha should be ~0.95.
-    assert!((p.color[3] - 0.95).abs() < 0.01, "flame alpha should be 0.95");
+    // Alpha of layer 0 should be ~0.95.
+    assert!((p0.color[3] - 0.95).abs() < 0.01, "primary layer alpha should be 0.95");
+    // Alpha of layer 1 should be ~0.55.
+    assert!((out[1].color[3] - 0.55).abs() < 0.01, "layer 1 alpha should be 0.55");
+    // Alpha of layer 2 should be ~0.30.
+    assert!((out[2].color[3] - 0.30).abs() < 0.01, "layer 2 alpha should be 0.30");
 }
 
 /// `emit_textured_lava` must push one particle and resolve the "lava"
