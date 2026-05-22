@@ -214,14 +214,14 @@ impl Renderer {
             .max(5)
             .min(adapter.limits().max_bind_groups);
 
-        // W46.5: raise max_buffer_size to host the 512 MB uber vertex pool
-        // (W46.1). downlevel_defaults caps at 256 MB which trips
-        // Device::create_buffer validation on the 512 MB pool. Pick the
-        // minimum of (1 GB, adapter max) - modern desktop GPUs report
-        // 1-4 GB, so 1 GB gives us 512 MB pool + headroom for other
-        // buffers without requesting beyond hardware limits.
+        // W46.5/W46.6: raise max_buffer_size to host the uber vertex pool.
+        // downlevel_defaults caps at 256 MB; we want up to 2 GB to scale
+        // with dGPU VRAM (see uber_buffer::UBER_POOL_TARGET_BYTES).
+        // Take the smaller of adapter max and 2 GB so we never request
+        // beyond hardware limits. The pool itself is then sized against
+        // this device limit below.
         let adapter_max_buf = adapter.limits().max_buffer_size;
-        required_limits.max_buffer_size = adapter_max_buf.min(1024 * 1024 * 1024);
+        required_limits.max_buffer_size = adapter_max_buf.min(uber_buffer::UBER_POOL_TARGET_BYTES);
         // Storage buffer binding size has a separate cap (default 128 MB).
         // The uber buffer is bound as VERTEX/INDEX, not STORAGE, so this is
         // not strictly required - but raising it keeps the limits coherent
@@ -250,6 +250,9 @@ impl Renderer {
             warn!("W32: INDIRECT_FIRST_INSTANCE unavailable - falling back to draw_indexed_indirect loop");
         }
 
+        // W46.6: snapshot device limits before the move so we can size
+        // the uber pool against the actually-granted max_buffer_size.
+        let device_max_buf = required_limits.max_buffer_size;
         let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("infengine_render::device"),
             required_features,
@@ -358,7 +361,26 @@ impl Renderer {
         // visible chunk submesh); it doubles on overflow like the instance buf.
         const UBER_INITIAL_INDIRECT_CAP: u64 = 2048;
         const UBER_INITIAL_INSTANCE_CAP: u64 = 2048;
-        let uber = UberMeshAllocator::new(&device);
+        // W46.6: size the uber pool from the device's actual max_buffer_size
+        // (set in required_limits above, snapshotted before the move).
+        // This way the engine scales with GPU VRAM: a 2 GB pool on a card
+        // that supports it, capped at UBER_POOL_TARGET_BYTES to avoid
+        // hogging VRAM on dGPUs with many GB free.
+        let vertex_pool_bytes = device_max_buf.min(uber_buffer::UBER_POOL_TARGET_BYTES);
+        // Index pool scales to ~25% of vertex pool (indices are 4 bytes vs
+        // ~40 byte vertices), capped to device limit. Keep at least the
+        // DEFAULT_INDEX_POOL_BYTES baseline so small-VRAM devices still
+        // have enough index headroom for a single chunk submesh batch.
+        let index_pool_bytes = (vertex_pool_bytes / uber_buffer::UBER_INDEX_FRACTION)
+            .max(uber_buffer::DEFAULT_INDEX_POOL_BYTES)
+            .min(device_max_buf);
+        info!(
+            vertex_pool_mb = vertex_pool_bytes / (1024 * 1024),
+            index_pool_mb = index_pool_bytes / (1024 * 1024),
+            device_max_buf_mb = device_max_buf / (1024 * 1024),
+            "W46.6: dynamic uber pool sizing",
+        );
+        let uber = UberMeshAllocator::new(&device, vertex_pool_bytes, index_pool_bytes);
         let uber_indirect_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::uber_indirect_buf"),
             size: UBER_INITIAL_INDIRECT_CAP

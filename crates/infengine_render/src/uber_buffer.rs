@@ -35,17 +35,23 @@
 use std::collections::HashMap;
 use crate::mesh3d::{MeshHandle, MeshVertex};
 
-const VERTEX_POOL_BYTES: u64 = 512 * 1024 * 1024; // 512 MB - see W46.1 note above
-const INDEX_POOL_BYTES: u64  = 128 * 1024 * 1024; // 128 MB
+// W46.6: pool sizes are now runtime-configured from adapter limits.
+// These defaults are used by the test path only - the Renderer queries
+// adapter.limits().max_buffer_size and picks the largest pool the device
+// supports up to UBER_POOL_TARGET_BYTES (=2 GB).
+#[allow(dead_code)]
+pub const DEFAULT_VERTEX_POOL_BYTES: u64 = 512 * 1024 * 1024; // 512 MB
+pub const DEFAULT_INDEX_POOL_BYTES: u64  = 128 * 1024 * 1024; // 128 MB
+/// Upper bound on pool size. We never request more than this even if
+/// the adapter supports it, to avoid hogging VRAM on dGPUs with many
+/// gigabytes free.
+pub const UBER_POOL_TARGET_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+/// Minimum index pool size. Indices are 4 bytes vs ~40 byte vertices,
+/// so we scale the index pool to ~25% of the vertex pool.
+pub const UBER_INDEX_FRACTION: u64 = 4; // index = vertex / 4
 
 const VERTEX_STRIDE: u64 = std::mem::size_of::<MeshVertex>() as u64;
 const INDEX_STRIDE: u64  = std::mem::size_of::<u32>() as u64;
-
-// Capacity in elements - only used in the compile-time assertions below.
-#[allow(dead_code)]
-const VERTEX_POOL_CAPACITY: u64 = VERTEX_POOL_BYTES / VERTEX_STRIDE;
-#[allow(dead_code)]
-const INDEX_POOL_CAPACITY: u64  = INDEX_POOL_BYTES  / INDEX_STRIDE;
 
 /// Render layer constants for uber chunk meshes.
 ///
@@ -182,6 +188,12 @@ pub(crate) struct UberMeshAllocator {
     pub(crate) vertex_buf: wgpu::Buffer,
     pub(crate) index_buf: wgpu::Buffer,
 
+    // W46.6: pool sizes stored per-instance (runtime-configured from
+    // adapter limits) rather than as const, so the allocator scales
+    // with GPU VRAM.
+    vertex_pool_bytes: u64,
+    index_pool_bytes: u64,
+
     // Bump watermarks (in bytes).
     v_watermark: u64,
     i_watermark: u64,
@@ -192,22 +204,32 @@ pub(crate) struct UberMeshAllocator {
 }
 
 impl UberMeshAllocator {
-    pub fn new(device: &wgpu::Device) -> Self {
+    /// Create an allocator with explicit pool sizes (W46.6). The
+    /// Renderer queries `adapter.limits().max_buffer_size` and passes
+    /// the largest size the device supports, up to UBER_POOL_TARGET_BYTES.
+    pub fn new(device: &wgpu::Device, vertex_pool_bytes: u64, index_pool_bytes: u64) -> Self {
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::uber_vertex_buf"),
-            size: VERTEX_POOL_BYTES,
+            size: vertex_pool_bytes,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let index_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::uber_index_buf"),
-            size: INDEX_POOL_BYTES,
+            size: index_pool_bytes,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        tracing::info!(
+            vertex_pool_mb = vertex_pool_bytes / (1024 * 1024),
+            index_pool_mb = index_pool_bytes / (1024 * 1024),
+            "W46.6: uber pool allocated",
+        );
         Self {
             vertex_buf,
             index_buf,
+            vertex_pool_bytes,
+            index_pool_bytes,
             v_watermark: 0,
             i_watermark: 0,
             free_list: SegregatedFreeList::new(),
@@ -246,17 +268,17 @@ impl UberMeshAllocator {
             (slot.v_byte_off, slot.i_byte_off)
         } else {
             // Bump allocate. Check capacity.
-            if self.v_watermark + v_bytes > VERTEX_POOL_BYTES {
+            if self.v_watermark + v_bytes > self.vertex_pool_bytes {
                 tracing::warn!(
                     "uber vertex pool full ({} / {} bytes used), falling back to legacy path",
-                    self.v_watermark, VERTEX_POOL_BYTES
+                    self.v_watermark, self.vertex_pool_bytes
                 );
                 return false;
             }
-            if self.i_watermark + i_bytes > INDEX_POOL_BYTES {
+            if self.i_watermark + i_bytes > self.index_pool_bytes {
                 tracing::warn!(
                     "uber index pool full ({} / {} bytes used), falling back to legacy path",
-                    self.i_watermark, INDEX_POOL_BYTES
+                    self.i_watermark, self.index_pool_bytes
                 );
                 return false;
             }
@@ -319,11 +341,14 @@ mod tests {
 
     #[test]
     fn uber_alloc_constants_are_sane() {
-        // Each vertex is 40 bytes; 128 MB / 40 = 3,355,443 vertices.
+        // Each vertex is 40 bytes; the default 512 MB pool holds 13M+ verts.
         assert_eq!(VERTEX_STRIDE, 40);
-        // Use const blocks so clippy does not warn about assertions_on_constants.
-        const { assert!(VERTEX_POOL_CAPACITY >= 3_000_000, "pool must hold at least 3M vertices") };
-        const { assert!(INDEX_POOL_CAPACITY  >= 8_000_000, "pool must hold at least 8M indices") };
+        // W46.6: capacity is no longer compile-time const (pool size is
+        // runtime-configured). Check default pool sizes are sane.
+        const DEFAULT_V_CAP: u64 = DEFAULT_VERTEX_POOL_BYTES / 40;
+        const DEFAULT_I_CAP: u64 = DEFAULT_INDEX_POOL_BYTES  / 4;
+        const { assert!(DEFAULT_V_CAP >= 3_000_000, "default pool must hold at least 3M vertices") };
+        const { assert!(DEFAULT_I_CAP >= 8_000_000, "default pool must hold at least 8M indices") };
     }
 
     // ---------------------------------------------------------------
