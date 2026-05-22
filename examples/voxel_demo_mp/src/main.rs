@@ -14562,8 +14562,20 @@ impl AppHandler for Voxel {
         //   Break -> always the break wireframe at target.voxel.
         if let Some(hit) = target {
             let highlight = self.highlight_mode;
+            // W46.17: Auto mode picks Build only when the held item is a
+            // SOLID placeable block. Tools (pickaxe / shovel / axe / sword
+            // / flint+steel / etc) drop into Break so the user sees what
+            // they will MINE. Decoration items that pass raycast (torch,
+            // flowers, water bucket, ...) also drop into Break because in
+            // MC they don't "replace" the targeted voxel - they sit next
+            // to it. Auto mode is about reading the user's intent: if you
+            // hold a stack of dirt, you are building; otherwise you are
+            // looking at what to break / what to attach to.
+            let held_is_build_block = selected_block
+                .map(|b| !is_tool_block(b) && !block_is_ray_passable(b))
+                .unwrap_or(false);
             let show_build = match highlight {
-                HighlightMode::Auto => selected_block.is_some(),
+                HighlightMode::Auto => held_is_build_block,
                 HighlightMode::Build => true,
                 HighlightMode::Break => false,
             };
