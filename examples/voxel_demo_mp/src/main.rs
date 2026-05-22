@@ -11721,11 +11721,23 @@ impl AppHandler for Voxel {
                     );
                     self.sheep_head_mesh = Some(mesh);
                 }
-                // W19.2: load entity textures + upload per-part meshes for
-                // the 6 remaining mob kinds. The `entity/<mob>/<mob>.tga`
+                // W19.2 / W46.9: load entity textures + upload per-part meshes
+                // for the 6 remaining mob kinds. The `entity/<mob>/<mob>.tga`
                 // convention mirrors the sheep path above. Both .tga and
                 // .png are tried so Java and Bedrock resource packs work.
-                self.mob_meshes = load_non_sheep_mob_meshes(dir, r);
+                //
+                // W46.9: pass BOTH the local engine assets dir AND the MC
+                // pack source path so the loader can fall back from one to
+                // the other. MC 26.1+ entity textures live under
+                // `<mc-pack>/textures/entity/<mob>/<mob>.png`; the engine's
+                // local `assets/textures/entity/` is only used for the sheep
+                // .tga that ships with the demo and for legacy fallback.
+                let mc_entity_dir = if !self.resource_pack.is_fallback {
+                    Some(self.resource_pack.source.join("textures").join("entity"))
+                } else {
+                    None
+                };
+                self.mob_meshes = load_non_sheep_mob_meshes(dir, mc_entity_dir.as_deref(), r);
             }
         }
         // W8.1: the worker pool + initial world build + safe-spawn
@@ -16449,16 +16461,25 @@ fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) 
 /// texture file wasn't found on disk).
 fn load_non_sheep_mob_meshes(
     texture_dir: &std::path::Path,
+    mc_entity_dir: Option<&std::path::Path>,
     r: &mut Renderer,
 ) -> mob_meshes::MobMeshes {
     use mob_meshes::{
         BiomeVariant, MobMeshes, MobPart, build_mob_part_mesh, entity_has_biome_variants,
     };
 
-    let entity_root = texture_dir
+    // W46.9: search BOTH the MC pack entity dir (canonical source - MC 26.1+
+    // ships per-mob `<mob>/<mob>.png` only inside the cached pack) AND the
+    // local engine assets dir (holdover from pre-MC waves, hosts the bundled
+    // sheep .tga). The MC pack root is preferred so 26.x biome variants win.
+    let local_entity_root = texture_dir
         .parent()
         .unwrap_or(texture_dir)
         .join("entity");
+    let entity_roots: Vec<std::path::PathBuf> = match mc_entity_dir {
+        Some(mc) => vec![mc.to_path_buf(), local_entity_root.clone()],
+        None => vec![local_entity_root.clone()],
+    };
 
     /// Try .tga then .png in the canonical MC entity sub-directory.
     /// Returns the image bytes as an RGBA `image::RgbaImage`, or `None`
@@ -16475,39 +16496,40 @@ fn load_non_sheep_mob_meshes(
     /// W31.2: logs a warn when no candidate is found so the user knows
     /// they need a resource pack for that mob's texture.
     fn try_open_entity(
-        entity_root: &std::path::Path,
+        entity_roots: &[std::path::PathBuf],
         mob: &str,
         biome: BiomeVariant,
     ) -> Option<image::RgbaImage> {
-        let mob_dir = entity_root.join(mob);
-
         // Per-biome filename (e.g. "chicken_temperate") - the canonical
         // MC 26.x name for mobs with biome variants. For non-variant
         // mobs this is unused.
         let biome_name = format!("{mob}{}", biome.suffix());
         let has_biome = entity_has_biome_variants(mob);
 
-        // Build candidate list with biome-variant names FIRST so the
-        // correct file wins on MC 26.x, then the bare name for older
-        // packs / mobs without biome variants.
+        // W46.9: build candidate list spanning every search root. Within
+        // each root the biome-variant names come first so MC 26.x packs
+        // win even when an older bare-name file is also present.
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-        if has_biome {
-            candidates.push(mob_dir.join(format!("{biome_name}.tga")));
-            candidates.push(mob_dir.join(format!("{biome_name}.png")));
-            candidates.push(entity_root.join(format!("{biome_name}.tga")));
-            candidates.push(entity_root.join(format!("{biome_name}.png")));
-        }
-        // Bare-name candidates (works for zombie / skeleton / spider /
-        // pre-26.x packs).
-        candidates.push(mob_dir.join(format!("{mob}.tga")));
-        candidates.push(mob_dir.join(format!("{mob}.png")));
-        // Bedrock packs often flatten the entity dir:
-        candidates.push(entity_root.join(format!("{mob}.tga")));
-        candidates.push(entity_root.join(format!("{mob}.png")));
-        // Some Java packs place the texture one level up from entity/:
-        if let Some(parent) = entity_root.parent() {
-            candidates.push(parent.join(format!("{mob}.tga")));
-            candidates.push(parent.join(format!("{mob}.png")));
+        for entity_root in entity_roots {
+            let mob_dir = entity_root.join(mob);
+            if has_biome {
+                candidates.push(mob_dir.join(format!("{biome_name}.tga")));
+                candidates.push(mob_dir.join(format!("{biome_name}.png")));
+                candidates.push(entity_root.join(format!("{biome_name}.tga")));
+                candidates.push(entity_root.join(format!("{biome_name}.png")));
+            }
+            // Bare-name candidates (works for zombie / skeleton / spider /
+            // pre-26.x packs).
+            candidates.push(mob_dir.join(format!("{mob}.tga")));
+            candidates.push(mob_dir.join(format!("{mob}.png")));
+            // Bedrock packs often flatten the entity dir:
+            candidates.push(entity_root.join(format!("{mob}.tga")));
+            candidates.push(entity_root.join(format!("{mob}.png")));
+            // Some Java packs place the texture one level up from entity/:
+            if let Some(parent) = entity_root.parent() {
+                candidates.push(parent.join(format!("{mob}.tga")));
+                candidates.push(parent.join(format!("{mob}.png")));
+            }
         }
 
         let path = match candidates.iter().find(|p| p.is_file()) {
@@ -16553,7 +16575,7 @@ fn load_non_sheep_mob_meshes(
     let mut mm = MobMeshes::default();
 
     // ---- Zombie (64x64) ----------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "zombie", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"zombie", biome) {
         let (w, h) = (img.width(), img.height());
         mm.zombie_head      = Some(upload_part(r, "voxel_demo_mp::zombie_head",      MobPart::ZombieHead,     &img));
         mm.zombie_body      = Some(upload_part(r, "voxel_demo_mp::zombie_body",      MobPart::ZombieBody,     &img));
@@ -16565,7 +16587,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Chicken (64x32) ---------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "chicken", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"chicken", biome) {
         let (w, h) = (img.width(), img.height());
         mm.chicken_head      = Some(upload_part(r, "voxel_demo_mp::chicken_head",      MobPart::ChickenHead,     &img));
         mm.chicken_body      = Some(upload_part(r, "voxel_demo_mp::chicken_body",      MobPart::ChickenBody,     &img));
@@ -16575,7 +16597,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Pig (64x64) -------------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "pig", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"pig", biome) {
         let (w, h) = (img.width(), img.height());
         mm.pig_head           = Some(upload_part(r, "voxel_demo_mp::pig_head",           MobPart::PigHead,          &img));
         mm.pig_body           = Some(upload_part(r, "voxel_demo_mp::pig_body",           MobPart::PigBody,          &img));
@@ -16587,7 +16609,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Cow (64x64) -------------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "cow", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"cow", biome) {
         let (w, h) = (img.width(), img.height());
         mm.cow_head            = Some(upload_part(r, "voxel_demo_mp::cow_head",    MobPart::CowHead,          &img));
         mm.cow_body            = Some(upload_part(r, "voxel_demo_mp::cow_body",    MobPart::CowBody,          &img));
@@ -16599,7 +16621,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Skeleton (64x32) --------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "skeleton", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"skeleton", biome) {
         let (w, h) = (img.width(), img.height());
         mm.skeleton_head      = Some(upload_part(r, "voxel_demo_mp::skeleton_head",      MobPart::SkeletonHead,     &img));
         mm.skeleton_body      = Some(upload_part(r, "voxel_demo_mp::skeleton_body",      MobPart::SkeletonBody,     &img));
@@ -16611,7 +16633,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Spider (64x32) ----------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "spider", biome) {
+    if let Some(img) = try_open_entity(&entity_roots,"spider", biome) {
         let (w, h) = (img.width(), img.height());
         mm.spider_head  = Some(upload_part(r, "voxel_demo_mp::spider_head",  MobPart::SpiderHead,  &img));
         mm.spider_body0 = Some(upload_part(r, "voxel_demo_mp::spider_body0", MobPart::SpiderBody0, &img));
