@@ -1333,9 +1333,10 @@ impl Renderer {
         // Wave 18.1: textured billboard particles. Rendered after the
         // opaque 3D scene (mesh3d_pass already ran the clear) but
         // before the 2D overlay so HUD elements appear on top.
-        // The particle pass uses no depth attachment: it runs in a
-        // dedicated LoadOp::Load pass so we don't need to carry the
-        // depth texture here.
+        // W46.12: particle pass now reads the world depth buffer so
+        // billboards behind opaque geometry get z-rejected. Load existing
+        // depth (no clear, no write); the particle pipeline has
+        // depth_write_enabled=false so it never stomps the depth.
         if particle_count > 0 {
             let mut ppass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("infengine_render::particle_pass"),
@@ -1348,7 +1349,14 @@ impl Renderer {
                         store: StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
