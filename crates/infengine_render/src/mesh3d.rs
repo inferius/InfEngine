@@ -350,6 +350,17 @@ impl MeshInstance {
         self
     }
 
+    /// W46.19: set emissive boost. Adds `strength * albedo` to the
+    /// lit result so the mesh is visible even in pitch dark. Used
+    /// for self-illuminated blocks (torches, glowstone, lava, lit
+    /// redstone, ...) so MC's "lit-tip" glow reads at all times.
+    /// `strength` is clamped to `[0, 4]` (0 = no emission, 1 = full
+    /// albedo added on top of lighting, 2+ = HDR boost).
+    pub fn with_emissive(mut self, strength: f32) -> Self {
+        self.material[2] = strength.clamp(0.0, 4.0);
+        self
+    }
+
     /// Flag this instance as the water-surface mesh. The fragment
     /// shader switches to the animated-ripple branch (driven by
     /// `camera.time`) and reads `MeshVertex.uv` as a per-vertex

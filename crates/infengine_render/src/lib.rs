@@ -678,11 +678,29 @@ impl Renderer {
         metallic: f32,
         roughness: f32,
     ) {
+        self.queue_chunk_draw_emissive(handle, model, color, metallic, roughness, 0.0);
+    }
+
+    /// W46.19: like `queue_chunk_draw` but lets the caller pass an
+    /// emissive strength so self-illuminated blocks (torches, glowstone,
+    /// lava) render at full colour in dark cells. Strength 0 = matches
+    /// the non-emissive variant.
+    pub fn queue_chunk_draw_emissive(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+        emissive: f32,
+    ) {
         if let Some(alloc) = self.uber.get(handle) {
             if alloc.i_count == 0 {
                 return; // Empty mesh - no draw needed.
             }
-            let instance = MeshInstance::new(model, color).with_material(metallic, roughness);
+            let instance = MeshInstance::new(model, color)
+                .with_material(metallic, roughness)
+                .with_emissive(emissive);
             // first_instance is filled in at flush time (we don't know the
             // packed index yet). Store 0 as placeholder.
             let cmd = wgpu::util::DrawIndexedIndirectArgs {

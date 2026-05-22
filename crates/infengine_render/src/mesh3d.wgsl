@@ -447,6 +447,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light_mult = 0.05 + 0.95 * effective_light;
     var lit_color = (direct + ambient) * light_mult;
 
+    // W46.19: emissive boost. material.z = strength packed by
+    // MeshInstance::with_emissive. Adds `strength * albedo` to the
+    // lit result so self-illuminated blocks (torch tip, glowstone,
+    // lava, lit redstone) read at full colour even when the cell is
+    // unlit. Skipped (strength = 0) for normal blocks.
+    let emissive_strength = clamp(in.material.z, 0.0, 4.0);
+    if emissive_strength > 0.0 {
+        lit_color = lit_color + albedo * emissive_strength;
+    }
+
     // W30.5: distance fog. Blends lit geometry toward sky_color over
     // the range [fog_start, fog_end]. Disabled when fog_end <= fog_start
     // or both are zero (default no-fog state).

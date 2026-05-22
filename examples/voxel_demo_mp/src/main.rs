@@ -14545,12 +14545,29 @@ impl AppHandler for Voxel {
                     } else {
                         1.0
                     };
-                    renderer.queue_chunk_draw(
+                    // W46.19: self-illuminated blocks (torch / lava /
+                    // glowstone / lit redstone / fire) need an emissive
+                    // boost so their texture pixels stay visible even
+                    // when the cell is dark. light_emission_for_id
+                    // returns the MC emission level (0..15); normalise
+                    // and scale so a torch (14) reads as a strong glow
+                    // and glowstone (15) reads as full HDR boost.
+                    let emission_level =
+                        crate::block::light_emission::light_emission_for_id(block.0);
+                    let emissive = if emission_level > 0 {
+                        // 0.85 base + level/15 scaling; torch=14 -> ~1.64,
+                        // glowstone=15 -> ~1.85. Caps in shader at 4.
+                        0.85 + (emission_level as f32 / 15.0) * 0.85
+                    } else {
+                        0.0
+                    };
+                    renderer.queue_chunk_draw_emissive(
                         *handle,
                         model,
                         [def.color[0], def.color[1], def.color[2], alpha],
                         def.metallic,
                         def.roughness,
+                        emissive,
                     );
                 }
             }
