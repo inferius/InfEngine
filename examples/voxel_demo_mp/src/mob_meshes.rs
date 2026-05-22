@@ -529,6 +529,373 @@ impl MobMeshes {
 // Tests
 // ---------------------------------------------------------------------------
 
+
+// ===========================================================================
+// W47.1: relocated from main.rs
+//
+// build_sheep_head_mesh, load_non_sheep_mob_meshes, tick_chicken_feather_lay
+// used to live inline in main.rs (which had ballooned to 17k+ lines).
+// They are pure functions over public renderer types + this module's own
+// MobMeshes / MobPart, so they belong here. Call sites in main.rs +
+// debug_tests.rs now go through `crate::mob_meshes::<fn>`.
+// ===========================================================================
+
+use infengine_render::Renderer;
+use tracing::{info, warn};
+
+/// Build a 1x1x1 cube mesh with per-face UVs targeting the MC
+/// sheep head texture layout. The face strip lives in the top-
+/// left of a 64-wide texture; each 8x8 tile maps to one face of
+/// an 8x8x8 cube unwrap:
+///
+/// ```text
+///                u
+///        +---+---+---+
+///        | T | B |   |     0..8: -  8..16: top  16..24: bottom
+///   v    +---+---+---+---+
+///        | R | F | L | K |   right, front, left, back
+///        +---+---+---+---+
+/// ```
+///
+/// `tex_w` / `tex_h` are the source texture dimensions; UVs are
+/// normalised against them so the same layout works for Java
+/// (64x32) and Bedrock (64x64) sheep textures.
+pub fn build_sheep_head_mesh(tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) {
+    let tw = tex_w as f32;
+    let th = tex_h as f32;
+    // Helper: convert pixel coordinates to normalised UV.
+    let uv = |u: u32, v: u32| -> [f32; 2] { [u as f32 / tw, v as f32 / th] };
+    let mut verts: Vec<MeshVertex> = Vec::with_capacity(24);
+    let mut indices: Vec<u32> = Vec::with_capacity(36);
+    let mut add_face = |corners: [[f32; 3]; 4],
+                       normal: [f32; 3],
+                       uv0: [f32; 2],
+                       uv1: [f32; 2],
+                       uv2: [f32; 2],
+                       uv3: [f32; 2]| {
+        let base = verts.len() as u32;
+        let uvs = [uv0, uv1, uv2, uv3];
+        for i in 0..4 {
+            // W28.6: use builder API - direct struct init removed.
+            // No block light, full sky; anim_id = 0 (static tile).
+            verts.push(
+                MeshVertex::new(corners[i], normal)
+                    .with_uv(uvs[i])
+                    .with_light(0.0, 1.0),
+            );
+        }
+        // Engine cube pipeline uses CCW front-face but the
+        // `cube_geometry` reference winds quads as
+        // `[0, 2, 1, 0, 3, 2]` when corners are listed
+        // bottom-left -> bottom-right -> top-right -> top-left
+        // viewed from outside. Matching that here so back-face
+        // culling hides the interior of the head, not the outside.
+        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+    };
+    // Cube corners centred on the origin, edge length 1. Vertex
+    // order per face is bottom-left, bottom-right, top-right,
+    // top-left when viewed from outside the cube. UV (0,0) is
+    // top-left of the texture, (1,1) is bottom-right - so the
+    // matching corner UV order is `(u0,v1)`, `(u1,v1)`, `(u1,v0)`,
+    // `(u0,v0)`.
+    let h = 0.5_f32;
+    // Bedrock sheep.geo.json: head bone has cube size [6, 6, 8] at
+    // texture origin (0, 0). That's MC box-uv layout, NOT a plain
+    // 8x8 face strip. The unwrap (with `d` = depth, `w` = width,
+    // `h` = height):
+    //
+    //   ```
+    //   (d, 0)         top  size w x d  -> (8, 0)..(14, 8)
+    //   (d+w, 0)       bottom size w x d -> (14, 0)..(20, 8)
+    //   (0, d)         right size d x h -> (0, 8)..(8, 14)
+    //   (d, d)         front size w x h -> (8, 8)..(14, 14)
+    //   (d+w, d)       left  size d x h -> (14, 8)..(22, 14)
+    //   (d+w+d, d)     back  size w x h -> (22, 8)..(28, 14)
+    //   ```
+    //
+    // Our render orientation has the sheep facing +X (the head's
+    // depth axis runs along world X). We map MC's "front" (face)
+    // tile onto our +X face so the eyes / mouth follow the
+    // sheep's movement direction.
+    //
+    // -Z face: head's right side (MC east). Tile (0, 8)..(8, 14).
+    add_face(
+        [[-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h]],
+        [0.0, 0.0, -1.0],
+        uv(0, 14),
+        uv(8, 14),
+        uv(8, 8),
+        uv(0, 8),
+    );
+    // +Z face: head's left side (MC west). Tile (14, 8)..(22, 14).
+    add_face(
+        [[h, -h, h], [-h, -h, h], [-h, h, h], [h, h, h]],
+        [0.0, 0.0, 1.0],
+        uv(14, 14),
+        uv(22, 14),
+        uv(22, 8),
+        uv(14, 8),
+    );
+    // +X face: the sheep's FACE. MC "front" tile (8, 8)..(14, 14).
+    add_face(
+        [[h, -h, -h], [h, -h, h], [h, h, h], [h, h, -h]],
+        [1.0, 0.0, 0.0],
+        uv(8, 14),
+        uv(14, 14),
+        uv(14, 8),
+        uv(8, 8),
+    );
+    // -X face: back of head. MC "back" tile (22, 8)..(28, 14).
+    add_face(
+        [[-h, -h, h], [-h, -h, -h], [-h, h, -h], [-h, h, h]],
+        [-1.0, 0.0, 0.0],
+        uv(22, 14),
+        uv(28, 14),
+        uv(28, 8),
+        uv(22, 8),
+    );
+    // Top face. MC "top" tile (8, 0)..(14, 8).
+    add_face(
+        [[-h, h, -h], [h, h, -h], [h, h, h], [-h, h, h]],
+        [0.0, 1.0, 0.0],
+        uv(8, 8),
+        uv(14, 8),
+        uv(14, 0),
+        uv(8, 0),
+    );
+    // Bottom face. MC "bottom" tile (14, 0)..(20, 8).
+    add_face(
+        [[-h, -h, h], [h, -h, h], [h, -h, -h], [-h, -h, -h]],
+        [0.0, -1.0, 0.0],
+        uv(14, 8),
+        uv(20, 8),
+        uv(20, 0),
+        uv(14, 0),
+    );
+    (verts, indices)
+}
+
+/// W19.2 - Discover and upload entity texture meshes for the 6 non-sheep
+/// mob kinds (Zombie, Chicken, Pig, Cow, Skeleton, Spider).
+///
+/// For each kind:
+/// 1. Search `<texture_dir>/../entity/<mob>/<mob>.tga` and `.png`.
+///    (Same fallback pattern as the sheep head loader above.)
+/// 2. Load via `image::open`, force alpha = 255.
+/// 3. Build per-part cube meshes via `mob_meshes::build_mob_part_mesh`.
+/// 4. Upload + bind via `r.create_mesh` / `r.make_mesh_albedo` /
+///    `r.bind_mesh_albedo_arc`.
+///
+/// Returns a fully populated `MobMeshes` (all `None` for any mob whose
+/// texture file wasn't found on disk).
+pub fn load_non_sheep_mob_meshes(
+    texture_dir: &std::path::Path,
+    mc_entity_dir: Option<&std::path::Path>,
+    r: &mut Renderer,
+) -> MobMeshes {
+
+    // W46.9: search BOTH the MC pack entity dir (canonical source - MC 26.1+
+    // ships per-mob `<mob>/<mob>.png` only inside the cached pack) AND the
+    // local engine assets dir (holdover from pre-MC waves, hosts the bundled
+    // sheep .tga). The MC pack root is preferred so 26.x biome variants win.
+    let local_entity_root = texture_dir
+        .parent()
+        .unwrap_or(texture_dir)
+        .join("entity");
+    let entity_roots: Vec<std::path::PathBuf> = match mc_entity_dir {
+        Some(mc) => vec![mc.to_path_buf(), local_entity_root.clone()],
+        None => vec![local_entity_root.clone()],
+    };
+
+    /// Try .tga then .png in the canonical MC entity sub-directory.
+    /// Returns the image bytes as an RGBA `image::RgbaImage`, or `None`
+    /// if neither file exists or the image can't be decoded.
+    ///
+    /// W46.4: MC 26.1.2 split chicken / pig / cow textures into per-biome
+    /// files (`chicken_temperate.png`, `chicken_cold.png`, `chicken_warm.png`).
+    /// For mobs in `entity_has_biome_variants`, the loader resolves the
+    /// canonical `<mob>{biome.suffix}.png` first (proper MC behaviour with
+    /// the engine-wide default biome = Temperate, NOT a "load any file we
+    /// can find" fallback). Mobs without biome variants still use the bare
+    /// `<mob>.png` path.
+    ///
+    /// W31.2: logs a warn when no candidate is found so the user knows
+    /// they need a resource pack for that mob's texture.
+    fn try_open_entity(
+        entity_roots: &[std::path::PathBuf],
+        mob: &str,
+        biome: BiomeVariant,
+    ) -> Option<image::RgbaImage> {
+        // Per-biome filename (e.g. "chicken_temperate") - the canonical
+        // MC 26.x name for mobs with biome variants. For non-variant
+        // mobs this is unused.
+        let biome_name = format!("{mob}{}", biome.suffix());
+        let has_biome = entity_has_biome_variants(mob);
+
+        // W46.9: build candidate list spanning every search root. Within
+        // each root the biome-variant names come first so MC 26.x packs
+        // win even when an older bare-name file is also present.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        for entity_root in entity_roots {
+            let mob_dir = entity_root.join(mob);
+            if has_biome {
+                candidates.push(mob_dir.join(format!("{biome_name}.tga")));
+                candidates.push(mob_dir.join(format!("{biome_name}.png")));
+                candidates.push(entity_root.join(format!("{biome_name}.tga")));
+                candidates.push(entity_root.join(format!("{biome_name}.png")));
+            }
+            // Bare-name candidates (works for zombie / skeleton / spider /
+            // pre-26.x packs).
+            candidates.push(mob_dir.join(format!("{mob}.tga")));
+            candidates.push(mob_dir.join(format!("{mob}.png")));
+            // Bedrock packs often flatten the entity dir:
+            candidates.push(entity_root.join(format!("{mob}.tga")));
+            candidates.push(entity_root.join(format!("{mob}.png")));
+            // Some Java packs place the texture one level up from entity/:
+            if let Some(parent) = entity_root.parent() {
+                candidates.push(parent.join(format!("{mob}.tga")));
+                candidates.push(parent.join(format!("{mob}.png")));
+            }
+        }
+
+        let path = match candidates.iter().find(|p| p.is_file()) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    mob = mob,
+                    biome = ?biome,
+                    searched = ?candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    "entity texture not found - mob will be untextured (install a resource pack)"
+                );
+                return None;
+            }
+        };
+        let mut img = image::open(path).ok()?.to_rgba8();
+        // Force alpha=255 so the cutout shader path can't punch holes
+        // through soft edges in .tga files with pre-multiplied alpha.
+        for px in img.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        Some(img)
+    }
+
+    // W46.4: engine-wide default biome until a real biome system lands.
+    // MC's plains / forest biomes resolve to Temperate so this matches the
+    // common-case appearance for spawned mobs.
+    let biome = BiomeVariant::default();
+
+    /// Upload a single mesh part and return its handle.
+    fn upload_part(
+        r: &mut Renderer,
+        label: &str,
+        part: MobPart,
+        img: &image::RgbaImage,
+    ) -> MeshHandle {
+        let (verts, indices) = build_mob_part_mesh(part, img.width(), img.height());
+        let albedo = r.make_mesh_albedo(img.width(), img.height(), img);
+        let mesh = r.create_mesh(label, &verts, &indices);
+        r.bind_mesh_albedo_arc(mesh, albedo);
+        mesh
+    }
+
+    let mut mm = MobMeshes::default();
+
+    // ---- Zombie (64x64) ----------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"zombie", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.zombie_head      = Some(upload_part(r, "voxel_demo_mp::zombie_head",      MobPart::ZombieHead,     &img));
+        mm.zombie_body      = Some(upload_part(r, "voxel_demo_mp::zombie_body",      MobPart::ZombieBody,     &img));
+        mm.zombie_right_arm = Some(upload_part(r, "voxel_demo_mp::zombie_right_arm", MobPart::ZombieRightArm, &img));
+        mm.zombie_left_arm  = Some(upload_part(r, "voxel_demo_mp::zombie_left_arm",  MobPart::ZombieLeftArm,  &img));
+        mm.zombie_right_leg = Some(upload_part(r, "voxel_demo_mp::zombie_right_leg", MobPart::ZombieRightLeg, &img));
+        mm.zombie_left_leg  = Some(upload_part(r, "voxel_demo_mp::zombie_left_leg",  MobPart::ZombieLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "zombie entity texture bound (6 parts)");
+    }
+
+    // ---- Chicken (64x32) ---------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"chicken", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.chicken_head      = Some(upload_part(r, "voxel_demo_mp::chicken_head",      MobPart::ChickenHead,     &img));
+        mm.chicken_body      = Some(upload_part(r, "voxel_demo_mp::chicken_body",      MobPart::ChickenBody,     &img));
+        mm.chicken_right_leg = Some(upload_part(r, "voxel_demo_mp::chicken_right_leg", MobPart::ChickenRightLeg, &img));
+        mm.chicken_left_leg  = Some(upload_part(r, "voxel_demo_mp::chicken_left_leg",  MobPart::ChickenLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "chicken entity texture bound (4 parts)");
+    }
+
+    // ---- Pig (64x64) -------------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"pig", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.pig_head           = Some(upload_part(r, "voxel_demo_mp::pig_head",           MobPart::PigHead,          &img));
+        mm.pig_body           = Some(upload_part(r, "voxel_demo_mp::pig_body",           MobPart::PigBody,          &img));
+        mm.pig_right_front_leg = Some(upload_part(r, "voxel_demo_mp::pig_rf_leg", MobPart::PigRightFrontLeg, &img));
+        mm.pig_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::pig_lf_leg", MobPart::PigLeftFrontLeg,  &img));
+        mm.pig_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::pig_rb_leg", MobPart::PigRightBackLeg,  &img));
+        mm.pig_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::pig_lb_leg", MobPart::PigLeftBackLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "pig entity texture bound (6 parts)");
+    }
+
+    // ---- Cow (64x64) -------------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"cow", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.cow_head            = Some(upload_part(r, "voxel_demo_mp::cow_head",    MobPart::CowHead,          &img));
+        mm.cow_body            = Some(upload_part(r, "voxel_demo_mp::cow_body",    MobPart::CowBody,          &img));
+        mm.cow_right_front_leg = Some(upload_part(r, "voxel_demo_mp::cow_rf_leg", MobPart::CowRightFrontLeg, &img));
+        mm.cow_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::cow_lf_leg", MobPart::CowLeftFrontLeg,  &img));
+        mm.cow_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::cow_rb_leg", MobPart::CowRightBackLeg,  &img));
+        mm.cow_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::cow_lb_leg", MobPart::CowLeftBackLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "cow entity texture bound (6 parts)");
+    }
+
+    // ---- Skeleton (64x32) --------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"skeleton", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.skeleton_head      = Some(upload_part(r, "voxel_demo_mp::skeleton_head",      MobPart::SkeletonHead,     &img));
+        mm.skeleton_body      = Some(upload_part(r, "voxel_demo_mp::skeleton_body",      MobPart::SkeletonBody,     &img));
+        mm.skeleton_right_arm = Some(upload_part(r, "voxel_demo_mp::skeleton_right_arm", MobPart::SkeletonRightArm, &img));
+        mm.skeleton_left_arm  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_arm",  MobPart::SkeletonLeftArm,  &img));
+        mm.skeleton_right_leg = Some(upload_part(r, "voxel_demo_mp::skeleton_right_leg", MobPart::SkeletonRightLeg, &img));
+        mm.skeleton_left_leg  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_leg",  MobPart::SkeletonLeftLeg,  &img));
+        info!(texture = format!("{w}x{h}"), "skeleton entity texture bound (6 parts)");
+    }
+
+    // ---- Spider (64x32) ----------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots,"spider", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.spider_head  = Some(upload_part(r, "voxel_demo_mp::spider_head",  MobPart::SpiderHead,  &img));
+        mm.spider_body0 = Some(upload_part(r, "voxel_demo_mp::spider_body0", MobPart::SpiderBody0, &img));
+        mm.spider_body1 = Some(upload_part(r, "voxel_demo_mp::spider_body1", MobPart::SpiderBody1, &img));
+        mm.spider_leg   = Some(upload_part(r, "voxel_demo_mp::spider_leg",   MobPart::SpiderLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "spider entity texture bound (4 parts)");
+    }
+
+    mm
+}
+
+/// Periodic chicken feather-lay gate (Q.3). Free fn so the test
+/// harness can drive it without a full `Voxel`. Returns `true`
+/// exactly on the tick the timer crosses the 12 s mark with the
+/// debug toggle on AND a chicken alive on a host; the caller's
+/// job is to perform the actual pickup. Resets the accumulator
+/// every gated-off frame so flipping the toggle never emits a
+/// stale-stored feather.
+pub fn tick_chicken_feather_lay(
+    debug_enabled: bool,
+    host_role: bool,
+    chicken_alive: bool,
+    accum: &mut f32,
+    dt: f32,
+) -> bool {
+    if !(debug_enabled && host_role && chicken_alive) {
+        *accum = 0.0;
+        return false;
+    }
+    *accum += dt;
+    if *accum >= 12.0 {
+        *accum = 0.0;
+        return true;
+    }
+    false
+}
 #[cfg(test)]
 mod tests {
     use super::*;

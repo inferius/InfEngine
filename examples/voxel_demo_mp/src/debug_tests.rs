@@ -9,7 +9,7 @@
 //! seconds while flying mid-air; this regression suite locks the
 //! gate so the loop stays off by default.
 
-use crate::tick_chicken_feather_lay;
+use crate::mob_meshes::tick_chicken_feather_lay;
 
 const TICK_DT: f32 = 1.0 / 60.0;
 
