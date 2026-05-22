@@ -214,6 +214,23 @@ impl Renderer {
             .max(5)
             .min(adapter.limits().max_bind_groups);
 
+        // W46.5: raise max_buffer_size to host the 512 MB uber vertex pool
+        // (W46.1). downlevel_defaults caps at 256 MB which trips
+        // Device::create_buffer validation on the 512 MB pool. Pick the
+        // minimum of (1 GB, adapter max) - modern desktop GPUs report
+        // 1-4 GB, so 1 GB gives us 512 MB pool + headroom for other
+        // buffers without requesting beyond hardware limits.
+        let adapter_max_buf = adapter.limits().max_buffer_size;
+        required_limits.max_buffer_size = adapter_max_buf.min(1024 * 1024 * 1024);
+        // Storage buffer binding size has a separate cap (default 128 MB).
+        // The uber buffer is bound as VERTEX/INDEX, not STORAGE, so this is
+        // not strictly required - but raising it keeps the limits coherent
+        // in case a future pass binds the pool as storage.
+        let adapter_max_sb = adapter.limits().max_storage_buffer_binding_size;
+        required_limits.max_storage_buffer_binding_size = required_limits
+            .max_storage_buffer_binding_size
+            .max(adapter_max_sb.min(512 * 1024 * 1024));
+
         // W32: try to enable INDIRECT_FIRST_INSTANCE so that
         // multi_draw_indexed_indirect can use non-zero first_instance to
         // index per-chunk instance data. This is required on DX12, Vulkan,
