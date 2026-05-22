@@ -3274,6 +3274,7 @@ impl Voxel {
                 pos,
                 &mut frame_seed,
                 flame_tint,
+                self.net_tick as u32,
             );
             // W36.3: torch smoke - uses the legacy CPU particle which
             // has per-particle velocity so it visibly rises upward.
@@ -3310,6 +3311,7 @@ impl Voxel {
                 pos,
                 &mut frame_seed,
                 [1.0, 0.55, 0.20],
+                self.net_tick as u32,
             );
             // Fire also coughs a smoke wisp at ~1/3 the flame rate.
             if accumulator_fires(&mut frame_seed, 0.33) {
@@ -16028,67 +16030,66 @@ fn spawn_smoke_particle(
 /// adjacent frames of the flame strip coexist in the scene at once,
 /// and the visual averages out to a smooth perceived animation rather
 /// than one frame flipping to a random other frame each tick.
+/// Emit a textured flame billboard above `pos` into `out`.
+///
+/// W46.2: rewritten from W45.4. The old "Option C" multi-layer
+/// emit (3 overlapping billboards with per-call random XZ jitter)
+/// was producing a "flame skips along X axis" look instead of a
+/// proper in-place sprite animation, because each emit call rolled
+/// fresh random jitter and a fresh random base frame. MC's actual
+/// flame is ONE billboard, fixed at the torch top, with the frame
+/// index advancing deterministically from world time so the sprite
+/// changes IN PLACE.
+///
+/// `tick` is the world tick counter (advances at the simulation
+/// rate). The MC flame texture has `n_frames` sub-sprites stacked
+/// vertically; we cycle one frame per tick so the full loop runs at
+/// the same cadence MC uses (~32 frames over ~32 ticks = 1.6 s).
+///
+/// `seed` is no longer used for randomness here (the visible flame
+/// is deterministic by design) but is kept for callers that still
+/// pass it; per-tick non-determinism lives in the legacy
+/// `spawn_flame_particle` path that handles the rising/colliding
+/// CPU particle.
 fn emit_textured_flame(
     out: &mut Vec<infengine_render::TexturedParticleInstance>,
     particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
     pos: &[i32; 3],
-    seed: &mut u32,
+    _seed: &mut u32,
     color: [f32; 3],
+    tick: u32,
 ) {
-    // Number of frame layers emitted per source per call.
-    // 3 layers means frames [N, N+1, N+2] overlap; fade factors
-    // keep the brightest layer dominant so texture detail reads
-    // clearly while the others provide smooth transition blending.
-    const FLAME_LAYERS: u32 = 3;
-
-    let rand = |s: &mut u32| -> f32 {
-        *s ^= *s << 13;
-        *s ^= *s >> 17;
-        *s ^= *s << 5;
-        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
-    };
-
     let n_frames = particle_atlas
         .map(|pa| pa.frame_count("flame").max(1))
         .unwrap_or(1);
-    // Base frame chosen randomly; subsequent layers cycle forward.
-    // Advance seed first so different sources stay visually distinct.
-    let base_frame = (rand(seed) * n_frames as f32) as u32 % n_frames;
+    // Frame index purely from world time -> animation runs in place
+    // regardless of emit cadence. One frame per tick matches vanilla
+    // MC's flame animation speed.
+    let frame = tick % n_frames;
 
-    for layer in 0..FLAME_LAYERS {
-        let frame = (base_frame + layer) % n_frames;
-        // Slight jitter per layer keeps layers from perfectly overlapping.
-        let jitter_x = (rand(seed) - 0.5) * 0.18;
-        let jitter_z = (rand(seed) - 0.5) * 0.18;
-        // Alpha: primary frame is full, subsequent frames fade.
-        // Layer 0 = 0.95, 1 = 0.55, 2 = 0.30. This gives the visual
-        // impression of the current frame dominating while the next
-        // frame is already partially visible (smooth crossfade).
-        let alphas = [0.95f32, 0.55, 0.30];
-        let alpha = alphas[layer as usize];
-
-        let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
-            if let Some(uv) = pa.sprite_uv("flame", frame) {
-                ([uv[0], uv[1]], [uv[2], uv[3]])
-            } else {
-                ([0.0f32, 0.0], [1.0, 1.0])
-            }
+    let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
+        if let Some(uv) = pa.sprite_uv("flame", frame) {
+            ([uv[0], uv[1]], [uv[2], uv[3]])
         } else {
             ([0.0f32, 0.0], [1.0, 1.0])
-        };
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0])
+    };
 
-        out.push(infengine_render::TexturedParticleInstance {
-            center_world: [
-                pos[0] as f32 + 0.5 + jitter_x,
-                pos[1] as f32 + 0.8,
-                pos[2] as f32 + 0.5 + jitter_z,
-            ],
-            size: 0.125,
-            uv_min,
-            uv_max,
-            color: [color[0], color[1], color[2], alpha],
-        });
-    }
+    out.push(infengine_render::TexturedParticleInstance {
+        // Centred on the voxel, lifted to the torch flame height.
+        // No XZ jitter - the flame stays anchored to the torch tip.
+        center_world: [
+            pos[0] as f32 + 0.5,
+            pos[1] as f32 + 0.8,
+            pos[2] as f32 + 0.5,
+        ],
+        size: 0.125,
+        uv_min,
+        uv_max,
+        color: [color[0], color[1], color[2], 1.0],
+    });
 }
 
 /// Emit a textured smoke quad above `pos` into `out`. Cycles the
@@ -16450,7 +16451,9 @@ fn load_non_sheep_mob_meshes(
     texture_dir: &std::path::Path,
     r: &mut Renderer,
 ) -> mob_meshes::MobMeshes {
-    use mob_meshes::{MobMeshes, MobPart, build_mob_part_mesh};
+    use mob_meshes::{
+        BiomeVariant, MobMeshes, MobPart, build_mob_part_mesh, entity_has_biome_variants,
+    };
 
     let entity_root = texture_dir
         .parent()
@@ -16460,37 +16463,59 @@ fn load_non_sheep_mob_meshes(
     /// Try .tga then .png in the canonical MC entity sub-directory.
     /// Returns the image bytes as an RGBA `image::RgbaImage`, or `None`
     /// if neither file exists or the image can't be decoded.
+    ///
+    /// W46.4: MC 26.1.2 split chicken / pig / cow textures into per-biome
+    /// files (`chicken_temperate.png`, `chicken_cold.png`, `chicken_warm.png`).
+    /// For mobs in `entity_has_biome_variants`, the loader resolves the
+    /// canonical `<mob>{biome.suffix}.png` first (proper MC behaviour with
+    /// the engine-wide default biome = Temperate, NOT a "load any file we
+    /// can find" fallback). Mobs without biome variants still use the bare
+    /// `<mob>.png` path.
+    ///
     /// W31.2: logs a warn when no candidate is found so the user knows
     /// they need a resource pack for that mob's texture.
     fn try_open_entity(
         entity_root: &std::path::Path,
         mob: &str,
+        biome: BiomeVariant,
     ) -> Option<image::RgbaImage> {
         let mob_dir = entity_root.join(mob);
-        // W31.2: extra Bedrock-style candidates - some packs keep a
-        // variant name (e.g. "chicken.tga" directly under entity/) or
-        // store the file under a "vanilla" subdirectory.
-        let candidates = [
-            mob_dir.join(format!("{mob}.tga")),
-            mob_dir.join(format!("{mob}.png")),
-            // Bedrock packs often flatten the entity dir:
-            entity_root.join(format!("{mob}.tga")),
-            entity_root.join(format!("{mob}.png")),
-            // Some Java packs place the texture one level up from entity/:
-            entity_root
-                .parent()
-                .map(|p| p.join(format!("{mob}.tga")))
-                .unwrap_or_else(|| entity_root.join(format!("{mob}.tga"))),
-            entity_root
-                .parent()
-                .map(|p| p.join(format!("{mob}.png")))
-                .unwrap_or_else(|| entity_root.join(format!("{mob}.png"))),
-        ];
+
+        // Per-biome filename (e.g. "chicken_temperate") - the canonical
+        // MC 26.x name for mobs with biome variants. For non-variant
+        // mobs this is unused.
+        let biome_name = format!("{mob}{}", biome.suffix());
+        let has_biome = entity_has_biome_variants(mob);
+
+        // Build candidate list with biome-variant names FIRST so the
+        // correct file wins on MC 26.x, then the bare name for older
+        // packs / mobs without biome variants.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if has_biome {
+            candidates.push(mob_dir.join(format!("{biome_name}.tga")));
+            candidates.push(mob_dir.join(format!("{biome_name}.png")));
+            candidates.push(entity_root.join(format!("{biome_name}.tga")));
+            candidates.push(entity_root.join(format!("{biome_name}.png")));
+        }
+        // Bare-name candidates (works for zombie / skeleton / spider /
+        // pre-26.x packs).
+        candidates.push(mob_dir.join(format!("{mob}.tga")));
+        candidates.push(mob_dir.join(format!("{mob}.png")));
+        // Bedrock packs often flatten the entity dir:
+        candidates.push(entity_root.join(format!("{mob}.tga")));
+        candidates.push(entity_root.join(format!("{mob}.png")));
+        // Some Java packs place the texture one level up from entity/:
+        if let Some(parent) = entity_root.parent() {
+            candidates.push(parent.join(format!("{mob}.tga")));
+            candidates.push(parent.join(format!("{mob}.png")));
+        }
+
         let path = match candidates.iter().find(|p| p.is_file()) {
             Some(p) => p,
             None => {
                 warn!(
                     mob = mob,
+                    biome = ?biome,
                     searched = ?candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
                     "entity texture not found - mob will be untextured (install a resource pack)"
                 );
@@ -16505,6 +16530,11 @@ fn load_non_sheep_mob_meshes(
         }
         Some(img)
     }
+
+    // W46.4: engine-wide default biome until a real biome system lands.
+    // MC's plains / forest biomes resolve to Temperate so this matches the
+    // common-case appearance for spawned mobs.
+    let biome = BiomeVariant::default();
 
     /// Upload a single mesh part and return its handle.
     fn upload_part(
@@ -16523,7 +16553,7 @@ fn load_non_sheep_mob_meshes(
     let mut mm = MobMeshes::default();
 
     // ---- Zombie (64x64) ----------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "zombie") {
+    if let Some(img) = try_open_entity(&entity_root, "zombie", biome) {
         let (w, h) = (img.width(), img.height());
         mm.zombie_head      = Some(upload_part(r, "voxel_demo_mp::zombie_head",      MobPart::ZombieHead,     &img));
         mm.zombie_body      = Some(upload_part(r, "voxel_demo_mp::zombie_body",      MobPart::ZombieBody,     &img));
@@ -16535,7 +16565,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Chicken (64x32) ---------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "chicken") {
+    if let Some(img) = try_open_entity(&entity_root, "chicken", biome) {
         let (w, h) = (img.width(), img.height());
         mm.chicken_head      = Some(upload_part(r, "voxel_demo_mp::chicken_head",      MobPart::ChickenHead,     &img));
         mm.chicken_body      = Some(upload_part(r, "voxel_demo_mp::chicken_body",      MobPart::ChickenBody,     &img));
@@ -16545,7 +16575,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Pig (64x64) -------------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "pig") {
+    if let Some(img) = try_open_entity(&entity_root, "pig", biome) {
         let (w, h) = (img.width(), img.height());
         mm.pig_head           = Some(upload_part(r, "voxel_demo_mp::pig_head",           MobPart::PigHead,          &img));
         mm.pig_body           = Some(upload_part(r, "voxel_demo_mp::pig_body",           MobPart::PigBody,          &img));
@@ -16557,7 +16587,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Cow (64x64) -------------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "cow") {
+    if let Some(img) = try_open_entity(&entity_root, "cow", biome) {
         let (w, h) = (img.width(), img.height());
         mm.cow_head            = Some(upload_part(r, "voxel_demo_mp::cow_head",    MobPart::CowHead,          &img));
         mm.cow_body            = Some(upload_part(r, "voxel_demo_mp::cow_body",    MobPart::CowBody,          &img));
@@ -16569,7 +16599,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Skeleton (64x32) --------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "skeleton") {
+    if let Some(img) = try_open_entity(&entity_root, "skeleton", biome) {
         let (w, h) = (img.width(), img.height());
         mm.skeleton_head      = Some(upload_part(r, "voxel_demo_mp::skeleton_head",      MobPart::SkeletonHead,     &img));
         mm.skeleton_body      = Some(upload_part(r, "voxel_demo_mp::skeleton_body",      MobPart::SkeletonBody,     &img));
@@ -16581,7 +16611,7 @@ fn load_non_sheep_mob_meshes(
     }
 
     // ---- Spider (64x32) ----------------------------------------------------
-    if let Some(img) = try_open_entity(&entity_root, "spider") {
+    if let Some(img) = try_open_entity(&entity_root, "spider", biome) {
         let (w, h) = (img.width(), img.height());
         mm.spider_head  = Some(upload_part(r, "voxel_demo_mp::spider_head",  MobPart::SpiderHead,  &img));
         mm.spider_body0 = Some(upload_part(r, "voxel_demo_mp::spider_body0", MobPart::SpiderBody0, &img));

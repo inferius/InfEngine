@@ -17,16 +17,26 @@
 //     during player movement, causing frame stalls).
 //
 // Buffer sizes:
-//   - Vertex pool: 128 MB / sizeof(MeshVertex)=40 ~ 3.3 M vertices.
-//   - Index pool: 32 MB / 4 bytes = 8 M indices.
+//   - Vertex pool: 512 MB / sizeof(MeshVertex)=40 ~ 13.4 M vertices.
+//   - Index pool: 128 MB / 4 bytes = 32 M indices.
+//
+// W46.1: bumped from 128 MB / 32 MB after W45.5 enabled the universal
+// JSON pipeline. Routing every cube block through per-element vertex
+// emission (instead of the compact 6-quad cube path) inflated vertex
+// usage to the point where the 128 MB pool was exhausted within a few
+// chunks at view_distance >= 8, spamming "uber pool full" WARN and
+// silently falling back to per-chunk legacy buffers (losing the W32
+// shared-buffer perf win). Real fix is instance rendering for cube
+// faces (1 vertex per face + per-instance offset = ~75% bytes saved)
+// but that is a larger refactor; bumping the pool buys headroom now.
 //
 // Thread safety: single-threaded (called from the renderer's main thread only).
 
 use std::collections::HashMap;
 use crate::mesh3d::{MeshHandle, MeshVertex};
 
-const VERTEX_POOL_BYTES: u64 = 128 * 1024 * 1024; // 128 MB
-const INDEX_POOL_BYTES: u64  =  32 * 1024 * 1024; //  32 MB
+const VERTEX_POOL_BYTES: u64 = 512 * 1024 * 1024; // 512 MB - see W46.1 note above
+const INDEX_POOL_BYTES: u64  = 128 * 1024 * 1024; // 128 MB
 
 const VERTEX_STRIDE: u64 = std::mem::size_of::<MeshVertex>() as u64;
 const INDEX_STRIDE: u64  = std::mem::size_of::<u32>() as u64;

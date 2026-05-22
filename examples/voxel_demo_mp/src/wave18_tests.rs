@@ -42,35 +42,69 @@ fn torch_emits_flame_textured_particle_with_atlas_uv() {
     let pos = [5i32, 64, 7];
     let mut out: Vec<TexturedParticleInstance> = Vec::new();
     let mut s = mk_seed(42);
-    crate::emit_textured_flame(&mut out, Some(&atlas), &pos, &mut s, [1.0, 0.78, 0.40]);
+    // W46.2: emit_textured_flame now takes a `tick` param and emits a
+    // single deterministic billboard per call (no random XZ jitter,
+    // no overlapping layers). Frame index = tick % n_frames.
+    crate::emit_textured_flame(&mut out, Some(&atlas), &pos, &mut s, [1.0, 0.78, 0.40], 0);
 
-    // W45.4: emit_textured_flame now emits FLAME_LAYERS=3 overlapping
-    // quads per call (anti-jump fix, Option C). Verify we get 3.
-    assert_eq!(out.len(), 3, "W45.4: three overlapping frame layers per call");
+    // One billboard per call after W46.2 (the W45.4 "Option C"
+    // multi-layer emit caused per-call random XZ jitter -> sprite
+    // appeared to jump along X instead of animating in place).
+    assert_eq!(out.len(), 1, "W46.2: single billboard per call");
 
-    // Primary layer (index 0) carries the highest alpha.
     let p0 = &out[0];
-    // Center y should be near pos[1] + 0.8 = 64.8 (with jitter <= 0.2).
+    // Center y exactly at pos[1] + 0.8 (no jitter after W46.2).
     assert!(
-        (p0.center_world[1] - 64.8).abs() < 0.25,
-        "center_y={} should be near 64.8",
+        (p0.center_world[1] - 64.8).abs() < 1e-5,
+        "center_y={} should be exactly 64.8 (no jitter)",
         p0.center_world[1],
     );
-    // UV must not be the fallback [0,0,1,1]. The flame strip in
-    // synth_atlas has v_max = 0.25 for frame 0; any selected frame has
-    // v_max <= 0.25 (or 0.50 or 0.75 for subsequent frames, all < 1.0).
-    // A simple bound: uv_max[1] < 1.0 (within the strip, not the fallback).
+    // Center x / z exactly at voxel center + 0.5 (no XZ jitter).
+    assert!((p0.center_world[0] - 5.5).abs() < 1e-5, "x should be 5.5, no jitter");
+    assert!((p0.center_world[2] - 7.5).abs() < 1e-5, "z should be 7.5, no jitter");
+    // UV must not be the fallback [0,0,1,1]; flame frame 0 in synth_atlas
+    // has v_max = 0.25, so v_max < 1.0 confirms a real atlas hit.
     let v_max = p0.uv_max[1];
     assert!(
         v_max < 1.0,
         "uv_max.v={v_max} should be within flame strip (< 1.0), not white fallback 1.0",
     );
-    // Alpha of layer 0 should be ~0.95.
-    assert!((p0.color[3] - 0.95).abs() < 0.01, "primary layer alpha should be 0.95");
-    // Alpha of layer 1 should be ~0.55.
-    assert!((out[1].color[3] - 0.55).abs() < 0.01, "layer 1 alpha should be 0.55");
-    // Alpha of layer 2 should be ~0.30.
-    assert!((out[2].color[3] - 0.30).abs() < 0.01, "layer 2 alpha should be 0.30");
+    // Single billboard - full alpha.
+    assert!((p0.color[3] - 1.0).abs() < 1e-5, "alpha should be 1.0");
+}
+
+/// W46.2: with a multi-frame flame strip the frame index must advance
+/// deterministically from the `tick` parameter (not from the seed).
+#[test]
+fn flame_frame_advances_with_tick_param() {
+    let atlas = synth_atlas(&[("flame", 4)]); // 4 frames
+    let pos = [0i32, 0, 0];
+    let mut s0 = mk_seed(42);
+    let mut s1 = mk_seed(42); // same seed
+    let mut out0 = Vec::new();
+    let mut out1 = Vec::new();
+    // Same seed, different tick -> different UV (different frame).
+    crate::emit_textured_flame(&mut out0, Some(&atlas), &pos, &mut s0, [1.0, 1.0, 1.0], 0);
+    crate::emit_textured_flame(&mut out1, Some(&atlas), &pos, &mut s1, [1.0, 1.0, 1.0], 1);
+    assert_eq!(out0.len(), 1);
+    assert_eq!(out1.len(), 1);
+    // synth_atlas builds the base UV as [0, 0, 1, 1/frames=0.25] for a
+    // single-entry atlas, so the 4 frames sub-divide V range [0, 0.25]:
+    //   frame 0: v_min=0,       v_max=0.0625
+    //   frame 1: v_min=0.0625,  v_max=0.125
+    assert!(
+        (out0[0].uv_min[1] - 0.0).abs() < 1e-5,
+        "tick 0 frame should map to v_min=0",
+    );
+    let v1 = out1[0].uv_min[1];
+    assert!(
+        v1 > 0.0 && v1 < 0.25,
+        "tick 1 frame should map to a higher V band (got {v1})",
+    );
+    assert!(
+        (out0[0].uv_min[1] - v1).abs() > 1e-5,
+        "tick 0 and tick 1 must select different frames",
+    );
 }
 
 /// `emit_textured_lava` must push one particle and resolve the "lava"

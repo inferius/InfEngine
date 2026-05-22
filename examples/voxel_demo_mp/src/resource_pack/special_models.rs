@@ -83,9 +83,15 @@ pub(crate) fn build_block_model_cache(pack: &mut super::ResourcePack) {
 /// Resolve one block id to a `ResolvedBlockState` for the cache.
 /// Reads disk ONCE per id (at cache-build time); during meshing the
 /// cache is consulted instead.
+///
+/// W46.3: logs the resolution path so we can verify the JSON pipeline
+/// is actually taking effect (e.g. for the torch root-cause hunt).
+/// Each id is resolved once at pack load, so the log volume is bounded
+/// by `BLOCK_NAME_MAP.len()` (a few dozen lines, info level).
 fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState {
     // id -> MC block name.
     let Some(map_entry) = name_map::lookup_block(id) else {
+        tracing::debug!(block_id = id, "resolve_for_cache: no name_map entry, falling back to special_table");
         return resolve_from_special_table(id);
     };
     let block_name = map_entry.block;
@@ -94,6 +100,11 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
     let Some(state) = blockstates::load_blockstate(pack, block_name) else {
         // No blockstate on disk. Try hand-coded special_models table
         // so the placeholder pack still works.
+        tracing::debug!(
+            block_id = id,
+            block_name = block_name,
+            "resolve_for_cache: blockstate JSON missing, falling back to special_table",
+        );
         return resolve_from_special_table(id);
     };
 
@@ -107,17 +118,50 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
             }
         }
         if parts.is_empty() {
+            tracing::debug!(
+                block_id = id,
+                block_name = block_name,
+                "resolve_for_cache: multipart blockstate but no parts loaded, falling back",
+            );
             return resolve_from_special_table(id);
         }
+        tracing::debug!(
+            block_id = id,
+            block_name = block_name,
+            parts = parts.len(),
+            "resolve_for_cache: multipart via JSON pipeline",
+        );
         ResolvedBlockState::Multipart(parts)
     } else {
         // Variant-form: pick first matching model (full state-matching deferred).
         let Some(model_ref) = state.first_variant_model() else {
+            tracing::debug!(
+                block_id = id,
+                block_name = block_name,
+                "resolve_for_cache: no variant model, falling back",
+            );
             return resolve_from_special_table(id);
         };
         match models::load_model(pack, &model_ref.model) {
-            Some(m) => ResolvedBlockState::Single(m),
-            None => resolve_from_special_table(id),
+            Some(m) => {
+                tracing::debug!(
+                    block_id = id,
+                    block_name = block_name,
+                    model = model_ref.model.as_str(),
+                    elements = m.elements.len(),
+                    "resolve_for_cache: single variant via JSON pipeline",
+                );
+                ResolvedBlockState::Single(m)
+            }
+            None => {
+                tracing::debug!(
+                    block_id = id,
+                    block_name = block_name,
+                    model = model_ref.model.as_str(),
+                    "resolve_for_cache: model JSON load failed, falling back",
+                );
+                resolve_from_special_table(id)
+            }
         }
     }
 }

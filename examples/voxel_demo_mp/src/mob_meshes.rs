@@ -34,6 +34,53 @@
 use infengine_render::{MeshHandle, MeshVertex};
 
 // ---------------------------------------------------------------------------
+// BiomeVariant - W46.4
+// ---------------------------------------------------------------------------
+
+/// W46.4: MC 26.1.2 ships per-biome entity textures for chicken / pig /
+/// cow / wolf / etc. (`chicken_temperate.png`, `chicken_cold.png`,
+/// `chicken_warm.png`). Each entity carries a `Biome` property at spawn;
+/// the client picks the texture file matching that biome. Mobs that
+/// don't have biome variants (zombie, skeleton, spider) ignore this
+/// and just load `<mob>.png`.
+///
+/// This enum mirrors MC's `BiomeKeys::TEMPERATE | COLD | WARM`. The
+/// engine defaults all mobs to `Temperate` until a real biome system
+/// lands; that matches MC's behaviour in plains / forest biomes
+/// (the most common spawn locations) and produces the correct
+/// canonical texture rather than a placeholder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)] // Cold / Warm wired up once biome system lands.
+pub(crate) enum BiomeVariant {
+    /// Plains, forest, swamp, etc. - the MC default for most spawns.
+    #[default]
+    Temperate,
+    /// Snowy plains, ice plains, frozen ocean.
+    Cold,
+    /// Desert, savanna, jungle, badlands.
+    Warm,
+}
+
+impl BiomeVariant {
+    /// Suffix MC appends to the base mob name for this variant
+    /// (e.g. `_temperate` -> `chicken_temperate.png`).
+    pub(crate) fn suffix(self) -> &'static str {
+        match self {
+            BiomeVariant::Temperate => "_temperate",
+            BiomeVariant::Cold => "_cold",
+            BiomeVariant::Warm => "_warm",
+        }
+    }
+}
+
+/// True when the given MC entity name has per-biome texture files.
+/// MC 26.x split these out; older mobs (zombie, skeleton, spider,
+/// sheep, etc.) still ship a single `<name>.png`.
+pub(crate) fn entity_has_biome_variants(mob: &str) -> bool {
+    matches!(mob, "chicken" | "pig" | "cow")
+}
+
+// ---------------------------------------------------------------------------
 // MobPart enum
 // ---------------------------------------------------------------------------
 
