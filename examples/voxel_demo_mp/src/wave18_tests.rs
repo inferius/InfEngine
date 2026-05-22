@@ -45,7 +45,7 @@ fn torch_emits_flame_textured_particle_with_atlas_uv() {
     // W46.2: emit_textured_flame now takes a `tick` param and emits a
     // single deterministic billboard per call (no random XZ jitter,
     // no overlapping layers). Frame index = tick % n_frames.
-    crate::emit_textured_flame(&mut out, Some(&atlas), &pos, &mut s, [1.0, 0.78, 0.40], 0);
+    crate::ambient::emit_textured_flame(&mut out, Some(&atlas), &pos, &mut s, [1.0, 0.78, 0.40], 0);
 
     // One billboard per call after W46.2 (the W45.4 "Option C"
     // multi-layer emit caused per-call random XZ jitter -> sprite
@@ -84,8 +84,8 @@ fn flame_frame_advances_with_tick_param() {
     let mut out0 = Vec::new();
     let mut out1 = Vec::new();
     // Same seed, different tick -> different UV (different frame).
-    crate::emit_textured_flame(&mut out0, Some(&atlas), &pos, &mut s0, [1.0, 1.0, 1.0], 0);
-    crate::emit_textured_flame(&mut out1, Some(&atlas), &pos, &mut s1, [1.0, 1.0, 1.0], 1);
+    crate::ambient::emit_textured_flame(&mut out0, Some(&atlas), &pos, &mut s0, [1.0, 1.0, 1.0], 0);
+    crate::ambient::emit_textured_flame(&mut out1, Some(&atlas), &pos, &mut s1, [1.0, 1.0, 1.0], 1);
     assert_eq!(out0.len(), 1);
     assert_eq!(out1.len(), 1);
     // synth_atlas builds the base UV as [0, 0, 1, 1/frames=0.25] for a
@@ -117,7 +117,7 @@ fn lava_emits_lava_drip_textured_particle() {
     let pos = [10i32, 40, 10];
     let mut out: Vec<TexturedParticleInstance> = Vec::new();
     let mut s = mk_seed(7);
-    crate::emit_textured_lava(&mut out, Some(&atlas), &pos, &mut s);
+    crate::ambient::emit_textured_lava(&mut out, Some(&atlas), &pos, &mut s);
 
     assert_eq!(out.len(), 1, "one lava drip per call");
     let p = &out[0];
@@ -154,7 +154,7 @@ fn smoke_particle_sprite_selection_stays_within_eight_frame_range() {
     for seed_v in 0u32..64 {
         let mut out: Vec<TexturedParticleInstance> = Vec::new();
         let mut s = mk_seed(seed_v * 17 + 3);
-        crate::emit_textured_smoke(&mut out, Some(&atlas), &[0, 64, 0], &mut s);
+        crate::ambient::emit_textured_smoke(&mut out, Some(&atlas), &[0, 64, 0], &mut s);
         assert_eq!(out.len(), 1, "one smoke per call (seed {seed_v})");
         let p = &out[0];
         let uv = [p.uv_min[0], p.uv_min[1], p.uv_max[0], p.uv_max[1]];
