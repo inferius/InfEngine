@@ -72,11 +72,59 @@ pub(crate) enum ResolvedBlockState {
 pub(crate) fn build_block_model_cache(pack: &mut super::ResourcePack) {
     use super::name_map::BLOCK_NAME_MAP;
     let mut cache = HashMap::with_capacity(BLOCK_NAME_MAP.len());
+    let mut single_count = 0usize;
+    let mut multipart_count = 0usize;
+    let mut none_count = 0usize;
     for entry in BLOCK_NAME_MAP {
         let id = entry.infengine_id;
         let resolved = resolve_for_cache(pack, id);
+        // W46.11: emit INFO-level breadcrumbs for known-tricky blocks so
+        // we can verify the JSON pipeline actually fired without enabling
+        // tracing-debug. Keeps the log volume tiny (a single line per id).
+        match &resolved {
+            ResolvedBlockState::Single(m) => {
+                single_count += 1;
+                if matches!(id, 10 | 50 | 51 | 52 | 53) {
+                    tracing::info!(
+                        block_id = id,
+                        block_name = entry.block,
+                        elements = m.elements.len(),
+                        textures = m.textures.len(),
+                        "W46.11 cache: torch-family resolved to Single(JSON)",
+                    );
+                }
+            }
+            ResolvedBlockState::Multipart(parts) => {
+                multipart_count += 1;
+                if matches!(id, 10 | 50 | 51 | 52 | 53) {
+                    tracing::info!(
+                        block_id = id,
+                        block_name = entry.block,
+                        parts = parts.len(),
+                        "W46.11 cache: torch-family resolved to Multipart(JSON)",
+                    );
+                }
+            }
+            ResolvedBlockState::None => {
+                none_count += 1;
+                if matches!(id, 10 | 50 | 51 | 52 | 53) {
+                    tracing::warn!(
+                        block_id = id,
+                        block_name = entry.block,
+                        "W46.11 cache: torch-family fell back to None (hand-built table)",
+                    );
+                }
+            }
+        }
         cache.insert(id, resolved);
     }
+    tracing::info!(
+        single = single_count,
+        multipart = multipart_count,
+        none = none_count,
+        total = BLOCK_NAME_MAP.len(),
+        "W46.11 cache breakdown",
+    );
     pack.block_models = cache;
 }
 
