@@ -93,7 +93,10 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         // W46.15: F_DEDICATED_RENDER dropped - chunk mesher now emits
         // the JSON template_torch.json geometry via emit_block_elements.
         // The legacy custom render path was removed in W46.13.
-        id: 10, name: "torch", color: [1.00, 0.78, 0.40], transparent: true,
+        // W46.16: color forced to white so the per-block tint in
+        // queue_chunk_draw doesn't darken/recolour the already-baked
+        // torch.png pixels (shader does albedo = color.rgb * tex.rgb).
+        id: 10, name: "torch", color: [1.00, 1.00, 1.00], transparent: true,
         flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
         top: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["torch_on.png", "torch.png"], keep_alpha: true },
@@ -447,7 +450,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Redstone torch (id 50). MC emits 7 when lit. Same pillar
     // render shape as a regular torch; tinted red.
     BlockType {
-        id: 50, name: "redstone_torch", color: [0.85, 0.15, 0.10], transparent: true,
+        id: 50, name: "redstone_torch", color: [1.00, 1.00, 1.00], transparent: true, // W46.16
         flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, // W46.15
         top: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
@@ -456,7 +459,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Redstone wall torch (id 51). Wall-mounted variant of
     // REDSTONE_TORCH. Same flags + emission.
     BlockType {
-        id: 51, name: "redstone_wall_torch", color: [0.85, 0.15, 0.10], transparent: true,
+        id: 51, name: "redstone_wall_torch", color: [1.00, 1.00, 1.00], transparent: true, // W46.16
         flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, // W46.15
         top: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["redstone_torch_on.png", "redstone_torch.png", "torch_on.png"], keep_alpha: true },
@@ -465,7 +468,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Soul torch (id 52). MC emits 10. Cooler-coloured variant of
     // TORCH crafted from a torch + soul soil/sand.
     BlockType {
-        id: 52, name: "soul_torch", color: [0.40, 0.85, 1.00], transparent: true,
+        id: 52, name: "soul_torch", color: [1.00, 1.00, 1.00], transparent: true, // W46.16
         flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, // W46.15
         top: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
@@ -473,7 +476,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     },
     // Soul wall torch (id 53). Wall variant of SOUL_TORCH.
     BlockType {
-        id: 53, name: "soul_wall_torch", color: [0.40, 0.85, 1.00], transparent: true,
+        id: 53, name: "soul_wall_torch", color: [1.00, 1.00, 1.00], transparent: true, // W46.16
         flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, // W46.15
         top: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
         bottom: TileSpec { col: 3, row: 2, files: &["soul_torch.png", "torch_on.png"], keep_alpha: true },
