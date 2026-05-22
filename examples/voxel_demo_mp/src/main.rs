@@ -14117,141 +14117,20 @@ impl AppHandler for Voxel {
                 8.0,
             );
         }
-        // Render every torch as a thin wooden pillar + a small
-        // glowing tip. Orientation is derived from the world
-        // each frame: if the voxel directly below is solid the
-        // torch stands upright; otherwise it leans toward the
-        // first neighbouring solid block (wall-mount).
-        if !self.torch_positions.is_empty() {
-            let cube = *self
-                .player_cube
-                .get_or_insert_with(|| renderer.cube_handle());
-            for p in self.torch_positions.iter() {
-                // Pick orientation:
-                //   (dx, dz, lean angle around X/Z, tilt_dir):
-                //   (0, 0) = floor torch.
-                let below = self.world.get([p[0], p[1] - 1, p[2]]);
-                let neighbours = [
-                    ([p[0] - 1, p[1], p[2]], (-1, 0)),
-                    ([p[0] + 1, p[1], p[2]], (1, 0)),
-                    ([p[0], p[1], p[2] - 1], (0, -1)),
-                    ([p[0], p[1], p[2] + 1], (0, 1)),
-                ];
-                let (lean_x, lean_z) = if let Some(orient) =
-                    self.torch_orient.get(p).copied()
-                {
-                    match orient {
-                        1 => (1, 0),
-                        2 => (-1, 0),
-                        3 => (0, 1),
-                        4 => (0, -1),
-                        _ => (0, 0),
-                    }
-                } else if !below.is_air() {
-                    (0i32, 0i32)
-                } else {
-                    let mut found = (0, 0);
-                    for (v, (dx, dz)) in neighbours.iter() {
-                        if !self.world.get(*v).is_air() {
-                            found = (-dx, -dz);
-                            break;
-                        }
-                    }
-                    found
-                };
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32;
-                let cz = p[2] as f32 + 0.5;
-                // Build a transform: floor torch points up;
-                // wall torch tilts ~30 deg toward the lean dir
-                // + shifts toward the supporting wall.
-                let (stick_pos, stick_rot, tip_pos) =
-                    if lean_x == 0 && lean_z == 0 {
-                        (
-                            Vec3::new(cx, cy + 0.35, cz),
-                            glam::Quat::IDENTITY,
-                            Vec3::new(cx, cy + 0.78, cz),
-                        )
-                    } else {
-                        let tilt_axis = if lean_x != 0 {
-                            Vec3::Z
-                        } else {
-                            Vec3::X
-                        };
-                        let tilt_sign = if lean_x != 0 {
-                            -lean_x as f32
-                        } else {
-                            lean_z as f32
-                        };
-                        let angle = 0.55 * tilt_sign;
-                        let rot = glam::Quat::from_axis_angle(
-                            tilt_axis, angle,
-                        );
-                        // Shift the torch base toward the wall
-                        // it's mounted on so the foot sits on
-                        // the supporting block.
-                        let shift_x = -lean_x as f32 * 0.42;
-                        let shift_z = -lean_z as f32 * 0.42;
-                        let sx = cx + shift_x;
-                        let sz = cz + shift_z;
-                        let sy = cy + 0.45;
-                        let tip_x = sx
-                            + lean_x as f32 * 0.18;
-                        let tip_z = sz
-                            + lean_z as f32 * 0.18;
-                        let tip_y = sy + 0.32;
-                        (
-                            Vec3::new(sx, sy, sz),
-                            rot,
-                            Vec3::new(tip_x, tip_y, tip_z),
-                        )
-                    };
-                let stick = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.12, 0.7, 0.12),
-                    stick_rot,
-                    stick_pos,
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    stick.to_cols_array(),
-                    [0.55, 0.40, 0.20, 1.0],
-                    0.0,
-                    0.9,
-                );
-                // Flame tip: small emissive-ish orange cube
-                // with an id-hashed flicker so neighbouring
-                // torches don't pulse in lockstep.
-                let phase = (p[0] as u32)
-                    .wrapping_mul(2654435761)
-                    ^ ((p[1] as u32).wrapping_mul(0x9E37_79B1))
-                    ^ ((p[2] as u32).wrapping_mul(0x85EB_CA6B));
-                let phase_f =
-                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-                let flicker_t =
-                    (self.day_time * 10.0 + phase_f).sin();
-                let scale = 0.16 + 0.025 * flicker_t;
-                let tip_pos = Vec3::new(
-                    tip_pos.x,
-                    tip_pos.y + 0.015 * flicker_t,
-                    tip_pos.z,
-                );
-                let r = 1.0;
-                let g = (0.72 + 0.10 * flicker_t).clamp(0.0, 1.0);
-                let b = (0.25 + 0.08 * flicker_t).clamp(0.0, 1.0);
-                let tip = Mat4::from_scale_rotation_translation(
-                    Vec3::splat(scale),
-                    glam::Quat::IDENTITY,
-                    tip_pos,
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    tip.to_cols_array(),
-                    [r, g, b, 1.0],
-                    0.0,
-                    0.4,
-                );
-            }
-        }
+        // W46.13: legacy pre-MC torch render path REMOVED.
+        //
+        // Up to W45 this block drew every entry in `self.torch_positions`
+        // as a hand-built stick cube + a flicker-animated emissive tip
+        // cube. Since W39+ the chunk mesher emits the proper MC
+        // template_torch.json geometry (verified in W46.11 log:
+        // "torch-family resolved to Single(JSON)") with the right texture
+        // UVs, so this custom render path was producing a SECOND, ugly,
+        // untextured torch on top of the textured one - the "pulsing
+        // top" the user reported in W46 debugging.
+        //
+        // `self.torch_positions` is kept - it is still consumed by the
+        // particle spawn at ~line 3251 (smoke + flame sources) and by
+        // the emitter_lights module. Only this render block is gone.
         // Snow layers: thin 1x0.12x1 slab covering the bottom
         // of the voxel cell. Atlas-tinted near-white so it
         // contrasts with whatever sits below.
