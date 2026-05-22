@@ -14107,16 +14107,20 @@ impl AppHandler for Voxel {
             let phase_f =
                 (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
             let flicker = (self.day_time * 8.0 + phase_f).sin();
-            // Scale to renderer convention. Original torch path used
-            // intensity 2.7..3.1; map the emitter intensity (0..1)
-            // onto a similar range, but stronger for high-emission
-            // sources (lava, glowstone, sea_lantern).
-            let intensity = (s.intensity * 3.0 + 0.4 * flicker).max(0.2);
+            // W46.18: scale to renderer convention. MC torches are
+            // VERY bright in dark caves - the user reported our torches
+            // "don't light up the surroundings" while MC's clearly do.
+            // Bumped intensity multiplier 3.0 -> 5.5 and radius 8 -> 14
+            // so a level-14 torch produces an ~5.1 intensity halo with
+            // 14-block falloff, matching MC's torch-radius range. Flicker
+            // amplitude scaled up proportionally so the wobble stays
+            // perceivable against the higher base.
+            let intensity = (s.intensity * 5.5 + 0.7 * flicker).max(0.3);
             renderer.queue_point_light(
                 s.position,
                 s.color,
                 intensity,
-                8.0,
+                14.0,
             );
         }
         // W46.13: legacy pre-MC torch render path REMOVED.
