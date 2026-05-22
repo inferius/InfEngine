@@ -75,9 +75,15 @@ impl ParticlePass {
     /// Build the pipeline.  `camera_bgl` is the @group(0) layout
     /// already owned by `Camera3DResource` in the renderer; we borrow
     /// it to avoid duplicating it here.
+    /// `depth_format` matches the renderer's depth attachment so the
+    /// pipeline can read the world depth buffer without writing to it.
+    /// W46.12: particles now depth-test against opaque geometry so
+    /// flames behind leaves / walls get z-rejected instead of drawing
+    /// on top of everything.
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
         camera_bgl: &wgpu::BindGroupLayout,
     ) -> Self {
         // Atlas texture + sampler bind group layout.
@@ -193,7 +199,19 @@ impl ParticlePass {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None, // no depth buffer: particle pass piggybacks on mesh3d's target
+            // W46.12: depth-test READ (LessEqual), depth-write OFF.
+            // The particles share mesh3d's depth attachment - we want
+            // opaque geometry in front of a particle to occlude it, but
+            // we never want a particle to write to the depth buffer
+            // (otherwise multiple alpha-blended billboards stomp each
+            // other and create halos around the nearest one).
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,

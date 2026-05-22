@@ -333,6 +333,7 @@ impl Renderer {
         let particle_pass = ParticlePass::new(
             &device,
             config.format,
+            DEPTH_FORMAT,
             &camera_3d_resource.layout,
         );
         let mut meshes = Mesh3DRegistry::default();
