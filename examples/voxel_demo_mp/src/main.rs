@@ -200,8 +200,8 @@ use mob::{
 };
 use player::{
     COLLISION_EPSILON, GRAVITY, JUMP_VELOCITY, PLAYER_HEIGHT, PLAYER_RADIUS,
-    PLAYER_SPEED, aabb_intersects_solid, body_aabb, submerged_liquid,
-    submerged_liquid_eye,
+    PLAYER_SPEED, body_aabb, ray_aabb, submerged_liquid, submerged_liquid_eye,
+    sweep_aabb,
 };
 use ui::{AppState, BackTo, HighlightMode, InvAction, LoadingPhase, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{Biome, WorldGen, biome_at};
@@ -16185,89 +16185,6 @@ fn water_face_normal(
 // `submerged_liquid_eye`, `submerged_liquid`, and
 // `aabb_intersects_solid` moved to `player.rs`.
 
-/// Slab-test ray-AABB intersection. Returns the parametric `t`
-/// of the entry point along `dir` (assumed approximately
-/// unit-length, but any positive length works) when the ray hits
-/// the box; `None` if it misses. Re-used by the mob picker.
-fn ray_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> Option<f32> {
-    let mut tmin = 0.0_f32;
-    let mut tmax = f32::INFINITY;
-    for axis in 0..3 {
-        let inv = 1.0 / dir[axis];
-        let mut t1 = (min[axis] - origin[axis]) * inv;
-        let mut t2 = (max[axis] - origin[axis]) * inv;
-        if t1 > t2 {
-            std::mem::swap(&mut t1, &mut t2);
-        }
-        tmin = tmin.max(t1);
-        tmax = tmax.min(t2);
-        if tmax < tmin {
-            return None;
-        }
-    }
-    if tmax < 0.0 {
-        None
-    } else {
-        Some(tmin.max(0.0))
-    }
-}
-
-fn sweep_aabb(
-    world: &World,
-    snow: &HashMap<[i32; 3], u8>,
-    pos: Vec3,
-    delta: Vec3,
-) -> (Vec3, bool, bool) {
-    let mut new_pos = pos;
-    let mut hit_floor = false;
-    let mut hit_ceiling = false;
-
-    // X axis.
-    let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
-    if aabb_intersects_solid(world, snow, candidate) {
-        if delta.x > 0.0 {
-            let wall = (candidate.x + PLAYER_RADIUS).floor();
-            new_pos.x = wall - PLAYER_RADIUS - COLLISION_EPSILON;
-        } else if delta.x < 0.0 {
-            let wall = (candidate.x - PLAYER_RADIUS).ceil();
-            new_pos.x = wall + PLAYER_RADIUS + COLLISION_EPSILON;
-        }
-    } else {
-        new_pos.x = candidate.x;
-    }
-
-    // Y axis.
-    let candidate = Vec3::new(new_pos.x, new_pos.y + delta.y, new_pos.z);
-    if aabb_intersects_solid(world, snow, candidate) {
-        if delta.y > 0.0 {
-            let wall = candidate.y.floor();
-            new_pos.y = wall - COLLISION_EPSILON;
-            hit_ceiling = true;
-        } else if delta.y < 0.0 {
-            let wall = (candidate.y - PLAYER_HEIGHT).ceil();
-            new_pos.y = wall + PLAYER_HEIGHT + COLLISION_EPSILON;
-            hit_floor = true;
-        }
-    } else {
-        new_pos.y = candidate.y;
-    }
-
-    // Z axis.
-    let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
-    if aabb_intersects_solid(world, snow, candidate) {
-        if delta.z > 0.0 {
-            let wall = (candidate.z + PLAYER_RADIUS).floor();
-            new_pos.z = wall - PLAYER_RADIUS - COLLISION_EPSILON;
-        } else if delta.z < 0.0 {
-            let wall = (candidate.z - PLAYER_RADIUS).ceil();
-            new_pos.z = wall + PLAYER_RADIUS + COLLISION_EPSILON;
-        }
-    } else {
-        new_pos.z = candidate.z;
-    }
-
-    (new_pos, hit_floor, hit_ceiling)
-}
 
 /// Helper to render a slot with full drag&drop integration.
 ///

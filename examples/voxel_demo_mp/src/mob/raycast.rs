@@ -11,7 +11,8 @@
 
 use glam::Vec3;
 
-use crate::{Voxel, ray_aabb};
+use crate::Voxel;
+use crate::player::ray_aabb;
 
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
