@@ -2,8 +2,11 @@
 
 ## Posledni stav
 
-main.rs: **13960 LOC** (z puvodnich 17207 = -3247 / -19%).
-Session W47.11..W47.13e delta: 14720 -> 13960 = -760 LOC.
+main.rs: **13424 LOC** (z puvodnich 17207 = -3783 / -22%).
+Session W47.11..W47.13k delta: 14720 -> 13424 = -1296 LOC.
+
+place_break.rs: 1261 LOC (limit 1500 - prozatim OK, ale 8+ helpers;
+treba splittnout pri pristim pridani).
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -77,6 +80,12 @@ Refaktor (W47.x):
 - W47.13c RMB action classifier -> world/place_break::classify_rmb_action
 - W47.13d block-break pipeline -> world/place_break::apply_block_break
 - W47.13e block-place pipeline -> world/place_break::apply_block_place
+- W47.13f shovel grass path -> world/place_break::apply_shovel_grass_path
+- W47.13g flint+steel ignite -> world/place_break::apply_flint_and_steel_ignite
+- W47.13h bucket scoop/pour -> world/place_break::apply_bucket_use
+- W47.13i open furnace/chest + sleep bed -> world/place_break
+- W47.13j mining damage tick -> world/place_break::tick_mining
+- W47.13k PvP/mob combat dispatch -> world/place_break::apply_combat
 
 ## Aktivni / open
 
@@ -109,22 +118,19 @@ Refaktor (W47.x):
 
 ## Dalsi refaktor splity
 
-W47.13 partial extracts hotove (a-e). Zbyle vetve v on_update place/break:
+W47.13 cely hotovy (a-k). Place/break in on_update redukovany na
+helper calls. Dalsi wave:
 
 | Wave  | Cil                                                | LOC | Riziko |
 |-------|----------------------------------------------------|-----|--------|
-| W47.13f | shovel grass path branch                         | ~50 | low    |
-| W47.13g | flint+steel ignite portal branch                 | ~100 | medium |
-| W47.13h | bucket scoop + pour branch                       | ~170 | medium |
-| W47.13i | sleep bed + chest/furnace open + path msg branches | ~80 | low    |
-| W47.13j | mining LMB damage tick (11218-11343)             | ~125 | medium |
-| W47.13k | attack resolution + combat damage application    | ~150 | medium |
-| W47.14 | mob AI tick -> entity/ai.rs                       | ?   | low    |
-| W47.15 | chunk streamer -> world/stream.rs                 | ~600 | medium |
-| W47.16 | egui inventory + hotbar -> ui/inventory.rs        | ~1500 | high   |
+| W47.14 | place_break.rs split do submodulu (1261 -> 4x~300)| ~0  | low    |
+| W47.15 | mob AI tick -> entity/ai.rs                       | ?   | low    |
+| W47.16 | chunk streamer -> world/stream.rs                 | ~600 | medium |
+| W47.17 | egui inventory + hotbar -> ui/inventory.rs        | ~1500 | high   |
 
-Recommend: pokracovat W47.13f-i (snadne 1-helper-per-commit), pak
-W47.13j mining tick, pak W47.13k combat. Az pak W47.14+.
+Recommend: W47.14 (split place_break.rs do 4 podsouboru: combat,
+mining, rmb_actions, break_place_helpers) jako prevence pred 1500
+limit. Pak W47.15+ wave podle TODO.
 
 ## Pravidla (z CLAUDE.md)
 
