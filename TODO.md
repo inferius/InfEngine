@@ -2,8 +2,8 @@
 
 ## Posledni stav
 
-main.rs: **14320 LOC** (z puvodnich 17207 = -2887 / -17%).
-Session W47.11..W47.13b delta: 14720 -> 14320 = -400 LOC.
+main.rs: **13960 LOC** (z puvodnich 17207 = -3247 / -19%).
+Session W47.11..W47.13e delta: 14720 -> 13960 = -760 LOC.
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -74,6 +74,9 @@ Refaktor (W47.x):
   (W47.11+12 commitnute spolu - combo commit kvuli sdilenemu main.rs diff)
 - W47.13a attack target resolver -> world/place_break.rs (pure decision)
 - W47.13b mining timer step -> mining::step_mining_session (pure clock)
+- W47.13c RMB action classifier -> world/place_break::classify_rmb_action
+- W47.13d block-break pipeline -> world/place_break::apply_block_break
+- W47.13e block-place pipeline -> world/place_break::apply_block_place
 
 ## Aktivni / open
 
@@ -106,21 +109,22 @@ Refaktor (W47.x):
 
 ## Dalsi refaktor splity
 
-W47.13 NENI cisty boundary - on_update je 2362 LOC megamethod s
-~1100 LOC place/break dispersed v deep `&mut self` borrows + 4
-mistech reset pending flags. Splitting incremental:
+W47.13 partial extracts hotove (a-e). Zbyle vetve v on_update place/break:
 
 | Wave  | Cil                                                | LOC | Riziko |
 |-------|----------------------------------------------------|-----|--------|
-| W47.13c | rmb_action_classify -> place_break (decision tree) | ~80 | medium |
-| W47.13d | break-> drop + broadcast helper                  | ~150 | medium |
-| W47.13e | place-> orient + broadcast helper                | ~250 | medium |
+| W47.13f | shovel grass path branch                         | ~50 | low    |
+| W47.13g | flint+steel ignite portal branch                 | ~100 | medium |
+| W47.13h | bucket scoop + pour branch                       | ~170 | medium |
+| W47.13i | sleep bed + chest/furnace open + path msg branches | ~80 | low    |
+| W47.13j | mining LMB damage tick (11218-11343)             | ~125 | medium |
+| W47.13k | attack resolution + combat damage application    | ~150 | medium |
 | W47.14 | mob AI tick -> entity/ai.rs                       | ?   | low    |
 | W47.15 | chunk streamer -> world/stream.rs                 | ~600 | medium |
 | W47.16 | egui inventory + hotbar -> ui/inventory.rs        | ~1500 | high   |
 
-Recommend: dokoncit W47.13c-e postupne (kazdy maly extract = jeden
-commit s testy), pak W47.14 mob AI, pak W47.15 streamer.
+Recommend: pokracovat W47.13f-i (snadne 1-helper-per-commit), pak
+W47.13j mining tick, pak W47.13k combat. Az pak W47.14+.
 
 ## Pravidla (z CLAUDE.md)
 
