@@ -13,3 +13,5 @@ pub mod point_lights;
 pub mod decor;
 // W47.15 - sky tint + weather/lightning mix + distance fog setup.
 pub mod sky;
+// W47.16 - floating dropped-item render (bob + magnet attract).
+pub mod drops;

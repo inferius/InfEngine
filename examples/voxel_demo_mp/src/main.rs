@@ -214,7 +214,7 @@ use player::{
 };
 use ui::{AppState, BackTo, HighlightMode, InvAction, LoadingPhase, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{Biome, WorldGen, biome_at};
-use drops::{DROP_ATTRACT_RADIUS, DropItem};
+use drops::DropItem;
 use inventory::{
     HOTBAR_SLOTS, INVENTORY_COLS, INVENTORY_ROWS, INVENTORY_SLOTS,
     SlotKind, SplitMode, STACK_MAX, inv_apply_drag, inv_consume,
@@ -11687,61 +11687,17 @@ impl AppHandler for Voxel {
         // `dropped_items` so both host + client see the same
         // set; bob phase comes from the drop's `age` so
         // neighbouring items don't oscillate in lockstep.
-        if !self.dropped_items.is_empty() {
-            let cube = *self
-                .player_cube
-                .get_or_insert_with(|| renderer.cube_handle());
-            let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
-            for drop in self.dropped_items.iter() {
-                let bob = (drop.age * 2.4).sin() * 0.08;
-                let block = BlockId(drop.block);
-                let color = self
-                    .registry
-                    .get(block)
-                    .map(|d| d.color)
-                    .unwrap_or([0.75, 0.55, 0.30]);
-                // Magnet visual: when the drop is in the attract
-                // band, shrink it toward the player + spin faster
-                // so the pickup reads as a satisfying suck-in
-                // animation. Outside the band the drop sits at
-                // base scale + spin.
-                let dx = player_pos.x - drop.pos[0];
-                let dy = chest_y - drop.pos[1];
-                let dz = player_pos.z - drop.pos[2];
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                let attract = if dist < DROP_ATTRACT_RADIUS && dist > 1e-3 {
-                    (1.0 - dist / DROP_ATTRACT_RADIUS).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                // Scale ramps from 0.28 (resting) down to 0.08
-                // at the collect band. Spin speed bumps with
-                // attract so the cube wobbles into the player.
-                let base_scale = 0.28;
-                let scale = base_scale * (1.0 - 0.7 * attract);
-                let spin_rate = 1.4 + 6.0 * attract;
-                // Lean toward the player by a fraction of the
-                // delta so the drop physically streaks in.
-                let lean = 0.45 * attract;
-                let render_pos = Vec3::new(
-                    drop.pos[0] + dx * lean,
-                    drop.pos[1] + 0.14 + bob + dy * lean,
-                    drop.pos[2] + dz * lean,
-                );
-                let m = Mat4::from_scale_rotation_translation(
-                    Vec3::splat(scale),
-                    glam::Quat::from_rotation_y(drop.age * spin_rate),
-                    render_pos,
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    m.to_cols_array(),
-                    [color[0], color[1], color[2], 1.0],
-                    0.0,
-                    0.7,
-                );
-            }
-        }
+        // W47.16: dropped items render moved into render::drops.
+        let drops_cube = *self
+            .player_cube
+            .get_or_insert_with(|| renderer.cube_handle());
+        crate::render::drops::draw(
+            renderer,
+            drops_cube,
+            &self.dropped_items,
+            player_pos,
+            &self.registry,
+        );
         // Render remote players as coloured cubes so each peer is
         // visible. The interpolation buffer (`remote_interp`) is
         // populated by every received `vx.player` regardless of
