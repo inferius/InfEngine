@@ -7,7 +7,10 @@
 
 use bytemuck::{Pod, Zeroable};
 
-pub(crate) const MAX_LIGHTS: usize = 8;
+// W46.27: bumped from 8 to 32 so a forest of torches doesn't leave
+// most of them dark when pick_nearest truncated the set. Modern
+// GPUs handle a 32-light fragment loop with no visible cost.
+pub(crate) const MAX_LIGHTS: usize = 32;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]

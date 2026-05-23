@@ -5981,27 +5981,43 @@ impl Voxel {
                     }
                 }
             }
-            // W46.24: persist chunk state BEFORE eviction so edits made
-            // outside the stream radius (a torch placed then walked past,
-            // an obsidian placed and forgotten) survive the next session.
-            // Without this, world.remove_chunk drops the modified chunk
-            // and the OLD on-disk file gets read back on next load -
-            // every edit between the last full save_world and the
-            // unload was silently lost.
+            // W46.24 + W46.28: persist chunk state BEFORE eviction
+            // so edits made outside the stream radius survive the
+            // next session. Build payloads on the main thread (fast:
+            // chunk-clone + filtered overrides, ~us per chunk) then
+            // hand the batch off to a detached background thread for
+            // the actual file writes. Keeps the unload step under
+            // ~1 ms of main-thread work even when 20 chunks scroll
+            // past UNLOAD_DISTANCE in a single frame.
             if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
                 && let Some(slug) = self.current_world_slug.clone()
             {
                 let dim = self.current_dim.clone();
+                let mut payloads: Vec<world_save::chunks::ChunkPayload> =
+                    Vec::with_capacity(to_unload.len());
                 for cc in &to_unload {
-                    if let Err(err) =
-                        world_save::save_one_chunk(self, &slug, &dim, *cc)
-                    {
-                        warn!(
-                            coord = ?cc,
-                            error = %err,
-                            "world_save: per-chunk unload-save failed",
-                        );
+                    if let Some(p) = world_save::build_chunk_payload(self, *cc) {
+                        payloads.push(p);
                     }
+                }
+                if !payloads.is_empty() {
+                    std::thread::Builder::new()
+                        .name("voxel_demo_mp::unload_writer".to_string())
+                        .spawn(move || {
+                            for payload in payloads {
+                                let coord = payload.coord;
+                                if let Err(err) =
+                                    world_save::write_chunk_payload(&slug, &dim, &payload)
+                                {
+                                    tracing::warn!(
+                                        coord = ?coord,
+                                        error = %err,
+                                        "world_save: async unload-save failed",
+                                    );
+                                }
+                            }
+                        })
+                        .ok();
                 }
             }
             // W46.26: drop emitter / torch / fire / snow / liquid map

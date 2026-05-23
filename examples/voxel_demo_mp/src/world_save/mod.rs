@@ -120,6 +120,7 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 /// the stream radius (e.g. a torch the player placed then walked
 /// away from) persist instead of evaporating when the chunk gets
 /// evicted from memory.
+#[allow(dead_code)] // W46.24 sync entry point; W46.28 main path uses async build/write split
 pub(crate) fn save_one_chunk(
     voxel: &Voxel,
     slug: &str,
@@ -127,6 +128,27 @@ pub(crate) fn save_one_chunk(
     coord: infengine_voxel::ChunkCoord,
 ) -> io::Result<()> {
     runtime::save_one_chunk(voxel, slug, dim, coord)
+}
+
+/// W46.28: build a single chunk's save payload on the main thread.
+/// Cheap (chunk clone + filtered overrides ~us). Pair with
+/// `write_chunk_payload` on a background thread to keep the file
+/// write off the main loop.
+pub(crate) fn build_chunk_payload(
+    voxel: &Voxel,
+    coord: infengine_voxel::ChunkCoord,
+) -> Option<chunks::ChunkPayload> {
+    runtime::build_chunk_payload(voxel, coord)
+}
+
+/// W46.28: write a pre-built `ChunkPayload` to disk. Pure I/O,
+/// safe to call from a background thread.
+pub(crate) fn write_chunk_payload(
+    slug: &str,
+    dim: &str,
+    payload: &chunks::ChunkPayload,
+) -> io::Result<()> {
+    runtime::write_chunk_payload(slug, dim, payload)
 }
 
 /// Load `slug` into `voxel`. On a fresh slot (no `meta.json` yet)

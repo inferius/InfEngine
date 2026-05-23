@@ -232,25 +232,50 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
 /// `dim` should be the active dim tag for the chunk's source
 /// `voxel.current_dim`. Parked dims should not unload chunks - they
 /// stay resident in `voxel.worlds` until the player visits them.
+#[allow(dead_code)] // W46.24 sync entry point; W46.28 main path uses async build/write split
 pub(crate) fn save_one_chunk(
     voxel: &Voxel,
     slug: &str,
     dim: &str,
     coord: infengine_voxel::ChunkCoord,
 ) -> io::Result<()> {
-    use super::chunks::{self, CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
-    use helpers::collect_for_chunk;
-    let Some(chunk) = voxel.world.chunk(coord) else {
-        // Chunk already gone - nothing to write. Not an error.
+    use super::chunks;
+    let Some(payload) = build_chunk_payload(voxel, coord) else {
         return Ok(());
     };
-    let payload = ChunkPayload {
+    chunks::write_chunk(slug, dim, &payload)
+}
+
+/// W46.28: build the on-disk payload struct for `coord` WITHOUT
+/// writing it. Used by the chunk-unload path so the main thread
+/// can collect a Vec of payloads in microseconds and hand them off
+/// to a detached background thread for the file write. Without
+/// this split the per-chunk disk write blocked the main thread by
+/// ~1 ms each, adding up to a visible hitch when 20 chunks
+/// scrolled past UNLOAD_DISTANCE in one frame.
+pub(crate) fn build_chunk_payload(
+    voxel: &Voxel,
+    coord: infengine_voxel::ChunkCoord,
+) -> Option<super::chunks::ChunkPayload> {
+    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+    use helpers::collect_for_chunk;
+    let chunk = voxel.world.chunk(coord)?;
+    Some(ChunkPayload {
         format_version: CHUNK_PAYLOAD_VERSION,
         coord,
         voxels: ChunkVoxels::from_chunk(chunk),
         liquid_levels: collect_for_chunk(&voxel.liquid_level, coord),
         torch_orient: collect_for_chunk(&voxel.torch_orient, coord),
         snow_layers: collect_for_chunk(&voxel.snow_positions, coord),
-    };
-    chunks::write_chunk(slug, dim, &payload)
+    })
+}
+
+/// W46.28: write a pre-built payload to disk. Pure I/O - safe to
+/// call from a background thread because it takes only owned data.
+pub(crate) fn write_chunk_payload(
+    slug: &str,
+    dim: &str,
+    payload: &super::chunks::ChunkPayload,
+) -> io::Result<()> {
+    super::chunks::write_chunk(slug, dim, payload)
 }

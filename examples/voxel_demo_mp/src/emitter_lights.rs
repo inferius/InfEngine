@@ -38,9 +38,9 @@ use crate::block::{
 };
 
 /// Max point lights the shader binding supports. Matches
-/// `mesh3d.wgsl::lights: array<PointLight, 8>`. Picking N > 8
-/// drops the furthest until <= 8 remain.
-pub(crate) const MAX_POINT_LIGHTS: usize = 8;
+/// `mesh3d.wgsl::lights: array<PointLight, 32>` (W46.27).
+/// Picking N > 32 drops the furthest until <= 32 remain.
+pub(crate) const MAX_POINT_LIGHTS: usize = 32;
 
 /// World-space sample fed into `infengine_render::queue_point_light`.
 /// Builds-up vs `PointLight` directly because the engine doesn't

@@ -40,7 +40,10 @@ struct ShadowUniform {
 @group(2) @binding(1) var shadow_map: texture_depth_2d;
 @group(2) @binding(2) var shadow_smp: sampler_comparison;
 
-const MAX_LIGHTS: u32 = 8u;
+// W46.27: bumped 8 -> 32. Matches the CPU-side MAX_LIGHTS in
+// lights.rs. Modern desktop GPUs run the per-fragment 32-light
+// loop with no visible cost.
+const MAX_LIGHTS: u32 = 32u;
 
 struct PointLight {
     position: vec4<f32>,
@@ -50,7 +53,7 @@ struct PointLight {
 
 struct LightsUniform {
     count: vec4<u32>,
-    lights: array<PointLight, 8>,
+    lights: array<PointLight, 32>,
 };
 
 @group(3) @binding(0) var<uniform> point_lights: LightsUniform;
