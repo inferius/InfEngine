@@ -347,10 +347,22 @@ const VIEW_DISTANCE_MAX: i32 = 32;
 /// W26.3: lowered back to 4 - GPU upload (wgpu buffer alloc + queue
 /// submit + bind group) is expensive; RESULTS_BUDGET_MS provides a
 /// soft time cap as a second guard.
-const RESULTS_PER_FRAME: usize = 4;
+// W46.33: bumped 4 -> 32. Loading state already uses 32; keeping the
+// same cap in Playing means a 412-chunk post-load remesh wave (W46.32
+// lighting BFS + W46.30 remesh queue) drains in ~13 frames instead
+// of ~103. The 2 ms per-frame time budget below still throttles, so
+// raising the count cap is safe on cheap result types (Lit, Removed)
+// and the time budget short-circuits expensive ones (Remeshed mesh
+// upload).
+const RESULTS_PER_FRAME: usize = 32;
 /// Soft time budget (ms) for the GPU upload drain loop per frame.
 /// W26.3: caps wall-clock GPU upload cost regardless of result count.
-const RESULTS_BUDGET_MS: u64 = 2;
+// W46.33: bumped 2 -> 6 ms. Same rationale as RESULTS_PER_FRAME -
+// post-load remesh wave benefits from a wider per-frame slot. 6 ms
+// stays under one 60 Hz frame budget (16.6 ms) by 10 ms so the rest
+// of on_update (lighting tick, mob AI, render dispatch) still has
+// headroom.
+const RESULTS_BUDGET_MS: u64 = 6;
 /// Hard upper bound on remesh dispatch calls per frame (W13.2). After
 /// W25 each call only enqueues a job (O(1) Arc clones) instead of
 /// doing synchronous meshing. W25.5: raised from 16 to 64.
