@@ -2766,11 +2766,13 @@ impl Voxel {
         // frame's `rebuild_all_meshes` pass picks the values up
         // into the GPU buffers.
         self.rebuild_all_lighting();
-        // W46.20: emitter_positions / torch_positions / fires are
-        // populated only via world_set_tracked (the edit path). Disk
-        // loads bypass that path, so re-scan every loaded chunk so
-        // existing torches / lava emit point lights + particles.
-        emitter_scan::rebuild_all(self);
+        // W46.20 / W46.22: emitter_positions / torch_positions /
+        // fires now get populated INSIDE apply_chunk_payload during
+        // load_world (one pass over each chunk's voxels instead of
+        // a second full-world scan). The redundant rebuild_all
+        // walk is gone - it was adding ~5-10 s of chunk-clone work
+        // on top of an already-slow lighting BFS, pushing load time
+        // past 90 s on 11k-chunk saves.
     }
 
     /// Raycast against every remote player's AABB. Returns the

@@ -68,29 +68,44 @@ pub(crate) fn scan_chunk(
 }
 
 /// Walk every loaded chunk and rebuild all three emitter maps from
-/// scratch. Called once after `world_save::load_world` finishes so
-/// the freshly-restored world has its emitter indices populated.
+/// scratch. Reserved for diagnostics / dev tools - the normal load
+/// path (W46.22) now populates the maps incrementally inside
+/// `world_save::apply_chunk_payload`, so calling `rebuild_all`
+/// during load_world is no longer needed.
+///
+/// W46.22: the initial implementation cloned every chunk before
+/// scanning ("snapshot coords + chunks first") which was O(N) extra
+/// memory + O(N) extra memcpy on top of the scan itself. For a save
+/// with 11k+ chunks this added ~80 MB allocation churn and pushed
+/// load time past 90 s. The split-borrow form below scans
+/// in-place against `&World` while still allowing mutable access to
+/// the three target maps.
+#[allow(dead_code)] // kept for diagnostics + future dev tools
 pub(crate) fn rebuild_all(vx: &mut crate::Voxel) {
-    // Snapshot coords first so we can borrow `vx` mutably while
-    // walking the chunk map.
-    let coords: Vec<(ChunkCoord, Chunk)> = vx
-        .world
-        .iter_chunks()
-        .map(|(c, ch)| (*c, ch.clone()))
-        .collect();
-    for (coord, chunk) in coords {
+    let start = std::time::Instant::now();
+    // Split-borrow: take an immutable iterator over chunks while
+    // separately holding mutable refs to the three target maps.
+    let world = &vx.world;
+    let emitter_positions = &mut vx.emitter_positions;
+    let torch_positions = &mut vx.torch_positions;
+    let fires = &mut vx.fires;
+    let mut scanned = 0usize;
+    for (coord, chunk) in world.iter_chunks() {
         scan_chunk(
-            coord,
-            &chunk,
-            &mut vx.emitter_positions,
-            &mut vx.torch_positions,
-            &mut vx.fires,
+            *coord,
+            chunk,
+            emitter_positions,
+            torch_positions,
+            fires,
         );
+        scanned += 1;
     }
     tracing::info!(
-        emitters = vx.emitter_positions.len(),
-        torches = vx.torch_positions.len(),
-        fires = vx.fires.len(),
+        scanned,
+        emitters = emitter_positions.len(),
+        torches = torch_positions.len(),
+        fires = fires.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
         "W46.20: emitter maps rebuilt from loaded chunks",
     );
 }

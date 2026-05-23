@@ -58,15 +58,33 @@ pub(super) fn apply_chunk_payload(voxel: &mut Voxel, payload: ChunkPayload) -> i
     // per-chunk override lists below then carry the variable data
     // (level / orientation / layer count) that the worldgen pass
     // wouldn't infer.
+    //
+    // W46.22: fold emitter + flame-emitter + fire indices into this
+    // same scan so the on-load post-pass (the W46.20 emitter_scan
+    // rebuild_all that walked every chunk a second time) is no
+    // longer needed. For an 11k-chunk save that second pass added
+    // ~80 MB of chunk-clone churn and pushed load time past 90 s.
     if let Some(chunk_ref) = voxel.world.chunk(coord) {
         let cs = CHUNK_SIZE as i32;
         for ly in 0..cs {
             for lz in 0..cs {
                 for lx in 0..cs {
                     let b = chunk_ref.get(lx as usize, ly as usize, lz as usize);
+                    if b.is_air() {
+                        continue;
+                    }
                     let world_pos = [origin[0] + lx, origin[1] + ly, origin[2] + lz];
                     if liquid_for(b).is_some() {
                         voxel.liquid_positions.insert(world_pos);
+                    }
+                    if crate::block::light_emission::light_emission_for_id(b.0) > 0 {
+                        voxel.emitter_positions.insert(world_pos, b.0);
+                    }
+                    if crate::flame_emitter(b.0) {
+                        voxel.torch_positions.insert(world_pos);
+                    }
+                    if b.0 == crate::block::FIRE_ID || b.0 == crate::block::SOUL_FIRE_ID {
+                        voxel.fires.entry(world_pos).or_insert(0);
                     }
                 }
             }
