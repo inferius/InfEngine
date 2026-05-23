@@ -357,7 +357,12 @@ const RESULTS_BUDGET_MS: u64 = 2;
 /// W26.3: lowered to 8 - dispatch still pays ~64 KB malloc per job
 /// (chunk clone; Arc<Chunk> refactor deferred to W27). At 8 jobs/frame
 /// that is ~512 KB/frame of allocator pressure vs ~4 MB/frame at 64.
-const REMESH_DEFERRED_PER_FRAME: usize = 8;
+// W46.30: bumped 8 -> 64 so the post-BFS re-remesh wave (every
+// loaded chunk after rebuild_all_lighting) dispatches in
+// 495 / 64 ~= 8 frames instead of 62. Workers pick the jobs up
+// at their own rate; the main-thread cap was only a back-pressure
+// safety, never the actual bottleneck on a 24-worker pool.
+const REMESH_DEFERRED_PER_FRAME: usize = 64;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`
@@ -6344,6 +6349,8 @@ impl Voxel {
                     new_grids,
                     affected_for_remesh,
                 } => {
+                    let lit_apply_start = std::time::Instant::now();
+                    let new_grid_count = new_grids.len();
                     // W27.5: Atomically swap in the new light grids
                     // computed by the worker. Any snapshot held by an
                     // in-flight remesh job sees the old Arc via COW.
@@ -6353,13 +6360,21 @@ impl Voxel {
                     // Trigger a remesh of every chunk whose lighting
                     // changed so the GPU picks up the new per-vertex
                     // light values.
+                    let mut queued = 0usize;
                     for cc in affected_for_remesh {
                         if self.world.chunk(cc).is_some()
                             && self.pending_remesh_set.insert(cc)
                         {
                             self.pending_remesh.push_back(cc);
+                            queued += 1;
                         }
                     }
+                    tracing::info!(
+                        grids = new_grid_count,
+                        remesh_queued = queued,
+                        apply_ms = lit_apply_start.elapsed().as_millis() as u64,
+                        "W46.30: WorkerResult::Lit applied + remesh queued",
+                    );
                     // W27.4: a lighting job completed - decrement the
                     // in-flight counter so the loading phase can
                     // advance past BuildingLighting.
@@ -14948,6 +14963,8 @@ impl WorkerPool {
                                     // into the main-thread World.
                                     // Warm-start from existing grids so the
                                     // BFS clears + re-floods from scratch.
+                                    let chunk_count = lj.affected.len();
+                                    let bfs_start = std::time::Instant::now();
                                     let mut local_state =
                                         lighting::LightingState::with_grids(lj.existing_grids);
                                     lighting::block_engine::propagate_block_light(
@@ -14955,10 +14972,19 @@ impl WorkerPool {
                                         &mut local_state,
                                         &lj.affected,
                                     );
+                                    let block_done_ms = bfs_start.elapsed().as_millis() as u64;
                                     lighting::sky_engine::propagate_sky_light(
                                         &lj.snapshot,
                                         &mut local_state,
                                         &lj.affected,
+                                    );
+                                    let total_ms = bfs_start.elapsed().as_millis() as u64;
+                                    tracing::info!(
+                                        chunks = chunk_count,
+                                        block_ms = block_done_ms,
+                                        sky_ms = total_ms - block_done_ms,
+                                        total_ms,
+                                        "W46.30: lighting BFS done",
                                     );
                                     // Collect the updated grids for the
                                     // affected chunks only. Arc::clone is
