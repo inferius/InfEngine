@@ -2,13 +2,18 @@
 
 ## Posledni stav
 
-main.rs: **12193 LOC** (z puvodnich 17207 = -5014 / -29%).
-Session W47.11..W47.20 delta: 14720 -> 12193 = -2527 LOC.
+main.rs: **5845 LOC** (z puvodnich 17207 = -11362 / -66%).
+Session W47.11..W47.24 delta: 14720 -> 5845 = -8875 LOC.
 
-place_break/ submodule (W47.14): 7 files, max 377 LOC v mod.rs.
-world/stream.rs (W47.18): 416 LOC.
-menu/apply.rs (W47.19): 210 LOC.
-bootstrap.rs (W47.20): 255 LOC.
+Submodule LOC:
+- place_break/ (W47.14): 7 files, max 377 LOC v mod.rs
+- world/stream.rs (W47.18): 416 LOC
+- menu/apply.rs (W47.19): 210 LOC
+- bootstrap.rs (W47.20): 255 LOC
+- ui/render.rs (W47.21): 3268 LOC (egui closure - dalsi split mozny)
+- app_on_update.rs (W47.22): 1349 LOC
+- update_play.rs (W47.23): 898 LOC
+- app.rs (W47.24): 899 LOC (struct Voxel + PluginBlock)
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -95,6 +100,10 @@ Refaktor (W47.x):
 - W47.18 stream_chunks (509 LOC) -> world/stream.rs
 - W47.19 apply_menu_action (252 LOC) -> menu/apply.rs
 - W47.20 on_start (362 LOC) -> bootstrap.rs
+- W47.21 render_ui (3261 LOC) -> ui/render.rs
+- W47.22 on_update (1331 LOC) -> app_on_update.rs
+- W47.23 update_play (885 LOC) -> update_play.rs
+- W47.24 struct Voxel + PluginBlock (887 LOC) -> app.rs (fields pub(crate))
 
 ## Aktivni / open
 
@@ -130,17 +139,30 @@ Refaktor (W47.x):
 W47.13 cely hotovy (a-k). Place/break in on_update redukovany na
 helper calls. Dalsi wave:
 
-| Wave  | Cil                                                | LOC | Riziko |
-|-------|----------------------------------------------------|-----|--------|
-| W47.21 | render_ui (3261 LOC) split do ui/* submoduly      | ~1500 | high   |
-| W47.22 | update_play (884 LOC) - intencionalni inline       | -    | n/a    |
+## Cesta k <500 LOC v main.rs
 
-render_ui detaily: 6073-9333 = 3261 LOC. Pre-egui setup 6073-6753
-(~680 LOC state snapshots), egui closure 6757-9333 (~2576 LOC) s
-AppState match (Paused 62 LOC, Settings 40 LOC, Playing 2364 LOC).
-Playing branch obsahuje HUD area, debug panel, chest UI, furnace UI,
-inventory UI, chat overlay, command palette, etc. Extract vyzaduje
-hands-on session - mnoho state borrows uvnitr closure.
+main.rs po W47.24: 5845 LOC. Cilove: < 500. Treba pryc ~5300.
+
+Velke fns/metody v main.rs ktery zbyly:
+
+| Cil | LOC | Kam |
+|-----|-----|-----|
+| impl Drop for WorkerPool | ~741 | -> workers.rs (s WorkerPool struct + impls) |
+| sample (RemoteInterp) | ~407 | -> player module |
+| Voxel::new() / new_with_net | ~331 | -> app.rs append (s struct) |
+| WorkerPool::spawn() | ~211 | -> workers.rs |
+| tick_liquid_cell | 198 | -> liquid module append |
+| build_lit_submeshes | 186 | -> chunk submodule |
+| maybe_rebuild_liquid_mesh | 167 | -> liquid module append |
+| world_set_tracked | 164 | -> app.rs append (Voxel method) |
+| apply_inv_action | 150 | -> inventory module append |
+| tick_lighting | 147 | -> lighting module append |
+| switch_dim | 117 | -> dim module append |
+| load_config | 111 | -> bootstrap append |
+| motd_lines | 107 | -> bootstrap append |
+| rebuild_all_lighting | 92 | -> lighting append |
+| Top-level helpers (day_night, build_block_atlas, slot_with_dnd, ...) | ~1500 | -> dedicated modules |
+| ui/render.rs sub-split | -3000 (ui.rs) | -> ui/main_menu.rs, ui/hud.rs, ui/inventory.rs, ui/chest.rs, ui/furnace.rs, ui/debug.rs |
 
 Recommend: W47.14 (split place_break.rs do 4 podsouboru: combat,
 mining, rmb_actions, break_place_helpers) jako prevence pred 1500
