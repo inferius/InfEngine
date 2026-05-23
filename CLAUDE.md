@@ -69,17 +69,20 @@ nova funkcionalita psat se do existujiciho `main.rs`, je to chyba.
 - Neprilezet refactor "az pozdeji" - delat to **prubezne pri psani
   nove fce**, ne pozdeji v dedikovane refactor wave.
 
-## Hra je MC klon
+## Hra je voxel sandbox
 
-Cilem je vlastni klon Minecraft. Behavior + look se ridi tim co MC
-dela. Lide znaji ovladani / efekty / vzhled z MC, takze sledovat
-to drzime.
+Cilem je vlastni voxel sandbox engine. Behavior + look inspirovany
+zavedenymi konvencemi zanru (block placement, lighting, redstone-like
+logic, mob behaviors), takze sledujeme to co je v zanru standardni.
 
-- Kdyz neco vyvijim, **inspirovat se MC zdrojaky** v
-  `C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\`
-  + decompiled Java zdrojaky (template_*.json modely, blockstate
-  pravidla, lighting BFS, particle spawn, atd.).
-- Odlisnosti od MC vyresit az **pote**, co MC chovani funguje.
-- Kdyz mi neco prijde divne (model, zvuk, particle, mob AI), **konzultovat
-  s uzivatelem** drive nez improvizuju vlastni reseni. Lepsi se 3x
+- Pri vyvoji nove fce **inspirovat se reference asset packem** v
+  `C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc-like-source\<version>\assets\...`
+  (template_*.json modely, blockstate pravidla, atlas textury,
+  particle data). Realna cache slozka pouziva interni key (viz
+  resource_pack module v kodu) - cesta vyse je logicky pohled na
+  inspirational source.
+- Odlisnosti od reference behavior vyresit az **pote**, co default
+  varianta funguje.
+- Kdyz neco prijde divne (model, zvuk, particle, mob AI), **konzultovat
+  s uzivatelem** drive nez improvizovat vlastni reseni. Lepsi se 3x
   zeptat nez prepisovat kod.
