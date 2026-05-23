@@ -41,6 +41,11 @@
 //!     NotRectangular / PerimeterIncomplete it posts a chat warning;
 //!     on Reject (no frame) it drops a fire cell at the clicked
 //!     position. Always consumes one flint+steel durability use.
+//!
+//! W47.13h: `apply_bucket_use` - empty bucket scoops a source
+//!     liquid; filled bucket pours liquid onto an air / replaceable
+//!     cell (also extinguishes fire). Handles creative-mode (no
+//!     bucket consume / no source remove) + liquid level broadcast.
 
 /// Outcome of the per-frame combat-vs-block-edit arbitration.
 ///
@@ -646,6 +651,152 @@ pub(crate) fn apply_flint_and_steel_ignite(
     vx.consume_flint_and_steel_use();
     vx.lmb_pending = false;
     vx.rmb_pending = false;
+}
+
+/// W47.13h: bucket RMB - scoop a liquid source or pour a filled
+/// bucket.
+///
+/// `held` is the selected slot's block (already known to be one of
+/// the bucket variants by `classify_rmb_action`). `forward` is the
+/// player facing vector used for the scoop raycast (the standard
+/// target ray skips liquids).
+///
+/// Scoop path (`BUCKET_EMPTY_ID`): runs a purpose-built raycast that
+/// stops at the first liquid or solid voxel; if the hit is a source
+/// (level 0) the source is replaced with air (skip in creative),
+/// the bucket swaps to the matching filled id (skip in creative),
+/// + a splash SFX fires.
+///
+/// Pour path (filled bucket): writes the liquid id at the hit voxel
+/// (or `hit.place_at` if the hit cell isn't replaceable), sets the
+/// level to 0 (source), extinguishes any fire that sat there, swaps
+/// the bucket to empty (skip in creative), broadcasts both the edit
+/// and the `vx.liquid_lvl` reset, + plays the splash SFX.
+pub(crate) fn apply_bucket_use(
+    vx: &mut crate::Voxel,
+    hit: &infengine_voxel::RayHit,
+    held: crate::BlockId,
+    forward: glam::Vec3,
+) {
+    use crate::net::NetRole;
+    use crate::{
+        BUCKET_EMPTY_ID, BlockId, EditMsg, Voxel, block,
+        block_is_liquid, block_is_ray_passable, block_is_replaceable,
+        bucket_liquid_id, liquid_to_bucket_id, raycast_with,
+    };
+    let cfg = bincode::config::standard();
+    if held.0 == BUCKET_EMPTY_ID {
+        let liquid_hit = raycast_with(
+            &vx.world,
+            vx.player_pos,
+            forward,
+            6.0,
+            |b| !b.is_air() && (block_is_liquid(b) || !block_is_ray_passable(b)),
+        );
+        let scoop_voxel = liquid_hit.map(|h| h.voxel);
+        let scoop_block = scoop_voxel
+            .map(|v| vx.world.get(v))
+            .unwrap_or(BlockId::AIR);
+        let scoop_level = scoop_voxel
+            .and_then(|v| vx.liquid_level.get(&v).copied())
+            .unwrap_or(0);
+        let scoop_is_source = scoop_voxel.is_some() && scoop_level == 0;
+        if scoop_is_source
+            && let (Some(filled), Some(voxel)) = (
+                liquid_to_bucket_id(scoop_block.0),
+                scoop_voxel,
+            )
+        {
+            if !vx.abilities.instabuild {
+                vx.world_set_tracked(voxel, BlockId::AIR);
+            }
+            let coords = Voxel::affected_chunks(voxel);
+            vx.rebuild_chunks(&coords);
+            if !vx.abilities.instabuild {
+                vx.inventory[vx.selected_slot] = Some((BlockId(filled), 1));
+            }
+            let edit = EditMsg {
+                x: voxel[0],
+                y: voxel[1],
+                z: voxel[2],
+                block: 0,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    vx.edit_history.push(edit);
+                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(edit);
+                }
+            }
+            let center = [
+                voxel[0] as f32 + 0.5,
+                voxel[1] as f32 + 0.5,
+                voxel[2] as f32 + 0.5,
+            ];
+            vx.sfx_at("splash", center, |a, g| {
+                let _ = a.play_thud(140.0, 0.18 * g);
+                let _ = a.play_swish(0.16 * g);
+            });
+        }
+    } else if let Some(liquid_id) = bucket_liquid_id(held) {
+        let target_block = vx.world.get(hit.voxel);
+        let target_voxel = if block_is_replaceable(target_block) {
+            hit.voxel
+        } else {
+            hit.place_at
+        };
+        let dest = vx.world.get(target_voxel);
+        if dest.is_air() || block_is_replaceable(dest) {
+            if dest.0 == block::FIRE_ID {
+                vx.fires.remove(&target_voxel);
+            }
+            vx.world_set_tracked(target_voxel, BlockId(liquid_id));
+            vx.liquid_level.insert(target_voxel, 0);
+            let coords = Voxel::affected_chunks(target_voxel);
+            vx.rebuild_chunks(&coords);
+            if !vx.abilities.instabuild {
+                vx.inventory[vx.selected_slot] =
+                    Some((BlockId(BUCKET_EMPTY_ID), 1));
+            }
+            let edit = EditMsg {
+                x: target_voxel[0],
+                y: target_voxel[1],
+                z: target_voxel[2],
+                block: liquid_id,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    vx.edit_history.push(edit);
+                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                    if let Ok(buf) =
+                        bincode::serde::encode_to_vec((target_voxel, 0u8), cfg)
+                    {
+                        server.broadcast_bytes("vx.liquid_lvl", buf);
+                    }
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(edit);
+                }
+            }
+            let center = [
+                target_voxel[0] as f32 + 0.5,
+                target_voxel[1] as f32 + 0.5,
+                target_voxel[2] as f32 + 0.5,
+            ];
+            vx.sfx_at("splash", center, |a, g| {
+                let _ = a.play_thud(120.0, 0.18 * g);
+                let _ = a.play_swish(0.14 * g);
+            });
+        }
+    }
 }
 
 #[cfg(test)]
