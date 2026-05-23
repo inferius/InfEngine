@@ -2,10 +2,10 @@
 
 ## Posledni stav
 
-main.rs: **1796 LOC** (z puvodnich 17207 = -15411 / -90%).
-Session W47.11..W47.26 delta: 14720 -> 1796 = -12924 LOC.
+main.rs: **449 LOC** (z puvodnich 17207 = -16758 / -97%). **CIL DOSAZEN.**
+Session W47.11..W47.27 delta: 14720 -> 449 = -14271 LOC.
 
-app.rs: **4526 LOC** (over 1500 ceiling - W47.27+ split into
+app.rs: **4569 LOC** (over 1500 ceiling - W47.28+ split into
 per-domain submodules: world_init, world_runtime, net_runtime,
 dim_runtime, chunk_runtime, light_runtime, ui_runtime,
 inventory_runtime, combat_runtime, save_runtime, audio_runtime).
@@ -111,6 +111,17 @@ Refaktor (W47.x):
 - W47.24 struct Voxel + PluginBlock (887 LOC) -> app.rs (fields pub(crate))
 - W47.25 WorkerPool + mesh_chunk_in_worker (424 LOC) -> workers.rs
 - W47.26 impl Voxel block (3625 LOC) -> app.rs append (methods pub(crate))
+- W47.27 multi-batch extract:
+  - ui/slot_widget.rs (slot draw helpers, ~210 LOC)
+  - atlas.rs (day_night + atlas helpers, ~310 LOC vcetne tests)
+  - recipes.rs (Recipe + RECIPES, ~165 LOC)
+  - handler.rs (impl AppHandler, ~130 LOC)
+  - app.rs append (Settings, ~40 LOC)
+  - workers.rs append (ChunkSideEffect/WorkerResult/Job/etc., ~160 LOC)
+  - bootstrap.rs append (fn main + arg parsing, ~150 LOC)
+  - remote_interp.rs (RemoteInterp + INTERP_DELAY, ~80 LOC)
+  - ambient.rs append (ambient_particle_tests, ~110 LOC)
+  main.rs: 1796 -> 449 LOC (UNDER 500 CEILING).
 
 ## Aktivni / open
 
