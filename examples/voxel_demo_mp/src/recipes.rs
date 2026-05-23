@@ -168,4 +168,64 @@ pub(crate) const RECIPES: &[Recipe] = &[
         output: (BUCKET_EMPTY_ID, 1),
         name: "Bucket",
     },
+    // ============================================================
+    // W50.1 - extended MC shapeless recipes batch.
+    // Plank variants from logs + sticks + tools + utility.
+    // ============================================================
+    // Wood -> plank variants (1 log -> 4 planks).
+    Recipe { inputs: &[(88, 1)], output: (89, 4), name: "Birch planks" },
+    Recipe { inputs: &[(127, 1)], output: (128, 4), name: "Acacia planks" },
+    Recipe { inputs: &[(130, 1)], output: (131, 4), name: "Spruce planks" },
+    Recipe { inputs: &[(133, 1)], output: (134, 4), name: "Jungle planks" },
+    Recipe { inputs: &[(136, 1)], output: (137, 4), name: "Dark oak planks" },
+    Recipe { inputs: &[(233, 1)], output: (234, 4), name: "Mangrove planks" },
+    Recipe { inputs: &[(237, 1)], output: (238, 4), name: "Cherry planks" },
+    // 2 planks -> 4 sticks (shapeless on 2x2).
+    Recipe { inputs: &[(7, 1), (7, 1)], output: (302, 4), name: "Sticks" },
+    // Crafting table: 4 planks -> 1 crafting_table.
+    Recipe { inputs: &[(7, 1), (7, 1), (7, 1), (7, 1)], output: (553, 1), name: "Crafting table" },
+    // Chest: 4 planks (corners) - simplified shapeless on 2x2.
+    Recipe { inputs: &[(7, 1), (7, 1), (7, 1), (7, 1)], output: (41, 1), name: "Chest" },
+    // Furnace: 4 cobble.
+    Recipe { inputs: &[(8, 1), (8, 1), (8, 1), (8, 1)], output: (42, 1), name: "Furnace" },
+    // Bread: 3 wheat.
+    Recipe { inputs: &[(493, 1), (493, 1), (493, 1)], output: (163, 1), name: "Bread" },
+    // 9 iron_ingot -> 1 iron_block.
+    Recipe { inputs: &[(14, 1), (14, 1), (14, 1), (14, 1)], output: (440, 1), name: "Iron block" },
+    // 9 gold_ingot -> 1 gold_block.
+    Recipe { inputs: &[(318, 1), (318, 1), (318, 1), (318, 1)], output: (391, 1), name: "Gold block" },
+    // 4 diamond -> diamond_block.
+    Recipe { inputs: &[(316, 1), (316, 1), (316, 1), (316, 1)], output: (392, 1), name: "Diamond block" },
+    // 4 emerald -> emerald_block.
+    Recipe { inputs: &[(317, 1), (317, 1), (317, 1), (317, 1)], output: (439, 1), name: "Emerald block" },
+    // 4 lapis -> lapis_block.
+    Recipe { inputs: &[(315, 1), (315, 1), (315, 1), (315, 1)], output: (438, 1), name: "Lapis block" },
+    // 4 redstone -> redstone_block.
+    Recipe { inputs: &[(309, 1), (309, 1), (309, 1), (309, 1)], output: (441, 1), name: "Redstone block" },
+    // 4 raw_copper -> raw_copper_block.
+    Recipe { inputs: &[(288, 1), (288, 1), (288, 1), (288, 1)], output: (388, 1), name: "Raw copper block" },
+    // 4 raw_iron -> raw_iron_block.
+    Recipe { inputs: &[(287, 1), (287, 1), (287, 1), (287, 1)], output: (389, 1), name: "Raw iron block" },
+    // 4 raw_gold -> raw_gold_block.
+    Recipe { inputs: &[(289, 1), (289, 1), (289, 1), (289, 1)], output: (390, 1), name: "Raw gold block" },
+    // 4 amethyst_shard -> amethyst_block.
+    Recipe { inputs: &[(323, 1), (323, 1), (323, 1), (323, 1)], output: (451, 1), name: "Amethyst block" },
+    // 4 sticks -> ladder.
+    Recipe { inputs: &[(302, 1), (302, 1), (302, 1), (302, 1)], output: (595, 1), name: "Ladder" },
+    // Stone bricks: 4 stone -> 4 stone_bricks (placeholder; real MC uses chiseled pattern).
+    Recipe { inputs: &[(1, 1), (1, 1), (1, 1), (1, 1)], output: (8, 4), name: "Stone bricks alt" },
+    // 4 brick -> 1 bricks block (4 brick items to 1 bricks block).
+    Recipe { inputs: &[(13, 1), (13, 1), (13, 1), (13, 1)], output: (86, 1), name: "Brick block" },
+    // 4 bone_meal stand-in: 4 wheat -> hay_bale.
+    Recipe { inputs: &[(493, 1), (493, 1), (493, 1), (493, 1)], output: (435, 1), name: "Hay bale" },
+    // 4 sugar_cane -> 1 paper (shapeless).
+    Recipe { inputs: &[(499, 1), (499, 1), (499, 1)], output: (304, 1), name: "Paper" },
+    // 1 paper + 1 stick + 1 string -> compass (simplified shapeless).
+    Recipe { inputs: &[(304, 1), (302, 1), (301, 1)], output: (307, 1), name: "Compass" },
+    // 1 paper + 1 leather + 1 stick -> book.
+    Recipe { inputs: &[(304, 1), (303, 1), (302, 1)], output: (305, 1), name: "Book" },
+    // Slime block: 4 slime_balls -> slime_block (using id 298).
+    Recipe { inputs: &[(298, 1), (298, 1), (298, 1), (298, 1)], output: (442, 1), name: "Slime block" },
+    // Honey block (4 honey bottles - using ID 444 honeycomb_block as proxy).
+    Recipe { inputs: &[(444, 1)], output: (443, 1), name: "Honey block" },
 ];
