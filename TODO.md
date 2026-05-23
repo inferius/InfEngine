@@ -2,12 +2,13 @@
 
 ## Posledni stav
 
-main.rs: **12549 LOC** (z puvodnich 17207 = -4658 / -27%).
-Session W47.11..W47.19 delta: 14720 -> 12549 = -2171 LOC.
+main.rs: **12193 LOC** (z puvodnich 17207 = -5014 / -29%).
+Session W47.11..W47.20 delta: 14720 -> 12193 = -2527 LOC.
 
 place_break/ submodule (W47.14): 7 files, max 377 LOC v mod.rs.
 world/stream.rs (W47.18): 416 LOC.
 menu/apply.rs (W47.19): 210 LOC.
+bootstrap.rs (W47.20): 255 LOC.
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -93,6 +94,7 @@ Refaktor (W47.x):
 - W47.17 remote/local player cube render -> render/players.rs
 - W47.18 stream_chunks (509 LOC) -> world/stream.rs
 - W47.19 apply_menu_action (252 LOC) -> menu/apply.rs
+- W47.20 on_start (362 LOC) -> bootstrap.rs
 
 ## Aktivni / open
 
@@ -130,9 +132,15 @@ helper calls. Dalsi wave:
 
 | Wave  | Cil                                                | LOC | Riziko |
 |-------|----------------------------------------------------|-----|--------|
-| W47.20 | on_start (364 LOC) -> bootstrap.rs                | ~360 | low |
 | W47.21 | render_ui (3261 LOC) split do ui/* submoduly      | ~1500 | high   |
 | W47.22 | update_play (884 LOC) - intencionalni inline       | -    | n/a    |
+
+render_ui detaily: 6073-9333 = 3261 LOC. Pre-egui setup 6073-6753
+(~680 LOC state snapshots), egui closure 6757-9333 (~2576 LOC) s
+AppState match (Paused 62 LOC, Settings 40 LOC, Playing 2364 LOC).
+Playing branch obsahuje HUD area, debug panel, chest UI, furnace UI,
+inventory UI, chat overlay, command palette, etc. Extract vyzaduje
+hands-on session - mnoho state borrows uvnitr closure.
 
 Recommend: W47.14 (split place_break.rs do 4 podsouboru: combat,
 mining, rmb_actions, break_place_helpers) jako prevence pred 1500
