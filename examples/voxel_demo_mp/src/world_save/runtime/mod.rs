@@ -222,3 +222,35 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
 
 // W5.1: the world_seed() / WORLDGEN atomics are gone; the
 // re-export shim that used to keep the import alive is removed.
+
+/// W46.24: write a single chunk's voxels + per-cell overrides
+/// (liquid level, torch orient, snow layers) to disk WITHOUT
+/// rewriting any other section. Used by the chunk-unload path so
+/// edits in chunks the player walks away from persist before the
+/// chunk gets evicted from memory.
+///
+/// `dim` should be the active dim tag for the chunk's source
+/// `voxel.current_dim`. Parked dims should not unload chunks - they
+/// stay resident in `voxel.worlds` until the player visits them.
+pub(crate) fn save_one_chunk(
+    voxel: &Voxel,
+    slug: &str,
+    dim: &str,
+    coord: infengine_voxel::ChunkCoord,
+) -> io::Result<()> {
+    use super::chunks::{self, CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+    use helpers::collect_for_chunk;
+    let Some(chunk) = voxel.world.chunk(coord) else {
+        // Chunk already gone - nothing to write. Not an error.
+        return Ok(());
+    };
+    let payload = ChunkPayload {
+        format_version: CHUNK_PAYLOAD_VERSION,
+        coord,
+        voxels: ChunkVoxels::from_chunk(chunk),
+        liquid_levels: collect_for_chunk(&voxel.liquid_level, coord),
+        torch_orient: collect_for_chunk(&voxel.torch_orient, coord),
+        snow_layers: collect_for_chunk(&voxel.snow_positions, coord),
+    };
+    chunks::write_chunk(slug, dim, &payload)
+}

@@ -115,6 +115,20 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     runtime::save_world(voxel, slug)
 }
 
+/// W46.24: write a single chunk to disk WITHOUT touching the rest
+/// of the world. Used by the chunk-unload path so edits made past
+/// the stream radius (e.g. a torch the player placed then walked
+/// away from) persist instead of evaporating when the chunk gets
+/// evicted from memory.
+pub(crate) fn save_one_chunk(
+    voxel: &Voxel,
+    slug: &str,
+    dim: &str,
+    coord: infengine_voxel::ChunkCoord,
+) -> io::Result<()> {
+    runtime::save_one_chunk(voxel, slug, dim, coord)
+}
+
 /// Load `slug` into `voxel`. On a fresh slot (no `meta.json` yet)
 /// the call returns `io::ErrorKind::NotFound` so the caller can
 /// decide whether to mint a new world (default behaviour: yes).

@@ -5981,6 +5981,29 @@ impl Voxel {
                     }
                 }
             }
+            // W46.24: persist chunk state BEFORE eviction so edits made
+            // outside the stream radius (a torch placed then walked past,
+            // an obsidian placed and forgotten) survive the next session.
+            // Without this, world.remove_chunk drops the modified chunk
+            // and the OLD on-disk file gets read back on next load -
+            // every edit between the last full save_world and the
+            // unload was silently lost.
+            if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+                && let Some(slug) = self.current_world_slug.clone()
+            {
+                let dim = self.current_dim.clone();
+                for cc in &to_unload {
+                    if let Err(err) =
+                        world_save::save_one_chunk(self, &slug, &dim, *cc)
+                    {
+                        warn!(
+                            coord = ?cc,
+                            error = %err,
+                            "world_save: per-chunk unload-save failed",
+                        );
+                    }
+                }
+            }
             for cc in &to_unload {
                 self.world.remove_chunk(*cc);
             }

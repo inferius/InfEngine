@@ -133,7 +133,7 @@ fn local_to_world(origin: [i32; 3], local: [u8; 3]) -> [i32; 3] {
 /// Filter a global `HashMap<[i32; 3], T>` to just the entries inside
 /// the chunk at `coord`, converting each world-space key into a
 /// chunk-local `[u8; 3]` for the payload schema.
-pub(super) fn collect_for_chunk<T: Copy>(
+pub(crate) fn collect_for_chunk<T: Copy>(
     map: &std::collections::HashMap<[i32; 3], T>,
     coord: ChunkCoord,
 ) -> Vec<([u8; 3], T)> {
