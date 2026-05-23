@@ -12783,58 +12783,7 @@ impl AppHandler for Voxel {
             self.day_time,
             session_secs,
         );
-        // W12.5: push the 8 nearest MC emitters (torch / glowstone /
-        // lava / fire / soul_torch / sea_lantern / jack_o_lantern /
-        // ...) to the renderer as point lights. Source set comes
-        // from `emitter_positions` which `world_set_tracked` keeps
-        // in sync. Sort by squared distance; far emitters drop out
-        // (MAX_LIGHTS = 8 cap in the shader).
-        let mut samples: Vec<emitter_lights::EmitterSample> = self
-            .emitter_positions
-            .iter()
-            .filter_map(|(p, id)| {
-                emitter_lights::sample_for(
-                    *id,
-                    [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5],
-                )
-            })
-            .collect();
-        let picked = emitter_lights::pick_nearest(
-            &samples,
-            [player_pos.x, player_pos.y, player_pos.z],
-            emitter_lights::MAX_POINT_LIGHTS,
-        );
-        samples.clear();
-        for s in picked.iter() {
-            // Subtle flicker on each light's intensity hashed by
-            // position so the room reads as living torchlight,
-            // not a static lamp.
-            let px = s.position[0] as u32;
-            let py = s.position[1] as u32;
-            let pz = s.position[2] as u32;
-            let phase = px
-                .wrapping_mul(2654435761)
-                ^ (py.wrapping_mul(0x9E37_79B1))
-                ^ (pz.wrapping_mul(0x85EB_CA6B));
-            let phase_f =
-                (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-            let flicker = (self.day_time * 8.0 + phase_f).sin();
-            // W46.18: scale to renderer convention. MC torches are
-            // VERY bright in dark caves - the user reported our torches
-            // "don't light up the surroundings" while MC's clearly do.
-            // Bumped intensity multiplier 3.0 -> 5.5 and radius 8 -> 14
-            // so a level-14 torch produces an ~5.1 intensity halo with
-            // 14-block falloff, matching MC's torch-radius range. Flicker
-            // amplitude scaled up proportionally so the wobble stays
-            // perceivable against the higher base.
-            let intensity = (s.intensity * 5.5 + 0.7 * flicker).max(0.3);
-            renderer.queue_point_light(
-                s.position,
-                s.color,
-                intensity,
-                14.0,
-            );
-        }
+        crate::render::point_lights::push(renderer, &self.emitter_positions, player_pos, self.day_time);
         // W46.13: legacy pre-MC torch render path REMOVED.
         //
         // Up to W45 this block drew every entry in `self.torch_positions`

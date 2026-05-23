@@ -7,3 +7,5 @@
 pub mod mobs;
 // W47.9 - sun + moon disc render + sun-intensity uniform.
 pub mod celestial;
+// W47.10 - emitter point-light upload.
+pub mod point_lights;
