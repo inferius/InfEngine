@@ -34,6 +34,13 @@
 //! W47.13f: `apply_shovel_grass_path` - shovel-RMB on grass turns
 //!     the cell into dirt (the MC "path" shortcut). Local edit +
 //!     server broadcast `vx.edit` or client request `vx.path`.
+//!
+//! W47.13g: `apply_flint_and_steel_ignite` - flint+steel RMB tries
+//!     to light a portal frame at the clicked face; on Ok scans the
+//!     3x3x3 area for new portal cells + broadcasts each. On
+//!     NotRectangular / PerimeterIncomplete it posts a chat warning;
+//!     on Reject (no frame) it drops a fire cell at the clicked
+//!     position. Always consumes one flint+steel durability use.
 
 /// Outcome of the per-frame combat-vs-block-edit arbitration.
 ///
@@ -550,6 +557,95 @@ pub(crate) fn apply_shovel_grass_path(vx: &mut crate::Voxel, voxel: [i32; 3]) {
             }
         }
     }
+}
+
+/// W47.13g: flint+steel RMB.
+///
+/// `place_at` is the face cell adjacent to the clicked block, i.e.
+/// the `hit.place_at` the cascade resolved. The helper drives one
+/// of three outcomes:
+/// - `try_ignite::Ok` -> writes portal cells across the 3x3x3 area
+///   centered on `place_at`, indexes them in `portal_positions`,
+///   broadcasts each edit + posts "Portal lit." to chat
+/// - `NotRectangular | PerimeterIncomplete` -> posts "Portal frame
+///   is invalid." to chat
+/// - any other result -> tries to ignite a fire cell at `place_at`
+///
+/// Every outcome decrements the flint+steel durability + clears
+/// the pending mouse flags. Returns nothing - all state changes
+/// land on `vx`.
+pub(crate) fn apply_flint_and_steel_ignite(
+    vx: &mut crate::Voxel,
+    place_at: [i32; 3],
+) {
+    use crate::net::NetRole;
+    use crate::{EditMsg, Voxel, block};
+    let cfg = bincode::config::standard();
+    let res = block::portal::try_ignite(&mut vx.world, place_at);
+    if let block::portal::IgniteResult::Ok { interior_count, .. } = res {
+        let center = place_at;
+        let mut emitted: Vec<EditMsg> = Vec::with_capacity(interior_count as usize);
+        for dx in -3..=3 {
+            for dy in -3..=3 {
+                for dz in -3..=3 {
+                    let p = [center[0] + dx, center[1] + dy, center[2] + dz];
+                    if vx.world.get(p).0 == block::PORTAL_ID {
+                        vx.portal_positions.insert(p);
+                        emitted.push(EditMsg {
+                            x: p[0],
+                            y: p[1],
+                            z: p[2],
+                            block: block::PORTAL_ID,
+                        });
+                    }
+                }
+            }
+        }
+        let coords = Voxel::affected_chunks(place_at);
+        vx.rebuild_chunks(&coords);
+        match &mut vx.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                for edit in &emitted {
+                    vx.edit_history.push(*edit);
+                    if let Ok(buf) = bincode::serde::encode_to_vec(*edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                }
+            }
+            NetRole::Client { pending_edits, .. } => {
+                for edit in &emitted {
+                    pending_edits.push(*edit);
+                }
+            }
+        }
+        vx.chat_log.push((
+            std::time::Instant::now(),
+            "Portal lit.".to_string(),
+        ));
+    } else if matches!(
+        res,
+        block::portal::IgniteResult::NotRectangular
+            | block::portal::IgniteResult::PerimeterIncomplete
+    ) {
+        vx.chat_log.push((
+            std::time::Instant::now(),
+            "Portal frame is invalid.".to_string(),
+        ));
+    } else {
+        // No frame: drop a fire cell at the clicked position.
+        let ignite_pos = place_at;
+        if let Some(age) = block::fire::try_ignite_block(&vx.world, ignite_pos) {
+            let step = block::fire::FireStep {
+                ignite: vec![(ignite_pos, age)],
+                ..Default::default()
+            };
+            vx.apply_fire_step(step);
+        }
+    }
+    vx.consume_flint_and_steel_use();
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
 }
 
 #[cfg(test)]
