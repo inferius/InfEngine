@@ -9,3 +9,5 @@ pub mod mobs;
 pub mod celestial;
 // W47.10 - emitter point-light upload.
 pub mod point_lights;
+// W47.11 - snow / portal / fire / liquid decoration draws.
+pub mod decor;

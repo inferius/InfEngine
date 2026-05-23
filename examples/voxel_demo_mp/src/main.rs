@@ -41,7 +41,7 @@ use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
     BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, LAVA_ID,
     REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
-    TILE_PX, TORCH_ID, TileSpec, WATER_ID, atlas_uv_rect, axe_tier,
+    TILE_PX, TORCH_ID, TileSpec, atlas_uv_rect, axe_tier,
     block_category, block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
@@ -184,6 +184,8 @@ mod mob_meshes;
 mod render;
 // W47.4 - ambient particle spawn loop extracted out of main.rs.
 mod ambient;
+// W47.9 - fire random-tick + apply-step + lava ignite glue.
+mod fire_runtime;
 // W46.20 - rebuild emitter maps after world load / chunk reload.
 mod emitter_scan;
 mod ui;
@@ -2502,196 +2504,9 @@ impl Voxel {
     /// net-tick frame; each cell rolls `1/RATE_DENOM` and on
     /// success runs `block::fire::plan_fire_cell`. Server-only
     /// (clients receive the resulting `vx.edit` traffic).
-    fn fire_tick(&mut self) {
-        if matches!(self.net, NetRole::Client { .. }) {
-            return;
-        }
-        if self.fires.is_empty() {
-            return;
-        }
-        self.fire_clock = self.fire_clock.wrapping_add(1);
-        let clock = self.fire_clock;
-        // Snapshot the keys so we can mutate `self.fires` inside
-        // the loop without invalidating an iterator borrow.
-        let positions: Vec<[i32; 3]> = self.fires.keys().copied().collect();
-        let mut combined = block::fire::FireStep::default();
-        for pos in positions {
-            // Per-cell 1/RATE_DENOM gate. Salt 0x7000 separates
-            // the gate roll from the in-tick decision salts.
-            let h_gate = block::fire::hash3_for(pos, clock, 0x7000);
-            if !h_gate.is_multiple_of(block::fire::RATE_DENOM) {
-                continue;
-            }
-            block::fire::plan_fire_cell(
-                &self.world,
-                &self.fires,
-                pos,
-                clock,
-                &mut combined,
-            );
-        }
-        if combined.extinguish.is_empty()
-            && combined.age_bump.is_empty()
-            && combined.ignite.is_empty()
-            && combined.consume.is_empty()
-        {
-            return;
-        }
-        self.apply_fire_step(combined);
-    }
-
-    /// Commit a `FireStep` to the world + fires map + chunk mesh +
-    /// network. Split from `fire_tick` so flint+steel and the
-    /// lava-ignite path (Q.4d/e) can reuse the same commit shape.
-    fn apply_fire_step(&mut self, step: block::fire::FireStep) {
-        let cfg = bincode::config::standard();
-        let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
-        // Extinguish first - clears the world block + fires entry.
-        for pos in &step.extinguish {
-            if self.world.get(*pos).0 != block::FIRE_ID {
-                continue;
-            }
-            self.world.set(*pos, BlockId::AIR);
-            self.fires.remove(pos);
-            for c in Self::affected_chunks(*pos) {
-                chunk_set.insert(c);
-            }
-        }
-        // Consume (flammable -> air). Block was non-fire; just clear.
-        for pos in &step.consume {
-            let here = self.world.get(*pos);
-            if here.is_air() || here.0 == block::FIRE_ID {
-                continue;
-            }
-            // Don't drop the consumed block (MC: burned blocks
-            // don't drop items).
-            self.world.set(*pos, BlockId::AIR);
-            for c in Self::affected_chunks(*pos) {
-                chunk_set.insert(c);
-            }
-        }
-        // Age bumps - update fires map only; world stays FIRE_ID.
-        for (pos, age) in &step.age_bump {
-            if self.world.get(*pos).0 != block::FIRE_ID {
-                continue;
-            }
-            self.fires.insert(*pos, *age);
-        }
-        // Ignite (replace flammable / air with fire). MUST run
-        // after consume so a check_burn_out catch overrides the
-        // implicit air write.
-        for (pos, age) in &step.ignite {
-            // Defensive: don't overwrite an already-set fire with
-            // a stale ignite entry.
-            let here = self.world.get(*pos);
-            if here.0 == block::FIRE_ID {
-                // Already burning - just refresh age.
-                self.fires.insert(*pos, *age);
-                continue;
-            }
-            // The ignite target must currently be air OR a
-            // flammable block (the latter when check_burn_out
-            // catches). For air, ensure support is present.
-            if !here.is_air()
-                && block::fire::block_flammability(here.0) == (0, 0)
-            {
-                continue;
-            }
-            self.world.set(*pos, BlockId(block::FIRE_ID));
-            self.fires.insert(*pos, *age);
-            for c in Self::affected_chunks(*pos) {
-                chunk_set.insert(c);
-            }
-        }
-        if !chunk_set.is_empty() {
-            let coords: Vec<ChunkCoord> = chunk_set.into_iter().collect();
-            self.rebuild_chunks(&coords);
-        }
-        // Broadcast edits for every world-block change.
-        if let NetRole::Server { server, .. } = &mut self.net {
-            for pos in &step.extinguish {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: 0,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-            }
-            for pos in &step.consume {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: 0,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-            }
-            for (pos, _) in &step.ignite {
-                let edit = EditMsg {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    block: block::FIRE_ID,
-                };
-                self.edit_history.push(edit);
-                if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-                    server.broadcast_bytes("vx.edit", buf);
-                }
-            }
-        }
-    }
-
-    /// Q.4d: lava source cells emit fire on flammable neighbours
-    /// (MC LavaFluid::randomTick, lines 78..=114). Walks every
-    /// lava source cell once per net-tick frame; each gates
-    /// 1/LAVA_IGNITE_RATE_DENOM and rolls the two-branch ignite
-    /// algorithm from `block::fire::plan_lava_random_tick`. The
-    /// produced `ignite` entries route through `apply_fire_step`
-    /// so the broadcast + chunk-rebuild plumbing is shared with
-    /// the regular fire spread path.
-    fn tick_lava_fire_emit(&mut self) {
-        if matches!(self.net, NetRole::Client { .. }) {
-            return;
-        }
-        if self.liquid_positions.is_empty() {
-            return;
-        }
-        let clock = self.fire_clock;
-        // Snapshot source cells - only level-0 lava blocks count
-        // per MC (`fluid_lava_flow_does_not_ignite` test).
-        let mut sources: Vec<[i32; 3]> = Vec::new();
-        for pos in self.liquid_positions.iter().copied() {
-            if self.world.get(pos).0 != block::LAVA_ID {
-                continue;
-            }
-            if self.liquid_level.get(&pos).copied().unwrap_or(0) != 0 {
-                continue;
-            }
-            sources.push(pos);
-        }
-        if sources.is_empty() {
-            return;
-        }
-        let mut step = block::fire::FireStep::default();
-        for pos in sources {
-            let h_gate = block::fire::hash3_for(pos, clock, 0x9000);
-            if !h_gate.is_multiple_of(block::fire::LAVA_IGNITE_RATE_DENOM) {
-                continue;
-            }
-            block::fire::plan_lava_random_tick(&self.world, pos, clock, &mut step);
-        }
-        if step.ignite.is_empty() && step.consume.is_empty() {
-            return;
-        }
-        self.apply_fire_step(step);
-    }
+    fn fire_tick(&mut self) { crate::fire_runtime::fire_tick(self); }
+    fn apply_fire_step(&mut self, step: block::fire::FireStep) { crate::fire_runtime::apply_fire_step(self, step); }
+    fn tick_lava_fire_emit(&mut self) { crate::fire_runtime::tick_lava_fire_emit(self); }
 
     /// Server-side mob update: gravity-snap to surface, walk
     /// toward target, retarget on arrival / timeout, spawn new
@@ -12798,217 +12613,18 @@ impl AppHandler for Voxel {
         // `self.torch_positions` is kept - it is still consumed by the
         // particle spawn at ~line 3251 (smoke + flame sources) and by
         // the emitter_lights module. Only this render block is gone.
-        // Snow layers: thin 1x0.12x1 slab covering the bottom
-        // of the voxel cell. Atlas-tinted near-white so it
-        // contrasts with whatever sits below.
-        if !self.snow_positions.is_empty() {
-            let cube = *self
-                .player_cube
-                .get_or_insert_with(|| renderer.cube_handle());
-            for (p, layers) in self.snow_positions.iter() {
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32;
-                let cz = p[2] as f32 + 0.5;
-                let h = (*layers as f32 / 8.0).clamp(0.06, 1.0);
-                let slab = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.0, h, 1.0),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + h * 0.5, cz),
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    slab.to_cols_array(),
-                    [0.97, 0.98, 1.0, 1.0],
-                    0.0,
-                    0.9,
-                );
-            }
-        }
-        // W5.2a: animated portal swirl. Each `PORTAL_ID` voxel
-        // draws as two thin quads (one Z-aligned, one X-aligned)
-        // tinted procedurally so the panel reads as a swirling
-        // purple curtain. The colour modulation comes from
-        // `day_time` (the only frame-anchored f32 we have without
-        // touching the renderer crate's shader uniforms) -> the
-        // base purple `(0.6, 0.2, 0.9)` rolls between dim and
-        // bright on a per-cell phase offset, so a 2x3 portal
-        // doesn't strobe in lockstep.
-        if !self.portal_positions.is_empty() {
-            let cube = *self
-                .player_cube
-                .get_or_insert_with(|| renderer.cube_handle());
-            let time = self.day_time;
-            for p in self.portal_positions.iter() {
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32 + 0.5;
-                let cz = p[2] as f32 + 0.5;
-                // Per-cell phase so neighbouring cells swirl
-                // out of sync; a coordinate hash gives a stable
-                // offset that doesn't randomise between frames.
-                let phase = ((p[0] as u32).wrapping_mul(0x9E37_79B1))
-                    ^ ((p[1] as u32).wrapping_mul(0x85EB_CA6B))
-                    ^ ((p[2] as u32).wrapping_mul(0xC2B2_AE35));
-                let phase_f =
-                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-                let swirl = (time * 2.0 + phase_f).sin();
-                let intensity = (0.55 + 0.35 * swirl).clamp(0.2, 1.0);
-                let purple = [
-                    0.6 * intensity,
-                    0.2 * intensity,
-                    0.9 * intensity,
-                    0.75,
-                ];
-                // Two thin panels: one in the XY plane (Z thin)
-                // and one in the ZY plane (X thin). Either covers
-                // the visible face depending on the frame
-                // orientation; rendering both keeps the rotation-
-                // agnostic look without storing axis state.
-                let xy_panel = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.0, 1.0, 0.08),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy, cz),
-                );
-                let zy_panel = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.08, 1.0, 1.0),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy, cz),
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    xy_panel.to_cols_array(),
-                    purple,
-                    0.6,
-                    0.2,
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    zy_panel.to_cols_array(),
-                    purple,
-                    0.6,
-                    0.2,
-                );
-            }
-        }
-        // W8.4: fire cell rendering. Each FIRE_ID voxel draws as
-        // two crossed flat quads tinted orange-red so the player
-        // can see lava + flint+steel ignites. The dedicated-render
-        // flag was set in the block table but no draw call existed
-        // before W8 (the user-reported bug). A future wave swaps
-        // the colour for the animated flame texture; for now the
-        // placeholder is enough to surface the fire visually.
-        if !self.fires.is_empty() {
-            let cube = *self
-                .player_cube
-                .get_or_insert_with(|| renderer.cube_handle());
-            let time = self.day_time;
-            for p in self.fires.keys() {
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32 + 0.2;
-                let cz = p[2] as f32 + 0.5;
-                // Mild per-cell phase so neighbouring fires don't
-                // strobe in lockstep.
-                let phase = ((p[0] as u32).wrapping_mul(0x9E37_79B1))
-                    ^ ((p[1] as u32).wrapping_mul(0x85EB_CA6B))
-                    ^ ((p[2] as u32).wrapping_mul(0xC2B2_AE35));
-                let phase_f =
-                    (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-                let flicker = (time * 6.0 + phase_f).sin();
-                let intensity = (0.85 + 0.15 * flicker).clamp(0.5, 1.05);
-                let orange = [
-                    1.0 * intensity,
-                    0.55 * intensity,
-                    0.15 * intensity,
-                    0.92,
-                ];
-                // Crossed pair of thin panels so the flame reads
-                // from any angle. Matches the portal pattern; a
-                // future wave swaps these for two billboard sprites
-                // facing the camera + the animated MC flame.
-                let xy_panel = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.9, 0.9, 0.06),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy, cz),
-                );
-                let zy_panel = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.06, 0.9, 0.9),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy, cz),
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    xy_panel.to_cols_array(),
-                    orange,
-                    0.0,
-                    0.8,
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    zy_panel.to_cols_array(),
-                    orange,
-                    0.0,
-                    0.8,
-                );
-                // Add a small point light so the fire glows nearby
-                // surfaces - matches lava + torch behaviour.
-                renderer.queue_point_light(
-                    [cx, cy + 0.2, cz],
-                    [1.0, 0.55, 0.15],
-                    1.6 + 0.4 * flicker,
-                    6.0,
-                );
-            }
-        }
-        // Liquids: one slope-aware mesh per kind (water + lava +
-        // future). Each draws with its own albedo from the
-        // matching `BlockType` row, so adding a new liquid means
-        // a single table flip rather than another draw call here.
-        for (liquid_id, handle) in &self.liquid_mesh_handles {
-            let Some(bt) = block_type(*liquid_id) else {
-                continue;
-            };
-            // W34: force liquid alpha to 1.0 (fully opaque). Previously
-            // water=0.65 / lava=0.92 routed both through the alpha-blend
-            // transparent pipeline with depth_write=off. The combo of
-            // alpha blend + the user's particular view angles produced
-            // invisible-from-above / weird-from-below water + lava
-            // appearance. Going opaque keeps liquids visible regardless
-            // of viewing angle and depth ordering; MC-style translucent
-            // water can return when the depth + sort is properly wired.
-            let (alpha, rough) = match *liquid_id {
-                WATER_ID => (1.0_f32, 0.18_f32),
-                LAVA_ID => (1.0, 0.55),
-                _ => (1.0, 0.30),
-            };
-            // W34: route BOTH water + lava through the water-marker
-            // shader path. The liquid mesh writes per-vertex flow into
-            // the `uv` slot (push_quad_flow); the regular PBR sampling
-            // path interpreted that as atlas UV and sampled the wrong
-            // tile -> lava appeared as static noise (per user's screen).
-            // Water-marker branch ignores `uv` for sampling (sets
-            // tex=white) and uses `color * ripple` so the per-block
-            // colour from BLOCK_TYPES gives the right tint (water blue,
-            // lava orange) + the ripple shader provides the animated
-            // flow look. MC's lava also has an animated flowing surface;
-            // approximating it via the same shader as water is
-            // visually acceptable until a dedicated lava shader lands.
-            if *liquid_id == WATER_ID || *liquid_id == LAVA_ID {
-                renderer.draw_mesh_water(
-                    *handle,
-                    Mat4::IDENTITY.to_cols_array(),
-                    [bt.color[0], bt.color[1], bt.color[2], alpha],
-                    0.0,
-                    rough,
-                );
-            } else {
-                renderer.draw_mesh_pbr(
-                    *handle,
-                    Mat4::IDENTITY.to_cols_array(),
-                    [bt.color[0], bt.color[1], bt.color[2], alpha],
-                    0.0,
-                    rough,
-                );
-            }
-        }
+        let decor_cube = *self
+            .player_cube
+            .get_or_insert_with(|| renderer.cube_handle());
+        crate::render::decor::draw(
+            renderer,
+            decor_cube,
+            &self.snow_positions,
+            &self.portal_positions,
+            &self.fires,
+            &self.liquid_mesh_handles,
+            self.day_time,
+        );
         // Floating drop entities. Each renders as a small cube
         // (~0.3 voxel) bobbing in place. Pulled off
         // `dropped_items` so both host + client see the same
