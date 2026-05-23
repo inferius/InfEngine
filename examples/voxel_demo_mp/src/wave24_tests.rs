@@ -44,7 +44,7 @@ fn mesh_chunk_in_worker_solid_chunk_produces_submeshes() {
         py: None,
         ny: None,
     };
-    let subs = crate::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo);
+    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo);
     let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
     assert!(
         total_verts > 0,
@@ -72,7 +72,7 @@ fn mesh_chunk_in_worker_air_chunk_produces_no_vertices() {
         py: None,
         ny: None,
     };
-    let subs = crate::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo);
+    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo);
     let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
     assert_eq!(total_verts, 0, "air chunk must produce zero vertices");
 }
