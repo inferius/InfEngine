@@ -11,6 +11,12 @@
 //! W47.13a: `resolve_attack_target` - given the three candidate hits
 //! (remote player, mob, voxel), return whichever wins by closest
 //! distance. Pure data; no engine dependencies.
+//!
+//! W47.13c: `classify_rmb_action` - given the held block, target
+//! block id, and ability flags, return which RMB branch should fire.
+//! Replaces the inline `else if rmb && self.world.get(...) == X`
+//! conditions in the main on_update cascade. Branch bodies (side
+//! effects) stay in the caller.
 
 /// Outcome of the per-frame combat-vs-block-edit arbitration.
 ///
@@ -59,6 +65,106 @@ pub fn resolve_attack_target(
         player = None;
     }
     AttackTarget { player, mob }
+}
+
+/// W47.13c: which RMB action wins for this click. The cascade in
+/// `Voxel::on_update` walks these in priority order; the first
+/// matching branch fires and the rest are suppressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RmbAction {
+    /// No RMB this frame, or no condition matched.
+    None,
+    /// Shovel right-click on a grass voxel (id 3) - degrades to
+    /// dirt (the MC "path" shortcut).
+    PathGrass,
+    /// Right-click on a furnace voxel - opens the furnace UI.
+    OpenFurnace,
+    /// Right-click on a chest voxel - opens the chest UI.
+    OpenChest,
+    /// Right-click on a bed voxel (id 35) - tries to skip the
+    /// night.
+    SleepBed,
+    /// Right-click with flint+steel - tries to ignite a portal
+    /// frame or drop a fire on the clicked surface.
+    IgnitePortal,
+    /// Right-click with an empty/water/lava bucket - scoops or
+    /// pours a liquid voxel.
+    BucketUse,
+    /// Right-click with a placeable block selected - places a new
+    /// voxel at the adjacent (or replaceable) cell.
+    PlaceBlock,
+}
+
+/// Bed block id. There is no const in `block::ids` yet; magic
+/// number documented here so the classifier stays self-contained.
+const BED_ID: u16 = 35;
+
+/// W47.13c: pick the winning RMB action.
+///
+/// `rmb` is the edge-triggered click; if false the result is
+/// always `RmbAction::None`. The remaining inputs match what the
+/// inline cascade reads from `self`:
+/// - `target_id`: id of the voxel under the crosshair.
+/// - `held_id`: id of the block in the selected hotbar slot,
+///   `None` if the slot is empty.
+/// - `held_shovel_tier`: `shovel_tier(held)` evaluated by the
+///   caller. 0 if the held item is not a shovel.
+/// - `held_is_tool_block`: `is_tool_block(held)` evaluated by the
+///   caller. Tool / weapon blocks suppress the PlaceBlock branch.
+/// - `may_build`: `self.abilities.may_build`. Adventure-mode
+///   players have this off; PlaceBlock is then suppressed.
+///
+/// Priority order mirrors the cascade exactly: PathGrass beats
+/// PlaceBlock when a shovel hits grass; the container/bed checks
+/// only depend on the target voxel so they win whenever the held
+/// item is irrelevant to them.
+pub fn classify_rmb_action(
+    rmb: bool,
+    target_id: u16,
+    held_id: Option<u16>,
+    held_shovel_tier: u8,
+    held_is_tool_block: bool,
+    may_build: bool,
+) -> RmbAction {
+    use crate::block::{
+        BUCKET_EMPTY_ID, BUCKET_LAVA_ID, BUCKET_WATER_ID, CHEST_ID,
+        FLINT_AND_STEEL_ID, FURNACE_ID,
+    };
+    if !rmb {
+        return RmbAction::None;
+    }
+    // 1. Shovel + grass -> path. Held must be a shovel (tier > 0)
+    //    AND target must be the grass block.
+    if target_id == 3 && held_shovel_tier > 0 {
+        return RmbAction::PathGrass;
+    }
+    // 2. Containers + bed are target-only - the held block does
+    //    not matter for these. A shovel on a furnace still opens
+    //    the furnace.
+    if target_id == FURNACE_ID {
+        return RmbAction::OpenFurnace;
+    }
+    if target_id == CHEST_ID {
+        return RmbAction::OpenChest;
+    }
+    if target_id == BED_ID {
+        return RmbAction::SleepBed;
+    }
+    // 3. Held-item-driven branches: flint+steel and buckets.
+    if let Some(h) = held_id {
+        if h == FLINT_AND_STEEL_ID {
+            return RmbAction::IgnitePortal;
+        }
+        if matches!(h, BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID) {
+            return RmbAction::BucketUse;
+        }
+    }
+    // 4. Generic block place. Suppressed in Adventure mode, with
+    //    an empty hand, or while holding a tool/weapon.
+    if may_build && held_id.is_some() && !held_is_tool_block {
+        return RmbAction::PlaceBlock;
+    }
+    RmbAction::None
 }
 
 #[cfg(test)]
@@ -111,5 +217,126 @@ mod tests {
     fn mob_only_when_no_pvp_and_no_voxel() {
         let r = resolve_attack_target(None, Some((9, 2.0)), None);
         assert_eq!(r, AttackTarget { player: None, mob: Some(9) });
+    }
+
+    // --- classify_rmb_action ---
+
+    use crate::block::{
+        BUCKET_EMPTY_ID, BUCKET_LAVA_ID, BUCKET_WATER_ID, CHEST_ID,
+        FLINT_AND_STEEL_ID, FURNACE_ID,
+    };
+
+    #[test]
+    fn rmb_false_always_none() {
+        assert_eq!(
+            classify_rmb_action(false, FURNACE_ID, Some(1), 0, false, true),
+            RmbAction::None,
+        );
+    }
+
+    #[test]
+    fn shovel_on_grass_wins_path() {
+        assert_eq!(
+            classify_rmb_action(true, 3, Some(50), 2, false, true),
+            RmbAction::PathGrass,
+        );
+    }
+
+    #[test]
+    fn non_shovel_on_grass_falls_through_to_place() {
+        // Held is some non-shovel non-tool block (e.g. dirt id 2)
+        // - cascade reaches the generic place branch.
+        assert_eq!(
+            classify_rmb_action(true, 3, Some(2), 0, false, true),
+            RmbAction::PlaceBlock,
+        );
+    }
+
+    #[test]
+    fn furnace_target_opens_regardless_of_held() {
+        assert_eq!(
+            classify_rmb_action(true, FURNACE_ID, Some(50), 3, false, true),
+            RmbAction::OpenFurnace,
+        );
+    }
+
+    #[test]
+    fn chest_target_opens_regardless_of_held() {
+        assert_eq!(
+            classify_rmb_action(true, CHEST_ID, None, 0, false, true),
+            RmbAction::OpenChest,
+        );
+    }
+
+    #[test]
+    fn bed_target_routes_to_sleep() {
+        assert_eq!(
+            classify_rmb_action(true, BED_ID, None, 0, false, true),
+            RmbAction::SleepBed,
+        );
+    }
+
+    #[test]
+    fn flint_and_steel_routes_to_ignite() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(FLINT_AND_STEEL_ID), 0, false, true),
+            RmbAction::IgnitePortal,
+        );
+    }
+
+    #[test]
+    fn empty_bucket_routes_to_bucket_use() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(BUCKET_EMPTY_ID), 0, false, true),
+            RmbAction::BucketUse,
+        );
+    }
+
+    #[test]
+    fn water_bucket_routes_to_bucket_use() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(BUCKET_WATER_ID), 0, false, true),
+            RmbAction::BucketUse,
+        );
+    }
+
+    #[test]
+    fn lava_bucket_routes_to_bucket_use() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(BUCKET_LAVA_ID), 0, false, true),
+            RmbAction::BucketUse,
+        );
+    }
+
+    #[test]
+    fn empty_hand_blocks_place() {
+        assert_eq!(
+            classify_rmb_action(true, 1, None, 0, false, true),
+            RmbAction::None,
+        );
+    }
+
+    #[test]
+    fn tool_block_blocks_place() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(99), 0, true, true),
+            RmbAction::None,
+        );
+    }
+
+    #[test]
+    fn may_build_false_blocks_place() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(2), 0, false, false),
+            RmbAction::None,
+        );
+    }
+
+    #[test]
+    fn place_block_with_regular_block() {
+        assert_eq!(
+            classify_rmb_action(true, 1, Some(2), 0, false, true),
+            RmbAction::PlaceBlock,
+        );
     }
 }

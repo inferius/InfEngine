@@ -38,8 +38,8 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 
 mod block;
 use block::{
-    ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID, BUCKET_LAVA_ID,
-    BUCKET_WATER_ID, BlockCategory, CHEST_ID, FURNACE_ID, LAVA_ID,
+    ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID,
+    BlockCategory, CHEST_ID, FURNACE_ID, LAVA_ID,
     REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
     TILE_PX, TORCH_ID, TileSpec, atlas_uv_rect, axe_tier,
     block_category, block_is_liquid,
@@ -11507,23 +11507,28 @@ impl AppHandler for Voxel {
             && attack_mob.is_none()
             && let Some(hit) = self.target
         {
+            // W47.13c: arbitration of the RMB cascade lives in
+            // world::place_break::classify_rmb_action. Each branch
+            // below pattern-matches on the predicted action instead
+            // of re-deriving the (target id, held id, tier, tool,
+            // may_build) conditions inline.
+            let predicted = {
+                let held = selected_block.unwrap_or(BlockId::AIR);
+                crate::world::place_break::classify_rmb_action(
+                    rmb,
+                    self.world.get(hit.voxel).0,
+                    selected_block.map(|b| b.0),
+                    shovel_tier(held),
+                    is_tool_block(held),
+                    self.abilities.may_build,
+                )
+            };
+            use crate::world::place_break::RmbAction;
             if false {
-                // Sentinel arm so the existing `else if rmb ...`
+                // Sentinel arm so the existing `else if ...`
                 // structure stays a single `if/else if` chain.
                 unreachable!()
-            } else if rmb
-                && self.world.get(hit.voxel).0 == 3
-                && {
-                    let held = self
-                        .inventory
-                        .get(self.selected_slot)
-                        .copied()
-                        .unwrap_or(None)
-                        .map(|(b, _)| b)
-                        .unwrap_or(BlockId::AIR);
-                    shovel_tier(held) > 0
-                }
-            {
+            } else if predicted == RmbAction::PathGrass {
                 // Shovel-RMB on grass -> degrade to dirt
                 // (Minecraft's "path" shortcut). Apply locally
                 // for instant visual feedback then route the
@@ -11560,7 +11565,7 @@ impl AppHandler for Voxel {
                         }
                     }
                 }
-            } else if rmb && self.world.get(hit.voxel).0 == FURNACE_ID {
+            } else if predicted == RmbAction::OpenFurnace {
                 // RMB on a furnace: open the furnace UI. Mints a
                 // fresh empty 3-slot container + runtime entry on
                 // first open so the offline place-without-open
@@ -11582,7 +11587,7 @@ impl AppHandler for Voxel {
                 }
                 self.lmb_pending = false;
                 self.rmb_pending = false;
-            } else if rmb && self.world.get(hit.voxel).0 == CHEST_ID {
+            } else if predicted == RmbAction::OpenChest {
                 // RMB on a chest: open the chest UI for the chest
                 // at this voxel. W5.3a wires the MP path: when
                 // running as `NetRole::Client`, ship a
@@ -11606,7 +11611,7 @@ impl AppHandler for Voxel {
                 // against the world.
                 self.lmb_pending = false;
                 self.rmb_pending = false;
-            } else if rmb && self.world.get(hit.voxel).0 == 35 {
+            } else if predicted == RmbAction::SleepBed {
                 // RMB on a bed: night-time, run the local /sleep
                 // logic if we're authoritative; clients ship a
                 // vx.sleep request to the host so the world
@@ -11641,10 +11646,7 @@ impl AppHandler for Voxel {
                         }
                     }
                 }
-            } else if rmb
-                && let Some(held) = selected_block
-                && held.0 == block::FLINT_AND_STEEL_ID
-            {
+            } else if predicted == RmbAction::IgnitePortal {
                 // Phase F.5: RMB with flint+steel on an obsidian
                 // block ignites a valid portal frame. The hit
                 // cell is the obsidian block itself; the frame
@@ -11742,12 +11744,8 @@ impl AppHandler for Voxel {
                 self.consume_flint_and_steel_use();
                 self.lmb_pending = false;
                 self.rmb_pending = false;
-            } else if rmb
+            } else if predicted == RmbAction::BucketUse
                 && let Some(held) = selected_block
-                && matches!(
-                    held.0,
-                    BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID
-                )
             {
                 // Bucket RMB interactions.
                 //   empty bucket  + liquid voxel -> scoop, swap to
@@ -11914,10 +11912,8 @@ impl AppHandler for Voxel {
                         });
                     }
                 }
-            } else if rmb
-                && self.abilities.may_build
+            } else if predicted == RmbAction::PlaceBlock
                 && let Some(block) = selected_block
-                && !is_tool_block(block)
             {
                 // W10.2: `may_build = false` (future Adventure mode)
                 // suppresses RMB placement entirely. Today every
