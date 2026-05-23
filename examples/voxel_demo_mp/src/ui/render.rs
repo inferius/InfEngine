@@ -1302,7 +1302,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ui.vertical_centered(|ui| {
                                 ui.horizontal(|ui| {
                                     for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                        let resp = slot_with_dnd_dur(
+                                        let resp = crate::ui::slot_widget::slot_with_dnd_dur(
                                             ui,
                                             *slot,
                                             atlas_tex_id,
@@ -1378,7 +1378,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             .get(snap_idx)
                                             .copied()
                                             .unwrap_or(None);
-                                        slot_with_dnd_dur(
+                                        crate::ui::slot_widget::slot_with_dnd_dur(
                                             ui,
                                             slot,
                                             atlas_tex_id,
@@ -1398,7 +1398,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             // closing the menu (matches Minecraft).
                             ui.horizontal(|ui| {
                                 for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                    let resp = slot_with_dnd_dur(
+                                    let resp = crate::ui::slot_widget::slot_with_dnd_dur(
                                         ui,
                                         *slot,
                                         atlas_tex_id,
@@ -1421,7 +1421,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         ui.horizontal(|ui| {
                                             for col in 0..2 {
                                                 let idx = row * 2 + col;
-                                                slot_with_dnd(
+                                                crate::ui::slot_widget::slot_with_dnd(
                                                     ui,
                                                     craft_snapshot[idx],
                                                     atlas_tex_id,
@@ -1440,7 +1440,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 });
                                 ui.vertical(|ui| {
                                     ui.label("Output");
-                                    let resp = slot_with_dnd(
+                                    let resp = crate::ui::slot_widget::slot_with_dnd(
                                         ui,
                                         craft_output_snapshot,
                                         atlas_tex_id,
@@ -1577,7 +1577,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                                 .unwrap_or("?"),
                                                         )
                                                     });
-                                                draw_slot_widget(
+                                                crate::ui::slot_widget::draw_slot_widget(
                                                     ui,
                                                     icon,
                                                     atlas_tex_id,
@@ -1610,7 +1610,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             // craft grid.
                                             let is_active = craft_recipe_name
                                                 == Some(r.name);
-                                            let out_resp = draw_slot_widget(
+                                            let out_resp = crate::ui::slot_widget::draw_slot_widget(
                                                 ui,
                                                 out_icon,
                                                 atlas_tex_id,
@@ -1712,7 +1712,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             };
                                             let name =
                                                 crate::item::item_display_name(entry.id);
-                                            let resp = draw_slot_widget(
+                                            let resp = crate::ui::slot_widget::draw_slot_widget(
                                                 ui,
                                                 icon_slot,
                                                 atlas_tex_id,

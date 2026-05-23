@@ -17,8 +17,7 @@ use infengine_window::EngineWindow;
 use infengine_editor::EditorUi;
 use tracing::{error, info, warn};
 
-use crate::{Voxel, load_block_atlas_from_dir, mob_meshes, plugin, resource_pack};
-use crate::net::NetRole;
+use crate::*;
 
 /// W47.20: drive the per-process startup sequence against `vx`.
 pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
@@ -248,4 +247,155 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
     if matches!(vx.net, NetRole::Server { .. }) {
         vx.enter_world();
     }
+}
+
+// W47.27 - main entry point + arg parsing (relocated from main.rs).
+pub(crate) fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    // Parse `--server [addr]` / `--client <addr>` / no-arg offline.
+    let mut args = std::env::args().skip(1);
+    let mut net = NetRole::Offline;
+    let mut title_suffix = String::new();
+    let mut texture_dir: Option<std::path::PathBuf> = None;
+    let mut sounds_dir: Option<std::path::PathBuf> = None;
+    // W5.1: collect the CLI worldgen flag and stamp it onto the
+    // Voxel after construction (the global WORLDGEN atomic is
+    // gone).
+    let mut cli_worldgen: Option<WorldGen> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--textures" => {
+                let p = args.next().unwrap_or_default();
+                texture_dir = Some(std::path::PathBuf::from(p));
+            }
+            "--sounds" => {
+                let p = args.next().unwrap_or_default();
+                sounds_dir = Some(std::path::PathBuf::from(p));
+            }
+            "--worldgen" => {
+                let m = args.next().unwrap_or_default();
+                match WorldGen::from_str(&m) {
+                    Some(g) => {
+                        info!(mode = ?g, "worldgen mode set");
+                        cli_worldgen = Some(g);
+                    }
+                    None => {
+                        warn!(arg = %m, "unknown worldgen mode (classic|flat|islands|amplified|realistic)");
+                    }
+                }
+            }
+            "--server" => {
+                let addr = args.next().unwrap_or_else(|| "0.0.0.0:7777".to_string());
+                match NetServer::bind(&addr) {
+                    Ok(s) => {
+                        info!(addr = %addr, "voxel server bound");
+                        title_suffix = format!(" [SERVER {addr}]");
+                        net = NetRole::Server {
+                            server: s,
+                            poses: HashMap::new(),
+                            inventories: HashMap::new(),
+                            pending_inv_sends: HashSet::new(),
+                        };
+                    }
+                    Err(err) => {
+                        error!(error = %err, addr = %addr, "server bind failed");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--client" => {
+                let addr = args
+                    .next()
+                    .unwrap_or_else(|| "127.0.0.1:7777".to_string());
+                match NetClient::connect(&addr, "voxel-mp-client") {
+                    Ok(c) => {
+                        info!(addr = %addr, "voxel client connecting");
+                        title_suffix = format!(" [CLIENT -> {addr}]");
+                        net = NetRole::Client {
+                            client: c,
+                            remote: HashMap::new(),
+                            pending_edits: Vec::new(),
+                            pending_inv_actions: Vec::new(),
+                        };
+                    }
+                    Err(err) => {
+                        error!(error = %err, addr = %addr, "client connect failed");
+                        return ExitCode::from(3);
+                    }
+                }
+            }
+            other => {
+                warn!(arg = %other, "ignoring unknown argv");
+            }
+        }
+    }
+    info!(role = %net.label(), "voxel_demo_mp starting");
+
+    let config = WindowConfig {
+        title: format!("InfEngine - voxel_demo_mp{title_suffix}"),
+        width: 1280,
+        height: 720,
+        resizable: true,
+    };
+    let mut voxel = Voxel::new_with_net(net);
+    // W21.1: pick initial splash text so it's ready before the
+    // first Main screen draw.
+    voxel.menu.enter_main();
+    // W5.1: apply the CLI --worldgen flag to the active dim's
+    // per-dim worldgen entry. Replaces the deleted global atomic.
+    if let Some(g) = cli_worldgen {
+        let dim = voxel.current_dim.clone();
+        voxel.dim_worldgens.insert(dim, g);
+    }
+    // Default asset resolution. We probe two locations in order:
+    //
+    //   1. `<exe-dir>/assets/...` - ships next to the binary in
+    //      a release zip. Standard game-distro layout: drop the
+    //      `assets/` folder beside `voxel_demo_mp.exe`.
+    //   2. `<CARGO_MANIFEST_DIR>/assets/...` - dev-mode fallback
+    //      so `cargo run` from the source tree still works
+    //      without copying anything around.
+    //
+    // Both paths are checked separately for `textures/blocks` and
+    // `sounds`, so a release with only one subfolder still picks
+    // it up. Missing both directories simply leaves the field
+    // `None` and the demo falls back to procedural atlas + synth
+    // audio.
+    fn resolve_asset_subdir(rel: &[&str]) -> Option<std::path::PathBuf> {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            let mut p = dir.to_path_buf();
+            for seg in rel {
+                p.push(seg);
+            }
+            candidates.push(p);
+        }
+        let mut dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for seg in rel {
+            dev.push(seg);
+        }
+        candidates.push(dev);
+        candidates.into_iter().find(|p| p.exists())
+    }
+    voxel.texture_dir = texture_dir
+        .or_else(|| resolve_asset_subdir(&["assets", "textures", "blocks"]));
+    voxel.sounds_dir = sounds_dir
+        .or_else(|| resolve_asset_subdir(&["assets", "sounds"]));
+    info!(
+        textures = ?voxel.texture_dir,
+        sounds = ?voxel.sounds_dir,
+        "resolved asset paths"
+    );
+    if let Err(err) = run(config, voxel) {
+        error!(error = %err, "event loop failed");
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
 }

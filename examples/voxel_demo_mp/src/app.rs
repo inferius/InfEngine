@@ -9,6 +9,7 @@
 #![allow(unused_imports)]
 
 use crate::*;
+use crate::lighting::HaloLighting;
 
 pub(crate) struct Voxel {
     pub(crate) state: AppState,
@@ -4521,6 +4522,49 @@ impl Voxel {
         if self.menu.saved_servers_stale() {
             let fresh = menu::multiplayer::load_saved_servers();
             self.menu.store_saved_servers(fresh);
+        }
+    }
+}
+
+// W47.27 - Settings struct + Default impl (relocated from main.rs).
+#[derive(Debug, Clone)]
+pub(crate) struct Settings {
+    pub(crate) mouse_sensitivity: f32,
+    pub(crate) lock_cursor: bool,
+    pub(crate) hide_cursor: bool,
+    pub(crate) show_fps: bool,
+    /// Render distance in chunks (Chebyshev). The unload radius is
+    /// computed as `view_distance + 2` so the player can wobble on
+    /// the boundary without thrashing chunk loads.
+    pub(crate) view_distance: u8,
+    /// Camera head bob while walking. Off-by-default-friendly:
+    /// nauseating for some players, polish for others.
+    pub(crate) head_bob: bool,
+    /// Invert vertical mouse axis. Some players prefer down=look-up
+    /// so leave it toggleable from the Settings panel.
+    pub(crate) invert_mouse_y: bool,
+    /// Reverse mouse-wheel hotbar scrolling direction.
+    pub(crate) invert_wheel: bool,
+    /// W9.7: optional override for the MC resource pack location.
+    /// `None` = use the auto-discovered default (env var ->
+    /// %APPDATA%/.minecraft -> placeholder). When set + the path
+    /// resolves to a usable `assets/minecraft/` tree, the engine
+    /// loads textures + sounds from there instead.
+    pub(crate) mc_assets_path: Option<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            mouse_sensitivity: 0.6,
+            lock_cursor: true,
+            hide_cursor: true,
+            show_fps: true,
+            view_distance: VIEW_DISTANCE_CHUNKS as u8,
+            head_bob: true,
+            invert_mouse_y: false,
+            invert_wheel: false,
+            mc_assets_path: None,
         }
     }
 }

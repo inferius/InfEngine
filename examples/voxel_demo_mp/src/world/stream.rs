@@ -21,11 +21,12 @@ use std::sync::Arc;
 use infengine_voxel::CHUNK_SIZE;
 
 use crate::{
-    CHUNK_PHASE_WARN_US, ChunkCoord, ChunkJob, ChunkSideEffect, HaloLighting, Job,
+    CHUNK_PHASE_WARN_US, ChunkCoord, ChunkJob, ChunkSideEffect, Job,
     PendingChunk, REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, REMESH_DEFERRED_PER_FRAME,
     VIEW_DISTANCE_MAX, Voxel, WorkerResult, block_skips_chunk_mesh, emitter_scan,
     net::NetRole, world_save,
 };
+use crate::lighting::HaloLighting;
 
 /// W47.18: drive one frame of the chunk stream. See module docs.
 pub(crate) fn stream_chunks(vx: &mut Voxel) {

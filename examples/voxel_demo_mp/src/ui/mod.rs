@@ -13,6 +13,7 @@
 //! display + tooltip.
 
 pub(crate) mod render;
+pub(crate) mod slot_widget;
 
 use infengine_voxel::BlockId;
 use serde::{Deserialize, Serialize};
