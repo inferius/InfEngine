@@ -63,7 +63,7 @@ pub(crate) const DEFAULT_DIMENSION: &str = "overworld";
 
 /// Per-save worldgen + dimension configuration. Immutable after
 /// world creation - edits would invalidate every persisted chunk.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorldJson {
     /// `WORLD_FORMAT_VERSION` at the time this slot was written.
     pub format_version: u32,
@@ -102,6 +102,12 @@ pub struct WorldJson {
     /// v2 saves migrate by defaulting this field to `"survival"`.
     #[serde(default = "default_game_mode_tag")]
     pub default_game_mode: String,
+    /// W46.31: time-of-day clock in seconds since dawn. Saved on
+    /// world exit so the sun position at next load matches where
+    /// the player left it. Defaults to 0.0 (dawn) on fresh worlds +
+    /// when reading an older save that didn't persist this field.
+    #[serde(default)]
+    pub day_time: f32,
 }
 
 /// `serde(default = ...)` hook for the `default_game_mode` field.
@@ -155,6 +161,7 @@ pub fn create_world_with_mode(
         ],
         dimension_worldgens: dim_gens,
         default_game_mode: default_game_mode.to_string(),
+        day_time: 0.0, // W46.31
     }
 }
 

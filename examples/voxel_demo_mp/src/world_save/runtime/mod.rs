@@ -82,8 +82,17 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 
     // 2. world.json: write only if missing (worldgen + seed are
     //    pinned at creation).
+    // W46.31: also rewrite when day_time drifted from disk so the
+    //   sun position survives across restarts. Cheap (a few hundred
+    //   bytes of JSON).
     let world_json_value = match world_json::read_world(slug) {
-        Ok(wj) => wj,
+        Ok(mut wj) => {
+            if (wj.day_time - voxel.day_time).abs() > 0.5 {
+                wj.day_time = voxel.day_time;
+                world_json::write_world(slug, &wj)?;
+            }
+            wj
+        }
         Err(_) => {
             // Missing OR corrupt - mint a fresh one. The base seed
             // and active dim's profile come straight from voxel
@@ -93,10 +102,11 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
                 .get(&voxel.current_dim)
                 .copied()
                 .unwrap_or(WorldGen::Classic);
-            let wj = create_world(
+            let mut wj = create_world(
                 worldgen_str(active_wg),
                 voxel.base_seed,
             );
+            wj.day_time = voxel.day_time; // W46.31
             world_json::write_world(slug, &wj)?;
             wj
         }
@@ -166,6 +176,9 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     };
     voxel.current_dim = active_dim.clone();
     voxel.base_seed = world_meta.seed;
+    // W46.31: restore the saved time-of-day so the sun resumes where
+    // the player left it instead of jumping to the engine's default.
+    voxel.day_time = world_meta.day_time;
     // Per-dim worldgens table; populate before per-dim load so
     // each dim's chunk-gen can see its assigned variant.
     dims::apply_dim_worldgens(voxel, &world_meta);
