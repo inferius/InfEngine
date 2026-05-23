@@ -181,11 +181,12 @@ pub(crate) const MC_EMITTERS: &[EmitterEntry] = &[
 /// automatically.
 fn engine_id_to_mc_name(id: u16) -> Option<&'static str> {
     use crate::block::{
-        CRYING_OBSIDIAN_ID, END_ROD_ID, ENDER_CHEST_ID, JACK_O_LANTERN_ID,
-        LANTERN_ID, LIGHT_BLOCK_ID, LIT_REDSTONE_LAMP_ID, LIT_REDSTONE_ORE_ID,
-        MAGMA_BLOCK_ID, REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID,
-        RESPAWN_ANCHOR_ID, SEA_LANTERN_ID, SHROOMLIGHT_ID, SOUL_FIRE_ID,
-        SOUL_LANTERN_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
+        COPPER_TORCH_ID, COPPER_WALL_TORCH_ID, CRYING_OBSIDIAN_ID, END_ROD_ID,
+        ENDER_CHEST_ID, JACK_O_LANTERN_ID, LANTERN_ID, LIGHT_BLOCK_ID,
+        LIT_REDSTONE_LAMP_ID, LIT_REDSTONE_ORE_ID, MAGMA_BLOCK_ID,
+        REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, RESPAWN_ANCHOR_ID,
+        SEA_LANTERN_ID, SHROOMLIGHT_ID, SOUL_FIRE_ID, SOUL_LANTERN_ID,
+        SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
     };
     match id {
         TORCH_ID => Some("torch"),
@@ -196,6 +197,8 @@ fn engine_id_to_mc_name(id: u16) -> Option<&'static str> {
         REDSTONE_WALL_TORCH_ID => Some("redstone_wall_torch"),
         SOUL_TORCH_ID => Some("soul_torch"),
         SOUL_WALL_TORCH_ID => Some("soul_wall_torch"),
+        COPPER_TORCH_ID => Some("copper_torch"),
+        COPPER_WALL_TORCH_ID => Some("copper_wall_torch"),
         SEA_LANTERN_ID => Some("sea_lantern"),
         JACK_O_LANTERN_ID => Some("jack_o_lantern"),
         SOUL_FIRE_ID => Some("soul_fire"),

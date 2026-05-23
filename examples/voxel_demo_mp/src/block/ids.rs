@@ -252,3 +252,10 @@ pub(crate) const TUFF_ID: u16 = 95;
 pub(crate) const DEEPSLATE_ID: u16 = 96;
 #[allow(dead_code)]
 pub(crate) const CALCITE_ID: u16 = 97;
+
+/// W46.21: Copper torch. MC 1.21+ adds copper-tinted variant. Emits 14.
+#[allow(dead_code)]
+pub(crate) const COPPER_TORCH_ID: u16 = 351;
+/// W46.21: Copper wall torch. Wall variant of COPPER_TORCH. Emits 14.
+#[allow(dead_code)]
+pub(crate) const COPPER_WALL_TORCH_ID: u16 = 352;

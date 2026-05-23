@@ -1944,6 +1944,18 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         places: None, max_stack: 64, icon: None,
         category: ItemCategory::Ingredient,
     },
+    // W46.21: copper torch family (MC 1.21+). Placeable decoration
+    // matching torch / redstone_torch / soul_torch pattern.
+    ItemType {
+        id: 351, name: "copper_torch", display: Some("Copper Torch"),
+        places: Some(351), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
+    ItemType {
+        id: 352, name: "copper_wall_torch", display: Some("Copper Wall Torch"),
+        places: Some(352), max_stack: 64, icon: None,
+        category: ItemCategory::Decoration,
+    },
 ];
 
 // ---------------------------------------------------------------

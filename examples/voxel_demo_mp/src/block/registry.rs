@@ -2300,4 +2300,23 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["amethyst_shard.png", "amethyst_block.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["amethyst_shard.png", "amethyst_block.png"], keep_alpha: false },
     },
+    // W46.21: copper torch family. MC 1.21+ added copper torches with
+    // emission 14 (same as regular torch). JSON pipeline picks up the
+    // template_torch.json geometry via the name_map "copper_torch"
+    // mapping; def.color forced to white so the texture renders
+    // unmodulated (matches W46.16 torch family).
+    BlockType {
+        id: 351, name: "copper_torch", color: [1.00, 1.00, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 352, name: "copper_wall_torch", color: [1.00, 1.00, 1.00], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["copper_torch.png", "torch.png"], keep_alpha: true },
+    },
 ];

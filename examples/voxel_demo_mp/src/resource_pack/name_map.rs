@@ -115,6 +115,9 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 51, block: "redstone_torch", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 52, block: "soul_torch",     top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 53, block: "soul_torch",     top: "", bottom: "", sides: "" },
+    // W46.21: copper torch family (MC 1.21+).
+    BlockNameMap { infengine_id: 351, block: "copper_torch",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 352, block: "copper_wall_torch", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 54, block: "sea_lantern",    top: "", bottom: "", sides: "" },
     BlockNameMap {
         infengine_id: 55, block: "jack_o_lantern",

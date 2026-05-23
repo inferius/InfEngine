@@ -15201,8 +15201,10 @@ fn day_night(time: f32) -> (Vec3, [f32; 3]) {
 /// is DIFFERENT from light_emission - glowstone emits light but no
 /// flame (solid block), while certain emitter variants emit particles
 /// but not necessarily maximum light.
-fn flame_emitter(id: u16) -> bool {
-    // TORCH_ID = 10, redstone torches = 50/51, soul torches = 52/53.
+pub(crate) fn flame_emitter(id: u16) -> bool {
+    // TORCH_ID = 10, redstone torches = 50/51, soul torches = 52/53,
+    // W46.21 copper torches = 324/325.
+    use crate::block::{COPPER_TORCH_ID, COPPER_WALL_TORCH_ID};
     matches!(
         id,
         x if x == TORCH_ID
@@ -15210,6 +15212,8 @@ fn flame_emitter(id: u16) -> bool {
             || x == REDSTONE_WALL_TORCH_ID
             || x == SOUL_TORCH_ID
             || x == SOUL_WALL_TORCH_ID
+            || x == COPPER_TORCH_ID
+            || x == COPPER_WALL_TORCH_ID
     )
 }
 

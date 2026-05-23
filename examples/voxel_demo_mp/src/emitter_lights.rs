@@ -29,9 +29,10 @@
 //! kind so the engine doesn't have to do a per-pixel sample.
 
 use crate::block::{
-    light_emission::light_emission_for_id, CRYING_OBSIDIAN_ID, END_ROD_ID,
-    ENDER_CHEST_ID, GLOWSTONE_ID, JACK_O_LANTERN_ID, LANTERN_ID, LAVA_ID,
-    LIT_REDSTONE_LAMP_ID, LIT_REDSTONE_ORE_ID, MAGMA_BLOCK_ID, REDSTONE_TORCH_ID,
+    light_emission::light_emission_for_id, COPPER_TORCH_ID, COPPER_WALL_TORCH_ID,
+    CRYING_OBSIDIAN_ID, END_ROD_ID, ENDER_CHEST_ID, GLOWSTONE_ID,
+    JACK_O_LANTERN_ID, LANTERN_ID, LAVA_ID, LIT_REDSTONE_LAMP_ID,
+    LIT_REDSTONE_ORE_ID, MAGMA_BLOCK_ID, REDSTONE_TORCH_ID,
     REDSTONE_WALL_TORCH_ID, SEA_LANTERN_ID, SHROOMLIGHT_ID, SOUL_FIRE_ID,
     SOUL_LANTERN_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID, TORCH_ID,
 };
@@ -64,6 +65,8 @@ pub(crate) fn emitter_color(block_id: u16) -> [f32; 3] {
     match block_id {
         // Warm orange torches + fire.
         x if x == TORCH_ID => [1.00, 0.78, 0.40],
+        // W46.21: copper torch - warm orange copper hue.
+        x if x == COPPER_TORCH_ID || x == COPPER_WALL_TORCH_ID => [1.00, 0.65, 0.35],
         // Redstone = red.
         x if x == REDSTONE_TORCH_ID || x == REDSTONE_WALL_TORCH_ID => [0.95, 0.20, 0.15],
         x if x == LIT_REDSTONE_ORE_ID => [0.95, 0.30, 0.30],
