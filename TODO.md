@@ -2,8 +2,8 @@
 
 ## Posledni stav
 
-main.rs: **14325 LOC** (z puvodnich 17207 = -2882 / -17%).
-Po W47.11+12: jeste -407 = ~13918 LOC ocekavano (overit po commit).
+main.rs: **14320 LOC** (z puvodnich 17207 = -2887 / -17%).
+Session W47.11..W47.13b delta: 14720 -> 14320 = -400 LOC.
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -72,6 +72,8 @@ Refaktor (W47.x):
 - W47.11 fire_tick + apply_fire_step + tick_lava_fire_emit -> fire_runtime.rs
 - W47.12 snow / portal / fire / liquid decor render -> render/decor.rs
   (W47.11+12 commitnute spolu - combo commit kvuli sdilenemu main.rs diff)
+- W47.13a attack target resolver -> world/place_break.rs (pure decision)
+- W47.13b mining timer step -> mining::step_mining_session (pure clock)
 
 ## Aktivni / open
 
@@ -104,16 +106,21 @@ Refaktor (W47.x):
 
 ## Dalsi refaktor splity
 
-| Wave  | Cil                                                | LOC odhad | Riziko |
-|-------|----------------------------------------------------|-----------|--------|
-| W47.13 | place/break logic -> world/place_break.rs         | ~1200     | medium |
-| W47.14 | mob AI tick -> entity/ai.rs                       | ?         | low    |
-| W47.15 | chunk streamer -> world/stream.rs                 | ~600      | medium |
-| W47.16 | egui inventory + hotbar -> ui/inventory.rs        | ~1500     | high   |
+W47.13 NENI cisty boundary - on_update je 2362 LOC megamethod s
+~1100 LOC place/break dispersed v deep `&mut self` borrows + 4
+mistech reset pending flags. Splitting incremental:
 
-Recommend: W47.13 place/break (cisty boundary), pak W47.14 mob AI,
-pak W47.15 streamer. W47.16 UI az naposled (velky risk, egui state
-spletany).
+| Wave  | Cil                                                | LOC | Riziko |
+|-------|----------------------------------------------------|-----|--------|
+| W47.13c | rmb_action_classify -> place_break (decision tree) | ~80 | medium |
+| W47.13d | break-> drop + broadcast helper                  | ~150 | medium |
+| W47.13e | place-> orient + broadcast helper                | ~250 | medium |
+| W47.14 | mob AI tick -> entity/ai.rs                       | ?   | low    |
+| W47.15 | chunk streamer -> world/stream.rs                 | ~600 | medium |
+| W47.16 | egui inventory + hotbar -> ui/inventory.rs        | ~1500 | high   |
+
+Recommend: dokoncit W47.13c-e postupne (kazdy maly extract = jeden
+commit s testy), pak W47.14 mob AI, pak W47.15 streamer.
 
 ## Pravidla (z CLAUDE.md)
 
