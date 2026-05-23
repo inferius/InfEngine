@@ -6004,6 +6004,41 @@ impl Voxel {
                     }
                 }
             }
+            // W46.26: drop emitter / torch / fire / snow / liquid map
+            // entries for every voxel in the unloaded chunks. These maps
+            // are keyed by absolute world position so they survive a
+            // chunk eviction unless we explicitly prune. Without this
+            // pruning the maps grew unbounded with exploration AND the
+            // ambient particle tick + point-light picker kept spawning
+            // smoke / lights from positions whose backing block no
+            // longer existed in memory.
+            //
+            // When the chunk reloads later (W46.25 disk-read), its
+            // scan_chunk pass re-populates these maps from the actual
+            // saved voxels, so the prune is data-safe: anything still
+            // on disk comes back; anything that was already a phantom
+            // gets garbage-collected.
+            let cs = infengine_voxel::CHUNK_SIZE as i32;
+            for cc in &to_unload {
+                let xmin = cc[0] * cs;
+                let xmax = xmin + cs;
+                let ymin = cc[1] * cs;
+                let ymax = ymin + cs;
+                let zmin = cc[2] * cs;
+                let zmax = zmin + cs;
+                let in_chunk = |p: &[i32; 3]| {
+                    p[0] >= xmin && p[0] < xmax
+                        && p[1] >= ymin && p[1] < ymax
+                        && p[2] >= zmin && p[2] < zmax
+                };
+                self.emitter_positions.retain(|p, _| !in_chunk(p));
+                self.torch_positions.retain(|p| !in_chunk(p));
+                self.torch_orient.retain(|p, _| !in_chunk(p));
+                self.fires.retain(|p, _| !in_chunk(p));
+                self.snow_positions.retain(|p, _| !in_chunk(p));
+                self.liquid_positions.retain(|p| !in_chunk(p));
+                self.liquid_level.retain(|p, _| !in_chunk(p));
+            }
             for cc in &to_unload {
                 self.world.remove_chunk(*cc);
             }
