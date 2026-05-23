@@ -30,6 +30,10 @@
 //!     broadcast + container mint + held-stack decrement + place SFX +
 //!     dust puff + counters). Same `&mut Voxel` shape as the break
 //!     helper since the body fans out across ~15 fields.
+//!
+//! W47.13f: `apply_shovel_grass_path` - shovel-RMB on grass turns
+//!     the cell into dirt (the MC "path" shortcut). Local edit +
+//!     server broadcast `vx.edit` or client request `vx.path`.
 
 /// Outcome of the per-frame combat-vs-block-edit arbitration.
 ///
@@ -511,6 +515,40 @@ pub(crate) fn apply_block_place(
     if vx.place_history.len() > 32 {
         let drop = vx.place_history.len() - 32;
         vx.place_history.drain(0..drop);
+    }
+}
+
+/// W47.13f: degrade the grass voxel at `voxel` to dirt (id 2). Host
+/// applies the edit locally + broadcasts `vx.edit`; client applies
+/// the same local edit (so the path appears instantly under the
+/// player's feet) and sends a `vx.path` request that the server will
+/// replay or reject.
+pub(crate) fn apply_shovel_grass_path(vx: &mut crate::Voxel, voxel: [i32; 3]) {
+    use crate::net::NetRole;
+    use crate::{BlockId, EditMsg, Voxel};
+    let cfg = bincode::config::standard();
+    vx.world_set_tracked(voxel, BlockId(2));
+    let coords = Voxel::affected_chunks(voxel);
+    vx.rebuild_chunks(&coords);
+    let edit = EditMsg {
+        x: voxel[0],
+        y: voxel[1],
+        z: voxel[2],
+        block: 2,
+    };
+    match &mut vx.net {
+        NetRole::Offline => {}
+        NetRole::Server { server, .. } => {
+            vx.edit_history.push(edit);
+            if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                server.broadcast_bytes("vx.edit", buf);
+            }
+        }
+        NetRole::Client { client, .. } => {
+            if let Ok(buf) = bincode::serde::encode_to_vec(voxel, cfg) {
+                let _ = client.send_bytes("vx.path", buf);
+            }
+        }
     }
 }
 

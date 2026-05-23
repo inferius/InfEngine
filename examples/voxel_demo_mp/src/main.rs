@@ -11401,42 +11401,11 @@ impl AppHandler for Voxel {
                 // structure stays a single `if/else if` chain.
                 unreachable!()
             } else if predicted == RmbAction::PathGrass {
-                // Shovel-RMB on grass -> degrade to dirt
-                // (Minecraft's "path" shortcut). Apply locally
-                // for instant visual feedback then route the
-                // change through the right MP path: host
-                // broadcasts vx.edit, client sends vx.path and
-                // the server replays / rejects.
-                let voxel = hit.voxel;
-                let cfg = bincode::config::standard();
-                self.world_set_tracked(voxel, BlockId(2));
-                let coords = Self::affected_chunks(voxel);
-                self.rebuild_chunks(&coords);
-                let edit = EditMsg {
-                    x: voxel[0],
-                    y: voxel[1],
-                    z: voxel[2],
-                    block: 2,
-                };
-                match &mut self.net {
-                    NetRole::Offline => {}
-                    NetRole::Server { server, .. } => {
-                        self.edit_history.push(edit);
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(edit, cfg)
-                        {
-                            server.broadcast_bytes("vx.edit", buf);
-                        }
-                    }
-                    NetRole::Client { client, .. } => {
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(voxel, cfg)
-                        {
-                            let _ =
-                                client.send_bytes("vx.path", buf);
-                        }
-                    }
-                }
+                // W47.13f: shovel-RMB on grass -> dirt local edit +
+                // host broadcast / client vx.path request.
+                crate::world::place_break::apply_shovel_grass_path(
+                    self, hit.voxel,
+                );
             } else if predicted == RmbAction::OpenFurnace {
                 // RMB on a furnace: open the furnace UI. Mints a
                 // fresh empty 3-slot container + runtime entry on
