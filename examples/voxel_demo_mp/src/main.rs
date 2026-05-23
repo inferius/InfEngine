@@ -6252,6 +6252,24 @@ impl Voxel {
                             if let Some(a) = atlas.clone() {
                                 renderer.bind_chunk_mesh_albedo(handle, a);
                             }
+                            // W46.36: redstone-torch family ships a 6-plane
+                            // halo around the lit tip (see W46.35). MC
+                            // renders the halo as a translucent overlay so
+                            // the stick + texture pixels show through. Route
+                            // the whole submesh to LAYER_TRANSLUCENT - the
+                            // alpha-blend pipeline gives the halo planes
+                            // their see-through look. Stick faces stay
+                            // visually solid because their texture alpha is
+                            // 1.0; the halo planes' lower-alpha pixels blend.
+                            if matches!(
+                                sub.block.0,
+                                REDSTONE_TORCH_ID | REDSTONE_WALL_TORCH_ID
+                            ) {
+                                renderer.set_chunk_mesh_layer(
+                                    handle,
+                                    infengine_render::CHUNK_LAYER_TRANSLUCENT,
+                                );
+                            }
                             self.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                         }
                     }
@@ -6352,6 +6370,19 @@ impl Voxel {
                             );
                             if let Some(a) = atlas.clone() {
                                 renderer.bind_chunk_mesh_albedo(handle, a);
+                            }
+                            // W46.36 (remesh path mirror): same translucent
+                            // routing as the apply_built_chunk path so the
+                            // halo stays semi-transparent after a re-lighting
+                            // remesh.
+                            if matches!(
+                                sub.block.0,
+                                REDSTONE_TORCH_ID | REDSTONE_WALL_TORCH_ID
+                            ) {
+                                renderer.set_chunk_mesh_layer(
+                                    handle,
+                                    infengine_render::CHUNK_LAYER_TRANSLUCENT,
+                                );
                             }
                             self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
                         }

@@ -68,3 +68,18 @@ nova funkcionalita psat se do existujiciho `main.rs`, je to chyba.
 - Necpat 500-radkove bloky logiky do `on_update`. Extrahovat.
 - Neprilezet refactor "az pozdeji" - delat to **prubezne pri psani
   nove fce**, ne pozdeji v dedikovane refactor wave.
+
+## Hra je MC klon
+
+Cilem je vlastni klon Minecraft. Behavior + look se ridi tim co MC
+dela. Lide znaji ovladani / efekty / vzhled z MC, takze sledovat
+to drzime.
+
+- Kdyz neco vyvijim, **inspirovat se MC zdrojaky** v
+  `C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\`
+  + decompiled Java zdrojaky (template_*.json modely, blockstate
+  pravidla, lighting BFS, particle spawn, atd.).
+- Odlisnosti od MC vyresit az **pote**, co MC chovani funguje.
+- Kdyz mi neco prijde divne (model, zvuk, particle, mob AI), **konzultovat
+  s uzivatelem** drive nez improvizuju vlastni reseni. Lepsi se 3x
+  zeptat nez prepisovat kod.
