@@ -11129,82 +11129,11 @@ impl AppHandler for Voxel {
             mob_target,
             voxel_dist,
         );
-        // Combat consumes a flat 3 stamina per attack so the
-        // sprint pool is shared between movement and fighting.
-        // W15.3: Creative / invulnerable players are exempt from
-        // the combat stamina cost (they already ignore mob damage).
-        if (attack_player.is_some() || attack_mob.is_some())
-            && !self.abilities.invulnerable
-        {
-            self.stamina = (self.stamina - 3.0).max(0.0);
-        }
-        // Player-vs-player attack: dispatch to server-side damage
-        // application. Host applies directly; client sends a
-        // `vx.pvp_hit` request the server can validate.
-        if let Some(target_id) = attack_player {
-            let held = self
-                .inventory
-                .get(self.selected_slot)
-                .copied()
-                .unwrap_or(None)
-                .map(|(b, _)| b)
-                .unwrap_or(BlockId::AIR);
-            let mult = weapon_damage_mult(held);
-            match &self.net {
-                NetRole::Client { client, .. } => {
-                    let cfg = bincode::config::standard();
-                    let msg = PvPHitMsg { target_id };
-                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
-                        let _ = client.send_bytes("vx.pvp_hit", buf);
-                    }
-                }
-                NetRole::Server { server, .. } => {
-                    // Host is attacker id 0 -> send DamageMsg
-                    // straight to the target.
-                    let cfg = bincode::config::standard();
-                    let dmg = DamageMsg {
-                        amount: PVP_DAMAGE * mult,
-                    };
-                    if let Ok(buf) = bincode::serde::encode_to_vec(dmg, cfg) {
-                        server.send_bytes_to_client(target_id, "vx.damage", buf);
-                    }
-                }
-                NetRole::Offline => {}
-            }
-        }
-        if let Some(mob_id) = attack_mob {
-            // Consume the LMB so it doesn't also break a voxel.
-            if is_client {
-                // Client: send hit request to server, optimistic
-                // flash so the player gets immediate feedback.
-                let msg = MobHitMsg { mob_id };
-                if let NetRole::Client { client, .. } = &self.net {
-                    let cfg = bincode::config::standard();
-                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
-                        let _ = client.send_bytes("vx.mob_hit", buf);
-                    }
-                }
-                self.mob_hurt_flash.insert(mob_id, 0.30);
-                if let Some(mob) = self.remote_mobs.get(&mob_id).copied() {
-                    let pos = mob.pos;
-                    self.sfx_at("mob/sheep/say", pos, |a, g| {
-                        let _ = a.play_beep(280.0, 0.12, 0.18 * g);
-                    });
-                }
-            } else {
-                // Offline / host: authoritative damage path. Host
-                // is attacker id 0. Weapon tier scales the hit.
-                let held = self
-                    .inventory
-                    .get(self.selected_slot)
-                    .copied()
-                    .unwrap_or(None)
-                    .map(|(b, _)| b)
-                    .unwrap_or(BlockId::AIR);
-                let mult = weapon_damage_mult(held);
-                self.damage_mob_scaled(mob_id, Some(0), mult);
-            }
-        }
+        // W47.13k: stamina drain + PvP/mob attack dispatch
+        // (host applies directly, client sends a hit request).
+        crate::world::place_break::apply_combat(
+            self, attack_player, attack_mob, is_client,
+        );
         // Mining: LMB held + a voxel in view, but no mob in front
         // (a melee swing takes priority). Tick the active session
         // toward `total`; on completion, set `mine_break` so the
