@@ -6640,8 +6640,28 @@ impl Voxel {
     /// Without a worker pool (headless tests): runs synchronously as
     /// before.
     fn rebuild_all_lighting(&mut self) {
+        // W46.32: limit the initial-load BFS to chunks within a wide
+        // radius of the player. For an 11k-chunk save the full
+        // propagate_sky_light pass was 17 s of column-walks + BFS;
+        // most of those columns sit far past the visible horizon and
+        // can be re-derived lazily by the streamer when the player
+        // actually approaches them. The horizontal radius below
+        // covers the visible stream radius + a comfortable margin so
+        // the player never sees an unlit edge in normal play.
+        let cs = infengine_voxel::CHUNK_SIZE as f32;
+        let pcx = (self.player_pos.x / cs).floor() as i32;
+        let pcy = (self.player_pos.y / cs).floor() as i32;
+        let pcz = (self.player_pos.z / cs).floor() as i32;
+        const LIGHTING_RADIUS_XZ: i32 = 16; // 16 chunks horizontally
+        const LIGHTING_RADIUS_Y: i32 = 8; // 8 chunks vertically
         let coords: Vec<ChunkCoord> =
-            self.world.iter_chunks().map(|(c, _)| *c).collect();
+            self.world.iter_chunks().map(|(c, _)| *c)
+                .filter(|c| {
+                    (c[0] - pcx).abs() <= LIGHTING_RADIUS_XZ
+                        && (c[1] - pcy).abs() <= LIGHTING_RADIUS_Y
+                        && (c[2] - pcz).abs() <= LIGHTING_RADIUS_XZ
+                })
+                .collect();
         if coords.is_empty() {
             return;
         }
