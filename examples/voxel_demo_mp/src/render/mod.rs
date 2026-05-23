@@ -5,3 +5,5 @@
 //! needs as parameters so the App struct's borrow state stays simple.
 
 pub mod mobs;
+// W47.9 - sun + moon disc render + sun-intensity uniform.
+pub mod celestial;
