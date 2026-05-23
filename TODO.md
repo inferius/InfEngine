@@ -2,11 +2,10 @@
 
 ## Posledni stav
 
-main.rs: **13424 LOC** (z puvodnich 17207 = -3783 / -22%).
-Session W47.11..W47.13k delta: 14720 -> 13424 = -1296 LOC.
+main.rs: **13349 LOC** (z puvodnich 17207 = -3858 / -22%).
+Session W47.11..W47.16 delta: 14720 -> 13349 = -1371 LOC.
 
-place_break.rs: 1261 LOC (limit 1500 - prozatim OK, ale 8+ helpers;
-treba splittnout pri pristim pridani).
+place_break/ submodule (W47.14): 7 files, max 377 LOC v mod.rs.
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -86,6 +85,9 @@ Refaktor (W47.x):
 - W47.13i open furnace/chest + sleep bed -> world/place_break
 - W47.13j mining damage tick -> world/place_break::tick_mining
 - W47.13k PvP/mob combat dispatch -> world/place_break::apply_combat
+- W47.14 place_break.rs (1261 LOC) split do 7-file submodulu
+- W47.15 sky/weather/fog tint -> render/sky.rs
+- W47.16 dropped items render -> render/drops.rs
 
 ## Aktivni / open
 
@@ -123,10 +125,9 @@ helper calls. Dalsi wave:
 
 | Wave  | Cil                                                | LOC | Riziko |
 |-------|----------------------------------------------------|-----|--------|
-| W47.14 | place_break.rs split do submodulu (1261 -> 4x~300)| ~0  | low    |
-| W47.15 | mob AI tick -> entity/ai.rs                       | ?   | low    |
-| W47.16 | chunk streamer -> world/stream.rs                 | ~600 | medium |
-| W47.17 | egui inventory + hotbar -> ui/inventory.rs        | ~1500 | high   |
+| W47.17 | remote/local player cube render -> render/players.rs | ~80 | low |
+| W47.18 | chunk streamer -> world/stream.rs                 | ~600 | medium |
+| W47.19 | render_ui (3261 LOC) -> ui/ submoduly             | ~1500 | high   |
 
 Recommend: W47.14 (split place_break.rs do 4 podsouboru: combat,
 mining, rmb_actions, break_place_helpers) jako prevence pred 1500
