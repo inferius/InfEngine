@@ -11293,18 +11293,15 @@ impl AppHandler for Voxel {
                 // `self.mining`. Write the updated state back at
                 // the end of the tick.
                 if let Some(mut m) = self.mining.take() {
-                    m.progress += dt;
-                    m.fx_cooldown -= dt;
-                    let done = m.progress >= m.total;
+                    // W47.13b: progress + cooldown arithmetic +
+                    // FX/done flags now live in mining::step_mining_session.
+                    let mining::MiningStep { fire_fx, done } =
+                        mining::step_mining_session(&mut m, dt);
                     let voxel_center = [
                         m.voxel[0] as f32 + 0.5,
                         m.voxel[1] as f32 + 0.5,
                         m.voxel[2] as f32 + 0.5,
                     ];
-                    let fire_fx = m.fx_cooldown <= 0.0 || done;
-                    if fire_fx {
-                        m.fx_cooldown = 0.22;
-                    }
                     let key = format!("dig:{}", block_material(block));
                     let freq = 220.0 + (block.0 as f32) * 18.0;
                     let total = m.total;
