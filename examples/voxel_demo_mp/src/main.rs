@@ -185,6 +185,8 @@ mod mob_meshes;
 mod render;
 // W47.4 - ambient particle spawn loop extracted out of main.rs.
 mod ambient;
+// W46.20 - rebuild emitter maps after world load / chunk reload.
+mod emitter_scan;
 mod ui;
 mod worldgen;
 // W13.4: view-frustum culling for chunk meshes. Reduces draw calls by
@@ -2764,6 +2766,11 @@ impl Voxel {
         // frame's `rebuild_all_meshes` pass picks the values up
         // into the GPU buffers.
         self.rebuild_all_lighting();
+        // W46.20: emitter_positions / torch_positions / fires are
+        // populated only via world_set_tracked (the edit path). Disk
+        // loads bypass that path, so re-scan every loaded chunk so
+        // existing torches / lava emit point lights + particles.
+        emitter_scan::rebuild_all(self);
     }
 
     /// Raycast against every remote player's AABB. Returns the
@@ -6108,6 +6115,17 @@ impl Voxel {
                         );
                     }
 
+                    // W46.20: chunk streamer fed us a freshly built /
+                    // re-loaded chunk. Scan its voxels for emitters so
+                    // torches / lava in it relight without waiting for
+                    // an explicit re-placement.
+                    emitter_scan::scan_chunk(
+                        coord,
+                        &chunk,
+                        &mut self.emitter_positions,
+                        &mut self.torch_positions,
+                        &mut self.fires,
+                    );
                     self.world.insert_chunk(coord, chunk);
                     let cc = coord;
 
