@@ -38,11 +38,17 @@ pub(crate) enum CreativeCategory {
     Blocks,
     /// Decoration (glass, wool, torches, slabs, doors, ...).
     Decoration,
+    /// W49: Redstone (lever, button, pressure plate, piston, etc.).
+    Redstone,
+    /// W49: Transportation (boats, minecarts, rails).
+    Transportation,
+    /// W49: Brewing (brewing_stand, nether_wart, potions).
+    Brewing,
     /// Tools (pickaxe / shovel / axe + flint and steel).
     Tools,
     /// Combat (swords).
     Combat,
-    /// Food (meat + future bread / apple).
+    /// Food (meat + bread + apple + crops).
     Food,
     /// Misc - buckets + ingredients (feather, ingot, ...).
     Misc,
@@ -56,6 +62,9 @@ impl CreativeCategory {
             CreativeCategory::All => "All",
             CreativeCategory::Blocks => "Blocks",
             CreativeCategory::Decoration => "Decoration",
+            CreativeCategory::Redstone => "Redstone",
+            CreativeCategory::Transportation => "Transportation",
+            CreativeCategory::Brewing => "Brewing",
             CreativeCategory::Tools => "Tools",
             CreativeCategory::Combat => "Combat",
             CreativeCategory::Food => "Food",
@@ -64,13 +73,16 @@ impl CreativeCategory {
     }
 
     /// Every category in display order. Used by the tab strip
-    /// renderer.
+    /// renderer. W49: order mirrors MC's CreativeModeTab enum.
     #[allow(dead_code)]
-    pub(crate) const fn all() -> [CreativeCategory; 7] {
+    pub(crate) const fn all() -> [CreativeCategory; 10] {
         [
             CreativeCategory::All,
             CreativeCategory::Blocks,
             CreativeCategory::Decoration,
+            CreativeCategory::Redstone,
+            CreativeCategory::Transportation,
+            CreativeCategory::Brewing,
             CreativeCategory::Tools,
             CreativeCategory::Combat,
             CreativeCategory::Food,
@@ -87,6 +99,9 @@ impl CreativeCategory {
             CreativeCategory::All => true,
             CreativeCategory::Blocks => matches!(ic, ItemCategory::BuildingBlock),
             CreativeCategory::Decoration => matches!(ic, ItemCategory::Decoration),
+            CreativeCategory::Redstone => matches!(ic, ItemCategory::Redstone),
+            CreativeCategory::Transportation => matches!(ic, ItemCategory::Transportation),
+            CreativeCategory::Brewing => matches!(ic, ItemCategory::Brewing),
             CreativeCategory::Tools => matches!(ic, ItemCategory::Tool),
             CreativeCategory::Combat => matches!(ic, ItemCategory::Weapon),
             CreativeCategory::Food => matches!(ic, ItemCategory::Food),
