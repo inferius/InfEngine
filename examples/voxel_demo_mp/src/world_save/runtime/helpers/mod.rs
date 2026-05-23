@@ -97,6 +97,18 @@ pub(super) fn apply_chunk_payload(voxel: &mut Voxel, payload: ChunkPayload) -> i
     }
     for (local, orient) in payload.torch_orient {
         let world_pos = local_to_world(origin, local);
+        // W46.23: guard against corrupt-save phantoms. Only re-attach
+        // orient + torch_positions when the chunk voxel ACTUALLY holds
+        // a torch-family block. A previous session may have saved a
+        // torch_orient entry whose backing voxel was cleared without
+        // the matching torch_orient cleanup; without this guard the
+        // load step keeps spawning smoke from a non-existent torch.
+        if let Some(chunk_ref) = voxel.world.chunk(coord) {
+            let b = chunk_ref.get(local[0] as usize, local[1] as usize, local[2] as usize);
+            if !crate::flame_emitter(b.0) {
+                continue;
+            }
+        }
         voxel.torch_orient.insert(world_pos, orient);
         voxel.torch_positions.insert(world_pos);
     }
