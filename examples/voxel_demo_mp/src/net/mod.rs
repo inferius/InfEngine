@@ -1178,3 +1178,7 @@ pub(crate) fn process_server_inbox(
         }
     }
 }
+
+
+// W47.6 - per-frame net IO dispatch lives in dispatch.rs.
+pub(crate) mod dispatch;
