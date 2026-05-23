@@ -442,6 +442,40 @@ fn emit_faces_for_element(
             light,
             anim_id,
         );
+
+        // W46.29: planar elements (one axis has from == to) declare
+        // only ONE face direction in the JSON, so the matching
+        // BOX_FACES side-pass emits a single quad whose back side
+        // gets culled by the front_face = Ccw pipeline state. Result:
+        // the plane is invisible from the OTHER half-space. This is
+        // exactly the case for redstone_torch's 6 halo planes around
+        // the lit tip - hence the user reported "redstone has no red
+        // glow around the head".
+        //
+        // Emit a second quad with reversed corner order so the plane
+        // is visible from both sides. Only triggered when the source
+        // element is degenerate on one axis (no extra geometry for
+        // normal cube blocks).
+        let is_planar =
+            from.x == to.x || from.y == to.y || from.z == to.z;
+        if is_planar {
+            let mirrored: [[f32; 3]; 4] = [
+                world_corners[0],
+                world_corners[3],
+                world_corners[2],
+                world_corners[1],
+            ];
+            let mirrored_normal = [-emit_normal[0], -emit_normal[1], -emit_normal[2]];
+            infengine_voxel::emit_element_quad(
+                vertices,
+                indices,
+                mirrored,
+                mirrored_normal,
+                uv_rect,
+                light,
+                anim_id,
+            );
+        }
     }
 }
 
