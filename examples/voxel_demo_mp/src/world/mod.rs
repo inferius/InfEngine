@@ -4,3 +4,5 @@
 //! (`Voxel`) calls them with the explicit field references it needs.
 
 pub mod place_break;
+// W47.18 - per-frame chunk streamer (queue, unload, dispatch, drain).
+pub mod stream;
