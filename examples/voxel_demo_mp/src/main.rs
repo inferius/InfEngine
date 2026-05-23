@@ -6652,28 +6652,38 @@ impl Voxel {
     /// Without a worker pool (headless tests): runs synchronously as
     /// before.
     fn rebuild_all_lighting(&mut self) {
-        // W46.32: limit the initial-load BFS to chunks within a wide
-        // radius of the player. For an 11k-chunk save the full
-        // propagate_sky_light pass was 17 s of column-walks + BFS;
-        // most of those columns sit far past the visible horizon and
-        // can be re-derived lazily by the streamer when the player
-        // actually approaches them. The horizontal radius below
-        // covers the visible stream radius + a comfortable margin so
-        // the player never sees an unlit edge in normal play.
+        // W46.32 / W46.34: cap the initial-load BFS to the N closest
+        // chunks to the player. The W46.32 radius filter
+        // (16xz x 8y) returned the full 1587-chunk set when the
+        // save's chunks were all dense around the player and didn't
+        // help. Sky-light BFS is O(columns * y_height); even on a
+        // 24-worker pool a 1587-chunk batch is a single serial Job
+        // taking 17 s.
+        //
+        // Sort by L1 chunk distance + truncate. Far chunks get their
+        // sky-light derived lazily via tick_lighting + per-chunk
+        // dispatch when the streamer adds them later.
+        const LIGHTING_BFS_CAP: usize = 500;
         let cs = infengine_voxel::CHUNK_SIZE as f32;
         let pcx = (self.player_pos.x / cs).floor() as i32;
         let pcy = (self.player_pos.y / cs).floor() as i32;
         let pcz = (self.player_pos.z / cs).floor() as i32;
-        const LIGHTING_RADIUS_XZ: i32 = 16; // 16 chunks horizontally
-        const LIGHTING_RADIUS_Y: i32 = 8; // 8 chunks vertically
-        let coords: Vec<ChunkCoord> =
-            self.world.iter_chunks().map(|(c, _)| *c)
-                .filter(|c| {
-                    (c[0] - pcx).abs() <= LIGHTING_RADIUS_XZ
-                        && (c[1] - pcy).abs() <= LIGHTING_RADIUS_Y
-                        && (c[2] - pcz).abs() <= LIGHTING_RADIUS_XZ
-                })
-                .collect();
+        let mut all: Vec<(i32, ChunkCoord)> = self
+            .world
+            .iter_chunks()
+            .map(|(c, _)| {
+                let d = (c[0] - pcx).abs()
+                    + (c[1] - pcy).abs() * 2 // weight Y so vertical neighbours win over far horiz
+                    + (c[2] - pcz).abs();
+                (d, *c)
+            })
+            .collect();
+        all.sort_by_key(|(d, _)| *d);
+        let coords: Vec<ChunkCoord> = all
+            .into_iter()
+            .take(LIGHTING_BFS_CAP)
+            .map(|(_, c)| c)
+            .collect();
         if coords.is_empty() {
             return;
         }
