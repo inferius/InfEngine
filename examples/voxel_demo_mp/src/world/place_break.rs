@@ -46,6 +46,13 @@
 //!     liquid; filled bucket pours liquid onto an air / replaceable
 //!     cell (also extinguishes fire). Handles creative-mode (no
 //!     bucket consume / no source remove) + liquid level broadcast.
+//!
+//! W47.13i: `open_furnace`, `open_chest`, `try_sleep_bed` - the
+//!     small UI-opener branches. Each mints (or finds) the local
+//!     container, sets the open marker on `Voxel`, and on
+//!     `NetRole::Client` sends the matching open / sleep request
+//!     to the host. The sleep branch also gates on the day phase
+//!     + posts the right chat line.
 
 /// Outcome of the per-frame combat-vs-block-edit arbitration.
 ///
@@ -795,6 +802,88 @@ pub(crate) fn apply_bucket_use(
                 let _ = a.play_thud(120.0, 0.18 * g);
                 let _ = a.play_swish(0.14 * g);
             });
+        }
+    }
+}
+
+/// W47.13i: RMB on a furnace. Mints the container + runtime entry
+/// if this is the first open, marks `furnace_open`, and tells the
+/// host (when running as Client) so it can broadcast state
+/// snapshots. Clears the pending mouse flags so the open click
+/// doesn't replay as an edit.
+pub(crate) fn open_furnace(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    use crate::block;
+    use crate::net::NetRole;
+    block::furnace::place_furnace(
+        &mut vx.furnaces,
+        &mut vx.furnace_runtimes,
+        pos,
+    );
+    vx.furnace_open = Some(pos);
+    if let NetRole::Client { client, .. } = &mut vx.net {
+        let cfg = bincode::config::standard();
+        let msg = crate::net::FurnaceOpenMsg { pos };
+        if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+            let _ = client.send_bytes("vx.furnace_open", buf);
+        }
+    }
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
+/// W47.13i: RMB on a chest. Mints an empty container if this is
+/// the first open, marks `chest_open`, and asks the host for the
+/// authoritative state when running as Client. Pending mouse flags
+/// cleared so the click doesn't replay against the world.
+pub(crate) fn open_chest(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    use crate::block;
+    use crate::net::NetRole;
+    vx.chests
+        .entry(pos)
+        .or_insert_with(block::chest::new_chest);
+    vx.chest_open = Some(pos);
+    if let NetRole::Client { client, .. } = &mut vx.net {
+        let cfg = bincode::config::standard();
+        let msg = crate::net::ChestOpenMsg { pos };
+        if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+            let _ = client.send_bytes("vx.chest_open", buf);
+        }
+    }
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
+/// W47.13i: RMB on a bed. Checks the day phase: outside night the
+/// player gets a chat refusal; at night offline/host bumps the day
+/// clock forward, client ships a `vx.sleep` request to the host.
+pub(crate) fn try_sleep_bed(vx: &mut crate::Voxel) {
+    use crate::DAY_LENGTH_S;
+    use crate::net::NetRole;
+    let phase = (vx.day_time / DAY_LENGTH_S).rem_euclid(1.0);
+    let elev = (phase * std::f32::consts::TAU).sin();
+    let is_night = elev < -0.05;
+    if !is_night {
+        vx.chat_log.push((
+            std::time::Instant::now(),
+            "You can only sleep at night.".to_string(),
+        ));
+        return;
+    }
+    match &mut vx.net {
+        NetRole::Offline | NetRole::Server { .. } => {
+            vx.day_time = DAY_LENGTH_S * 0.20;
+            vx.last_day_broadcast = None;
+            vx.chat_log.push((
+                std::time::Instant::now(),
+                "* sleeps through the night".to_string(),
+            ));
+        }
+        NetRole::Client { client, .. } => {
+            let _ = client.send_bytes("vx.sleep", Vec::new());
+            vx.chat_log.push((
+                std::time::Instant::now(),
+                "Asking host to skip the night...".to_string(),
+            ));
         }
     }
 }

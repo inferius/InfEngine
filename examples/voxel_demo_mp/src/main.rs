@@ -11407,86 +11407,15 @@ impl AppHandler for Voxel {
                     self, hit.voxel,
                 );
             } else if predicted == RmbAction::OpenFurnace {
-                // RMB on a furnace: open the furnace UI. Mints a
-                // fresh empty 3-slot container + runtime entry on
-                // first open so the offline place-without-open
-                // case still gets a clean state to work against.
-                let pos = hit.voxel;
-                block::furnace::place_furnace(
-                    &mut self.furnaces,
-                    &mut self.furnace_runtimes,
-                    pos,
-                );
-                self.furnace_open = Some(pos);
-                // W5.3b: notify host so we get state snapshots.
-                if let NetRole::Client { client, .. } = &mut self.net {
-                    let cfg = bincode::config::standard();
-                    let msg = crate::net::FurnaceOpenMsg { pos };
-                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
-                        let _ = client.send_bytes("vx.furnace_open", buf);
-                    }
-                }
-                self.lmb_pending = false;
-                self.rmb_pending = false;
+                // W47.13i: furnace open + mint + client notify.
+                crate::world::place_break::open_furnace(self, hit.voxel);
             } else if predicted == RmbAction::OpenChest {
-                // RMB on a chest: open the chest UI for the chest
-                // at this voxel. W5.3a wires the MP path: when
-                // running as `NetRole::Client`, ship a
-                // `vx.chest_open` to the host; subsequent
-                // `vx.chest_state` broadcasts paint the
-                // authoritative contents into the local map.
-                let pos = hit.voxel;
-                self.chests
-                    .entry(pos)
-                    .or_insert_with(block::chest::new_chest);
-                self.chest_open = Some(pos);
-                if let NetRole::Client { client, .. } = &mut self.net {
-                    let cfg = bincode::config::standard();
-                    let msg = crate::net::ChestOpenMsg { pos };
-                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
-                        let _ = client.send_bytes("vx.chest_open", buf);
-                    }
-                }
-                // Drop any queued mouse-button edits the click
-                // that opened the chest would otherwise replay
-                // against the world.
-                self.lmb_pending = false;
-                self.rmb_pending = false;
+                // W47.13i: chest open + mint + client notify.
+                crate::world::place_break::open_chest(self, hit.voxel);
             } else if predicted == RmbAction::SleepBed {
-                // RMB on a bed: night-time, run the local /sleep
-                // logic if we're authoritative; clients ship a
-                // vx.sleep request to the host so the world
-                // clock advances for everyone.
-                let phase = (self.day_time / DAY_LENGTH_S).rem_euclid(1.0);
-                let elev = (phase * std::f32::consts::TAU).sin();
-                let is_night = elev < -0.05;
-                if !is_night {
-                    self.chat_log.push((
-                        std::time::Instant::now(),
-                        "You can only sleep at night.".to_string(),
-                    ));
-                } else {
-                    match &self.net {
-                        NetRole::Offline | NetRole::Server { .. } => {
-                            self.day_time = DAY_LENGTH_S * 0.20;
-                            self.last_day_broadcast = None;
-                            self.chat_log.push((
-                                std::time::Instant::now(),
-                                "* sleeps through the night"
-                                    .to_string(),
-                            ));
-                        }
-                        NetRole::Client { client, .. } => {
-                            let _ = client
-                                .send_bytes("vx.sleep", Vec::new());
-                            self.chat_log.push((
-                                std::time::Instant::now(),
-                                "Asking host to skip the night..."
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                }
+                // W47.13i: bed sleep (day-phase gated; host bumps
+                // clock, client asks host).
+                crate::world::place_break::try_sleep_bed(self);
             } else if predicted == RmbAction::IgnitePortal {
                 // W47.13g: flint+steel ignite (portal frame or fire
                 // drop) + durability consume + pending flag clear.
