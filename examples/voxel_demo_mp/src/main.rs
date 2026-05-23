@@ -11635,47 +11635,16 @@ impl AppHandler for Voxel {
             }
             cam.fov_y_rad = self.fov_y_rad;
         }
-        // Day/night cycle. `day_time` ramps from 0..DAY_LENGTH_S
-        // and feeds both the sun direction (rotating around the +Z
-        // axis) and the clear color (sunrise -> noon -> sunset ->
-        // night). The sky color is a perceptual mix between three
-        // anchor swatches keyed on the sun's elevation.
-        let (sun_dir, mut sky) = day_night(self.day_time);
-        // Precipitation re-tints the sky. Rain: dark stormy
-        // grey. Snow: lighter, slightly blue-tinged overcast.
-        if self.weather == 1 {
-            let target = [0.42, 0.46, 0.52];
-            let t = 0.6;
-            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
-            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
-            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
-        } else if self.weather == 2 {
-            let target = [0.70, 0.74, 0.80];
-            let t = 0.55;
-            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
-            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
-            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
-        }
-        // Active lightning flash washes the sky toward white.
-        if self.lightning_flash > 0.0 {
-            let t = (self.lightning_flash / 0.18).clamp(0.0, 1.0);
-            let target = [1.0, 1.0, 1.0];
-            sky[0] = sky[0] * (1.0 - t) + target[0] * t;
-            sky[1] = sky[1] * (1.0 - t) + target[1] * t;
-            sky[2] = sky[2] * (1.0 - t) + target[2] * t;
-        }
-        renderer.set_sun_dir(sun_dir);
-        renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
-        // W30.5: distance fog. Start fading 2 chunks before the view edge,
-        // reach full sky colour 0.5 chunks before the load boundary.
-        // This hides the hard pop-clip at view_distance edges.
-        {
-            let cs = CHUNK_SIZE as f32;
-            let vd = self.settings.view_distance as f32;
-            let fog_start = (vd - 2.0).max(0.0) * cs;
-            let fog_end = vd * cs * 0.95;
-            renderer.set_fog(fog_start, fog_end, [sky[0], sky[1], sky[2]]);
-        }
+        // W47.15: sky / weather / fog tint moved into render::sky.
+        let (sun_dir, base_sky) = day_night(self.day_time);
+        let _sky = crate::render::sky::apply_tint_and_fog(
+            renderer,
+            sun_dir,
+            base_sky,
+            self.weather,
+            self.lightning_flash,
+            self.settings.view_distance,
+        );
         let player_cube_handle = *self.player_cube.get_or_insert_with(|| renderer.cube_handle());
         let session_secs = self.session_started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
         crate::render::celestial::draw(
