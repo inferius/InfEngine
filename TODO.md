@@ -3,12 +3,15 @@
 ## Posledni stav
 
 main.rs: **449 LOC** (z puvodnich 17207 = -16758 / -97%). **CIL DOSAZEN.**
-Session W47.11..W47.27 delta: 14720 -> 449 = -14271 LOC.
+Session W47.11..W47.28 delta: 14720 -> 449 = -14271 LOC.
 
-app.rs: **4569 LOC** (over 1500 ceiling - W47.28+ split into
-per-domain submodules: world_init, world_runtime, net_runtime,
-dim_runtime, chunk_runtime, light_runtime, ui_runtime,
-inventory_runtime, combat_runtime, save_runtime, audio_runtime).
+app.rs splitnuto na app/ dir (W47.28): 17 submodulu, max liquid_tick.rs
+549 LOC, mod.rs 962 LOC. **Vsechny pod 1500 ceiling.**
+
+Stale nad 1500 LOC (pristi refactor wave - nejsou v main hot path):
+- ui/render.rs 3268 LOC (egui closure - moze split per AppState)
+- block/registry.rs 2322 LOC (block table)
+- item/mod.rs 2051 LOC (item registry)
 
 Submodule LOC:
 - place_break/ (W47.14): 7 files, max 377 LOC v mod.rs
@@ -111,6 +114,7 @@ Refaktor (W47.x):
 - W47.24 struct Voxel + PluginBlock (887 LOC) -> app.rs (fields pub(crate))
 - W47.25 WorkerPool + mesh_chunk_in_worker (424 LOC) -> workers.rs
 - W47.26 impl Voxel block (3625 LOC) -> app.rs append (methods pub(crate))
+- W47.28 app.rs (4569 LOC) -> app/ dir s 17 submodulu
 - W47.27 multi-batch extract:
   - ui/slot_widget.rs (slot draw helpers, ~210 LOC)
   - atlas.rs (day_night + atlas helpers, ~310 LOC vcetne tests)
