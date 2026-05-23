@@ -213,6 +213,30 @@ impl BlockState {
         if self.is_multipart {
             return None;
         }
+        // W46.35: prefer the "lit=true" / "powered=true" / "on=true"
+        // variant when present. MC stores redstone_torch with
+        // `lit=false` first which our engine resolved to the unlit
+        // template (1 stick element, no halo). The engine has no
+        // redstone-power state yet so we always want the lit variant
+        // - it carries the proper 7-element model with the halo
+        // glow around the tip.
+        const LIT_HINTS: &[(&str, &str)] = &[
+            ("lit", "true"),
+            ("powered", "true"),
+            ("on", "true"),
+            ("active", "true"),
+        ];
+        for (key, val) in LIT_HINTS {
+            if let Some((_, m)) = self
+                .variants
+                .iter()
+                .find(|(k, _)| {
+                    k.pairs.iter().any(|(pk, pv)| pk == key && pv == val)
+                })
+            {
+                return Some(m);
+            }
+        }
         self.variants.first().map(|(_, m)| m)
     }
 
