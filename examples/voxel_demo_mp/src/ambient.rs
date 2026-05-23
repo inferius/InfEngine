@@ -500,3 +500,88 @@ pub(crate) fn lava_sources_in_chunk(
     }
     out
 }
+
+// ===========================================================================
+// W47.7: break + place particle bursts, relocated from main.rs.
+// ===========================================================================
+
+pub(crate) fn spawn_break_particles(particles: &mut infengine_particles::ParticleSystem, voxel: [i32; 3]) {
+        // No-tint variant: callers that don't know the source
+        // block fall through to a neutral dirt-ish color.
+        spawn_break_particles_tinted(particles, voxel, [0.75, 0.55, 0.30]);
+    }
+pub(crate) fn spawn_break_particles_tinted(particles: &mut infengine_particles::ParticleSystem, voxel: [i32; 3], color: [f32; 3]) {
+        let pos = [
+            voxel[0] as f32 + 0.5,
+            voxel[1] as f32 + 0.5,
+            voxel[2] as f32 + 0.5,
+        ];
+        let mut rng: u32 = 0xCAFEBABE
+            ^ (voxel[0] as u32)
+            ^ ((voxel[1] as u32) << 7)
+            ^ ((voxel[2] as u32) << 13);
+        let mut rand01 = || -> f32 {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+        };
+        for _ in 0..12 {
+            let vx = (rand01() * 2.0 - 1.0) * 3.0;
+            let vy = rand01() * 3.5;
+            let vz = (rand01() * 2.0 - 1.0) * 3.0;
+            // Small per-particle brightness jitter so the puff
+            // doesn't read as a flat monochrome cluster.
+            let j = 0.85 + rand01() * 0.30;
+            particles.particles.push(infengine_particles::Particle {
+                position: pos,
+                velocity: [vx, vy, vz],
+                color: [
+                    (color[0] * j).clamp(0.0, 1.0),
+                    (color[1] * j).clamp(0.0, 1.0),
+                    (color[2] * j).clamp(0.0, 1.0),
+                    1.0,
+                ],
+                size: 0.12,
+                age: 0.0,
+                lifetime: 0.5,
+                gravity_scale: 1.0,
+            });
+        }
+    }
+
+    /// Burst of small dust particles when a block is placed. Half
+    /// the count of `spawn_break_particles` so it reads as a
+    /// gentle "click" rather than a full debris cloud, tinted with
+    /// the block's albedo.
+pub(crate) fn spawn_place_particles(particles: &mut infengine_particles::ParticleSystem, voxel: [i32; 3], color: [f32; 3]) {
+        let pos = [
+            voxel[0] as f32 + 0.5,
+            voxel[1] as f32 + 0.5,
+            voxel[2] as f32 + 0.5,
+        ];
+        let mut rng: u32 = 0xABAD1DEA
+            ^ (voxel[0] as u32)
+            ^ ((voxel[1] as u32) << 7)
+            ^ ((voxel[2] as u32) << 13);
+        let mut rand01 = || -> f32 {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            (rng as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+        };
+        for _ in 0..6 {
+            let vx = (rand01() * 2.0 - 1.0) * 1.5;
+            let vy = rand01() * 1.0 + 0.5;
+            let vz = (rand01() * 2.0 - 1.0) * 1.5;
+            particles.particles.push(infengine_particles::Particle {
+                position: pos,
+                velocity: [vx, vy, vz],
+                color: [color[0], color[1], color[2], 0.9],
+                size: 0.08,
+                age: 0.0,
+                lifetime: 0.3,
+                gravity_scale: 1.0,
+            });
+        }
+    }
