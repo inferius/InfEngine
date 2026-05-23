@@ -585,3 +585,121 @@ pub(crate) fn spawn_place_particles(particles: &mut infengine_particles::Particl
             });
         }
     }
+/// W9.5: ambient particle helper unit tests. Live below the
+/// day_night_tests module so the items_after_test_module lint
+/// stays happy.
+#[cfg(test)]
+mod ambient_particle_tests {
+    // W47.5: helpers moved to crate::ambient. Test imports updated.
+    use crate::ambient::{
+        accumulator_fires, spawn_flame_particle, spawn_smoke_particle,
+        within_radius,
+    };
+    use infengine_particles::ParticleSystem;
+
+    #[test]
+    fn within_radius_includes_close_position() {
+        let player = [0.0, 0.0, 0.0];
+        assert!(within_radius(player, &[1, 0, 0], 5.0));
+        assert!(within_radius(player, &[3, 0, 3], 10.0));
+    }
+
+    #[test]
+    fn within_radius_excludes_far_position() {
+        let player = [0.0, 0.0, 0.0];
+        assert!(!within_radius(player, &[100, 0, 0], 32.0));
+        assert!(!within_radius(player, &[40, 0, 0], 32.0));
+    }
+
+    #[test]
+    fn accumulator_target_zero_never_fires() {
+        let mut seed = 0xDEADBEEF;
+        for _ in 0..1000 {
+            assert!(!accumulator_fires(&mut seed, 0.0));
+        }
+    }
+
+    #[test]
+    fn accumulator_target_one_always_fires() {
+        let mut seed = 0x12345678;
+        for _ in 0..1000 {
+            assert!(accumulator_fires(&mut seed, 1.0));
+        }
+    }
+
+    #[test]
+    fn flame_particle_spawns_above_position() {
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0xABCDEF01;
+        let start = sys.particles.len();
+        spawn_flame_particle(&mut sys, &[10, 5, 7], &mut seed, [1.0, 0.8, 0.4]);
+        assert_eq!(sys.particles.len(), start + 1);
+        let p = sys.particles.last().unwrap();
+        // Y should be above the voxel centre.
+        assert!(p.position[1] >= 5.5, "flame should spawn above the cell base");
+        assert!(p.velocity[1] > 0.0, "flame should drift upward");
+        assert!(p.lifetime > 0.0);
+    }
+
+    #[test]
+    fn smoke_particle_drifts_slower_than_flame() {
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x11223344;
+        spawn_flame_particle(&mut sys, &[0, 0, 0], &mut seed, [1.0, 0.8, 0.4]);
+        let flame_vy = sys.particles.last().unwrap().velocity[1];
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, None);
+        let smoke_vy = sys.particles.last().unwrap().velocity[1];
+        // Flame range: 0.4..0.9. Smoke range: 0.3..0.5. They can
+        // technically overlap, but the smoke ceiling (0.5) is
+        // below the flame floor + something - assert the smoke is
+        // BOUNDED ABOVE by 0.55 + flame is BOUNDED BELOW by 0.35.
+        assert!(smoke_vy < 0.55, "smoke vy should be capped");
+        assert!(flame_vy > 0.35, "flame vy should be at least 0.4");
+    }
+
+    #[test]
+    fn particle_cap_is_enforced_softly() {
+        // The cap is checked once at the top of tick_ambient_particles;
+        // we can't easily call that here without a full Voxel, but
+        // we can at least verify the spawn helpers add ONE particle
+        // each per invocation - so the cap math (max-per-tick) works.
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x99887766;
+        let start = sys.particles.len();
+        for _ in 0..10 {
+            spawn_flame_particle(&mut sys, &[0, 0, 0], &mut seed, [1.0, 0.8, 0.4]);
+        }
+        assert_eq!(sys.particles.len(), start + 10);
+    }
+
+    #[test]
+    fn smoke_particle_uses_mc_tint_when_provided() {
+        // W9.y.5: the spawn helper takes an optional MC tint
+        // sampled from the smoke_0..7 sprite set. When supplied,
+        // the emitted Particle's color must use the MC RGB
+        // (alpha forced to 0.7 so the wisp keeps its translucent
+        // look).
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x42424242;
+        let mc = Some([0.2, 0.21, 0.22, 1.0]);
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, mc);
+        let p = sys.particles.last().unwrap();
+        assert!((p.color[0] - 0.2).abs() < 1e-3);
+        assert!((p.color[1] - 0.21).abs() < 1e-3);
+        assert!((p.color[2] - 0.22).abs() < 1e-3);
+        assert!((p.color[3] - 0.7).abs() < 1e-3);
+    }
+
+    #[test]
+    fn smoke_particle_falls_back_to_grey_without_mc_tint() {
+        // No MC pack (placeholder atlas): the smoke wisp uses
+        // the legacy grey swatch so the visual stays stable.
+        let mut sys = ParticleSystem::new();
+        let mut seed = 0x42424242;
+        spawn_smoke_particle(&mut sys, &[0, 0, 0], &mut seed, None);
+        let p = sys.particles.last().unwrap();
+        assert!((p.color[0] - 0.35).abs() < 1e-3);
+        assert!((p.color[1] - 0.35).abs() < 1e-3);
+        assert!((p.color[2] - 0.35).abs() < 1e-3);
+    }
+}

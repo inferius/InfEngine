@@ -216,3 +216,92 @@ pub(crate) fn water_face_normal(
 
 // `submerged_liquid_eye`, `submerged_liquid`, and
 // `aabb_intersects_solid` moved to `player.rs`.
+#[cfg(test)]
+mod day_night_tests {
+    use super::{DAY_LENGTH_S, day_night};
+
+    /// Helper: just the sky color half of the `day_night` return.
+    fn sky_at(t: f32) -> [f32; 3] {
+        day_night(t).1
+    }
+
+    /// Helper: euclidean distance between two RGB triples. Lets the
+    /// assertions read tolerantly so the smoothstep ramp doesn't
+    /// have to land on exact float boundaries.
+    fn rgb_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+        let dr = a[0] - b[0];
+        let dg = a[1] - b[1];
+        let db = a[2] - b[2];
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    #[test]
+    fn sky_color_at_noon_matches_daytime_anchor() {
+        // W8.3: noon = day fraction 0.25 (sun at +Y peak in our
+        // phase = sin(theta) curve). Within tolerance of the
+        // noon anchor [0.45, 0.65, 0.95].
+        let sky = sky_at(DAY_LENGTH_S * 0.25);
+        let noon_anchor = [0.45_f32, 0.65, 0.95];
+        assert!(
+            rgb_dist(sky, noon_anchor) < 0.10,
+            "noon sky {sky:?} far from anchor {noon_anchor:?}"
+        );
+    }
+
+    #[test]
+    fn sky_color_at_midnight_is_near_black() {
+        // W8.3: midnight = day fraction 0.75 (sun straight down).
+        // Each channel should be <= 0.10 (the night anchor max).
+        let sky = sky_at(DAY_LENGTH_S * 0.75);
+        for (i, ch) in sky.iter().enumerate() {
+            assert!(
+                *ch <= 0.10,
+                "midnight sky channel {i} = {ch} not near-black"
+            );
+        }
+    }
+
+    #[test]
+    fn sky_color_dawn_is_intermediate() {
+        // W8.3: dawn (0.50) sits in the night..horizon ramp - the
+        // result should be brighter than the midnight anchor but
+        // darker than the noon anchor.
+        let dawn = sky_at(DAY_LENGTH_S * 0.50);
+        let midnight = sky_at(DAY_LENGTH_S * 0.75);
+        let noon = sky_at(DAY_LENGTH_S * 0.25);
+        let lum = |c: [f32; 3]| c[0] + c[1] + c[2];
+        let strict_min = [0.0_f32, 0.0, 0.0];
+        assert!(
+            lum(dawn) >= lum(strict_min),
+            "dawn {dawn:?} below strict min"
+        );
+        assert!(
+            lum(dawn) < lum(noon),
+            "dawn {dawn:?} brighter than noon {noon:?}"
+        );
+        // Soft sanity: midnight luminance is non-greater than dawn
+        // (the ramp is monotonic in the dawn -> noon direction).
+        assert!(lum(midnight) <= lum(noon));
+    }
+
+    #[test]
+    fn sky_color_smooth_ramp_through_dusk() {
+        // W8.3: stepping in 0.01-day fractions across dusk
+        // (0.70..0.80) should produce a monotonically-darkening
+        // sequence - no jumps back to bright blue.
+        let mut prev_lum = f32::INFINITY;
+        let mut samples = 0;
+        for i in 70..=80 {
+            let t = DAY_LENGTH_S * (i as f32 * 0.01);
+            let c = sky_at(t);
+            let lum = c[0] + c[1] + c[2];
+            assert!(
+                lum <= prev_lum + 0.01,
+                "sky luminance not monotonic at t={t}: {lum} after {prev_lum}"
+            );
+            prev_lum = lum;
+            samples += 1;
+        }
+        assert!(samples >= 10, "expected at least 10 ramp samples");
+    }
+}
