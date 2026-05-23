@@ -34,6 +34,7 @@ use crate::VIEW_DISTANCE_MAX;
 use crate::game_mode::GameMode;
 use crate::world_save::layout::WorldSummary;
 
+pub(crate) mod apply;
 pub(crate) mod loading;
 pub(crate) mod main_screen;
 pub(crate) mod multiplayer;
