@@ -11698,75 +11698,34 @@ impl AppHandler for Voxel {
             player_pos,
             &self.registry,
         );
-        // Render remote players as coloured cubes so each peer is
-        // visible. The interpolation buffer (`remote_interp`) is
-        // populated by every received `vx.player` regardless of
-        // role, so a single sample call here covers Server + Client
-        // paths uniformly. We skip our own id (0 for the host, the
-        // assigned id for a client) to avoid rendering ourselves.
-        let now = std::time::Instant::now();
+        // W47.17: remote + local player cube render moved into
+        // render::players. own_id derives from net role; remote
+        // sampling skipped offline; local override added in 3rd-person.
         let own_id: u32 = match &self.net {
             NetRole::Offline => u32::MAX,
             NetRole::Server { .. } => 0,
             NetRole::Client { client, .. } => client.client_id.unwrap_or(0),
         };
-        let remote_iter: Vec<PlayerMsg> = if matches!(self.net, NetRole::Offline) {
-            Vec::new()
-        } else {
-            self.remote_interp
-                .iter()
-                .filter(|(id, _)| **id != own_id)
-                .map(|(_, r)| r.sample(now))
-                .collect()
-        };
-        // In third-person we draw the local player too so the
-        // pulled-back camera has something to look at. We
-        // synthesize a PlayerMsg from current state and prepend
-        // it to the render list.
-        let mut local_iter = remote_iter;
-        if self.camera_mode != 0 {
-            local_iter.push(PlayerMsg {
+        let include_remote = !matches!(self.net, NetRole::Offline);
+        let local_render = (self.camera_mode != 0).then_some(
+            crate::render::players::LocalPlayerRender {
                 id: own_id,
-                pos: [player_pos.x, player_pos.y, player_pos.z],
+                pos: player_pos,
                 yaw: self.player_yaw,
                 pitch: self.player_pitch,
-            });
-        }
-        if !local_iter.is_empty() {
-            let cube = self.player_cube.get_or_insert_with(|| renderer.cube_handle());
-            for p in local_iter {
-                // Hash id to a stable colour + a slightly cooler
-                // head tone so the two parts read as separate body
-                // segments instead of a single block.
-                let h = (p.id.wrapping_mul(2654435761)) as f32 / u32::MAX as f32;
-                let tau = std::f32::consts::TAU;
-                let body_color = [
-                    (0.4 + 0.5 * (h * tau).sin().abs()).min(1.0),
-                    (0.4 + 0.5 * ((h + 0.33) * tau).sin().abs()).min(1.0),
-                    (0.4 + 0.5 * ((h + 0.66) * tau).sin().abs()).min(1.0),
-                    1.0,
-                ];
-                let head_color = [
-                    (body_color[0] * 0.85).min(1.0),
-                    (body_color[1] * 0.85).min(1.0),
-                    (body_color[2] * 0.85).min(1.0),
-                    1.0,
-                ];
-                let rot = glam::Quat::from_rotation_y(p.yaw);
-                let body = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.65, 1.0, 0.4),
-                    rot,
-                    Vec3::new(p.pos[0], p.pos[1] - 1.2, p.pos[2]),
-                );
-                renderer.draw_mesh_pbr(*cube, body.to_cols_array(), body_color, 0.0, 0.7);
-                let head = Mat4::from_scale_rotation_translation(
-                    Vec3::new(0.55, 0.55, 0.55),
-                    rot,
-                    Vec3::new(p.pos[0], p.pos[1] - 0.45, p.pos[2]),
-                );
-                renderer.draw_mesh_pbr(*cube, head.to_cols_array(), head_color, 0.0, 0.7);
-            }
-        }
+            },
+        );
+        let players_cube = *self
+            .player_cube
+            .get_or_insert_with(|| renderer.cube_handle());
+        crate::render::players::draw(
+            renderer,
+            players_cube,
+            &self.remote_interp,
+            own_id,
+            include_remote,
+            local_render,
+        );
         // W28.11: Build frustum for mob culling. Mobs behind the player
         // or off to the side don't need draw_mesh_pbr calls. Re-use the
         // same Frustum type as the chunk culling path.

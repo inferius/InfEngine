@@ -15,3 +15,5 @@ pub mod decor;
 pub mod sky;
 // W47.16 - floating dropped-item render (bob + magnet attract).
 pub mod drops;
+// W47.17 - remote + local player cube render (body + head, hashed tint).
+pub mod players;
