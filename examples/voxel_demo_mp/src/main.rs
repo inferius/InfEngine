@@ -186,6 +186,8 @@ mod render;
 mod ambient;
 // W47.9 - fire random-tick + apply-step + lava ignite glue.
 mod fire_runtime;
+// W47.13 - place / break decision helpers extracted from on_update.
+mod world;
 // W46.20 - rebuild emitter maps after world load / chunk reload.
 mod emitter_scan;
 mod ui;
@@ -11116,32 +11118,17 @@ impl AppHandler for Voxel {
             );
             (c - self.player_pos).length()
         });
-        // Pick whichever attack target is closest: player < mob <
-        // voxel. Voxel break path is suppressed when any combat
-        // target wins.
-        let mut best_dist = f32::INFINITY;
-        let mut attack_player: Option<u32> = None;
-        let mut attack_mob: Option<u32> = None;
-        if let Some((id, d)) = pvp_target
-            && d < best_dist
-        {
-            best_dist = d;
-            attack_player = Some(id);
-            attack_mob = None;
-        }
-        if let Some((id, d)) = mob_target
-            && d < best_dist
-        {
-            best_dist = d;
-            attack_mob = Some(id);
-            attack_player = None;
-        }
-        if let Some(d) = voxel_dist
-            && d < best_dist
-        {
-            attack_mob = None;
-            attack_player = None;
-        }
+        // W47.13a: arbitration moved to world::place_break::
+        // resolve_attack_target. Pure-data helper picks the closest
+        // of (pvp, mob, voxel) and returns at most one combat target.
+        let crate::world::place_break::AttackTarget {
+            player: attack_player,
+            mob: attack_mob,
+        } = crate::world::place_break::resolve_attack_target(
+            pvp_target,
+            mob_target,
+            voxel_dist,
+        );
         // Combat consumes a flat 3 stamina per attack so the
         // sprint pool is shared between movement and fighting.
         // W15.3: Creative / invulnerable players are exempt from
