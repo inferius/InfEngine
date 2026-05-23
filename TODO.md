@@ -2,10 +2,12 @@
 
 ## Posledni stav
 
-main.rs: **13349 LOC** (z puvodnich 17207 = -3858 / -22%).
-Session W47.11..W47.16 delta: 14720 -> 13349 = -1371 LOC.
+main.rs: **12549 LOC** (z puvodnich 17207 = -4658 / -27%).
+Session W47.11..W47.19 delta: 14720 -> 12549 = -2171 LOC.
 
 place_break/ submodule (W47.14): 7 files, max 377 LOC v mod.rs.
+world/stream.rs (W47.18): 416 LOC.
+menu/apply.rs (W47.19): 210 LOC.
 
 Layout `examples/voxel_demo_mp/src/`:
 
@@ -88,6 +90,9 @@ Refaktor (W47.x):
 - W47.14 place_break.rs (1261 LOC) split do 7-file submodulu
 - W47.15 sky/weather/fog tint -> render/sky.rs
 - W47.16 dropped items render -> render/drops.rs
+- W47.17 remote/local player cube render -> render/players.rs
+- W47.18 stream_chunks (509 LOC) -> world/stream.rs
+- W47.19 apply_menu_action (252 LOC) -> menu/apply.rs
 
 ## Aktivni / open
 
@@ -125,9 +130,9 @@ helper calls. Dalsi wave:
 
 | Wave  | Cil                                                | LOC | Riziko |
 |-------|----------------------------------------------------|-----|--------|
-| W47.17 | remote/local player cube render -> render/players.rs | ~80 | low |
-| W47.18 | chunk streamer -> world/stream.rs                 | ~600 | medium |
-| W47.19 | render_ui (3261 LOC) -> ui/ submoduly             | ~1500 | high   |
+| W47.20 | on_start (364 LOC) -> bootstrap.rs                | ~360 | low |
+| W47.21 | render_ui (3261 LOC) split do ui/* submoduly      | ~1500 | high   |
+| W47.22 | update_play (884 LOC) - intencionalni inline       | -    | n/a    |
 
 Recommend: W47.14 (split place_break.rs do 4 podsouboru: combat,
 mining, rmb_actions, break_place_helpers) jako prevence pred 1500
