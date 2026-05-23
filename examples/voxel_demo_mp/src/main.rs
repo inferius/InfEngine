@@ -6058,6 +6058,11 @@ impl Voxel {
                     ctx: ctx.clone(),
                     pack: Arc::clone(&pack_arc),
                     halo,
+                    // W46.25: pass slug + dim so the worker can read
+                    // saved chunk data from disk before falling
+                    // through to worldgen.
+                    slug: self.current_world_slug.clone(),
+                    dim: self.current_dim.clone(),
                 });
                 if pool.req_tx.send(job).is_err() {
                     // Channel closed - requeue and abort.
@@ -14699,6 +14704,14 @@ struct ChunkJob {
     pack: Arc<resource_pack::ResourcePack>,
     /// W24: pre-fetched light grids for own chunk + 6 neighbours.
     halo: HaloLighting,
+    /// W46.25: current world slug + dim so the worker reads the
+    /// chunk from disk before falling through to worldgen. Without
+    /// this the streamer regenerated every reloaded chunk from
+    /// scratch, wiping every player edit (placed torch / obsidian /
+    /// anything) that landed in a chunk after the player walked
+    /// past UNLOAD_DISTANCE.
+    slug: Option<String>,
+    dim: String,
 }
 
 /// W25: remesh-only job. Carries a clone of the chunk's voxel data
@@ -14755,14 +14768,40 @@ impl WorkerPool {
                             };
                             match job {
                                 Job::Generate(gj) => {
-                                    // Pure-ctx call - no atomic reads. The
-                                    // ctx snapshot at enqueue is the source
-                                    // of truth for this job; a dim swap on
-                                    // the main thread between enqueue +
-                                    // pickup can no longer poison the gen.
-                                    let chunk = worldgen::generate_chunk_at_ctx(
-                                        gj.coord, &gj.ctx,
-                                    );
+                                    // W46.25: disk-first chunk source. If
+                                    // the slot has a saved chunk file at
+                                    // this coord, decode it - that file
+                                    // carries every player edit. Otherwise
+                                    // fall through to fresh worldgen.
+                                    //
+                                    // Without this branch every chunk that
+                                    // scrolled past UNLOAD_DISTANCE got
+                                    // re-generated on re-entry, silently
+                                    // wiping any torch / obsidian / placed
+                                    // block that lived in it.
+                                    let mut chunk_opt: Option<infengine_voxel::Chunk> = None;
+                                    if let Some(slug) = gj.slug.as_deref() {
+                                        match world_save::chunks::read_chunk(slug, &gj.dim, gj.coord) {
+                                            Ok(Some(payload)) => {
+                                                if let Ok(ch) = payload.voxels.into_chunk() {
+                                                    chunk_opt = Some(ch);
+                                                }
+                                            }
+                                            Ok(None) => {}
+                                            Err(err) => {
+                                                tracing::warn!(
+                                                    coord = ?gj.coord,
+                                                    error = %err,
+                                                    "W46.25: read_chunk failed; falling back to worldgen",
+                                                );
+                                            }
+                                        }
+                                    }
+                                    let chunk = chunk_opt.unwrap_or_else(|| {
+                                        worldgen::generate_chunk_at_ctx(
+                                            gj.coord, &gj.ctx,
+                                        )
+                                    });
                                     let origin = World::chunk_world_origin(gj.coord);
 
                                     // W13.2: Pre-scan voxels for side-effects
