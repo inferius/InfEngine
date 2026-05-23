@@ -127,6 +127,42 @@ Refaktor (W47.x):
   - ambient.rs append (ambient_particle_tests, ~110 LOC)
   main.rs: 1796 -> 449 LOC (UNDER 500 CEILING).
 
+## W48-W52 plan (velky feature blok)
+
+User requested 5 cilu: blocks + icons + sounds + categories + crafting + mob spawn/AI.
+
+**W48 - Block table extension (~600 blocks)** [in progress]
+- W48.1 done: +50 blocks (stone/nether/end/copper/earth/ice variants, ID 353-402)
+- W48.2 pending: +50 (concrete decor, dyes, glass colors, beds, banners)
+- W48.3 pending: +50 (redstone components: lever, button, plate, wire, repeater, comparator)
+- W48.4 pending: +50 (saplings, crops, flowers, leaves variants, food crops)
+- W48.5 pending: +50 (slabs/stairs/walls extensions for new stone/wood)
+- W48.6 pending: +50 (utility blocks: anvil, smithing table, lectern, smoker, blast furnace, etc.)
+- W48.7+ pending: remainder toward ~600
+
+**W49 - Icons + creative tab**
+- Atlas slot allocation for new blocks
+- Creative tab structure matching MC (Building/Decoration/Redstone/Tools/Combat/Food/Misc/Brewing/Search)
+- Icon resolution from MC pack via name_map
+
+**W50 - Crafting MC-style**
+- Shaped recipe support (3x3 pattern matching)
+- Shapeless recipe extension
+- Crafting table block + 3x3 UI
+- Smelting recipe expansion
+- Brewing stand block + recipes
+
+**W51 - Block + item sounds**
+- Extend ENGINE_TO_MC with per-block dig/step
+- Door/chest/button/lever/piston interaction sounds
+- Trapdoor/fence_gate sounds
+
+**W52 - Mob spawn + AI fix**
+- MC NaturalSpawner per-chunk dispatch
+- Biome-weighted spawn pool
+- Climb logic fix
+- Add creeper/enderman/slime/villager/wolf
+
 ## Aktivni / open
 
 ### Vizualni
