@@ -2,8 +2,13 @@
 
 ## Posledni stav
 
-main.rs: **5845 LOC** (z puvodnich 17207 = -11362 / -66%).
-Session W47.11..W47.24 delta: 14720 -> 5845 = -8875 LOC.
+main.rs: **1796 LOC** (z puvodnich 17207 = -15411 / -90%).
+Session W47.11..W47.26 delta: 14720 -> 1796 = -12924 LOC.
+
+app.rs: **4526 LOC** (over 1500 ceiling - W47.27+ split into
+per-domain submodules: world_init, world_runtime, net_runtime,
+dim_runtime, chunk_runtime, light_runtime, ui_runtime,
+inventory_runtime, combat_runtime, save_runtime, audio_runtime).
 
 Submodule LOC:
 - place_break/ (W47.14): 7 files, max 377 LOC v mod.rs
@@ -104,6 +109,8 @@ Refaktor (W47.x):
 - W47.22 on_update (1331 LOC) -> app_on_update.rs
 - W47.23 update_play (885 LOC) -> update_play.rs
 - W47.24 struct Voxel + PluginBlock (887 LOC) -> app.rs (fields pub(crate))
+- W47.25 WorkerPool + mesh_chunk_in_worker (424 LOC) -> workers.rs
+- W47.26 impl Voxel block (3625 LOC) -> app.rs append (methods pub(crate))
 
 ## Aktivni / open
 
