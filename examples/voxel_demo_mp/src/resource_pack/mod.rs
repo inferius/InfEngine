@@ -311,18 +311,49 @@ impl ResourcePack {
         infengine_id: u16,
         face: BlockFace,
     ) -> Option<&TextureRef> {
-        let map = name_map::lookup_block(infengine_id)?;
-        let face_name = match face {
-            BlockFace::Top => map.top,
-            BlockFace::Bottom => map.bottom,
-            BlockFace::Sides => map.sides,
+        if let Some(map) = name_map::lookup_block(infengine_id) {
+            let face_name = match face {
+                BlockFace::Top => map.top,
+                BlockFace::Bottom => map.bottom,
+                BlockFace::Sides => map.sides,
+            };
+            let primary = if !face_name.is_empty() {
+                self.block_texture(face_name)
+            } else {
+                None
+            };
+            if let Some(r) = primary.or_else(|| self.block_texture(map.block)) {
+                return Some(r);
+            }
+        }
+        // W53.5: fall back to BLOCK_TYPES.name. Many late-added
+        // blocks (sandstone, glass variants, terracotta, copper,
+        // sculk, ...) share their MC block name with their
+        // infengine name, so a direct lookup hits without needing
+        // an explicit name_map row.
+        //
+        // W53.6: also try per-face suffixes (`_top`, `_bottom`,
+        // `_side`, `_front`) so blocks with face-specific MC
+        // textures (crafting_table, furnace, smoker, hopper, ...)
+        // resolve without an explicit name_map row.
+        let bt = crate::block::block_type(infengine_id)?;
+        let base = bt.name;
+        let suffix_candidates: &[&str] = match face {
+            BlockFace::Top => &["_top", "", "_side"],
+            BlockFace::Bottom => &["_bottom", "", "_top"],
+            BlockFace::Sides => &["_side", "_front", "", "_top"],
         };
-        let primary = if !face_name.is_empty() {
-            self.block_texture(face_name)
-        } else {
-            None
-        };
-        primary.or_else(|| self.block_texture(map.block))
+        for suf in suffix_candidates {
+            let key = if suf.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}{suf}")
+            };
+            if let Some(r) = self.block_texture(&key) {
+                return Some(r);
+            }
+        }
+        None
     }
 
     /// Resolve the inventory icon for an infengine item id. Block-form
@@ -333,6 +364,16 @@ impl ResourcePack {
         // Tool / ingredient / bucket / food: dedicated item icon.
         if let Some(item_name) = name_map::lookup_item(infengine_id)
             && let Some(r) = self.item_icon(item_name)
+        {
+            return Some(r);
+        }
+        // W53.5: fall back to the ITEM_TYPES.name as an MC item
+        // sprite key when name_map doesn't have an explicit entry.
+        // Covers ids past 350 (W48 batch + later) without needing
+        // a hand-maintained map row for every block that happens
+        // to share its MC name.
+        if let Some(it) = crate::item::item_type(infengine_id)
+            && let Some(r) = self.item_icon(it.name)
         {
             return Some(r);
         }

@@ -2250,6 +2250,23 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 630, name: "sculk_shrieker", display: Some("Sculk Shrieker"), places: Some(630), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 631, name: "sculk_sensor", display: Some("Sculk Sensor"), places: Some(631), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 632, name: "calibrated_sculk_sensor", display: Some("Calibrated Sculk Sensor"), places: Some(632), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W53.4 - missing tool items (hoes, bow, crossbow, shears,
+    // fishing_rod). ItemCategory::Tool covers hoes/shears/fishing_rod;
+    // bow + crossbow are ranged so they live in Weapon to land in
+    // the Combat tab alongside swords. max_stack=1 enforced by
+    // mc_stack_override regardless of table value, but we set it
+    // explicitly so the table reads MC-strict at a glance.
+    ItemType { id: 633, name: "hoe_wood", display: Some("Wood Hoe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 634, name: "hoe_stone", display: Some("Stone Hoe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 635, name: "hoe_iron", display: Some("Iron Hoe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 636, name: "hoe_gold", display: Some("Golden Hoe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 637, name: "hoe_diamond", display: Some("Diamond Hoe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 638, name: "bow", display: Some("Bow"), places: None, max_stack: 1, icon: None, category: ItemCategory::Weapon },
+    ItemType { id: 639, name: "crossbow", display: Some("Crossbow"), places: None, max_stack: 1, icon: None, category: ItemCategory::Weapon },
+    ItemType { id: 640, name: "shears", display: Some("Shears"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 641, name: "fishing_rod", display: Some("Fishing Rod"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 642, name: "shield", display: Some("Shield"), places: None, max_stack: 1, icon: None, category: ItemCategory::Weapon },
+    ItemType { id: 643, name: "arrow", display: Some("Arrow"), places: None, max_stack: 64, icon: None, category: ItemCategory::Weapon },
 ];
 
 // ---------------------------------------------------------------
@@ -2265,8 +2282,125 @@ pub(crate) fn item_type(id: u16) -> Option<&'static ItemType> {
 /// Max stack size for an item id. Falls back to `64` for unknown ids
 /// so legacy callers that haven't been migrated yet keep behaving
 /// like the block table assumed.
+///
+/// W53.3: applies the MC-strict override on top of the ITEM_TYPES
+/// table value so tools/weapons/armor/buckets/beds/boats etc. stack
+/// to 1 (and snowballs/eggs/signs/books to 16) regardless of what
+/// the table row says. The override is name-pattern driven so newly
+/// added items pick up the right cap automatically.
 pub(crate) fn item_max_stack(id: u16) -> u8 {
-    item_type(id).map(|it| it.max_stack).unwrap_or(64)
+    let Some(it) = item_type(id) else {
+        return 64;
+    };
+    if let Some(n) = mc_stack_override(it.name) {
+        return n;
+    }
+    it.max_stack
+}
+
+/// W53.3: return the MC-strict max_stack for items the ITEM_TYPES
+/// table is wrong about. `None` = no override (use the table value).
+fn mc_stack_override(name: &str) -> Option<u8> {
+    // Stack = 1 items: tools, weapons, armor, single-use containers,
+    // beds, vehicles, durability items.
+    if name.contains("pickaxe")
+        || name.contains("shovel")
+        || name.starts_with("axe_")
+        || name.ends_with("_axe")
+        || name.contains("sword")
+        || name.starts_with("hoe_")
+        || name.ends_with("_hoe")
+        || name == "shears"
+        || name == "trident"
+        || name == "bow"
+        || name == "crossbow"
+        || name == "fishing_rod"
+        || name.ends_with("_helmet")
+        || name.ends_with("_chestplate")
+        || name.ends_with("_leggings")
+        || name.ends_with("_boots")
+        || name == "elytra"
+        || name == "shield"
+        || name == "saddle"
+        || name == "flint_and_steel"
+        || name == "compass"
+        || name == "clock"
+        || name == "name_tag"
+        || name.contains("horse_armor")
+        || name == "lead"
+        || name == "carrot_on_a_stick"
+        || name == "warped_fungus_on_a_stick"
+        || name == "water_bucket"
+        || name == "lava_bucket"
+        || name == "milk_bucket"
+        || name == "powder_snow_bucket"
+        || name.starts_with("cod_bucket")
+        || name.starts_with("salmon_bucket")
+        || name.starts_with("pufferfish_bucket")
+        || name.starts_with("tropical_fish_bucket")
+        || name.starts_with("axolotl_bucket")
+        || name.starts_with("tadpole_bucket")
+        || name == "bed"
+        || name.ends_with("_bed")
+        || name.contains("boat")
+        || name.contains("minecart")
+        || name == "writable_book"
+        || name == "written_book"
+        || name == "potion"
+        || name == "splash_potion"
+        || name == "lingering_potion"
+        || name == "milk"
+        || name == "totem_of_undying"
+        || name == "spyglass"
+        || name == "goat_horn"
+        || name == "bundle"
+        || name == "armor_stand"
+        || name == "cake"
+        || name == "mushroom_stew"
+        || name == "rabbit_stew"
+        || name == "beetroot_soup"
+        || name == "suspicious_stew"
+    {
+        return Some(1);
+    }
+    // Stack = 16 items: thrown projectiles, signs, snowballs, eggs,
+    // ender pearls, honey bottles, empty bucket.
+    if matches!(name,
+        "snowball"
+        | "egg"
+        | "ender_pearl"
+        | "ender_eye"
+        | "honey_bottle"
+        | "bucket"
+        | "sign"
+        | "oak_sign"
+        | "birch_sign"
+        | "spruce_sign"
+        | "jungle_sign"
+        | "acacia_sign"
+        | "dark_oak_sign"
+        | "mangrove_sign"
+        | "cherry_sign"
+        | "bamboo_sign"
+        | "crimson_sign"
+        | "warped_sign"
+        | "oak_hanging_sign"
+        | "birch_hanging_sign"
+        | "spruce_hanging_sign"
+        | "jungle_hanging_sign"
+        | "acacia_hanging_sign"
+        | "dark_oak_hanging_sign"
+        | "mangrove_hanging_sign"
+        | "cherry_hanging_sign"
+        | "bamboo_hanging_sign"
+        | "crimson_hanging_sign"
+        | "warped_hanging_sign"
+        | "enchanted_book"
+        | "book")
+    {
+        return Some(16);
+    }
+    None
 }
 
 /// `Some(block_id)` if RMB-placing the item produces a block.

@@ -42,6 +42,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         //    other peers, so Esc just toggles `mp_menu_open` which
         //    drives an overlay UI; physics / net tick continue.
         // Settings always backs out via Esc regardless of role.
+        // W53.1: when egui owns keyboard focus (search box, chat
+        // input, MP setup form, settings text fields) the in-world
+        // hotkeys must NOT fire. Typing "E" in creative search
+        // would otherwise close the panel; typing "T" while in a
+        // text field would open chat on top. Single source of
+        // truth so every hotkey gate below shares it.
+        let egui_kb = vx.ui.as_ref().map(|u| u.wants_keyboard_input()).unwrap_or(false);
+
         let esc_now = ctx.input.is_pressed(Key::Escape);
         let esc_just = esc_now && !vx.esc_prev;
         vx.esc_prev = esc_now;
@@ -186,6 +194,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
             && !vx.inventory_open
+            && !egui_kb
             && vx.selected_slot < HOTBAR_SLOTS
             && let Some((b, c)) = vx.inventory[vx.selected_slot]
         {
@@ -224,6 +233,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
             && !vx.inventory_open
+            && !egui_kb
             && let Some(voxel) = vx.place_history.pop()
         {
             let current = vx.world.get(voxel);
@@ -266,6 +276,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.g_prev
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
+            && !egui_kb
         {
             vx.show_chunk_grid = !vx.show_chunk_grid;
         }
@@ -279,6 +290,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.h_prev
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
+            && !egui_kb
         {
             vx.highlight_mode = vx.highlight_mode.cycle();
             let label = vx.highlight_mode.label();
@@ -296,7 +308,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // 1..9 select the matching hotbar slot directly (Minecraft
         // convention). Digit 1 maps to slot 0 so the user-facing
         // numbering matches the visual order in the hotbar.
-        if matches!(vx.state, AppState::Playing) && !vx.chat_open {
+        if matches!(vx.state, AppState::Playing) && !vx.chat_open && !egui_kb {
             let digits = [
                 Key::Digit1,
                 Key::Digit2,
@@ -322,6 +334,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         if e_just
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
+            && !egui_kb
         {
             // Pressing E while a chest / furnace UI is open closes
             // it first instead of stacking a second panel on top.
@@ -362,6 +375,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.inventory_open
             && !vx.mp_menu_open
             && !vx.chat_open
+            && !egui_kb
         {
             // Chat opens in any net role (including Offline) so
             // local slash commands like /give work in
@@ -383,6 +397,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.inventory_open
             && !vx.mp_menu_open
             && !vx.chat_open
+            && !egui_kb
             && vx.player_health < PLAYER_MAX_HEALTH
         {
             // Find first slot holding meat (offline / host path).

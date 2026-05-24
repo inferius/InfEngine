@@ -487,9 +487,12 @@ mod tests {
     }
 
     #[test]
-    fn category_strip_lists_all_seven() {
+    fn category_strip_lists_all_ten() {
+        // W49: tab strip extended from 7 to 10 entries (added
+        // Redstone, Transportation, Brewing per MC's
+        // CreativeModeTab layout).
         let strip = CreativeCategory::all();
-        assert_eq!(strip.len(), 7);
+        assert_eq!(strip.len(), 10);
         // First is All, last is Misc per the display order.
         assert_eq!(strip[0], CreativeCategory::All);
         assert_eq!(strip[strip.len() - 1], CreativeCategory::Misc);

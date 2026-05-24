@@ -18,6 +18,10 @@ impl Voxel {
             || self.furnace_open.is_some()
             // W10.6: the creative tab also captures input.
             || self.creative_tab.open
+            // W53.2: crafting table + brewing stand panels also
+            // need the cursor + suppress WASD / hotkeys while open.
+            || self.crafting_table_open.is_some()
+            || self.brewing_open.is_some()
     }
 
     pub(crate) fn apply_cursor_settings(&self, window: &EngineWindow) {

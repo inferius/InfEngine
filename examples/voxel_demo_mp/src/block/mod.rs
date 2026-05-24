@@ -246,14 +246,44 @@ pub(crate) fn block_required_tier(block: BlockId) -> u8 {
 }
 
 /// True if the block id represents a tool / non-placeable item.
+/// W53.4: extended to cover gold/diamond/netherite tier variants
+/// (added in W48) + hoes / shears / bow / crossbow / fishing_rod /
+/// trident. Pattern-driven so new tool items pick up the right
+/// behavior without per-id hardcoding.
 pub(crate) fn is_tool_block(block: BlockId) -> bool {
-    matches!(
+    // Legacy fixed-id ranges for the original tool block. Kept for
+    // back-compat with save files that store these ids verbatim.
+    if matches!(
         block.0,
         16..=19 | 23..=25 | 29..=34 | 38..=40 | FLINT_AND_STEEL_ID
-    )
+    ) {
+        return true;
+    }
+    // W53.4: name-pattern check for new tool ids. Drives off the
+    // ITEM_TYPES table so all gold/diamond/netherite/hoe variants
+    // pick up the right behavior without per-id hardcoding.
+    let Some(it) = crate::item::item_type(block.0) else {
+        return false;
+    };
+    let name = it.name;
+    name.starts_with("pickaxe_")
+        || name.starts_with("shovel_")
+        || name.starts_with("axe_")
+        || name.starts_with("sword_")
+        || name.starts_with("hoe_")
+        || name == "shears"
+        || name == "bow"
+        || name == "crossbow"
+        || name == "fishing_rod"
+        || name == "trident"
+        || name == "flint_and_steel"
+        || name.ends_with("_bucket")
+        || name == "bucket"
 }
 
 /// Human label for a tool slot, used by the HUD readout.
+/// W53.4: fall through to ITEM_TYPES display name for tool ids
+/// the legacy match arms don't cover (gold/diamond/netherite/hoe).
 pub(crate) fn tool_label(block: BlockId) -> Option<&'static str> {
     match block.0 {
         16 => Some("Wood pickaxe"),
@@ -272,7 +302,14 @@ pub(crate) fn tool_label(block: BlockId) -> Option<&'static str> {
         39 => Some("Water bucket"),
         40 => Some("Lava bucket"),
         FLINT_AND_STEEL_ID => Some("Flint and Steel"),
-        _ => None,
+        _ => {
+            // W53.4: fall through to ITEM_TYPES for the new tool
+            // variants (gold/diamond/netherite/hoe/bow/etc.).
+            if !is_tool_block(block) {
+                return None;
+            }
+            crate::item::item_type(block.0).and_then(|it| it.display)
+        }
     }
 }
 

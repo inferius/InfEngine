@@ -102,10 +102,12 @@ pub(crate) fn inv_pickup(
     if block == BlockId::AIR {
         return false;
     }
+    // W53.3: per-item max stack honours tools/buckets/etc.
+    let cap = crate::item::item_max_stack(block.0);
     for slot in inv.iter_mut() {
         if let Some((b, count)) = slot.as_mut()
             && *b == block
-            && *count < STACK_MAX
+            && *count < cap
         {
             *count += 1;
             return true;
@@ -136,6 +138,8 @@ pub(crate) fn inv_pickup_n(
     if block == BlockId::AIR || count == 0 {
         return true;
     }
+    // W53.3: per-item max stack honours tools/buckets/etc.
+    let cap = crate::item::item_max_stack(block.0);
     let mut remaining = count;
     // Pass 1: top up matching partial stacks.
     for slot in inv.iter_mut() {
@@ -144,9 +148,9 @@ pub(crate) fn inv_pickup_n(
         }
         if let Some((b, c)) = slot.as_mut()
             && *b == block
-            && *c < STACK_MAX
+            && *c < cap
         {
-            let room = STACK_MAX - *c;
+            let room = cap - *c;
             let take = room.min(remaining);
             *c += take;
             remaining -= take;
@@ -158,7 +162,7 @@ pub(crate) fn inv_pickup_n(
             return true;
         }
         if slot.is_none() {
-            let take = STACK_MAX.min(remaining);
+            let take = cap.min(remaining);
             *slot = Some((block, take));
             remaining -= take;
         }
@@ -245,7 +249,8 @@ pub(crate) fn inv_apply_drag(
             }
             Some((tb, tc))
                 if tb == from_stack.0
-                    && (tc as u16 + from_stack.1 as u16) <= STACK_MAX as u16 =>
+                    && (tc as u16 + from_stack.1 as u16)
+                        <= crate::item::item_max_stack(tb.0) as u16 =>
             {
                 for cell in inv.craft_grid.iter_mut() {
                     if let Some((_, c)) = cell.as_mut() {
@@ -271,7 +276,8 @@ pub(crate) fn inv_apply_drag(
         let rem = from_stack.1 - take;
         match to_stack {
             Some((tb, tc)) if tb == from_stack.0 => {
-                let merge = (STACK_MAX - tc).min(take);
+                let cap = crate::item::item_max_stack(tb.0);
+                let merge = cap.saturating_sub(tc).min(take);
                 let new_to = tc + merge;
                 let leftover = take - merge;
                 write_to(inv, to, Some((tb, new_to)));
@@ -304,7 +310,8 @@ pub(crate) fn inv_apply_drag(
     }
     match to_stack {
         Some((tb, tc)) if tb == from_stack.0 => {
-            let take = (STACK_MAX - tc).min(from_stack.1);
+            let cap = crate::item::item_max_stack(tb.0);
+            let take = cap.saturating_sub(tc).min(from_stack.1);
             let new_to = tc + take;
             let rem = from_stack.1 - take;
             write_to(inv, to, Some((tb, new_to)));
