@@ -630,6 +630,21 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     ItemNameMap { infengine_id: 348, item: "ink_sac" },
     ItemNameMap { infengine_id: 349, item: "glow_ink_sac" },
     ItemNameMap { infengine_id: 350, item: "echo_shard" },
+    // W53.4: hoes (infengine name "hoe_<tier>" -> MC "<tier>_hoe").
+    ItemNameMap { infengine_id: 633, item: "wooden_hoe" },
+    ItemNameMap { infengine_id: 634, item: "stone_hoe" },
+    ItemNameMap { infengine_id: 635, item: "iron_hoe" },
+    ItemNameMap { infengine_id: 636, item: "golden_hoe" },
+    ItemNameMap { infengine_id: 637, item: "diamond_hoe" },
+    // W53.4: bow / crossbow / shears / fishing_rod / shield / arrow.
+    // infengine names already match MC names here, but explicit
+    // rows make the mapping discoverable and keep the lookup fast.
+    ItemNameMap { infengine_id: 638, item: "bow" },
+    ItemNameMap { infengine_id: 639, item: "crossbow" },
+    ItemNameMap { infengine_id: 640, item: "shears" },
+    ItemNameMap { infengine_id: 641, item: "fishing_rod" },
+    ItemNameMap { infengine_id: 642, item: "shield" },
+    ItemNameMap { infengine_id: 643, item: "arrow" },
 ];
 
 pub(crate) fn lookup_item(id: u16) -> Option<&'static str> {

@@ -311,6 +311,26 @@ impl ResourcePack {
         infengine_id: u16,
         face: BlockFace,
     ) -> Option<&TextureRef> {
+        // W53.7: BLOCK_TYPES.top/bottom/sides.files already lists
+        // the exact MC PNG filenames per face. That IS the
+        // authoritative mapping - parse `<stem>.png` once and
+        // look up the texture by stem. No name_map indirection
+        // needed for the 600+ blocks that use BLOCK_TYPES.
+        let bt = crate::block::block_type(infengine_id)?;
+        let tile = match face {
+            BlockFace::Top => &bt.top,
+            BlockFace::Bottom => &bt.bottom,
+            BlockFace::Sides => &bt.sides,
+        };
+        for f in tile.files {
+            let stem = f.strip_suffix(".png").unwrap_or(f);
+            if let Some(r) = self.block_texture(stem) {
+                return Some(r);
+            }
+        }
+        // Legacy fallback: name_map for the pre-BLOCK_TYPES path
+        // (kept so the existing per-face override rows still
+        // resolve when BLOCK_TYPES.files comes up empty).
         if let Some(map) = name_map::lookup_block(infengine_id) {
             let face_name = match face {
                 BlockFace::Top => map.top,
@@ -322,36 +342,7 @@ impl ResourcePack {
             } else {
                 None
             };
-            if let Some(r) = primary.or_else(|| self.block_texture(map.block)) {
-                return Some(r);
-            }
-        }
-        // W53.5: fall back to BLOCK_TYPES.name. Many late-added
-        // blocks (sandstone, glass variants, terracotta, copper,
-        // sculk, ...) share their MC block name with their
-        // infengine name, so a direct lookup hits without needing
-        // an explicit name_map row.
-        //
-        // W53.6: also try per-face suffixes (`_top`, `_bottom`,
-        // `_side`, `_front`) so blocks with face-specific MC
-        // textures (crafting_table, furnace, smoker, hopper, ...)
-        // resolve without an explicit name_map row.
-        let bt = crate::block::block_type(infengine_id)?;
-        let base = bt.name;
-        let suffix_candidates: &[&str] = match face {
-            BlockFace::Top => &["_top", "", "_side"],
-            BlockFace::Bottom => &["_bottom", "", "_top"],
-            BlockFace::Sides => &["_side", "_front", "", "_top"],
-        };
-        for suf in suffix_candidates {
-            let key = if suf.is_empty() {
-                base.to_string()
-            } else {
-                format!("{base}{suf}")
-            };
-            if let Some(r) = self.block_texture(&key) {
-                return Some(r);
-            }
+            return primary.or_else(|| self.block_texture(map.block));
         }
         None
     }
@@ -361,23 +352,27 @@ impl ResourcePack {
     /// behaviour). Tools / buckets / ingots / food resolve through
     /// the item-name override table.
     pub(crate) fn icon_ref(&self, infengine_id: u16) -> Option<&TextureRef> {
-        // Tool / ingredient / bucket / food: dedicated item icon.
+        // Explicit name_map row first: covers items where the
+        // infengine name differs from the MC PNG stem
+        // ("pickaxe_wood" vs "wooden_pickaxe.png").
         if let Some(item_name) = name_map::lookup_item(infengine_id)
             && let Some(r) = self.item_icon(item_name)
         {
             return Some(r);
         }
-        // W53.5: fall back to the ITEM_TYPES.name as an MC item
-        // sprite key when name_map doesn't have an explicit entry.
-        // Covers ids past 350 (W48 batch + later) without needing
-        // a hand-maintained map row for every block that happens
-        // to share its MC name.
-        if let Some(it) = crate::item::item_type(infengine_id)
+        // W53.7: items where the ITEM_TYPES name matches the MC
+        // PNG stem ("apple", "feather", "stick"). Direct lookup
+        // by ITEM_TYPES.name into the item_icons map - same path
+        // a name_map row would resolve to, just without the
+        // hand-written indirection.
+        let it = crate::item::item_type(infengine_id)?;
+        if it.places.is_none()
             && let Some(r) = self.item_icon(it.name)
         {
             return Some(r);
         }
-        // Block form: use the top face.
+        // Block-form item: read the top face from BLOCK_TYPES
+        // TileSpec (W53.7 - authoritative per-face PNG list).
         self.block_face_ref(infengine_id, BlockFace::Top)
     }
 
