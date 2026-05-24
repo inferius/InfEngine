@@ -649,13 +649,18 @@ pub(crate) fn build_slab_top() -> BlockModel {
 /// Side-connection arms are a follow-up that needs neighbour-aware
 /// multipart blockstate dispatch.
 pub(crate) fn build_fence_post() -> BlockModel {
+    // W61.4: use literal `oak_planks` texture so isolated fence
+    // posts render as a wood pillar instead of the magenta
+    // __missing checker. nether_brick_fence still falls through
+    // to JSON pipeline (multipart) on the real pack so it gets
+    // its own texture there.
     BlockModel {
         elements: vec![ModelElement {
             from: [6.0, 0.0, 6.0],
             to: [10.0, 16.0, 10.0],
             rotation: None,
             shade: true,
-            faces: cube_all_faces("#texture"),
+            faces: cube_all_faces("oak_planks"),
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
@@ -829,13 +834,16 @@ pub(crate) fn build_stairs() -> BlockModel {
 /// (multipart blockstate). Glass pane and iron bars share the
 /// same post geometry; only the texture differs.
 pub(crate) fn build_thin_pane() -> BlockModel {
+    // W61.4: literal `glass` texture so the center pane renders
+    // instead of magenta __missing. Iron bars / stained panes
+    // route through JSON pipeline first when MC pack present.
     BlockModel {
         elements: vec![ModelElement {
             from: [7.0, 0.0, 7.0],
             to: [9.0, 16.0, 9.0],
             rotation: None,
             shade: true,
-            faces: cube_all_faces("#texture"),
+            faces: cube_all_faces("glass"),
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
@@ -846,13 +854,15 @@ pub(crate) fn build_thin_pane() -> BlockModel {
 /// -> centre 8x16x8 column. Side arms (`template_wall_side.json`)
 /// are a follow-up tied to the multipart blockstate dispatch.
 pub(crate) fn build_wall_post() -> BlockModel {
+    // W61.4: literal `cobblestone` texture so isolated walls
+    // render correctly.
     BlockModel {
         elements: vec![ModelElement {
             from: [4.0, 0.0, 4.0],
             to: [12.0, 16.0, 12.0],
             rotation: None,
             shade: true,
-            faces: cube_all_faces("#texture"),
+            faces: cube_all_faces("cobblestone"),
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
