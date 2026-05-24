@@ -243,6 +243,22 @@ impl ResourcePack {
                             elapsed_ms,
                             "W41.1 block model cache built",
                         );
+                        // W54.1: audit which ITEM_TYPES rows resolve
+                        // to a texture so missing icons surface in the
+                        // log instead of silently rendering blank.
+                        let mut missing: Vec<u16> = Vec::new();
+                        for it in crate::item::ITEM_TYPES.iter() {
+                            if pack.icon_ref(it.id).is_none() {
+                                missing.push(it.id);
+                            }
+                        }
+                        if !missing.is_empty() {
+                            tracing::warn!(
+                                count = missing.len(),
+                                first_ids = ?&missing[..missing.len().min(20)],
+                                "W54.1 items without a resolved icon",
+                            );
+                        }
                         pack
                     }
                     None => {

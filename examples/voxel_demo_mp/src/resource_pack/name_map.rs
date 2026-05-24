@@ -640,7 +640,9 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     // infengine names already match MC names here, but explicit
     // rows make the mapping discoverable and keep the lookup fast.
     ItemNameMap { infengine_id: 638, item: "bow" },
-    ItemNameMap { infengine_id: 639, item: "crossbow" },
+    // MC ships crossbow as crossbow_standby.png (default state);
+    // pulling animations live under crossbow_pulling_0..2.
+    ItemNameMap { infengine_id: 639, item: "crossbow_standby" },
     ItemNameMap { infengine_id: 640, item: "shears" },
     ItemNameMap { infengine_id: 641, item: "fishing_rod" },
     ItemNameMap { infengine_id: 642, item: "shield" },
