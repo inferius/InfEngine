@@ -646,26 +646,30 @@ pub(crate) fn build_fence_post() -> BlockModel {
     }
 }
 
-/// W55.2: Chest model as an inset 14x14x14 cuboid centred on the
-/// block. Leaves a 1-pixel gap on every face so the geometry
-/// stands apart from neighbouring planks. MC's full chest entity
-/// model adds a lid + latch rendered via BlockEntityRenderer; the
-/// inset cube is the static-mesh fallback while the entity
-/// renderer path is a future wave.
+/// W55.2: Chest model as a FULL-block (16x16x16) cuboid so the
+/// neighbouring grass / dirt doesn't get rendered through the
+/// gaps. MC's real chest entity model adds the inset + lid +
+/// latch via BlockEntityRenderer; for the static-mesh path we
+/// just stamp the planks texture on every face.
+///
+/// W56.2: texture name is a LITERAL ("oak_planks"), not a `#top`
+/// ref. element_mesh strips the leading `#` and looks the name
+/// up directly in the atlas; hand-coded models that ship an
+/// empty `textures` HashMap need the bare texture key here.
 pub(crate) fn build_chest() -> BlockModel {
     BlockModel {
         elements: vec![ModelElement {
-            from: [1.0, 0.0, 1.0],
-            to: [15.0, 14.0, 15.0],
+            from: [0.0, 0.0, 0.0],
+            to: [16.0, 16.0, 16.0],
             rotation: None,
             shade: true,
             faces: ElementFaces {
-                down: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#bottom", Some(CubeFace::Down))),
-                up: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#top", Some(CubeFace::Up))),
-                north: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::North))),
-                south: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::South))),
-                west: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::West))),
-                east: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::East))),
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::Up))),
+                north: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::East))),
             },
         }],
         textures: HashMap::new(),

@@ -97,9 +97,14 @@ pub(crate) fn tick_mob_audio(voxel: &mut Voxel, dt: f32) {
                 *step_t = 0.45;
                 let pos = m.pos;
                 let key = format!("{}/step", mob_sound_stem(m.kind));
-                voxel.sfx_at(&key, pos, |a, g| {
-                    let _ = a.play_swish(0.18 * g);
-                });
+                // W56.1: no synth fallback for mob steps. The
+                // play_swish beep was firing for EVERY mob (since
+                // the cached pack has no `sounds/` subtree),
+                // producing a constant chorus of beeps. Silent
+                // when the OGG isn't loaded; the real audio
+                // arrives when a proper MC pack ships sound
+                // files.
+                voxel.sfx_at(&key, pos, |_a, _g| {});
             }
         }
         // Baa: random initial timer, refresh on each fire.
@@ -116,9 +121,9 @@ pub(crate) fn tick_mob_audio(voxel: &mut Voxel, dt: f32) {
             *say_t = 6.0 + (h % 14.0).abs();
             let pos = m.pos;
             let key = format!("{}/say", mob_sound_stem(m.kind));
-            voxel.sfx_at(&key, pos, |a, g| {
-                let _ = a.play_beep(300.0, 0.18, 0.18 * g);
-            });
+            // W56.1: no synth fallback for mob ambient. See step
+            // handler above; silent until the pack ships sounds.
+            voxel.sfx_at(&key, pos, |_a, _g| {});
         }
     }
 }

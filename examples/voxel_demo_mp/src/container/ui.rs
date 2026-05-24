@@ -69,6 +69,24 @@ pub(crate) struct GridConfig {
     /// Tooltip label prefix shown above the grid. `None` skips the
     /// header row.
     pub(crate) title: Option<String>,
+    /// W56.3: unique salt for the egui Grid id. Two grids that
+    /// share `(cols, rows)` AND have no title (or the same title)
+    /// would otherwise clash. Caller threads a stable per-call
+    /// string here; default empty means "no extra salt".
+    #[allow(dead_code)] // optional - older callers leave it empty
+    pub(crate) id_salt: &'static str,
+}
+
+impl Default for GridConfig {
+    fn default() -> Self {
+        Self {
+            cols: 0,
+            rows: 0,
+            tile_px: 36.0,
+            title: None,
+            id_salt: "",
+        }
+    }
 }
 
 /// Draw the grid + collect a frame of `GridAction`s.
@@ -113,6 +131,7 @@ pub(crate) fn draw_grid_with_uv(
     // to the slot rectangle dims so two side-by-side default grids
     // (chest + player inv) still get distinct ids.
     let grid_id_src = (
+        cfg.id_salt,
         cfg.title.as_deref().unwrap_or("container_grid"),
         cfg.cols,
         cfg.rows,

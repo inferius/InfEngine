@@ -1825,22 +1825,22 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ));
                             }
                             ui.separator();
-                            let chest_cfg = container::ui::GridConfig {
-                                cols: 9,
-                                rows: 3,
-                                tile_px: 36.0,
-                                title: None,
-                            };
-                            // W55.2b: when paired with a partner
-                            // chest, draw it ABOVE the main chest
-                            // so the combined view reads as a
-                            // 6-row 54-slot grid (matches MC
-                            // double-chest layout).
+                            // W56.3: id_salt makes each grid's
+                            // egui Id unique even though title +
+                            // (cols, rows) match across the
+                            // partner / main / inv stack.
                             if let Some(partner) = &chest_partner_snapshot {
                                 ui.label("Chest (paired - top)");
+                                let partner_cfg = container::ui::GridConfig {
+                                    cols: 9,
+                                    rows: 3,
+                                    tile_px: 36.0,
+                                    title: None,
+                                    id_salt: "chest_partner",
+                                };
                                 let actions = container::ui::draw_grid_with_uv(
                                     ui,
-                                    &chest_cfg,
+                                    &partner_cfg,
                                     partner,
                                     chest_held_local,
                                     atlas_tex_id,
@@ -1853,6 +1853,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             } else {
                                 ui.label("Chest (27)");
                             }
+                            let chest_cfg = container::ui::GridConfig {
+                                cols: 9,
+                                rows: 3,
+                                tile_px: 36.0,
+                                title: None,
+                                id_salt: "chest_main",
+                            };
                             let actions = container::ui::draw_grid_with_uv(
                                 ui,
                                 &chest_cfg,
@@ -1880,11 +1887,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             for (i, s) in inv_plain_snapshot.iter().enumerate() {
                                 inv_view.set_slot(i, *s);
                             }
+                            // W56.3: id_salt for the player-inv
+                            // grid below the chest grids.
                             let inv_cfg = container::ui::GridConfig {
                                 cols: 9,
                                 rows: 4,
                                 tile_px: 36.0,
                                 title: None,
+                                id_salt: "chest_player_inv",
                             };
                             let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,
@@ -1936,6 +1946,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui.label("Input");
                                 let cfg_input = container::ui::GridConfig {
                                     cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                    id_salt: "furnace_input",
                                 };
                                 let mut single = container::Container::with_size(1);
                                 single.set_slot(0, furnace.slot(0));
@@ -1976,6 +1987,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui.label("Fuel");
                                 let cfg_fuel = container::ui::GridConfig {
                                     cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                    id_salt: "furnace_fuel",
                                 };
                                 let mut single_f = container::Container::with_size(1);
                                 single_f.set_slot(0, furnace.slot(1));
@@ -2009,6 +2021,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui.label("Out");
                                 let cfg_out = container::ui::GridConfig {
                                     cols: 1, rows: 1, tile_px: 36.0, title: None,
+                                    id_salt: "furnace_output",
                                 };
                                 let mut single_o = container::Container::with_size(1);
                                 single_o.set_slot(0, furnace.slot(2));
@@ -2032,6 +2045,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 rows: 4,
                                 tile_px: 36.0,
                                 title: None,
+                                id_salt: "furnace_player_inv",
                             };
                             let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,

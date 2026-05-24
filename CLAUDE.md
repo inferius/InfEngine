@@ -86,3 +86,94 @@ logic, mob behaviors), takze sledujeme to co je v zanru standardni.
 - Kdyz neco prijde divne (model, zvuk, particle, mob AI), **konzultovat
   s uzivatelem** drive nez improvizovat vlastni reseni. Lepsi se 3x
   zeptat nez prepisovat kod.
+
+## MC-adoption checklist (pro kazdy novy block/item/mob)
+
+Kdyz prevzimas neco z MC, NIKDY nestaci pridat radek do tabulky.
+Cely retezec musi byt complete. Projit kazdou polozku:
+
+### Block
+
+1. `block/registry.rs` BlockType row: id, name, color, transparent,
+   flags, TileSpec (top/bottom/sides s `files: &["mc_name.png"]`).
+2. `block/ids.rs` const (jen pokud na nej kod odkazuje jmenem).
+3. `block/mod.rs` re-export pokud `pub(crate)` ven.
+4. `item/mod.rs` ItemType row (kazdy block ma item form pro inventory).
+   `places: Some(block_id)`, category, max_stack (default 64 - tools/
+   armor/etc override v `mc_stack_override`).
+5. **Flags rules:**
+   - Specialni model (slab/door/torch/chest/trapdoor): `F_DEDICATED_RENDER`
+     **plus** ne-empty entry v `special_models::name_for_block` **plus**
+     buildr v `special_models::lookup`.
+   - Pruchodny (cross-pattern, trapdoor, door, ladder): `F_RAY_PASS |
+     F_AABB_PASS`.
+   - Pruhledny render: `F_TRANSPARENT_RENDER` + `transparent: true` +
+     `keep_alpha: true` v TileSpec.
+6. **Build/clippy/test** mezi kazdym blokem, ne na konec.
+
+### Special model (build_*)
+
+1. Texture refs v `ElementFaces`: bud LITERAL texture name (e.g.
+   `"oak_planks"`) NEBO `"#var"` + `textures.insert(var, real_name)`.
+   Empty textures HashMap + `"#var"` ref = magenta __missing render
+   (W56.2 chest hole regression).
+2. **Test placement na svete** - F_DEDICATED_RENDER blocky muzou
+   zpusobit transparent prostor pokud model emituje 0 faces.
+
+### Item icon
+
+1. Match-name path: `ITEM_TYPES.name == MC png stem` -> auto resolve via
+   `item_icon(it.name)`.
+2. Renamed-name path: explicit row v `resource_pack::name_map::ITEM_NAME_MAP`.
+3. Block-form (places=Some): fall through to `block_face_ref` -> BLOCK_TYPES
+   TileSpec.files (W53.7).
+
+### Sound
+
+1. Engine key -> MC event: row v `resource_pack::sounds::ENGINE_TO_MC`.
+2. MC event musi byt v `sounds.json` v packu - jinak audio_bank miss.
+3. **Synth fallback opt-out**: pro klice kde MC pack nedoda OGG, predej
+   `|_, _| {}` mistr `play_beep/swish` do `sfx_at`. Jinak vznika anoying
+   bzucani pro vsechny ne-loadnute klice (W56.1 mob beep regression).
+
+### Mob
+
+1. `mob::kinds::MobKind` enum variant + KIND_X const.
+2. `mob_meshes::MobPart` variants per body part + box_uv table.
+3. `mob_meshes::MobMeshes` fields + `*_loaded()` helper.
+4. `load_non_sheep_mob_meshes` block per kind.
+5. `render::mobs.rs` match arm per kind (3 ways: textured parts when
+   loaded, legacy cube fallback otherwise).
+6. `mob::ai.rs` chase/wander/melee per kind.
+7. `mob::pool.rs` biome spawn weights.
+8. `mob::audio.rs` `mob_sound_stem` mapping + ENGINE_TO_MC rows.
+9. `mob::spawn::initial_health_for` HP per kind.
+
+### egui Grid
+
+1. Kazdy `GridConfig` musi mit UNIKATNI `id_salt` kdyz vis ze bude na
+   stejne obrazovce co dalsi grid. Default `""` zpusobi "ID clashes"
+   warning v debug stripe (W56.3 chest regression).
+
+### Container UI panel
+
+1. `world/place_break::RmbAction` enum arm.
+2. `world/place_break::classify_rmb_action` route per block id.
+3. `world/place_break::containers::open_X` mint container + close
+   other open panels.
+4. Voxel fields: `X_open: Option<[i32;3]>`, `X_held: Option<(u16,u8)>`,
+   optional `X_state: HashMap<[i32;3], Container>`.
+5. `app/new_construct.rs` default field values.
+6. `chunk_runtime::clear_world_state` reset on dim/world reset.
+7. `app/chunk_runtime::close_X_ui` helper (return inv on close).
+8. `app_on_update`: dispatch RMB + ESC arm + tick call.
+9. `ui/X_panel.rs` egui Window + draw_grid + apply.
+10. `ui/render.rs` snapshot + render call + post-egui apply.
+
+### Po kazde wave - **rebuild MUSI byt cisty**:
+
+- `cargo build -p voxel_demo_mp --release` (zadne warnings z noveho
+  kodu).
+- `cargo clippy --workspace --release --all-targets -- -D warnings`.
+- `cargo test -p voxel_demo_mp --release --lib` (606+ green; bin tests
+  maji 7 pre-existing baseline failures z W42/W43).

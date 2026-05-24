@@ -123,6 +123,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                 rows: 4,
                 tile_px: 36.0,
                 title: None,
+                id_salt: "brewing_player_inv",
             };
             let inv_actions = container::ui::draw_grid_with_uv(
                 ui,
@@ -150,11 +151,21 @@ fn draw_single(
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
     actions_out: &mut Vec<(bool, container::ui::GridAction)>,
 ) {
+    // W56.3: slot_idx as the id_salt so each single-slot strip
+    // gets a unique egui Grid id.
+    let salt: &'static str = match slot_idx {
+        0 => "brewing_ingredient",
+        1 => "brewing_fuel",
+        2 => "brewing_bottle0",
+        3 => "brewing_bottle1",
+        _ => "brewing_bottle2",
+    };
     let cfg = container::ui::GridConfig {
         cols: 1,
         rows: 1,
         tile_px: 36.0,
         title: None,
+        id_salt: salt,
     };
     let mut single = container::Container::with_size(1);
     single.set_slot(0, stand.slot(slot_idx));
