@@ -110,6 +110,102 @@ pub(crate) fn load_sounds_json(mc_root: &Path) -> HashMap<String, Vec<PathBuf>> 
     }
 }
 
+/// W57 - Load sound registry from the MC content-addressable
+/// asset store. Modern launchers ship `sounds.json` + the .ogg
+/// files only here (the decompiled `assets/minecraft/` tree
+/// doesn't carry them). Walks the index for both the sounds.json
+/// object and every `.ogg` variant referenced inside it.
+pub(crate) fn load_sounds_via_store(
+    store: &super::mc_asset_store::AssetStore,
+) -> HashMap<String, Vec<PathBuf>> {
+    let mut out: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    // Step 1: load sounds.json itself.
+    let sounds_json_path = match store.resolve("minecraft/sounds.json") {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                "asset-store has no `minecraft/sounds.json` entry",
+            );
+            return out;
+        }
+    };
+    let text = match std::fs::read_to_string(&sounds_json_path) {
+        Ok(t) => t,
+        Err(_) => return out,
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return out,
+    };
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return out,
+    };
+    // Step 2: walk each event + collect direct + event-ref names.
+    let mut event_refs: HashMap<String, Vec<String>> = HashMap::new();
+    for (event_name, body) in obj {
+        let Some(body_obj) = body.as_object() else { continue };
+        let Some(sounds) = body_obj.get("sounds").and_then(|s| s.as_array()) else {
+            continue;
+        };
+        let mut variants: Vec<PathBuf> = Vec::new();
+        let mut refs: Vec<String> = Vec::new();
+        for entry in sounds {
+            match entry {
+                serde_json::Value::String(s) => {
+                    let logical = format!("minecraft/sounds/{s}.ogg");
+                    if let Some(p) = store.resolve(&logical) {
+                        variants.push(p);
+                    }
+                }
+                serde_json::Value::Object(o) => {
+                    let kind = o
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("sound");
+                    let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if kind == "event" {
+                        refs.push(name.to_string());
+                    } else {
+                        let logical = format!("minecraft/sounds/{name}.ogg");
+                        if let Some(p) = store.resolve(&logical) {
+                            variants.push(p);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !variants.is_empty() {
+            out.insert(event_name.clone(), variants);
+        }
+        if !refs.is_empty() {
+            event_refs.insert(event_name.clone(), refs);
+        }
+    }
+    // Step 3: resolve one-level event references.
+    let snapshot = out.clone();
+    for (event, refs) in event_refs {
+        let mut merged: Vec<PathBuf> = out.get(&event).cloned().unwrap_or_default();
+        for r in refs {
+            if let Some(target) = snapshot.get(&r) {
+                merged.extend(target.iter().cloned());
+            }
+        }
+        if !merged.is_empty() {
+            out.insert(event, merged);
+        }
+    }
+    tracing::info!(
+        events = out.len(),
+        "MC sounds.json loaded from asset store",
+    );
+    out
+}
+
 /// Mapping from infengine sound keys (matching the existing
 /// `AudioBank` keys like `"step:grass"`, `"dig:stone"`) to MC
 /// event names. The loader consults this to populate the

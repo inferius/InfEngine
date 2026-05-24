@@ -37,6 +37,7 @@ pub(crate) mod anim_registry;
 pub(crate) mod blockstates;
 pub(crate) mod element_mesh;
 pub(crate) mod fallback;
+pub(crate) mod mc_asset_store;
 pub(crate) mod mcmeta;
 pub(crate) mod models;
 pub(crate) mod name_map;
@@ -189,7 +190,17 @@ impl ResourcePack {
         match discovered {
             Some(root) => {
                 tracing::info!(path = %root.display(), "MC resource pack discovered");
-                let sounds_reg = sounds::load_sounds_json(&root);
+                // W57: prefer the content-addressable asset store for
+                // sounds (launcher install / Mojang asset mirror).
+                // Falls back to the in-pack sounds.json if the store
+                // isn't on disk.
+                let mut sounds_reg = HashMap::new();
+                if let Some(store) = mc_asset_store::discover_asset_store() {
+                    sounds_reg = sounds::load_sounds_via_store(&store);
+                }
+                if sounds_reg.is_empty() {
+                    sounds_reg = sounds::load_sounds_json(&root);
+                }
                 if !sounds_reg.is_empty() {
                     tracing::info!(
                         events = sounds_reg.len(),
