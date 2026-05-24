@@ -651,6 +651,15 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     ItemNameMap { infengine_id: 348, item: "ink_sac" },
     ItemNameMap { infengine_id: 349, item: "glow_ink_sac" },
     ItemNameMap { infengine_id: 350, item: "echo_shard" },
+    // W61.6: W48 door variants - item icon at textures/item/<name>.png.
+    ItemNameMap { infengine_id: 568, item: "birch_door" },
+    ItemNameMap { infengine_id: 569, item: "spruce_door" },
+    ItemNameMap { infengine_id: 570, item: "jungle_door" },
+    ItemNameMap { infengine_id: 571, item: "acacia_door" },
+    ItemNameMap { infengine_id: 572, item: "dark_oak_door" },
+    ItemNameMap { infengine_id: 573, item: "mangrove_door" },
+    ItemNameMap { infengine_id: 574, item: "cherry_door" },
+    ItemNameMap { infengine_id: 575, item: "warped_door" },
     // W53.4: hoes (infengine name "hoe_<tier>" -> MC "<tier>_hoe").
     ItemNameMap { infengine_id: 633, item: "wooden_hoe" },
     ItemNameMap { infengine_id: 634, item: "stone_hoe" },
