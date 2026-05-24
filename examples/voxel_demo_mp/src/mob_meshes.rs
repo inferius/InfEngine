@@ -91,11 +91,16 @@ pub(crate) fn entity_has_biome_variants(mob: &str) -> bool {
 #[allow(dead_code)] // All variants used by W19.2 / W19.3 dispatch.
 pub(crate) enum MobPart {
     // ---- Sheep (64x32 entity texture) -----------------------------------
-    // Head: texOffs(0,0) addBox size [6,6,8]. Reuses existing
-    // build_sheep_head_mesh; these constants are here for completeness.
+    // Source: SheepModel.java -> QuadrupedModel.createBodyMesh(legSize=12)
+    // head texOffs(0,0)   addBox size [6,6,8]
+    // body texOffs(28,8)  addBox size [8,16,6] (rotated 90 in MC)
+    // leg  texOffs(0,16)  addBox size [4,12,4]  (all 4 legs share UV)
     SheepHead,
-    // Body: texOffs(28,8) addBox size [8,16,6] (base quadruped body).
     SheepBody,
+    SheepLeftFrontLeg,
+    SheepRightFrontLeg,
+    SheepLeftBackLeg,
+    SheepRightBackLeg,
 
     // ---- Zombie / humanoid (64x64 entity texture) -----------------------
     // Source: HumanoidModel.java
@@ -201,6 +206,11 @@ impl MobPart {
             // Sheep - base quadruped (64x32), head from sheep.tga
             MobPart::SheepHead => BoxUv { u0: 0,  v0: 0,  w: 6,  h: 6,  d: 8  },
             MobPart::SheepBody => BoxUv { u0: 28, v0: 8,  w: 8,  h: 16, d: 6  },
+            // W55.3: all 4 sheep legs share the same MC leg-UV tile.
+            MobPart::SheepLeftFrontLeg => BoxUv { u0: 0, v0: 16, w: 4, h: 12, d: 4 },
+            MobPart::SheepRightFrontLeg => BoxUv { u0: 0, v0: 16, w: 4, h: 12, d: 4 },
+            MobPart::SheepLeftBackLeg => BoxUv { u0: 0, v0: 16, w: 4, h: 12, d: 4 },
+            MobPart::SheepRightBackLeg => BoxUv { u0: 0, v0: 16, w: 4, h: 12, d: 4 },
 
             // Zombie / humanoid (64x64)
             MobPart::ZombieHead     => BoxUv { u0: 0,  v0: 0,  w: 8, h: 8,  d: 8 },
@@ -451,6 +461,14 @@ pub(crate) fn build_box_uv_mesh(
 /// W19.3: consumed by the mob render dispatch.
 #[derive(Default)]
 pub(crate) struct MobMeshes {
+    // ---- Sheep -------------------------------------------------------------
+    pub(crate) sheep_head: Option<MeshHandle>,
+    pub(crate) sheep_body: Option<MeshHandle>,
+    pub(crate) sheep_right_front_leg: Option<MeshHandle>,
+    pub(crate) sheep_left_front_leg: Option<MeshHandle>,
+    pub(crate) sheep_right_back_leg: Option<MeshHandle>,
+    pub(crate) sheep_left_back_leg: Option<MeshHandle>,
+
     // ---- Zombie ------------------------------------------------------------
     pub(crate) zombie_head: Option<MeshHandle>,
     pub(crate) zombie_body: Option<MeshHandle>,
@@ -499,6 +517,10 @@ pub(crate) struct MobMeshes {
 // W19.3 dispatch uses these helpers; suppress dead_code until then.
 #[allow(dead_code)]
 impl MobMeshes {
+    /// True iff at least one part mesh was loaded for sheep.
+    pub(crate) fn sheep_loaded(&self) -> bool {
+        self.sheep_head.is_some()
+    }
     /// True iff at least one part mesh was loaded for zombie.
     pub(crate) fn zombie_loaded(&self) -> bool {
         self.zombie_head.is_some()
@@ -799,6 +821,20 @@ pub fn load_non_sheep_mob_meshes(
     }
 
     let mut mm = MobMeshes::default();
+
+    // ---- Sheep (64x32 base + wool overlay) ---------------------------------
+    // W55.3: sheep gets the full QuadrupedModel treatment (body +
+    // head + 4 legs) instead of the legacy 2-cube placeholder.
+    if let Some(img) = try_open_entity(&entity_roots, "sheep", biome) {
+        let (w, h) = (img.width(), img.height());
+        mm.sheep_head          = Some(upload_part(r, "voxel_demo_mp::sheep_head",  MobPart::SheepHead,          &img));
+        mm.sheep_body          = Some(upload_part(r, "voxel_demo_mp::sheep_body",  MobPart::SheepBody,          &img));
+        mm.sheep_right_front_leg = Some(upload_part(r, "voxel_demo_mp::sheep_rf_leg", MobPart::SheepRightFrontLeg, &img));
+        mm.sheep_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::sheep_lf_leg", MobPart::SheepLeftFrontLeg,  &img));
+        mm.sheep_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::sheep_rb_leg", MobPart::SheepRightBackLeg,  &img));
+        mm.sheep_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::sheep_lb_leg", MobPart::SheepLeftBackLeg,   &img));
+        info!(texture = format!("{w}x{h}"), "sheep entity texture bound (6 parts)");
+    }
 
     // ---- Zombie (64x64) ----------------------------------------------------
     if let Some(img) = try_open_entity(&entity_roots,"zombie", biome) {

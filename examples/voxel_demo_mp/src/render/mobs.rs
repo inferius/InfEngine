@@ -137,39 +137,84 @@ pub fn draw_remote_mobs(
 
                 match mob.kind {
                     // ---- Sheep ------------------------------------------
-                    // Unchanged from the pre-W19 path: wool-tile body cube
-                    // + sheep.tga head cube.
+                    // W55.3: full MC QuadrupedModel (body + head + 4
+                    // legs from the entity texture). Falls back to the
+                    // legacy wool-cube + head-cube path when the entity
+                    // texture isn't on disk.
                     KIND_SHEEP => {
-                        let body = Mat4::from_scale_rotation_translation(
-                            Vec3::new(1.2, 0.8, 0.7),
-                            body_rot,
-                            Vec3::new(
-                                base_x,
-                                mob.pos[1] + 0.4 - death_sink + walk_bob,
-                                base_z,
-                            ),
-                        );
-                        renderer.draw_mesh_pbr(
-                            body_mesh,
-                            body.to_cols_array(),
-                            apply_tint(body_tint),
-                            0.0,
-                            0.9,
-                        );
-                        let head_pos = Vec3::new(base_x, mob.pos[1] + 0.8 - death_sink + walk_bob, base_z)
-                            + fwd * 0.45;
-                        let head = Mat4::from_scale_rotation_translation(
-                            Vec3::new(0.60, 0.45, 0.45),
-                            glam::Quat::from_rotation_y(mob.yaw) * tilt,
-                            head_pos,
-                        );
-                        renderer.draw_mesh_pbr(
-                            head_mesh,
-                            head.to_cols_array(),
-                            apply_tint(head_color),
-                            0.0,
-                            0.9,
-                        );
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        if mob_meshes.sheep_loaded() {
+                            let rot = body_rot;
+                            // Body: MC quadruped is rotated 90 so the
+                            // 16-pixel length runs along the world Z
+                            // axis. Scale (0.50, 0.37, 1.00) = MC body
+                            // scaled to ~1 block long.
+                            if let Some(m) = mob_meshes.sheep_body {
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.50, 0.37, 1.00), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.50 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(apply_tint(body_tint)), 0.0, 0.9);
+                            }
+                            // Head: forward-facing 6x6x8 box.
+                            if let Some(m) = mob_meshes.sheep_head {
+                                let hp = Vec3::new(base_x, mob.pos[1] + 0.50 - death_sink + walk_bob, base_z) + fwd * 0.55;
+                                let t = Mat4::from_scale_rotation_translation(
+                                    Vec3::new(0.37, 0.37, 0.50),
+                                    glam::Quat::from_rotation_y(mob.yaw) * tilt,
+                                    hp);
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(head_color), 0.0, 0.9);
+                            }
+                            // 4 legs.
+                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
+                            let leg_scale = Vec3::new(0.25, 0.75, 0.25);
+                            let leg_y = mob.pos[1] - 0.25 - death_sink + walk_bob;
+                            for (mesh_opt, dx, dz) in [
+                                (mob_meshes.sheep_right_front_leg,  0.20_f32, -0.30_f32),
+                                (mob_meshes.sheep_left_front_leg,  -0.20,     -0.30),
+                                (mob_meshes.sheep_right_back_leg,   0.20,      0.30),
+                                (mob_meshes.sheep_left_back_leg,   -0.20,      0.30),
+                            ] {
+                                if let Some(m) = mesh_opt {
+                                    let off = side * dx + fwd * (-dz);
+                                    let t = Mat4::from_scale_rotation_translation(
+                                        leg_scale, rot,
+                                        Vec3::new(base_x, leg_y, base_z) + off);
+                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
+                                }
+                            }
+                        } else {
+                            // Legacy fallback.
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(1.2, 0.8, 0.7),
+                                body_rot,
+                                Vec3::new(
+                                    base_x,
+                                    mob.pos[1] + 0.4 - death_sink + walk_bob,
+                                    base_z,
+                                ),
+                            );
+                            renderer.draw_mesh_pbr(
+                                body_mesh,
+                                body.to_cols_array(),
+                                apply_tint(body_tint),
+                                0.0,
+                                0.9,
+                            );
+                            let head_pos = Vec3::new(base_x, mob.pos[1] + 0.8 - death_sink + walk_bob, base_z)
+                                + fwd * 0.45;
+                            let head = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.60, 0.45, 0.45),
+                                glam::Quat::from_rotation_y(mob.yaw) * tilt,
+                                head_pos,
+                            );
+                            renderer.draw_mesh_pbr(
+                                head_mesh,
+                                head.to_cols_array(),
+                                apply_tint(head_color),
+                                0.0,
+                                0.9,
+                            );
+                        }
                     }
 
                     // ---- Zombie -----------------------------------------
