@@ -37,9 +37,18 @@ use super::pool::{pool_for, weighted_pick};
 use super::state::{MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH};
 use crate::worldgen::biome_at;
 
-/// Period (seconds) between spawn attempts. Keeps the world from
-/// flooding when the cap is high.
-pub(crate) const MOB_SPAWN_PERIOD: f32 = 6.0;
+/// Period (seconds) between spawn attempts. W52 - tightened from
+/// 6.0 to 2.0. Each attempt now tries SPAWN_ATTEMPTS_PER_TICK
+/// columns and bails on the first that lands; the per-chunk cap
+/// + global mob_cap still hold the density.
+pub(crate) const MOB_SPAWN_PERIOD: f32 = 2.0;
+
+/// W52: number of candidate columns the spawner probes per spawn
+/// pass. MC's NaturalSpawner walks every nearby chunk and tries 3
+/// "pack" attempts per chunk; we approximate with N attempts in a
+/// single tick over the ring around the player. The first
+/// successful spawn wins; the rest are dropped without retry.
+pub(crate) const SPAWN_ATTEMPTS_PER_TICK: usize = 4;
 
 /// Per-chunk soft cap on simultaneous mobs. MC keeps a per-mob-
 /// category cap; we use a single all-kinds cap of 4 to stop a
@@ -235,8 +244,24 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
     if matches!(voxel.net, NetRole::Client { .. }) {
         return;
     }
+    // W52: try up to SPAWN_ATTEMPTS_PER_TICK ring positions before
+    // giving up this tick. Stops on the first successful spawn so
+    // density still respects the per-chunk + global caps.
     let mut rng = SpawnRng::new(rng_state);
-    voxel.next_mob_id = try_spawn_one(voxel, day_time, voxel.next_mob_id, &mut rng);
+    let before = voxel.next_mob_id;
+    for _ in 0..SPAWN_ATTEMPTS_PER_TICK {
+        if voxel.mobs.len() >= voxel.mob_cap {
+            break;
+        }
+        let id = try_spawn_one(voxel, day_time, voxel.next_mob_id, &mut rng);
+        if id != voxel.next_mob_id {
+            voxel.next_mob_id = id;
+            break;
+        }
+    }
+    // Defensive: if every attempt bailed without spawning, leave
+    // next_mob_id untouched (try_spawn_one already preserved it).
+    let _ = before;
 }
 
 #[cfg(test)]

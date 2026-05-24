@@ -161,31 +161,45 @@ fn step_one(
         let step_z = vz * dt;
         let mut ax_block = false;
         let mut az_block = false;
+        // W52: 1-block step-up on each axis. MC's `Mob.tryToStepUp`
+        // tests the cell at `body_y` (blocked) plus the cell at
+        // `body_y + 1` (clear) plus the cell at `body_y + 2`
+        // (clear) - the mob then walks onto the step. Mirrors that
+        // here so a sheep doesn't get stuck against any 1-block
+        // ridge / staircase corner.
         let try_x = m.pos[0] + step_x;
         let body_y = m.pos[1].floor() as i32;
-        if !voxel
-            .world
-            .get([try_x.floor() as i32, body_y, m.pos[2].floor() as i32])
-            .is_air()
-            || !voxel
-                .world
-                .get([try_x.floor() as i32, body_y + 1, m.pos[2].floor() as i32])
-                .is_air()
+        let feet_x = try_x.floor() as i32;
+        let cur_z = m.pos[2].floor() as i32;
+        let blocked_feet =
+            !voxel.world.get([feet_x, body_y, cur_z]).is_air();
+        let blocked_head =
+            !voxel.world.get([feet_x, body_y + 1, cur_z]).is_air();
+        if blocked_feet && !blocked_head
+            && voxel.world.get([feet_x, body_y + 2, cur_z]).is_air()
         {
+            // Step-up: walk onto the higher block.
+            m.pos[0] = try_x;
+            m.pos[1] = (body_y + 1) as f32;
+        } else if blocked_feet || blocked_head {
             ax_block = true;
         } else {
             m.pos[0] = try_x;
         }
         let try_z = m.pos[2] + step_z;
-        if !voxel
-            .world
-            .get([m.pos[0].floor() as i32, body_y, try_z.floor() as i32])
-            .is_air()
-            || !voxel
-                .world
-                .get([m.pos[0].floor() as i32, body_y + 1, try_z.floor() as i32])
-                .is_air()
+        let cur_x = m.pos[0].floor() as i32;
+        let feet_z = try_z.floor() as i32;
+        let body_y2 = m.pos[1].floor() as i32; // may have changed above
+        let blocked_feet_z =
+            !voxel.world.get([cur_x, body_y2, feet_z]).is_air();
+        let blocked_head_z =
+            !voxel.world.get([cur_x, body_y2 + 1, feet_z]).is_air();
+        if blocked_feet_z && !blocked_head_z
+            && voxel.world.get([cur_x, body_y2 + 2, feet_z]).is_air()
         {
+            m.pos[2] = try_z;
+            m.pos[1] = (body_y2 + 1) as f32;
+        } else if blocked_feet_z || blocked_head_z {
             az_block = true;
         } else {
             m.pos[2] = try_z;

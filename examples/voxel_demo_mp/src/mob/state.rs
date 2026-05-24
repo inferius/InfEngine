@@ -92,7 +92,11 @@ impl MobState {
 /// every peer.
 pub(crate) const MOB_DEATH_FADE: f32 = 0.55;
 
-pub(crate) const MOB_CAP_DEFAULT: usize = 12;
+// W52: bumped from 12 to 25. MC's per-player mob density caps land
+// at 70 hostile + 10 passive + 15 ambient + 5 water within a
+// 128x128 column; the demo runs a single global cap, so 25 keeps
+// the world feeling populated without overwhelming the renderer.
+pub(crate) const MOB_CAP_DEFAULT: usize = 25;
 pub(crate) const MOB_SPEED: f32 = 1.2;
 pub(crate) const MOB_MAX_HEALTH: f32 = 8.0;
 pub(crate) const MOB_HIT_DAMAGE: f32 = 2.0;
