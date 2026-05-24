@@ -246,6 +246,7 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/fence_post" | "fence_post" => Some(build_fence_post()),
         "block/door_lower" | "door_lower" => Some(build_door_lower()),
         "block/door_upper" | "door_upper" => Some(build_door_upper()),
+        "block/trapdoor" | "trapdoor" => Some(build_trapdoor()),
         "block/bed_foot" | "bed_foot" => Some(build_bed_foot()),
         // W12.2 - stairs / pane / bars / wall.
         "block/stairs" | "stairs" => Some(build_stairs()),
@@ -315,6 +316,11 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         }
         x if x == OAK_DOOR_ID || x == IRON_DOOR_ID => Some("block/door_lower"),
         x if x == OAK_DOOR_UPPER_ID => Some("block/door_upper"),
+        // W55.1: W48 door + trapdoor variants. JSON pipeline takes
+        // precedence (loads real MC blockstate); these fallbacks
+        // only fire when the JSON path returns None.
+        548..=552 => Some("block/trapdoor"),
+        568..=575 => Some("block/door_lower"),
         x if x == GLASS_PANE_ID || x == IRON_BARS_ID => Some("block/glass_pane"),
         x if x == COBBLESTONE_WALL_ID => Some("block/wall_post"),
         _ => None,
@@ -630,6 +636,32 @@ pub(crate) fn build_fence_post() -> BlockModel {
             rotation: None,
             shade: true,
             faces: cube_all_faces("#texture"),
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W55.1: Trapdoor (closed, bottom-resting). 16x3x16 slab on the
+/// ground. Cite `template_orientable_trapdoor_bottom.json`. The
+/// JSON pipeline picks the correct open / orientation variant from
+/// MC's blockstate; this hand-coded fallback covers the placeholder
+/// pack + the "closed, bottom" default state.
+pub(crate) fn build_trapdoor() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [0.0, 0.0, 0.0],
+            to: [16.0, 3.0, 16.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#texture", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#texture", Some(CubeFace::Up))),
+                north: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::East))),
+            },
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,

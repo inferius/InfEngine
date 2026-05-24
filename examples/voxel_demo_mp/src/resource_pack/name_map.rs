@@ -472,6 +472,27 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 321, block: "magma_cream",              top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 322, block: "fermented_spider_eye",     top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 323, block: "amethyst_shard",           top: "", bottom: "", sides: "" },
+    // W55.1: W48 trapdoor variants (548..=552). MC ships proper
+    // 3-px slab blockstates that the universal JSON pipeline can
+    // load once these rows point at the right MC name.
+    BlockNameMap { infengine_id: 548, block: "oak_trapdoor",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 549, block: "iron_trapdoor",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 550, block: "birch_trapdoor",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 551, block: "spruce_trapdoor",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 552, block: "jungle_trapdoor",  top: "", bottom: "", sides: "" },
+    // W55.1: W48 door variants (568..=575). MC ships proper
+    // 3-px hinged door blockstates that the universal JSON
+    // pipeline can load once these rows point at the right MC
+    // name. Each variant has its own `*_door.json` blockstate
+    // that the parser walks to pick the lower / upper half.
+    BlockNameMap { infengine_id: 568, block: "birch_door",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 569, block: "spruce_door",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 570, block: "jungle_door",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 571, block: "acacia_door",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 572, block: "dark_oak_door",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 573, block: "mangrove_door",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 574, block: "cherry_door",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 575, block: "warped_door",      top: "", bottom: "", sides: "" },
 ];
 
 /// Look up the (block, top, bottom, sides) MC names for an infengine
