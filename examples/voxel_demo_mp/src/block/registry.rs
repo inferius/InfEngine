@@ -344,10 +344,15 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // up the wood-planks tile + we tint via `color` so the chest
     // still reads as a distinct block on the world surface.
     BlockType {
-        id: 41, name: "chest", color: [0.62, 0.42, 0.20], transparent: false, flags: 0,
-        top: TileSpec { col: 0, row: 0, files: &["chest_top.png", "chest.png", "planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 0, files: &["chest_bottom.png", "chest.png", "planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 0, files: &["chest_side.png", "chest.png", "planks_oak.png"], keep_alpha: false },
+        id: 41, name: "chest", color: [0.62, 0.42, 0.20], transparent: false,
+        // W55.2: F_DEDICATED_RENDER so the special-model path
+        // (build_chest) drives geometry; chunk mesher skips cube
+        // emission. Falls back to planks_oak texture for both
+        // pack-missing and entity-textures-not-atlased cases.
+        flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
     },
     // Furnace. Opaque cube with a 3-slot Container (input / fuel /
     // output) stored on `Voxel::furnaces` keyed by absolute world

@@ -247,6 +247,7 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/door_lower" | "door_lower" => Some(build_door_lower()),
         "block/door_upper" | "door_upper" => Some(build_door_upper()),
         "block/trapdoor" | "trapdoor" => Some(build_trapdoor()),
+        "block/chest" | "chest" => Some(build_chest()),
         "block/bed_foot" | "bed_foot" => Some(build_bed_foot()),
         // W12.2 - stairs / pane / bars / wall.
         "block/stairs" | "stairs" => Some(build_stairs()),
@@ -321,6 +322,9 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         // only fire when the JSON path returns None.
         548..=552 => Some("block/trapdoor"),
         568..=575 => Some("block/door_lower"),
+        // W55.2: chest renders as an inset 14x14x14 box so it
+        // visually stands apart from a plain plank block.
+        x if x == crate::block::CHEST_ID => Some("block/chest"),
         x if x == GLASS_PANE_ID || x == IRON_BARS_ID => Some("block/glass_pane"),
         x if x == COBBLESTONE_WALL_ID => Some("block/wall_post"),
         _ => None,
@@ -636,6 +640,33 @@ pub(crate) fn build_fence_post() -> BlockModel {
             rotation: None,
             shade: true,
             faces: cube_all_faces("#texture"),
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W55.2: Chest model as an inset 14x14x14 cuboid centred on the
+/// block. Leaves a 1-pixel gap on every face so the geometry
+/// stands apart from neighbouring planks. MC's full chest entity
+/// model adds a lid + latch rendered via BlockEntityRenderer; the
+/// inset cube is the static-mesh fallback while the entity
+/// renderer path is a future wave.
+pub(crate) fn build_chest() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [1.0, 0.0, 1.0],
+            to: [15.0, 14.0, 15.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#bottom", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#top", Some(CubeFace::Up))),
+                north: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 0.0, 14.0, 14.0], "#side", Some(CubeFace::East))),
+            },
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
