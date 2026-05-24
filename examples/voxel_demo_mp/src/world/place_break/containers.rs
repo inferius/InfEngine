@@ -55,6 +55,24 @@ pub(crate) fn open_chest(vx: &mut crate::Voxel, pos: [i32; 3]) {
     vx.rmb_pending = false;
 }
 
+/// W50.5: RMB on a brewing_stand block. Mints an empty container
+/// + runtime entry if missing, marks `brewing_open`. Closes any
+///   other open container UI for consistency with chest / furnace.
+pub(crate) fn open_brewing_stand(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    use crate::block;
+    block::brewing::place_brewing_stand(
+        &mut vx.brewing_stands,
+        &mut vx.brewing_runtimes,
+        pos,
+    );
+    vx.brewing_open = Some(pos);
+    vx.chest_open = None;
+    vx.furnace_open = None;
+    vx.crafting_table_open = None;
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
 /// W50.3: RMB on a crafting_table block. Marks the table open and
 /// clears any other open UI marker so the 3x3 panel doesn't fight
 /// with the chest / furnace panels. The 3x3 grid + held stack live

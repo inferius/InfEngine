@@ -567,6 +567,25 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut crafting_table_held_local = vx.crafting_table_held;
         // Set when the player clicks the 3x3 output slot.
         let mut crafting_table_take_output = false;
+        // W50.5: brewing stand snapshot mirrors the chest/furnace
+        // pattern - clone the live container so the panel paints
+        // a stable view; collected actions land on vx after the
+        // egui closure exits.
+        let brewing_open_pos = vx.brewing_open;
+        let brewing_snapshot: Option<container::Container> = vx
+            .brewing_open
+            .as_ref()
+            .and_then(|p| vx.brewing_stands.get(p).cloned());
+        let brewing_runtime_snapshot: block::brewing::BrewingRuntime = vx
+            .brewing_open
+            .as_ref()
+            .and_then(|p| vx.brewing_runtimes.get(p).copied())
+            .unwrap_or_default();
+        let mut brewing_open_local = brewing_open_pos.is_some();
+        let brewing_held_snapshot = vx.brewing_held;
+        let mut brewing_held_local = brewing_held_snapshot;
+        let mut brewing_grid_actions: Vec<(bool, container::ui::GridAction)> =
+            Vec::new();
         // Plain inventory snapshot as Option<(u16,u8)> for the
         // chest-UI's player-side grid - independent of the
         // existing DnD widget snapshot which carries icon meta.
@@ -2017,6 +2036,23 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     );
                 }
 
+                // W50.5: brewing stand panel.
+                if let Some(stand) = &brewing_snapshot {
+                    ui::brewing_panel::render(
+                        ui::brewing_panel::BrewingPanelInputs {
+                            ctx,
+                            stand_snapshot: stand,
+                            runtime_snapshot: brewing_runtime_snapshot,
+                            inv_plain_snapshot: &inv_plain_snapshot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut brewing_open_local,
+                            held_local: brewing_held_local,
+                            stand_actions_out: &mut brewing_grid_actions,
+                        },
+                    );
+                }
+
                 // Hurt-flash: full-screen red overlay that fades
                 // out over ~0.5 s. Painted on the Foreground layer
                 // so it sits above the world but below the
@@ -3068,6 +3104,49 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             if !crafting_table_open_local {
                 vx.close_crafting_table_ui();
             }
+        }
+        // W50.5: brewing panel apply.
+        if brewing_open_pos.is_some() && !brewing_open_local {
+            vx.close_brewing_ui();
+        }
+        if let Some(pos) = vx.brewing_open
+            && !brewing_grid_actions.is_empty()
+        {
+            if let Some(stand) = vx.brewing_stands.get_mut(&pos) {
+                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                for (player_side, action) in brewing_grid_actions {
+                    if player_side {
+                        // Reuse the generic chest player-side
+                        // helper; it's container-agnostic.
+                        block::chest::apply_player_action(
+                            &mut inv_u16,
+                            stand,
+                            &mut brewing_held_local,
+                            action,
+                        );
+                    } else {
+                        block::chest::apply_chest_action(
+                            stand,
+                            &mut inv_u16,
+                            &mut brewing_held_local,
+                            action,
+                        );
+                    }
+                }
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= vx.inventory.len() {
+                        break;
+                    }
+                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
+            }
+            vx.brewing_held = brewing_held_local;
+        } else {
+            vx.brewing_held = brewing_held_local;
         }
         // Apply queued chest-UI actions. Each entry is
         // `(true_if_player_side, GridAction)`.

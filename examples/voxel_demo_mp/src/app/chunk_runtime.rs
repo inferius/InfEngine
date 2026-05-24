@@ -57,6 +57,11 @@ impl Voxel {
         self.crafting_table_open = None;
         self.craft_grid_3x3 = [None; 9];
         self.crafting_table_held = None;
+        // W50.5: brewing stand maps cleared on world reset.
+        self.brewing_stands.clear();
+        self.brewing_runtimes.clear();
+        self.brewing_open = None;
+        self.brewing_held = None;
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into
@@ -119,6 +124,23 @@ impl Voxel {
                 // dropping multiple of the same item is fine because
                 // each drop accumulates on pickup.
                 self.spawn_drop(b, p);
+            }
+        }
+    }
+
+    /// W50.5: close the brewing stand UI. Returns the held stack
+    /// into the stand (filtered by accept) + falls back to floor
+    /// drops at the stand position on overflow.
+    pub(crate) fn close_brewing_ui(&mut self) {
+        let pos = self.brewing_open.take();
+        let held = self.brewing_held.take();
+        if let Some(p) = pos {
+            let leftovers = block::brewing::recover_held_on_close(
+                self.brewing_stands.get_mut(&p),
+                held,
+            );
+            for id in leftovers {
+                self.spawn_drop(BlockId(id), p);
             }
         }
     }

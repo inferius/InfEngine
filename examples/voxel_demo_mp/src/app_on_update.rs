@@ -65,6 +65,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         vx.close_furnace_ui();
                     } else if vx.crafting_table_open.is_some() {
                         vx.close_crafting_table_ui();
+                    } else if vx.brewing_open.is_some() {
+                        vx.close_brewing_ui();
                     } else if vx.creative_tab.open {
                         // W20.3: ESC closes the creative tab (same as E).
                         vx.creative_tab.close();
@@ -632,6 +634,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 crate::world::place_break::open_crafting_table(
                     vx, hit.voxel,
                 );
+            } else if predicted == RmbAction::OpenBrewingStand {
+                // W50.5: brewing stand open.
+                crate::world::place_break::open_brewing_stand(
+                    vx, hit.voxel,
+                );
             } else if predicted == RmbAction::SleepBed {
                 // W47.13i: bed sleep (day-phase gated; host bumps
                 // clock, client asks host).
@@ -848,6 +855,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         block::furnace::furnace_tick(
             &mut vx.furnaces,
             &mut vx.furnace_runtimes,
+            dt_ms,
+        );
+        // W50.5: brewing stand tick (5-slot container + 400-tick
+        // brew cycle that transforms matching bottle slots).
+        block::brewing::brewing_tick(
+            &mut vx.brewing_stands,
+            &mut vx.brewing_runtimes,
             dt_ms,
         );
         // W5.3b: broadcast furnace state snapshots to registered

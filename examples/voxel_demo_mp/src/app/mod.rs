@@ -675,6 +675,17 @@ pub(crate) struct Voxel {
     /// W50.3: cursor-held stack while the crafting table UI is open.
     /// Mirrors `chest_held` / `furnace_held`.
     pub(crate) crafting_table_held: Option<(u16, u8)>,
+    /// W50.5: per-brewing-stand 5-slot container state, keyed by
+    /// world voxel coords. Parallel to `furnaces`. Inserted on
+    /// place, removed on break (drops fall as item entities).
+    pub(crate) brewing_stands: HashMap<[i32; 3], container::Container>,
+    /// W50.5: live runtime (progress_ms) per brewing stand.
+    pub(crate) brewing_runtimes:
+        HashMap<[i32; 3], block::brewing::BrewingRuntime>,
+    /// W50.5: position of the brewing stand the player has open.
+    pub(crate) brewing_open: Option<[i32; 3]>,
+    /// W50.5: cursor-held stack while the brewing UI is open.
+    pub(crate) brewing_held: Option<(u16, u8)>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
