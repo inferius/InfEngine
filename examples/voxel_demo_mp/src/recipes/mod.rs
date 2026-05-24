@@ -14,7 +14,10 @@ pub(crate) mod matcher;
 pub(crate) mod shaped;
 pub(crate) mod smelting;
 
-use crate::*;
+// Local alias so the `BUCKET_EMPTY_ID` reference below resolves in
+// both the bin and the lib crate. The bin re-exports it at crate
+// root via main.rs; the lib reaches it through the block module.
+use crate::block::BUCKET_EMPTY_ID;
 
 /// Shapeless 2x2 crafting recipe. Each entry is `(BlockId, count)`
 /// the player must place into the 2x2 grid (order doesn't matter).

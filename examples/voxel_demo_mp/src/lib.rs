@@ -67,6 +67,11 @@ pub mod container;
 #[path = "smelting.rs"]
 pub mod smelting;
 
+// W50.2 - shared crafting / smelting / brewing recipe tables.
+// Headless-safe (pure data + matchers, no Voxel refs).
+#[path = "recipes/mod.rs"]
+pub mod recipes;
+
 #[path = "worldgen/mod.rs"]
 pub mod worldgen;
 

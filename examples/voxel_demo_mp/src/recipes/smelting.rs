@@ -28,23 +28,32 @@ const DEFAULT_TIME: u32 = 200;
 pub(crate) const SMELTING_RECIPES: &[SmeltingRecipe] = &[
     // ---- Ores -> ingots (canonical MC results). ----
     SmeltingRecipe {
-        input: 287, // raw_iron
-        output: (14, 1), // iron ingot
+        input: 329, // raw_iron
+        output: (43, 1), // iron ingot (item id 43)
         name: "Iron ingot",
         time_ticks: DEFAULT_TIME,
         xp: 0.7,
     },
     SmeltingRecipe {
-        input: 289, // raw_gold
+        input: 330, // raw_gold
         output: (318, 1), // gold ingot
         name: "Gold ingot",
         time_ticks: DEFAULT_TIME,
         xp: 1.0,
     },
     SmeltingRecipe {
-        input: 288, // raw_copper
-        output: (319, 1), // copper ingot (id from block::ids)
+        input: 331, // raw_copper
+        output: (328, 1), // copper ingot
         name: "Copper ingot",
+        time_ticks: DEFAULT_TIME,
+        xp: 0.7,
+    },
+    // Iron ore block itself -> iron ingot (matches existing
+    // smelting.rs single-entry recipe; kept for back-compat).
+    SmeltingRecipe {
+        input: 14, // iron_ore block
+        output: (43, 1),
+        name: "Iron ingot (from ore)",
         time_ticks: DEFAULT_TIME,
         xp: 0.7,
     },

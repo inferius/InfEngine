@@ -158,7 +158,7 @@ pub(crate) const SHAPED_RECIPES: &[ShapedRecipe] = &[
     // Bucket: V of 3 iron ingots (bottom 3 + sides).
     ShapedRecipe {
         pattern: [[0, 0, 0], [14, 0, 14], [0, 14, 0]],
-        output: (crate::BUCKET_EMPTY_ID, 1),
+        output: (crate::block::BUCKET_EMPTY_ID, 1),
         name: "Bucket (shaped)",
     },
     // Ladder: 7 sticks in MC's H pattern.

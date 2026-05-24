@@ -37,6 +37,7 @@ pub(crate) const FURNACE_ID: u16 = 42;
 /// reference a single source of truth instead of a bare literal.
 pub(crate) const COAL_ID: u16 = 13;
 /// Iron-ore block id (raw form, smelts into IRON_INGOT_ID).
+#[allow(dead_code)]
 pub(crate) const IRON_ORE_ID: u16 = 14;
 /// Wood / log id. Doubles as a fuel for the furnace.
 pub(crate) const WOOD_ID: u16 = 5;
@@ -62,6 +63,7 @@ pub(crate) const WOOL_ID: u16 = 11;
 /// Iron ingot item id. Output of smelting iron ore. Pure item -
 /// has no block form, so the place path treats it like the
 /// pickaxes (not placeable).
+#[allow(dead_code)]
 pub(crate) const IRON_INGOT_ID: u16 = 43;
 /// Netherrack: bulk material of the nether dimension. Phase F.
 pub(crate) const NETHERRACK_ID: u16 = 44;

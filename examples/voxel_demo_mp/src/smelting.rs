@@ -24,7 +24,7 @@
 //!   added in C.4 (no block form). See `item::ITEM_TYPES` for the
 //!   row.
 
-use crate::block::{CHEST_ID, COAL_ID, FURNACE_ID, IRON_INGOT_ID, IRON_ORE_ID, PLANKS_ID, WOOD_ID};
+use crate::block::{CHEST_ID, COAL_ID, FURNACE_ID, PLANKS_ID, WOOD_ID};
 
 /// Resolve a smelt recipe.
 ///
@@ -37,16 +37,12 @@ use crate::block::{CHEST_ID, COAL_ID, FURNACE_ID, IRON_INGOT_ID, IRON_ORE_ID, PL
 /// multi-output recipes (e.g. sand -> 1 glass, but sand -> 2 sugar
 /// in a different mod) without rewriting the callers.
 pub(crate) fn smelt_recipe(input_id: u16) -> Option<(u16, u8)> {
-    match input_id {
-        // Cobblestone -> stone. Vanilla recipe, faithful 1:1.
-        8 => Some((1, 1)),
-        // Iron ore -> iron ingot. The output ID points at the new
-        // item registered in `item::ITEM_TYPES` row 42.
-        id if id == IRON_ORE_ID => Some((IRON_INGOT_ID, 1)),
-        // Future recipes append here. Keep the entries grouped by
-        // material category so the file stays readable.
-        _ => None,
-    }
+    // W50.4: delegate to the extended recipes/smelting table. The
+    // legacy match arms (cobble -> stone, IRON_ORE -> IRON_INGOT)
+    // are folded into SMELTING_RECIPES so the furnace tick + the
+    // recipe book share the same source of truth.
+    crate::recipes::smelting::smelting_for(input_id)
+        .map(|r| r.output)
 }
 
 /// Resolve a fuel's burn duration.
@@ -62,15 +58,18 @@ pub(crate) fn smelt_recipe(input_id: u16) -> Option<(u16, u8)> {
 /// duration in milliseconds. The catch-up dispatcher uses the same
 /// constant on the offline path so the two units stay in sync.
 pub(crate) fn fuel_burn_ticks(item_id: u16) -> u32 {
+    // W50.4: delegate to the recipes table so new fuel ids (other
+    // log variants, sticks, ladders) flow through one place.
+    // Fallback to the legacy 1600 / 300 mapping for the original
+    // 3 ids so the existing furnace tests stay green.
+    let extended = crate::recipes::smelting::fuel_burn_ticks(item_id);
+    if extended > 0 {
+        return extended;
+    }
     match item_id {
-        // Coal (the item-form drop of a coal-ore block).
         id if id == COAL_ID => 1600,
-        // Planks: 300 ticks. Wood logs treated identically for now.
         id if id == PLANKS_ID => 300,
         id if id == WOOD_ID => 300,
-        // Future fuels append here. The 0 default rejects every
-        // other input via the accept filter on the furnace fuel
-        // slot.
         _ => 0,
     }
 }
@@ -163,6 +162,25 @@ mod tests {
         assert!(is_fuel(WOOD_ID));
         assert!(!is_fuel(0));
         assert!(!is_fuel(1));
+    }
+
+    #[test]
+    fn smelt_sand_to_glass_via_recipes_table() {
+        // W50.4: sand (id 4) -> glass (id 9). Comes from the
+        // recipes/smelting table, not the legacy match arms.
+        assert_eq!(smelt_recipe(4), Some((9, 1)));
+    }
+
+    #[test]
+    fn smelt_raw_iron_item_to_iron_ingot() {
+        // W50.4: raw_iron (item id 329) -> iron_ingot (43).
+        assert_eq!(smelt_recipe(329), Some((43, 1)));
+    }
+
+    #[test]
+    fn smelt_oak_log_to_charcoal() {
+        // W50.4: oak log (id 5) -> charcoal/coal (13).
+        assert_eq!(smelt_recipe(5), Some((13, 1)));
     }
 
     #[test]
