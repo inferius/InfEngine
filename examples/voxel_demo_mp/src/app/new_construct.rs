@@ -273,6 +273,7 @@ impl Voxel {
             brewing_runtimes: HashMap::new(),
             brewing_open: None,
             brewing_held: None,
+            door_open: std::collections::HashSet::new(),
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_level: HashMap::new(),

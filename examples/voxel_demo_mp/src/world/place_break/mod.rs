@@ -124,6 +124,9 @@ pub enum RmbAction {
     /// W50.5: right-click on a brewing_stand voxel - opens the
     /// 5-slot brewing UI.
     OpenBrewingStand,
+    /// W61.2: right-click on a door / trapdoor - toggles open
+    /// state.
+    ToggleDoor,
     /// Right-click on a bed voxel (id 35) - tries to skip the
     /// night.
     SleepBed,
@@ -161,6 +164,12 @@ const BED_ID: u16 = 35;
 /// PlaceBlock when a shovel hits grass; the container/bed checks
 /// only depend on the target voxel so they win whenever the held
 /// item is irrelevant to them.
+/// W61.3: true when `id` is one of the trapdoor block ids.
+/// Currently W48.4 ids 548..=552.
+fn is_trapdoor_block(id: u16) -> bool {
+    (548..=552).contains(&id)
+}
+
 pub fn classify_rmb_action(
     rmb: bool,
     target_id: u16,
@@ -198,6 +207,12 @@ pub fn classify_rmb_action(
     // W50.5: brewing stand opens the 5-slot brewing UI.
     if target_id == crate::block::BREWING_STAND_ID {
         return RmbAction::OpenBrewingStand;
+    }
+    // W61.2: door / trapdoor toggles open state.
+    if crate::block::door::is_door_block(target_id)
+        || is_trapdoor_block(target_id)
+    {
+        return RmbAction::ToggleDoor;
     }
     if target_id == BED_ID {
         return RmbAction::SleepBed;

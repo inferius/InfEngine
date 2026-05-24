@@ -654,6 +654,32 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 crate::world::place_break::open_brewing_stand(
                     vx, hit.voxel,
                 );
+            } else if predicted == RmbAction::ToggleDoor {
+                // W61.2 / W61.3: toggle door + trapdoor open
+                // state. The render path swaps the model on the
+                // next frame; AABB / ray-pass flips so the
+                // player walks through.
+                let world_ptr: *const infengine_voxel::World = &vx.world;
+                // SAFETY: read-only borrow for the duration of
+                // the toggle; vx.door_open is the only mutable
+                // field touched.
+                let was_open = unsafe {
+                    crate::block::door::toggle_door(
+                        &mut vx.door_open, &*world_ptr, hit.voxel,
+                    )
+                };
+                vx.lmb_pending = false;
+                vx.rmb_pending = false;
+                // Force a remesh of the chunk so the door model
+                // flips immediately.
+                let cs = infengine_voxel::CHUNK_SIZE as i32;
+                let cc = [
+                    hit.voxel[0].div_euclid(cs),
+                    hit.voxel[1].div_euclid(cs),
+                    hit.voxel[2].div_euclid(cs),
+                ];
+                vx.rebuild_chunks(&[cc]);
+                let _ = was_open;
             } else if predicted == RmbAction::SleepBed {
                 // W47.13i: bed sleep (day-phase gated; host bumps
                 // clock, client asks host).

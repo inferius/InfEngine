@@ -686,6 +686,11 @@ pub(crate) struct Voxel {
     pub(crate) brewing_open: Option<[i32; 3]>,
     /// W50.5: cursor-held stack while the brewing UI is open.
     pub(crate) brewing_held: Option<(u16, u8)>,
+    /// W61.2: open-door positions. Stored as the LOWER-half voxel
+    /// pos so two halves share one entry. RMB toggles via
+    /// `block::door::toggle_door`; the render path checks via
+    /// `block::door::is_open`.
+    pub(crate) door_open: std::collections::HashSet<[i32; 3]>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No
