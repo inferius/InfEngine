@@ -52,6 +52,11 @@ impl Voxel {
         self.furnace_runtimes.clear();
         self.furnace_open = None;
         self.furnace_held = None;
+        // W50.3: crafting_table is client-side only; drop its
+        // grid contents on world reset too.
+        self.crafting_table_open = None;
+        self.craft_grid_3x3 = [None; 9];
+        self.crafting_table_held = None;
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into
@@ -78,6 +83,42 @@ impl Voxel {
                 if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                     let _ = client.send_bytes("vx.chest_close", buf);
                 }
+            }
+        }
+    }
+
+    /// W50.3: close the 3x3 crafting-table UI. Drops the grid +
+    /// held stack back into the inventory; on overflow the rest
+    /// falls as item entities at the table position. No network
+    /// notify because crafting_table is client-side state.
+    pub(crate) fn close_crafting_table_ui(&mut self) {
+        let pos = self.crafting_table_open.take();
+        // Collect grid + held leftovers first so the iterator
+        // borrow ends before we hit `spawn_drop` (which needs a
+        // fresh `&mut self`).
+        let mut overflow: Vec<(BlockId, u8)> = Vec::new();
+        for cell in self.craft_grid_3x3.iter_mut() {
+            if let Some((b, c)) = cell.take()
+                && !crate::inventory::inv_pickup_n(&mut self.inventory, b, c)
+            {
+                overflow.push((b, c));
+            }
+        }
+        if let Some((id, c)) = self.crafting_table_held.take()
+            && !crate::inventory::inv_pickup_n(
+                &mut self.inventory,
+                BlockId(id),
+                c,
+            )
+        {
+            overflow.push((BlockId(id), c));
+        }
+        if let Some(p) = pos {
+            for (b, _c) in overflow {
+                // spawn_drop emits a single drop entity per call;
+                // dropping multiple of the same item is fine because
+                // each drop accumulates on pickup.
+                self.spawn_drop(b, p);
             }
         }
     }

@@ -663,6 +663,18 @@ pub(crate) struct Voxel {
     /// Cursor-held stack while the furnace UI is open. Mirrors
     /// `chest_held`.
     pub(crate) furnace_held: Option<(u16, u8)>,
+    /// W50.3: position of the crafting_table block the player has
+    /// open. `None` means no 3x3 panel is visible. Client-side only -
+    /// crafting tables aren't shared server state.
+    pub(crate) crafting_table_open: Option<[i32; 3]>,
+    /// W50.3: 3x3 crafting grid, row-major (idx = row*3 + col).
+    /// Cleared when the player ESCs out / breaks the table - the
+    /// table panel's "close" handler drops the contents back into
+    /// inventory.
+    pub(crate) craft_grid_3x3: [Option<(BlockId, u8)>; 9],
+    /// W50.3: cursor-held stack while the crafting table UI is open.
+    /// Mirrors `chest_held` / `furnace_held`.
+    pub(crate) crafting_table_held: Option<(u16, u8)>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No

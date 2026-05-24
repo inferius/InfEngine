@@ -12,6 +12,7 @@
 //! recipe-matching lookup that drives the craft grid's output
 //! display + tooltip.
 
+pub(crate) mod crafting_panel;
 pub(crate) mod render;
 pub(crate) mod slot_widget;
 

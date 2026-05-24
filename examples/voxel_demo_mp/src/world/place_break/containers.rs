@@ -55,6 +55,19 @@ pub(crate) fn open_chest(vx: &mut crate::Voxel, pos: [i32; 3]) {
     vx.rmb_pending = false;
 }
 
+/// W50.3: RMB on a crafting_table block. Marks the table open and
+/// clears any other open UI marker so the 3x3 panel doesn't fight
+/// with the chest / furnace panels. The 3x3 grid + held stack live
+/// directly on Voxel (client-side only - crafting tables aren't a
+/// shared server resource).
+pub(crate) fn open_crafting_table(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    vx.crafting_table_open = Some(pos);
+    vx.chest_open = None;
+    vx.furnace_open = None;
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
 /// W47.13i: RMB on a bed. Checks the day phase: outside night the
 /// player gets a chat refusal; at night offline/host bumps the day
 /// clock forward, client ships a `vx.sleep` request to the host.

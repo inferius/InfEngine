@@ -557,10 +557,25 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let furnace_held_snapshot = vx.furnace_held;
         let mut furnace_grid_actions: Vec<(bool, container::ui::GridAction)> = Vec::new();
         let mut furnace_held_local = furnace_held_snapshot;
+        // W50.3: 3x3 crafting table snapshot. Local copies that the
+        // panel mutates inside the egui closure; reconciled with vx
+        // after the closure exits.
+        let crafting_table_open_pos = vx.crafting_table_open;
+        let mut crafting_table_open_local = crafting_table_open_pos.is_some();
+        let mut crafting_table_grid_local: [Option<(BlockId, u8)>; 9] =
+            vx.craft_grid_3x3;
+        let mut crafting_table_held_local = vx.crafting_table_held;
+        // Set when the player clicks the 3x3 output slot.
+        let mut crafting_table_take_output = false;
         // Plain inventory snapshot as Option<(u16,u8)> for the
         // chest-UI's player-side grid - independent of the
         // existing DnD widget snapshot which carries icon meta.
-        let inv_plain_snapshot: Vec<Option<(u16, u8)>> = vx
+        //
+        // W50.3: mutable so the 3x3 crafting table panel can
+        // apply player-inv clicks in place; render.rs copies the
+        // result back into vx.inventory after the egui closure
+        // when the crafting table was the active panel.
+        let mut inv_plain_snapshot: Vec<Option<(u16, u8)>> = vx
             .inventory
             .iter()
             .map(|s| s.map(|(b, c)| (b.0, c)))
@@ -1981,6 +1996,27 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         });
                 }
 
+                // W50.3: 3x3 crafting table panel. Client-side
+                // only - the grid lives on Voxel directly so the
+                // panel doesn't snapshot from a HashMap. Player
+                // inventory clicks below the grid funnel through
+                // the same chest_grid_actions pipeline so the
+                // existing player-side mutations apply unchanged.
+                if crafting_table_open_pos.is_some() {
+                    ui::crafting_panel::render(
+                        ui::crafting_panel::CraftingPanelInputs {
+                            ctx,
+                            grid: &mut crafting_table_grid_local,
+                            held: &mut crafting_table_held_local,
+                            inv_view: &mut inv_plain_snapshot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut crafting_table_open_local,
+                            take_output_out: &mut crafting_table_take_output,
+                        },
+                    );
+                }
+
                 // Hurt-flash: full-screen red overlay that fades
                 // out over ~0.5 s. Painted on the Foreground layer
                 // so it sits above the world but below the
@@ -2965,6 +3001,73 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // Same close-button handling for the furnace UI.
         if furnace_open_pos.is_some() && !furnace_open_local {
             vx.close_furnace_ui();
+        }
+        // W50.3: crafting-table panel apply.
+        if crafting_table_open_pos.is_some() {
+            // 1. Sync grid + held back from the local mutations
+            //    inside the egui closure.
+            vx.craft_grid_3x3 = crafting_table_grid_local;
+            vx.crafting_table_held = crafting_table_held_local;
+            // 2. Output click: consume 1 of every non-empty grid
+            //    cell + push the resolved output onto the held
+            //    stack (or merge with existing held).
+            if crafting_table_take_output {
+                let grid_u16: [Option<(u16, u8)>; 9] =
+                    std::array::from_fn(|i| {
+                        vx.craft_grid_3x3[i].map(|(b, c)| (b.0, c))
+                    });
+                if let Some((out_id, out_n, _)) =
+                    crate::recipes::matcher::match_3x3(&grid_u16)
+                {
+                    // Merge / set held.
+                    let new_held = match vx.crafting_table_held {
+                        None => Some((out_id, out_n)),
+                        Some((hid, hn)) if hid == out_id => {
+                            let cap = inventory::STACK_MAX;
+                            let sum = (hn as u16) + (out_n as u16);
+                            if sum <= cap as u16 {
+                                Some((hid, sum as u8))
+                            } else {
+                                // Output doesn't fit - don't craft
+                                // (matches MC).
+                                Some((hid, hn))
+                            }
+                        }
+                        Some(h) => Some(h), // different item held; skip
+                    };
+                    // Only consume inputs if the held merge
+                    // succeeded (i.e. we actually produced output).
+                    let consumed = match (vx.crafting_table_held, new_held) {
+                        (None, Some(_)) => true,
+                        (Some((_, before)), Some((_, after))) if after > before => true,
+                        _ => false,
+                    };
+                    if consumed {
+                        for cell in vx.craft_grid_3x3.iter_mut() {
+                            if let Some((b, c)) = *cell {
+                                let nc = c.saturating_sub(1);
+                                *cell = if nc == 0 { None } else { Some((b, nc)) };
+                            }
+                        }
+                        vx.crafting_table_held = new_held;
+                    }
+                }
+            }
+            // 3. Copy the mutated inv snapshot back into
+            //    vx.inventory (the panel's player-inv grid
+            //    operated directly on inv_plain_snapshot).
+            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+                if i >= vx.inventory.len() {
+                    break;
+                }
+                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+            }
+            // 4. Close-via-X: route through close_crafting_table_ui
+            //    so the grid + held stack get returned to the inv
+            //    (or spawn as drops when the inv is full).
+            if !crafting_table_open_local {
+                vx.close_crafting_table_ui();
+            }
         }
         // Apply queued chest-UI actions. Each entry is
         // `(true_if_player_side, GridAction)`.

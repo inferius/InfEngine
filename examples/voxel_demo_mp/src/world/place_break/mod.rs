@@ -48,7 +48,7 @@ mod rmb_use;
 
 pub(crate) use break_pipeline::{apply_block_break, apply_shovel_grass_path};
 pub(crate) use combat::apply_combat;
-pub(crate) use containers::{open_chest, open_furnace, try_sleep_bed};
+pub(crate) use containers::{open_chest, open_crafting_table, open_furnace, try_sleep_bed};
 pub(crate) use mining_tick::tick_mining;
 pub(crate) use place_pipeline::apply_block_place;
 pub(crate) use rmb_use::{apply_bucket_use, apply_flint_and_steel_ignite};
@@ -116,6 +116,9 @@ pub enum RmbAction {
     OpenFurnace,
     /// Right-click on a chest voxel - opens the chest UI.
     OpenChest,
+    /// W50.3: right-click on a crafting_table voxel - opens the
+    /// 3x3 crafting grid UI.
+    OpenCraftingTable,
     /// Right-click on a bed voxel (id 35) - tries to skip the
     /// night.
     SleepBed,
@@ -181,6 +184,11 @@ pub fn classify_rmb_action(
     }
     if target_id == CHEST_ID {
         return RmbAction::OpenChest;
+    }
+    // W50.3: crafting table opens the 3x3 grid UI (client-side
+    // only, no host state).
+    if target_id == crate::block::CRAFTING_TABLE_ID {
+        return RmbAction::OpenCraftingTable;
     }
     if target_id == BED_ID {
         return RmbAction::SleepBed;

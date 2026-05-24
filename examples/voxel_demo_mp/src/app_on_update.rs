@@ -63,6 +63,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         vx.close_chest_ui();
                     } else if vx.furnace_open.is_some() {
                         vx.close_furnace_ui();
+                    } else if vx.crafting_table_open.is_some() {
+                        vx.close_crafting_table_ui();
                     } else if vx.creative_tab.open {
                         // W20.3: ESC closes the creative tab (same as E).
                         vx.creative_tab.close();
@@ -625,6 +627,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             } else if predicted == RmbAction::OpenChest {
                 // W47.13i: chest open + mint + client notify.
                 crate::world::place_break::open_chest(vx, hit.voxel);
+            } else if predicted == RmbAction::OpenCraftingTable {
+                // W50.3: crafting table open (client-side 3x3 grid).
+                crate::world::place_break::open_crafting_table(
+                    vx, hit.voxel,
+                );
             } else if predicted == RmbAction::SleepBed {
                 // W47.13i: bed sleep (day-phase gated; host bumps
                 // clock, client asks host).

@@ -120,6 +120,52 @@ pub(crate) fn inv_pickup(
     false
 }
 
+/// Pop `count` of `block` into the inventory. Tops up partial
+/// stacks first, then claims empty slots. Returns `true` if the
+/// full count fit; `false` (and some items already merged) when
+/// the inventory ran out of room before `count` was exhausted.
+///
+/// W50.3: used by the crafting-table close handler to dump the
+/// 3x3 grid contents back into the player inv when the panel is
+/// closed via the X button.
+pub(crate) fn inv_pickup_n(
+    inv: &mut [Option<(BlockId, u8)>; INVENTORY_SLOTS],
+    block: BlockId,
+    count: u8,
+) -> bool {
+    if block == BlockId::AIR || count == 0 {
+        return true;
+    }
+    let mut remaining = count;
+    // Pass 1: top up matching partial stacks.
+    for slot in inv.iter_mut() {
+        if remaining == 0 {
+            return true;
+        }
+        if let Some((b, c)) = slot.as_mut()
+            && *b == block
+            && *c < STACK_MAX
+        {
+            let room = STACK_MAX - *c;
+            let take = room.min(remaining);
+            *c += take;
+            remaining -= take;
+        }
+    }
+    // Pass 2: claim empty slots.
+    for slot in inv.iter_mut() {
+        if remaining == 0 {
+            return true;
+        }
+        if slot.is_none() {
+            let take = STACK_MAX.min(remaining);
+            *slot = Some((block, take));
+            remaining -= take;
+        }
+    }
+    remaining == 0
+}
+
 /// Decrement one item of `block` somewhere in the inventory.
 /// Returns `true` if a stack matched + was decremented (slot is
 /// cleared when the count hits zero); `false` means the inventory
