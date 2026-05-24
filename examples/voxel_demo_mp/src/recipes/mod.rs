@@ -1,6 +1,18 @@
-//! W47.27 - crafting recipe table (relocated from main.rs).
+//! Crafting / smelting / brewing recipe tables.
+//!
+//! - `Recipe` (this file): shapeless 2x2 crafting (W47.27 origin).
+//! - `shaped`: shaped 3x3 grid recipes (W50.2).
+//! - `smelting`: furnace input -> output table (W50.2).
+//! - `brewing`: brewing stand ingredient + base -> potion (W50.2).
+//! - `matcher`: free functions that consume a 3x3 grid and resolve
+//!   either a shaped or shapeless match (W50.2).
 
 #![allow(unused_imports)]
+
+pub(crate) mod brewing;
+pub(crate) mod matcher;
+pub(crate) mod shaped;
+pub(crate) mod smelting;
 
 use crate::*;
 
