@@ -223,20 +223,21 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
                 });
             }
 
-            // ---- Recipe book ---------------------------------
-            if book_open {
-                ui.separator();
-                ui.label("Recipe Book");
-                draw_recipe_book(
-                    ui,
-                    atlas_tex_id,
-                    icon_uv_resolver,
-                    inv_view,
-                    grid,
-                );
-            }
         });
-    // Persist recipe book state.
+
+    // W54.5: Recipe book lives in its own egui::Window so the
+    // player can dock it next to the crafting panel and search
+    // recipes without losing the grid view.
+    if book_open {
+        render_recipe_book_window(
+            ctx,
+            &mut book_open,
+            atlas_tex_id,
+            icon_uv_resolver,
+            inv_view,
+            grid,
+        );
+    }
     ctx.memory_mut(|m| m.data.insert_temp(book_id, book_open));
 
     // ---- Drag state machine: react to release. -----------------
@@ -297,11 +298,13 @@ fn track_slot(
     rmb_down: bool,
     shift_down: bool,
 ) {
-    // Drag tracking: while the matching button is held down and
-    // the cursor hovers a slot, add it to the visit list (unique).
-    // Requires `has_held` so empty-cursor drag doesn't accidentally
-    // hoover up stacks.
-    if has_held && resp.hovered() {
+    // W54.4: use `contains_pointer()` not `hovered()`. egui's
+    // `hovered()` returns false on widgets the cursor passes over
+    // during an already-active drag started on a sibling widget;
+    // `contains_pointer()` reports the raw geometric hit which is
+    // what we want for "did the drag visit this slot".
+    let pointer_over = resp.contains_pointer();
+    if has_held && pointer_over {
         if lmb_down && drag.button != Some(DragButton::Right) {
             if drag.button.is_none() && lmb_pressed {
                 drag.button = Some(DragButton::Left);
@@ -794,13 +797,14 @@ fn grid_as_u16(g: &[Option<(BlockId, u8)>; 9]) -> [Option<(u16, u8)>; 9] {
     std::array::from_fn(|i| g[i].map(|(b, c)| (b.0, c)))
 }
 
-/// W54.3 - Recipe book: scrollable grid of every known shaped +
-/// shapeless recipe. Each tile shows the output icon; hover reads
-/// the recipe name + ingredient list. Click auto-fills the 3x3
-/// grid from the player inventory (if enough materials are
-/// present); otherwise it just previews the pattern in the grid.
-fn draw_recipe_book(
-    ui: &mut egui::Ui,
+/// W54.5 - Recipe book in a standalone egui::Window. Shows every
+/// known shaped + shapeless recipe with a search filter and a
+/// craftable-only toggle. Each card paints the 3x3 input layout
+/// next to an arrow + output icon (MC `RecipeBookComponent` shape).
+/// Clicking a card auto-fills the 3x3 grid from the player inv.
+fn render_recipe_book_window(
+    ctx: &egui::Context,
+    open: &mut bool,
     atlas_tex_id: Option<egui::TextureId>,
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
     inv_view: &mut [Option<(u16, u8)>],
@@ -808,37 +812,200 @@ fn draw_recipe_book(
 ) {
     use crate::recipes::shaped::SHAPED_RECIPES;
     use crate::recipes::RECIPES;
-    egui::ScrollArea::vertical()
-        .max_height(180.0)
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                // Shapeless 2x2 recipes (small craft only - the table
-                // lists them anyway since 2x2 is a subset of 3x3).
-                for recipe in RECIPES {
-                    let entry = recipe_entry_shapeless(recipe);
-                    draw_recipe_tile(
-                        ui,
-                        atlas_tex_id,
-                        icon_uv_resolver,
-                        &entry,
-                        inv_view,
-                        grid,
-                    );
+
+    // Search state persisted via egui memory.
+    let search_id = egui::Id::new("crafting_panel_recipe_search");
+    let mut search: String = ctx
+        .memory(|m| m.data.get_temp::<String>(search_id).unwrap_or_default());
+    let only_craftable_id =
+        egui::Id::new("crafting_panel_recipe_only_craftable");
+    let mut only_craftable: bool = ctx.memory(|m| {
+        m.data
+            .get_temp::<bool>(only_craftable_id)
+            .unwrap_or(false)
+    });
+
+    let screen = ctx.content_rect();
+    egui::Window::new("Recipe Book")
+        .open(open)
+        .collapsible(true)
+        .resizable(true)
+        .default_pos([
+            screen.center().x + 60.0,
+            screen.center().y - 260.0,
+        ])
+        .default_size([360.0, 540.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Search:");
+                ui.add_sized(
+                    egui::vec2(200.0, 20.0),
+                    egui::TextEdit::singleline(&mut search),
+                );
+                if ui.button("X").on_hover_text("Clear search").clicked() {
+                    search.clear();
                 }
-                // Shaped 3x3 recipes.
-                for recipe in SHAPED_RECIPES {
-                    let entry = recipe_entry_shaped(recipe);
-                    draw_recipe_tile(
+            });
+            ui.checkbox(&mut only_craftable, "Only craftable from inventory");
+            ui.separator();
+
+            // Build entry list with search + craftable filter.
+            let q = search.trim().to_lowercase();
+            let mut entries: Vec<RecipeEntry> = Vec::new();
+            for r in RECIPES {
+                entries.push(recipe_entry_shapeless(r));
+            }
+            for r in SHAPED_RECIPES {
+                entries.push(recipe_entry_shaped(r));
+            }
+            let filtered: Vec<&RecipeEntry> = entries
+                .iter()
+                .filter(|e| {
+                    if !q.is_empty() {
+                        let name = e.name.to_lowercase();
+                        let out = crate::item::item_display_name(e.output.0)
+                            .to_lowercase();
+                        if !name.contains(&q) && !out.contains(&q) {
+                            return false;
+                        }
+                    }
+                    if only_craftable && !is_craftable_from(e, inv_view) {
+                        return false;
+                    }
+                    true
+                })
+                .collect();
+            ui.label(format!("Showing {} recipes", filtered.len()));
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for entry in filtered {
+                    draw_recipe_card(
                         ui,
                         atlas_tex_id,
                         icon_uv_resolver,
-                        &entry,
+                        entry,
                         inv_view,
                         grid,
                     );
+                    ui.separator();
                 }
             });
         });
+
+    ctx.memory_mut(|m| {
+        m.data.insert_temp(search_id, search);
+        m.data.insert_temp(only_craftable_id, only_craftable);
+    });
+}
+
+/// Predicate: does the player inv hold every input the recipe
+/// needs, in the right quantity?
+fn is_craftable_from(
+    entry: &RecipeEntry,
+    inv: &[Option<(u16, u8)>],
+) -> bool {
+    let mut needed: Vec<(u16, u32)> = Vec::new();
+    for id in entry.cells.iter().flatten() {
+        if let Some(t) = needed.iter_mut().find(|(b, _)| *b == *id) {
+            t.1 += 1;
+        } else {
+            needed.push((*id, 1));
+        }
+    }
+    for (id, count) in &needed {
+        let avail: u32 = inv
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .filter(|(sid, _)| sid == id)
+            .map(|(_, c)| *c as u32)
+            .sum();
+        if avail < *count {
+            return false;
+        }
+    }
+    true
+}
+
+/// W54.5: one recipe card. Layout (left -> right):
+///   3x3 input grid  ->  output tile + count badge
+/// Each row of the grid is 24px tall so the card fits a few per
+/// scroll page. Click anywhere on the card auto-fills the 3x3
+/// crafting grid.
+fn draw_recipe_card(
+    ui: &mut egui::Ui,
+    atlas_tex_id: Option<egui::TextureId>,
+    icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
+    entry: &RecipeEntry,
+    inv_view: &mut [Option<(u16, u8)>],
+    grid: &mut [Option<(BlockId, u8)>; 9],
+) {
+    let mut card_clicked = false;
+    ui.horizontal(|ui| {
+        // 3x3 input grid.
+        ui.vertical(|ui| {
+            for r in 0..3 {
+                ui.horizontal(|ui| {
+                    for c in 0..3 {
+                        let id_opt = entry.cells[r * 3 + c];
+                        let slot = id_opt.map(|id| (id, 1u8));
+                        let resp = draw_slot(
+                            ui,
+                            slot,
+                            22.0,
+                            atlas_tex_id,
+                            icon_uv_resolver,
+                        );
+                        if resp.clicked() {
+                            card_clicked = true;
+                        }
+                    }
+                });
+            }
+        });
+        ui.label("  ->  ");
+        let out_resp = draw_slot(
+            ui,
+            Some(entry.output),
+            32.0,
+            atlas_tex_id,
+            icon_uv_resolver,
+        );
+        if out_resp.clicked() {
+            card_clicked = true;
+        }
+        ui.vertical(|ui| {
+            ui.label(entry.name);
+            ui.label(
+                egui::RichText::new(format!(
+                    "-> {} x{}",
+                    crate::item::item_display_name(entry.output.0),
+                    entry.output.1,
+                ))
+                .small(),
+            );
+            let craftable = is_craftable_from(entry, inv_view);
+            if craftable {
+                ui.label(
+                    egui::RichText::new("Craftable")
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 220, 120)),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("Missing items")
+                        .small()
+                        .color(egui::Color32::from_gray(180)),
+                );
+            }
+            if ui.small_button("Fill grid").clicked() {
+                card_clicked = true;
+            }
+        });
+    });
+    if card_clicked {
+        autofill_grid_from_inv(entry, inv_view, grid);
+    }
 }
 
 struct RecipeEntry {
@@ -875,61 +1042,6 @@ fn recipe_entry_shaped(r: &crate::recipes::shaped::ShapedRecipe) -> RecipeEntry 
         name: r.name,
         cells,
     }
-}
-
-fn draw_recipe_tile(
-    ui: &mut egui::Ui,
-    atlas_tex_id: Option<egui::TextureId>,
-    icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
-    entry: &RecipeEntry,
-    inv_view: &mut [Option<(u16, u8)>],
-    grid: &mut [Option<(BlockId, u8)>; 9],
-) {
-    let resp = draw_slot(
-        ui,
-        Some(entry.output),
-        28.0,
-        atlas_tex_id,
-        icon_uv_resolver,
-    );
-    let tooltip = build_recipe_tooltip(entry);
-    let resp = resp.on_hover_text(tooltip);
-    if resp.clicked() {
-        // Auto-fill: pull each required input from the player inv
-        // into the matching grid cell. Bail if any input is missing.
-        autofill_grid_from_inv(entry, inv_view, grid);
-    }
-}
-
-fn build_recipe_tooltip(entry: &RecipeEntry) -> String {
-    let mut s = String::new();
-    s.push_str(entry.name);
-    s.push('\n');
-    s.push_str(&format!(
-        "-> {} x{}\n",
-        crate::item::item_display_name(entry.output.0),
-        entry.output.1,
-    ));
-    let mut tally: Vec<(u16, u32)> = Vec::new();
-    for id in entry.cells.iter().flatten() {
-        if let Some(t) = tally.iter_mut().find(|(b, _)| *b == *id) {
-            t.1 += 1;
-        } else {
-            tally.push((*id, 1));
-        }
-    }
-    s.push_str("Needs: ");
-    for (i, (id, c)) in tally.iter().enumerate() {
-        if i > 0 {
-            s.push_str(", ");
-        }
-        s.push_str(&format!(
-            "{} x{}",
-            crate::item::item_display_name(*id),
-            c,
-        ));
-    }
-    s
 }
 
 /// W54.3 - autofill: for each non-empty cell in the recipe, find
