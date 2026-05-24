@@ -36,6 +36,30 @@ pub(crate) fn new_chest() -> Container {
     Container::with_size(CHEST_SLOTS)
 }
 
+/// W55.2b - find the partner chest position for a double-chest
+/// arrangement. Walks the 4 horizontal neighbours; the first one
+/// that holds another chest block AND has a live `Container`
+/// entry is the partner. Walked in a deterministic order so two
+/// adjacent chests always settle on the same pair.
+pub(crate) fn partner_for(
+    world: &infengine_voxel::World,
+    chests: &std::collections::HashMap<[i32; 3], Container>,
+    pos: [i32; 3],
+) -> Option<[i32; 3]> {
+    let offsets: [[i32; 3]; 4] = [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
+    for off in offsets {
+        let p = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
+        if world.get(p).0 != crate::block::CHEST_ID {
+            continue;
+        }
+        if !chests.contains_key(&p) {
+            continue;
+        }
+        return Some(p);
+    }
+    None
+}
+
 /// Flatten a chest's contents into the per-item drop list emitted
 /// on break. Each slot of `(id, count)` expands to `count` copies
 /// of `id` so the caller can spawn one drop entity per item -

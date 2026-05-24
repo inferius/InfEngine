@@ -535,6 +535,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .chest_open
             .as_ref()
             .and_then(|p| vx.chests.get(p).cloned());
+        // W55.2b: detect a paired chest neighbour for the open
+        // chest. When found, the UI renders a 54-slot composite
+        // (this chest above, partner below) and the apply path
+        // routes actions to the matching backing container.
+        let chest_partner_pos: Option<[i32; 3]> = chest_open_pos
+            .and_then(|p| block::chest::partner_for(&vx.world, &vx.chests, p));
+        let chest_partner_snapshot: Option<container::Container> =
+            chest_partner_pos.and_then(|p| vx.chests.get(&p).cloned());
         // Sentinel that the egui close-button + ESC inside the
         // chest panel can flip; we read it back after the closure
         // to clear `chest_open`.
@@ -640,6 +648,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // and route to `block::chest::apply_chest_action` /
         // `apply_player_action`. `side` = false means a click on
         // the chest grid, `true` = a click on the player-inv grid.
+        // W55.2b: partner-chest action queue for double chests.
+        let mut chest_partner_actions: Vec<container::ui::GridAction> =
+            Vec::new();
         let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
         let mut chest_held_local = chest_held_snapshot;
@@ -1814,13 +1825,34 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ));
                             }
                             ui.separator();
-                            ui.label("Chest (27)");
                             let chest_cfg = container::ui::GridConfig {
                                 cols: 9,
                                 rows: 3,
                                 tile_px: 36.0,
                                 title: None,
                             };
+                            // W55.2b: when paired with a partner
+                            // chest, draw it ABOVE the main chest
+                            // so the combined view reads as a
+                            // 6-row 54-slot grid (matches MC
+                            // double-chest layout).
+                            if let Some(partner) = &chest_partner_snapshot {
+                                ui.label("Chest (paired - top)");
+                                let actions = container::ui::draw_grid_with_uv(
+                                    ui,
+                                    &chest_cfg,
+                                    partner,
+                                    chest_held_local,
+                                    atlas_tex_id,
+                                    &icon_uv_resolver,
+                                );
+                                for a in actions {
+                                    chest_partner_actions.push(a);
+                                }
+                                ui.label("Chest (paired - bottom)");
+                            } else {
+                                ui.label("Chest (27)");
+                            }
                             let actions = container::ui::draw_grid_with_uv(
                                 ui,
                                 &chest_cfg,
@@ -3212,6 +3244,33 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             // No actions but still surface the latest cursor
             // state for the next frame.
             vx.chest_held = chest_held_local;
+        }
+        // W55.2b: apply partner-chest actions (double-chest top
+        // grid). Routes through the same chest apply helpers but
+        // against the partner pos.
+        if let Some(partner_pos) = chest_partner_pos
+            && !chest_partner_actions.is_empty()
+            && let Some(chest) = vx.chests.get_mut(&partner_pos)
+        {
+                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
+                    .inventory
+                    .iter()
+                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .collect();
+                for action in chest_partner_actions {
+                    block::chest::apply_chest_action(
+                        chest,
+                        &mut inv_u16,
+                        &mut vx.chest_held,
+                        action,
+                    );
+                }
+                for (i, slot) in inv_u16.iter().enumerate() {
+                    if i >= vx.inventory.len() {
+                        break;
+                    }
+                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                }
         }
         // Apply queued furnace-UI actions. Mirrors the chest path
         // but routes through `block::furnace::apply_furnace_action`
