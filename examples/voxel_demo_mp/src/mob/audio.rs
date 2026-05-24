@@ -17,6 +17,28 @@ use std::collections::HashSet;
 use crate::Voxel;
 use crate::net::MobMsg;
 
+use super::kinds::{
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON,
+    KIND_SPIDER, KIND_ZOMBIE,
+};
+
+/// W55.4 - per-mob sound key prefix. Returns the engine key stem
+/// (`mob/<name>`) used by `sfx_at` to look up the matching MC
+/// event via `ENGINE_TO_MC`. Unknown kinds collapse to sheep so
+/// the existing fallback baa/step sound still fires.
+fn mob_sound_stem(kind: u8) -> &'static str {
+    match kind {
+        KIND_SHEEP => "mob/sheep",
+        KIND_ZOMBIE => "mob/zombie",
+        KIND_CHICKEN => "mob/chicken",
+        KIND_PIG => "mob/pig",
+        KIND_COW => "mob/cow",
+        KIND_SKELETON => "mob/skeleton",
+        KIND_SPIDER => "mob/spider",
+        _ => "mob/sheep",
+    }
+}
+
 /// Tick the per-mob step + baa sound timers. Runs on every
 /// peer (the server's audio comes through too if the host is
 /// playing). Step sounds fire only when the mob actually
@@ -74,7 +96,8 @@ pub(crate) fn tick_mob_audio(voxel: &mut Voxel, dt: f32) {
             if *step_t <= 0.0 {
                 *step_t = 0.45;
                 let pos = m.pos;
-                voxel.sfx_at("mob/sheep/step", pos, |a, g| {
+                let key = format!("{}/step", mob_sound_stem(m.kind));
+                voxel.sfx_at(&key, pos, |a, g| {
                     let _ = a.play_swish(0.18 * g);
                 });
             }
@@ -92,7 +115,8 @@ pub(crate) fn tick_mob_audio(voxel: &mut Voxel, dt: f32) {
             let h = (m.id.wrapping_mul(2654435761) ^ voxel.net_tick as u32) as f32;
             *say_t = 6.0 + (h % 14.0).abs();
             let pos = m.pos;
-            voxel.sfx_at("mob/sheep/say", pos, |a, g| {
+            let key = format!("{}/say", mob_sound_stem(m.kind));
+            voxel.sfx_at(&key, pos, |a, g| {
                 let _ = a.play_beep(300.0, 0.18, 0.18 * g);
             });
         }
