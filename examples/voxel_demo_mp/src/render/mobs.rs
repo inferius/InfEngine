@@ -145,13 +145,14 @@ pub fn draw_remote_mobs(
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         if mob_meshes.sheep_loaded() {
                             let rot = body_rot;
-                            // W58.3: SheepModel body 8x16x6 rotated
-                            // horizontal (xRot=PI/2). World dims X=8,
-                            // Y=6, Z=16. Body sits on 12-tall legs;
-                            // body centre at y = 0.75 + 0.1875 = 0.9375.
+                            // W60.2: SheepModel body 8x16x6 with
+                            // xRot=PI/2. Final dims: length 1.0 (X
+                            // = MC h=16), height 0.375 (Y = MC d=6),
+                            // width 0.5 (Z = MC w=8). Body centre
+                            // y=0.9375 (on 12-tall legs).
                             if let Some(m) = mob_meshes.sheep_body {
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.5, 0.375, 1.0), rot,
+                                    Vec3::new(1.0, 0.375, 0.5), rot,
                                     Vec3::new(base_x, mob.pos[1] + 0.9375 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(body_tint), 0.0, 0.9);
                             }
@@ -339,13 +340,14 @@ pub fn draw_remote_mobs(
                         let pink = [0.95f32, 0.65, 0.65, 1.0];
                         if mob_meshes.pig_loaded() {
                             let rot = body_rot;
-                            // W58.3: PigModel body 10x16x8 rotated
-                            // horizontal (xRot=PI/2). World dims
-                            // X=10, Y=8, Z=16. Body sits on 6-tall
-                            // legs (centre y=0.5625).
+                            // W60.2: PigModel body 10x16x8 with
+                            // xRot=PI/2. Length 1.0 (X = MC h=16),
+                            // height 0.5 (Y = MC d=8), width 0.625
+                            // (Z = MC w=10). Body centre y=0.625
+                            // (on 6-tall legs).
                             if let Some(m) = mob_meshes.pig_body {
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.625, 0.5, 1.0), rot,
+                                    Vec3::new(1.0, 0.5, 0.625), rot,
                                     Vec3::new(base_x, mob.pos[1] + 0.625 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
                             }
@@ -395,15 +397,18 @@ pub fn draw_remote_mobs(
                         let brown = [0.55f32, 0.35, 0.20, 1.0];
                         if mob_meshes.cow_loaded() {
                             let rot = body_rot;
-                            // W58.2: MC CowModel body is 12x18x10
-                            // rotated horizontal (xRot=pi/2). Final
-                            // world-space dims: X=12, Y=10, Z=18.
-                            // Body sits on top of 12-tall legs; legs
-                            // run from ground to ~0.75 voxel, body
-                            // centre lands ~1.06 voxel.
+                            // W60.2: MC CowModel body 12x18x10 with
+                            // xRot=PI/2 lays the 18-axis horizontal.
+                            // Our engine's forward is +X, so body
+                            // length runs along X (1.125), height
+                            // along Y (0.625 = MC depth 10 post-rot),
+                            // width along Z (0.75 = MC width 12).
+                            // build_mob_part_mesh puts the "front"
+                            // tile on the +X face, so the head end
+                            // ends up at +X = forward direction.
                             if let Some(m) = mob_meshes.cow_body {
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.75, 0.625, 1.125), rot,
+                                    Vec3::new(1.125, 0.625, 0.75), rot,
                                     Vec3::new(base_x, mob.pos[1] + 1.06 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
                             }

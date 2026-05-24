@@ -47,10 +47,12 @@ mod w12_blocks_tests;
 pub(crate) use ids::*;
 pub(crate) use registry::BLOCK_TYPES;
 pub(crate) use types::{
-    BlockType, TileSpec, ATLAS_COLS, ATLAS_ROWS, F_AABB_PASS, F_DEDICATED_RENDER,
+    BlockType, TileSpec, ATLAS_COLS, ATLAS_ROWS, F_AABB_PASS,
     F_NO_PLACE, F_RAY_PASS, F_REPLACEABLE, F_SWIM, F_TRANSPARENT_RENDER, F_WASHABLE,
     TILE_PX,
 };
+#[allow(unused_imports)]
+pub(crate) use types::F_DEDICATED_RENDER;
 
 // ---------------------------------------------------------------
 // Block lookup helpers.
@@ -109,11 +111,28 @@ pub(crate) fn block_is_swim_medium(b: BlockId) -> bool {
 }
 
 /// Block has its own per-voxel render path (torch pillar, snow
-/// slab, water slab) so the chunk mesher should skip emitting
-/// full-cube geometry for it.
+/// slab, water slab, portal swirl, fire cross) so the chunk
+/// mesher should drop its submesh. ONLY these blocks get an
+/// alternate world-pass render in `render::decor`; every other
+/// F_DEDICATED_RENDER block (slabs, doors, stairs, chest, etc.)
+/// emits its special-model geometry into the chunk submesh and
+/// needs that submesh uploaded.
+///
+/// W60.1: previously gated on F_DEDICATED_RENDER alone, which
+/// dropped every special-model submesh (chest invisible, slab
+/// invisible, ...). MC ships these as block models + we render
+/// them through `emit_block_elements`; the chunk submesh IS the
+/// render path for them.
 #[inline]
 pub(crate) fn block_skips_chunk_mesh(b: BlockId) -> bool {
-    block_has_flag(b, F_DEDICATED_RENDER)
+    // 10 = torch, 15 = snow layer, 36 = water, 37 = lava, 47 =
+    // portal, 49 = fire, 50/51 = redstone_torch/wall, 52/53 =
+    // soul_torch/wall, 56 = soul_fire. All drawn by
+    // `render::decor` per-voxel.
+    matches!(
+        b.0,
+        10 | 15 | 36 | 37 | 47 | 49 | 50 | 51 | 52 | 53 | 56
+    )
 }
 
 /// Block can be displaced by RMB-placement (the placed block

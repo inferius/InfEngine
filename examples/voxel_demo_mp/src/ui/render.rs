@@ -183,7 +183,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     KIND_ZOMBIE => "Zombie",
                     KIND_CHICKEN => "Chicken",
                     KIND_PIG => "Pig",
-                    _ => "Sheep",
+                    KIND_COW => "Cow",
+                    KIND_SKELETON => "Skeleton",
+                    KIND_SPIDER => "Spider",
+                    KIND_SHEEP => "Sheep",
+                    _ => "Mob",
                 };
                 (name, m.health, max)
             });

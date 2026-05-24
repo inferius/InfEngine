@@ -50,6 +50,14 @@ fn every_w12_block_has_a_registry_row() {
 
 #[test]
 fn every_w12_block_carries_dedicated_render_flag() {
+    // W60.1: block_skips_chunk_mesh now hard-codes the
+    // dedicated-pass id list (torch / snow / liquid / portal /
+    // fire). Slabs / stairs / fences / doors / panes / walls
+    // emit special-model geometry into the chunk submesh and
+    // need that submesh uploaded - they MUST NOT skip.
+    // F_DEDICATED_RENDER flag still flips for legacy callers
+    // that scan it; the rendering decision lives in
+    // block_skips_chunk_mesh.
     for &id in ALL_W12_IDS {
         let bt = block_type(id).unwrap_or_else(|| panic!("id {id}"));
         assert!(
@@ -57,8 +65,8 @@ fn every_w12_block_carries_dedicated_render_flag() {
             "id {} ({}) missing F_DEDICATED_RENDER", id, bt.name,
         );
         assert!(
-            block_skips_chunk_mesh(BlockId(id)),
-            "id {} ({}) chunk mesher would emit full cube", id, bt.name,
+            !block_skips_chunk_mesh(BlockId(id)),
+            "id {} ({}) is special-model + must NOT skip chunk mesh", id, bt.name,
         );
     }
 }
