@@ -662,32 +662,46 @@ pub(crate) fn build_fence_post() -> BlockModel {
     }
 }
 
-/// W55.2: Chest model as a FULL-block (16x16x16) cuboid so the
-/// neighbouring grass / dirt doesn't get rendered through the
-/// gaps. MC's real chest entity model adds the inset + lid +
-/// latch via BlockEntityRenderer; for the static-mesh path we
-/// just stamp the planks texture on every face.
+/// W59.1: Proper MC chest static-mesh geometry. Mirrors
+/// `ChestRenderer.java` for the closed single-chest layout:
+/// - Base   `(1, 0, 1)..(15, 10, 15)` - 14x10x14 box.
+/// - Lid    `(1, 9, 1)..(15, 14, 15)` - 14x5x14 box sitting on top.
+/// - Latch  `(7, 4, 0)..(9, 8, 1)`    - 2x4x1 knob on the north
+///   face. North = Z- = MC's chest-front by convention.
 ///
-/// W56.2: texture name is a LITERAL ("oak_planks"), not a `#top`
-/// ref. element_mesh strips the leading `#` and looks the name
-/// up directly in the atlas; hand-coded models that ship an
-/// empty `textures` HashMap need the bare texture key here.
+/// Entity texture (`textures/entity/chest/normal.png`) isn't in
+/// the atlas - keep planks_oak as the texture key so the
+/// geometry reads as a wood chest. Entity-renderer + chest
+/// sprite belongs to the future BlockEntityRenderer wave.
 pub(crate) fn build_chest() -> BlockModel {
-    BlockModel {
-        elements: vec![ModelElement {
-            from: [0.0, 0.0, 0.0],
-            to: [16.0, 16.0, 16.0],
+    let mk_face = |uv: [f32; 4], face: Option<CubeFace>| -> ModelFace {
+        uv_face(uv, "oak_planks", face)
+    };
+    let cube = |from: [f32; 3], to: [f32; 3]| -> ModelElement {
+        let dx = to[0] - from[0];
+        let dy = to[1] - from[1];
+        let dz = to[2] - from[2];
+        ModelElement {
+            from,
+            to,
             rotation: None,
             shade: true,
             faces: ElementFaces {
-                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::Down))),
-                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::Up))),
-                north: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::North))),
-                south: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::South))),
-                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::West))),
-                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_planks", Some(CubeFace::East))),
+                down: Some(mk_face([0.0, 0.0, dx, dz], Some(CubeFace::Down))),
+                up: Some(mk_face([0.0, 0.0, dx, dz], Some(CubeFace::Up))),
+                north: Some(mk_face([0.0, 0.0, dx, dy], Some(CubeFace::North))),
+                south: Some(mk_face([0.0, 0.0, dx, dy], Some(CubeFace::South))),
+                west: Some(mk_face([0.0, 0.0, dz, dy], Some(CubeFace::West))),
+                east: Some(mk_face([0.0, 0.0, dz, dy], Some(CubeFace::East))),
             },
-        }],
+        }
+    };
+    BlockModel {
+        elements: vec![
+            cube([1.0, 0.0, 1.0], [15.0, 10.0, 15.0]),   // base
+            cube([1.0, 9.0, 1.0], [15.0, 14.0, 15.0]),   // lid
+            cube([7.0, 4.0, 0.0], [9.0, 8.0, 1.0]),       // latch
+        ],
         textures: HashMap::new(),
         ambient_occlusion: true,
     }

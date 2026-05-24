@@ -145,34 +145,37 @@ pub fn draw_remote_mobs(
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         if mob_meshes.sheep_loaded() {
                             let rot = body_rot;
-                            // Body: MC quadruped is rotated 90 so the
-                            // 16-pixel length runs along the world Z
-                            // axis. Scale (0.50, 0.37, 1.00) = MC body
-                            // scaled to ~1 block long.
+                            // W58.3: SheepModel body 8x16x6 rotated
+                            // horizontal (xRot=PI/2). World dims X=8,
+                            // Y=6, Z=16. Body sits on 12-tall legs;
+                            // body centre at y = 0.75 + 0.1875 = 0.9375.
                             if let Some(m) = mob_meshes.sheep_body {
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.37, 1.00), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 0.50 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(apply_tint(body_tint)), 0.0, 0.9);
+                                    Vec3::new(0.5, 0.375, 1.0), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.9375 - death_sink + walk_bob, base_z));
+                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(body_tint), 0.0, 0.9);
                             }
-                            // Head: forward-facing 6x6x8 box.
+                            // SheepHead 6x6x8 forward-facing. Head
+                            // top y ~= 24px in MC = 1.5 voxel. Head
+                            // centre y ~= 1.3.
                             if let Some(m) = mob_meshes.sheep_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 0.50 - death_sink + walk_bob, base_z) + fwd * 0.55;
+                                let hp = Vec3::new(base_x, mob.pos[1] + 1.05 - death_sink + walk_bob, base_z) + fwd * 0.6;
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.37, 0.37, 0.50),
+                                    Vec3::new(0.375, 0.375, 0.5),
                                     glam::Quat::from_rotation_y(mob.yaw) * tilt,
                                     hp);
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(head_color), 0.0, 0.9);
                             }
-                            // 4 legs.
+                            // Legs 4x12x4 -> 0.25 x 0.75 x 0.25,
+                            // centre at y=0.375.
                             let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
                             let leg_scale = Vec3::new(0.25, 0.75, 0.25);
-                            let leg_y = mob.pos[1] - 0.25 - death_sink + walk_bob;
+                            let leg_y = mob.pos[1] + 0.375 - death_sink + walk_bob;
                             for (mesh_opt, dx, dz) in [
-                                (mob_meshes.sheep_right_front_leg,  0.20_f32, -0.30_f32),
-                                (mob_meshes.sheep_left_front_leg,  -0.20,     -0.30),
-                                (mob_meshes.sheep_right_back_leg,   0.20,      0.30),
-                                (mob_meshes.sheep_left_back_leg,   -0.20,      0.30),
+                                (mob_meshes.sheep_right_front_leg,  0.15_f32, -0.40_f32),
+                                (mob_meshes.sheep_left_front_leg,  -0.15,     -0.40),
+                                (mob_meshes.sheep_right_back_leg,   0.15,      0.40),
+                                (mob_meshes.sheep_left_back_leg,   -0.15,      0.40),
                             ] {
                                 if let Some(m) = mesh_opt {
                                     let off = side * dx + fwd * (-dz);
@@ -336,26 +339,35 @@ pub fn draw_remote_mobs(
                         let pink = [0.95f32, 0.65, 0.65, 1.0];
                         if mob_meshes.pig_loaded() {
                             let rot = body_rot;
+                            // W58.3: PigModel body 10x16x8 rotated
+                            // horizontal (xRot=PI/2). World dims
+                            // X=10, Y=8, Z=16. Body sits on 6-tall
+                            // legs (centre y=0.5625).
                             if let Some(m) = mob_meshes.pig_body {
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.62, 1.0, 0.50), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 0.35 - death_sink + walk_bob, base_z));
+                                    Vec3::new(0.625, 0.5, 1.0), rot,
+                                    Vec3::new(base_x, mob.pos[1] + 0.625 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
                             }
+                            // PigHead 8x8x8 cube.
                             if let Some(m) = mob_meshes.pig_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.40;
+                                let hp = Vec3::new(base_x, mob.pos[1] + 0.625 - death_sink + walk_bob, base_z) + fwd * 0.5;
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.50, 0.50), rot, hp);
+                                    Vec3::new(0.5, 0.5, 0.5),
+                                    glam::Quat::from_rotation_y(mob.yaw) * tilt,
+                                    hp);
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
                             }
+                            // Legs 4x6x4 -> 0.25 x 0.375 x 0.25,
+                            // centre at y=0.1875.
                             let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
                             let leg_scale = Vec3::new(0.25, 0.375, 0.25);
-                            let leg_y = mob.pos[1] - 0.12 - death_sink + walk_bob;
+                            let leg_y = mob.pos[1] + 0.1875 - death_sink + walk_bob;
                             for (mesh_opt, dx, dz) in [
-                                (mob_meshes.pig_right_front_leg,  0.19_f32, -0.20_f32),
-                                (mob_meshes.pig_left_front_leg,  -0.19,     -0.20),
-                                (mob_meshes.pig_right_back_leg,   0.19,      0.20),
-                                (mob_meshes.pig_left_back_leg,   -0.19,      0.20),
+                                (mob_meshes.pig_right_front_leg,  0.19_f32, -0.35_f32),
+                                (mob_meshes.pig_left_front_leg,  -0.19,     -0.35),
+                                (mob_meshes.pig_right_back_leg,   0.19,      0.35),
+                                (mob_meshes.pig_left_back_leg,   -0.19,      0.35),
                             ] {
                                 if let Some(m) = mesh_opt {
                                     let off = side * dx + fwd * (-dz);
