@@ -191,7 +191,7 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
             return resolve_from_special_table(id);
         };
         match models::load_model(pack, &model_ref.model) {
-            Some(m) => {
+            Some(m) if !m.elements.is_empty() => {
                 tracing::debug!(
                     block_id = id,
                     block_name = block_name,
@@ -200,6 +200,22 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
                     "resolve_for_cache: single variant via JSON pipeline",
                 );
                 ResolvedBlockState::Single(m)
+            }
+            Some(_) => {
+                // W57.1: MC ships some blocks (chest, ender_chest,
+                // shulker_box, banner, sign, ...) as element-less
+                // model JSONs because the renderer is a
+                // BlockEntityRenderer in vanilla. JSON pipeline
+                // "succeeds" but yields nothing to draw. Fall
+                // through to the hand-coded table so our static
+                // mesh fallback gets a chance.
+                tracing::debug!(
+                    block_id = id,
+                    block_name = block_name,
+                    model = model_ref.model.as_str(),
+                    "resolve_for_cache: model has zero elements (entity-rendered in MC), falling back",
+                );
+                resolve_from_special_table(id)
             }
             None => {
                 tracing::debug!(
