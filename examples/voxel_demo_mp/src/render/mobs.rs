@@ -156,13 +156,22 @@ pub fn draw_remote_mobs(
                                     Vec3::new(base_x, mob.pos[1] + 0.9375 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(body_tint), 0.0, 0.9);
                             }
-                            // SheepHead 6x6x8 forward-facing. Head
-                            // top y ~= 24px in MC = 1.5 voxel. Head
-                            // centre y ~= 1.3.
+                            // W61.1: SheepHead 6x6x8 (MC w x h x d).
+                            // Head depth (d=8) along X axis (forward
+                            // direction), width (w=6) along Z, height
+                            // (h=6) along Y. Mesh +X "front" face is
+                            // the head's nose end so head looks the
+                            // way the mob is walking.
+                            // Y placement: body top sits at
+                            // 0.9375 + 0.1875 = 1.125 voxel; head
+                            // centre at ~1.30 so the 0.375-tall head
+                            // sits on top with a bit of overlap into
+                            // the body (matches MC reference where
+                            // the head meets the front of the body).
                             if let Some(m) = mob_meshes.sheep_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 1.05 - death_sink + walk_bob, base_z) + fwd * 0.6;
+                                let hp = Vec3::new(base_x, mob.pos[1] + 1.30 - death_sink + walk_bob, base_z) + fwd * 0.55;
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.375, 0.375, 0.5),
+                                    Vec3::new(0.5, 0.375, 0.375),
                                     glam::Quat::from_rotation_y(mob.yaw) * tilt,
                                     hp);
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(head_color), 0.0, 0.9);
@@ -412,12 +421,15 @@ pub fn draw_remote_mobs(
                                     Vec3::new(base_x, mob.pos[1] + 1.06 - death_sink + walk_bob, base_z));
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
                             }
-                            // Head 8x8x6, front-facing. Centre at
-                            // ~1.25 voxel + fwd*0.5 from body front.
+                            // W61.1: CowHead 8x8x6 (w h d). Depth
+                            // (d=6) along X for forward direction;
+                            // height (h=8) along Y; width (w=8)
+                            // along Z. Centre y ~= 1.25 (top of
+                            // body + half head height).
                             if let Some(m) = mob_meshes.cow_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 1.25 - death_sink + walk_bob, base_z) + fwd * 0.55;
+                                let hp = Vec3::new(base_x, mob.pos[1] + 1.25 - death_sink + walk_bob, base_z) + fwd * 0.6;
                                 let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.5, 0.5, 0.375),
+                                    Vec3::new(0.375, 0.5, 0.5),
                                     glam::Quat::from_rotation_y(mob.yaw) * tilt,
                                     hp);
                                 renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
