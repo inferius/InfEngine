@@ -22,7 +22,7 @@
 //! referenced from chat, mob, drops, UI etc and isn't
 //! player-physics-only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec3;
 use infengine_voxel::{BlockId, World};
@@ -79,9 +79,24 @@ pub(crate) fn is_passable(b: BlockId) -> bool {
 /// decoration set AND, when the block is snow, has fewer than
 /// 8 stacked layers (so a fully-buried voxel becomes a solid
 /// block the player can stand on).
+#[allow(dead_code)]
 pub(crate) fn voxel_is_solid(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
+    v: [i32; 3],
+) -> bool {
+    voxel_is_solid_with_doors(world, snow, &HashSet::new(), v)
+}
+
+/// W63.1 - solid lookup that also consults the engine's open-
+/// door set. Open doors become passable; closed doors stay
+/// solid. The shared `voxel_is_solid` keeps the old signature
+/// for non-Voxel callers (worldgen / tests); the player
+/// collision path threads `door_open` here.
+pub(crate) fn voxel_is_solid_with_doors(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    door_open: &HashSet<[i32; 3]>,
     v: [i32; 3],
 ) -> bool {
     let b = world.get(v);
@@ -94,6 +109,19 @@ pub(crate) fn voxel_is_solid(
     if b.0 == 15 {
         let layers = snow.get(&v).copied().unwrap_or(8);
         return layers >= 8;
+    }
+    // W63.1: open door is solid in flag table but passes
+    // through here. Check the lower-half cell - upper half
+    // shares the state.
+    if crate::block::door::is_door_block(b.0) {
+        let lower = if crate::block::door::is_door_block(world.get([v[0], v[1] - 1, v[2]]).0) {
+            [v[0], v[1] - 1, v[2]]
+        } else {
+            v
+        };
+        if door_open.contains(&lower) {
+            return false;
+        }
     }
     true
 }
@@ -147,9 +175,22 @@ pub(crate) fn submerged_liquid(world: &World, pos: Vec3) -> Option<&'static Liqu
 }
 
 /// Returns true if `pos`'s AABB overlaps any solid voxel.
+#[allow(dead_code)]
 pub(crate) fn aabb_intersects_solid(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
+    pos: Vec3,
+) -> bool {
+    aabb_intersects_solid_with_doors(world, snow, &HashSet::new(), pos)
+}
+
+/// W63.1 - same as `aabb_intersects_solid` but consults the
+/// engine's open-door set so the player can walk through doors
+/// once they've toggled them open.
+pub(crate) fn aabb_intersects_solid_with_doors(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    door_open: &HashSet<[i32; 3]>,
     pos: Vec3,
 ) -> bool {
     let (min, max) = body_aabb(pos);
@@ -162,7 +203,7 @@ pub(crate) fn aabb_intersects_solid(
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
-                if voxel_is_solid(world, snow, [x, y, z]) {
+                if voxel_is_solid_with_doors(world, snow, door_open, [x, y, z]) {
                     return true;
                 }
             }
@@ -336,9 +377,24 @@ pub(crate) fn ray_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn sweep_aabb(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
+    pos: Vec3,
+    delta: Vec3,
+) -> (Vec3, bool, bool) {
+    sweep_aabb_with_doors(world, snow, &HashSet::new(), pos, delta)
+}
+
+/// W63.1 - sweep_aabb with the open-door set threaded through so
+/// open doors stop blocking the player. Existing `sweep_aabb`
+/// keeps the old signature for callers that don't have the
+/// engine's door state on hand.
+pub(crate) fn sweep_aabb_with_doors(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    door_open: &HashSet<[i32; 3]>,
     pos: Vec3,
     delta: Vec3,
 ) -> (Vec3, bool, bool) {
@@ -348,7 +404,7 @@ pub(crate) fn sweep_aabb(
 
     // X axis.
     let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
-    if aabb_intersects_solid(world, snow, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
         if delta.x > 0.0 {
             let wall = (candidate.x + PLAYER_RADIUS).floor();
             new_pos.x = wall - PLAYER_RADIUS - COLLISION_EPSILON;
@@ -362,7 +418,7 @@ pub(crate) fn sweep_aabb(
 
     // Y axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y + delta.y, new_pos.z);
-    if aabb_intersects_solid(world, snow, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
         if delta.y > 0.0 {
             let wall = candidate.y.floor();
             new_pos.y = wall - COLLISION_EPSILON;
@@ -378,7 +434,7 @@ pub(crate) fn sweep_aabb(
 
     // Z axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
-    if aabb_intersects_solid(world, snow, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
         if delta.z > 0.0 {
             let wall = (candidate.z + PLAYER_RADIUS).floor();
             new_pos.z = wall - PLAYER_RADIUS - COLLISION_EPSILON;

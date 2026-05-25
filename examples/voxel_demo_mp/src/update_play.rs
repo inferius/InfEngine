@@ -742,9 +742,10 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         // Axis-resolved voxel AABB collision.
         let was_grounded = app.grounded;
         let delta = app.player_vel * dt;
-        let (new_pos, hit_floor, hit_ceiling) = sweep_aabb(
+        let (new_pos, hit_floor, hit_ceiling) = player::sweep_aabb_with_doors(
             &app.world,
             &app.snow_positions,
+            &app.door_open,
             app.player_pos,
             delta,
         );

@@ -236,7 +236,6 @@ use mob::{
 use player::{
     COLLISION_EPSILON, GRAVITY, JUMP_VELOCITY, PLAYER_HEIGHT, PLAYER_RADIUS,
     PLAYER_SPEED, body_aabb, ray_aabb, submerged_liquid, submerged_liquid_eye,
-    sweep_aabb,
 };
 use ui::{AppState, BackTo, HighlightMode, InvAction, LoadingPhase, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{Biome, WorldGen, biome_at};
