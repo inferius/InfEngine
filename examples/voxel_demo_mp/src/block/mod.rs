@@ -126,14 +126,22 @@ pub(crate) fn block_is_swim_medium(b: BlockId) -> bool {
 /// render path for them.
 #[inline]
 pub(crate) fn block_skips_chunk_mesh(b: BlockId) -> bool {
-    // 10 = torch, 15 = snow layer, 36 = water, 37 = lava, 47 =
-    // portal, 49 = fire, 50/51 = redstone_torch/wall, 52/53 =
-    // soul_torch/wall, 56 = soul_fire. All drawn by
-    // `render::decor` per-voxel.
-    matches!(
-        b.0,
-        10 | 15 | 36 | 37 | 47 | 49 | 50 | 51 | 52 | 53 | 56
-    )
+    // W62.1 - hard list of blocks drawn by `render::decor`
+    // instead of through chunk submeshes. Torches (10, 50, 51,
+    // 52, 53) were dropped from this set in W46.15 - the chunk
+    // mesher emits torch geometry via emit_block_elements on
+    // the template_torch JSON model + the cutout-layer flag on
+    // stream upload. Including them here makes torches
+    // invisible (regression W60.1).
+    //
+    // Current dedicated-pass-only ids:
+    //   15 = snow layer (snow_positions HashMap)
+    //   36 = water (liquid_mesh_handles)
+    //   37 = lava (liquid_mesh_handles)
+    //   47 = portal (portal_positions HashSet)
+    //   49 = fire (fires HashMap)
+    //   56 = soul_fire (fires HashMap)
+    matches!(b.0, 15 | 36 | 37 | 47 | 49 | 56)
 }
 
 /// Block can be displaced by RMB-placement (the placed block
