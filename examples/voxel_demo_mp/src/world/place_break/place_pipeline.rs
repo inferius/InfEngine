@@ -162,6 +162,40 @@ pub(crate) fn apply_block_place(
         }
         vx.edit_history.push(edit);
     }
+    // W62.2b - door 2-block-tall place. When the placed block is
+    // a door, also stamp the upper-half block in the cell above.
+    // Wooden oak door (77) uses the dedicated upper id 78; every
+    // other door variant (W48 birch/spruce/jungle/...) reuses the
+    // same id for both halves since we don't ship per-variant
+    // upper ids yet.
+    if crate::block::door::is_door_block(placed_block.0) {
+        let upper_pos = [target_voxel[0], target_voxel[1] + 1, target_voxel[2]];
+        if vx.world.get(upper_pos).is_air() {
+            let upper_id = if placed_block.0 == 77 { 78 } else { placed_block.0 };
+            vx.world_set_tracked(upper_pos, BlockId(upper_id));
+            let upper_coords = Voxel::affected_chunks(upper_pos);
+            vx.rebuild_chunks(&upper_coords);
+            let upper_edit = EditMsg {
+                x: upper_pos[0],
+                y: upper_pos[1],
+                z: upper_pos[2],
+                block: upper_id,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(upper_edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                    vx.edit_history.push(upper_edit);
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(upper_edit);
+                }
+            }
+        }
+    }
     // Chest place: empty 27-slot container.
     if block.0 == CHEST_ID {
         vx.chests
