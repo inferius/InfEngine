@@ -40,6 +40,53 @@ pub(crate) fn apply_block_break(
     // Capture the block we're about to break so we can
     // pop it into the inventory (greedy collection - air just no-ops).
     let broken = vx.world.get(voxel);
+    // W63.3 - door 2-block break. If the broken voxel is a door
+    // half, also break the sibling half (one cell above for the
+    // lower half, one cell below for the upper half). Clear
+    // door_open state too. Done BEFORE the normal break so both
+    // edits get broadcast in sequence.
+    if crate::block::door::is_door_block(broken.0) {
+        let sibling = {
+            let above = [voxel[0], voxel[1] + 1, voxel[2]];
+            let below = [voxel[0], voxel[1] - 1, voxel[2]];
+            if crate::block::door::is_door_block(vx.world.get(above).0) {
+                Some(above)
+            } else if crate::block::door::is_door_block(vx.world.get(below).0) {
+                Some(below)
+            } else {
+                None
+            }
+        };
+        if let Some(sib) = sibling {
+            let lower = std::cmp::min(voxel[1], sib[1]);
+            vx.door_open
+                .remove(&[voxel[0], lower, voxel[2]]);
+            vx.world_set_tracked(sib, BlockId::AIR);
+            let coords = Voxel::affected_chunks(sib);
+            vx.rebuild_chunks(&coords);
+            let sib_edit = EditMsg {
+                x: sib[0],
+                y: sib[1],
+                z: sib[2],
+                block: 0,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(sib_edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                    vx.edit_history.push(sib_edit);
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(sib_edit);
+                }
+            }
+        } else {
+            vx.door_open.remove(&voxel);
+        }
+    }
     // Tint the debris with the broken block's albedo.
     let break_color = vx
         .registry

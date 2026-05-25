@@ -718,6 +718,8 @@ pub(crate) fn build_chest() -> BlockModel {
 /// MC's blockstate; this hand-coded fallback covers the placeholder
 /// pack + the "closed, bottom" default state.
 pub(crate) fn build_trapdoor() -> BlockModel {
+    // W63.2: literal `oak_trapdoor` texture so the trapdoor slab
+    // renders instead of magenta __missing.
     BlockModel {
         elements: vec![ModelElement {
             from: [0.0, 0.0, 0.0],
@@ -725,12 +727,12 @@ pub(crate) fn build_trapdoor() -> BlockModel {
             rotation: None,
             shade: true,
             faces: ElementFaces {
-                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#texture", Some(CubeFace::Down))),
-                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#texture", Some(CubeFace::Up))),
-                north: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::North))),
-                south: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::South))),
-                west: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::West))),
-                east: Some(uv_face([0.0, 0.0, 16.0, 3.0], "#texture", Some(CubeFace::East))),
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_trapdoor", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_trapdoor", Some(CubeFace::Up))),
+                north: Some(uv_face([0.0, 0.0, 16.0, 3.0], "oak_trapdoor", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 0.0, 16.0, 3.0], "oak_trapdoor", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 0.0, 16.0, 3.0], "oak_trapdoor", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 0.0, 16.0, 3.0], "oak_trapdoor", Some(CubeFace::East))),
             },
         }],
         textures: HashMap::new(),
@@ -742,6 +744,12 @@ pub(crate) fn build_trapdoor() -> BlockModel {
 /// slab on the X axis with the full 16x16 texture mapped to the
 /// big faces and a 3x16 strip mapped to the edge faces.
 pub(crate) fn build_door_lower() -> BlockModel {
+    // W63.2: literal `oak_door_bottom` texture so the door slab
+    // renders the wood-door sprite instead of magenta __missing.
+    // The MC pack ships oak_door_bottom.png, birch_door_bottom.png,
+    // etc.; using oak as the default covers oak/iron and is a
+    // reasonable visual fallback for the W48 variants until per-
+    // variant textures get wired through resolve_for_cache.
     BlockModel {
         elements: vec![ModelElement {
             from: [0.0, 0.0, 0.0],
@@ -749,12 +757,12 @@ pub(crate) fn build_door_lower() -> BlockModel {
             rotation: None,
             shade: true,
             faces: ElementFaces {
-                down: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#bottom", None)),
-                up: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#top", None)),
-                north: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#side", None)),
-                south: Some(uv_face([13.0, 0.0, 16.0, 16.0], "#side", None)),
-                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", Some(CubeFace::West))),
-                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", Some(CubeFace::East))),
+                down: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_bottom", None)),
+                up: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_bottom", None)),
+                north: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_bottom", None)),
+                south: Some(uv_face([13.0, 0.0, 16.0, 16.0], "oak_door_bottom", None)),
+                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_door_bottom", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_door_bottom", Some(CubeFace::East))),
             },
         }],
         textures: HashMap::new(),
@@ -767,6 +775,8 @@ pub(crate) fn build_door_lower() -> BlockModel {
 /// (the engine resolves `door_oak_upper.png` per the W12.2
 /// BlockType row's `top`/`bottom`/`sides` tile spec).
 pub(crate) fn build_door_upper() -> BlockModel {
+    // W63.2: literal `oak_door_top` texture for the upper-half
+    // sprite.
     BlockModel {
         elements: vec![ModelElement {
             from: [0.0, 0.0, 0.0],
@@ -774,12 +784,12 @@ pub(crate) fn build_door_upper() -> BlockModel {
             rotation: None,
             shade: true,
             faces: ElementFaces {
-                down: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#bottom", None)),
-                up: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#top", None)),
-                north: Some(uv_face([0.0, 0.0, 3.0, 16.0], "#side", None)),
-                south: Some(uv_face([13.0, 0.0, 16.0, 16.0], "#side", None)),
-                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
-                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+                down: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_top", None)),
+                up: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_top", None)),
+                north: Some(uv_face([0.0, 0.0, 3.0, 16.0], "oak_door_top", None)),
+                south: Some(uv_face([13.0, 0.0, 16.0, 16.0], "oak_door_top", None)),
+                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_door_top", None)),
+                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "oak_door_top", None)),
             },
         }],
         textures: HashMap::new(),
