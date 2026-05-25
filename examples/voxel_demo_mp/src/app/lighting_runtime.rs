@@ -91,10 +91,38 @@ impl Voxel {
         // the cube path is skipped. For all other blocks return `false`.
         let chunk_ref = chunk;
         let voxel_origin_ref = origin;
+        // W62.2: door open-state lookup. Cloned into the closure
+        // so the meshing path can render open doors as invisible
+        // (matches the "door swung aside" MC behavior; full
+        // hinge rotation lands in W62.2b).
+        let door_open_snapshot: std::collections::HashSet<[i32; 3]> =
+            self.door_open.clone();
         let emit_special = move |block: BlockId,
                                  voxel_origin: glam::Vec3,
                                  verts: &mut Vec<MeshVertex>,
                                  idxs: &mut Vec<u32>| {
+            // W62.2: door at open state -> emit nothing but
+            // return `true` so the greedy cube path skips this
+            // cell (door "disappears" visually).
+            if crate::block::door::is_door_block(block.0) {
+                let wp = [
+                    voxel_origin.x.floor() as i32,
+                    voxel_origin.y.floor() as i32,
+                    voxel_origin.z.floor() as i32,
+                ];
+                // Lower-half resolution: the upper half also
+                // disappears when its sibling lower is open.
+                let lower = if (1..=78).contains(&block.0)
+                    && door_open_snapshot.contains(&[wp[0], wp[1] - 1, wp[2]])
+                {
+                    [wp[0], wp[1] - 1, wp[2]]
+                } else {
+                    wp
+                };
+                if door_open_snapshot.contains(&lower) {
+                    return true;
+                }
+            }
             // Compute voxel local coords from world position.
             let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
             let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
