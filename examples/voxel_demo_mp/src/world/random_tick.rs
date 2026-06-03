@@ -39,6 +39,10 @@ const CELLS_PER_CHUNK: usize = 1;
 /// no-op, so this is generous.
 const MAX_CELLS_PER_TICK: usize = 256;
 
+/// Inverse chance a sampled sapling advances toward a tree on a given
+/// random tick (1 in N). Higher = slower growth.
+const SAPLING_GROW_DENOM: u32 = 8;
+
 /// Host-side random-tick driver. Samples random cells from the
 /// loaded chunks near the player and dispatches each to a per-block
 /// behaviour. No-op on clients.
@@ -89,11 +93,43 @@ fn xorshift(s: &mut u32) -> u32 {
 /// `rng` word lets a behaviour make a local random choice (e.g. the
 /// grass-spread direction) without touching the scheduler's stream.
 fn random_tick_cell(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
-    // W65.1 ships a single behaviour; W65.2+ turn this into a match
-    // over the block id (sapling growth, leaf decay, crops).
-    if vx.world.get(pos).0 == GRASS_ID
-        && let Some((p, b)) = grass_tick(&vx.world, pos, rng)
-    {
+    let id = vx.world.get(pos).0;
+    if id == GRASS_ID {
+        if let Some((p, b)) = grass_tick(&vx.world, pos, rng) {
+            crate::world::edit::emit(vx, p, b);
+        }
+    } else if is_sapling(id) {
+        sapling_tick(vx, pos, rng);
+    }
+}
+
+/// True for the standard 7 `_sapling` blocks (oak / birch / spruce /
+/// jungle / acacia / dark_oak / cherry). Mangrove propagule + azalea
+/// grow differently and are intentionally excluded.
+fn is_sapling(id: u16) -> bool {
+    crate::block::block_type(id)
+        .map(|b| b.name.ends_with("_sapling"))
+        .unwrap_or(false)
+}
+
+/// Probabilistic sapling growth. On a fraction of the random ticks a
+/// sapling is sampled, if it stands on soil with trunk headroom it
+/// becomes a small oak. The chance gate (plus the sparse sampling)
+/// spreads growth over a handful of seconds rather than firing the
+/// instant a sapling is placed.
+fn sapling_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
+    if !rng.is_multiple_of(SAPLING_GROW_DENOM) {
+        return;
+    }
+    // Must stand on sustaining soil (dirt / grass).
+    let below = vx.world.get([pos[0], pos[1] - 1, pos[2]]).0;
+    if below != DIRT_ID && below != GRASS_ID {
+        return;
+    }
+    let Some(edits) = crate::world::tree::grow_oak_edits(&vx.world, pos) else {
+        return;
+    };
+    for (p, b) in edits {
         crate::world::edit::emit(vx, p, b);
     }
 }

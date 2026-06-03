@@ -10,5 +10,7 @@ pub mod falling;
 pub mod place_break;
 // W65 - MC-style random block tick (grass spread, growth, decay).
 pub mod random_tick;
+// W65.2 - runtime sapling -> tree growth (world-space edit builder).
+pub mod tree;
 // W47.18 - per-frame chunk streamer (queue, unload, dispatch, drain).
 pub mod stream;
