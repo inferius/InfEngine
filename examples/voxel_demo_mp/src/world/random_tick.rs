@@ -52,6 +52,10 @@ const LEAF_DECAY_RADIUS: i32 = 4;
 /// Inverse chance a decaying leaf drops an oak sapling (1 in N).
 const LEAF_SAPLING_DROP_DENOM: u32 = 20;
 
+/// Inverse chance a sampled immature crop advances to mature on a
+/// given random tick (1 in N). Higher = slower growth.
+const CROP_GROW_DENOM: u32 = 6;
+
 /// Host-side random-tick driver. Samples random cells from the
 /// loaded chunks near the player and dispatches each to a per-block
 /// behaviour. No-op on clients.
@@ -111,6 +115,26 @@ fn random_tick_cell(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
         sapling_tick(vx, pos, rng);
     } else if id == crate::block::LEAVES_ID {
         leaf_tick(vx, pos, rng);
+    } else if crate::world::crop::is_immature_crop(id) {
+        crop_tick(vx, pos, rng);
+    }
+}
+
+/// Immature-crop random tick: on a fraction of ticks, if the crop
+/// stands on soil (dirt / grass), advance it to the mature stage.
+/// Two-stage growth; MC's finer stage chain + farmland hydration are
+/// a follow-up.
+fn crop_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
+    if !rng.is_multiple_of(CROP_GROW_DENOM) {
+        return;
+    }
+    let below = vx.world.get([pos[0], pos[1] - 1, pos[2]]).0;
+    if below != DIRT_ID && below != GRASS_ID {
+        return;
+    }
+    let id = vx.world.get(pos).0;
+    if let Some(mature) = crate::world::crop::mature_for(id) {
+        crate::world::edit::emit(vx, pos, BlockId(mature));
     }
 }
 

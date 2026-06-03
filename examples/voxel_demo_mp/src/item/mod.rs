@@ -2271,6 +2271,13 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // ids match their block ids (644/645).
     ItemType { id: 644, name: "gravel", display: Some("Gravel"), places: Some(644), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 645, name: "red_sand", display: Some("Red Sand"), places: Some(645), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W65.4 - immature crop stages. Item forms exist only to satisfy
+    // the 1:1 block<->item invariant; they place their own young
+    // block (which then grows) and harvest to nothing.
+    ItemType { id: 646, name: "wheat_immature", display: Some("Wheat (Growing)"), places: Some(646), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 647, name: "carrots_immature", display: Some("Carrots (Growing)"), places: Some(647), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 648, name: "potatoes_immature", display: Some("Potatoes (Growing)"), places: Some(648), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 649, name: "beetroots_immature", display: Some("Beetroots (Growing)"), places: Some(649), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 // ---------------------------------------------------------------

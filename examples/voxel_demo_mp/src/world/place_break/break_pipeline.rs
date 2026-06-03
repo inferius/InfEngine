@@ -135,7 +135,13 @@ pub(crate) fn apply_block_break(
             .unwrap_or(BlockId::AIR);
         let tier = tool_tier(held);
         let needed = block_required_tier(broken);
-        if !suppress_drops && tier >= needed {
+        // W65.4: immature crops have no item form - harvest before
+        // maturity drops nothing (MC drops only seeds early; we keep
+        // it simple). Mature crops fall through to the normal drop.
+        if !suppress_drops
+            && tier >= needed
+            && !crate::world::crop::is_immature_crop(broken.0)
+        {
             // W35.2: wall-torch variants drop the floor-torch item.
             let drop_id = match broken.0 {
                 x if x == REDSTONE_WALL_TORCH_ID => REDSTONE_TORCH_ID,

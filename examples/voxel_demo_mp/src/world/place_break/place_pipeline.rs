@@ -98,6 +98,13 @@ pub(crate) fn apply_block_place(
     if overlaps || torch_unsupported || occupied {
         return;
     }
+    // W65.4: a planted crop starts at its immature stage and grows
+    // via random tick. Swap before the edit is built / broadcast so
+    // every peer sees the young sprite.
+    let placed_block = match crate::world::crop::immature_for(placed_block.0) {
+        Some(immature) => BlockId(immature),
+        None => placed_block,
+    };
     let edit = EditMsg {
         x: target_voxel[0],
         y: target_voxel[1],
