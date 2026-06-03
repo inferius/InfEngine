@@ -711,6 +711,13 @@ pub(crate) struct Voxel {
     /// block id at the world coord tells the mesher which
     /// liquid lives at that cell.
     pub(crate) liquid_positions: HashSet<[i32; 3]>,
+    /// W64: cells queued for a falling-block check. A freshly placed
+    /// falling block (sand / concrete_powder / gravel) and the cell
+    /// directly above any removed block land here; the host-only
+    /// `world::falling::tick` drops each unsupported one a voxel per
+    /// tick. Host-only - clients never insert (their place / break
+    /// hooks skip it) and the tick clears any stragglers.
+    pub(crate) falling_pending: HashSet<[i32; 3]>,
     /// MC-style level per liquid voxel: 0 = source, 1..=7 = flow
     /// (lower = closer to source). Missing entry defaults to 0
     /// (source) so loaders from old saves treat existing fluid

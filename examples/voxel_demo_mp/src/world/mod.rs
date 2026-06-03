@@ -3,6 +3,8 @@
 //! submodule is pure / borrow-friendly free functions; the App
 //! (`Voxel`) calls them with the explicit field references it needs.
 
+// W64 - falling-block physics (sand / concrete_powder / gravel).
+pub mod falling;
 pub mod place_break;
 // W47.18 - per-frame chunk streamer (queue, unload, dispatch, drain).
 pub mod stream;

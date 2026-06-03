@@ -166,6 +166,11 @@ pub(crate) fn apply_block_break(
         // Cascade: dislodge any F_NO_PLACE decoration whose support
         // we just removed.
         vx.dislodge_unsupported_decorations(voxel);
+        // W64: a falling block (sand / gravel / concrete_powder)
+        // resting directly on the removed cell just lost its floor -
+        // wake it so the next falling tick drops it. Host-only; the
+        // tick filters non-falling cells.
+        vx.falling_pending.insert([voxel[0], voxel[1] + 1, voxel[2]]);
     }
     if broken != BlockId::AIR {
         vx.blocks_broken = vx.blocks_broken.saturating_add(1);

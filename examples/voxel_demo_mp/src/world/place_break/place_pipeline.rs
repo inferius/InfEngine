@@ -238,6 +238,13 @@ pub(crate) fn apply_block_place(
         .map(|d| d.color)
         .unwrap_or([0.7, 0.7, 0.7]);
     vx.spawn_place_particles(target_voxel, color);
+    // W64: a freshly placed falling block starts falling if the
+    // cell beneath it is empty. Host-only enqueue (the tick gates
+    // on NetRole); the destination + chain are re-queued by the
+    // tick itself.
+    if !is_client && crate::world::falling::is_falling_block(placed_block.0) {
+        vx.falling_pending.insert(target_voxel);
+    }
     vx.blocks_placed = vx.blocks_placed.saturating_add(1);
     vx.place_history.push(target_voxel);
     if vx.place_history.len() > 32 {

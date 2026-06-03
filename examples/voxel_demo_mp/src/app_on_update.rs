@@ -882,6 +882,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // liquid the host runs fall -> spread -> optional source
         // merge -> decay. Clients skip and rely on `vx.edit`.
         vx.tick_liquids();
+        // W64: gravity for sand / concrete_powder / gravel. Host
+        // drops each queued unsupported falling cell one voxel per
+        // tick; clients apply the resulting `vx.edit` traffic.
+        crate::world::falling::tick(vx);
         // Step every floating drop entity: gravity, bob,
         // pickup-on-touch, despawn after lifetime. Host runs
         // the full sim; clients also tick locally for smooth
