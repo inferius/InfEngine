@@ -564,3 +564,6 @@ pub(crate) const WHEAT_IMMATURE_ID: u16 = 646;
 pub(crate) const CARROTS_IMMATURE_ID: u16 = 647;
 pub(crate) const POTATOES_IMMATURE_ID: u16 = 648;
 pub(crate) const BEETROOTS_IMMATURE_ID: u16 = 649;
+// W67.1 - redstone signal blocks. Wire (309) + sources + lamp pair.
+pub(crate) const REDSTONE_DUST_ID: u16 = 309;
+pub(crate) const REDSTONE_LAMP_ID: u16 = 650;

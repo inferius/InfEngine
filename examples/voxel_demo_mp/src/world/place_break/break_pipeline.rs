@@ -177,6 +177,13 @@ pub(crate) fn apply_block_break(
         // wake it so the next falling tick drops it. Host-only; the
         // tick filters non-falling cells.
         vx.falling_pending.insert([voxel[0], voxel[1] + 1, voxel[2]]);
+        // W67.1: breaking a redstone block (wire / source / lamp)
+        // re-solves the local network so dependent lamps update. The
+        // broken cell is already air (world_set_tracked above), so the
+        // resolve seeds from its neighbours.
+        if crate::world::redstone::is_redstone_block(broken.0) {
+            crate::world::redstone::resolve(vx, voxel);
+        }
     }
     if broken != BlockId::AIR {
         vx.blocks_broken = vx.blocks_broken.saturating_add(1);

@@ -724,6 +724,11 @@ pub(crate) struct Voxel {
     /// remains in range. `world_set_tracked` drops an entry the moment
     /// its cell stops being a leaf.
     pub(crate) persistent_leaves: HashSet<[i32; 3]>,
+    /// W67.1: levers currently in the "on" position. The redstone
+    /// solver reads this as a constant power-15 source set; an RMB on
+    /// a lever toggles membership. Server-side only (not persisted in
+    /// v1 - levers reset off on reload).
+    pub(crate) lever_on: HashSet<[i32; 3]>,
     /// MC-style level per liquid voxel: 0 = source, 1..=7 = flow
     /// (lower = closer to source). Missing entry defaults to 0
     /// (source) so loaders from old saves treat existing fluid

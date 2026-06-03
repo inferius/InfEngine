@@ -127,6 +127,9 @@ pub enum RmbAction {
     /// W61.2: right-click on a door / trapdoor - toggles open
     /// state.
     ToggleDoor,
+    /// W67.1: right-click on a lever - toggles its redstone power
+    /// state + re-solves the network.
+    ToggleLever,
     /// Right-click on a bed voxel (id 35) - tries to skip the
     /// night.
     SleepBed,
@@ -216,6 +219,10 @@ pub fn classify_rmb_action(
     }
     if target_id == BED_ID {
         return RmbAction::SleepBed;
+    }
+    // W67.1: lever toggles its redstone power state.
+    if target_id == crate::block::LEVER_ID {
+        return RmbAction::ToggleLever;
     }
     // 3. Held-item-driven branches: flint+steel and buckets.
     if let Some(h) = held_id {

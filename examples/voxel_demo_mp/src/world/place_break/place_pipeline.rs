@@ -258,6 +258,11 @@ pub(crate) fn apply_block_place(
     if !is_client && placed_block.0 == crate::block::LEAVES_ID {
         vx.persistent_leaves.insert(target_voxel);
     }
+    // W67.1: placing a redstone block (wire / source / lamp) re-solves
+    // the local network so lamps update immediately.
+    if !is_client && crate::world::redstone::is_redstone_block(placed_block.0) {
+        crate::world::redstone::resolve(vx, target_voxel);
+    }
     vx.blocks_placed = vx.blocks_placed.saturating_add(1);
     vx.place_history.push(target_voxel);
     if vx.place_history.len() > 32 {

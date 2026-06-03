@@ -155,6 +155,11 @@ impl Voxel {
         if block.0 != block::LEAVES_ID {
             self.persistent_leaves.remove(&voxel);
         }
+        // W67.1: a cell that stops being a lever can't stay a powered
+        // lever - drop its on-state so a future lever there starts off.
+        if block.0 != block::LEVER_ID {
+            self.lever_on.remove(&voxel);
+        }
         // Liquid bookkeeping: any registered liquid (water,
         // lava, ...) re-enters the active queue + position set
         // when it's written. Level defaults to 0 (source) for

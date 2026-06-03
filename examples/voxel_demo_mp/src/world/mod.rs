@@ -10,6 +10,8 @@ pub mod falling;
 pub mod place_break;
 // W65 - MC-style random block tick (grass spread, growth, decay).
 pub mod random_tick;
+// W67 - redstone signal logic (power solve, lever, lamp).
+pub mod redstone;
 // W65.4 - crop growth (immature -> mature stage mapping).
 pub mod crop;
 // W65.2 - runtime sapling -> tree growth (world-space edit builder).

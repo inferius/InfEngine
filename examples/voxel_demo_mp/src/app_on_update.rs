@@ -708,6 +708,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 ];
                 vx.rebuild_chunks(&[cc]);
                 let _ = was_open;
+            } else if predicted == RmbAction::ToggleLever {
+                // W67.1: flip the lever + re-solve its redstone net.
+                crate::world::redstone::toggle_lever(vx, hit.voxel);
+                vx.lmb_pending = false;
+                vx.rmb_pending = false;
             } else if predicted == RmbAction::SleepBed {
                 // W47.13i: bed sleep (day-phase gated; host bumps
                 // clock, client asks host).

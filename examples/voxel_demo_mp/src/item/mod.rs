@@ -2278,6 +2278,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 647, name: "carrots_immature", display: Some("Carrots (Growing)"), places: Some(647), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 648, name: "potatoes_immature", display: Some("Potatoes (Growing)"), places: Some(648), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 649, name: "beetroots_immature", display: Some("Beetroots (Growing)"), places: Some(649), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W67.1 - unlit redstone lamp (the placeable / off state).
+    ItemType { id: 650, name: "redstone_lamp", display: Some("Redstone Lamp"), places: Some(650), max_stack: 64, icon: None, category: ItemCategory::Redstone },
 ];
 
 // ---------------------------------------------------------------
