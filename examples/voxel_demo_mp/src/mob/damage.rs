@@ -19,7 +19,9 @@ use crate::Voxel;
 use crate::inventory::inv_pickup;
 use crate::net::{MobEventMsg, NetRole};
 
-use super::kinds::{KIND_CHICKEN, KIND_COW, KIND_PIG};
+use super::kinds::{
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
+};
 use super::state::{MOB_DEATH_FADE, MOB_HIT_DAMAGE};
 
 /// Authoritative damage application. Caller must own the
@@ -90,30 +92,19 @@ pub(crate) fn damage_mob_scaled(
     // for the animation.
     voxel.mobs[idx].dying = MOB_DEATH_FADE;
     voxel.mob_dying.insert(mob_id, MOB_DEATH_FADE);
-    // Per-kind loot table. Sheep drops 1-3 wool + 1-2 meat;
-    // chicken drops 1-2 feathers + 1-2 meat. Quantities are
-    // seeded from the mob id so save/replay matches.
+    // Per-kind hand-rolled loot table (see `mob_loot`). Quantities
+    // are seeded from the mob id so save / replay matches. The kill
+    // either auto-collects to the host inventory or credits the
+    // attacking client's server-side inventory.
     let kind = voxel.mobs[idx].kind;
     let seed = mob_id.wrapping_mul(2654435761);
-    let meat_qty = (1 + ((seed >> 8) & 0x1) as u8).min(2);
-    let (loot_id, loot_qty) = if kind == KIND_CHICKEN {
-        (BlockId(19), (1 + ((seed >> 4) & 0x1) as u8).min(2))
-    } else if kind == KIND_PIG {
-        // Extra meat, no fibre drop.
-        (BlockId(12), (2 + (seed & 0x1) as u8).min(3))
-    } else if kind == KIND_COW {
-        // Cow drops leather (placeholder = wool) + extra meat.
-        (BlockId(11), (1 + (seed & 0x1) as u8).min(2))
-    } else {
-        (BlockId(11), (1 + (seed & 0x3) as u8).min(3))
-    };
+    let loot = mob_loot(kind, seed);
     match attacker_client_id {
         None | Some(0) => {
-            for _ in 0..loot_qty {
-                voxel.pickup(loot_id);
-            }
-            for _ in 0..meat_qty {
-                voxel.pickup(BlockId(12));
+            for (id, qty) in &loot {
+                for _ in 0..*qty {
+                    voxel.pickup(BlockId(*id));
+                }
             }
             voxel.kill_count = voxel.kill_count.saturating_add(1);
         }
@@ -125,11 +116,10 @@ pub(crate) fn damage_mob_scaled(
             } = &mut voxel.net
                 && let Some(inv) = inventories.get_mut(&cid)
             {
-                for _ in 0..loot_qty {
-                    inv_pickup(&mut inv.inventory, loot_id);
-                }
-                for _ in 0..meat_qty {
-                    inv_pickup(&mut inv.inventory, BlockId(12));
+                for (id, qty) in &loot {
+                    for _ in 0..*qty {
+                        inv_pickup(&mut inv.inventory, BlockId(*id));
+                    }
                 }
                 pending_inv_sends.insert(cid);
             }
@@ -143,4 +133,58 @@ pub(crate) fn damage_mob_scaled(
         mob_pos[2].floor() as i32,
     ];
     voxel.spawn_break_particles(target_voxel);
+}
+
+/// Per-kind drop table. Returns `(item_id, qty)` pairs auto-collected
+/// on the kill. Ids cover block-form drops (wool 11, meat 12, feather
+/// 19) and item-only drops (rotten_flesh 293, bone 294, string 301,
+/// leather 303, arrow 643). `seed` is the mob-id hash so quantities
+/// replay deterministically.
+///
+/// MC mirror: each `EntityType` ships a loot-table JSON; we hand-roll
+/// the common drops. Hostiles yield their signature item and no meat;
+/// passives yield produce + meat.
+fn mob_loot(kind: u8, seed: u32) -> Vec<(u16, u8)> {
+    let one_or_two = 1 + ((seed >> 4) & 0x1) as u8;
+    let zero_to_two = (((seed >> 8) & 0x3) as u8) % 3;
+    match kind {
+        KIND_CHICKEN => vec![(19, one_or_two), (12, one_or_two)],
+        KIND_PIG => vec![(12, 2 + (seed & 0x1) as u8)],
+        KIND_COW => vec![(303, one_or_two), (12, one_or_two)],
+        KIND_ZOMBIE => vec![(293, one_or_two)],
+        KIND_SKELETON => vec![(294, one_or_two), (643, zero_to_two)],
+        KIND_SPIDER => vec![(301, zero_to_two)],
+        // Sheep (and any other passive default): wool + meat.
+        _ => vec![(11, 1 + ((seed & 0x3) as u8) % 3), (12, one_or_two)],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hostiles_drop_signature_item_and_no_meat() {
+        for seed in 0u32..64 {
+            let z = mob_loot(KIND_ZOMBIE, seed);
+            assert!(z.iter().any(|(id, q)| *id == 293 && *q >= 1));
+            assert!(!z.iter().any(|(id, _)| *id == 12), "zombie meat-free");
+            let s = mob_loot(KIND_SKELETON, seed);
+            assert!(s.iter().any(|(id, q)| *id == 294 && *q >= 1));
+            assert!(!s.iter().any(|(id, _)| *id == 12), "skeleton meat-free");
+            let sp = mob_loot(KIND_SPIDER, seed);
+            assert!(!sp.iter().any(|(id, _)| *id == 12), "spider meat-free");
+        }
+    }
+
+    #[test]
+    fn passives_drop_meat_and_cow_yields_leather() {
+        for kind in [KIND_COW, KIND_CHICKEN, KIND_PIG] {
+            assert!(
+                mob_loot(kind, 0x1234).iter().any(|(id, _)| *id == 12),
+                "kind {kind} drops meat",
+            );
+        }
+        assert!(mob_loot(KIND_COW, 0).iter().any(|(id, _)| *id == 303));
+    }
 }
