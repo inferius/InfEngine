@@ -189,6 +189,9 @@ pub(crate) fn block_material(b: BlockId) -> &'static str {
         6 => "grass",               // leaves
         9 => "glass",
         36 => "sand", // water - splashy-ish, no dedicated bank yet
+        // W64.2: gravel + red_sand are granular - share the soft sand
+        // bank (closest match; MC's distinct gravel bank is a TODO).
+        x if x == GRAVEL_ID || x == RED_SAND_ID => "sand",
         _ => "stone",
     }
 }

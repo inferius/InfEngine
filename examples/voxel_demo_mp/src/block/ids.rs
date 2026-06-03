@@ -553,3 +553,8 @@ pub(crate) const COPPER_WALL_TORCH_ID: u16 = 352;
 #[allow(dead_code)] pub(crate) const SCULK_SHRIEKER_ID: u16 = 630;
 #[allow(dead_code)] pub(crate) const SCULK_SENSOR_ID: u16 = 631;
 #[allow(dead_code)] pub(crate) const CALIBRATED_SCULK_SENSOR_ID: u16 = 632;
+// W64.2 - gravity blocks (fall like sand via world::falling). Ids
+// 633..=643 are tool/weapon items in the shared id space, so these
+// jump to 644/645 to keep `item.id == block.id` for block-forms.
+pub(crate) const GRAVEL_ID: u16 = 644;
+pub(crate) const RED_SAND_ID: u16 = 645;

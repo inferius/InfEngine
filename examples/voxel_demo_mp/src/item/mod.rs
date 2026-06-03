@@ -2267,6 +2267,10 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 641, name: "fishing_rod", display: Some("Fishing Rod"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
     ItemType { id: 642, name: "shield", display: Some("Shield"), places: None, max_stack: 1, icon: None, category: ItemCategory::Weapon },
     ItemType { id: 643, name: "arrow", display: Some("Arrow"), places: None, max_stack: 64, icon: None, category: ItemCategory::Weapon },
+    // W64.2 - gravity blocks (gravel + red_sand). Block-form items;
+    // ids match their block ids (644/645).
+    ItemType { id: 644, name: "gravel", display: Some("Gravel"), places: Some(644), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 645, name: "red_sand", display: Some("Red Sand"), places: Some(645), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 // ---------------------------------------------------------------

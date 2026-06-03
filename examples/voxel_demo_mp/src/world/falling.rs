@@ -32,12 +32,14 @@ use crate::{BlockId, EditMsg, Voxel};
 /// the cap keep their slot for the next tick.
 const MAX_FALLING_PER_TICK: usize = 2048;
 
-/// W64: block ids that obey gravity. Sand (4) + the 16
-/// `concrete_powder` colours (201..=216). W64.2 extends this with
-/// gravel / red_sand. `soul_sand` (374) is intentionally excluded -
-/// it's a solid support block in MC, not a falling one.
+/// W64: block ids that obey gravity. Sand (4), the 16
+/// `concrete_powder` colours (201..=216), and gravel / red_sand
+/// (W64.2, ids 644/645). `soul_sand` (374) is intentionally excluded
+/// - it's a solid support block in MC, not a falling one.
 pub(crate) fn is_falling_block(id: u16) -> bool {
     matches!(id, 4 | 201..=216)
+        || id == crate::block::GRAVEL_ID
+        || id == crate::block::RED_SAND_ID
 }
 
 /// Pure decision used by [`tick`]: the destination cell when the
@@ -147,6 +149,8 @@ mod tests {
         assert!(is_falling_block(4)); // sand
         assert!(is_falling_block(201)); // white_concrete_powder
         assert!(is_falling_block(216)); // black_concrete_powder
+        assert!(is_falling_block(crate::block::GRAVEL_ID)); // W64.2
+        assert!(is_falling_block(crate::block::RED_SAND_ID)); // W64.2
         assert!(!is_falling_block(1)); // stone
         assert!(!is_falling_block(2)); // dirt
         assert!(!is_falling_block(374)); // soul_sand - solid in MC

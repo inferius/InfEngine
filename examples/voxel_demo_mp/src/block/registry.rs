@@ -2909,4 +2909,14 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 630, name: "sculk_shrieker", color: [0.10, 0.12, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["sculk_shrieker_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["sculk_shrieker_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["sculk_shrieker_side.png"], keep_alpha: false } },
     BlockType { id: 631, name: "sculk_sensor", color: [0.10, 0.12, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["sculk_sensor_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["sculk_sensor_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["sculk_sensor_side.png"], keep_alpha: false } },
     BlockType { id: 632, name: "calibrated_sculk_sensor", color: [0.10, 0.12, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["calibrated_sculk_sensor_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["sculk_sensor_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["calibrated_sculk_sensor_side.png"], keep_alpha: false } },
+    // W64.2 - gravity blocks: gravel + red_sand fall like sand
+    // (folded into world::falling::is_falling_block). Ids jump from
+    // 632 to 644 because 633..=643 are already claimed by non-block
+    // tool / weapon items (hoes, bow, arrow, ...) in the shared
+    // block/item id space - block-form items use `item.id ==
+    // block.id`, so a new placeable block must avoid those. The
+    // HashMap-keyed BlockRegistry + find-based block_type() tolerate
+    // the gap.
+    BlockType { id: 644, name: "gravel", color: [0.55, 0.52, 0.50], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["gravel.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["gravel.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["gravel.png"], keep_alpha: false } },
+    BlockType { id: 645, name: "red_sand", color: [0.78, 0.45, 0.20], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["red_sand.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["red_sand.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["red_sand.png"], keep_alpha: false } },
 ];
