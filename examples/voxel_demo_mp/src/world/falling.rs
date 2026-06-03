@@ -25,7 +25,7 @@
 //! player disturbs it - matching MC.
 
 use crate::net::NetRole;
-use crate::{BlockId, EditMsg, Voxel};
+use crate::{BlockId, Voxel};
 
 /// Per-tick cap on falling-cell relocations so a giant collapse
 /// drains across several frames instead of stalling one. Cells over
@@ -92,37 +92,13 @@ pub(crate) fn tick(vx: &mut Voxel) {
         processed += 1;
         let moved = vx.world.get(pos);
         // Relocate one voxel down through the shared edit funnel.
-        emit_edit(vx, below, moved);
-        emit_edit(vx, pos, BlockId::AIR);
+        crate::world::edit::emit(vx, below, moved);
+        crate::world::edit::emit(vx, pos, BlockId::AIR);
         // Keep the fall going + wake the cell that just lost its
         // floor (it may be a falling block too).
         vx.falling_pending.insert(below);
         vx.falling_pending.insert([pos[0], pos[1] + 1, pos[2]]);
     }
-}
-
-/// Apply one block edit the same way a manual dig / place does:
-/// write the cell with side-table bookkeeping via
-/// `world_set_tracked`, remesh the affected chunks, broadcast
-/// `vx.edit` on the server, and record it in `edit_history`.
-/// Host-only - the caller ([`tick`]) gates on `NetRole`.
-fn emit_edit(vx: &mut Voxel, pos: [i32; 3], block: BlockId) {
-    vx.world_set_tracked(pos, block);
-    let coords = Voxel::affected_chunks(pos);
-    vx.rebuild_chunks(&coords);
-    let edit = EditMsg {
-        x: pos[0],
-        y: pos[1],
-        z: pos[2],
-        block: block.0,
-    };
-    if let NetRole::Server { server, .. } = &vx.net {
-        let cfg = bincode::config::standard();
-        if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
-            server.broadcast_bytes("vx.edit", buf);
-        }
-    }
-    vx.edit_history.push(edit);
 }
 
 #[cfg(test)]

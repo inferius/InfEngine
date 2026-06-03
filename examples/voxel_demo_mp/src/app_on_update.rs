@@ -886,6 +886,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // drops each queued unsupported falling cell one voxel per
         // tick; clients apply the resulting `vx.edit` traffic.
         crate::world::falling::tick(vx);
+        // W65: MC-style random block ticks (grass spread; later
+        // sapling growth, leaf decay, crops). Host-only sample over
+        // chunks near the player; clients get the `vx.edit` stream.
+        crate::world::random_tick::tick(vx);
         // Step every floating drop entity: gravity, bob,
         // pickup-on-touch, despawn after lifetime. Host runs
         // the full sim; clients also tick locally for smooth

@@ -3,8 +3,12 @@
 //! submodule is pure / borrow-friendly free functions; the App
 //! (`Voxel`) calls them with the explicit field references it needs.
 
+// W65 - shared runtime block-edit funnel (set + remesh + broadcast).
+pub mod edit;
 // W64 - falling-block physics (sand / concrete_powder / gravel).
 pub mod falling;
 pub mod place_break;
+// W65 - MC-style random block tick (grass spread, growth, decay).
+pub mod random_tick;
 // W47.18 - per-frame chunk streamer (queue, unload, dispatch, drain).
 pub mod stream;
