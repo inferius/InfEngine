@@ -51,6 +51,12 @@ pub(crate) struct MobState {
     /// despawn pass. Mirrors MC's
     /// `Mob::checkDespawn` 30-second far-timer.
     pub(crate) far_despawn_timer: f32,
+    /// W66.2: in-love timer (seconds). > 0 = fed + seeking a mate.
+    /// Server-side only (not wired or saved); decays in `breed_pass`.
+    pub(crate) love: f32,
+    /// W66.2: seconds before this animal can be bred again. Set on a
+    /// successful breed so a pair can't multiply every tick.
+    pub(crate) breed_cooldown: f32,
 }
 
 impl MobState {
@@ -79,6 +85,8 @@ impl MobState {
             attack_cd: 0.0,
             persistent: false,
             far_despawn_timer: FAR_DESPAWN_TIMER,
+            love: 0.0,
+            breed_cooldown: 0.0,
         }
     }
 }

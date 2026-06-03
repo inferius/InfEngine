@@ -605,8 +605,36 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             false
         };
+        // W66.2: RMB on a breedable animal while holding breeding food
+        // feeds it (sets love + consumes one food), taking priority
+        // over the block-place cascade below. Host / offline only -
+        // a pure client lets the server echo drive the love timer.
+        let mut fed = false;
+        if !is_client
+            && rmb
+            && !vx.any_panel_open()
+            && selected_block
+                .is_some_and(|b| crate::mob::breed::is_breeding_food(b.0))
+            && let Some((mob_id, _)) =
+                vx.raycast_mob(vx.player_pos, forward, MOB_ATTACK_REACH)
+        {
+            fed = crate::mob::breed::try_feed(vx, mob_id);
+            if fed {
+                if !vx.abilities.instabuild
+                    && let Some((_, count)) =
+                        vx.inventory[vx.selected_slot].as_mut()
+                {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        vx.inventory[vx.selected_slot] = None;
+                    }
+                }
+                vx.rmb_pending = false;
+            }
+        }
         // Block place: RMB single click stays instant; no mining.
-        if !bucket_scooped
+        if !fed
+            && !bucket_scooped
             && !vx.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = vx.target

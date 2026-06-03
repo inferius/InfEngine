@@ -22,6 +22,7 @@
 
 pub(crate) mod ai;
 pub(crate) mod audio;
+pub(crate) mod breed;
 pub(crate) mod damage;
 pub(crate) mod despawn;
 pub(crate) mod goal;
