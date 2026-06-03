@@ -149,6 +149,12 @@ impl Voxel {
         if block.0 != TORCH_ID {
             self.torch_orient.remove(&voxel);
         }
+        // W65.3: a cell that stops being a leaf can no longer be a
+        // persistent (player-placed) leaf - drop its decay exemption
+        // so a future tree-grown leaf in the same spot can decay.
+        if block.0 != block::LEAVES_ID {
+            self.persistent_leaves.remove(&voxel);
+        }
         // Liquid bookkeeping: any registered liquid (water,
         // lava, ...) re-enters the active queue + position set
         // when it's written. Level defaults to 0 (source) for

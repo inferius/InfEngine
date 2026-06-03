@@ -45,6 +45,7 @@ impl Voxel {
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.falling_pending.clear();
+        self.persistent_leaves.clear();
         self.liquid_mesh_dirty = true;
         self.chests.clear();
         self.chest_open = None;

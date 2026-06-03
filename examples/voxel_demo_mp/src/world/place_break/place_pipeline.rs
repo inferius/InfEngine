@@ -245,6 +245,12 @@ pub(crate) fn apply_block_place(
     if !is_client && crate::world::falling::is_falling_block(placed_block.0) {
         vx.falling_pending.insert(target_voxel);
     }
+    // W65.3: a player-placed leaf is persistent (exempt from
+    // random-tick decay), mirroring MC's persistent leaf flag. Host
+    // side only - the decay pass runs on the host.
+    if !is_client && placed_block.0 == crate::block::LEAVES_ID {
+        vx.persistent_leaves.insert(target_voxel);
+    }
     vx.blocks_placed = vx.blocks_placed.saturating_add(1);
     vx.place_history.push(target_voxel);
     if vx.place_history.len() > 32 {

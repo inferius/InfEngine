@@ -43,6 +43,15 @@ const MAX_CELLS_PER_TICK: usize = 256;
 /// random tick (1 in N). Higher = slower growth.
 const SAPLING_GROW_DENOM: u32 = 8;
 
+/// Chebyshev radius searched for a sustaining log around a leaf. A
+/// leaf with no `WOOD_ID` log inside this box decays. (MC uses a
+/// distance-7 flood-fill through leaves; the box scan is the cheap
+/// stateless stand-in.)
+const LEAF_DECAY_RADIUS: i32 = 4;
+
+/// Inverse chance a decaying leaf drops an oak sapling (1 in N).
+const LEAF_SAPLING_DROP_DENOM: u32 = 20;
+
 /// Host-side random-tick driver. Samples random cells from the
 /// loaded chunks near the player and dispatches each to a per-block
 /// behaviour. No-op on clients.
@@ -100,6 +109,8 @@ fn random_tick_cell(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
         }
     } else if is_sapling(id) {
         sapling_tick(vx, pos, rng);
+    } else if id == crate::block::LEAVES_ID {
+        leaf_tick(vx, pos, rng);
     }
 }
 
@@ -132,6 +143,42 @@ fn sapling_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
     for (p, b) in edits {
         crate::world::edit::emit(vx, p, b);
     }
+}
+
+/// Leaf random tick: a tree-generated leaf with no sustaining log in
+/// range decays to air. Player-placed leaves (tracked in
+/// `persistent_leaves`) are exempt. On decay there's a small chance
+/// to drop an oak sapling, so chopping a tree can reseed.
+fn leaf_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
+    if vx.persistent_leaves.contains(&pos) {
+        return;
+    }
+    if has_log_within(&vx.world, pos, LEAF_DECAY_RADIUS) {
+        return;
+    }
+    crate::world::edit::emit(vx, pos, BlockId::AIR);
+    if rng.is_multiple_of(LEAF_SAPLING_DROP_DENOM) {
+        // Oak sapling (id 468) - replantable drop.
+        vx.spawn_drop(BlockId(468), pos);
+    }
+}
+
+/// True when a `WOOD_ID` log sits within `r` (Chebyshev) of `pos`.
+/// Early-exits on the first hit so leaves near a trunk are cheap;
+/// only orphaned leaves pay the full box scan before decaying.
+fn has_log_within(world: &infengine_voxel::World, pos: [i32; 3], r: i32) -> bool {
+    for dx in -r..=r {
+        for dy in -r..=r {
+            for dz in -r..=r {
+                if world.get([pos[0] + dx, pos[1] + dy, pos[2] + dz]).0
+                    == crate::block::WOOD_ID
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// True when the block directly blocks light from above: a non-air,
@@ -247,5 +294,27 @@ mod tests {
         // Offset (0,0,0) targets the grass itself - no spread.
         let rng = rng_for_offset(0, 0, 0);
         assert_eq!(grass_tick(&w, [5, 10, 5], rng), None);
+    }
+
+    #[test]
+    fn log_within_radius_sustains_leaf() {
+        let mut w = test_world();
+        w.set([10, 10, 10], BlockId(crate::block::WOOD_ID));
+        // Leaf 3 cells away on x - inside the radius-4 box.
+        assert!(has_log_within(&w, [13, 10, 10], LEAF_DECAY_RADIUS));
+    }
+
+    #[test]
+    fn no_log_in_range_lets_leaf_decay() {
+        let w = test_world(); // empty - no logs anywhere
+        assert!(!has_log_within(&w, [10, 10, 10], LEAF_DECAY_RADIUS));
+    }
+
+    #[test]
+    fn log_just_outside_radius_does_not_sustain() {
+        let mut w = test_world();
+        // Log 5 cells away on x, radius is 4 -> out of range.
+        w.set([15, 10, 10], BlockId(crate::block::WOOD_ID));
+        assert!(!has_log_within(&w, [10, 10, 10], LEAF_DECAY_RADIUS));
     }
 }

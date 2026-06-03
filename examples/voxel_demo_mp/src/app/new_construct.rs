@@ -279,6 +279,7 @@ impl Voxel {
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
             falling_pending: HashSet::new(),
+            persistent_leaves: HashSet::new(),
             lighting: lighting::LightingState::new(),
             last_lighting_tick_s: 0.0,
             mobs: Vec::new(),

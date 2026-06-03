@@ -718,6 +718,12 @@ pub(crate) struct Voxel {
     /// tick. Host-only - clients never insert (their place / break
     /// hooks skip it) and the tick clears any stragglers.
     pub(crate) falling_pending: HashSet<[i32; 3]>,
+    /// W65.3: player-placed leaf cells, exempt from random-tick decay
+    /// (MC's `persistent` leaf flag). Tree-generated leaves (from
+    /// worldgen and sapling growth) are absent and decay when no log
+    /// remains in range. `world_set_tracked` drops an entry the moment
+    /// its cell stops being a leaf.
+    pub(crate) persistent_leaves: HashSet<[i32; 3]>,
     /// MC-style level per liquid voxel: 0 = source, 1..=7 = flow
     /// (lower = closer to source). Missing entry defaults to 0
     /// (source) so loaders from old saves treat existing fluid
