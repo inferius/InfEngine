@@ -467,7 +467,7 @@ pub(crate) fn default_new_world() -> MenuScreen {
     MenuScreen::NewWorld {
         name: String::new(),
         seed: String::new(),
-        generator: "realistic".to_string(),
+        generator: "natural".to_string(),
         game_mode: GameMode::Survival,
     }
 }

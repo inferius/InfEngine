@@ -260,6 +260,7 @@ pub(crate) fn worldgen_str(wg: crate::worldgen::WorldGen) -> &'static str {
         crate::worldgen::WorldGen::Amplified => "amplified",
         crate::worldgen::WorldGen::Realistic => "realistic",
         crate::worldgen::WorldGen::Nether => "nether",
+        crate::worldgen::WorldGen::Natural => "natural",
     }
 }
 

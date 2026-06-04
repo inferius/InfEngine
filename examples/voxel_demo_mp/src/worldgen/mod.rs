@@ -44,6 +44,7 @@ pub(crate) mod climate;
 pub(crate) mod dungeons;
 pub(crate) mod flowers;
 pub(crate) mod height;
+pub(crate) mod natural;
 pub(crate) mod nether;
 #[cfg(test)]
 mod nether_baseline_test;
@@ -229,6 +230,13 @@ pub enum WorldGen {
     /// `nether` dim in a multi-dim save - the worldgen variant
     /// is per-dim, not a top-level world choice.
     Nether = 5,
+    /// W71: MC-inspired fractal terrain. Multi-octave value noise
+    /// (continentalness + biome hills + detail + ridged peaks)
+    /// replaces the sin/cos height of Classic / Realistic, giving
+    /// irregular, non-repeating landscapes. Shares the Realistic
+    /// biome / surface / cave / decoration pipeline. Default for new
+    /// overworlds.
+    Natural = 6,
 }
 
 impl WorldGen {
@@ -245,6 +253,7 @@ impl WorldGen {
             "amplified" | "amp" => Some(Self::Amplified),
             "realistic" | "real" => Some(Self::Realistic),
             "nether" | "hell" => Some(Self::Nether),
+            "natural" | "nat" => Some(Self::Natural),
             _ => None,
         }
     }
