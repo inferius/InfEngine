@@ -47,23 +47,31 @@ impl Voxel {
     /// Resolve a safe player spawn for the current world. Uses
     /// `spawn_pos` when configured, otherwise scans an outward
     /// spiral around the origin for a column whose top voxel is
-    /// solid + has clear air above. Falls back to high-altitude
-    /// Y=90 so gravity can drop the player onto whatever terrain
-    /// exists below. Caller should clear `player_vel` +
-    /// `fall_start_y` after assigning the returned position.
+    /// solid + has 3 clear air blocks above (dry, roofless ground).
+    /// If the whole search area is flooded / capped it lands on the
+    /// highest surface found instead of free-falling from altitude.
+    /// Caller should clear `player_vel` + `fall_start_y` after
+    /// assigning the returned position.
     pub(crate) fn safe_spawn(&self) -> Vec3 {
         if let Some(p) = self.spawn_pos {
             return Vec3::new(p[0], p[1], p[2]);
         }
         let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
-        // Square-spiral search out to 24 blocks. The first column
-        // with a confirmed surface + 2 blocks of air directly
-        // above wins so the player doesn't ever spawn buried.
-        for r in 0i32..=24 {
+        // Square-spiral search out to 48 blocks. A column with a solid
+        // top + 3 clear air blocks above (dry, roofless ground) wins.
+        // The wider radius matters for the Natural profile, where the
+        // origin can land in a low / ocean patch. `best` keeps the
+        // highest surface seen so a no-dry-column result still lands on
+        // solid ground rather than free-falling from a fixed altitude
+        // and wedging the player inside a hillside ("spawned stuck in
+        // the terrain").
+        let mut best: Option<(i32, i32, i32)> = None; // (surface_y, dx, dz)
+        let mut dry: Option<(i32, i32, i32)> = None;
+        'search: for r in 0i32..=48 {
             for dz in -r..=r {
                 for dx in -r..=r {
-                    // Cheap ring filter: only inspect cells on
-                    // the current ring perimeter.
+                    // Cheap ring filter: only inspect cells on the
+                    // current ring perimeter.
                     if r > 0 && dx.abs() != r && dz.abs() != r {
                         continue;
                     }
@@ -71,26 +79,45 @@ impl Voxel {
                         Some(y) => y,
                         None => continue,
                     };
-                    // Need 3 clear air blocks above the surface
-                    // voxel so the player capsule (PLAYER_HEIGHT
-                    // = 1.7 m) has headroom + body room.
+                    if best.is_none_or(|(by, _, _)| sy > by) {
+                        best = Some((sy, dx, dz));
+                    }
+                    // Need 3 clear air blocks above the surface voxel so
+                    // the player capsule (PLAYER_HEIGHT = 1.7 m) has
+                    // headroom + body room, and so a flooded column
+                    // (water directly above the seabed) is rejected.
                     let above1 = self.world.get([dx, sy + 1, dz]);
                     let above2 = self.world.get([dx, sy + 2, dz]);
                     let above3 = self.world.get([dx, sy + 3, dz]);
                     if above1.is_air() && above2.is_air() && above3.is_air() {
-                        // Voxel `sy` is solid with top at world
-                        // y = sy + 1. Foot sits on that surface;
-                        // `player_pos.y` is the eye/cap height so
-                        // it lands at sy + 1 + PLAYER_HEIGHT.
-                        return Vec3::new(
-                            dx as f32 + 0.5,
-                            sy as f32 + 1.0 + PLAYER_HEIGHT + 0.05,
-                            dz as f32 + 0.5,
-                        );
+                        dry = Some((sy, dx, dz));
+                        break 'search;
                     }
                 }
             }
         }
-        Vec3::new(0.0, 90.0, 0.0)
+        // Prefer the dry column; else the highest surface seen. Voxel
+        // `sy` is solid with top at world y = sy + 1; the foot sits
+        // there and `player_pos.y` is the eye/cap height, so it lands
+        // at sy + 1 + PLAYER_HEIGHT.
+        let Some((sy, dx, dz)) = dry.or(best) else {
+            // Pathological: nothing solid in range. The world always
+            // has a y=0 floor now, so a high drop still lands safely.
+            return Vec3::new(0.5, 90.0, 0.5);
+        };
+        let pos = Vec3::new(
+            dx as f32 + 0.5,
+            sy as f32 + 1.0 + PLAYER_HEIGHT + 0.05,
+            dz as f32 + 0.5,
+        );
+        tracing::info!(
+            dx,
+            dz,
+            sy,
+            dry = dry.is_some(),
+            y = pos.y,
+            "voxel: safe_spawn resolved"
+        );
+        pos
     }
 }

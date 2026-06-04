@@ -98,7 +98,16 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
         // `1 - |hills|` folds the noise into ridge lines for peaks.
         elev += (1.0 - hills.abs()) * 8.0;
     }
-    (SEA_LEVEL as f32 + elev).round() as i32
+    let h = SEA_LEVEL as f32 + elev;
+    // Guarantee dry, walkable ground around the origin so a fresh spawn
+    // never lands in an ocean / sub-sea pit (the "spawned in / stuck in
+    // the terrain" reports). Blend a ">= sea + 3" floor in at (0, 0),
+    // fading to the raw height by ~200 blocks out so the wider world
+    // keeps its natural lows and coastlines. `.max` only lifts lows -
+    // hills and peaks pass through untouched.
+    let d = (wx * wx + wz * wz).sqrt();
+    let pull = (1.0 - d / 200.0).clamp(0.0, 1.0);
+    lerp(h, h.max(SEA_LEVEL as f32 + 3.0), pull).round() as i32
 }
 
 /// Natural chunk generator: the Realistic biome / surface / carve /
@@ -198,6 +207,20 @@ mod tests {
             ph += natural_height(wx, wz, 5, Biome::Plains) as i64;
         }
         assert!(mh > ph, "mountains {mh} should outclimb plains {ph}");
+    }
+
+    #[test]
+    fn natural_origin_is_dry_land() {
+        // W73: within the spawn-pull radius the surface must sit safely
+        // above sea level for every biome, so a fresh spawn lands on dry
+        // ground rather than in an ocean / sub-sea pit.
+        for biome in [Biome::Plains, Biome::Swamp, Biome::Beach, Biome::Forest] {
+            let h = natural_height(0.0, 0.0, 12_345, biome);
+            assert!(
+                h >= SEA_LEVEL + 3,
+                "origin must be dry land, got {h} for {biome:?}"
+            );
+        }
     }
 
     #[test]
