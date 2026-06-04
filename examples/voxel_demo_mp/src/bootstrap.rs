@@ -143,15 +143,27 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
                 );
                 vx.sheep_head_mesh = Some(mesh);
             }
-            // W19.2 / W46.9: load remaining mob meshes.
-            let mc_entity_dir = if !vx.resource_pack.is_fallback {
-                Some(vx.resource_pack.source.join("textures").join("entity"))
-            } else {
-                None
-            };
-            vx.mob_meshes =
-                mob_meshes::load_non_sheep_mob_meshes(dir, mc_entity_dir.as_deref(), r);
         }
+        // W67.3: load the full mob mesh set (sheep + non-sheep) from
+        // the MC pack's entity dir. This used to live INSIDE the
+        // `texture_dir` gate above, so a pack-only install (no legacy
+        // --textures dir, hence texture_dir = None) skipped it entirely
+        // and rendered every mob as an untextured cube (the user's
+        // "pig has no texture" report). The pack entity dir is the
+        // canonical source for MC 26.x biome-variant textures
+        // (`pig_temperate.png`, ...); the legacy dir is only a fallback
+        // root, empty when absent.
+        let mc_entity_dir = if !vx.resource_pack.is_fallback {
+            Some(vx.resource_pack.source.join("textures").join("entity"))
+        } else {
+            None
+        };
+        let legacy_root = vx.texture_dir.clone().unwrap_or_default();
+        vx.mob_meshes = mob_meshes::load_non_sheep_mob_meshes(
+            &legacy_root,
+            mc_entity_dir.as_deref(),
+            r,
+        );
     }
     // Best-effort audio: a missing output device disables SFX.
     match infengine_audio::AudioSystem::new() {

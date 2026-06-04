@@ -456,9 +456,17 @@ fn emit_faces_for_element(
         // is visible from both sides. Only triggered when the source
         // element is degenerate on one axis (no extra geometry for
         // normal cube blocks).
+        // W67.3: only synthesise a back-face when the element does NOT
+        // already declare the opposite face. A cross model (flowers,
+        // saplings, short_grass) declares BOTH sides of each plane
+        // (north+south / east+west), so double-siding them would emit
+        // the geometry twice (32 verts instead of 16 - the user's
+        // "weird rotated overlapping flower" report). Single-faced
+        // planar elements (redstone-torch halo planes) still get the
+        // back-face so they're visible from both sides.
         let is_planar =
             from.x == to.x || from.y == to.y || from.z == to.z;
-        if is_planar {
+        if is_planar && !opposite_face_declared(faces, box_face.cube_face) {
             let mirrored: [[f32; 3]; 4] = [
                 world_corners[0],
                 world_corners[3],
@@ -476,6 +484,22 @@ fn emit_faces_for_element(
                 anim_id,
             );
         }
+    }
+}
+
+/// True when `faces` also declares the face opposite to `face`. The
+/// planar back-face synthesis (W46.29) is suppressed for such
+/// elements: a cross model already carries both sides of each plane
+/// (north+south / east+west), so synthesising a back-face would
+/// double the geometry.
+fn opposite_face_declared(faces: &ElementFaces, face: CubeFace) -> bool {
+    match face {
+        CubeFace::North => faces.south.is_some(),
+        CubeFace::South => faces.north.is_some(),
+        CubeFace::East => faces.west.is_some(),
+        CubeFace::West => faces.east.is_some(),
+        CubeFace::Up => faces.down.is_some(),
+        CubeFace::Down => faces.up.is_some(),
     }
 }
 
