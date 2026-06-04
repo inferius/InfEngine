@@ -198,7 +198,18 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     let chunks_loaded = dims::load_all_dims(voxel, slug, &world_meta)?;
 
     // Player pose + inventory + last_dimension.
-    let player_save = player.unwrap_or_else(|| fresh_player(world_meta.spawn));
+    // W69: a freshly created world (no player file yet) seeds its
+    // player from the game mode chosen in the New World form, stored in
+    // world.json's `default_game_mode`. Without this the fresh player's
+    // Survival default overwrote a Creative pick via apply_player_save
+    // below, so "I selected Creative on create" had no effect.
+    let player_save = player.unwrap_or_else(|| {
+        let mut fp = fresh_player(world_meta.spawn);
+        if world_meta.default_game_mode.eq_ignore_ascii_case("creative") {
+            fp.game_mode = 1; // PlayerSave game_mode: 1 = Creative
+        }
+        fp
+    });
     apply_player_save(voxel, &player_save);
 
     // Timers + catch-up.
