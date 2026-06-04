@@ -34,6 +34,51 @@ pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     }
 }
 
+/// Generator surface height (the un-carved terrain top) at world
+/// column `(wx, wz)` for the active profile. Mirrors the per-profile
+/// height that `generate_chunk_at_ctx` fills, so a spawn placed at
+/// `column_height + 1` sits on the real ground rather than the floor
+/// of a cave / ravine carved into the column afterwards (which also
+/// has clear air above it and otherwise reads as a valid surface).
+pub(crate) fn column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
+    let seed = ctx.effective_seed();
+    let fx = wx as f32;
+    let fz = wz as f32;
+    match ctx.profile {
+        WorldGen::Flat => 8,
+        WorldGen::Islands => {
+            // Mirror gen_islands' mask -> height; <= threshold is ocean.
+            let a = (fx * 0.04).sin() + (fz * 0.05).cos();
+            let b = (fx * 0.11 + 17.0).sin() * 0.5 + (fz * 0.13 + 9.0).cos() * 0.5;
+            let m = a + b * 0.7;
+            if m <= 0.55 {
+                0
+            } else {
+                10 + ((m - 0.55) * 18.0).round() as i32
+            }
+        }
+        WorldGen::Classic => {
+            height_at_classic(fx, fz, biome_at(fx, fz, seed), 1.0)
+        }
+        WorldGen::Amplified => {
+            height_at_classic(fx, fz, biome_at(fx, fz, seed), 2.5)
+        }
+        WorldGen::Realistic => {
+            let climate = super::climate::climate_at(fx, fz, seed);
+            let biome = super::biome_table::biome_from_climate(climate);
+            super::climate::realistic_height(climate, biome)
+        }
+        WorldGen::Natural => {
+            let biome =
+                super::biome_table::biome_from_climate(super::climate::climate_at(fx, fz, seed));
+            super::natural::natural_height(fx, fz, seed, biome)
+        }
+        // Nether is roofed + lava-floored; its spawn is handled
+        // separately. A mid-height fallback keeps the dispatch total.
+        WorldGen::Nether => 32,
+    }
+}
+
 /// Pancake-flat terrain at y=8: one row of grass, three rows of
 /// dirt, stone below. Empty above. Trees disabled.
 ///
@@ -178,6 +223,18 @@ mod tests {
         // y=8 must be grass; y=9 must be air.
         assert_eq!(chunk.get(0, 8, 0).0, 3);
         assert_eq!(chunk.get(0, 9, 0).0, 0);
+    }
+
+    #[test]
+    fn column_height_matches_profiles() {
+        // Flat: constant crown at y=8 (matches gen_flat's grass row).
+        assert_eq!(column_height(&ctx_for(WorldGen::Flat), 0, 0), 8);
+        // Natural: the origin is lifted to dry land (>= sea+3 = 15) by
+        // the spawn land-floor, so a spawn placed there clears water.
+        assert!(column_height(&ctx_for(WorldGen::Natural), 0, 0) >= 15);
+        // Classic: a plausible overworld surface height.
+        let ch = column_height(&ctx_for(WorldGen::Classic), 40, -24);
+        assert!((1..=200).contains(&ch), "classic height {ch} out of range");
     }
 
     #[test]

@@ -79,6 +79,14 @@ impl Voxel {
         // the terrain").
         let mut best: Option<(i32, i32, i32)> = None; // (surface_y, dx, dz)
         let mut dry: Option<(i32, i32, i32)> = None;
+        // Generator height per column lets us reject the floor of a cave
+        // / ravine carved into a column - it also has clear air above so
+        // it otherwise reads as a valid surface, which is exactly how the
+        // player kept spawning deep inside the terrain. A real ground
+        // surface sits within a couple of blocks of the generator's
+        // terrain top; a carve floor sits well below it, a tree canopy
+        // well above it.
+        let ctx = self.current_worldgen_ctx();
         'search: for r in 0i32..=48 {
             for dz in -r..=r {
                 for dx in -r..=r {
@@ -102,8 +110,14 @@ impl Voxel {
                     let above2 = self.world.get([dx, sy + 2, dz]);
                     let above3 = self.world.get([dx, sy + 3, dz]);
                     if above1.is_air() && above2.is_air() && above3.is_air() {
-                        dry = Some((sy, dx, dz));
-                        break 'search;
+                        // Only accept a surface at (near) the generator's
+                        // terrain height - not a ravine / cave floor below
+                        // it, nor a tree canopy above it.
+                        let gh = crate::worldgen::chunk::column_height(&ctx, dx, dz);
+                        if (sy - gh).abs() <= 2 {
+                            dry = Some((sy, dx, dz));
+                            break 'search;
+                        }
                     }
                 }
             }
