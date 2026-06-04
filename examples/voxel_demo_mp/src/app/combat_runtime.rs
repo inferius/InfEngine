@@ -54,7 +54,19 @@ impl Voxel {
     /// assigning the returned position.
     pub(crate) fn safe_spawn(&self) -> Vec3 {
         if let Some(p) = self.spawn_pos {
-            return Vec3::new(p[0], p[1], p[2]);
+            // Trust a stored spawn only if the player capsule actually
+            // fits there. An old save (or a world whose terrain changed
+            // under it) can leave the recorded spawn buried in solid
+            // blocks; in that case fall through to the spiral search
+            // rather than dropping the player inside the ground.
+            let bx = p[0].floor() as i32;
+            let bz = p[2].floor() as i32;
+            let feet_y = (p[1] - PLAYER_HEIGHT).floor() as i32;
+            let head_y = p[1].floor() as i32;
+            let clear = (feet_y..=head_y).all(|y| self.world.get([bx, y, bz]).is_air());
+            if clear {
+                return Vec3::new(p[0], p[1], p[2]);
+            }
         }
         let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
         // Square-spiral search out to 48 blocks. A column with a solid

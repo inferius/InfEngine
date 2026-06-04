@@ -31,6 +31,30 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         let inst = (1.0 / dt.max(1e-3)).clamp(1.0, 999.0);
         vx.fps_ema = vx.fps_ema * 0.5 + inst * 0.5;
 
+        // W75: lightweight per-frame perf diagnostic. Accumulates the
+        // GPU render-pass cost and, every ~120 frames, logs the queue
+        // depths + average render_ms so a frame-rate collapse can be
+        // pinned to remesh / stream churn (remesh_q), lighting
+        // (light_jobs), the falling queue, streaming (chunks), or the
+        // render pass (render_ms). If all are low but fps is low the
+        // cost is in the per-frame sim ticks. Cheap + logged sparsely.
+        use std::sync::atomic::{AtomicU64, Ordering as DiagOrd};
+        static DIAG_N: AtomicU64 = AtomicU64::new(0);
+        static DIAG_REND_US: AtomicU64 = AtomicU64::new(0);
+        let diag_n = DIAG_N.fetch_add(1, DiagOrd::Relaxed);
+        if diag_n > 0 && diag_n.is_multiple_of(120) {
+            let rend_us = DIAG_REND_US.swap(0, DiagOrd::Relaxed);
+            tracing::info!(
+                fps = vx.fps_ema as i32,
+                chunks = vx.world.iter_chunks().count(),
+                remesh_q = vx.pending_remesh.len(),
+                light_jobs = vx.pending_lighting_jobs,
+                falling = vx.falling_pending.len(),
+                render_ms = (rend_us / 120) as f32 / 1000.0,
+                "voxel: perf diag"
+            );
+        }
+
         // Pull any pending master-query results back onto the main
         // thread (refresh + announce both run on background workers).
         vx.poll_master_queries();
@@ -1436,11 +1460,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 }
             }
         }
+        let _diag_rt = std::time::Instant::now();
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
         } else {
             renderer.render(|_, _, _, _, _| {})
         };
+        DIAG_REND_US.fetch_add(_diag_rt.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         if let Err(err) = render_result {
             warn!(error = ?err, "frame render failed");
         }
