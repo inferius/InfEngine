@@ -49,6 +49,9 @@ pub(crate) mod special_models;
 pub(crate) mod textures;
 
 #[cfg(test)]
+mod test_env;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

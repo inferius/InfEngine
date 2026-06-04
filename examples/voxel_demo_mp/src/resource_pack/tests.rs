@@ -5,6 +5,7 @@ use super::*;
 
 #[test]
 fn load_returns_a_pack_with_known_atlas_size() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     let pack = ResourcePack::load_with_override(None);
     // Without an explicit override + no MC install on the test host,
     // we always end up at the placeholder pack.
@@ -18,6 +19,7 @@ fn load_returns_a_pack_with_known_atlas_size() {
 
 #[test]
 fn placeholder_pack_block_texture_lookup_works() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     let pack = ResourcePack::load();
     let stone = pack.block_texture("stone");
     assert!(stone.is_some());
@@ -30,6 +32,7 @@ fn placeholder_pack_block_texture_lookup_works() {
 
 #[test]
 fn placeholder_pack_reports_placeholder_source() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     let pack = ResourcePack::load();
     assert_eq!(pack.source.to_string_lossy(), "<placeholder>");
     assert!(pack.is_placeholder());
@@ -37,6 +40,7 @@ fn placeholder_pack_reports_placeholder_source() {
 
 #[test]
 fn override_path_to_nonexistent_dir_still_falls_back() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     let pack = ResourcePack::load_with_override(Some(
         std::path::PathBuf::from("Z:/not/a/real/path/anywhere"),
     ));
@@ -138,6 +142,7 @@ fn icon_ref_unknown_id_is_none() {
 
 #[test]
 fn placeholder_pack_icon_ref_for_block_is_top_tile() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     // The fallback path populates `item_icons` from BLOCK_TYPES via
     // the block's top tile, so block icons should resolve there.
     let pack = ResourcePack::load();
@@ -217,6 +222,7 @@ fn animated_uv_zero_frametime_does_not_animate() {
 
 #[test]
 fn sound_paths_empty_on_placeholder_pack() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     let pack = ResourcePack::load();
     assert!(pack.sound_paths("dig:stone").is_empty());
     assert!(pack.sound_paths("lava:pop").is_empty());
@@ -224,6 +230,7 @@ fn sound_paths_empty_on_placeholder_pack() {
 
 #[test]
 fn sound_paths_resolves_engine_key_through_mc_event() {
+    let (_env, _guard_tmp) = super::test_env::force_placeholder();
     let tmp = tempfile::tempdir().unwrap();
     let mc = stage_synthetic_pack(tmp.path());
     // Stage a sounds.json + matching OGG file.
@@ -316,6 +323,7 @@ fn static_tile_gets_slot_zero() {
 
 #[test]
 fn placeholder_pack_has_empty_anim_registry() {
+    let (_env, _tmp) = super::test_env::force_placeholder();
     // The placeholder pack ships zero animated tiles.
     let pack = ResourcePack::load();
     assert!(pack.is_fallback);
@@ -386,6 +394,7 @@ fn reload_assigns_stable_slot_ids() {
 
 #[test]
 fn reload_to_placeholder_zeros_anim_uniform() {
+    let (_env, _guard_tmp) = super::test_env::force_placeholder();
     // Simulate the reload path: load a real pack with animated
     // tiles, then reload from a path that doesn't exist (falls
     // back to the placeholder). The placeholder uniform must

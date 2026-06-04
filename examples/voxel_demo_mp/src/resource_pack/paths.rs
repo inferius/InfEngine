@@ -133,7 +133,17 @@ fn candidate_paths() -> Vec<PathBuf> {
     {
         out.push(PathBuf::from(env));
     }
-    if let Some(appdata) = appdata_roaming() {
+    // W67.x: in test builds, skip the ambient `%APPDATA%/.minecraft`
+    // probe so tests stay hermetic - they must not pick up a real MC
+    // install on the dev box (e.g. the `F:\Data\mc_assets` junctions),
+    // which would flip the placeholder-pack assertions + slow every
+    // `load()` down with 1.4 GB of disk I/O. Tests drive discovery
+    // through the explicit `INFENGINE_MC_ASSETS` env above (set via
+    // the test EnvScope) or `load_with_override`. The real game
+    // (non-test build) keeps the full probe.
+    if !cfg!(test)
+        && let Some(appdata) = appdata_roaming()
+    {
         let mc_root = appdata.join(".minecraft");
         // Known exact version.
         out.push(
@@ -193,57 +203,10 @@ fn appdata_roaming() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Global mutex serializing env-mutating tests. `std::env::set_var`
-    /// is unsafe in multi-threaded code (other threads may be reading
-    /// the same key), and cargo runs tests in parallel by default;
-    /// this lock keeps env-mutating tests from racing each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// RAII multi-key env guard. Holds the global env lock for its
-    /// lifetime + restores every previously-mutated key on drop, so
-    /// tests can safely fence on parallel runs.
-    struct EnvScope {
-        prev: Vec<(&'static str, Option<String>)>,
-        _g: std::sync::MutexGuard<'static, ()>,
-    }
-    impl EnvScope {
-        fn new() -> Self {
-            let g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            Self {
-                prev: Vec::new(),
-                _g: g,
-            }
-        }
-        fn set(&mut self, key: &'static str, val: &str) -> &mut Self {
-            let prev = std::env::var(key).ok();
-            // SAFETY: ENV_LOCK serializes all env mutation.
-            unsafe { std::env::set_var(key, val) };
-            self.prev.push((key, prev));
-            self
-        }
-        fn unset(&mut self, key: &'static str) -> &mut Self {
-            let prev = std::env::var(key).ok();
-            // SAFETY: ENV_LOCK serializes all env mutation.
-            unsafe { std::env::remove_var(key) };
-            self.prev.push((key, prev));
-            self
-        }
-    }
-    impl Drop for EnvScope {
-        fn drop(&mut self) {
-            // SAFETY: the guard still holds ENV_LOCK at this point.
-            unsafe {
-                while let Some((key, prev)) = self.prev.pop() {
-                    match prev {
-                        Some(v) => std::env::set_var(key, v),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
-    }
+    // W67.x: the env guard moved to the shared `test_env` module so
+    // the paths discovery tests + the resource_pack integration tests
+    // serialise env mutation through one lock (no cross-module race).
+    use super::super::test_env::EnvScope;
 
     #[test]
     fn canonicalize_rejects_nonexistent_path() {

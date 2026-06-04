@@ -112,23 +112,29 @@ fn candidate_paths() -> Vec<PathBuf> {
     {
         out.push(PathBuf::from(env));
     }
-    if let Ok(p) = std::env::var("APPDATA")
-        && !p.trim().is_empty()
-    {
-        out.push(
-            PathBuf::from(p).join(".minecraft").join("assets"),
-        );
+    // W67.x: in test builds, skip the ambient `%APPDATA%/.minecraft`
+    // store probe + the offline mirror so tests stay hermetic - they
+    // must not pick up the dev box's real asset store (the
+    // `F:\Data\mc_assets\asset_store` junction), which would change
+    // sound-path resolution counts. The real game (non-test build)
+    // keeps the full probe.
+    if !cfg!(test) {
+        if let Ok(p) = std::env::var("APPDATA")
+            && !p.trim().is_empty()
+        {
+            out.push(PathBuf::from(p).join(".minecraft").join("assets"));
+        }
+        // POSIX fallback (CI).
+        if let Ok(p) = std::env::var("HOME")
+            && !p.trim().is_empty()
+        {
+            out.push(PathBuf::from(p).join(".minecraft").join("assets"));
+        }
+        // W57: well-known offline mirror this project ships with.
+        // Direct hit for the dev machine; harmless on hosts without
+        // the directory (load() returns None).
+        out.push(PathBuf::from(r"J:\Temp\MC-Sounds\assets"));
     }
-    // POSIX fallback (CI / tests).
-    if let Ok(p) = std::env::var("HOME")
-        && !p.trim().is_empty()
-    {
-        out.push(PathBuf::from(p).join(".minecraft").join("assets"));
-    }
-    // W57: well-known offline mirror this project ships with.
-    // Direct hit for the dev machine; harmless on hosts without
-    // the directory (load() returns None).
-    out.push(PathBuf::from(r"J:\Temp\MC-Sounds\assets"));
     out
 }
 
