@@ -1083,7 +1083,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // per-frame draw calls.
         vx.maybe_rebuild_liquid_mesh();
         let player_pos = vx.player_pos;
-        let chunk_meshes = vx.chunk_meshes.clone();
+        // W77: borrow the mesh table instead of cloning the whole
+        // HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>> every frame.
+        // The clone allocated one Vec per loaded chunk per frame, a cost
+        // that scaled with view distance (hundreds at vd=4, thousands at
+        // vd=12) for no benefit - the render pass only reads it. The
+        // mutations that follow touch disjoint Voxel fields, so the
+        // shared borrow is fine.
+        let chunk_meshes = &vx.chunk_meshes;
         let registry = &vx.registry;
         // Wireframe outline follows the mining ray so the player
         // sees the highlight on a decoration (torch / flower)
@@ -1301,7 +1308,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W32: draw_mesh_pbr replaced with queue_chunk_draw - all visible chunk
         // submeshes are batched into a single multi_draw_indexed_indirect call
         // at render() time instead of one draw call per submesh.
-        for (coord, subs) in &chunk_meshes {
+        for (coord, subs) in chunk_meshes {
             // W13.4: skip chunks that are fully outside the view
             // frustum (behind the camera, off to the sides, beyond
             // the far plane). Typical win: ~60-70% of chunks culled.
