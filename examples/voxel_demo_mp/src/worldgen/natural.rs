@@ -13,7 +13,7 @@
 //! stack octave noise into continentalness / erosion / peaks-and-
 //! valleys; this approximates that layering with plain value-noise fBm.
 
-use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
+use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 use super::biome::Biome;
 use super::biome_table::biome_from_climate;
@@ -78,20 +78,25 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
     let cont = fbm2(wx * 0.0035, wz * 0.0035, seed ^ 0x00C0_FFEE, 5);
     let hills = fbm2(wx * 0.013, wz * 0.013, seed ^ 0xB117_0000, 4);
     let detail = fbm2(wx * 0.05, wz * 0.05, seed ^ 0xD7A1_5EED, 3);
+    // Amplitudes kept moderate: dramatic enough to read as varied
+    // terrain, but not so jagged that the sky-light BFS (horizontal
+    // light spill into deep valleys) tanks the frame budget. Swamp /
+    // beach stay near sea level but >= 0 so they're walkable, not
+    // permanent void / ocean.
     let (bias, amp, ridged) = match biome {
-        Biome::Mountain | Biome::SnowyMountain => (14.0, 28.0, true),
-        Biome::Jungle => (5.0, 10.0, false),
-        Biome::Forest | Biome::Taiga => (4.0, 8.0, false),
-        Biome::Desert => (2.0, 5.0, false),
-        Biome::Tundra => (2.0, 5.0, false),
-        Biome::Plains | Biome::Savanna => (2.0, 4.0, false),
-        Biome::Swamp => (-2.0, 2.0, false),
-        Biome::Beach => (-1.0, 1.5, false),
+        Biome::Mountain | Biome::SnowyMountain => (12.0, 18.0, true),
+        Biome::Jungle => (5.0, 8.0, false),
+        Biome::Forest | Biome::Taiga => (4.0, 6.0, false),
+        Biome::Desert => (2.0, 4.0, false),
+        Biome::Tundra => (2.0, 4.0, false),
+        Biome::Plains | Biome::Savanna => (2.0, 3.0, false),
+        Biome::Swamp => (0.0, 2.0, false),
+        Biome::Beach => (0.0, 1.5, false),
     };
-    let mut elev = cont * 10.0 + hills * amp + detail * 2.0 + bias;
+    let mut elev = cont * 8.0 + hills * amp + detail * 1.5 + bias;
     if ridged {
         // `1 - |hills|` folds the noise into ridge lines for peaks.
-        elev += (1.0 - hills.abs()) * 14.0;
+        elev += (1.0 - hills.abs()) * 8.0;
     }
     (SEA_LEVEL as f32 + elev).round() as i32
 }
@@ -101,14 +106,32 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
 pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
+    // W73: precompute height + biome per (x,z) column ONCE. The fBm
+    // height is expensive and the old per-cell path recomputed it 16x
+    // per column (once for every y) - a pointless chunk-gen cost that
+    // helped tank the frame rate while streaming. `.max(1)` also keeps
+    // a solid block under every column so a low-continentalness area is
+    // a shallow seabed, never a bottomless void to spawn into / fall
+    // through (the "player fell through the world" report).
+    let mut col: [[(i32, Biome); CHUNK_SIZE]; CHUNK_SIZE] =
+        [[(0, Biome::Plains); CHUNK_SIZE]; CHUNK_SIZE];
+    for (lx, row) in col.iter_mut().enumerate() {
+        for (lz, cell) in row.iter_mut().enumerate() {
+            let wx = origin.x + lx as f32;
+            let wz = origin.z + lz as f32;
+            let biome = biome_from_climate(climate_at(wx, wz, seed));
+            *cell = (natural_height(wx, wz, seed, biome).max(1), biome);
+        }
+    }
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
-        let wx = origin.x + x as f32;
-        let wz = origin.z + z as f32;
-        let climate = climate_at(wx, wz, seed);
-        let biome = biome_from_climate(climate);
-        let h = natural_height(wx, wz, seed, biome);
         let wy = origin.y as i32 + y as i32;
+        // W73: solid world floor - the player can never fall into the
+        // unloaded void below y=0.
+        if wy <= 0 {
+            return BlockId(1); // stone floor
+        }
+        let (h, biome) = col[x][z];
         if wy > h {
             if wy <= SEA_LEVEL && h < SEA_LEVEL {
                 return BlockId(36); // water fills below sea level
@@ -120,6 +143,8 @@ pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         } else if wy >= h - 3 {
             near_surface_block(biome)
         } else {
+            let wx = origin.x + x as f32;
+            let wz = origin.z + z as f32;
             pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });
@@ -173,5 +198,29 @@ mod tests {
             ph += natural_height(wx, wz, 5, Biome::Plains) as i64;
         }
         assert!(mh > ph, "mountains {mh} should outclimb plains {ph}");
+    }
+
+    #[test]
+    fn natural_chunk_has_solid_floor_no_void() {
+        // W73: every column's y=0 must be solid so a low-continentalness
+        // area is a seabed, never a bottomless void the player falls
+        // through on spawn.
+        let ctx = WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Natural,
+        };
+        for cc in [[0, 0, 0], [5, 0, -3], [-7, 0, 9]] {
+            let chunk = gen_natural(cc, &ctx);
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    assert_ne!(
+                        chunk.get(x, 0, z).0,
+                        0,
+                        "y=0 must be solid at column ({x}, {z})",
+                    );
+                }
+            }
+        }
     }
 }
