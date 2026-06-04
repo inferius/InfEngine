@@ -70,6 +70,20 @@ fn reset_world_clears_portal_positions() {
     assert!(v.portal_positions.is_empty());
 }
 
+/// W72: reset_world zeroes the in-flight worker lighting-job count. A
+/// leftover (jobs dispatched for a world whose worker pool was then
+/// dropped on return-to-menu) would stall the NEXT world's load
+/// forever in the BuildingLighting phase, which waits for
+/// pending_lighting_jobs == 0 - the "infinite loading on second world"
+/// bug.
+#[test]
+fn reset_world_clears_pending_lighting_jobs() {
+    let mut v = Voxel::new();
+    v.pending_lighting_jobs = 5;
+    v.reset_world();
+    assert_eq!(v.pending_lighting_jobs, 0);
+}
+
 /// Multiple portal cells (a typical 2x3 frame interior) all land
 /// in the tracker. The render pass walks the set so all 6 cells
 /// get a swirl panel.

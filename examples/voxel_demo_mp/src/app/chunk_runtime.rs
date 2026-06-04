@@ -33,6 +33,15 @@ impl Voxel {
         self.pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        // W72: drop the in-flight worker lighting-job count. A world
+        // reset (return-to-menu teardown / new-world entry) sets
+        // `workers = None`, so any lighting jobs dispatched for the old
+        // world never send their `WorkerResult::Lit` back to decrement
+        // this. Left non-zero, the NEXT world's load hangs forever in
+        // the BuildingLighting phase, which waits for
+        // `pending_lighting_jobs == 0` (the "infinite loading when I
+        // load a second world" bug).
+        self.pending_lighting_jobs = 0;
         self.snow_positions.clear();
         self.torch_positions.clear();
         self.emitter_positions.clear();
