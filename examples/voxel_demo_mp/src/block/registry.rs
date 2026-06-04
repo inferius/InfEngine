@@ -73,9 +73,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     },
     BlockType {
         id: 7, name: "planks", color: [0.78, 0.60, 0.36], transparent: false, flags: 0,
-        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
     },
     BlockType {
         id: 8, name: "cobble", color: [0.42, 0.42, 0.45], transparent: false, flags: 0,
@@ -350,9 +350,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         // emission. Falls back to planks_oak texture for both
         // pack-missing and entity-textures-not-atlased cases.
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["oak_planks.png", "oak_planks.png"], keep_alpha: false },
     },
     // Furnace. Opaque cube with a 3-slot Container (input / fuel /
     // output) stored on `Voxel::furnaces` keyed by absolute world
@@ -632,9 +632,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 68, name: "oak_slab", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
     },
     // Stone slab. Cite: `models/block/stone_slab.json`.
     BlockType {
@@ -656,18 +656,18 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 71, name: "oak_slab_top", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
     },
     // Oak stairs. Cite: `models/block/oak_stairs.json`. W12.2 ships
     // default east-facing only; rotation states are a follow-up.
     BlockType {
         id: 72, name: "oak_stairs", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
     },
     // Stone stairs. Cite: `models/block/stone_stairs.json`.
     BlockType {
@@ -691,9 +691,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 75, name: "oak_fence", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
     },
     // Nether brick fence. Cite: `models/block/nether_brick_fence_post.json`.
     BlockType {
@@ -708,9 +708,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 77, name: "oak_door", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
-        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
-        sides: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "planks_oak.png"], keep_alpha: true },
+        top: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
     },
     // Oak door (upper half). Cite: `models/block/oak_door_top.json`.
     // Manual placement only in W12.2 - the chat /setblock places one
@@ -718,9 +718,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 78, name: "oak_door_upper", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
-        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
-        sides: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "planks_oak.png"], keep_alpha: true },
+        top: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
     },
     // Iron door (lower half). Cite: `models/block/iron_door_bottom.json`.
     BlockType {
@@ -805,9 +805,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Birch planks - cream coloured planks.
     BlockType {
         id: 89, name: "birch_planks", color: [0.90, 0.84, 0.60], transparent: false, flags: 0,
-        top: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "planks_oak.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "oak_planks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "oak_planks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 2, files: &["birch_planks.png", "oak_planks.png"], keep_alpha: false },
     },
     // Birch leaves - bright yellow-green.
     BlockType {
@@ -2868,7 +2868,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 598, name: "conduit", color: [0.78, 0.78, 0.62], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["conduit.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["conduit.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["conduit.png"], keep_alpha: true } },
     BlockType { id: 599, name: "target", color: [0.85, 0.78, 0.55], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["target_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["target_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["target_side.png"], keep_alpha: false } },
     BlockType { id: 600, name: "bee_nest", color: [0.78, 0.62, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["bee_nest_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["bee_nest_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["bee_nest_side.png", "bee_nest_front.png"], keep_alpha: false } },
-    BlockType { id: 601, name: "beehive", color: [0.78, 0.62, 0.32], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["beehive_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["beehive_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["beehive_side.png", "beehive_front.png"], keep_alpha: false } },
+    BlockType { id: 601, name: "beehive", color: [0.78, 0.62, 0.32], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["beehive_end.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["beehive_end.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["beehive_side.png", "beehive_front.png"], keep_alpha: false } },
     BlockType { id: 602, name: "lodestone", color: [0.45, 0.45, 0.48], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["lodestone_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["lodestone_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["lodestone_side.png"], keep_alpha: false } },
     // ============================================================
     // W48.6 batch 6: 30 more blocks (IDs 603-632) - hits 600+ target.
