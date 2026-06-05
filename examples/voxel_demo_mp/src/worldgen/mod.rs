@@ -41,6 +41,7 @@ pub(crate) mod cactus;
 pub(crate) mod caves;
 pub(crate) mod chunk;
 pub(crate) mod climate;
+pub(crate) mod decor;
 pub(crate) mod dungeons;
 pub(crate) mod flowers;
 pub(crate) mod height;

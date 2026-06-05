@@ -19,7 +19,7 @@ use super::biome::Biome;
 use super::biome_table::biome_from_climate;
 use super::climate::{SEA_LEVEL, climate_at, near_surface_block, surface_block};
 use super::ore::pick_stone_or_ore;
-use super::{WorldgenCtx, cactus, caves, dungeons, flowers, ravines, trees};
+use super::{WorldgenCtx, caves, decor, dungeons, ravines};
 
 /// Integer-grid hash -> `[0, 1)`. Stable per `(ix, iz, seed)`.
 fn hash2(ix: i32, iz: i32, seed: u32) -> f32 {
@@ -159,9 +159,7 @@ pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     });
     caves::carve(&mut chunk, coord, ctx);
     ravines::carve(&mut chunk, coord, ctx);
-    trees::place_realistic_from_coord(&mut chunk, coord, ctx);
-    flowers::place_realistic_from_coord(&mut chunk, coord, ctx);
-    cactus::place_realistic_from_coord(&mut chunk, coord, ctx);
+    decor::place_realistic(&mut chunk, coord, ctx);
     dungeons::place(&mut chunk, coord, ctx);
     chunk
 }

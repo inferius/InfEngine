@@ -17,7 +17,7 @@ use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 use super::biome::Biome;
 use super::biome_table::biome_from_climate;
 use super::ore::pick_stone_or_ore;
-use super::{WorldgenCtx, cactus, caves, dungeons, flowers, ravines, trees};
+use super::{WorldgenCtx, caves, decor, dungeons, ravines};
 
 /// Per-(wx, wz) climate sample. Each component is normalised to
 /// roughly `[-1, 1]`. Re-derived deterministically from the world
@@ -197,10 +197,8 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     caves::carve(&mut chunk, coord, ctx);
     // W17.2: ravine carver pass.
     ravines::carve(&mut chunk, coord, ctx);
-    // Decoration passes.
-    trees::place_realistic_from_coord(&mut chunk, coord, ctx);
-    flowers::place_realistic_from_coord(&mut chunk, coord, ctx);
-    cactus::place_realistic_from_coord(&mut chunk, coord, ctx);
+    // Decoration passes (W79: unified driver).
+    decor::place_realistic(&mut chunk, coord, ctx);
     // W17.3: dungeon room pass (runs last, after decorations, so it
     // can write cobblestone walls over any mis-placed decoration).
     dungeons::place(&mut chunk, coord, ctx);
