@@ -32,7 +32,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         vx.fps_ema = vx.fps_ema * 0.5 + inst * 0.5;
 
         // W75: lightweight per-frame perf diagnostic. Accumulates the
-        // GPU render-pass cost and, every ~120 frames, logs the queue
+        // GPU render-pass cost and, every ~600 frames, logs the queue
         // depths + average render_ms so a frame-rate collapse can be
         // pinned to remesh / stream churn (remesh_q), lighting
         // (light_jobs), the falling queue, streaming (chunks), or the
@@ -42,7 +42,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         static DIAG_N: AtomicU64 = AtomicU64::new(0);
         static DIAG_REND_US: AtomicU64 = AtomicU64::new(0);
         let diag_n = DIAG_N.fetch_add(1, DiagOrd::Relaxed);
-        if diag_n > 0 && diag_n.is_multiple_of(120) {
+        if diag_n > 0 && diag_n.is_multiple_of(600) {
             let rend_us = DIAG_REND_US.swap(0, DiagOrd::Relaxed);
             tracing::info!(
                 fps = vx.fps_ema as i32,
@@ -50,7 +50,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 remesh_q = vx.pending_remesh.len(),
                 light_jobs = vx.pending_lighting_jobs,
                 falling = vx.falling_pending.len(),
-                render_ms = (rend_us / 120) as f32 / 1000.0,
+                render_ms = (rend_us / 600) as f32 / 1000.0,
                 "voxel: perf diag"
             );
         }

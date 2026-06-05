@@ -93,7 +93,8 @@ pub(crate) fn place_realistic_from_coord(
     ctx: &WorldgenCtx,
 ) {
     use crate::worldgen::biome_table::biome_from_climate;
-    use crate::worldgen::climate::{climate_at, realistic_height};
+    use crate::worldgen::chunk::column_height;
+    use crate::worldgen::climate::climate_at;
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
@@ -113,7 +114,12 @@ pub(crate) fn place_realistic_from_coord(
             if rng % modulus != 7 {
                 continue;
             }
-            let ground = realistic_height(climate, biome);
+            // W78: use the active profile's column height (not the
+            // Realistic one) so trees sit on the actual terrain. On the
+            // Natural profile the terrain is filled with natural_height,
+            // which differs from realistic_height per column - using the
+            // latter left trees floating above / buried in the ground.
+            let ground = column_height(ctx, wx, wz);
             dispatch(species, chunk, x, z, ground, origin_y, rng);
         }
     }

@@ -70,7 +70,8 @@ pub(crate) fn place_realistic_from_coord(
     ctx: &WorldgenCtx,
 ) {
     use super::biome_table::biome_from_climate;
-    use super::climate::{climate_at, realistic_height};
+    use super::chunk::column_height;
+    use super::climate::climate_at;
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
@@ -90,7 +91,10 @@ pub(crate) fn place_realistic_from_coord(
             if h % 24 != 5 {
                 continue;
             }
-            let ground = realistic_height(climate, biome);
+            // W78: profile-correct column height so cacti sit on the
+            // real terrain (Natural fills with natural_height, not
+            // realistic_height).
+            let ground = column_height(ctx, wx, wz);
             let height_voxels = 2 + ((h >> 4) % 2) as i32;
             for step in 1..=height_voxels {
                 let wy = ground + step;
