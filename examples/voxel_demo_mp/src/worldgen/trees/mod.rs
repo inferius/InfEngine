@@ -62,7 +62,10 @@ pub(crate) fn place_classic(
                 continue;
             }
             let ground = height_at_classic(wx as f32 + 0.5, wz as f32 + 0.5, biome, amp_scale);
-            oak::place_at(chunk, x, z, ground, origin_y);
+            // rng = 0 keeps Classic / Amplified oaks byte-identical to
+            // the pre-split baseline; the trunk jitter is a Realistic /
+            // Natural feature (driven through `dispatch`).
+            oak::place_at(chunk, x, z, ground, origin_y, 0);
         }
     }
 }
@@ -162,7 +165,9 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
             } else {
                 Species::Birch
             };
-            Some((10, species))
+            // W83: density 14 (was 10) - the old forests were a wall of
+            // trunks you spawned buried in; thin them so there are gaps.
+            Some((14, species))
         }
         // Plains: legacy oak only, legacy density.
         Biome::Plains => Some((32, Species::Oak)),
@@ -171,9 +176,9 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
         Biome::Taiga => {
             let roll = (rng >> 8) % 100;
             if roll < 12 {
-                Some((18, Species::MegaSpruce))
+                Some((20, Species::MegaSpruce))
             } else {
-                Some((9, Species::Pine))
+                Some((12, Species::Pine))
             }
         }
         // Jungle: less dense, but bigger trees. 70/30 jungle/oak.
@@ -184,7 +189,7 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
             } else {
                 Species::Oak
             };
-            Some((14, species))
+            Some((16, species))
         }
         // Savanna: sparse acacia.
         Biome::Savanna => Some((48, Species::Acacia)),
@@ -211,7 +216,7 @@ fn dispatch(
     rng: u32,
 ) {
     match species {
-        Species::Oak => oak::place_at(chunk, local_x, local_z, ground, origin_y),
+        Species::Oak => oak::place_at(chunk, local_x, local_z, ground, origin_y, rng),
         Species::Birch => birch::place_at(chunk, local_x, local_z, ground, origin_y, rng),
         Species::Pine => pine::place_at(chunk, local_x, local_z, ground, origin_y, rng),
         Species::Sequoia => sequoia::place_at(chunk, local_x, local_z, ground, origin_y),

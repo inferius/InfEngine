@@ -132,11 +132,20 @@ pub(crate) fn realistic_height(climate: Climate, biome: Biome) -> i32 {
 pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
     match biome {
         Biome::Desert | Biome::Beach => BlockId(4), // sand
-        Biome::Plains | Biome::Forest | Biome::Jungle | Biome::Savanna | Biome::Swamp => {
-            BlockId(3) // grass
-        }
-        Biome::Taiga | Biome::Tundra => BlockId(15), // snow cap
-        Biome::SnowyMountain => BlockId(15),
+        // W83: cold biomes use grass too, not the thin snow layer.
+        // Block 15 "snow" is a < 1-block-tall layer, so when it was the
+        // surface cell, trees / ground cover placed in the cell above it
+        // read as floating one block over the ground, and a spawn landed
+        // a block high. (A proper full-snow-block surface / snow-on-top
+        // decoration can return later.)
+        Biome::Plains
+        | Biome::Forest
+        | Biome::Jungle
+        | Biome::Savanna
+        | Biome::Swamp
+        | Biome::Taiga
+        | Biome::Tundra
+        | Biome::SnowyMountain => BlockId(3), // grass
         Biome::Mountain => {
             if h >= 34 {
                 BlockId(15) // snow peak

@@ -18,9 +18,10 @@ pub(crate) fn place_at(
     origin_y: i32,
     rng: u32,
 ) {
-    // Trunk height jitters 8-10. Pines stand taller than oaks /
+    // W83: trunk height jitters 6-12 (was a flat 8-10) so a taiga
+    // isn't a field of identical pines. Pines stand taller than oaks /
     // birches so the canopy can stack three+ layers.
-    let trunk_h = 8 + ((rng >> 4) % 3) as i32;
+    let trunk_h = 6 + ((rng >> 4) % 7) as i32;
     stamp_trunk_column(
         chunk,
         local_x,
@@ -32,8 +33,10 @@ pub(crate) fn place_at(
     // Canopy: 4 stacked layers, radius 3 -> 2 -> 1 -> single
     // block on top.
     let canopy_base = ground + trunk_h - 3;
-    stamp_leaf_square(chunk, local_x, canopy_base - origin_y, local_z, 3, LEAF, true);
-    stamp_leaf_square(chunk, local_x, canopy_base + 1 - origin_y, local_z, 2, LEAF, true);
+    // Slim (r=2) vs full (r=3) bottom skirt for silhouette variety.
+    let base_r = 2 + ((rng >> 11) & 1) as i32;
+    stamp_leaf_square(chunk, local_x, canopy_base - origin_y, local_z, base_r, LEAF, true);
+    stamp_leaf_square(chunk, local_x, canopy_base + 1 - origin_y, local_z, base_r - 1, LEAF, true);
     stamp_leaf_square(chunk, local_x, canopy_base + 2 - origin_y, local_z, 1, LEAF, true);
     set_in_chunk(chunk, local_x, canopy_base + 3 - origin_y, local_z, LEAF);
     set_in_chunk(chunk, local_x, canopy_base + 4 - origin_y, local_z, LEAF);
@@ -63,10 +66,10 @@ mod tests {
         let mut c = Chunk::empty();
         place_at(&mut c, 8, 8, 1, 0, 0);
         let trunk_h = count_id(&c, 5);
-        // Trunk is 8..=10 wood blocks, but the canopy's single
-        // leaf cap stamps over the trunk top so the surviving
-        // wood count is one less.
-        assert!((7..=9).contains(&trunk_h), "trunk_h={trunk_h}");
+        // W83: trunk is 6..=12 wood blocks, but the canopy's leaf cap
+        // stamps over the trunk top so the surviving wood count is one
+        // less (5..=11).
+        assert!((4..=11).contains(&trunk_h), "trunk_h={trunk_h}");
     }
 
     #[test]

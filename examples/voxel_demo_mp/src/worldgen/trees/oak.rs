@@ -21,31 +21,31 @@ pub(crate) fn place_at(
     local_z: i32,
     ground: i32,
     origin_y: i32,
+    rng: u32,
 ) {
-    // Trunk: 4 wood blocks above the surface voxel.
+    // W83: jitter the trunk 4..=6 so a stand of oaks isn't carbon-copied.
+    // `rng == 0` keeps the historical 4-block trunk (Classic regression).
+    let trunk_h = 4 + ((rng >> 4) % 3) as i32;
     stamp_trunk_column(
         chunk,
         local_x,
         local_z,
         ground + 1 - origin_y,
-        ground + 4 - origin_y,
+        ground + trunk_h - origin_y,
         WOOD,
     );
-    // Canopy: two 5x5 layers (corners trimmed) at trunk top -1 / 0,
-    // a 3x3 cap above, and a single top block.
+    // Canopy rides the trunk top: two 5x5 layers (corners trimmed) at
+    // trunk top -1 / 0, a 3x3 cap above, and a single top block.
     for layer in 0i32..2 {
-        let wy = ground + 3 + layer;
+        let wy = ground + trunk_h - 1 + layer;
         let local_y = wy - origin_y;
-        // The pre-Phase-E worldgen.rs skipped the centre cell on
-        // layer 0 only (the trunk lives there); layer 1 keeps the
-        // centre.
+        // Layer 0 skips the centre (the trunk lives there); layer 1
+        // keeps it.
         let skip_center = layer == 0;
         stamp_leaf_disc_5(chunk, local_x, local_y, local_z, LEAF, skip_center);
     }
-    // 3x3 cap above the two 5x5 layers.
-    stamp_leaf_disc_3(chunk, local_x, ground + 5 - origin_y, local_z, LEAF);
-    // Single block top.
-    set_in_chunk(chunk, local_x, ground + 6 - origin_y, local_z, LEAF);
+    stamp_leaf_disc_3(chunk, local_x, ground + trunk_h + 1 - origin_y, local_z, LEAF);
+    set_in_chunk(chunk, local_x, ground + trunk_h + 2 - origin_y, local_z, LEAF);
 }
 
 #[cfg(test)]
@@ -55,7 +55,9 @@ mod tests {
 
     fn place_centred() -> Chunk {
         let mut c = Chunk::empty();
-        place_at(&mut c, 8, 8, 5, 0);
+        // rng == 0 -> historical 4-block trunk, so the byte-identical
+        // assertions below still hold.
+        place_at(&mut c, 8, 8, 5, 0, 0);
         c
     }
 
@@ -100,7 +102,7 @@ mod tests {
         // Tree centred at (-2, -2) means most of the canopy lies
         // outside the chunk and gets clipped.
         let mut c = Chunk::empty();
-        place_at(&mut c, -2, -2, 5, 0);
+        place_at(&mut c, -2, -2, 5, 0, 0);
         let leaves_outside = count_id(&c, 6);
         // Only a sliver of the canopy should land in the chunk.
         assert!(leaves_outside < 20);
@@ -110,8 +112,8 @@ mod tests {
     fn oak_is_deterministic_for_same_inputs() {
         let mut a = Chunk::empty();
         let mut b = Chunk::empty();
-        place_at(&mut a, 4, 4, 8, 0);
-        place_at(&mut b, 4, 4, 8, 0);
+        place_at(&mut a, 4, 4, 8, 0, 0xDEAD_BEEF);
+        place_at(&mut b, 4, 4, 8, 0, 0xDEAD_BEEF);
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
@@ -119,6 +121,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn oak_trunk_varies_with_rng() {
+        // Different rng seeds must be able to produce different trunk
+        // heights so a stand of oaks isn't carbon-copied.
+        let mut heights = std::collections::HashSet::new();
+        for r in 0..64u32 {
+            let mut c = Chunk::empty();
+            place_at(&mut c, 8, 8, 5, 0, r.wrapping_mul(2_654_435_761));
+            heights.insert(count_id(&c, 5));
+        }
+        assert!(heights.len() >= 2, "oak trunk height never varies: {heights:?}");
     }
 
     #[test]

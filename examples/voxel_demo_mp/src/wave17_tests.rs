@@ -203,12 +203,15 @@ fn surface_block_desert_beach_return_sand() {
     assert_eq!(surface_block(Biome::Beach, 15).0, 4);
 }
 
-/// Taiga, Tundra, SnowyMountain always produce snow (id 15).
+/// W83: cold biomes now surface as grass (id 3), not the thin snow
+/// layer (id 15) - the layer is < 1 block so anything placed on top of
+/// it (trees, ground cover, the player spawn) read as floating a block
+/// high. Snow-on-top can return as a proper full block / layer later.
 #[test]
-fn surface_block_snowy_biomes_return_snow() {
+fn surface_block_cold_biomes_return_grass() {
     for biome in [Biome::Taiga, Biome::Tundra, Biome::SnowyMountain] {
         let b = surface_block(biome, 15);
-        assert_eq!(b.0, 15, "{} should give snow, got {}", biome.label(), b.0);
+        assert_eq!(b.0, 3, "{} should give grass, got {}", biome.label(), b.0);
     }
 }
 
