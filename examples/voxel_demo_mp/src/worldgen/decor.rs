@@ -12,7 +12,7 @@
 
 use infengine_voxel::{Chunk, ChunkCoord};
 
-use super::{WorldgenCtx, cactus, flowers, trees};
+use super::{WorldgenCtx, cactus, flowers, ground_cover, trees};
 
 /// Run every decoration pass on a freshly carved chunk. Order matters:
 /// trees first (they own the vertical space + cast the canopy), then the
@@ -20,5 +20,8 @@ use super::{WorldgenCtx, cactus, flowers, trees};
 pub(crate) fn place_realistic(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
     trees::place_realistic_from_coord(chunk, coord, ctx);
     flowers::place_realistic_from_coord(chunk, coord, ctx);
+    // W80: ground cover after flowers so flowers win their cells and
+    // grass/ferns fill the rest of the surface.
+    ground_cover::place_realistic_from_coord(chunk, coord, ctx);
     cactus::place_realistic_from_coord(chunk, coord, ctx);
 }

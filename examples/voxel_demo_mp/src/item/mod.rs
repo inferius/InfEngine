@@ -2280,6 +2280,10 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 649, name: "beetroots_immature", display: Some("Beetroots (Growing)"), places: Some(649), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W67.1 - unlit redstone lamp (the placeable / off state).
     ItemType { id: 650, name: "redstone_lamp", display: Some("Redstone Lamp"), places: Some(650), max_stack: 64, icon: None, category: ItemCategory::Redstone },
+    // W80 - MC ground cover plant items (icon auto-resolves from the
+    // matching png stem: short_grass.png / fern.png).
+    ItemType { id: 651, name: "short_grass", display: Some("Grass"), places: Some(651), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 652, name: "fern", display: Some("Fern"), places: Some(652), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 // ---------------------------------------------------------------

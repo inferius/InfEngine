@@ -2933,4 +2933,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // neighbouring wire / source carries power, and back when it goes
     // dark.
     BlockType { id: 650, name: "redstone_lamp", color: [0.42, 0.24, 0.14], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["redstone_lamp.png", "glowstone.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["redstone_lamp.png", "glowstone.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["redstone_lamp.png", "glowstone.png"], keep_alpha: false } },
+    // W80 - MC ground cover. Cross-pattern plants; the grayscale pack
+    // textures carry a tintindex so the green `color` below tints them
+    // (same path as the grass block top). F_WASHABLE so water clears them.
+    BlockType { id: 651, name: "short_grass", color: [0.36, 0.62, 0.28], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["short_grass.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["short_grass.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["short_grass.png"], keep_alpha: true } },
+    BlockType { id: 652, name: "fern", color: [0.33, 0.55, 0.26], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["fern.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["fern.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["fern.png"], keep_alpha: true } },
 ];

@@ -567,3 +567,6 @@ pub(crate) const BEETROOTS_IMMATURE_ID: u16 = 649;
 // W67.1 - redstone signal blocks. Wire (309) + sources + lamp pair.
 pub(crate) const REDSTONE_DUST_ID: u16 = 309;
 pub(crate) const REDSTONE_LAMP_ID: u16 = 650;
+// W80 - MC ground cover (cross-pattern, biome-tinted plants).
+pub(crate) const SHORT_GRASS_ID: u16 = 651;
+pub(crate) const FERN_ID: u16 = 652;
