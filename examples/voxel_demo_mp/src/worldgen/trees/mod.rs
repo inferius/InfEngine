@@ -24,6 +24,7 @@ use crate::worldgen::height::height_at_classic;
 pub(crate) mod acacia;
 pub(crate) mod birch;
 pub(crate) mod jungle;
+pub(crate) mod mega_spruce;
 pub(crate) mod oak;
 pub(crate) mod pine;
 pub(crate) mod sequoia;
@@ -136,6 +137,8 @@ pub(crate) enum Species {
     Sequoia,
     Jungle,
     Acacia,
+    /// 2x2-trunk giant conifer (old-growth taiga).
+    MegaSpruce,
 }
 
 /// Returns `(density_modulus, species)` for a biome roll, or
@@ -163,8 +166,16 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
         }
         // Plains: legacy oak only, legacy density.
         Biome::Plains => Some((32, Species::Oak)),
-        // Taiga: dense pines.
-        Biome::Taiga => Some((9, Species::Pine)),
+        // Taiga: dense pines, with the occasional 2x2 giant spruce
+        // (old-growth taiga). Giants are sparser so they have room.
+        Biome::Taiga => {
+            let roll = (rng >> 8) % 100;
+            if roll < 12 {
+                Some((18, Species::MegaSpruce))
+            } else {
+                Some((9, Species::Pine))
+            }
+        }
         // Jungle: less dense, but bigger trees. 70/30 jungle/oak.
         Biome::Jungle => {
             let species_roll = (rng >> 8) % 10;
@@ -179,8 +190,13 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
         Biome::Savanna => Some((48, Species::Acacia)),
         // Swamp: sparse oak.
         Biome::Swamp => Some((40, Species::Oak)),
-        // Other biomes: treeless. (Desert handled by cactus pass;
-        // Beach/Mountain/SnowyMountain/Tundra are vegetation-free.)
+        // Windswept hills + cold peaks: scattered conifers so the
+        // mountains aren't barren.
+        Biome::Mountain => Some((40, Species::Pine)),
+        Biome::SnowyMountain => Some((55, Species::Pine)),
+        // Snowy flats: the odd lonely spruce.
+        Biome::Tundra => Some((85, Species::Pine)),
+        // Desert (handled by the cactus pass) + Beach stay tree-free.
         _ => None,
     }
 }
@@ -201,6 +217,9 @@ fn dispatch(
         Species::Sequoia => sequoia::place_at(chunk, local_x, local_z, ground, origin_y),
         Species::Jungle => jungle::place_at(chunk, local_x, local_z, ground, origin_y, rng),
         Species::Acacia => acacia::place_at(chunk, local_x, local_z, ground, origin_y, rng),
+        Species::MegaSpruce => {
+            mega_spruce::place_at(chunk, local_x, local_z, ground, origin_y, rng)
+        }
     }
 }
 
@@ -250,15 +269,14 @@ mod tests {
     }
 
     #[test]
-    fn treeless_biomes_return_none() {
-        for b in [
-            Biome::Desert,
-            Biome::Mountain,
-            Biome::Tundra,
-            Biome::SnowyMountain,
-            Biome::Beach,
-        ] {
+    fn desert_and_beach_treeless_mountains_grow_conifers() {
+        // Desert is the cactus pass's job; beaches stay bare.
+        for b in [Biome::Desert, Biome::Beach] {
             assert!(pick_species(b, 0).is_none(), "biome {b:?} should be treeless");
+        }
+        // W81: cold / high biomes now grow sparse conifers.
+        for b in [Biome::Mountain, Biome::SnowyMountain, Biome::Tundra] {
+            assert!(pick_species(b, 0).is_some(), "biome {b:?} should grow pines");
         }
     }
 }
