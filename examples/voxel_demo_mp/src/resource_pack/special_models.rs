@@ -293,10 +293,11 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
 pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     use crate::block::{
         COBBLESTONE_SLAB_ID, COBBLESTONE_STAIRS_ID, COBBLESTONE_WALL_ID,
-        FLOWER_BLUE_ID, FLOWER_RED_ID, FLOWER_YELLOW_ID, GLASS_PANE_ID,
-        IRON_BARS_ID, IRON_DOOR_ID, NETHER_BRICK_FENCE_ID, OAK_DOOR_ID,
-        OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID, OAK_SLAB_TOP_ID,
-        OAK_STAIRS_ID, STONE_SLAB_ID, STONE_STAIRS_ID, TORCH_ID,
+        FERN_ID, FLOWER_BLUE_ID, FLOWER_RED_ID, FLOWER_YELLOW_ID,
+        GLASS_PANE_ID, IRON_BARS_ID, IRON_DOOR_ID, NETHER_BRICK_FENCE_ID,
+        OAK_DOOR_ID, OAK_DOOR_UPPER_ID, OAK_FENCE_ID, OAK_SLAB_ID,
+        OAK_SLAB_TOP_ID, OAK_STAIRS_ID, SHORT_GRASS_ID, STONE_SLAB_ID,
+        STONE_STAIRS_ID, TORCH_ID,
     };
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -314,6 +315,10 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         x if x == FLOWER_RED_ID => Some("block/cross/poppy"),
         x if x == FLOWER_YELLOW_ID => Some("block/cross/dandelion"),
         x if x == FLOWER_BLUE_ID => Some("block/cross/blue_orchid"),
+        // W90 - ground cover: render as X-cross plants, not cubes (they
+        // were falling back to the cube TileSpec -> grass texture on top).
+        x if x == SHORT_GRASS_ID => Some("block/cross/short_grass"),
+        x if x == FERN_ID => Some("block/cross/fern"),
         // W12.2 - slab / fence / door / stairs / pane / bars / wall.
         x if x == OAK_SLAB_ID
             || x == STONE_SLAB_ID
