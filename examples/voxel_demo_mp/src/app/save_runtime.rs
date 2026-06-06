@@ -5,15 +5,34 @@ use crate::lighting::HaloLighting;
 
 impl Voxel {
     /// Resolve the config file path used for settings persistence.
-    /// Lives next to the exe in release builds so the user can
-    /// nuke the file without finding a hidden appdata directory;
-    /// during `cargo run` it sits next to the workspace target so
-    /// repeated runs share the same file.
+    /// Lives next to the exe in release builds so the user can nuke the
+    /// file without finding a hidden appdata directory.
+    ///
+    /// W88: prefer an existing config, including the sibling build
+    /// profile's. A `cargo run` (debug) build and a `--release` build
+    /// live in sibling `target/{debug,release}` dirs; sharing one config
+    /// means `mc_assets_path` (and every other setting) set while
+    /// running one profile is seen by the other - so debug runs get the
+    /// MC textures the release config points at, instead of falling back
+    /// to the placeholder atlas. Falls back to a fresh file next to the
+    /// current exe when none exists yet.
     pub(crate) fn config_path() -> std::path::PathBuf {
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
         {
-            return dir.join("voxel_demo_mp.config");
+            let here = dir.join("voxel_demo_mp.config");
+            if here.exists() {
+                return here;
+            }
+            if let Some(target_dir) = dir.parent() {
+                for sib in ["release", "debug"] {
+                    let p = target_dir.join(sib).join("voxel_demo_mp.config");
+                    if p.exists() {
+                        return p;
+                    }
+                }
+            }
+            return here;
         }
         std::path::PathBuf::from("voxel_demo_mp.config")
     }
