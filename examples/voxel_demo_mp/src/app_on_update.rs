@@ -882,18 +882,36 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     if let AppState::Loading { ref mut phase, .. } = vx.state {
                         *phase = LoadingPhase::Finalising;
                     }
-                    // Pin player on the surface of the generated
-                    // terrain. Can only run now that chunks exist.
-                    let spawn = vx.safe_spawn();
-                    vx.player_pos = spawn;
-                    vx.player_vel = Vec3::ZERO;
-                    vx.fall_start_y = None;
-                    // Load persisted server state (edits, timers,
-                    // containers). Clients skip - they sync via the
-                    // catch-up broadcast on first heartbeat.
+                    // W84: load persisted server state FIRST (edits,
+                    // timers, containers - and crucially the player save
+                    // via load_world). Doing safe_spawn before this let
+                    // load_world's apply_player_save clobber the resolved
+                    // spawn with the fresh player's default world-spawn
+                    // (~y=0.5), burying the player deep underground - the
+                    // long-standing "I spawned in the ground" bug. The
+                    // log even showed safe_spawn resolving correctly, then
+                    // load_world running right after and overwriting it.
+                    // Clients skip - they sync via the catch-up broadcast.
                     if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
                         vx.load_server_state();
                     }
+                    // Now pin the player onto the generated surface, but
+                    // only if the loaded position is buried / unsafe - a
+                    // fresh world leaves the player at the default world
+                    // spawn, deep in the terrain. A returning player at a
+                    // valid spot keeps exactly where they logged off.
+                    let p = vx.player_pos;
+                    let bx = p.x.floor() as i32;
+                    let bz = p.z.floor() as i32;
+                    let feet_y = (p.y - PLAYER_HEIGHT).floor() as i32;
+                    let head_y = p.y.floor() as i32;
+                    let buried = !vx.world.get([bx, feet_y, bz]).is_air()
+                        || !vx.world.get([bx, head_y, bz]).is_air();
+                    if buried {
+                        vx.player_pos = vx.safe_spawn();
+                    }
+                    vx.player_vel = Vec3::ZERO;
+                    vx.fall_start_y = None;
                     vx.world_loaded = true;
                     vx.state = AppState::Playing;
                     info!(
