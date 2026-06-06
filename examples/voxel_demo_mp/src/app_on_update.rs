@@ -895,19 +895,40 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
                         vx.load_server_state();
                     }
-                    // Now pin the player onto the generated surface, but
-                    // only if the loaded position is buried / unsafe - a
-                    // fresh world leaves the player at the default world
-                    // spawn, deep in the terrain. A returning player at a
-                    // valid spot keeps exactly where they logged off.
+                    // Pin the player onto the generated surface unless the
+                    // loaded position is already a valid standable surface
+                    // spot. "Standable" = both body cells clear AND solid
+                    // ground within 2 blocks below the feet. This catches
+                    // BOTH a buried default spawn (deep at world-origin)
+                    // AND a floating one (high in the air over a hole), so
+                    // either way a fresh world resolves to real ground; a
+                    // returning player standing somewhere valid keeps it.
                     let p = vx.player_pos;
                     let bx = p.x.floor() as i32;
                     let bz = p.z.floor() as i32;
                     let feet_y = (p.y - PLAYER_HEIGHT).floor() as i32;
                     let head_y = p.y.floor() as i32;
-                    let buried = !vx.world.get([bx, feet_y, bz]).is_air()
-                        || !vx.world.get([bx, head_y, bz]).is_air();
-                    if buried {
+                    let body_clear = vx.world.get([bx, feet_y, bz]).is_air()
+                        && vx.world.get([bx, head_y, bz]).is_air();
+                    let ground_below =
+                        (1..=2).any(|d| !vx.world.get([bx, feet_y - d, bz]).is_air());
+                    let standable = body_clear && ground_below;
+                    // Always log the decision so an "in the ground" report
+                    // is decidable: shows the loaded pos + why it was or
+                    // wasn't kept.
+                    info!(
+                        x = p.x,
+                        y = p.y,
+                        z = p.z,
+                        feet_y,
+                        body_clear,
+                        ground_below,
+                        standable,
+                        at_feet = vx.world.get([bx, feet_y, bz]).0,
+                        at_head = vx.world.get([bx, head_y, bz]).0,
+                        "voxel: spawn pre-resolve check"
+                    );
+                    if !standable {
                         vx.player_pos = vx.safe_spawn();
                     }
                     vx.player_vel = Vec3::ZERO;
