@@ -203,13 +203,23 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     // world.json's `default_game_mode`. Without this the fresh player's
     // Survival default overwrote a Creative pick via apply_player_save
     // below, so "I selected Creative on create" had no effect.
-    let player_save = player.unwrap_or_else(|| {
-        let mut fp = fresh_player(world_meta.spawn);
-        if world_meta.default_game_mode.eq_ignore_ascii_case("creative") {
-            fp.game_mode = 1; // PlayerSave game_mode: 1 = Creative
+    let player_save = match player {
+        Some(p) => p,
+        None => {
+            // W86: a freshly created world has no player file. The bare
+            // world-spawn is [0,0,0] -> the player would load at the
+            // bedrock floor, deep underground. The procedural chunks are
+            // already in `voxel.world` by now, so resolve a real surface
+            // spawn directly here rather than relying on a later lift.
+            let mut fp = fresh_player(world_meta.spawn);
+            if world_meta.default_game_mode.eq_ignore_ascii_case("creative") {
+                fp.game_mode = 1; // PlayerSave game_mode: 1 = Creative
+            }
+            let s = voxel.safe_spawn();
+            fp.pos = [s.x, s.y, s.z];
+            fp
         }
-        fp
-    });
+    };
     apply_player_save(voxel, &player_save);
 
     // Timers + catch-up.
