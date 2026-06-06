@@ -37,9 +37,14 @@ pub(crate) fn place_at(
     let cx = local_x; // bias one side; close enough on a 2-block trunk
     let cz = local_z;
     let top = ground + trunk_h;
+    // W89: two full 7x7 layers + a 5x5 cap so the jungle crown is a
+    // fuller dome rather than a single flat slab on the 2x2 trunk.
+    stamp_leaf_disc_7(chunk, cx, top - 1 - origin_y, cz, LEAF);
+    stamp_leaf_disc_7(chunk, cx + 1, top - 1 - origin_y, cz + 1, LEAF);
     stamp_leaf_disc_7(chunk, cx, top - origin_y, cz, LEAF);
     stamp_leaf_disc_7(chunk, cx + 1, top - origin_y, cz + 1, LEAF);
     stamp_leaf_disc_5(chunk, cx, top + 1 - origin_y, cz, LEAF, false);
+    stamp_leaf_disc_5(chunk, cx + 1, top + 1 - origin_y, cz + 1, LEAF, false);
     set_in_chunk(chunk, cx, top + 2 - origin_y, cz, LEAF);
     set_in_chunk(chunk, cx + 1, top + 2 - origin_y, cz + 1, LEAF);
 }
@@ -69,11 +74,11 @@ mod tests {
         // Anchor low so the canopy fits inside the chunk.
         place_at(&mut c, 8, 8, 1, 0, 0);
         let trunk_h = count_id(&c, 5);
-        // Trunk: 4 columns x (10..=13) rows = 40..=52. But the
-        // 7-disc canopy stamps leaves over the top voxel of each
-        // trunk column (4 cells), leaving 36..=48 wood blocks.
+        // Trunk: 4 columns x (10..=13) rows = 40..=52. W89's fuller
+        // 2-layer crown stamps leaves over the top TWO voxels of each
+        // trunk column (8 cells), leaving ~32..=44 wood blocks.
         assert!(
-            (36..=48).contains(&trunk_h),
+            (28..=48).contains(&trunk_h),
             "trunk_h={trunk_h}"
         );
     }

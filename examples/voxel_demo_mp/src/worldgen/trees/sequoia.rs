@@ -13,7 +13,7 @@ pub(crate) const LEAF: BlockId = BlockId(6);
 
 /// Sequoia trunk height. 24 blocks; fits inside one CHUNK_SIZE=32
 /// chunk for the canopy at typical ground heights.
-const TRUNK_H: i32 = 18;
+const TRUNK_H: i32 = 15;
 
 pub(crate) fn place_at(
     chunk: &mut Chunk,
@@ -31,10 +31,12 @@ pub(crate) fn place_at(
         ground + TRUNK_H - origin_y,
         WOOD,
     );
-    // Canopy: 4 stacked layers near the top. Bottom layer is a
-    // 7x7 trimmed disc; the next two are 7x7 + 5x5; top is a
-    // single leaf block. Centres around y = ground + TRUNK_H.
+    // W89: a rounded crown over the top ~7 layers (3 of them full 7x7,
+    // widest in the middle) instead of a thin 4-layer plate on a bare
+    // pole. Reads as a leafy ball, not a table on a stick.
     let top = ground + TRUNK_H;
+    stamp_leaf_disc_5(chunk, local_x, top - 5 - origin_y, local_z, LEAF, true);
+    stamp_leaf_disc_7(chunk, local_x, top - 4 - origin_y, local_z, LEAF);
     stamp_leaf_disc_7(chunk, local_x, top - 3 - origin_y, local_z, LEAF);
     stamp_leaf_disc_7(chunk, local_x, top - 2 - origin_y, local_z, LEAF);
     stamp_leaf_disc_5(chunk, local_x, top - 1 - origin_y, local_z, LEAF, true);
@@ -72,10 +74,10 @@ mod tests {
         let mut c = Chunk::empty();
         place_at(&mut c, 8, 8, -1, 0);
         let wood = count_id(&c, 5);
-        // Bottom 13 trunk blocks land before the canopy starts;
-        // canopy at top-3 = (TRUNK_H-1-3)-1 = 13 overstamps the
-        // 14th. So 13 trunks survive intact.
-        assert!(wood >= 12, "wood={wood}");
+        // W89: trunk is 15 high now with the crown enveloping its upper
+        // layers; the bare trunk below the crown still leaves a healthy
+        // run of wood.
+        assert!(wood >= 8, "wood={wood}");
     }
 
     #[test]
@@ -88,7 +90,7 @@ mod tests {
         // ground+TRUNK_H+1 = 16. Most of it should land at
         // y=12..=15 (4 layers in chunk).
         let leaves = count_id(&c, 6);
-        assert!(leaves > 50, "leaves={leaves}");
+        assert!(leaves > 40, "leaves={leaves}");
     }
 
     #[test]

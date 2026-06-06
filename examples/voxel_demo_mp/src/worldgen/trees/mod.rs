@@ -124,19 +124,13 @@ pub(crate) fn place_realistic_from_coord(
             // which differs from realistic_height per column - using the
             // latter left trees floating above / buried in the ground.
             let ground = column_height(ctx, wx, wz);
-            // W84: if a cave / ravine carved the surface out of this
-            // column, the generator height points at empty air - placing
-            // a tree there leaves it floating over the hole. Skip when
-            // the surface voxel is gone. Only checkable for in-chunk
-            // columns; a margin trunk lives in the neighbour chunk.
-            if (0..cs).contains(&x) && (0..cs).contains(&z) {
-                let gy = ground - origin_y;
-                let carved = !(0..cs).contains(&gy)
-                    || chunk.get(x as usize, gy as usize, z as usize).0 == 0;
-                if carved {
-                    continue;
-                }
-            }
+            // W89: no per-chunk carve-skip here. It only saw the home
+            // chunk's columns, so a margin tree (trunk in the neighbour
+            // chunk) had its trunk skipped while this chunk still drew the
+            // canopy - leaving detached leaf slabs floating in the air.
+            // Placing every tree at its generator height keeps trunk +
+            // canopy together; a rare tree over a carved column floats as
+            // one connected piece, which is far less jarring.
             dispatch(species, chunk, x, z, ground, origin_y, rng);
         }
     }
@@ -171,9 +165,11 @@ pub(crate) fn pick_species(biome: Biome, rng: u32) -> Option<(u32, Species)> {
             // Use a separate slice of the rng so the species roll
             // doesn't bias the density check below.
             let species_roll = (rng >> 8) % 100;
-            let species = if species_roll < 7 {
+            // W89: sequoias are tall + visually dominant; keep them an
+            // occasional landmark (4%) rather than every other tree.
+            let species = if species_roll < 4 {
                 Species::Sequoia
-            } else if species_roll < 53 {
+            } else if species_roll < 52 {
                 Species::Oak
             } else {
                 Species::Birch
