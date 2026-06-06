@@ -206,17 +206,18 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     let player_save = match player {
         Some(p) => p,
         None => {
-            // W86: a freshly created world has no player file. The bare
-            // world-spawn is [0,0,0] -> the player would load at the
-            // bedrock floor, deep underground. The procedural chunks are
-            // already in `voxel.world` by now, so resolve a real surface
-            // spawn directly here rather than relying on a later lift.
+            // W87: a freshly created world has no player file. The bare
+            // world-spawn is [0,0,0] -> the bedrock floor. Keep the
+            // surface position the caller already resolved into
+            // `player_pos` via safe_spawn (run before this load, while the
+            // procedural chunks are still populated); don't call
+            // safe_spawn here - load_world has transiently cleared the
+            // chunks, so it would return the y=90 sky fallback.
             let mut fp = fresh_player(world_meta.spawn);
             if world_meta.default_game_mode.eq_ignore_ascii_case("creative") {
                 fp.game_mode = 1; // PlayerSave game_mode: 1 = Creative
             }
-            let s = voxel.safe_spawn();
-            fp.pos = [s.x, s.y, s.z];
+            fp.pos = [voxel.player_pos.x, voxel.player_pos.y, voxel.player_pos.z];
             fp
         }
     };

@@ -882,57 +882,26 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     if let AppState::Loading { ref mut phase, .. } = vx.state {
                         *phase = LoadingPhase::Finalising;
                     }
-                    // W84: load persisted server state FIRST (edits,
-                    // timers, containers - and crucially the player save
-                    // via load_world). Doing safe_spawn before this let
-                    // load_world's apply_player_save clobber the resolved
-                    // spawn with the fresh player's default world-spawn
-                    // (~y=0.5), burying the player deep underground - the
-                    // long-standing "I spawned in the ground" bug. The
-                    // log even showed safe_spawn resolving correctly, then
-                    // load_world running right after and overwriting it.
-                    // Clients skip - they sync via the catch-up broadcast.
+                    // W87: resolve the surface spawn BEFORE loading
+                    // persisted state. load_world transiently clears +
+                    // re-streams the procedural chunks, so safe_spawn has
+                    // to read the populated world here - running it after
+                    // load saw an empty world and returned its y=90 sky
+                    // fallback (player spawned in the air and fell). The
+                    // chunks exist now (post-mesh), so this finds real
+                    // ground. load_world's fresh-player branch keeps this
+                    // resolved position; a saved player overrides it with
+                    // their logged-off spot.
+                    let spawn = vx.safe_spawn();
+                    vx.player_pos = spawn;
+                    vx.player_vel = Vec3::ZERO;
+                    vx.fall_start_y = None;
+                    // Load persisted server state (edits, timers,
+                    // containers, player). Clients skip - they sync via
+                    // the catch-up broadcast on first heartbeat.
                     if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
                         vx.load_server_state();
                     }
-                    // Pin the player onto the generated surface unless the
-                    // loaded position is already a valid standable surface
-                    // spot. "Standable" = both body cells clear AND solid
-                    // ground within 2 blocks below the feet. This catches
-                    // BOTH a buried default spawn (deep at world-origin)
-                    // AND a floating one (high in the air over a hole), so
-                    // either way a fresh world resolves to real ground; a
-                    // returning player standing somewhere valid keeps it.
-                    let p = vx.player_pos;
-                    let bx = p.x.floor() as i32;
-                    let bz = p.z.floor() as i32;
-                    let feet_y = (p.y - PLAYER_HEIGHT).floor() as i32;
-                    let head_y = p.y.floor() as i32;
-                    let body_clear = vx.world.get([bx, feet_y, bz]).is_air()
-                        && vx.world.get([bx, head_y, bz]).is_air();
-                    let ground_below =
-                        (1..=2).any(|d| !vx.world.get([bx, feet_y - d, bz]).is_air());
-                    let standable = body_clear && ground_below;
-                    // Always log the decision so an "in the ground" report
-                    // is decidable: shows the loaded pos + why it was or
-                    // wasn't kept.
-                    info!(
-                        x = p.x,
-                        y = p.y,
-                        z = p.z,
-                        feet_y,
-                        body_clear,
-                        ground_below,
-                        standable,
-                        at_feet = vx.world.get([bx, feet_y, bz]).0,
-                        at_head = vx.world.get([bx, head_y, bz]).0,
-                        "voxel: spawn pre-resolve check"
-                    );
-                    if !standable {
-                        vx.player_pos = vx.safe_spawn();
-                    }
-                    vx.player_vel = Vec3::ZERO;
-                    vx.fall_start_y = None;
                     vx.world_loaded = true;
                     vx.state = AppState::Playing;
                     info!(
