@@ -124,6 +124,19 @@ pub(crate) fn place_realistic_from_coord(
             // which differs from realistic_height per column - using the
             // latter left trees floating above / buried in the ground.
             let ground = column_height(ctx, wx, wz);
+            // W84: if a cave / ravine carved the surface out of this
+            // column, the generator height points at empty air - placing
+            // a tree there leaves it floating over the hole. Skip when
+            // the surface voxel is gone. Only checkable for in-chunk
+            // columns; a margin trunk lives in the neighbour chunk.
+            if (0..cs).contains(&x) && (0..cs).contains(&z) {
+                let gy = ground - origin_y;
+                let carved = !(0..cs).contains(&gy)
+                    || chunk.get(x as usize, gy as usize, z as usize).0 == 0;
+                if carved {
+                    continue;
+                }
+            }
             dispatch(species, chunk, x, z, ground, origin_y, rng);
         }
     }

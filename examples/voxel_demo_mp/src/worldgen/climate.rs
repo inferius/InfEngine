@@ -132,27 +132,19 @@ pub(crate) fn realistic_height(climate: Climate, biome: Biome) -> i32 {
 pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
     match biome {
         Biome::Desert | Biome::Beach => BlockId(4), // sand
-        // W83: cold biomes use grass too, not the thin snow layer.
-        // Block 15 "snow" is a < 1-block-tall layer, so when it was the
-        // surface cell, trees / ground cover placed in the cell above it
-        // read as floating one block over the ground, and a spawn landed
-        // a block high. (A proper full-snow-block surface / snow-on-top
-        // decoration can return later.)
-        Biome::Plains
-        | Biome::Forest
-        | Biome::Jungle
-        | Biome::Savanna
-        | Biome::Swamp
-        | Biome::Taiga
-        | Biome::Tundra
-        | Biome::SnowyMountain => BlockId(3), // grass
-        Biome::Mountain => {
-            if h >= 34 {
-                BlockId(15) // snow peak
-            } else if h >= 22 {
-                BlockId(1) // bare stone mid-slope
+        // W84: everything else is grass, with bare stone only on a
+        // genuine high peak. The world should read green like MC, not as
+        // a gray rockfield - the old Mountain branch surfaced a wide
+        // h=22..34 stone band (plus a thin-snow cap, the W83 float bug)
+        // that turned whole hillsides gray even though the "Mountain"
+        // biome is just the high-elevation climate cell. Cold biomes are
+        // grass too for now; snow + a proper peak cap can return as full
+        // blocks later.
+        _ => {
+            if h >= 46 {
+                BlockId(1) // bare rock peak
             } else {
-                BlockId(3) // grass lower slope
+                BlockId(3) // grass
             }
         }
     }
@@ -161,7 +153,8 @@ pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
 pub(crate) fn near_surface_block(biome: Biome) -> BlockId {
     match biome {
         Biome::Desert | Biome::Beach => BlockId(26), // sandstone
-        Biome::Mountain | Biome::SnowyMountain => BlockId(1),
+        // W84: dirt under the grassy mountain surface (was stone, which
+        // read as grass sitting straight on rock).
         _ => BlockId(2), // dirt
     }
 }

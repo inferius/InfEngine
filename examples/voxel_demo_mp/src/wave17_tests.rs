@@ -215,42 +215,29 @@ fn surface_block_cold_biomes_return_grass() {
     }
 }
 
-/// Mountain biome at low altitude should NOT return stone (grey).
-/// W17.4 fix: h < 22 -> grass, 22..34 -> stone, >= 34 -> snow.
+/// W84: mountains are grassy until a genuine high peak, then bare rock.
+/// (Was a wide h>=22 stone band + thin-snow cap that turned hillsides
+/// grey and floated decorations; the world should read green like MC.)
 #[test]
 fn realistic_world_surface_per_biome_is_correct() {
-    // Low mountain (h < 22) -> grass.
+    // Grass for the whole walkable range of a mountain.
+    for h in [15, 21, 22, 33, 45] {
+        assert_eq!(
+            surface_block(Biome::Mountain, h).0,
+            3,
+            "Mountain h={h} should be grass, not grey stone"
+        );
+    }
+    // Only a genuine high peak turns to bare rock.
     assert_eq!(
-        surface_block(Biome::Mountain, 15).0,
-        3,
-        "Mountain h=15 should be grass, not grey stone"
-    );
-    assert_eq!(
-        surface_block(Biome::Mountain, 21).0,
-        3,
-        "Mountain h=21 should be grass"
-    );
-    // Mid mountain (22..34) -> stone.
-    assert_eq!(
-        surface_block(Biome::Mountain, 22).0,
+        surface_block(Biome::Mountain, 46).0,
         1,
-        "Mountain h=22 should be stone"
+        "Mountain h=46 should be a bare rock peak"
     );
     assert_eq!(
-        surface_block(Biome::Mountain, 33).0,
+        surface_block(Biome::Mountain, 60).0,
         1,
-        "Mountain h=33 should be stone"
-    );
-    // High mountain (>= 34) -> snow.
-    assert_eq!(
-        surface_block(Biome::Mountain, 34).0,
-        15,
-        "Mountain h=34 should be snow"
-    );
-    assert_eq!(
-        surface_block(Biome::Mountain, 50).0,
-        15,
-        "Mountain h=50 should be snow"
+        "Mountain h=60 should be a bare rock peak"
     );
 }
 

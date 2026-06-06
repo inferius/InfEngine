@@ -131,17 +131,38 @@ impl Voxel {
             // has a y=0 floor now, so a high drop still lands safely.
             return Vec3::new(0.5, 90.0, 0.5);
         };
+        // W84 safety lift: raise the foot cell until two clear air blocks
+        // (body + head room) sit above the ground, so even the fallback
+        // path (no dry column found, e.g. a surface under a canopy) can
+        // never leave the player embedded. For a normal dry column this
+        // is a no-op (foot = sy + 1 is already clear).
+        let mut foot = sy + 1;
+        while foot + 1 < ceiling
+            && (!self.world.get([dx, foot, dz]).is_air()
+                || !self.world.get([dx, foot + 1, dz]).is_air())
+        {
+            foot += 1;
+        }
+        // `foot` is the air cell the feet rest in (ground top at `foot`);
+        // player_pos.y is the eye, PLAYER_HEIGHT above the feet.
         let pos = Vec3::new(
             dx as f32 + 0.5,
-            sy as f32 + 1.0 + PLAYER_HEIGHT + 0.05,
+            foot as f32 + PLAYER_HEIGHT + 0.05,
             dz as f32 + 0.5,
         );
+        // Log the actual blocks at the spawn so an "I spawned in the
+        // ground" report is decidable from the log: ground should be
+        // solid, at_feet / at_head should be 0 (air).
         tracing::info!(
             dx,
             dz,
             sy,
+            foot,
             dry = dry.is_some(),
             y = pos.y,
+            ground = self.world.get([dx, foot - 1, dz]).0,
+            at_feet = self.world.get([dx, foot, dz]).0,
+            at_head = self.world.get([dx, foot + 1, dz]).0,
             "voxel: safe_spawn resolved"
         );
         pos
