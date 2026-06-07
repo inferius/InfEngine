@@ -201,7 +201,9 @@ impl Voxel {
             chunk,
             origin,
             uv_resolver,
-            block_is_opaque,
+            // W109: block_fully_occludes (not block_is_opaque) so the
+            // cactus's inset model doesn't cull the sand top under it.
+            crate::block::block_fully_occludes,
             |air_local, _normal| light_lookup(air_local),
             anim_lookup,
             emit_special,

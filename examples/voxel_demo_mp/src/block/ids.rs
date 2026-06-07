@@ -9,6 +9,12 @@
 /// renderer-side light scan doesn't have to do a string lookup.
 pub(crate) const TORCH_ID: u16 = 10;
 pub(crate) const GLOWSTONE_ID: u16 = 28;
+/// Cactus block id. Renders via the MC inset model (sides pulled in
+/// 1 px). W109: opaque material but NOT a full cube, so it must not
+/// cull a neighbouring full block's adjacent face - otherwise the
+/// sand top under the cactus is culled and the 1 px inset gap shows
+/// through to the void/sky. See `block_fully_occludes`.
+pub(crate) const CACTUS_ID: u16 = 27;
 /// Block id of water. Passable, instant-break, applies swim drag
 /// + buoyancy while the player AABB intersects it.
 pub(crate) const WATER_ID: u16 = 36;

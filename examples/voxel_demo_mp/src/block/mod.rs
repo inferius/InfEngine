@@ -175,6 +175,20 @@ pub(crate) fn block_is_opaque(b: BlockId) -> bool {
     block_type(b.0).map(|t| !t.transparent).unwrap_or(true)
 }
 
+/// W109: does this block FULLY fill its cell, occluding a neighbour's
+/// adjacent face? `block_is_opaque` conflates "opaque material" with
+/// "full cube": the cactus is opaque but its model insets the sides
+/// 1 px, so when it culled the top face of the sand it stands on, the
+/// inset gap showed through to the void/sky instead of the sand. The
+/// chunk mesher's face-cull predicate uses THIS; lighting keeps using
+/// `block_is_opaque` (cactus still blocks light, MC-style).
+pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
+    if b.0 == CACTUS_ID {
+        return false;
+    }
+    block_is_opaque(b)
+}
+
 /// Map a block id to the Minecraft sound-material name. Used to
 /// pick the right `dig:*` / `step:*` variant from `sound_assets`.
 /// Unknown blocks default to `"stone"` because that's the least

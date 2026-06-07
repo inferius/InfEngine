@@ -393,7 +393,10 @@ pub(crate) fn mesh_chunk_in_worker(
         chunk,
         origin,
         uv_resolver,
-        block_is_opaque,
+        // W109: block_fully_occludes (not block_is_opaque) so the cactus's
+        // inset model doesn't cull the sand top under it (you'd see the void
+        // through the 1 px inset gap). Lighting still uses block_is_opaque.
+        crate::block::block_fully_occludes,
         |air_local, _normal| light_lookup(air_local),
         anim_lookup,
         emit_special,
