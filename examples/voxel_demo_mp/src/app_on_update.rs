@@ -41,8 +41,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         use std::sync::atomic::{AtomicU64, Ordering as DiagOrd};
         static DIAG_N: AtomicU64 = AtomicU64::new(0);
         static DIAG_REND_US: AtomicU64 = AtomicU64::new(0);
-        let diag_n = DIAG_N.fetch_add(1, DiagOrd::Relaxed);
-        if diag_n > 0 && diag_n.is_multiple_of(600) {
+        static DIAG_ACC_US: AtomicU64 = AtomicU64::new(0);
+        // W95: fire on a ~2.5s WALL-CLOCK interval, not every 600 frames.
+        // At 10 FPS a 600-frame gate only logged once per 60s, so a frame
+        // collapse produced no diag before the user quit. Now a stall is
+        // visible within ~2.5s. `py`/`vy` expose the player Y + vertical
+        // velocity so a "falling forever" spawn (which churns chunk
+        // streaming -> continuous lighting/remesh) is distinguishable from
+        // a stable-but-slow frame or a one-off heavy initial load.
+        let frames = DIAG_N.fetch_add(1, DiagOrd::Relaxed) + 1;
+        let dt_us = (dt * 1_000_000.0) as u64;
+        let acc_us = DIAG_ACC_US.fetch_add(dt_us, DiagOrd::Relaxed) + dt_us;
+        if acc_us >= 2_500_000 {
+            DIAG_N.store(0, DiagOrd::Relaxed);
+            DIAG_ACC_US.store(0, DiagOrd::Relaxed);
             let rend_us = DIAG_REND_US.swap(0, DiagOrd::Relaxed);
             tracing::info!(
                 fps = vx.fps_ema as i32,
@@ -50,7 +62,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 remesh_q = vx.pending_remesh.len(),
                 light_jobs = vx.pending_lighting_jobs,
                 falling = vx.falling_pending.len(),
-                render_ms = (rend_us / 600) as f32 / 1000.0,
+                py = vx.player_pos.y,
+                vy = vx.player_vel.y,
+                render_ms = (rend_us / frames.max(1)) as f32 / 1000.0,
                 "voxel: perf diag"
             );
         }
