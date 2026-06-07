@@ -424,8 +424,20 @@ fn emit_faces_for_element(
         // (lighting is sampled per-voxel, so we snap back to the
         // nearest cardinal direction for the air-side cell offset).
         let light_normal = if rot_mat.is_some() {
-            // Snap the rotated normal to the closest cardinal.
-            snap_to_cardinal(rot_normal)
+            // W105: cross-plants / non-occluding rotated decorations
+            // (short_grass, fern, flowers, sapling, dead bush) sit in an
+            // air-passable cell. MC lights them from their OWN cell,
+            // uniformly. Sampling a snapped cardinal NEIGHBOUR made each of
+            // the cross's four quads read a different cell - one the lit air
+            // it stands in, the next the solid block beside/under it
+            // (light 0) - which is the black / checkered grass the user saw.
+            // Solid rotated blocks keep neighbour sampling: their own cell is
+            // opaque (light 0), so own-cell light would turn THEM black.
+            if crate::block::block_is_ray_passable(infengine_voxel::BlockId(block_id)) {
+                [0, 0, 0]
+            } else {
+                snap_to_cardinal(rot_normal)
+            }
         } else {
             box_face.normal
         };
