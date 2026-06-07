@@ -237,7 +237,37 @@ fn resolve_from_special_table(id: u16) -> ResolvedBlockState {
     {
         return ResolvedBlockState::Single(m);
     }
+    // W96: UNIVERSAL cross-plant fallback. Any block that fails BOTH the
+    // MC JSON pipeline AND the hand-coded table but is a passable,
+    // washable decoration (every plant carries F_RAY_PASS | F_AABB_PASS |
+    // F_WASHABLE) renders as an X-cross built from its OWN texture instead
+    // of silently becoming a textured cube. This kills the per-plant
+    // whack-a-mole: grass/fern needed explicit `name_for_block` entries,
+    // dead_bush / saplings / sugar_cane / flowers / etc. did not have them
+    // and fell back to a cube. New plants now need ZERO special-casing -
+    // just the standard plant flags they already carry. F_WASHABLE gates
+    // out non-plant passables (ladder, rails, portal, water) so they are
+    // never mis-rendered as crosses.
+    if let Some(tex) = cross_plant_texture(id) {
+        return ResolvedBlockState::Single(build_cross(tex));
+    }
     ResolvedBlockState::None
+}
+
+/// Texture stem for a passable-decoration (plant) block, or `None` if the
+/// block is not a cross-plant. Drives the universal cross fallback above.
+fn cross_plant_texture(id: u16) -> Option<&'static str> {
+    use crate::block::{block_type, F_AABB_PASS, F_RAY_PASS, F_SWIM, F_WASHABLE};
+    let bt = block_type(id)?;
+    const PLANT: u8 = F_RAY_PASS | F_AABB_PASS | F_WASHABLE;
+    if bt.flags & PLANT != PLANT || bt.flags & F_SWIM != 0 {
+        return None;
+    }
+    // The plant's own sprite (first `sides` file, already in the atlas),
+    // stem only - `build_cross`/`full_face` resolve it by name like the
+    // explicit `block/cross/<tex>` entries do.
+    let file = bt.sides.files.first()?;
+    Some(file.strip_suffix(".png").unwrap_or(file))
 }
 
 /// Resolve a model name to a hand-built `BlockModel`. Returns
@@ -428,8 +458,11 @@ pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<Blo
             ResolvedBlockState::None => {}
         }
     }
-    // Fall through to hand-coded table (placeholder pack / cross plants).
-    name_for_block(id).and_then(lookup)
+    // Fall through to hand-coded table, then the W96 universal cross-plant
+    // fallback (see model_for_block_with_neighbors).
+    name_for_block(id)
+        .and_then(lookup)
+        .or_else(|| cross_plant_texture(id).map(build_cross))
 }
 
 /// Resolve a block model taking neighbour connection flags into account.
@@ -488,8 +521,15 @@ pub(crate) fn model_for_block_with_neighbors(
     if let Some(m) = resolve_block_model_with_neighbors(pack, id, neighbors) {
         return Some(m);
     }
-    // Fall through to hand-coded table (placeholder pack / cross plants).
-    name_for_block(id).and_then(lookup)
+    // Fall through to hand-coded table, then the W96 universal cross-plant
+    // fallback (any passable washable plant -> X-cross from its own
+    // texture). This is THE meshing path (chunk_mesh_greedy_with_special
+    // calls emit_special -> emit_block_elements -> here for every voxel),
+    // so it fixes dead_bush / crops / sugar_cane / saplings / etc. with no
+    // per-plant wiring or registry flags.
+    name_for_block(id)
+        .and_then(lookup)
+        .or_else(|| cross_plant_texture(id).map(build_cross))
 }
 
 // ---------------------------------------------------------------
