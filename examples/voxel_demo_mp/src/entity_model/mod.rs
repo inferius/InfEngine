@@ -128,7 +128,18 @@ pub(crate) struct BonePose {
 /// shared albedo for every bone. Call once at load. The albedo is made
 /// once and `Arc`-cloned onto each bone mesh (no per-bone GPU upload).
 pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage) -> BakedModel {
-    let albedo = r.make_mesh_albedo(img.width(), img.height(), img);
+    // W97: force alpha=255 exactly like the legacy `mob_meshes::upload_part`
+    // path does. The mesh-PBR shader runs an alpha-cutout discard; entity
+    // sheets have sub-0.5-alpha texels (skeleton rib gaps, the zombie's
+    // left-limb region, chicken-leg edges) that were getting discarded and
+    // showing as black. Opaque mobs (cow/pig) were unaffected, which is why
+    // only some parts looked black. Flattening alpha matches the proven
+    // legacy behaviour so every part renders solid.
+    let mut opaque = img.clone();
+    for px in opaque.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let albedo = r.make_mesh_albedo(opaque.width(), opaque.height(), &opaque);
     // UVs are normalized by the ACTUAL texture size (MC-asset-driven), not
     // a hardcoded model constant - so the same `texOffs` data is correct
     // whatever resolution the pack ships.
