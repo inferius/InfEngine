@@ -128,18 +128,16 @@ pub(crate) struct BonePose {
 /// shared albedo for every bone. Call once at load. The albedo is made
 /// once and `Arc`-cloned onto each bone mesh (no per-bone GPU upload).
 pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage) -> BakedModel {
-    // W97: force alpha=255 exactly like the legacy `mob_meshes::upload_part`
-    // path does. The mesh-PBR shader runs an alpha-cutout discard; entity
-    // sheets have sub-0.5-alpha texels (skeleton rib gaps, the zombie's
-    // left-limb region, chicken-leg edges) that were getting discarded and
-    // showing as black. Opaque mobs (cow/pig) were unaffected, which is why
-    // only some parts looked black. Flattening alpha matches the proven
-    // legacy behaviour so every part renders solid.
-    let mut opaque = img.clone();
-    for px in opaque.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    let albedo = r.make_mesh_albedo(opaque.width(), opaque.height(), &opaque);
+    // W102: bind the texture WITH its alpha intact. MC entity sheets have
+    // genuinely transparent texels - e.g. the gaps between a skeleton's ribs
+    // (you see through them), the chicken-leg and zombie-limb cutouts - and
+    // the mesh-PBR shader discards alpha < 0.5, so those holes show the
+    // background. W97 wrongly flattened alpha to 255 (copying the legacy
+    // .tga-soft-edge workaround), which DISABLED the discard and turned
+    // every transparent texel into opaque BLACK (the black skeleton ribs).
+    // MC's .png sheets are hard-edged (alpha 0/255), so keeping alpha is
+    // correct and matches how MC renders entities (cutout).
+    let albedo = r.make_mesh_albedo(img.width(), img.height(), img);
     // UVs are normalized by the ACTUAL texture size (MC-asset-driven), not
     // a hardcoded model constant - so the same `texOffs` data is correct
     // whatever resolution the pack ships.
