@@ -181,7 +181,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
 
     // Drain finished results from the workers.
     let (results_cap, budget_ms) = vx.current_results_budget();
-    vx.stream_delivered.clear();
+    // W106: do NOT clear here - results that last frame's processing
+    // time-budget left unprocessed carry over, so a burst of finished
+    // chunks drains across several frames instead of one big spike.
     if let Some(pool) = vx.workers.as_ref() {
         let drain_start = std::time::Instant::now();
         let drain_budget = std::time::Duration::from_millis(budget_ms);
@@ -192,8 +194,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             vx.stream_delivered.push(r);
         }
     }
-    let mut delivered = std::mem::take(&mut vx.stream_delivered);
-    for result in delivered.drain(..) {
+    let delivered = std::mem::take(&mut vx.stream_delivered);
+    // W106: apply the per-frame time budget to PROCESSING (the GPU mesh
+    // uploads), which is what the budget always intended (see the
+    // RESULTS_BUDGET_MS doc). Previously it gated only the cheap try_recv
+    // drain, so all `results_cap` meshes still GPU-uploaded in ONE frame -
+    // ballooning it to 15-20 ms and making the camera + nearby mobs/trees
+    // visibly judder during streaming/lighting bursts. Whatever doesn't
+    // fit the budget carries to the next frame via `stream_delivered`.
+    let process_start = std::time::Instant::now();
+    let process_budget = std::time::Duration::from_millis(budget_ms);
+    let mut delivered_iter = delivered.into_iter();
+    for result in delivered_iter.by_ref() {
         match result {
             WorkerResult::Generated {
                 coord,
@@ -388,8 +400,13 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 vx.pending_lighting_jobs = vx.pending_lighting_jobs.saturating_sub(1);
             }
         }
+        // W106: stop once this frame's streaming budget is spent; the
+        // remaining drained results stay queued for the next frame.
+        if process_start.elapsed() >= process_budget {
+            break;
+        }
     }
-    vx.stream_delivered = delivered;
+    vx.stream_delivered = delivered_iter.collect();
 
     // Drain deferred neighbour re-meshes.
     let mut remesh_done = 0;

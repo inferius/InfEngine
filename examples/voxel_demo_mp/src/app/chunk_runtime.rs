@@ -33,6 +33,10 @@ impl Voxel {
         self.pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        // W106: stream_delivered now carries unprocessed worker results
+        // across frames (time-budgeted processing), so drop them on reset -
+        // stale results from the old world must not apply to the new one.
+        self.stream_delivered.clear();
         // W72: drop the in-flight worker lighting-job count. A world
         // reset (return-to-menu teardown / new-world entry) sets
         // `workers = None`, so any lighting jobs dispatched for the old
@@ -201,6 +205,7 @@ impl Voxel {
         self.pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        self.stream_delivered.clear(); // W106: see clear_world_state note.
         // W27.1: use the runtime view_distance so target_chunks matches the
         // live count that stream_chunks will also use. Previously INITIAL_CHUNKS
         // (=3) was used here but stream_chunks uses view_distance (default 4),
