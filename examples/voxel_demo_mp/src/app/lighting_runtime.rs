@@ -320,6 +320,25 @@ impl Voxel {
     ///   synchronous path and returns the affected list so the caller
     ///   can remesh immediately.
     pub(crate) fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
+        // W94: cap concurrent in-flight lighting jobs. The lighting pool is
+        // shared with chunk generate + remesh; in water-rich Natural
+        // worldgen the dirty source (chunk streaming) was feeding lighting
+        // faster than the pool drained it, so `pending_lighting_jobs` grew
+        // without bound (0 -> 200+ over ~90s) until the backlog of queued
+        // job snapshots + WorkerResult::Lit results exhausted memory and the
+        // game froze to ~1 FPS. We must NOT drain the dirty-set when over the
+        // cap: the dirty-set is a deduped HashSet, so retaining it across
+        // skipped ticks is bounded by the loaded world size (not the tick
+        // rate), and the work is simply picked up once jobs drain below the
+        // cap. Classic worldgen never hit this (no water -> fast BFS -> the
+        // counter stayed at 0-1), so this only throttles the pathological
+        // case and is invisible in normal play.
+        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 8;
+        if self.workers.is_some()
+            && self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
+        {
+            return Vec::new();
+        }
         let dirty = self.lighting.take_dirty();
         // W28.5: also drain the per-change emission records.
         let dirty_changes = self.lighting.take_dirty_changes();
