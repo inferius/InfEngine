@@ -12,17 +12,19 @@ use std::f32::consts::FRAC_PI_2;
 
 use super::{Bone, EntityModel, McCube};
 
-// Leg cube is shared by all four legs (texOffs 0,16; left legs mirror).
-const LEG_R: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0, 16])];
-const LEG_L: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0, 16]).mirrored()];
+// Leg cube, shared by all four legs (texOffs 0,16). MC's QuadrupedModel
+// uses ONE non-mirrored CubeListBuilder for all four, so there is no
+// left/right mirror here.
+const LEG: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0, 16])];
 
 const HEAD: &[McCube] = &[
     // Main head box.
     McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]),
-    // Right + left horns (texOffs 22,0). These are the "missing nuance"
-    // the hand-coded head left off.
+    // The two horns (both texOffs 22,0, no mirror - exactly as MC
+    // `CowModel` adds them). These are the "missing nuance" the
+    // hand-coded head dropped.
     McCube::new([-5.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22, 0]),
-    McCube::new([4.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22, 0]).mirrored(),
+    McCube::new([4.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22, 0]),
 ];
 
 const BODY: &[McCube] = &[McCube::new([-6.0, -10.0, -7.0], [12.0, 18.0, 10.0], [18, 4])];
@@ -32,10 +34,10 @@ const BONES: &[Bone] = &[
     // Body: MC offsetAndRotation(0, 5, 2, PI/2, 0, 0) - the xRot lays the
     // 18-tall box horizontal and puts the udder face on the belly.
     Bone { name: "cow_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "cow_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_R },
-    Bone { name: "cow_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_L },
-    Bone { name: "cow_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_R },
-    Bone { name: "cow_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_L },
+    Bone { name: "cow_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { name: "cow_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { name: "cow_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { name: "cow_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

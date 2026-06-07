@@ -490,6 +490,8 @@ pub(crate) struct MobMeshes {
     pub(crate) pig_left_front_leg: Option<MeshHandle>,
     pub(crate) pig_right_back_leg: Option<MeshHandle>,
     pub(crate) pig_left_back_leg: Option<MeshHandle>,
+    /// W92 - pig baked from universal MC `PigModel` data (incl. snout).
+    pub(crate) pig_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Cow ---------------------------------------------------------------
     pub(crate) cow_head: Option<MeshHandle>,
@@ -871,7 +873,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.pig_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::pig_lf_leg", MobPart::PigLeftFrontLeg,  &img));
         mm.pig_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::pig_rb_leg", MobPart::PigRightBackLeg,  &img));
         mm.pig_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::pig_lb_leg", MobPart::PigLeftBackLeg,   &img));
-        info!(texture = format!("{w}x{h}"), "pig entity texture bound (6 parts)");
+        // W92 - universal MC PigModel (incl. snout). Render prefers this.
+        mm.pig_model = Some(crate::entity_model::bake(r, &crate::entity_model::pig::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "pig entity texture bound (universal model + 6 legacy parts)");
     }
 
     // ---- Cow (64x64) -------------------------------------------------------

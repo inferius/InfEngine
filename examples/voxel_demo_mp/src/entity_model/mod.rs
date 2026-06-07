@@ -32,6 +32,7 @@ use glam::{Mat4, Quat, Vec3};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 
 pub(crate) mod cow;
+pub(crate) mod pig;
 
 /// MC model pixels -> world blocks, with MC's X/Y flip baked in
 /// (`scale(-1,-1,1)` * 1/16). Negating two axes keeps the determinant
@@ -60,8 +61,19 @@ impl McCube {
     pub(crate) const fn new(origin: [f32; 3], size: [f32; 3], uv: [u32; 2]) -> Self {
         Self { origin, size, uv, inflate: 0.0, mirror: false }
     }
+    /// MC `CubeListBuilder.mirror()` - flips the tile horizontally. Used by
+    /// mobs whose left limbs reuse a right-limb texture (e.g. the spider's
+    /// legs); quadrupeds share one non-mirrored leg builder so they don't.
+    #[allow(dead_code)] // wired in as the biped/spider ports land (W92).
     pub(crate) const fn mirrored(mut self) -> Self {
         self.mirror = true;
+        self
+    }
+    /// MC `CubeDeformation` grow (inflate) - e.g. hats, the sheep wool
+    /// overlay. Builder form so model data stays declarative.
+    #[allow(dead_code)] // wired in with the sheep/biped-hat ports (W92).
+    pub(crate) const fn inflated(mut self, inflate: f32) -> Self {
+        self.inflate = inflate;
         self
     }
 }

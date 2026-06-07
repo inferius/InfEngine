@@ -347,47 +347,24 @@ pub fn draw_remote_mobs(
                     KIND_PIG => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let pink = [0.95f32, 0.65, 0.65, 1.0];
-                        if mob_meshes.pig_loaded() {
-                            let rot = body_rot;
-                            // W60.2: PigModel body 10x16x8 with
-                            // xRot=PI/2. Length 1.0 (X = MC h=16),
-                            // height 0.5 (Y = MC d=8), width 0.625
-                            // (Z = MC w=10). Body centre y=0.625
-                            // (on 6-tall legs).
-                            if let Some(m) = mob_meshes.pig_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(1.0, 0.5, 0.625), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 0.625 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // PigHead 8x8x8 cube.
-                            if let Some(m) = mob_meshes.pig_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 0.625 - death_sink + walk_bob, base_z) + fwd * 0.5;
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.5, 0.5, 0.5),
-                                    glam::Quat::from_rotation_y(mob.yaw) * tilt,
-                                    hp);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // Legs 4x6x4 -> 0.25 x 0.375 x 0.25,
-                            // centre at y=0.1875.
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            let leg_scale = Vec3::new(0.25, 0.375, 0.25);
-                            let leg_y = mob.pos[1] + 0.1875 - death_sink + walk_bob;
-                            for (mesh_opt, dx, dz) in [
-                                (mob_meshes.pig_right_front_leg,  0.19_f32, -0.35_f32),
-                                (mob_meshes.pig_left_front_leg,  -0.19,     -0.35),
-                                (mob_meshes.pig_right_back_leg,   0.19,      0.35),
-                                (mob_meshes.pig_left_back_leg,   -0.19,      0.35),
-                            ] {
-                                if let Some(m) = mesh_opt {
-                                    let off = side * dx + fwd * (-dz);
-                                    let t = Mat4::from_scale_rotation_translation(
-                                        leg_scale, rot,
-                                        Vec3::new(base_x, leg_y, base_z) + off);
-                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                                }
-                            }
+                        if let Some(baked) = &mob_meshes.pig_model {
+                            // W92 - universal MC PigModel (snout + body xRot),
+                            // same pipeline as the cow. MC faces -Z; engine
+                            // forward is +X, hence the -PI/2 yaw offset.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
                                 Vec3::new(1.1, 0.75, 0.6), body_rot,
