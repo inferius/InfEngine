@@ -235,54 +235,29 @@ pub fn draw_remote_mobs(
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let green = [0.30f32, 0.55, 0.30, 1.0];
                         let head_green = [0.22f32, 0.42, 0.22, 1.0];
-                        if mob_meshes.zombie_loaded() {
-                            // Textured humanoid: body centre at y=0.78,
-                            // head at y=1.85, arms and legs flanking.
-                            let rot = body_rot;
-                            let by = mob.pos[1] + 0.78 - death_sink + walk_bob;
-                            // body
-                            if let Some(m) = mob_meshes.zombie_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, by, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // head
-                            if let Some(m) = mob_meshes.zombie_head {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.50, 0.50), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 1.60 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // right arm (offset to mob's right = -side)
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            if let Some(m) = mob_meshes.zombie_right_arm {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.25, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, by, base_z) + side * 0.38);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // left arm
-                            if let Some(m) = mob_meshes.zombie_left_arm {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.25, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, by, base_z) - side * 0.38);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // legs
-                            let leg_y = mob.pos[1] + 0.0 - death_sink + walk_bob;
-                            if let Some(m) = mob_meshes.zombie_right_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.25, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, leg_y, base_z) + side * 0.12);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            if let Some(m) = mob_meshes.zombie_left_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.25, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, leg_y, base_z) - side * 0.12);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
+                        if let Some(baked) = &mob_meshes.zombie_model {
+                            // W92 - universal MC ZombieModel. Arms raised
+                            // forward (xRot = -PI/2) for the classic zombie
+                            // pose, the rest at the MC rest pose.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |name| match name {
+                                    "zombie_arm_r" | "zombie_arm_l" => crate::entity_model::BonePose {
+                                        extra_rotation: [-std::f32::consts::FRAC_PI_2, 0.0, 0.0],
+                                    },
+                                    _ => crate::entity_model::BonePose::default(),
+                                },
+                            );
                         } else {
                             // Fallback: tinted 2-cube silhouette.
                             let body = Mat4::from_scale_rotation_translation(
@@ -419,48 +394,23 @@ pub fn draw_remote_mobs(
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let bone = [0.88f32, 0.87, 0.82, 1.0];
                         let bone_head = [0.80f32, 0.79, 0.74, 1.0];
-                        if mob_meshes.skeleton_loaded() {
-                            let rot = body_rot;
-                            let by = mob.pos[1] + 0.78 - death_sink + walk_bob;
-                            if let Some(m) = mob_meshes.skeleton_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.75, 0.25), rot,
-                                    Vec3::new(base_x, by, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            if let Some(m) = mob_meshes.skeleton_head {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.50, 0.50), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 1.60 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            // Arms: thinner than zombie (2x12x2 MC units)
-                            if let Some(m) = mob_meshes.skeleton_right_arm {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.12, 0.75, 0.12), rot,
-                                    Vec3::new(base_x, by, base_z) + side * 0.31);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            if let Some(m) = mob_meshes.skeleton_left_arm {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.12, 0.75, 0.12), rot,
-                                    Vec3::new(base_x, by, base_z) - side * 0.31);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            let leg_y = mob.pos[1] + 0.0 - death_sink + walk_bob;
-                            if let Some(m) = mob_meshes.skeleton_right_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.12, 0.75, 0.12), rot,
-                                    Vec3::new(base_x, leg_y, base_z) + side * 0.12);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            if let Some(m) = mob_meshes.skeleton_left_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.12, 0.75, 0.12), rot,
-                                    Vec3::new(base_x, leg_y, base_z) - side * 0.12);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
+                        if let Some(baked) = &mob_meshes.skeleton_model {
+                            // W92 - universal MC SkeletonModel (thin limbs,
+                            // mirrored left side), arms at the MC rest pose.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
                                 Vec3::new(0.45, 1.55, 0.30), body_rot,

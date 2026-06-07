@@ -33,6 +33,8 @@ use infengine_render::{MeshHandle, MeshVertex, Renderer};
 
 pub(crate) mod cow;
 pub(crate) mod pig;
+pub(crate) mod skeleton;
+pub(crate) mod zombie;
 
 /// MC model pixels -> world blocks, with MC's X/Y flip baked in
 /// (`scale(-1,-1,1)` * 1/16). Negating two axes keeps the determinant

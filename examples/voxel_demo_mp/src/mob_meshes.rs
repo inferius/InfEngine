@@ -476,6 +476,8 @@ pub(crate) struct MobMeshes {
     pub(crate) zombie_left_arm: Option<MeshHandle>,
     pub(crate) zombie_right_leg: Option<MeshHandle>,
     pub(crate) zombie_left_leg: Option<MeshHandle>,
+    /// W92 - zombie baked from universal MC `ZombieModel` data.
+    pub(crate) zombie_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -512,6 +514,8 @@ pub(crate) struct MobMeshes {
     pub(crate) skeleton_left_arm: Option<MeshHandle>,
     pub(crate) skeleton_right_leg: Option<MeshHandle>,
     pub(crate) skeleton_left_leg: Option<MeshHandle>,
+    /// W92 - skeleton baked from universal MC `SkeletonModel` data.
+    pub(crate) skeleton_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Spider ------------------------------------------------------------
     pub(crate) spider_head: Option<MeshHandle>,
@@ -851,7 +855,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.zombie_left_arm  = Some(upload_part(r, "voxel_demo_mp::zombie_left_arm",  MobPart::ZombieLeftArm,  &img));
         mm.zombie_right_leg = Some(upload_part(r, "voxel_demo_mp::zombie_right_leg", MobPart::ZombieRightLeg, &img));
         mm.zombie_left_leg  = Some(upload_part(r, "voxel_demo_mp::zombie_left_leg",  MobPart::ZombieLeftLeg,  &img));
-        info!(texture = format!("{w}x{h}"), "zombie entity texture bound (6 parts)");
+        // W92 - universal MC ZombieModel. Render prefers this.
+        mm.zombie_model = Some(crate::entity_model::bake(r, &crate::entity_model::zombie::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "zombie entity texture bound (universal model + 6 legacy parts)");
     }
 
     // ---- Chicken (64x32) ---------------------------------------------------
@@ -903,7 +909,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.skeleton_left_arm  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_arm",  MobPart::SkeletonLeftArm,  &img));
         mm.skeleton_right_leg = Some(upload_part(r, "voxel_demo_mp::skeleton_right_leg", MobPart::SkeletonRightLeg, &img));
         mm.skeleton_left_leg  = Some(upload_part(r, "voxel_demo_mp::skeleton_left_leg",  MobPart::SkeletonLeftLeg,  &img));
-        info!(texture = format!("{w}x{h}"), "skeleton entity texture bound (6 parts)");
+        // W92 - universal MC SkeletonModel. Render prefers this.
+        mm.skeleton_model = Some(crate::entity_model::bake(r, &crate::entity_model::skeleton::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "skeleton entity texture bound (universal model + 6 legacy parts)");
     }
 
     // ---- Spider (64x32) ----------------------------------------------------
