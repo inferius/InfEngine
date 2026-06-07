@@ -404,55 +404,27 @@ pub fn draw_remote_mobs(
                     _ if mob.kind == KIND_COW => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let brown = [0.55f32, 0.35, 0.20, 1.0];
-                        if mob_meshes.cow_loaded() {
-                            let rot = body_rot;
-                            // W60.2: MC CowModel body 12x18x10 with
-                            // xRot=PI/2 lays the 18-axis horizontal.
-                            // Our engine's forward is +X, so body
-                            // length runs along X (1.125), height
-                            // along Y (0.625 = MC depth 10 post-rot),
-                            // width along Z (0.75 = MC width 12).
-                            // build_mob_part_mesh puts the "front"
-                            // tile on the +X face, so the head end
-                            // ends up at +X = forward direction.
-                            if let Some(m) = mob_meshes.cow_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(1.125, 0.625, 0.75), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 1.06 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // W61.1: CowHead 8x8x6 (w h d). Depth
-                            // (d=6) along X for forward direction;
-                            // height (h=8) along Y; width (w=8)
-                            // along Z. Centre y ~= 1.25 (top of
-                            // body + half head height).
-                            if let Some(m) = mob_meshes.cow_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 1.25 - death_sink + walk_bob, base_z) + fwd * 0.6;
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.375, 0.5, 0.5),
-                                    glam::Quat::from_rotation_y(mob.yaw) * tilt,
-                                    hp);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // 4 legs 4x12x4 -> 0.25 x 0.75 x 0.25,
-                            // bottoms on ground, centre at y=0.375.
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            let leg_scale = Vec3::new(0.25, 0.75, 0.25);
-                            let leg_y = mob.pos[1] + 0.375 - death_sink + walk_bob;
-                            for (mesh_opt, dx, dz) in [
-                                (mob_meshes.cow_right_front_leg,  0.20_f32, -0.40_f32),
-                                (mob_meshes.cow_left_front_leg,  -0.20,     -0.40),
-                                (mob_meshes.cow_right_back_leg,   0.20,      0.40),
-                                (mob_meshes.cow_left_back_leg,   -0.20,      0.40),
-                            ] {
-                                if let Some(m) = mesh_opt {
-                                    let off = side * dx + fwd * (-dz);
-                                    let t = Mat4::from_scale_rotation_translation(
-                                        leg_scale, rot,
-                                        Vec3::new(base_x, leg_y, base_z) + off);
-                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                                }
-                            }
+                        if let Some(baked) = &mob_meshes.cow_model {
+                            // W91 - universal MC `CowModel`: faithful boxes
+                            // (incl. the two head horns), body `xRot=PI/2`,
+                            // and MC->engine flip+1/16, all from model data
+                            // (no per-part magic transforms). MC models look
+                            // along -Z; the engine's yaw points forward at
+                            // +X, so offset the model yaw by -PI/2 to align.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
                                 Vec3::new(1.2, 0.9, 0.7), body_rot,

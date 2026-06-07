@@ -13,9 +13,9 @@ use crate::Voxel;
 use crate::block::{BLOCK_TYPES, is_tool_block};
 use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
-    DAY_LENGTH_S, KIND_CHICKEN, KIND_PIG, KIND_SHEEP, KIND_ZOMBIE,
-    MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState, PLAYER_MAX_HEALTH,
-    ZOMBIE_MAX_HEALTH,
+    DAY_LENGTH_S, KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON,
+    KIND_SPIDER, KIND_ZOMBIE, MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState,
+    PLAYER_MAX_HEALTH, ZOMBIE_MAX_HEALTH,
 };
 
 /// `/motd`. Print the MOTD file next to the binary (if any).
@@ -255,8 +255,8 @@ pub(crate) fn cmd_horde(
     true
 }
 
-/// `/spawnmob [zombie|chicken|pig|sheep]`. Spawn one mob in
-/// front of the player (host / offline only).
+/// `/spawnmob [zombie|chicken|pig|sheep|cow|skeleton|spider]`. Spawn one
+/// mob in front of the player (host / offline only).
 pub(crate) fn cmd_spawnmob(
     voxel: &mut Voxel,
     arg: &str,
@@ -279,6 +279,12 @@ pub(crate) fn cmd_spawnmob(
         KIND_CHICKEN
     } else if arg.eq_ignore_ascii_case("pig") {
         KIND_PIG
+    } else if arg.eq_ignore_ascii_case("cow") {
+        KIND_COW
+    } else if arg.eq_ignore_ascii_case("skeleton") {
+        KIND_SKELETON
+    } else if arg.eq_ignore_ascii_case("spider") {
+        KIND_SPIDER
     } else {
         KIND_SHEEP
     };

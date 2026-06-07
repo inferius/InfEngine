@@ -180,6 +180,10 @@ mod jar_cache;
 mod mob_skin;
 // W19.1: per-body-part UV-mapped cube meshes for all 7 mob kinds.
 mod mob_meshes;
+// W91 - universal MC entity-model system (data-driven bones/cubes, one
+// shared cube->mesh + MC->engine transform; replaces per-part magic
+// numbers in render/mobs.rs). See memory: mc-faithful-porting.
+mod entity_model;
 // W47.3 - mob rendering extracted out of main.rs.
 mod render;
 // W47.4 - ambient particle spawn loop extracted out of main.rs.

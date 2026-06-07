@@ -498,6 +498,10 @@ pub(crate) struct MobMeshes {
     pub(crate) cow_left_front_leg: Option<MeshHandle>,
     pub(crate) cow_right_back_leg: Option<MeshHandle>,
     pub(crate) cow_left_back_leg: Option<MeshHandle>,
+    /// W91 - the cow baked from universal MC `CowModel` data (horns +
+    /// body xRot). When present, render uses this instead of the legacy
+    /// six magic-number part transforms above.
+    pub(crate) cow_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Skeleton ----------------------------------------------------------
     pub(crate) skeleton_head: Option<MeshHandle>,
@@ -879,7 +883,11 @@ pub fn load_non_sheep_mob_meshes(
         mm.cow_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::cow_lf_leg", MobPart::CowLeftFrontLeg,  &img));
         mm.cow_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::cow_rb_leg", MobPart::CowRightBackLeg,  &img));
         mm.cow_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::cow_lb_leg", MobPart::CowLeftBackLeg,   &img));
-        info!(texture = format!("{w}x{h}"), "cow entity texture bound (6 parts)");
+        // W91 - bake the universal MC CowModel (horns + body xRot) from the
+        // same texture. Render prefers this; the six parts above are the
+        // legacy fallback path (removed once all mobs move over in W92).
+        mm.cow_model = Some(crate::entity_model::bake(r, &crate::entity_model::cow::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "cow entity texture bound (universal model + 6 legacy parts)");
     }
 
     // ---- Skeleton (64x32) --------------------------------------------------
