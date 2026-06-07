@@ -806,14 +806,16 @@ pub(crate) struct Voxel {
     /// geometry pipeline. Rebuilt lazily when
     /// `liquid_mesh_dirty` flips (place / fall / spread / decay
     /// / source merge).
-    pub(crate) liquid_mesh_handles: HashMap<u16, MeshHandle>,
+    /// W111: PER-CHUNK liquid meshes (chunk coord -> one mesh per liquid
+    /// kind in that chunk). Replaces the single whole-world mesh so only
+    /// chunks whose liquid changed get rebuilt - no whole-world churn, no
+    /// throttle, scales to oceans.
+    pub(crate) liquid_mesh_handles: HashMap<ChunkCoord, Vec<(u16, MeshHandle)>>,
     pub(crate) liquid_mesh_dirty: bool,
-    /// W107: dt accumulator throttling full liquid-mesh rebuilds. The mesh
-    /// is one whole-world mesh rebuilt from scratch on ANY water change;
-    /// oscillating edge cells flip liquid_mesh_dirty ~20x/s, which rebuilt
-    /// 4000+ cells that often and made everything near water judder. Cap
-    /// rebuilds to a fixed cadence (transient, not persisted).
-    pub(crate) liquid_mesh_accum: f32,
+    /// W111: last-meshed signature per chunk (commutative fold over the
+    /// chunk's liquid cell positions + levels). The diff re-meshes only
+    /// chunks whose signature changed. Transient, not persisted.
+    pub(crate) liquid_chunk_sig: HashMap<ChunkCoord, u64>,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different

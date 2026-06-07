@@ -129,9 +129,12 @@ impl Voxel {
                     renderer.remove_chunk_mesh(handle);
                 }
             }
-            for (_, h) in self.liquid_mesh_handles.drain() {
-                renderer.remove_mesh(h);
+            for (_cc, kinds) in self.liquid_mesh_handles.drain() {
+                for (_id, h) in kinds {
+                    renderer.remove_mesh(h);
+                }
             }
+            self.liquid_chunk_sig.clear();
         }
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's

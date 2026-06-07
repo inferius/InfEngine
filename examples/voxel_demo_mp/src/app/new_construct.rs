@@ -153,7 +153,7 @@ impl Voxel {
             next_drop_id: 1,
             flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
-            liquid_mesh_accum: 0.0,
+            liquid_chunk_sig: HashMap::new(),
             sheep_mesh: None,
             sheep_head_mesh: None,
             mob_meshes: Default::default(),

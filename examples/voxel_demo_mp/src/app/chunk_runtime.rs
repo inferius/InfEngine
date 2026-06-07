@@ -22,8 +22,10 @@ impl Voxel {
                     renderer.remove_chunk_mesh(handle);
                 }
             }
-            for (_, h) in self.liquid_mesh_handles.drain() {
-                renderer.remove_mesh(h);
+            for (_cc, kinds) in self.liquid_mesh_handles.drain() {
+                for (_id, h) in kinds {
+                    renderer.remove_mesh(h);
+                }
             }
         }
         for cc in coords {
@@ -56,7 +58,7 @@ impl Voxel {
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
         self.liquid_tick_accum = 0.0;
-        self.liquid_mesh_accum = 0.0;
+        self.liquid_chunk_sig.clear();
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.falling_pending.clear();

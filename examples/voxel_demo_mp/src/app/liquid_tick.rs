@@ -93,184 +93,219 @@ impl Voxel {
     /// side faces drop to y=0 only against air / decorations, and
     /// the bottom face emits only when there's something the
     /// player could actually see through the water from below.
-    pub(crate) fn maybe_rebuild_liquid_mesh(&mut self, dt: f32) {
-        // W107: throttle full liquid-mesh rebuilds to a fixed cadence. The
-        // rebuild walks EVERY liquid cell + recreates the GPU mesh; with
-        // oscillating edge cells flipping dirty ~20x/s the whole 4000+ cell
-        // mesh churned every frame near big water, juddering the view. ~7 Hz
-        // is plenty for water spread/level updates (the flow animation is a
-        // per-frame shader effect, unaffected by the mesh-rebuild cadence).
-        self.liquid_mesh_accum += dt;
+    /// W111: emit the slope-aware quads for ONE liquid cell at `p` into the
+    /// per-kind vertex/index bucket. Shared by the per-chunk rebuild below;
+    /// extracted verbatim from the old whole-world loop.
+    fn emit_liquid_cell(
+        &self,
+        p: [i32; 3],
+        buckets: &mut HashMap<u16, (Vec<MeshVertex>, Vec<u32>)>,
+    ) {
+        let block = self.world.get(p);
+        let liquid_id = block.0;
+        if liquid_for(block).is_none() {
+            return;
+        }
+        let (vertices, indices) = buckets.entry(liquid_id).or_default();
+        let vx = p[0];
+        let vy = p[1];
+        let vz = p[2];
+        let h00 = self.liquid_corner_height(vx, vy, vz, 0, 0, liquid_id);
+        let h10 = self.liquid_corner_height(vx, vy, vz, 1, 0, liquid_id);
+        let h11 = self.liquid_corner_height(vx, vy, vz, 1, 1, liquid_id);
+        let h01 = self.liquid_corner_height(vx, vy, vz, 0, 1, liquid_id);
+        let fx = vx as f32;
+        let fy = vy as f32;
+        let fz = vz as f32;
+        // Per-cell flow vector, baked into the faces so the water shader
+        // scrolls its caustics in the right direction (zero -> isotropic).
+        let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
+        // Top face (CCW from above so the Back-cull keeps it) - only when
+        // the cell above isn't the same liquid.
+        let above_same = self.world.get([vx, vy + 1, vz]).0 == liquid_id;
+        if !above_same {
+            let t0 = [fx, fy + h00, fz];
+            let t1 = [fx, fy + h01, fz + 1.0];
+            let t2 = [fx + 1.0, fy + h11, fz + 1.0];
+            let t3 = [fx + 1.0, fy + h10, fz];
+            let normal = water_face_normal(t0, t1, t2, t3);
+            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, flow);
+        }
+        // Side faces: only when the in-plane neighbour is open (air /
+        // passable). Same-liquid cancels (shared face is interior).
+        if side_open(&self.world, vx - 1, vy, vz, liquid_id) {
+            push_quad_flow(
+                vertices,
+                indices,
+                [fx, fy, fz + 1.0],
+                [fx, fy + h01, fz + 1.0],
+                [fx, fy + h00, fz],
+                [fx, fy, fz],
+                [-1.0, 0.0, 0.0],
+                flow,
+            );
+        }
+        if side_open(&self.world, vx + 1, vy, vz, liquid_id) {
+            push_quad_flow(
+                vertices,
+                indices,
+                [fx + 1.0, fy, fz],
+                [fx + 1.0, fy + h10, fz],
+                [fx + 1.0, fy + h11, fz + 1.0],
+                [fx + 1.0, fy, fz + 1.0],
+                [1.0, 0.0, 0.0],
+                flow,
+            );
+        }
+        if side_open(&self.world, vx, vy, vz - 1, liquid_id) {
+            push_quad_flow(
+                vertices,
+                indices,
+                [fx, fy, fz],
+                [fx, fy + h00, fz],
+                [fx + 1.0, fy + h10, fz],
+                [fx + 1.0, fy, fz],
+                [0.0, 0.0, -1.0],
+                flow,
+            );
+        }
+        if side_open(&self.world, vx, vy, vz + 1, liquid_id) {
+            push_quad_flow(
+                vertices,
+                indices,
+                [fx + 1.0, fy, fz + 1.0],
+                [fx + 1.0, fy + h11, fz + 1.0],
+                [fx, fy + h01, fz + 1.0],
+                [fx, fy, fz + 1.0],
+                [0.0, 0.0, 1.0],
+                flow,
+            );
+        }
+        // Bottom face: only when the cell below is open (air / passable) -
+        // MC's shouldRenderFace(DOWN) gate, so a cliff-edge water cell
+        // shows its underside rather than sky.
+        if bottom_open(&self.world, vx, vy - 1, vz, liquid_id) {
+            push_quad_flow(
+                vertices,
+                indices,
+                [fx, fy, fz],
+                [fx + 1.0, fy, fz],
+                [fx + 1.0, fy, fz + 1.0],
+                [fx, fy, fz + 1.0],
+                [0.0, -1.0, 0.0],
+                flow,
+            );
+        }
+    }
+
+    /// W111: PER-CHUNK liquid mesh - replaces the whole-world rebuild and
+    /// the W107 throttle workaround. Each rebuild folds an order-independent
+    /// per-chunk signature of the liquid cells (position + level) and
+    /// re-meshes ONLY the chunks whose signature changed. So an oscillating
+    /// edge cell near a big ocean re-meshes just its own 16^3 chunk
+    /// (cheap), never the whole 30k+ cell world mesh every tick - no judder,
+    /// no throttle, and it scales to oceans. GPU work is budgeted to a few
+    /// chunks per frame so a fresh chunk-load wave can't spike a frame.
+    pub(crate) fn maybe_rebuild_liquid_mesh(&mut self) {
         if !self.liquid_mesh_dirty {
             return;
         }
-        const LIQUID_MESH_REBUILD_INTERVAL: f32 = 0.15;
-        if self.liquid_mesh_accum < LIQUID_MESH_REBUILD_INTERVAL {
-            return;
-        }
-        self.liquid_mesh_accum = 0.0;
         if self.renderer.is_none() {
             return;
         }
-        // Per-liquid vertex/index pool. One mesh per kind so
-        // each can draw with its own colour (water blue, lava
-        // orange, ...) through the shared alpha-blend pipeline.
-        let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> =
-            HashMap::new();
+        let cs = CHUNK_SIZE as i32;
+        let chunk_of = |p: [i32; 3]| -> ChunkCoord {
+            [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
+        };
+        // Per-chunk signature: a commutative fold (wrapping-add of a per-cell
+        // hash over position + level) so HashSet iteration order is irrelevant.
+        let mut cur_sig: HashMap<ChunkCoord, u64> = HashMap::new();
         for p in self.liquid_positions.iter().copied() {
-            let block = self.world.get(p);
-            let liquid_id = block.0;
-            if liquid_for(block).is_none() {
+            if liquid_for(self.world.get(p)).is_none() {
                 continue;
             }
-            let (vertices, indices) =
-                buckets.entry(liquid_id).or_default();
-            let vx = p[0];
-            let vy = p[1];
-            let vz = p[2];
-            let h00 = self.liquid_corner_height(vx, vy, vz, 0, 0, liquid_id);
-            let h10 = self.liquid_corner_height(vx, vy, vz, 1, 0, liquid_id);
-            let h11 = self.liquid_corner_height(vx, vy, vz, 1, 1, liquid_id);
-            let h01 = self.liquid_corner_height(vx, vy, vz, 0, 1, liquid_id);
-            let fx = vx as f32;
-            let fy = vy as f32;
-            let fz = vz as f32;
-            // Flow vector for this cell (units of voxels/sec on
-            // the XZ plane). Baked into the top/side faces so the
-            // animated water shader scrolls its caustic noise in
-            // the right direction. Sources / still ponds return
-            // zero and the shader falls back to an isotropic
-            // shimmer.
-            let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
-            // Top face: emit only when the voxel above isn't
-            // the same liquid.
-            //
-            // W34: now that liquids route through the OPAQUE pipeline
-            // (cull_mode::Back), the top face MUST be CCW from above
-            // or it gets culled. The previous (SW, SE, NE, NW) order
-            // was CW from above which is why user saw "horni strana
-            // chybi - jde videt jen ze spodu". Emit in (SW, NW, NE, SE)
-            // order = CCW from above so triangle (v0, v1, v2) has
-            // cross +Y matching the outward normal.
-            //
-            // The shader's water ripple animation is invariant to corner
-            // order (it samples world_pos.xz + per-fragment flow which
-            // are independent of which vertex carried which index), so
-            // any prior "flow direction reversed" perception was a
-            // viewpoint illusion, not a real shader difference.
-            let above_same =
-                self.world.get([vx, vy + 1, vz]).0 == liquid_id;
-            if !above_same {
-                let t0 = [fx, fy + h00, fz];                  // SW (X=0, Z=0)
-                let t1 = [fx, fy + h01, fz + 1.0];            // NW (X=0, Z=1)
-                let t2 = [fx + 1.0, fy + h11, fz + 1.0];      // NE (X=1, Z=1)
-                let t3 = [fx + 1.0, fy + h10, fz];            // SE (X=1, Z=0)
-                let normal = water_face_normal(t0, t1, t2, t3);
-                push_quad_flow(
-                    vertices, indices, t0, t1, t2, t3, normal, flow,
-                );
+            let lvl = self.liquid_level.get(&p).copied().unwrap_or(0) as u64;
+            let mut hsh = 0xcbf2_9ce4_8422_2325u64;
+            for v in [p[0] as u64, p[1] as u64, p[2] as u64, lvl] {
+                hsh ^= v;
+                hsh = hsh.wrapping_mul(0x0000_0100_0000_01b3);
             }
-            // Side faces: emit only when the in-plane neighbour is
-            // air or a passable decoration. Same-liquid cancels -
-            // shared face sits inside the body. See `side_open`
-            // in `liquid::mesh` for the predicate definition.
-            if side_open(&self.world, vx - 1, vy, vz, liquid_id) {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx, fy, fz + 1.0],
-                    [fx, fy + h01, fz + 1.0],
-                    [fx, fy + h00, fz],
-                    [fx, fy, fz],
-                    [-1.0, 0.0, 0.0],
-                    flow,
-                );
-            }
-            if side_open(&self.world, vx + 1, vy, vz, liquid_id) {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx + 1.0, fy, fz],
-                    [fx + 1.0, fy + h10, fz],
-                    [fx + 1.0, fy + h11, fz + 1.0],
-                    [fx + 1.0, fy, fz + 1.0],
-                    [1.0, 0.0, 0.0],
-                    flow,
-                );
-            }
-            if side_open(&self.world, vx, vy, vz - 1, liquid_id) {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx, fy, fz],
-                    [fx, fy + h00, fz],
-                    [fx + 1.0, fy + h10, fz],
-                    [fx + 1.0, fy, fz],
-                    [0.0, 0.0, -1.0],
-                    flow,
-                );
-            }
-            if side_open(&self.world, vx, vy, vz + 1, liquid_id) {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx + 1.0, fy, fz + 1.0],
-                    [fx + 1.0, fy + h11, fz + 1.0],
-                    [fx, fy + h01, fz + 1.0],
-                    [fx, fy, fz + 1.0],
-                    [0.0, 0.0, 1.0],
-                    flow,
-                );
-            }
-            // Bottom face: emit when the cell below is open (air or
-            // passable decoration). Skipping this when below is air
-            // was a bug - looking up from underneath a cliff-edge
-            // water cell showed the air gap as plain sky instead of
-            // the water bottom. MC's `LiquidBlockRenderer` renders
-            // a bottom face in the same case via its
-            // `shouldRenderFace(DOWN)` gate.
-            //
-            // Same-liquid below => no face (would be inside the
-            // body). Solid below => no face (covered by the solid's
-            // own top face).
-            if bottom_open(&self.world, vx, vy - 1, vz, liquid_id) {
-                push_quad_flow(
-                    vertices, indices,
-                    [fx, fy, fz],
-                    [fx + 1.0, fy, fz],
-                    [fx + 1.0, fy, fz + 1.0],
-                    [fx, fy, fz + 1.0],
-                    [0.0, -1.0, 0.0],
-                    flow,
-                );
+            let e = cur_sig.entry(chunk_of(p)).or_insert(0u64);
+            *e = e.wrapping_add(hsh);
+        }
+        // Chunks to (re)mesh: new / changed signature, or liquid now gone.
+        let mut changed: Vec<ChunkCoord> = Vec::new();
+        for (cc, sig) in &cur_sig {
+            if self.liquid_chunk_sig.get(cc) != Some(sig) {
+                changed.push(*cc);
             }
         }
-        // Re-borrow renderer now that the `&self.world` /
-        // `&self.liquid_level` reads above are done.
-        let renderer = self
-            .renderer
-            .as_mut()
-            .expect("renderer checked at function entry");
-        // Drop every previous handle: the rebuild owns the
-        // full state so we don't try to diff per-cell.
-        for (_, h) in self.liquid_mesh_handles.drain() {
-            renderer.remove_mesh(h);
-        }
-        for (liquid_id, (vertices, indices)) in buckets {
-            if vertices.is_empty() || indices.is_empty() {
-                continue;
+        for cc in self.liquid_chunk_sig.keys() {
+            if !cur_sig.contains_key(cc) {
+                changed.push(*cc);
             }
-            let label = format!("voxel_liquid_{liquid_id}");
-            let h = renderer.create_mesh(&label, &vertices, &indices);
-            // W108: water renders translucent via the alpha-blend pipeline;
-            // lava stays opaque (MC lava is fully opaque). The transparent
-            // pipeline has cull_mode=None, which sidesteps the old W34 "top
-            // face invisible from above" the opaque pipeline's backface cull
-            // caused on the liquid mesh's mixed winding. Render order (water
-            // after opaque chunks) is handled in infengine_render::render().
-            if liquid_id == crate::block::WATER_ID {
-                renderer.set_mesh_transparent(h, true);
-            }
-            self.liquid_mesh_handles.insert(liquid_id, h);
-            let _ = block_is_transparent_render;
         }
-        self.liquid_mesh_dirty = false;
+        const LIQUID_CHUNKS_PER_FRAME: usize = 24;
+        let budget_hit = changed.len() > LIQUID_CHUNKS_PER_FRAME;
+        changed.truncate(LIQUID_CHUNKS_PER_FRAME);
+        for cc in changed {
+            // Per-kind vertex/index pool for THIS chunk only.
+            let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> =
+                HashMap::new();
+            let bx = cc[0] * cs;
+            let by = cc[1] * cs;
+            let bz = cc[2] * cs;
+            let cells = (0..cs).flat_map(move |lx| {
+                (0..cs).flat_map(move |ly| {
+                    (0..cs).map(move |lz| [bx + lx, by + ly, bz + lz])
+                })
+            });
+            for p in cells {
+                self.emit_liquid_cell(p, &mut buckets);
+            }
+            // Swap THIS chunk's per-kind liquid meshes for the freshly
+            // built ones, then record its new signature.
+            let renderer = self.renderer.as_mut().expect("renderer ready");
+            if let Some(old) = self.liquid_mesh_handles.remove(&cc) {
+                for (_, h) in old {
+                    renderer.remove_mesh(h);
+                }
+            }
+            let mut handles = Vec::new();
+            for (liquid_id, (vertices, indices)) in buckets {
+                if vertices.is_empty() || indices.is_empty() {
+                    continue;
+                }
+                let label =
+                    format!("voxel_liquid_{}_{}_{}_{liquid_id}", cc[0], cc[1], cc[2]);
+                let h = renderer.create_mesh(&label, &vertices, &indices);
+                // W108: water translucent (alpha pipeline, cull_mode=None);
+                // lava opaque. Draw order handled in infengine_render::render().
+                if liquid_id == crate::block::WATER_ID {
+                    renderer.set_mesh_transparent(h, true);
+                }
+                handles.push((liquid_id, h));
+            }
+            match cur_sig.get(&cc) {
+                Some(sig) => {
+                    self.liquid_chunk_sig.insert(cc, *sig);
+                }
+                None => {
+                    self.liquid_chunk_sig.remove(&cc);
+                }
+            }
+            if handles.is_empty() {
+                self.liquid_mesh_handles.remove(&cc);
+            } else {
+                self.liquid_mesh_handles.insert(cc, handles);
+            }
+        }
+        // Clear dirty only once every changed chunk is re-meshed; any
+        // beyond the per-frame budget finish on following frames.
+        if !budget_hit {
+            self.liquid_mesh_dirty = false;
+        }
+        let _ = block_is_transparent_render;
     }
 
     /// Spawn a fresh drop entity at the voxel centre. Host-only

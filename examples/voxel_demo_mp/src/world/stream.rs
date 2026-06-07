@@ -78,6 +78,13 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     renderer.remove_chunk_mesh(handle);
                 }
             }
+            // W111: drop this chunk's per-chunk liquid mesh + signature.
+            if let Some(kinds) = vx.liquid_mesh_handles.remove(cc) {
+                for (_id, h) in kinds {
+                    renderer.remove_mesh(h);
+                }
+            }
+            vx.liquid_chunk_sig.remove(cc);
         }
         // Persist edits to disk on a background thread.
         if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)

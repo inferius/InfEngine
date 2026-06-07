@@ -27,7 +27,7 @@ pub(crate) fn draw(
     snow_positions: &std::collections::HashMap<[i32; 3], u8>,
     portal_positions: &std::collections::HashSet<[i32; 3]>,
     fires: &std::collections::HashMap<[i32; 3], u8>,
-    liquid_mesh_handles: &std::collections::HashMap<u16, infengine_render::MeshHandle>,
+    liquid_mesh_handles: &std::collections::HashMap<[i32; 3], Vec<(u16, infengine_render::MeshHandle)>>,
     day_time: f32,
 ) {
     let _ = (block_type, LAVA_ID, WATER_ID); // silence unused on stripped paths
@@ -189,7 +189,9 @@ pub(crate) fn draw(
         // future). Each draws with its own albedo from the
         // matching `BlockType` row, so adding a new liquid means
         // a single table flip rather than another draw call here.
-        for (liquid_id, handle) in liquid_mesh_handles {
+        // W111: per-chunk liquid meshes - flatten every chunk's Vec of
+        // per-kind meshes into a single draw pass.
+        for (liquid_id, handle) in liquid_mesh_handles.values().flatten() {
             let Some(bt) = block_type(*liquid_id) else {
                 continue;
             };
