@@ -34,6 +34,7 @@ use infengine_render::{MeshHandle, MeshVertex, Renderer};
 pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod pig;
+pub(crate) mod sheep;
 pub(crate) mod skeleton;
 pub(crate) mod spider;
 pub(crate) mod zombie;

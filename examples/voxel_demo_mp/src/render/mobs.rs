@@ -143,58 +143,23 @@ pub fn draw_remote_mobs(
                     // texture isn't on disk.
                     KIND_SHEEP => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
-                        if mob_meshes.sheep_loaded() {
-                            let rot = body_rot;
-                            // W60.2: SheepModel body 8x16x6 with
-                            // xRot=PI/2. Final dims: length 1.0 (X
-                            // = MC h=16), height 0.375 (Y = MC d=6),
-                            // width 0.5 (Z = MC w=8). Body centre
-                            // y=0.9375 (on 12-tall legs).
-                            if let Some(m) = mob_meshes.sheep_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(1.0, 0.375, 0.5), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 0.9375 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(body_tint), 0.0, 0.9);
-                            }
-                            // W61.1: SheepHead 6x6x8 (MC w x h x d).
-                            // Head depth (d=8) along X axis (forward
-                            // direction), width (w=6) along Z, height
-                            // (h=6) along Y. Mesh +X "front" face is
-                            // the head's nose end so head looks the
-                            // way the mob is walking.
-                            // Y placement: body top sits at
-                            // 0.9375 + 0.1875 = 1.125 voxel; head
-                            // centre at ~1.30 so the 0.375-tall head
-                            // sits on top with a bit of overlap into
-                            // the body (matches MC reference where
-                            // the head meets the front of the body).
-                            if let Some(m) = mob_meshes.sheep_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 1.30 - death_sink + walk_bob, base_z) + fwd * 0.55;
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.5, 0.375, 0.375),
-                                    glam::Quat::from_rotation_y(mob.yaw) * tilt,
-                                    hp);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(head_color), 0.0, 0.9);
-                            }
-                            // Legs 4x12x4 -> 0.25 x 0.75 x 0.25,
-                            // centre at y=0.375.
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            let leg_scale = Vec3::new(0.25, 0.75, 0.25);
-                            let leg_y = mob.pos[1] + 0.375 - death_sink + walk_bob;
-                            for (mesh_opt, dx, dz) in [
-                                (mob_meshes.sheep_right_front_leg,  0.15_f32, -0.40_f32),
-                                (mob_meshes.sheep_left_front_leg,  -0.15,     -0.40),
-                                (mob_meshes.sheep_right_back_leg,   0.15,      0.40),
-                                (mob_meshes.sheep_left_back_leg,   -0.15,      0.40),
-                            ] {
-                                if let Some(m) = mesh_opt {
-                                    let off = side * dx + fwd * (-dz);
-                                    let t = Mat4::from_scale_rotation_translation(
-                                        leg_scale, rot,
-                                        Vec3::new(base_x, leg_y, base_z) + off);
-                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                                }
-                            }
+                        if let Some(baked) = &mob_meshes.sheep_model {
+                            // W92 - universal MC SheepModel (quadruped, full
+                            // woolly texture). Same pipeline + yaw offset.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             // Legacy fallback.
                             let body = Mat4::from_scale_rotation_translation(

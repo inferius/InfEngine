@@ -468,6 +468,8 @@ pub(crate) struct MobMeshes {
     pub(crate) sheep_left_front_leg: Option<MeshHandle>,
     pub(crate) sheep_right_back_leg: Option<MeshHandle>,
     pub(crate) sheep_left_back_leg: Option<MeshHandle>,
+    /// W92 - sheep baked from universal MC `SheepModel` data.
+    pub(crate) sheep_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Zombie ------------------------------------------------------------
     pub(crate) zombie_head: Option<MeshHandle>,
@@ -849,7 +851,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.sheep_left_front_leg  = Some(upload_part(r, "voxel_demo_mp::sheep_lf_leg", MobPart::SheepLeftFrontLeg,  &img));
         mm.sheep_right_back_leg  = Some(upload_part(r, "voxel_demo_mp::sheep_rb_leg", MobPart::SheepRightBackLeg,  &img));
         mm.sheep_left_back_leg   = Some(upload_part(r, "voxel_demo_mp::sheep_lb_leg", MobPart::SheepLeftBackLeg,   &img));
-        info!(texture = format!("{w}x{h}"), "sheep entity texture bound (6 parts)");
+        // W92 - universal MC SheepModel. Render prefers this.
+        mm.sheep_model = Some(crate::entity_model::bake(r, &crate::entity_model::sheep::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "sheep entity texture bound (universal model + 6 legacy parts)");
     }
 
     // ---- Zombie (64x64) ----------------------------------------------------
