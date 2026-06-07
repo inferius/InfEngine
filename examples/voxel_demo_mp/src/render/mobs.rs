@@ -276,36 +276,23 @@ pub fn draw_remote_mobs(
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let feather = [0.95f32, 0.95, 0.9, 1.0];
                         let comb = [0.95f32, 0.35, 0.30, 1.0];
-                        if mob_meshes.chicken_loaded() {
-                            let rot = body_rot;
-                            // Body centre at y=0.28
-                            if let Some(m) = mob_meshes.chicken_body {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.37, 0.50, 0.37), rot,
-                                    Vec3::new(base_x, mob.pos[1] + 0.28 - death_sink + walk_bob, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // Head forward-poked
-                            if let Some(m) = mob_meshes.chicken_head {
-                                let hp = Vec3::new(base_x, mob.pos[1] + 0.65 - death_sink + walk_bob, base_z) + fwd * 0.25;
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.25, 0.25, 0.25), rot, hp);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                            let leg_y = mob.pos[1] - 0.12 - death_sink + walk_bob;
-                            if let Some(m) = mob_meshes.chicken_right_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.18, 0.30, 0.18), rot,
-                                    Vec3::new(base_x, leg_y, base_z) + side * 0.10);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            if let Some(m) = mob_meshes.chicken_left_leg {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.18, 0.30, 0.18), rot,
-                                    Vec3::new(base_x, leg_y, base_z) - side * 0.10);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
+                        if let Some(baked) = &mob_meshes.chicken_model {
+                            // W92 - universal MC ChickenModel (beak, wattle,
+                            // wings). Same pipeline + yaw offset as the rest.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
                                 Vec3::new(0.45, 0.55, 0.4), body_rot,
@@ -432,57 +419,24 @@ pub fn draw_remote_mobs(
                         // that falls through here gets the spider/cube path.
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         let dark = [0.18f32, 0.12, 0.12, 1.0];
-                        if mob_meshes.spider_loaded() {
-                            let rot = body_rot;
-                            let cy = mob.pos[1] + 0.10 - death_sink + walk_bob;
-                            // Thorax (body0)
-                            if let Some(m) = mob_meshes.spider_body0 {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.37, 0.37, 0.37), rot,
-                                    Vec3::new(base_x, cy, base_z));
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // Abdomen (body1) - behind the thorax
-                            if let Some(m) = mob_meshes.spider_body1 {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.62, 0.50, 0.75), rot,
-                                    Vec3::new(base_x, cy, base_z) - fwd * 0.55);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // Head - forward
-                            if let Some(m) = mob_meshes.spider_head {
-                                let t = Mat4::from_scale_rotation_translation(
-                                    Vec3::new(0.50, 0.50, 0.50), rot,
-                                    Vec3::new(base_x, cy + 0.05, base_z) + fwd * 0.35);
-                                renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                            }
-                            // 8 legs as pairs: each leg is a thin elongated
-                            // box extending sideways from the thorax.
-                            if let Some(m) = mob_meshes.spider_leg {
-                                let side = Vec3::new(-mob.yaw.sin(), 0.0, -mob.yaw.cos());
-                                let leg_offsets: [(f32, f32, f32); 4] = [
-                                    // (side_dist, forward, y_raise)
-                                    (0.55, -0.20, 0.0),
-                                    (0.55,  0.0,  0.0),
-                                    (0.55,  0.20, 0.0),
-                                    (0.55,  0.40, 0.0),
-                                ];
-                                for (sd, fwd_off, yr) in leg_offsets {
-                                    let leg_scale = Vec3::new(1.0, 0.12, 0.12);
-                                    // Right leg
-                                    let t = Mat4::from_scale_rotation_translation(
-                                        leg_scale, rot,
-                                        Vec3::new(base_x, cy + yr, base_z)
-                                            + side * sd + fwd * fwd_off);
-                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                                    // Left leg (mirror)
-                                    let t = Mat4::from_scale_rotation_translation(
-                                        leg_scale, rot,
-                                        Vec3::new(base_x, cy + yr, base_z)
-                                            - side * sd + fwd * fwd_off);
-                                    renderer.draw_mesh_pbr(m, t.to_cols_array(), apply_tint(white), 0.0, 0.9);
-                                }
-                            }
+                        if let Some(baked) = &mob_meshes.spider_model {
+                            // W92 - universal MC SpiderModel: 2 body segments
+                            // + 8 legs with their rest-pose splay baked into
+                            // the bone rotations. Same pipeline + yaw offset.
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + walk_bob,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                |_| crate::entity_model::BonePose::default(),
+                            );
                         } else {
                             // Fallback: flat dark elongated cube
                             let body = Mat4::from_scale_rotation_translation(

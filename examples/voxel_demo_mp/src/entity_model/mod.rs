@@ -31,9 +31,11 @@
 use glam::{Mat4, Quat, Vec3};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 
+pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod pig;
 pub(crate) mod skeleton;
+pub(crate) mod spider;
 pub(crate) mod zombie;
 
 /// MC model pixels -> world blocks, with MC's X/Y flip baked in
@@ -137,13 +139,31 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
         let mesh = r.create_mesh(bone.name, &verts, &indices);
         r.bind_mesh_albedo_arc(mesh, albedo.clone());
         bones.push(BakedBone { bone: *bone, mesh });
-        // Track the lowest point (largest MC +Y, since Y is down) across
-        // all cubes including the bone pivot, to derive the feet offset.
+        // Track the lowest world point (the feet) to derive the ground
+        // offset. We rotate each cube's 8 corners by the bone's default
+        // rotation + pivot first, so splayed limbs (e.g. the spider's
+        // legs, rotated ~45 deg down) are measured at their real tips, not
+        // their un-rotated extents. world Y = -mc_y * scale, so the largest
+        // MC y is the lowest world y.
+        let rot = Quat::from_euler(
+            glam::EulerRot::ZYX,
+            bone.rotation[2],
+            bone.rotation[1],
+            bone.rotation[0],
+        );
+        let pivot = Vec3::from(bone.pivot);
         for c in bone.cubes {
-            let bottom_mc = bone.pivot[1] + c.origin[1] + c.size[1] + c.inflate;
-            // world Y = -mc_y * scale, so a larger MC y is a lower world y.
-            let world_y = -bottom_mc * MODEL_SCALE;
-            lowest_world_y = lowest_world_y.min(world_y);
+            let [ox, oy, oz] = c.origin;
+            let [sx, sy, sz] = c.size;
+            let g = c.inflate;
+            for &cx in &[ox - g, ox + sx + g] {
+                for &cy in &[oy - g, oy + sy + g] {
+                    for &cz in &[oz - g, oz + sz + g] {
+                        let p = rot * Vec3::new(cx, cy, cz) + pivot;
+                        lowest_world_y = lowest_world_y.min(-p.y * MODEL_SCALE);
+                    }
+                }
+            }
         }
     }
     BakedModel { bones, ground_offset: -lowest_world_y }

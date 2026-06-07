@@ -484,6 +484,9 @@ pub(crate) struct MobMeshes {
     pub(crate) chicken_body: Option<MeshHandle>,
     pub(crate) chicken_right_leg: Option<MeshHandle>,
     pub(crate) chicken_left_leg: Option<MeshHandle>,
+    /// W92 - chicken baked from universal MC `ChickenModel` data
+    /// (incl. beak, wattle, wings).
+    pub(crate) chicken_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Pig ---------------------------------------------------------------
     pub(crate) pig_head: Option<MeshHandle>,
@@ -522,6 +525,9 @@ pub(crate) struct MobMeshes {
     pub(crate) spider_body0: Option<MeshHandle>,
     pub(crate) spider_body1: Option<MeshHandle>,
     pub(crate) spider_leg: Option<MeshHandle>,
+    /// W92 - spider baked from universal MC `SpiderModel` data (8 splayed
+    /// legs + two body segments).
+    pub(crate) spider_model: Option<crate::entity_model::BakedModel>,
 }
 
 // W19.3 dispatch uses these helpers; suppress dead_code until then.
@@ -867,7 +873,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.chicken_body      = Some(upload_part(r, "voxel_demo_mp::chicken_body",      MobPart::ChickenBody,     &img));
         mm.chicken_right_leg = Some(upload_part(r, "voxel_demo_mp::chicken_right_leg", MobPart::ChickenRightLeg, &img));
         mm.chicken_left_leg  = Some(upload_part(r, "voxel_demo_mp::chicken_left_leg",  MobPart::ChickenLeftLeg,  &img));
-        info!(texture = format!("{w}x{h}"), "chicken entity texture bound (4 parts)");
+        // W92 - universal MC ChickenModel (beak/wattle/wings). Render prefers this.
+        mm.chicken_model = Some(crate::entity_model::bake(r, &crate::entity_model::chicken::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "chicken entity texture bound (universal model + 4 legacy parts)");
     }
 
     // ---- Pig (64x64) -------------------------------------------------------
@@ -921,7 +929,9 @@ pub fn load_non_sheep_mob_meshes(
         mm.spider_body0 = Some(upload_part(r, "voxel_demo_mp::spider_body0", MobPart::SpiderBody0, &img));
         mm.spider_body1 = Some(upload_part(r, "voxel_demo_mp::spider_body1", MobPart::SpiderBody1, &img));
         mm.spider_leg   = Some(upload_part(r, "voxel_demo_mp::spider_leg",   MobPart::SpiderLeg,   &img));
-        info!(texture = format!("{w}x{h}"), "spider entity texture bound (4 parts)");
+        // W92 - universal MC SpiderModel (8 splayed legs). Render prefers this.
+        mm.spider_model = Some(crate::entity_model::bake(r, &crate::entity_model::spider::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "spider entity texture bound (universal model + 4 legacy parts)");
     }
 
     mm
