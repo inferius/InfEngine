@@ -1146,7 +1146,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // set. Done before the renderer borrow below so the
         // create_mesh / remove_mesh churn doesn't fight with the
         // per-frame draw calls.
-        vx.maybe_rebuild_liquid_mesh();
+        vx.maybe_rebuild_liquid_mesh(dt);
         let player_pos = vx.player_pos;
         // W77: borrow the mesh table instead of cloning the whole
         // HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>> every frame.
