@@ -302,3 +302,111 @@ pub(crate) fn draw(
         r.draw_mesh_pbr(bb.mesh, m.to_cols_array(), tint, 0.0, 0.9);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    fn uv_of(v: &MeshVertex) -> [f32; 2] {
+        [v.uv_packed[0] as f32 / 65535.0, v.uv_packed[1] as f32 / 65535.0]
+    }
+    fn normal_of(v: &MeshVertex) -> [f32; 3] {
+        [
+            v.normal_pad[0] as f32 / 127.0,
+            v.normal_pad[1] as f32 / 127.0,
+            v.normal_pad[2] as f32 / 127.0,
+        ]
+    }
+    /// (u_min,u_max,v_min,v_max) over a 4-vertex face, in pixels for the
+    /// given texture size.
+    fn uv_px_bbox(face: &[MeshVertex], tw: f32, th: f32) -> (f32, f32, f32, f32) {
+        let us: Vec<f32> = face.iter().map(|v| uv_of(v)[0] * tw).collect();
+        let vs: Vec<f32> = face.iter().map(|v| uv_of(v)[1] * th).collect();
+        let mn = |xs: &[f32]| xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let mx = |xs: &[f32]| xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        (mn(&us), mx(&us), mn(&vs), mx(&vs))
+    }
+
+    /// Each of the six faces must land on its MC box-unwrap tile (the bug
+    /// that put the cow's eyes/horns on the wrong faces was exactly this).
+    /// Cube = cow head main box: texOffs(0,0), size 8x8x6, texture 64x64.
+    /// Tiles (px): right u0..6, front u6..14, left u14..20, back u20..28,
+    /// all side v6..14; top u6..14, bottom u14..22, both v0..6.
+    #[test]
+    fn append_cube_uv_matches_mc_unwrap() {
+        let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        append_cube(&mut v, &mut i, &cube, 64, 64);
+        assert_eq!(v.len(), 24, "6 faces * 4 verts");
+        assert_eq!(i.len(), 36, "6 faces * 2 tris");
+
+        // Emission order: front, back, right, left, top, bottom.
+        let eps = 0.05; // sub-pixel rounding from u16 packing.
+        let about = |a: f32, b: f32| (a - b).abs() < eps;
+        let check = |name: &str, f: &[MeshVertex], want: (f32, f32, f32, f32)| {
+            let (u0, u1, v0, v1) = uv_px_bbox(f, 64.0, 64.0);
+            assert!(
+                about(u0, want.0) && about(u1, want.1) && about(v0, want.2) && about(v1, want.3),
+                "{name} uv px = ({u0},{u1},{v0},{v1}) want {want:?}"
+            );
+        };
+        check("front", &v[0..4], (6.0, 14.0, 6.0, 14.0));
+        check("back", &v[4..8], (20.0, 28.0, 6.0, 14.0));
+        check("right", &v[8..12], (0.0, 6.0, 6.0, 14.0));
+        check("left", &v[12..16], (14.0, 20.0, 6.0, 14.0));
+        check("top", &v[16..20], (6.0, 14.0, 0.0, 6.0));
+        check("bottom", &v[20..24], (14.0, 22.0, 0.0, 6.0));
+    }
+
+    /// Faces sit on the right geometric planes with the right outward MC
+    /// normals (front=-Z, back=+Z, right=+X, left=-X, top=-Y, bottom=+Y).
+    #[test]
+    fn append_cube_face_geometry() {
+        let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        append_cube(&mut v, &mut i, &cube, 64, 64);
+        // (x0,y0,z0)=(-4,-4,-6), (x1,y1,z1)=(4,4,0).
+        let all = |f: &[MeshVertex], axis: usize, val: f32| {
+            f.iter().all(|vt| (vt.position[axis] - val).abs() < 1e-4)
+        };
+        assert!(all(&v[0..4], 2, -6.0), "front on z0");
+        assert!(all(&v[4..8], 2, 0.0), "back on z1");
+        assert!(all(&v[8..12], 0, 4.0), "right on x1");
+        assert!(all(&v[12..16], 0, -4.0), "left on x0");
+        assert!(all(&v[16..20], 1, -4.0), "top on y0 (MC up)");
+        assert!(all(&v[20..24], 1, 4.0), "bottom on y1");
+        // Normals.
+        let n = |f: &[MeshVertex]| normal_of(&f[0]);
+        assert_eq!(n(&v[0..4]).map(|x| x.round()), [0.0, 0.0, -1.0]);
+        assert_eq!(n(&v[8..12]).map(|x| x.round()), [1.0, 0.0, 0.0]);
+        assert_eq!(n(&v[16..20]).map(|x| x.round()), [0.0, -1.0, 0.0]);
+    }
+
+    /// The render layer passes `mob.yaw - PI/2`; at mob.yaw = 0 that must
+    /// rotate the MC front (-Z) onto the engine's forward (+X) and keep MC
+    /// "up" (-Y) pointing engine-up (+Y). This is the orientation half of
+    /// the cow's udder/horn fix, verifiable without a GPU.
+    #[test]
+    fn bone_matrix_orients_mc_front_to_engine_plus_x() {
+        let bone = Bone { name: "b", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: &[] };
+        let m = bone_matrix(Vec3::ZERO, -FRAC_PI_2, 0.0, &bone, BonePose::default());
+        let front = m.transform_point3(Vec3::new(0.0, 0.0, -1.0));
+        assert!(
+            front.x > 0.0 && front.x.abs() > front.z.abs() && front.x.abs() > front.y.abs(),
+            "MC front (-Z) should map to engine +X, got {front:?}"
+        );
+        let up = m.transform_point3(Vec3::new(0.0, -1.0, 0.0));
+        assert!(up.y > 0.0 && up.y.abs() > up.x.abs(), "MC up (-Y) -> engine +Y, got {up:?}");
+    }
+
+    /// The MC->engine flip must preserve winding (det +1), or every face
+    /// would be back-face culled.
+    #[test]
+    fn flip_preserves_winding() {
+        let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
+        assert!(flip.determinant() > 0.0, "flip det must be positive");
+    }
+}
