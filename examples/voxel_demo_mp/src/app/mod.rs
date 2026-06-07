@@ -808,6 +808,12 @@ pub(crate) struct Voxel {
     /// / source merge).
     pub(crate) liquid_mesh_handles: HashMap<u16, MeshHandle>,
     pub(crate) liquid_mesh_dirty: bool,
+    /// W107: dt accumulator throttling full liquid-mesh rebuilds. The mesh
+    /// is one whole-world mesh rebuilt from scratch on ANY water change;
+    /// oscillating edge cells flip liquid_mesh_dirty ~20x/s, which rebuilt
+    /// 4000+ cells that often and made everything near water judder. Cap
+    /// rebuilds to a fixed cadence (transient, not persisted).
+    pub(crate) liquid_mesh_accum: f32,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different

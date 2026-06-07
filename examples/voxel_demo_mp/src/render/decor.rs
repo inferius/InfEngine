@@ -193,16 +193,15 @@ pub(crate) fn draw(
             let Some(bt) = block_type(*liquid_id) else {
                 continue;
             };
-            // W34: force liquid alpha to 1.0 (fully opaque). Previously
-            // water=0.65 / lava=0.92 routed both through the alpha-blend
-            // transparent pipeline with depth_write=off. The combo of
-            // alpha blend + the user's particular view angles produced
-            // invisible-from-above / weird-from-below water + lava
-            // appearance. Going opaque keeps liquids visible regardless
-            // of viewing angle and depth ordering; MC-style translucent
-            // water can return when the depth + sort is properly wired.
+            // W108: water is translucent again (alpha 0.65). It now routes
+            // through the alpha-blend transparent pipeline (cull_mode=None)
+            // and is drawn AFTER the opaque chunk terrain (see render()
+            // ordering), so it blends over the terrain instead of the cleared
+            // sky - the two conditions whose absence caused the old W34
+            // "invisible from above / weird from below" artefacts. Lava stays
+            // fully opaque (MC parity).
             let (alpha, rough) = match *liquid_id {
-                WATER_ID => (1.0_f32, 0.18_f32),
+                WATER_ID => (0.65_f32, 0.18_f32),
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };

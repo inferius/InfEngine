@@ -1307,19 +1307,14 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             rpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
-            if mesh3d_count > 0 {
-                self.mesh3d.draw(
-                    &mut rpass,
-                    &self.meshes,
-                    &mesh_batches,
-                    &self.shadow.sample_bg,
-                    &self.lights.bind_group,
-                    &self.tile_anims.bind_group,
-                    &self.mesh_albedos,
-                );
-            }
             // W33.3: flush uber chunk draws in layer order:
             // opaque -> cutout (same pipeline, sorted separately) -> translucent.
+            // W108: chunks draw BEFORE the legacy mesh3d pass so translucent
+            // water (the mesh3d transparent sub-pass) blends over the opaque
+            // terrain instead of the cleared sky - the correct order that
+            // makes water see-through without the old W34 artefacts. Opaque
+            // mobs in the mesh3d pass are depth-tested, so drawing them after
+            // the terrain is also correct.
             if total_chunk_draws > 0 {
                 self.mesh3d.draw_uber_chunks(
                     &mut rpass,
@@ -1334,6 +1329,17 @@ impl Renderer {
                     chunk_cutout_count,
                     chunk_translucent_count,
                     self.has_indirect_first_instance,
+                );
+            }
+            if mesh3d_count > 0 {
+                self.mesh3d.draw(
+                    &mut rpass,
+                    &self.meshes,
+                    &mesh_batches,
+                    &self.shadow.sample_bg,
+                    &self.lights.bind_group,
+                    &self.tile_anims.bind_group,
+                    &self.mesh_albedos,
                 );
             }
             if self.show_grid {

@@ -93,10 +93,22 @@ impl Voxel {
     /// side faces drop to y=0 only against air / decorations, and
     /// the bottom face emits only when there's something the
     /// player could actually see through the water from below.
-    pub(crate) fn maybe_rebuild_liquid_mesh(&mut self) {
+    pub(crate) fn maybe_rebuild_liquid_mesh(&mut self, dt: f32) {
+        // W107: throttle full liquid-mesh rebuilds to a fixed cadence. The
+        // rebuild walks EVERY liquid cell + recreates the GPU mesh; with
+        // oscillating edge cells flipping dirty ~20x/s the whole 4000+ cell
+        // mesh churned every frame near big water, juddering the view. ~7 Hz
+        // is plenty for water spread/level updates (the flow animation is a
+        // per-frame shader effect, unaffected by the mesh-rebuild cadence).
+        self.liquid_mesh_accum += dt;
         if !self.liquid_mesh_dirty {
             return;
         }
+        const LIQUID_MESH_REBUILD_INTERVAL: f32 = 0.15;
+        if self.liquid_mesh_accum < LIQUID_MESH_REBUILD_INTERVAL {
+            return;
+        }
+        self.liquid_mesh_accum = 0.0;
         if self.renderer.is_none() {
             return;
         }
@@ -246,10 +258,15 @@ impl Voxel {
             }
             let label = format!("voxel_liquid_{liquid_id}");
             let h = renderer.create_mesh(&label, &vertices, &indices);
-            // W34: liquid meshes stay opaque so the pass routes them via
-            // the default mesh3d pipeline (depth-write on, no alpha blend
-            // ordering issues). Translucent water returns when proper
-            // back-to-front sort + depth ordering is in place.
+            // W108: water renders translucent via the alpha-blend pipeline;
+            // lava stays opaque (MC lava is fully opaque). The transparent
+            // pipeline has cull_mode=None, which sidesteps the old W34 "top
+            // face invisible from above" the opaque pipeline's backface cull
+            // caused on the liquid mesh's mixed winding. Render order (water
+            // after opaque chunks) is handled in infengine_render::render().
+            if liquid_id == crate::block::WATER_ID {
+                renderer.set_mesh_transparent(h, true);
+            }
             self.liquid_mesh_handles.insert(liquid_id, h);
             let _ = block_is_transparent_render;
         }
