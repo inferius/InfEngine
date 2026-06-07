@@ -145,7 +145,15 @@ fn step_one(
     let dx = m.target[0] - m.pos[0];
     let dz = m.target[2] - m.pos[2];
     let d2 = dx * dx + dz * dz;
-    if d2 < 0.25 || day_time >= m.retarget_at {
+    // W99: when actively chasing a player, hold at attack distance instead
+    // of walking right onto them (the "skeleton sticks to / glues onto the
+    // player" bug). 1.0 block^2 stop is inside ZOMBIE_ATTACK_RANGE (1.4) so
+    // the melee tick below still lands; the mob just stops advancing.
+    const MOB_CHASE_STOP_D2: f32 = 1.0;
+    let chasing = chase_player_pos.is_some();
+    if chasing && d2 < MOB_CHASE_STOP_D2 {
+        // Within reach: stand and attack, don't overshoot or wander.
+    } else if d2 < 0.25 || day_time >= m.retarget_at {
         // Pick a new wander target nearby (within 12 blocks).
         let theta = rng.next_f32() * std::f32::consts::TAU;
         let dist = 4.0 + rng.next_f32() * 8.0;

@@ -565,7 +565,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             None
         };
-        let voxel_dist = vx.target.map(|h| {
+        // W100: compare the mob hit against the MINING ray (`mine_target`,
+        // which stops at the first breakable block), not the placement ray
+        // (`target`, which passes through decorations). Using the placement
+        // ray let a block behind the mob look "closer", so an attack also
+        // dug the terrain behind the mob. The mining ray is what would
+        // actually break, so it's the correct distance to arbitrate against.
+        let voxel_dist = vx.mine_target.map(|h| {
             let c = Vec3::new(
                 h.voxel[0] as f32 + 0.5,
                 h.voxel[1] as f32 + 0.5,

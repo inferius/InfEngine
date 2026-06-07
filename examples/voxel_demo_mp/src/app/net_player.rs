@@ -105,8 +105,11 @@ impl Voxel {
                 best = Some((p, d2));
             }
         };
-        // Host's own pose is always in play.
-        consider([self.player_pos.x, self.player_pos.y, self.player_pos.z]);
+        // Host's own pose is in play UNLESS the host is in Creative -
+        // W99: hostiles must not target a creative player (MC parity).
+        if !self.game_mode.is_creative() {
+            consider([self.player_pos.x, self.player_pos.y, self.player_pos.z]);
+        }
         // Plus every remote player tracked by the server pose
         // table (clients don't have other peers' poses authoritatively).
         if let NetRole::Server { poses, .. } = &self.net {

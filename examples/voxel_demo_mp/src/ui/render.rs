@@ -2605,6 +2605,27 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 // gets squashed by the parent
                                 // `Area`'s auto-shrink so the box
                                 // ended up tiny regardless.
+                                // W101: while the completion popup is open,
+                                // intercept Up/Down BEFORE the TextEdit so
+                                // egui doesn't move the text cursor to
+                                // line-start/end. consume_key removes the
+                                // event (TextEdit never sees it) and tells us
+                                // it fired, so we cycle the suggestion here.
+                                if chat_completion.is_some() {
+                                    let down = ui.input_mut(|i| {
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                                    });
+                                    let up = ui.input_mut(|i| {
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                                    });
+                                    if let Some(popup) = chat_completion.as_mut() {
+                                        if down {
+                                            popup.select_next();
+                                        } else if up {
+                                            popup.select_prev();
+                                        }
+                                    }
+                                }
                                 let te_id = ui.id().with("chat_input_te");
                                 let resp = ui.add_sized(
                                     [720.0, 36.0],
