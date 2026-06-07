@@ -285,8 +285,15 @@ pub(crate) fn cmd_spawnmob(
         KIND_SKELETON
     } else if arg.eq_ignore_ascii_case("spider") {
         KIND_SPIDER
-    } else {
+    } else if arg.eq_ignore_ascii_case("sheep") {
         KIND_SHEEP
+    } else {
+        // W101: an unknown kind used to silently spawn a sheep
+        // (e.g. `/spawnmob creeper` -> sheep). Report it instead.
+        lines.push(format!(
+            "/spawnmob: unknown mob '{arg}'. Valid: zombie, skeleton, spider, cow, pig, sheep, chicken."
+        ));
+        return true;
     };
     let fwd_h = Vec3::new(
         voxel.player_yaw.cos(),
