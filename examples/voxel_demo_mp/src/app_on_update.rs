@@ -1002,7 +1002,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // liquid the host runs fall -> spread -> optional source
         // merge -> decay. Clients skip and rely on `vx.edit`.
         let _t = std::time::Instant::now();
-        vx.tick_liquids();
+        vx.tick_liquids(dt);
         DIAG_LIQUIDS_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // W64: gravity for sand / concrete_powder / gravel. Host
         // drops each queued unsupported falling cell one voxel per

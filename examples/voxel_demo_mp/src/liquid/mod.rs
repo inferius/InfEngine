@@ -130,11 +130,11 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         block_id: WATER_ID,
         max_range: 7,
         drop_off: 1,
-        // ~167 ms per tick at 60 fps. Roughly half MC's
-        // 250 ms - readable progress without burning CPU on
-        // big pools.
-        tick_period: 10,
-        fall_period: 5,
+        // W104: units are now fixed 20 Hz game ticks (see tick_liquids),
+        // so these match MC directly: water spreads every 5 ticks
+        // (250 ms) and a falling column advances every 2 ticks (100 ms).
+        tick_period: 5,
+        fall_period: 2,
         infinite_source: true,
         swim_horiz_drag: 0.45,
         swim_fall_cap: -1.8,
@@ -155,8 +155,11 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         // and drop_off = 2 lines up with MC.
         max_range: 7,
         drop_off: 2,
-        tick_period: 90,
-        fall_period: 15,
+        // W104: fixed 20 Hz game ticks. MC overworld lava spreads every
+        // 30 ticks (1.5 s); a falling lava column advances every 10
+        // ticks (0.5 s).
+        tick_period: 30,
+        fall_period: 10,
         infinite_source: false,
         swim_horiz_drag: 0.20,
         swim_fall_cap: -0.5,

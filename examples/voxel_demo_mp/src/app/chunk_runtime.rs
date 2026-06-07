@@ -51,6 +51,7 @@ impl Voxel {
         self.torch_orient.clear();
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
+        self.liquid_tick_accum = 0.0;
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.falling_pending.clear();

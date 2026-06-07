@@ -701,10 +701,15 @@ pub(crate) struct Voxel {
     /// schedule's `pending` set serves the same "is this cell
     /// scheduled?" role.
     pub(crate) liquid_schedule: LiquidSchedule,
-    /// Game-tick counter for the schedule. +1 per net-tick frame.
-    /// Used both as `now` for `pop_due` and as the base for
-    /// computing `due_at_tick = now + tick_delay`.
+    /// Game-tick counter for the schedule. W104: advanced at a fixed
+    /// 20 ticks/sec (MC game-tick rate) by `tick_liquids`, NOT once
+    /// per render frame. Used both as `now` for `pop_due` and as the
+    /// base for computing `due_at_tick = now + tick_delay`.
     pub(crate) liquid_clock: u64,
+    /// W104: wall-clock accumulator (seconds) that gates `liquid_clock`
+    /// advancement to a fixed 20 Hz so liquid flow speed is independent
+    /// of frame rate. Transient - not persisted; reset on world load.
+    pub(crate) liquid_tick_accum: f32,
     /// Every liquid voxel currently in the world. Maintained on
     /// every peer (host + clients) so the dedicated slope-mesh
     /// render path can iterate without scanning chunks. The

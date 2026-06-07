@@ -277,57 +277,76 @@ impl Voxel {
     /// dispatches each liquid's tick passes when the cadence
     /// (`Liquid::tick_period`) matches. Host-only - clients
     /// receive the resulting `vx.edit` traffic.
-    pub(crate) fn tick_liquids(&mut self) {
+    pub(crate) fn tick_liquids(&mut self, dt: f32) {
         if matches!(self.net, NetRole::Client { .. }) {
             return;
         }
-        // Advance the per-cell schedule clock once per frame.
-        self.liquid_clock = self.liquid_clock.wrapping_add(1);
-        let now = self.liquid_clock;
-        // Per-frame CPU budget for liquid cell processing. Cells
-        // that don't fit this frame keep their slot in the
-        // schedule and tick next frame - replaces the old hard
-        // 8192 cap on the bulk planner. 4096 leaves plenty of
-        // CPU headroom (4096 * ~20 world.get calls = ~80k reads
-        // per frame, still well under 1 ms on a warm cache) and
-        // lets a wave of 5-10k pending cells drain in 2-3 frames.
-        const MAX_LIQUID_PER_FRAME: usize = 4096;
-        let mut processed = 0usize;
-        // W103: chunks touched by liquid edits this frame, deduplicated.
-        // Rebuilt ONCE after the budget drains instead of per-cell.
-        let mut dirty: HashSet<ChunkCoord> = HashSet::new();
-        while processed < MAX_LIQUID_PER_FRAME {
-            let Some(pos) = self.liquid_schedule.pop_due(now) else {
-                break;
-            };
-            // Identify which liquid owns this cell, if any. The
-            // cell may have been broken since it was scheduled -
-            // skip silently.
-            let b = self.world.get(pos);
-            let Some(liquid) = liquid_for(b) else {
-                continue;
-            };
-            // Snapshot the liquid by value (no &self borrow into
-            // the inner method).
-            let lq = *liquid;
-            self.tick_liquid_cell(pos, &lq, now, &mut dirty);
-            processed += 1;
+        // W104: advance the liquid clock at a FIXED 20 ticks/sec (MC's
+        // game-tick rate) instead of once per render frame. Per-frame
+        // advancement made flow speed scale with FPS (~12x too fast at
+        // 240 FPS, and framerate-dependent) and forced the schedule
+        // drain + merge scan + every never-settling cell's chunk
+        // remesh to run on EVERY frame. A fixed cadence is MC-faithful
+        // and means a high-FPS frame usually does zero liquid work, so
+        // the residual liquid cost no longer tracks the frame rate.
+        const LIQUID_TICK_DT: f32 = 1.0 / 20.0;
+        // Cap catch-up so a hitch (or a long alt-tab) can't avalanche
+        // into a multi-second liquid burst on the resume frame.
+        const MAX_CATCHUP_TICKS: u32 = 4;
+        self.liquid_tick_accum += dt;
+        if self.liquid_tick_accum < LIQUID_TICK_DT {
+            // Not a game-tick boundary yet - skip all liquid work.
+            return;
         }
-        // Source-merge pass: each `infinite_source` liquid gets a
-        // chance to promote flow cells. The merge is rare + fast
-        // (256-cell cap inside `liquid_merge_step`); run it every
-        // frame regardless of schedule state.
-        for liquid in LIQUIDS {
-            if liquid.infinite_source {
-                self.tick_liquid_merge(liquid);
+        // Per-game-tick CPU budget for liquid cell processing. Cells
+        // that don't fit keep their slot in the schedule and tick on
+        // the next game tick.
+        const MAX_LIQUID_PER_FRAME: usize = 4096;
+        // W103: chunks touched by liquid edits this frame, deduplicated
+        // across every catch-up tick. Rebuilt ONCE at the end instead
+        // of per-cell (per-cell cloned the same ~8 KB chunk thousands
+        // of times a frame - the open-area 10 fps collapse).
+        let mut dirty: HashSet<ChunkCoord> = HashSet::new();
+        let mut catch = 0u32;
+        while self.liquid_tick_accum >= LIQUID_TICK_DT && catch < MAX_CATCHUP_TICKS {
+            self.liquid_tick_accum -= LIQUID_TICK_DT;
+            catch += 1;
+            self.liquid_clock = self.liquid_clock.wrapping_add(1);
+            let now = self.liquid_clock;
+            let mut processed = 0usize;
+            while processed < MAX_LIQUID_PER_FRAME {
+                let Some(pos) = self.liquid_schedule.pop_due(now) else {
+                    break;
+                };
+                // Identify which liquid owns this cell, if any. The
+                // cell may have been broken since it was scheduled -
+                // skip silently.
+                let b = self.world.get(pos);
+                let Some(liquid) = liquid_for(b) else {
+                    continue;
+                };
+                // Snapshot the liquid by value (no &self borrow into
+                // the inner method).
+                let lq = *liquid;
+                self.tick_liquid_cell(pos, &lq, now, &mut dirty);
+                processed += 1;
+            }
+            // Source-merge pass: each `infinite_source` liquid gets a
+            // chance to promote flow cells. Runs per game tick (MC
+            // merges on tick), 256-cell cap inside `liquid_merge_step`.
+            for liquid in LIQUIDS {
+                if liquid.infinite_source {
+                    self.tick_liquid_merge(liquid);
+                }
             }
         }
-        // W103: one batched remesh dispatch for every chunk the whole
-        // frame's liquid activity touched. Collapses thousands of
-        // redundant per-cell rebuild_chunks calls (each an ~8 KB chunk
-        // clone + halo snapshot + remesh dispatch) into one job per
-        // distinct chunk. This was the dominant cost behind the
-        // open-area 10 fps collapse (tick_liquids 127-350 ms/frame).
+        // Drop any backlog beyond the catch-up cap so the accumulator
+        // can't grow without bound after a long stall.
+        if catch >= MAX_CATCHUP_TICKS {
+            self.liquid_tick_accum = 0.0;
+        }
+        // W103: one batched remesh dispatch for every chunk this frame's
+        // liquid ticks touched - one job per distinct chunk.
         if !dirty.is_empty() {
             let coords: Vec<ChunkCoord> = dirty.into_iter().collect();
             self.rebuild_chunks(&coords);
