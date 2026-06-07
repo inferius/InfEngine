@@ -93,10 +93,23 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
         Biome::Swamp => (0.0, 2.0, false),
         Biome::Beach => (0.0, 1.5, false),
     };
-    let mut elev = cont * 8.0 + hills * amp + detail * 1.5 + bias;
+    // W110: continentalness now drives a smooth ocean->land curve so the
+    // world has PROPER seas + coastlines, not just the rare shallow dip
+    // the old linear `cont * 8` produced (the "no proper water" report).
+    // Strongly-negative continentalness = a deep ocean basin; near zero =
+    // coast / shallows; positive = inland that rises with the biome. MC
+    // stacks a continentalness spline the same way.
+    let base = cont * 9.0 + cont.signum() * cont * cont * 7.0;
+    // Land mask: 0 over the deep basin, ramping to 1 on land, so the
+    // biome's hills + bias don't lift the seabed into islands everywhere
+    // (ocean floors stay flat like MC's abyssal plains). Ocean forms
+    // where `base` (continentalness) is low enough.
+    let land = ((base + 5.0) / 7.0).clamp(0.0, 1.0);
+    let mut elev = base + (hills * amp + bias) * land + detail * 1.5;
     if ridged {
-        // `1 - |hills|` folds the noise into ridge lines for peaks.
-        elev += (1.0 - hills.abs()) * 8.0;
+        // `1 - |hills|` folds the noise into ridge lines for peaks -
+        // land only, so no ridged spikes rise out of the abyssal plain.
+        elev += (1.0 - hills.abs()) * 8.0 * land;
     }
     let h = SEA_LEVEL as f32 + elev;
     // Guarantee dry, walkable ground around the origin so a fresh spawn
@@ -167,6 +180,34 @@ pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_water_coverage() {
+        // W110 verify: % of columns below sea level (= water surface) over a
+        // 4000x4000 area beyond the spawn-pull radius. Run with
+        // `cargo test dump_water_coverage -- --ignored --nocapture`.
+        let mut water = 0u32;
+        let mut total = 0u32;
+        let mut deep = 0u32;
+        for wx in (-2000..2000).step_by(11) {
+            for wz in (-2000..2000).step_by(11) {
+                let biome = biome_from_climate(climate_at(wx as f32, wz as f32, 0));
+                let h = natural_height(wx as f32, wz as f32, 0, biome).max(1);
+                total += 1;
+                if h < SEA_LEVEL {
+                    water += 1;
+                }
+                if h < SEA_LEVEL - 4 {
+                    deep += 1;
+                }
+            }
+        }
+        let pct = 100.0 * water as f32 / total as f32;
+        let dpct = 100.0 * deep as f32 / total as f32;
+        println!("W110 WATER COVERAGE: {water}/{total} = {pct:.1}% below sea (deep>4: {dpct:.1}%)");
+    }
 
     #[test]
     fn fbm_stays_in_unit_range() {
