@@ -320,30 +320,54 @@ impl Voxel {
     ///   synchronous path and returns the affected list so the caller
     ///   can remesh immediately.
     pub(crate) fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
-        // W94: cap concurrent in-flight lighting jobs. The lighting pool is
-        // shared with chunk generate + remesh; in water-rich Natural
-        // worldgen the dirty source (chunk streaming) was feeding lighting
-        // faster than the pool drained it, so `pending_lighting_jobs` grew
-        // without bound (0 -> 200+ over ~90s) until the backlog of queued
-        // job snapshots + WorkerResult::Lit results exhausted memory and the
-        // game froze to ~1 FPS. We must NOT drain the dirty-set when over the
-        // cap: the dirty-set is a deduped HashSet, so retaining it across
-        // skipped ticks is bounded by the loaded world size (not the tick
-        // rate), and the work is simply picked up once jobs drain below the
-        // cap. Classic worldgen never hit this (no water -> fast BFS -> the
-        // counter stayed at 0-1), so this only throttles the pathological
-        // case and is invisible in normal play.
-        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 8;
+        // W94/W95: bound lighting work per tick on TWO axes so a fast,
+        // sustained re-dirty source (chunk streaming while the player moves
+        // through water-rich Natural terrain, where the BFS is slow and the
+        // worker pool is shared with generate+remesh) can't tank the frame
+        // rate or freeze the game:
+        //
+        // 1. In-flight cap: never have more than MAX_INFLIGHT lighting jobs
+        //    outstanding, or the worker queue + result backlog grows without
+        //    bound (the original 1-FPS freeze: pending_lighting_jobs 0->225).
+        // 2. Per-dispatch cap: process at most MAX_DIRTY_PER_TICK dirty
+        //    voxels per tick, re-marking the overflow. Without this, the
+        //    dirty-set accumulated across in-flight-capped ticks and a
+        //    single later dispatch cloned hundreds of chunks into the worker
+        //    snapshot ON THE MAIN THREAD -> multi-100ms stalls -> ~10 FPS.
+        //    Bounding the batch keeps every snapshot clone cheap.
+        //
+        // The dirty-set is a deduped HashSet, so retaining/re-marking across
+        // ticks is bounded by the loaded world size (not the tick rate);
+        // lighting just trails slightly under heavy load instead of running
+        // away. Classic worldgen never hit any of this (no water -> fast BFS
+        // -> the counter stayed at 0-1). The sync (no-worker, test) path is
+        // untouched and still processes the whole set in one pass.
+        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 6;
+        const MAX_DIRTY_PER_TICK: usize = 8;
         if self.workers.is_some()
             && self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
         {
             return Vec::new();
         }
-        let dirty = self.lighting.take_dirty();
+        let mut dirty = self.lighting.take_dirty();
         // W28.5: also drain the per-change emission records.
         let dirty_changes = self.lighting.take_dirty_changes();
         if dirty.is_empty() {
             return Vec::new();
+        }
+        // Bound the batch for the worker-backed bulk path (gen-driven, no
+        // emission changes). Edits carry `dirty_changes` and are few, so
+        // they process whole to keep the incremental two-queue path exact.
+        if self.workers.is_some()
+            && dirty_changes.is_empty()
+            && dirty.len() > MAX_DIRTY_PER_TICK
+        {
+            let mut iter = dirty.into_iter();
+            let batch: HashSet<[i32; 3]> = iter.by_ref().take(MAX_DIRTY_PER_TICK).collect();
+            for v in iter {
+                self.lighting.mark_dirty(v);
+            }
+            dirty = batch;
         }
         let cs = infengine_voxel::CHUNK_SIZE as i32;
         let mut affected_set: HashSet<ChunkCoord> = HashSet::new();
