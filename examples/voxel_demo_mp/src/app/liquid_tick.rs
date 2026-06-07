@@ -293,6 +293,9 @@ impl Voxel {
         // lets a wave of 5-10k pending cells drain in 2-3 frames.
         const MAX_LIQUID_PER_FRAME: usize = 4096;
         let mut processed = 0usize;
+        // W103: chunks touched by liquid edits this frame, deduplicated.
+        // Rebuilt ONCE after the budget drains instead of per-cell.
+        let mut dirty: HashSet<ChunkCoord> = HashSet::new();
         while processed < MAX_LIQUID_PER_FRAME {
             let Some(pos) = self.liquid_schedule.pop_due(now) else {
                 break;
@@ -307,7 +310,7 @@ impl Voxel {
             // Snapshot the liquid by value (no &self borrow into
             // the inner method).
             let lq = *liquid;
-            self.tick_liquid_cell(pos, &lq, now);
+            self.tick_liquid_cell(pos, &lq, now, &mut dirty);
             processed += 1;
         }
         // Source-merge pass: each `infinite_source` liquid gets a
@@ -319,13 +322,29 @@ impl Voxel {
                 self.tick_liquid_merge(liquid);
             }
         }
+        // W103: one batched remesh dispatch for every chunk the whole
+        // frame's liquid activity touched. Collapses thousands of
+        // redundant per-cell rebuild_chunks calls (each an ~8 KB chunk
+        // clone + halo snapshot + remesh dispatch) into one job per
+        // distinct chunk. This was the dominant cost behind the
+        // open-area 10 fps collapse (tick_liquids 127-350 ms/frame).
+        if !dirty.is_empty() {
+            let coords: Vec<ChunkCoord> = dirty.into_iter().collect();
+            self.rebuild_chunks(&coords);
+        }
     }
 
     /// MC `FlowingFluid.tick(pos)`: pulls `pos` through
     /// `getNewLiquid`, applies + spreads, then re-schedules every
     /// neighbour the apply touched (and `pos` itself if still
     /// active) at `now + tick_period`.
-    pub(crate) fn tick_liquid_cell(&mut self, pos: [i32; 3], liquid: &Liquid, now: u64) {
+    pub(crate) fn tick_liquid_cell(
+        &mut self,
+        pos: [i32; 3],
+        liquid: &Liquid,
+        now: u64,
+        dirty: &mut HashSet<ChunkCoord>,
+    ) {
         let liquid_id = liquid.block_id;
         let delay = liquid.tick_period.max(1) as u64;
         // Build the per-cell plan against the current world snapshot.
@@ -376,16 +395,19 @@ impl Voxel {
             }
             self.spawn_drop(*block, *p);
         }
-        // Rebuild every chunk the apply touched.
-        let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
+        // W103: accumulate the chunks this cell touched into the
+        // frame-level dirty set; tick_liquids rebuilds them ONCE after
+        // the per-frame budget drains. Previously every active liquid
+        // cell called rebuild_chunks here directly, re-cloning the SAME
+        // chunk once per cell — thousands of times a frame in a pool.
         for p in &tape.evaporated {
             for c in Self::affected_chunks(*p) {
-                chunk_set.insert(c);
+                dirty.insert(c);
             }
         }
         for (p, _, _) in &tape.placed {
             for c in Self::affected_chunks(*p) {
-                chunk_set.insert(c);
+                dirty.insert(c);
             }
         }
         // Q.4a: solidified cells are former lava cells now holding
@@ -394,12 +416,8 @@ impl Voxel {
         // liquid slab and emits a full solid cube.
         for (p, _) in &tape.solidified {
             for c in Self::affected_chunks(*p) {
-                chunk_set.insert(c);
+                dirty.insert(c);
             }
-        }
-        if !chunk_set.is_empty() {
-            let coords: Vec<ChunkCoord> = chunk_set.into_iter().collect();
-            self.rebuild_chunks(&coords);
         }
         if !tape.evaporated.is_empty()
             || !tape.placed.is_empty()

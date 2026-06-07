@@ -17,6 +17,9 @@ use infengine_window::{EngineWindow, FrameContext};
 
 pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContext<'_>) {
         let dt = ctx.delta_time.clamp(1e-4, 0.1);
+        // W103 perf-diag: wall-clock start of this frame's on_update so the
+        // 2.5s diag can split total frame cost into sim phases vs render.
+        let _frame_start = std::time::Instant::now();
         // Wave 7: fire on_tick for every loaded plugin BEFORE
         // anything else in the frame so plugins see a stable
         // world state (no edits applied mid-tick). day_time
@@ -42,6 +45,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         static DIAG_N: AtomicU64 = AtomicU64::new(0);
         static DIAG_REND_US: AtomicU64 = AtomicU64::new(0);
         static DIAG_ACC_US: AtomicU64 = AtomicU64::new(0);
+        // W103: per-phase sim cost accumulators (microseconds), drained in the
+        // same 2.5s window as render_ms. SIM = everything in on_update before
+        // the render() call; the named phases are the prime suspects.
+        static DIAG_SIM_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_UPDATE_PLAY_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_STREAM_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_MOBS_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_LIQUIDS_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_DRAWQ_US: AtomicU64 = AtomicU64::new(0);
         // W95: fire on a ~2.5s WALL-CLOCK interval, not every 600 frames.
         // At 10 FPS a 600-frame gate only logged once per 60s, so a frame
         // collapse produced no diag before the user quit. Now a stall is
@@ -56,6 +68,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             DIAG_N.store(0, DiagOrd::Relaxed);
             DIAG_ACC_US.store(0, DiagOrd::Relaxed);
             let rend_us = DIAG_REND_US.swap(0, DiagOrd::Relaxed);
+            let sim_us = DIAG_SIM_US.swap(0, DiagOrd::Relaxed);
+            let up_us = DIAG_UPDATE_PLAY_US.swap(0, DiagOrd::Relaxed);
+            let str_us = DIAG_STREAM_US.swap(0, DiagOrd::Relaxed);
+            let mob_us = DIAG_MOBS_US.swap(0, DiagOrd::Relaxed);
+            let liq_us = DIAG_LIQUIDS_US.swap(0, DiagOrd::Relaxed);
+            let dq_us = DIAG_DRAWQ_US.swap(0, DiagOrd::Relaxed);
+            let f = frames.max(1);
             tracing::info!(
                 fps = vx.fps_ema as i32,
                 chunks = vx.world.iter_chunks().count(),
@@ -64,7 +83,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 falling = vx.falling_pending.len(),
                 py = vx.player_pos.y,
                 vy = vx.player_vel.y,
-                render_ms = (rend_us / frames.max(1)) as f32 / 1000.0,
+                render_ms = (rend_us / f) as f32 / 1000.0,
+                sim_ms = (sim_us / f) as f32 / 1000.0,
+                update_play_ms = (up_us / f) as f32 / 1000.0,
+                stream_ms = (str_us / f) as f32 / 1000.0,
+                mobs_ms = (mob_us / f) as f32 / 1000.0,
+                liquids_ms = (liq_us / f) as f32 / 1000.0,
+                drawq_ms = (dq_us / f) as f32 / 1000.0,
+                liq_pos = vx.liquid_positions.len(),
+                liq_sched = vx.liquid_schedule.len(),
                 "voxel: perf diag"
             );
         }
@@ -470,8 +497,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             //
             // W8.1: also gated on `world_loaded` so the simulation
             // path can't run while the user is on the main menu.
+            let _t = std::time::Instant::now();
             vx.update_play(ctx, dt);
+            DIAG_UPDATE_PLAY_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
+            let _t = std::time::Instant::now();
             vx.stream_chunks();
+            DIAG_STREAM_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         } else {
             // Paused / in a menu screen: drop captured mouse motion
             // so the camera doesn't lurch when play resumes.
@@ -814,7 +845,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 // and drains finished results into vx.world each
                 // frame - this is the same path used during normal
                 // gameplay streaming.
+                let _t = std::time::Instant::now();
                 vx.stream_chunks();
+                DIAG_STREAM_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
                 // Count how many chunks the world holds now.
                 let live = vx.world.iter_chunks().count() as u32;
                 // Update the counter. Extract target + phase as Copy
@@ -961,12 +994,16 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // Authoritative side simulates wandering mobs. The render
         // path reads `vx.remote_mobs` which gets populated by
         // both `tick_mobs` (server) and `vx.mob` (client).
+        let _t = std::time::Instant::now();
         vx.tick_mobs(dt);
+        DIAG_MOBS_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // Generic liquid physics: drive each registered liquid
         // (water, lava, ...) at its own MC-style cadence. Per
         // liquid the host runs fall -> spread -> optional source
         // merge -> decay. Clients skip and rely on `vx.edit`.
+        let _t = std::time::Instant::now();
         vx.tick_liquids();
+        DIAG_LIQUIDS_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // W64: gravity for sand / concrete_powder / gravel. Host
         // drops each queued unsupported falling cell one voxel per
         // tick; clients apply the resulting `vx.edit` traffic.
@@ -1336,6 +1373,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W32: draw_mesh_pbr replaced with queue_chunk_draw - all visible chunk
         // submeshes are batched into a single multi_draw_indexed_indirect call
         // at render() time instead of one draw call per submesh.
+        let _drawq_t = std::time::Instant::now();
         for (coord, subs) in chunk_meshes {
             // W13.4: skip chunks that are fully outside the view
             // frustum (behind the camera, off to the sides, beyond
@@ -1381,6 +1419,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 }
             }
         }
+        DIAG_DRAWQ_US.fetch_add(_drawq_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // Wire outline previewing the next action. The highlight
         // mode (H key, persisted in PlayerSave) gates which
         // preview wins:
@@ -1495,7 +1534,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 }
             }
         }
+        // W103: everything from frame start to here is the per-frame sim cost
+        // (input, ticks, streaming, lighting, draw-queue build) — the part NOT
+        // counted by render_ms. Lets the diag attribute a frame collapse.
         let _diag_rt = std::time::Instant::now();
+        DIAG_SIM_US.fetch_add(
+            _diag_rt.duration_since(_frame_start).as_micros() as u64,
+            DiagOrd::Relaxed,
+        );
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
         } else {
