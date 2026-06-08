@@ -17,7 +17,7 @@ use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 use super::biome::Biome;
 use super::biome_table::biome_from_climate;
 use super::ore::pick_stone_or_ore;
-use super::{WorldgenCtx, caves, decor, dungeons, ravines};
+use super::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
 
 /// Per-(wx, wz) climate sample. Each component is normalised to
 /// roughly `[-1, 1]`. Re-derived deterministically from the world
@@ -185,6 +185,12 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         let biome = biome_from_climate(climate);
         let h = realistic_height(climate, biome);
         let wy = origin.y as i32 + y as i32;
+        // W121: jagged bedrock floor at the world bottom (shared with
+        // gen_natural). Runs before the height test so a sub-sea column
+        // still gets a solid, MC-faithful floor.
+        if let Some(b) = strata::bedrock_floor_block(wx as i32, wy, wz as i32, seed) {
+            return b;
+        }
         if wy > h {
             // Fill the gap up to sea level with water so oceans
             // + lake floors look right. Only Beach + Swamp +
@@ -202,6 +208,7 @@ pub(crate) fn gen_realistic(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         } else if wy >= h - 3 {
             near_surface_block(biome)
         } else {
+            // W121: ore + deepslate strata via strata::pick_block.
             pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });

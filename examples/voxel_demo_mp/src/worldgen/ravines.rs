@@ -22,6 +22,8 @@
 
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
+use crate::worldgen::climate::SEA_LEVEL;
+use crate::worldgen::strata::WORLD_FLOOR;
 use crate::worldgen::{WorldgenCtx, hash3_for};
 
 // ---------------------------------------------------------------
@@ -50,9 +52,10 @@ const HALF_HEIGHT_MIN: i32 = 8;
 /// -> total half-height 8..24 (full height 16..48).
 const HALF_HEIGHT_AMP: u32 = 16;
 
-/// World-Y floor below which ravines do not carve. Keeps a solid
-/// bedrock-proxy layer.
-const RAVINE_FLOOR_Y: i32 = 2;
+/// World-Y floor below which ravines do not carve. Keeps the bedrock
+/// floor band intact. W121: relative to `WORLD_FLOOR` instead of the
+/// old absolute `2`.
+const RAVINE_FLOOR_Y: i32 = WORLD_FLOOR + 2;
 
 // ---------------------------------------------------------------
 // Internal helpers
@@ -138,9 +141,15 @@ fn try_ravine_at_column(chunk_x: i32, chunk_z: i32, seed: u32) -> Option<Ravine>
     let hh = HALF_HEIGHT_MIN
         + (hash3_for(chunk_x, 5, chunk_z, seed ^ SALT_HGT) % HALF_HEIGHT_AMP) as i32;
 
-    // Y centre: somewhere between 10 and 50 (below typical surface).
-    let cy_range = 40_u32;
-    let cy = 10 + (hash3_for(chunk_x, 6, chunk_z, seed ^ SALT_Y) % cy_range) as i32;
+    // Y centre: spread through the WHOLE underground (W121). Was a fixed
+    // y10..50 band pinned below the old sea-12 surface, which crammed
+    // every ravine under the waterline. Now relative to SEA_LEVEL /
+    // WORLD_FLOOR: from just above the bedrock floor up to a few blocks
+    // under sea level, so ravines slash the band where players dig.
+    let cy_lo = WORLD_FLOOR + 8;
+    let cy_hi = SEA_LEVEL - 6;
+    let cy_range = (cy_hi - cy_lo).max(1) as u32;
+    let cy = cy_lo + (hash3_for(chunk_x, 6, chunk_z, seed ^ SALT_Y) % cy_range) as i32;
 
     // Rotation.
     let x_aligned = hash3_for(chunk_x, 7, chunk_z, seed ^ SALT_ROT).is_multiple_of(2);
@@ -161,7 +170,8 @@ fn try_ravine_at_column(chunk_x: i32, chunk_z: i32, seed: u32) -> Option<Ravine>
 // ---------------------------------------------------------------
 
 /// Block ids the ravine carver may replace with air. Mirrors the
-/// cave carver's allowlist.
+/// cave carver's allowlist (W121: + deepslate + full ore roster so
+/// open ravine walls don't leave floating ore / un-carved deepslate).
 fn is_carveable(block: BlockId) -> bool {
     matches!(
         block.0,
@@ -169,9 +179,11 @@ fn is_carveable(block: BlockId) -> bool {
         | 2  // dirt
         | 3  // grass
         | 8  // cobblestone
-        | 13 // coal ore
-        | 14 // iron ore
         | 26 // sandstone
+        | 96 // deepslate
+        | 13 | 14 | 117..=122 // stone-form ores
+        | 123..=126 // deepslate ores (coal, iron, diamond, gold)
+        | 246..=249 // deepslate ores (redstone, lapis, emerald, copper)
     )
 }
 
@@ -311,14 +323,16 @@ mod tests {
     fn ravine_carved_in_marked_chunk() {
         let seed = 42;
         let (cx, cz) = find_ravine_column(seed).expect("no ravine found in search area");
-        // Pick the Y chunk that contains the ravine's Y centre.
-        // cy is in range 10..50, so chunk Y=0 (world-Y 0..16) or Y=1 (16..32) is safe.
+        // W121: the ravine Y centre now spreads across the whole
+        // underground (y ~8..57), so sweep chunk-Y 0..=3 (world-Y 0..64)
+        // to be sure we hit the slice that contains the carve.
         let ctx = ctx(seed);
-        let mut chunk_y0 = stone_chunk();
-        let mut chunk_y1 = stone_chunk();
-        carve(&mut chunk_y0, [cx, 0, cz], &ctx);
-        carve(&mut chunk_y1, [cx, 1, cz], &ctx);
-        let total_air = count_air(&chunk_y0) + count_air(&chunk_y1);
+        let mut total_air = 0usize;
+        for chy in 0..=3 {
+            let mut chunk = stone_chunk();
+            carve(&mut chunk, [cx, chy, cz], &ctx);
+            total_air += count_air(&chunk);
+        }
         assert!(
             total_air > 0,
             "expected ravine carving at ({cx},{cz}) seed={seed} but got 0 air"

@@ -20,6 +20,8 @@
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use crate::block::COBBLE_ID;
+use crate::worldgen::climate::SEA_LEVEL;
+use crate::worldgen::strata::WORLD_FLOOR;
 use crate::worldgen::{WorldgenCtx, hash3_for};
 
 // ---------------------------------------------------------------
@@ -28,6 +30,16 @@ use crate::worldgen::{WorldgenCtx, hash3_for};
 
 /// Inverse spawn probability (per chunk column). 200 -> ~1/200.
 const DUNGEON_RATE: u32 = 200;
+
+/// Dungeon floor Y band, SEA_LEVEL-relative (W121). Was a fixed y8..32
+/// pinned below the old sea-12 surface, which buried every dungeon under
+/// the waterline. Now spans from just above the bedrock floor to a safe
+/// margin below sea level, so dungeons appear throughout the underground
+/// the player actually explores without ever piercing the surface.
+const DUNGEON_FLOOR_MIN_Y: i32 = WORLD_FLOOR + 6;
+/// Top of the dungeon floor band: leave headroom under the sea so the
+/// 5-tall room never pokes through a shallow seabed.
+const DUNGEON_FLOOR_MAX_Y: i32 = SEA_LEVEL - 12;
 
 /// Interior room width (X) and depth (Z) in blocks. MC uses 9x9
 /// inner; we use 5x5 inner (7x7 outer) as a slightly smaller but
@@ -155,9 +167,9 @@ fn try_dungeon_at_column(chunk_x: i32, chunk_z: i32, seed: u32) -> Option<Dungeo
     let ox = chunk_x * cs + ox_local;
     let oz = chunk_z * cs + oz_local;
 
-    // Y: between 8 and 32 for the floor of the outer box.
-    let y_range = (32 - 8 + 1) as u32;
-    let oy = 8 + (hash3_for(chunk_x, 3, chunk_z, seed ^ SALT_Y) % y_range) as i32;
+    // Y: SEA_LEVEL-relative floor band (W121) for the outer box.
+    let y_range = (DUNGEON_FLOOR_MAX_Y - DUNGEON_FLOOR_MIN_Y + 1).max(1) as u32;
+    let oy = DUNGEON_FLOOR_MIN_Y + (hash3_for(chunk_x, 3, chunk_z, seed ^ SALT_Y) % y_range) as i32;
 
     // Number of chests: 1 or 2.
     let chest_h = hash3_for(chunk_x, 4, chunk_z, seed ^ SALT_CHESTS);
@@ -338,10 +350,12 @@ mod tests {
         let seed = 0;
         let (cx, cz) = find_dungeon_column(seed).expect("no dungeon found in search area");
         let d = try_dungeon_at_column(cx, cz, seed).unwrap();
-        // The dungeon origin Y should be in the expected range.
+        // W121: the dungeon origin Y now sits in the SEA_LEVEL-relative
+        // band (WORLD_FLOOR+6 .. SEA_LEVEL-12), not the old absolute
+        // 8..=32.
         assert!(
-            (8..=32).contains(&d.oy),
-            "dungeon Y={} out of expected range 8..=32",
+            (DUNGEON_FLOOR_MIN_Y..=DUNGEON_FLOOR_MAX_Y).contains(&d.oy),
+            "dungeon Y={} out of expected range {DUNGEON_FLOOR_MIN_Y}..={DUNGEON_FLOOR_MAX_Y}",
             d.oy
         );
     }

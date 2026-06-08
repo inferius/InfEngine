@@ -19,7 +19,7 @@ use super::biome::Biome;
 use super::biome_table::biome_from_climate;
 use super::climate::{SEA_LEVEL, climate_at, near_surface_block, surface_block};
 use super::ore::pick_stone_or_ore;
-use super::{WorldgenCtx, caves, decor, dungeons, ravines};
+use super::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
 
 /// Integer-grid hash -> `[0, 1)`. Stable per `(ix, iz, seed)`.
 fn hash2(ix: i32, iz: i32, seed: u32) -> f32 {
@@ -152,11 +152,15 @@ pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     }
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
+        let wx = origin.x + x as f32;
+        let wz = origin.z + z as f32;
         let wy = origin.y as i32 + y as i32;
-        // W73: solid world floor - the player can never fall into the
-        // unloaded void below y=0.
-        if wy <= 0 {
-            return BlockId(1); // stone floor
+        // W121: jagged bedrock floor (block 45) instead of the old flat
+        // stone slab. Row 0 is always solid so a low-continentalness area
+        // is a seabed, never a void the player falls through (W73); the
+        // rows above jitter so the floor reads like MC's noisy bedrock.
+        if let Some(b) = strata::bedrock_floor_block(wx as i32, wy, wz as i32, seed) {
+            return b;
         }
         let (h, biome) = col[x][z];
         if wy > h {
@@ -170,8 +174,10 @@ pub(crate) fn gen_natural(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         } else if wy >= h - 3 {
             near_surface_block(biome)
         } else {
-            let wx = origin.x + x as f32;
-            let wz = origin.z + z as f32;
+            // W121: ore + deepslate strata. `pick_stone_or_ore` ->
+            // `strata::pick_block` lays the MC-1.18 ore roster by depth
+            // band and swaps stone/ores to their deepslate variants in
+            // the deep stratum.
             pick_stone_or_ore(wx, wy, wz, biome, seed)
         }
     });
@@ -220,6 +226,161 @@ mod tests {
         let hmean = hsum as f32 / total as f32;
         println!("W110 WATER COVERAGE: {water}/{total} = {pct:.1}% below sea (deep>4: {dpct:.1}%)");
         println!("W112 HEIGHT RANGE: min={hmin} max={hmax} mean={hmean:.1} (sea={SEA_LEVEL})");
+    }
+
+    /// W121 verify: sample a real generated chunk volume and print ore
+    /// counts per Y band + assert (a) bedrock at the world floor, (b)
+    /// deepslate only below the strata threshold (never plain stone-form
+    /// ore there), (c) the full ore roster actually generates. Run with
+    /// `cargo test dump_underground -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_underground() {
+        use super::strata::{self, WORLD_FLOOR};
+        use std::collections::BTreeMap;
+
+        let ctx = WorldgenCtx {
+            base_seed: 0,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Natural,
+        };
+        // Names for the ids we care about (stone-form + deepslate-form).
+        let name = |id: u16| -> &'static str {
+            match id {
+                1 => "stone",
+                96 => "deepslate",
+                45 => "bedrock",
+                13 => "coal",
+                14 => "iron",
+                117 => "gold",
+                118 => "diamond",
+                119 => "redstone",
+                120 => "lapis",
+                121 => "emerald",
+                122 => "copper",
+                123 => "ds_coal",
+                124 => "ds_iron",
+                125 => "ds_diamond",
+                126 => "ds_gold",
+                246 => "ds_redstone",
+                247 => "ds_lapis",
+                248 => "ds_emerald",
+                249 => "ds_copper",
+                _ => "other",
+            }
+        };
+        let is_stone_ore = |id: u16| matches!(id, 13 | 14 | 117..=122);
+        let is_deepslate_ore = |id: u16| matches!(id, 123..=126 | 246..=249);
+
+        // Per-Y-band tallies: band = world-Y / 8.
+        let mut band_counts: BTreeMap<i32, BTreeMap<u16, u64>> = BTreeMap::new();
+        let mut total: BTreeMap<u16, u64> = BTreeMap::new();
+        let mut bedrock_y0 = 0u64;
+        let mut bedrock_y0_total = 0u64;
+        let mut stone_ore_in_deep = 0u64;
+        let mut deepslate_above_thresh = 0u64;
+
+        // Sweep a grid of chunk columns (spread out so the rare ores show
+        // up) across the full underground chunk-Y stack (0..4 -> y0..64).
+        let cxs: [i32; 6] = [10, 40, -25, 70, -55, 120];
+        let czs: [i32; 6] = [-15, 33, 60, -48, 90, 5];
+        for &cx in &cxs {
+            for &cz in &czs {
+                for cy in 0..4 {
+                    let chunk = gen_natural([cx, cy, cz], &ctx);
+                    for lz in 0..CHUNK_SIZE {
+                        for ly in 0..CHUNK_SIZE {
+                            for lx in 0..CHUNK_SIZE {
+                                let id = chunk.get(lx, ly, lz).0;
+                                let wy = cy * CHUNK_SIZE as i32 + ly as i32;
+                                // Bedrock-floor accounting.
+                                if wy == WORLD_FLOOR {
+                                    bedrock_y0_total += 1;
+                                    if id == 45 {
+                                        bedrock_y0 += 1;
+                                    }
+                                }
+                                // Strata consistency: a stone-form ore must
+                                // never appear in the deepslate zone, and
+                                // deepslate bulk/ore must never appear above
+                                // the threshold.
+                                if strata::is_deepslate(wy) && is_stone_ore(id) {
+                                    stone_ore_in_deep += 1;
+                                }
+                                if !strata::is_deepslate(wy)
+                                    && (id == 96 || is_deepslate_ore(id))
+                                    && wy > WORLD_FLOOR
+                                {
+                                    deepslate_above_thresh += 1;
+                                }
+                                if is_stone_ore(id) || is_deepslate_ore(id) {
+                                    let band = wy / 8;
+                                    *band_counts
+                                        .entry(band)
+                                        .or_default()
+                                        .entry(id)
+                                        .or_default() += 1;
+                                    *total.entry(id).or_default() += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("W121 UNDERGROUND DUMP (Natural, seed=0, {} chunk-columns):", cxs.len() * czs.len());
+        println!("  deepslate threshold depth-fraction = {} (stone->deepslate)", strata::DEEPSLATE_DEPTH);
+        println!("  bedrock at y={WORLD_FLOOR}: {bedrock_y0}/{bedrock_y0_total} voxels");
+        println!("  ORE COUNTS PER Y-BAND (band = floor(y/8)):");
+        for (band, counts) in &band_counts {
+            let y0 = band * 8;
+            let deep = strata::is_deepslate(y0);
+            let tag = if deep { "DEEP " } else { "norm " };
+            let mut parts: Vec<String> = counts
+                .iter()
+                .map(|(id, n)| format!("{}={n}", name(*id)))
+                .collect();
+            parts.sort();
+            println!("    y{y0:>3}..{:<3} [{tag}] {}", y0 + 7, parts.join(" "));
+        }
+        println!("  TOTALS:");
+        let mut tparts: Vec<(u16, u64)> = total.iter().map(|(k, v)| (*k, *v)).collect();
+        tparts.sort();
+        for (id, n) in &tparts {
+            println!("    {:>12} = {n}", name(*id));
+        }
+        println!(
+            "  CONSISTENCY: stone_ore_in_deep_zone={stone_ore_in_deep} (must be 0), \
+             deepslate_above_threshold={deepslate_above_thresh} (must be 0)"
+        );
+
+        // Hard assertions (the dump is also a guard).
+        assert_eq!(bedrock_y0, bedrock_y0_total, "y={WORLD_FLOOR} must be all bedrock");
+        assert_eq!(stone_ore_in_deep, 0, "stone-form ore found in deepslate zone");
+        assert_eq!(deepslate_above_thresh, 0, "deepslate found above the threshold");
+        // Every ore TYPE must generate at least once across the sample,
+        // counting stone-form + deepslate-form together (e.g. diamond is
+        // almost always deepslate-form in MC, so the stone variant alone
+        // can legitimately be absent in a finite sample).
+        let pair_total = |stone: u16, deep: u16| {
+            total.get(&stone).copied().unwrap_or(0) + total.get(&deep).copied().unwrap_or(0)
+        };
+        for (label, stone, deep) in [
+            ("coal", 13u16, 123u16),
+            ("iron", 14, 124),
+            ("gold", 117, 126),
+            ("diamond", 118, 125),
+            ("redstone", 119, 246),
+            ("lapis", 120, 247),
+            ("copper", 122, 249),
+        ] {
+            assert!(
+                pair_total(stone, deep) > 0,
+                "ore '{label}' (stone {stone} / deepslate {deep}) never generated"
+            );
+        }
     }
 
     #[test]

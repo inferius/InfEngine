@@ -1,12 +1,18 @@
-//! Deterministic 3D ore hashing + per-biome ore picker. The
-//! classic generator falls through to `pick_stone_or_ore` for
-//! every below-cap stone voxel; under Mountain biome the
-//! probabilities lean richer + iron's ceiling rises so peaks
-//! become genuinely worth digging into.
+//! Deterministic 3D ore hashing + per-biome ore picker. Every
+//! sub-surface stone voxel runs through `pick_stone_or_ore`, which
+//! (W121) delegates to the sea-relative `strata` depth-band model:
+//! gold / diamond / redstone / lapis / emerald / copper / iron / coal
+//! placed with MC-1.18-style triangular depth distributions, and the
+//! deepslate-ore variants swapped in below the deepslate threshold.
+//!
+//! This module now owns only the shared 3D hash (`ore_hash`); the band
+//! table + depth math live in `strata.rs` so they can be reused by the
+//! bedrock-floor / deepslate fill in `natural.rs` + `climate.rs`.
 
 use infengine_voxel::BlockId;
 
 use super::biome::Biome;
+use super::strata;
 
 /// Cheap, deterministic 3D hash used by the ore generator. Mixes
 /// integer voxel coordinates + a per-ore-kind salt into a [0, 1]
@@ -34,29 +40,17 @@ pub(crate) fn ore_hash(x: i32, y: i32, z: i32, salt: u32, seed: u32) -> f32 {
     (a * 0.7 + b * 0.3).clamp(0.0, 1.0)
 }
 
-/// Roll for ore veins under the surface cap. Two deterministic 3D
-/// hashes seed coal + iron pockets; each is a noise value that
-/// exceeds a threshold rarely. Coal is more common + can live
-/// high; iron is rarer + only deep. Mountain biome boosts both
-/// probabilities (lower thresholds) and raises the iron Y ceiling
-/// so peaks become genuinely worth digging into.
+/// Resolve the bulk/ore block for one sub-surface stone voxel.
+///
+/// W121: replaces the old 2-ore (coal + iron) hardcode with the full
+/// MC-1.18 roster placed by depth band. The actual table + triangular
+/// depth distribution live in `strata::pick_block`; this wrapper keeps
+/// the long-standing `(f32, i32, f32, Biome, seed)` signature that the
+/// three column-fill paths (`gen_classic`, `gen_realistic`,
+/// `gen_natural`) call, converting the float world coords to the integer
+/// voxel coords the band model hashes on.
 pub(crate) fn pick_stone_or_ore(wx: f32, wy: i32, wz: f32, biome: Biome, seed: u32) -> BlockId {
-    let ox = wx as i32;
-    let oy = wy;
-    let oz = wz as i32;
-    let h_coal = ore_hash(ox, oy, oz, 0x9E37_79B9, seed);
-    let h_iron = ore_hash(ox, oy, oz, 0x85EB_CA6B, seed);
-    let (iron_thr, iron_max_y, coal_thr) = match biome {
-        Biome::Mountain | Biome::SnowyMountain => (0.965, 24, 0.90),
-        _ => (0.985, 14, 0.94),
-    };
-    if h_iron > iron_thr && oy < iron_max_y {
-        BlockId(14)
-    } else if h_coal > coal_thr {
-        BlockId(13)
-    } else {
-        BlockId(1)
-    }
+    strata::pick_block(wx as i32, wy, wz as i32, biome, seed)
 }
 
 #[cfg(test)]
@@ -93,9 +87,17 @@ mod tests {
 
     #[test]
     fn pick_stone_or_ore_returns_block() {
-        for y in 0..20 {
+        // W121: the picker now returns the full ore roster + bulk
+        // stone/deepslate. Just assert every result is a real block id
+        // (the per-band depth + deepslate behaviour is tested in
+        // `strata`). y span covers shallow stone -> deep deepslate.
+        let known = [
+            1u16, 96, 13, 14, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 246, 247, 248,
+            249,
+        ];
+        for y in 0..63 {
             let b = pick_stone_or_ore(0.0, y, 0.0, Biome::Plains, 0);
-            assert!(matches!(b.0, 1 | 13 | 14));
+            assert!(known.contains(&b.0), "unexpected ore-pick id {}", b.0);
         }
     }
 }

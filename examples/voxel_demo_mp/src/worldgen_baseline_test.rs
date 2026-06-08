@@ -94,14 +94,20 @@ fn all_profiles_seed_0_byte_identical_after_split() {
 // Snapshot values captured against `worldgen.rs` HEAD (commit
 // 8a79fc2, "C.4f RMB-open furnace UI") prior to the Phase E split
 // via `cargo test dump_snapshots -- --ignored --nocapture`.
+// W121: Classic + Amplified re-snapshotted after the modern-MC
+// underground (ore depth bands + deepslate stratum + bedrock floor).
+// Both profiles share `pick_stone_or_ore`, and their terrain sits below
+// SEA_LEVEL, so the new strata change their deep-block content. The
+// height curves are untouched. Flat + Islands (which never call the ore
+// picker) are byte-identical and were left as-is.
 const CLASSIC_SEED_0: [u64; 7] = [
-    0x17a329954876e943,
-    0x91d82ba3e14b165e,
-    0x4b9c0cc38123e1db,
-    0x5189420585774da1,
-    0x64c0ccb8ca8d2abc,
-    0xb68bcb4088dc1aa5,
-    0x461492b8fbe40a5b,
+    0x6aaaf06ea75d741d,
+    0x64ae3483fa398118,
+    0xae07ac57270e8e31,
+    0x76719d392882f538,
+    0x746fb621be6b53fa,
+    0xe5c77cb70ded7cb8,
+    0xcd38fb29d0ca8910,
 ];
 const FLAT_SEED_0: [u64; 7] = [
     0xcecbf0fbda0ee525,
@@ -122,13 +128,13 @@ const ISLANDS_SEED_0: [u64; 7] = [
     0x2dd75833bf438d8e,
 ];
 const AMPLIFIED_SEED_0: [u64; 7] = [
-    0x5809f0984e3685e2,
-    0x94b0e032fec247db,
-    0x5e45d458088a0745,
-    0x641ef80644e17981,
-    0x86e358c4b8b4cf68,
-    0x1197d549b3b0d6c0,
-    0xd052ddcd01ad8ff1,
+    0xcd6d9069250682df,
+    0x0094c725e278651d,
+    0xb1e6b3be018b24fb,
+    0x3f81996ef5d380f3,
+    0xb2bea48d17d93a12,
+    0x6a098145a6fead5e,
+    0x10175c2790e27d98,
 ];
 
 /// One-shot capture: run with `cargo test dump_snapshots -- --ignored

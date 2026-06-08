@@ -53,6 +53,7 @@ pub(crate) mod nether;
 mod nether_baseline_test;
 pub(crate) mod ore;
 pub(crate) mod ravines;
+pub(crate) mod strata;
 pub(crate) mod trees;
 
 // Public re-exports for the surface the rest of the bin + lib

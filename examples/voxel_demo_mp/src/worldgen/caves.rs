@@ -6,10 +6,13 @@
 //! air. The multiplicative shape produces elongated, tunnel-like
 //! voids rather than blob caves.
 //!
-//! Density targets:
-//! - y >= 10: threshold 0.82  -> ~5% of underground voxels carved.
-//! - y <  10: threshold 0.70  -> richer deep cave layer, lava-lake zone.
-//! - y <= 0:  never carved    -> keeps the bedrock-equivalent floor.
+//! Density targets (W121: the deep-zone switch is now SEA_LEVEL-relative
+//! via `strata::depth_fraction`, not a hard `y < 10`, so caves spread
+//! through the WHOLE underground instead of cramming below the old
+//! sea-12 numbers):
+//! - shallow underground: threshold 0.82 -> ~5% of voxels carved.
+//! - deep stratum:        threshold 0.70 -> richer caves, lava-lake zone.
+//! - bedrock floor:       never carved   -> keeps the world floor solid.
 //!
 //! Two callers:
 //! - `gen_realistic` in `climate.rs` - primary user.
@@ -22,6 +25,7 @@
 use infengine_voxel::{BlockId, Chunk, ChunkCoord, World};
 
 use crate::worldgen::WorldgenCtx;
+use crate::worldgen::strata::{self, WORLD_FLOOR};
 
 // ---------------------------------------------------------------
 // Noise primitives
@@ -106,20 +110,24 @@ const CAVE_SCALE_B: f32 = 6.0;
 /// decorrelated even though both use `hash3_cave`.
 const OCTAVE_B_SALT: u32 = 0xA5B4_C3D2;
 
-/// Carve threshold for y >= 10 (normal underground).
+/// Carve threshold for the shallow underground.
 /// ~5% of voxels satisfy `cave_value > THRESHOLD_NORMAL`.
 const THRESHOLD_NORMAL: f32 = 0.82;
-/// Carve threshold for y < 10 (deep layer).
-/// Wider caves / more frequent carving to evoke lava-lake zone.
+/// Carve threshold for the deep stratum.
+/// Wider caves / more frequent carving to evoke the lava-lake zone.
 const THRESHOLD_DEEP: f32 = 0.70;
 
 /// Returns `true` when the voxel at (wx, wy, wz) falls inside a
 /// cave void. The multiplicative combination of two octaves creates
 /// elongated tunnels that branch, matching MC's cave carver feel.
 ///
-/// `wy <= 0` is always solid (bedrock floor proxy).
+/// W121: the deep/shallow split is keyed to `strata::is_deepslate` (a
+/// SEA_LEVEL-relative depth fraction) instead of the old absolute
+/// `y < 10`, so the richer deep caves track the deepslate stratum and
+/// the normal caves fill the whole band up to the surface. The bedrock
+/// floor (`wy < WORLD_FLOOR + BEDROCK_ROWS`-ish) stays solid.
 pub(crate) fn is_cave(wx: f32, wy: f32, wz: f32, seed: u32) -> bool {
-    if wy <= 0.0 {
+    if wy <= WORLD_FLOOR as f32 {
         return false;
     }
     let a = sample_noise3(wx, wy, wz, CAVE_SCALE_A, seed);
@@ -127,7 +135,7 @@ pub(crate) fn is_cave(wx: f32, wy: f32, wz: f32, seed: u32) -> bool {
     let b = sample_noise3(wx, wy, wz, CAVE_SCALE_B, seed ^ OCTAVE_B_SALT);
     // Multiply -> highest values only where BOTH octaves are high.
     let v = a * b;
-    let threshold = if wy < 10.0 {
+    let threshold = if strata::is_deepslate(wy.floor() as i32) {
         THRESHOLD_DEEP * THRESHOLD_DEEP
     } else {
         THRESHOLD_NORMAL * THRESHOLD_NORMAL
@@ -184,8 +192,9 @@ pub(crate) fn carve(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
                 // know h here, guard by world-Y range: y >= 5 is a
                 // safe lower-bound.
                 if wy < 5 {
-                    // Allow near-bedrock carving for the deep layer.
-                    if wy <= 0 {
+                    // Allow near-bedrock carving for the deep layer, but
+                    // never cut into the bedrock floor (W121).
+                    if wy <= WORLD_FLOOR {
                         continue;
                     }
                 }
@@ -202,14 +211,21 @@ pub(crate) fn carve(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
 
 /// Block ids that the cave carver is allowed to replace with air.
 /// Everything else (grass, sand, water, bedrock, ...) is preserved.
+///
+/// W121: the deepslate stratum (96) + the full ore roster (stone-form
+/// 13/14/117-122 and deepslate-form 123-126/246-249) are now carveable
+/// so caves don't leave floating ore / un-carved deepslate columns where
+/// they cut through the deep underground.
 fn is_carveable(block: BlockId) -> bool {
     matches!(
         block.0,
         1  // stone
         | 8  // cobblestone
-        | 13 // coal ore
-        | 14 // iron ore
         | 26 // sandstone
+        | 96 // deepslate
+        | 13 | 14 | 117..=122 // stone-form ores (coal, iron, gold..copper)
+        | 123..=126 // deepslate ores (coal, iron, diamond, gold)
+        | 246..=249 // deepslate ores (redstone, lapis, emerald, copper)
     )
 }
 
