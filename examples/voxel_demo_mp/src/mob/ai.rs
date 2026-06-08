@@ -216,11 +216,22 @@ fn step_one(
         } else {
             m.pos[2] = try_z;
         }
-        // Both axes blocked: bail out by forcing a retarget
-        // next tick. Stops the sheep from grinding into a
-        // corner forever.
+        // Both axes blocked: stuck against terrain (very common in
+        // water / pits). Retarget to a fresh escape heading - but on a
+        // ~1 s cooldown, NOT every tick. The old code set
+        // `retarget_at = day_time`, which retargeted EVERY frame: the
+        // heading snapped to a new random direction each frame, so a
+        // wedged mob spun rapidly in place and never got out (the
+        // "cow spins extremely fast underwater, can't escape" bug). Only
+        // pull the retarget in when it's currently further out than the
+        // cooldown, so it fires a few times - not 20x - a second.
         if ax_block && az_block {
-            m.retarget_at = day_time;
+            const STUCK_RETARGET_S: f32 = 1.0;
+            let ahead = (m.retarget_at - day_time).rem_euclid(DAY_LENGTH_S);
+            if ahead > STUCK_RETARGET_S {
+                m.retarget_at =
+                    (day_time + STUCK_RETARGET_S).rem_euclid(DAY_LENGTH_S);
+            }
         }
         // `Quat::from_rotation_y(yaw)` rotates +X to
         // `(cos yaw, 0, -sin yaw)` in our right-handed
