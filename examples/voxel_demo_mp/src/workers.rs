@@ -114,11 +114,38 @@ impl WorkerPool {
                                                         ChunkSideEffect::Torch(wv),
                                                     );
                                                 } else if let Some(lq) = liquid_for(b) {
+                                                    // W115: only schedule a tick when the cell
+                                                    // can actually move - air DIRECTLY BELOW means
+                                                    // it can fall / feed a flow (cliff edge, cave).
+                                                    // A worldgen sea cell rests on seabed or more
+                                                    // water, so it's already at equilibrium:
+                                                    // rendering it is enough. Scheduling every ocean
+                                                    // cell made the whole sea re-settle on load -
+                                                    // the never-quiet edge oscillation that warped
+                                                    // the surface into "walls" AND spiked the
+                                                    // sky-light relight (the near-water stutter).
+                                                    // tick_offset 0 = render only, don't schedule.
+                                                    // ly==0's below cell is in the chunk underneath
+                                                    // (unknown here) -> treat as stable; a real
+                                                    // falling column still ticks via its higher
+                                                    // cells. Placed/edited liquid is unaffected (it
+                                                    // schedules through set_block, not here).
+                                                    let below_air = ly > 0
+                                                        && chunk
+                                                            .get(
+                                                                lx as usize,
+                                                                (ly - 1) as usize,
+                                                                lz as usize,
+                                                            )
+                                                            .is_air();
                                                     side_effects.push(
                                                         ChunkSideEffect::Liquid {
                                                             pos: wv,
-                                                            tick_offset: lq.tick_period.max(1)
-                                                                as u64,
+                                                            tick_offset: if below_air {
+                                                                lq.tick_period.max(1) as u64
+                                                            } else {
+                                                                0
+                                                            },
                                                         },
                                                     );
                                                 }

@@ -239,10 +239,20 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             vx.torch_positions.insert(*wv);
                         }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
-                            vx.liquid_schedule.schedule(
-                                *pos,
-                                vx.liquid_clock + tick_offset,
-                            );
+                            // W115: tick_offset 0 = a static worldgen liquid
+                            // cell at equilibrium (sea resting on seabed) -
+                            // render it, but DON'T schedule a tick, so the
+                            // ocean never re-settles on stream-in (no surface
+                            // "walls" from edge oscillation, no sky-relight
+                            // spike). Non-zero = the cell can move (air below)
+                            // -> schedule it. Placed/edited liquid still ticks
+                            // through set_block, unaffected.
+                            if *tick_offset > 0 {
+                                vx.liquid_schedule.schedule(
+                                    *pos,
+                                    vx.liquid_clock + tick_offset,
+                                );
+                            }
                             if vx.liquid_positions.insert(*pos) {
                                 vx.liquid_mesh_dirty = true;
                             }
