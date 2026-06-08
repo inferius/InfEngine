@@ -230,8 +230,45 @@ impl Voxel {
                 hsh ^= v;
                 hsh = hsh.wrapping_mul(0x0000_0100_0000_01b3);
             }
-            let e = cur_sig.entry(chunk_of(p)).or_insert(0u64);
-            *e = e.wrapping_add(hsh);
+            // W113: fold this cell into its own chunk's signature AND into any
+            // FACE-adjacent chunk whose edge-face culling depends on it (a cell
+            // on a chunk boundary). Without the neighbour fold, a chunk meshed
+            // while its neighbour was still streaming keeps the seam face it
+            // culled against then-absent water: its OWN signature never changes
+            // when the neighbour's edge water later loads, so it never
+            // re-meshes - leaving a "wall" inside otherwise-continuous water at
+            // the chunk seam (the user's report). Folding the boundary cell
+            // into the neighbour's signature flips it the moment the water
+            // arrives, so that chunk re-meshes and re-culls the shared face -
+            // MC marks the adjacent section dirty on a boundary change the same
+            // way.
+            let cc = chunk_of(p);
+            let lx = p[0].rem_euclid(cs);
+            let ly = p[1].rem_euclid(cs);
+            let lz = p[2].rem_euclid(cs);
+            let mut fold: [Option<ChunkCoord>; 7] = [Some(cc), None, None, None, None, None, None];
+            if lx == 0 {
+                fold[1] = Some([cc[0] - 1, cc[1], cc[2]]);
+            }
+            if lx == cs - 1 {
+                fold[2] = Some([cc[0] + 1, cc[1], cc[2]]);
+            }
+            if ly == 0 {
+                fold[3] = Some([cc[0], cc[1] - 1, cc[2]]);
+            }
+            if ly == cs - 1 {
+                fold[4] = Some([cc[0], cc[1] + 1, cc[2]]);
+            }
+            if lz == 0 {
+                fold[5] = Some([cc[0], cc[1], cc[2] - 1]);
+            }
+            if lz == cs - 1 {
+                fold[6] = Some([cc[0], cc[1], cc[2] + 1]);
+            }
+            for c in fold.into_iter().flatten() {
+                let e = cur_sig.entry(c).or_insert(0u64);
+                *e = e.wrapping_add(hsh);
+            }
         }
         // Chunks to (re)mesh: new / changed signature, or liquid now gone.
         let mut changed: Vec<ChunkCoord> = Vec::new();
