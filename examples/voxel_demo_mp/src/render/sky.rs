@@ -30,6 +30,7 @@ pub(crate) fn apply_tint_and_fog(
     weather: u8,
     lightning_flash: f32,
     view_distance_chunks: u8,
+    underwater: bool,
 ) -> [f32; 3] {
     let mut sky = base_sky;
     // Rain: dark stormy grey.
@@ -56,6 +57,20 @@ pub(crate) fn apply_tint_and_fog(
         sky[2] = sky[2] * (1.0 - t) + target[2] * t;
     }
     renderer.set_sun_dir(sun_dir);
+    // W113: underwater post-process. When the camera (eye) voxel is water,
+    // MC washes the whole view toward a deep blue-green and pulls the fog in
+    // tight, so the world reads as "seen through water" rather than clear
+    // air. Override the clear colour + fog band here (the sun dir stays so
+    // lit surfaces still catch light). The fog starts right at the camera so
+    // even near geometry takes the tint, reaching full murk by ~1.4 chunks -
+    // roughly MC's underwater visibility. A dedicated fullscreen blue overlay
+    // (for the immediate foreground) can layer on later if wanted.
+    if underwater {
+        let murk = [0.06_f32, 0.18, 0.36];
+        renderer.set_clear_color(murk[0] as f64, murk[1] as f64, murk[2] as f64, 1.0);
+        renderer.set_fog(0.5, 22.0, murk);
+        return sky;
+    }
     renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
     // W30.5: distance fog. Start fading 2 chunks before the view edge,
     // reach full sky colour 0.5 chunks before the load boundary. Hides

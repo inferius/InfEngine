@@ -1245,6 +1245,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         }
         // W47.15: sky / weather / fog tint moved into render::sky.
         let (sun_dir, base_sky) = day_night(vx.day_time);
+        // W113: underwater post-process - true when the camera (eye) voxel is
+        // water, so the sky/fog setup can wash the view blue + pull the fog in
+        // tight (MC's submerged look). player_pos.y is the eye height.
+        let eye = vx.player_pos;
+        let underwater = vx
+            .world
+            .get([eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32])
+            .0
+            == crate::block::WATER_ID;
         let _sky = crate::render::sky::apply_tint_and_fog(
             renderer,
             sun_dir,
@@ -1252,6 +1261,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.weather,
             vx.lightning_flash,
             vx.settings.view_distance,
+            underwater,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());
         let session_secs = vx.session_started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
