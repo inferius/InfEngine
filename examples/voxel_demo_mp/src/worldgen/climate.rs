@@ -33,11 +33,18 @@ pub(crate) struct Climate {
     pub elevation: f32,
 }
 
-/// Sea level used by the Realistic generator. Constant across
-/// biomes so the shoreline is predictable; pinned a notch above
-/// the Desert base height so deserts sit above water and any
-/// "Beach" tile reads as a thin sandy collar.
-pub(crate) const SEA_LEVEL: i32 = 12;
+/// Sea level. Matches modern Minecraft's Y=63 so the world has a
+/// proper vertical budget: ~63 blocks of underground (caves / ores)
+/// below the waterline and ample room for terrain + mountains above.
+/// Every vertical feature depth is expressed RELATIVE to this constant
+/// (see `vscale` below) so raising/lowering the whole world is a single
+/// edit here - no scattered magic Y numbers to chase.
+///
+/// W112: was 12 (a cramped leftover that pinned all terrain into the
+/// bottom ~1/8 of the 256-tall world). The Natural + Realistic profiles
+/// derive their height curve from this value, so bumping it lifts the
+/// entire terrain band up to a Minecraft-faithful sea line.
+pub(crate) const SEA_LEVEL: i32 = 63;
 
 /// Channel phase offsets. Each one xor-mixes a fixed magic number
 /// into the seed so distinct hosts get distinct temperature /
@@ -141,7 +148,11 @@ pub(crate) fn surface_block(biome: Biome, h: i32) -> BlockId {
         // grass too for now; snow + a proper peak cap can return as full
         // blocks later.
         _ => {
-            if h >= 46 {
+            // W112: rock cap only on genuine high peaks, expressed
+            // relative to SEA_LEVEL so it tracks the world's vertical
+            // scale instead of a fixed Y. ~40 blocks above the waterline
+            // is the bare-stone line; everything below reads green.
+            if h >= SEA_LEVEL + 40 {
                 BlockId(1) // bare rock peak
             } else {
                 BlockId(3) // grass
@@ -325,11 +336,12 @@ let ctx = crate::worldgen::WorldgenCtx {
         let _ = gen_realistic([0, 0, 0], &ctx);
     }
 
-    // Sanity: SEA_LEVEL sits below Mountain base + above the
-    // typical Desert base. Pre-validates the constant before any
-    // shoreline test depends on it.
+    // Sanity: SEA_LEVEL sits well inside the world's vertical budget
+    // (0..CHUNK_SIZE*VERTICAL_CHUNKS), leaving room for underground
+    // below and terrain/mountains above. The wide upper bound keeps
+    // this valid if the world is later grown taller.
     #[test]
     fn sea_level_in_sane_range() {
-        const { assert!(SEA_LEVEL > 8 && SEA_LEVEL < 30) };
+        const { assert!(SEA_LEVEL > 8 && SEA_LEVEL < 200) };
     }
 }

@@ -84,7 +84,12 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
     // beach stay near sea level but >= 0 so they're walkable, not
     // permanent void / ocean.
     let (bias, amp, ridged) = match biome {
-        Biome::Mountain | Biome::SnowyMountain => (12.0, 18.0, true),
+        // W112: mountain amp trimmed (18->14, ridge 8->6 below) so peaks
+        // top out ~sea+44 (h~107). That keeps the tallest terrain inside
+        // the ±3-chunk vertical streaming window from a sea-level valley
+        // (no clipped peaks) now that the whole band sits at SEA_LEVEL=63.
+        // Taller mountains return once the vertical load range grows.
+        Biome::Mountain | Biome::SnowyMountain => (12.0, 14.0, true),
         Biome::Jungle => (5.0, 8.0, false),
         Biome::Forest | Biome::Taiga => (4.0, 6.0, false),
         Biome::Desert => (2.0, 4.0, false),
@@ -109,7 +114,7 @@ pub(crate) fn natural_height(wx: f32, wz: f32, seed: u32, biome: Biome) -> i32 {
     if ridged {
         // `1 - |hills|` folds the noise into ridge lines for peaks -
         // land only, so no ridged spikes rise out of the abyssal plain.
-        elev += (1.0 - hills.abs()) * 8.0 * land;
+        elev += (1.0 - hills.abs()) * 6.0 * land;
     }
     let h = SEA_LEVEL as f32 + elev;
     // Guarantee dry, walkable ground around the origin so a fresh spawn
@@ -191,6 +196,9 @@ mod tests {
         let mut water = 0u32;
         let mut total = 0u32;
         let mut deep = 0u32;
+        let mut hmin = i32::MAX;
+        let mut hmax = i32::MIN;
+        let mut hsum = 0i64;
         for wx in (-2000..2000).step_by(11) {
             for wz in (-2000..2000).step_by(11) {
                 let biome = biome_from_climate(climate_at(wx as f32, wz as f32, 0));
@@ -202,11 +210,16 @@ mod tests {
                 if h < SEA_LEVEL - 4 {
                     deep += 1;
                 }
+                hmin = hmin.min(h);
+                hmax = hmax.max(h);
+                hsum += h as i64;
             }
         }
         let pct = 100.0 * water as f32 / total as f32;
         let dpct = 100.0 * deep as f32 / total as f32;
+        let hmean = hsum as f32 / total as f32;
         println!("W110 WATER COVERAGE: {water}/{total} = {pct:.1}% below sea (deep>4: {dpct:.1}%)");
+        println!("W112 HEIGHT RANGE: min={hmin} max={hmax} mean={hmean:.1} (sea={SEA_LEVEL})");
     }
 
     #[test]
