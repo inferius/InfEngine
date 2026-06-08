@@ -52,6 +52,22 @@ impl Voxel {
         })
     }
 
+    /// True if the player capsule for eye-height `pos` overlaps a solid
+    /// (non-`F_AABB_PASS`) block - i.e. the player is embedded in terrain
+    /// rather than standing in air / passable plants. Used on world load to
+    /// detect a saved position that a worldgen change (W112 raised the sea
+    /// level 12 -> 63, lifting the terrain band) or a later edit has buried.
+    pub(crate) fn capsule_embedded(&self, pos: Vec3) -> bool {
+        let bx = pos.x.floor() as i32;
+        let bz = pos.z.floor() as i32;
+        let feet_y = (pos.y - PLAYER_HEIGHT).floor() as i32;
+        let head_y = pos.y.floor() as i32;
+        (feet_y..=head_y).any(|y| {
+            let b = self.world.get([bx, y, bz]);
+            !b.is_air() && !crate::block::block_is_aabb_passable(b)
+        })
+    }
+
     /// Resolve a safe player spawn for the current world. Uses
     /// `spawn_pos` when configured, otherwise scans an outward
     /// spiral around the origin for a column whose top voxel is

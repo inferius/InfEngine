@@ -955,6 +955,17 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
                         vx.load_server_state();
                     }
+                    // W112: load_server_state may restore a player position
+                    // saved before the world's vertical scale changed (sea
+                    // level 12 -> 63 lifted the terrain), or any spot since
+                    // buried by an edit. If the loaded capsule is embedded in
+                    // solid ground, fall back to the surface spawn resolved
+                    // above instead of leaving the player stuck in the terrain.
+                    if vx.capsule_embedded(vx.player_pos) {
+                        vx.player_pos = spawn;
+                        vx.player_vel = Vec3::ZERO;
+                        vx.fall_start_y = None;
+                    }
                     vx.world_loaded = true;
                     vx.state = AppState::Playing;
                     info!(
