@@ -672,14 +672,23 @@ where
 /// This is the recommended replacement for
 /// `chunk_mesh_with_atlas_light_anim_and_special` in performance-
 /// sensitive paths.
+///
+/// W122: `occluder_at(local_coord)` reports whether the voxel at a
+/// chunk-local coordinate (which may be out of `[0, CHUNK_SIZE)` for
+/// neighbour cells) is a full AO occluder. It drives per-corner
+/// ambient occlusion + smooth-light averaging. Callers that can resolve
+/// neighbour chunks should answer across borders; otherwise return
+/// `false` out of range (no contact shadow at the chunk seam, but no
+/// artefact either).
 #[allow(clippy::too_many_arguments)]
-pub fn chunk_mesh_greedy_with_special<F, O, L, A, S>(
+pub fn chunk_mesh_greedy_with_special<F, O, L, A, S, OC>(
     chunk: &Chunk,
     origin: Vec3,
     uv_rect: F,
     is_opaque: O,
     light_at: L,
     anim_id_at: A,
+    occluder_at: OC,
     mut emit_special: S,
 ) -> Vec<ChunkSubmesh>
 where
@@ -687,6 +696,7 @@ where
     O: Fn(BlockId) -> bool,
     L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
     A: Fn(BlockId, [i8; 3]) -> u32,
+    OC: Fn([i32; 3]) -> bool,
     S: FnMut(BlockId, Vec3, &mut Vec<MeshVertex>, &mut Vec<u32>) -> bool,
 {
     let cs = CHUNK_SIZE;
@@ -729,18 +739,24 @@ where
         };
         let side = if face.normal[fa] > 0 { 1i32 } else { -1i32 };
 
+        // W122: the merge key carries all four corners' quantised
+        // (block, sky, ao) so two cells merge only when their smooth
+        // lighting + AO is identical. Flat fully-lit faces (corners all
+        // equal) still merge into big quads; gradients/contact corners
+        // split to per-cell, exactly where MC wants the detail.
         #[derive(Clone, PartialEq, Eq)]
         struct FaceKey {
             block: u16,
-            bl: u8,
-            sl: u8,
+            corners: [[u8; 3]; 4],
             anim: u32,
             uv0u: u16, uv0v: u16, uv1u: u16, uv1v: u16,
         }
 
         let mut mask: Vec<Option<FaceKey>> = vec![None; cs * cs];
         let mut mask_uv: Vec<[f32; 4]> = vec![[0.0; 4]; cs * cs];
-        let mut mask_light: Vec<[f32; 2]> = vec![[0.0; 2]; cs * cs];
+        // Per-corner (block, sky, ao) in [c00, c01, c10, c11] order
+        // (cu along ua, cv along va).
+        let mut mask_corner: Vec<[[f32; 3]; 4]> = vec![[[0.0; 3]; 4]; cs * cs];
 
         for d in 0..cs {
             for u in 0..cs {
@@ -771,16 +787,73 @@ where
                         mask[u * cs + v] = None;
                         continue;
                     }
-                    let air_coord = [nc[0], nc[1], nc[2]];
-                    let light = light_at(air_coord, face.normal);
                     let anim = anim_id_at(block, face.normal);
                     let uv = uv_rect(block, face.normal);
+                    // W122: per-corner smooth light + AO. `nc` is the
+                    // air-side cell; for each corner sample the 2x2
+                    // air-side neighbourhood around it (the two edge
+                    // neighbours + the diagonal). AO follows the
+                    // standard "3 - occluders, 0 if both sides solid"
+                    // rule; smooth light averages the non-occluder
+                    // cells so light bleeds across the corner.
+                    let corner_val = |cu: i32, cv: i32| -> [f32; 3] {
+                        let su = if cu == 0 { -1 } else { 1 };
+                        let sv = if cv == 0 { -1 } else { 1 };
+                        let mut side_u = nc; side_u[ua] += su;
+                        let mut side_v = nc; side_v[va] += sv;
+                        let mut diag = nc; diag[ua] += su; diag[va] += sv;
+                        let o_n = occluder_at(nc);
+                        let o_su = occluder_at(side_u);
+                        let o_sv = occluder_at(side_v);
+                        let o_d = occluder_at(diag);
+                        let level = if o_su && o_sv {
+                            0u8
+                        } else {
+                            3 - (o_su as u8 + o_sv as u8 + o_d as u8)
+                        };
+                        let ao = match level {
+                            0 => 0.5,
+                            1 => 0.7,
+                            2 => 0.85,
+                            _ => 1.0,
+                        };
+                        let mut bsum = 0.0f32;
+                        let mut ssum = 0.0f32;
+                        let mut cnt = 0u32;
+                        for (cell, occ) in
+                            [(nc, o_n), (side_u, o_su), (side_v, o_sv), (diag, o_d)]
+                        {
+                            if !occ {
+                                let l = light_at(cell, face.normal);
+                                bsum += l[0];
+                                ssum += l[1];
+                                cnt += 1;
+                            }
+                        }
+                        let (bl, sl) = if cnt > 0 {
+                            (bsum / cnt as f32, ssum / cnt as f32)
+                        } else {
+                            let l = light_at(nc, face.normal);
+                            (l[0], l[1])
+                        };
+                        [bl, sl, ao]
+                    };
+                    let c00 = corner_val(0, 0);
+                    let c01 = corner_val(0, 1);
+                    let c10 = corner_val(1, 0);
+                    let c11 = corner_val(1, 1);
+                    let mk = |c: &[f32; 3]| -> [u8; 3] {
+                        [
+                            (c[0].clamp(0.0, 1.0) * 15.0).round() as u8,
+                            (c[1].clamp(0.0, 1.0) * 15.0).round() as u8,
+                            (c[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+                        ]
+                    };
                     mask_uv[u * cs + v] = uv;
-                    mask_light[u * cs + v] = light;
+                    mask_corner[u * cs + v] = [c00, c01, c10, c11];
                     mask[u * cs + v] = Some(FaceKey {
                         block: block.0,
-                        bl: (light[0].clamp(0.0, 1.0) * 15.0).round() as u8,
-                        sl: (light[1].clamp(0.0, 1.0) * 15.0).round() as u8,
+                        corners: [mk(&c00), mk(&c01), mk(&c10), mk(&c11)],
                         anim,
                         uv0u: (uv[0].clamp(0.0, 1.0) * 65535.0) as u16,
                         uv0v: (uv[1].clamp(0.0, 1.0) * 65535.0) as u16,
@@ -835,7 +908,17 @@ where
                     };
                     // W30.3 + W34.2: tile-fract emit with per-face UV table.
                     let base_uv = mask_uv[idx0];
-                    let light = mask_light[idx0];
+                    // W122: map the anchor cell's 4 corner values
+                    // ([c00, c01, c10, c11]) onto the emitted vertex
+                    // order (which mirrors `corners` above). All merged
+                    // cells share this key's corners, so the anchor's
+                    // values are the run's outer-corner values.
+                    let cc = mask_corner[idx0];
+                    let corner_light = if side > 0 {
+                        [cc[0], cc[1], cc[3], cc[2]]
+                    } else {
+                        [cc[2], cc[3], cc[1], cc[0]]
+                    };
                     let [u0t, v0t, u1t, v1t] = base_uv;
                     let tile_uv0 = [u0t, v0t];
                     let tile_size = [u1t - u0t, v1t - v0t];
@@ -878,11 +961,11 @@ where
                     let entry = per_block
                         .entry(block)
                         .or_insert_with(|| (Vec::with_capacity(64), Vec::with_capacity(96)));
-                    emit_element_quad_tiled(
+                    emit_element_quad_tiled_corners(
                         &mut entry.0, &mut entry.1,
                         corners, nf,
                         tile_uv0, tile_size, quad_uv_corners,
-                        light, key.anim,
+                        corner_light, key.anim,
                     );
                 }
             }
@@ -1199,6 +1282,36 @@ pub fn emit_element_quad_tiled(
             MeshVertex::new(*corner, normal)
                 .with_tile_uv(tile_uv0, tile_size, quad_uv_corners[i])
                 .with_light(light[0], light[1])
+                .with_anim_id(anim_id),
+        );
+    }
+    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+}
+
+/// W122: per-corner variant of `emit_element_quad_tiled`. Each of the
+/// four corners carries its own `[block_light, sky_light, ao]` so the
+/// shader interpolates smooth lighting + ambient occlusion across the
+/// face (MC's smooth-lit look). `corner_light[i]` matches `corners[i]`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_element_quad_tiled_corners(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    corners: [[f32; 3]; 4],
+    normal: [f32; 3],
+    tile_uv0: [f32; 2],
+    tile_size: [f32; 2],
+    quad_uv_corners: [[f32; 2]; 4],
+    corner_light: [[f32; 3]; 4],
+    anim_id: u32,
+) {
+    let base = vertices.len() as u32;
+    for (i, corner) in corners.iter().enumerate() {
+        let cl = corner_light[i];
+        vertices.push(
+            MeshVertex::new(*corner, normal)
+                .with_tile_uv(tile_uv0, tile_size, quad_uv_corners[i])
+                .with_light(cl[0], cl[1])
+                .with_ao(cl[2])
                 .with_anim_id(anim_id),
         );
     }

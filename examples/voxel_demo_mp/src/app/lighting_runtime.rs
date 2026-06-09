@@ -193,6 +193,20 @@ impl Voxel {
                 },
             )
         };
+        // W122: AO occluder query (matches the worker path so sync- and
+        // worker-built chunks are pixel-identical). In-range cells read
+        // the local chunk; out-of-range neighbours return `false`.
+        let occluder_at = |local: [i32; 3]| -> bool {
+            if (0..CHUNK_SIZE as i32).contains(&local[0])
+                && (0..CHUNK_SIZE as i32).contains(&local[1])
+                && (0..CHUNK_SIZE as i32).contains(&local[2])
+            {
+                let b = chunk.get(local[0] as usize, local[1] as usize, local[2] as usize);
+                !b.is_air() && crate::block::block_fully_occludes(b)
+            } else {
+                false
+            }
+        };
         // W34.2: switch to greedy mesher with per-face UV tables.
         // The per-face quad_uv derivation was completed in W34.2 -
         // each of the 6 face directions now has an explicit
@@ -206,6 +220,7 @@ impl Voxel {
             crate::block::block_fully_occludes,
             |air_local, _normal| light_lookup(air_local),
             anim_lookup,
+            occluder_at,
             emit_special,
         )
     }

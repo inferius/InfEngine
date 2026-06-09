@@ -139,7 +139,8 @@ struct VertexOutput {
     // is per-vertex - at integer voxel coords it always returned 0 so
     // every vertex got the same UV and the texture stretched.
     @location(4) uv: vec2<f32>,
-    @location(5) light: vec2<f32>,
+    // .xy = (block, sky) light; .z = W122 ambient-occlusion (1 = none).
+    @location(5) light: vec3<f32>,
     @location(7) tile_uv0_out: vec2<f32>,
     @location(8) tile_size_out: vec2<f32>,
     @location(9) quad_uv_out: vec2<f32>,
@@ -162,8 +163,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         f32(in.normal_packed.y) / 127.0,
         f32(in.normal_packed.z) / 127.0,
     );
-    // Unorm8x4 already in [0, 1]; .xy = (block, sky).
-    let light = in.light_packed.xy;
+    // Unorm8x4 already in [0, 1]; .xy = (block, sky), .z = AO (W122).
+    let light = in.light_packed.xyz;
 
     // W30 fix: only DECODE the packed tile/quad attrs here; fract() is
     // applied in the fragment shader where it sees the interpolated
@@ -447,7 +448,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let block_light_norm = clamp(in.light.x, 0.0, 1.0);
     let sky_light_norm = clamp(in.light.y, 0.0, 1.0);
     let effective_light = max(block_light_norm, sky_light_norm * day_factor);
-    let light_mult = 0.05 + 0.95 * effective_light;
+    // W122: vertex ambient occlusion. `in.light.z` interpolates per
+    // pixel across the face (1 = no occlusion). Fold it into the
+    // light multiplier so concave corners darken the way MC's smooth
+    // lighting does. The 0.05 floor stays AO-independent so occluded
+    // corners never go fully black.
+    let ao = clamp(in.light.z, 0.0, 1.0);
+    let light_mult = 0.05 + 0.95 * effective_light * ao;
     var lit_color = (direct + ambient) * light_mult;
 
     // W46.19: emissive boost. material.z = strength packed by

@@ -415,6 +415,23 @@ pub(crate) fn mesh_chunk_in_worker(
         )
     };
 
+    // W122: AO occluder query. In-range cells read the chunk directly;
+    // out-of-range neighbour cells return `false` (no contact shadow at
+    // the chunk seam yet - a full cross-chunk occupancy halo is a
+    // follow-up). `block_fully_occludes` so inset blocks (cactus, ...)
+    // don't cast a hard AO corner.
+    let occluder_at = |local: [i32; 3]| -> bool {
+        if (0..CHUNK_SIZE as i32).contains(&local[0])
+            && (0..CHUNK_SIZE as i32).contains(&local[1])
+            && (0..CHUNK_SIZE as i32).contains(&local[2])
+        {
+            let b = chunk.get(local[0] as usize, local[1] as usize, local[2] as usize);
+            !b.is_air() && crate::block::block_fully_occludes(b)
+        } else {
+            false
+        }
+    };
+
     // W34.2: worker also uses greedy mesher, matching build_lit_submeshes.
     chunk_mesh_greedy_with_special(
         chunk,
@@ -426,6 +443,7 @@ pub(crate) fn mesh_chunk_in_worker(
         crate::block::block_fully_occludes,
         |air_local, _normal| light_lookup(air_local),
         anim_lookup,
+        occluder_at,
         emit_special,
     )
 }

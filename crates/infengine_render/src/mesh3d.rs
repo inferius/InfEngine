@@ -54,7 +54,10 @@ pub struct MeshVertex {
     /// UV coordinates packed as u16 = component * 65535. Legacy field;
     /// the shader now uses tile_uv0/tile_size/quad_uv for final UV.
     pub uv_packed: [u16; 2],
-    /// Light values packed as unorm8: [block_light, sky_light, 0, 0].
+    /// Light values packed as unorm8: [block_light, sky_light, ao, 0].
+    /// W122: byte 2 carries vertex ambient-occlusion (1.0 = no AO /
+    /// full bright, lower = darker contact corner). Defaults to 255
+    /// so meshes that never set it render unchanged.
     pub light_pad: [u8; 4],
     /// Animation slot id (0 = static, 1..=32 = animated tile).
     pub anim_id: u32,
@@ -84,8 +87,10 @@ impl MeshVertex {
                 0,
             ],
             uv_packed: [0, 0],
-            // Default: no block light (0), full sky (255 = 1.0).
-            light_pad: [0, 255, 0, 0],
+            // Default: no block light (0), full sky (255 = 1.0),
+            // no AO (255 = 1.0 = full bright). W122: ao defaults to
+            // 255 so meshes that never call `.with_ao` are unchanged.
+            light_pad: [0, 255, 255, 0],
             anim_id: 0,
             // W30.1: default tile attrs - identity tiling (single voxel quad).
             // tile_uv0=0, tile_size=65535 (= 1.0 in [0,1]), quad_uv=(0,0).
@@ -150,6 +155,15 @@ impl MeshVertex {
         self
     }
 
+    /// W122: Override the per-vertex ambient-occlusion factor. `1.0`
+    /// means no occlusion (full bright); lower values darken the
+    /// corner (MC's contact shading in concave corners). The shader
+    /// multiplies the final light by this. Clamped to `[0, 1]`.
+    pub fn with_ao(mut self, ao: f32) -> Self {
+        self.light_pad[2] = (ao.clamp(0.0, 1.0) * 255.0) as u8;
+        self
+    }
+
     /// Wave 9.y: tag this vertex with an animation slot id. `0`
     /// means static (no UV scroll); `1..=32` references an entry
     /// in the shader's `tile_anim` uniform array. Slots outside
@@ -188,6 +202,12 @@ impl MeshVertex {
             self.light_pad[0] as f32 / 255.0,
             self.light_pad[1] as f32 / 255.0,
         ]
+    }
+
+    /// W122: Decode the ambient-occlusion factor back to f32 `[0, 1]`.
+    #[inline]
+    pub fn ao(&self) -> f32 {
+        self.light_pad[2] as f32 / 255.0
     }
 
     /// W30.1: Decode tile_uv0 back to f32 [u0, v0].
