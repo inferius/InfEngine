@@ -364,6 +364,12 @@ pub(crate) fn mesh_chunk_in_worker(
         let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
         let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
         let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+        // W126: the chest is a block ENTITY - render::chests draws
+        // it per frame with the real entity sheets + lid animation.
+        // The chunk mesh emits nothing for its cell.
+        if block.0 == crate::block::CHEST_ID {
+            return true;
+        }
         // W125: doors render from the baked state snapshot (facing +
         // open per lower half). Handled here so the static west-edge
         // `door_lower` model never runs for doors.

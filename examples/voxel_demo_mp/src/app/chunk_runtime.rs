@@ -72,6 +72,9 @@ impl Voxel {
         self.chests.clear();
         self.chest_open = None;
         self.chest_held = None;
+        // W126: chest entity-render state is per-world too.
+        self.chest_facing.clear();
+        self.chest_lid_anim.clear();
         self.furnaces.clear();
         self.furnace_runtimes.clear();
         self.furnace_open = None;
@@ -96,6 +99,9 @@ impl Voxel {
         let pos = self.chest_open.take();
         let held = self.chest_held.take();
         if let Some(p) = pos {
+            // W126: MC chest-close thunk.
+            let spos = [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5];
+            self.sfx_at("container/chest/close", spos, |_, _| {});
             let leftovers = block::chest::recover_held_on_close(
                 self.chests.get_mut(&p),
                 held,

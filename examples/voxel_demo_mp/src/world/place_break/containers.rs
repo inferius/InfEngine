@@ -44,6 +44,9 @@ pub(crate) fn open_chest(vx: &mut crate::Voxel, pos: [i32; 3]) {
         .entry(pos)
         .or_insert_with(block::chest::new_chest);
     vx.chest_open = Some(pos);
+    // W126: MC chest-open creak (real OGG; silent without the pack).
+    let spos = [pos[0] as f32 + 0.5, pos[1] as f32 + 0.5, pos[2] as f32 + 0.5];
+    vx.sfx_at("container/chest/open", spos, |_, _| {});
     if let NetRole::Client { client, .. } = &mut vx.net {
         let cfg = bincode::config::standard();
         let msg = crate::net::ChestOpenMsg { pos };

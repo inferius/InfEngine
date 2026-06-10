@@ -626,6 +626,15 @@ pub(crate) struct Voxel {
     /// a 27-slot `Container` (see `block::chest::CHEST_SLOTS`).
     /// Persisted via `world_save/containers.rs`.
     pub(crate) chests: HashMap<[i32; 3], container::Container>,
+    /// W126: per-chest facing (0=+X,1=+Z,2=-X,3=-Z = latch
+    /// direction), set at place time (toward the placer). Drives
+    /// the entity-render yaw + double-chest pairing.
+    pub(crate) chest_facing: HashMap<[i32; 3], u8>,
+    /// W126: lid animation state per chest (0 closed .. 1 open).
+    /// Transient; advanced by the render pass.
+    pub(crate) chest_lid_anim: HashMap<[i32; 3], f32>,
+    /// W126: baked chest entity meshes (normal + double halves).
+    pub(crate) chest_meshes: crate::render::chests::ChestMeshes,
     /// Position of the chest the player has open. `None` means no
     /// chest UI is visible. Set by an RMB-on-chest interaction +
     /// cleared by ESC / walking too far / opening another panel.

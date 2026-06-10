@@ -167,6 +167,12 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             mc_entity_dir.as_deref(),
             r,
         );
+        // W126: chest block-entity meshes (normal + double halves)
+        // from the same entity texture dir.
+        vx.chest_meshes = crate::render::chests::load_chest_meshes(
+            r,
+            mc_entity_dir.as_deref(),
+        );
     }
     // Best-effort audio: a missing output device disables SFX.
     match infengine_audio::AudioSystem::new() {

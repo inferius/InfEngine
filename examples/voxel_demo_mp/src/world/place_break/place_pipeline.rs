@@ -238,6 +238,32 @@ pub(crate) fn apply_block_place(
         vx.chests
             .entry(target_voxel)
             .or_insert_with(block::chest::new_chest);
+        // W126: the latch faces the placer (MC chest placement) -
+        // the OPPOSITE of the player's look direction. Broadcast so
+        // every peer renders the same yaw + double-chest pairing.
+        let facing = crate::block::door::closed_edge(
+            crate::block::door::facing_from_look(
+                vx.player_yaw.cos(),
+                -vx.player_yaw.sin(),
+            ),
+        );
+        vx.chest_facing.insert(target_voxel, facing);
+        let payload: ([i32; 3], u8) = (target_voxel, facing);
+        match &mut vx.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(payload, cfg) {
+                    server.broadcast_bytes("vx.chest_facing", buf);
+                }
+            }
+            NetRole::Client { client, .. } => {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(payload, cfg) {
+                    let _ = client.send_bytes("vx.chest_facing", buf);
+                }
+            }
+        }
     }
     // Furnace place: empty 3-slot container + zeroed runtime.
     if block.0 == FURNACE_ID {

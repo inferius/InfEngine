@@ -17,3 +17,5 @@ pub mod sky;
 pub mod drops;
 // W47.17 - remote + local player cube render (body + head, hashed tint).
 pub mod players;
+// W126 - chest block-entity renderer (entity sheets + lid anim).
+pub mod chests;

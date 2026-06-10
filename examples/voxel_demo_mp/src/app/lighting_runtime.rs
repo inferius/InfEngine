@@ -99,6 +99,11 @@ impl Voxel {
                                  voxel_origin: glam::Vec3,
                                  verts: &mut Vec<MeshVertex>,
                                  idxs: &mut Vec<u32>| {
+            // W126: chest = block entity; the chunk mesh emits
+            // nothing (render::chests draws it per frame).
+            if block.0 == crate::block::CHEST_ID {
+                return true;
+            }
             // W125: doors render as a state-aware panel (closed =
             // edge opposite the facing, open = hinge-left edge).
             if crate::block::door::is_door_block(block.0) {

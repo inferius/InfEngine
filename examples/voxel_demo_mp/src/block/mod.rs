@@ -186,6 +186,13 @@ pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
     if b.0 == CACTUS_ID {
         return false;
     }
+    // W126: the chest is an inset block ENTITY (14x14x14, drawn by
+    // render::chests) - its cell holds no chunk-mesh geometry, so
+    // culling neighbour faces against it would punch see-through
+    // holes behind every chest.
+    if b.0 == CHEST_ID {
+        return false;
+    }
     block_is_opaque(b)
 }
 

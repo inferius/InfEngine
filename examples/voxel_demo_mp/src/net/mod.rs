@@ -539,6 +539,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     /// W125: door place/toggle state updates (lower pos, facing,
     /// open) received this tick. Applied + remeshed by dispatch.
     pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
+    /// W126: chest facing records (pos, facing) from places.
+    pub chest_facing_updates: &'a mut Vec<([i32; 3], u8)>,
     pub kick_reason: &'a mut Option<String>,
     /// W5.3a/b: incoming chest + furnace state snapshots from the
     /// host. Applied by the main loop to overwrite the local
@@ -773,6 +775,16 @@ pub(crate) fn process_client_inbox(
                     ctx.door_state_updates.push((v, facing, open));
                 }
             }
+            "vx.chest_facing" => {
+                // W126: chest latch direction from the host.
+                if let Ok(((v, facing), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.chest_facing_updates.push((v, facing));
+                }
+            }
             "vx.kick" => {
                 if let Ok((reason, _)) =
                     bincode::serde::decode_from_slice::<String, _>(&data, cfg)
@@ -823,6 +835,8 @@ pub(crate) struct ServerInboxCtx<'a> {
     /// W125: door place/toggle state updates (lower pos, facing,
     /// open) received this tick. Applied + remeshed by dispatch.
     pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
+    /// W126: chest facing records (pos, facing) from places.
+    pub chest_facing_updates: &'a mut Vec<([i32; 3], u8)>,
     pub chat_inbox: &'a mut Vec<String>,
     pub pvp_self_damage: &'a mut f32,
     /// W5.3a: pending chest open / act / close events for the
@@ -1091,6 +1105,22 @@ pub(crate) fn process_server_inbox(
                         bincode::serde::encode_to_vec((v, facing, open), cfg)
                     {
                         server.broadcast_bytes("vx.door_state", buf);
+                    }
+                }
+            }
+            "vx.chest_facing" => {
+                // W126: cosmetic chest yaw riding alongside a
+                // chest place (reach validated by the vx.edit).
+                if let Ok(((v, facing), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.chest_facing_updates.push((v, facing));
+                    if let Ok(buf) =
+                        bincode::serde::encode_to_vec((v, facing), cfg)
+                    {
+                        server.broadcast_bytes("vx.chest_facing", buf);
                     }
                 }
             }

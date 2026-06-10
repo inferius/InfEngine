@@ -116,6 +116,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut torch_orient_updates: Vec<([i32; 3], u8)> = Vec::new();
         // W125: door place/toggle updates (lower pos, facing, open).
         let mut door_state_updates: Vec<([i32; 3], u8, bool)> = Vec::new();
+        // W126: chest facing records (pos, facing).
+        let mut chest_facing_updates: Vec<([i32; 3], u8)> = Vec::new();
         // W5.3a/b: incoming chest + furnace state snapshots from
         // the host. Applied below to refresh the local chest /
         // furnace maps so the open UI mirrors the authoritative
@@ -183,6 +185,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         mob_hits_to_apply: &mut mob_hits_to_apply,
                         torch_orient_updates: &mut torch_orient_updates,
                         door_state_updates: &mut door_state_updates,
+                        chest_facing_updates: &mut chest_facing_updates,
                         chat_inbox: &mut chat_inbox,
                         pvp_self_damage: &mut pvp_self_damage,
                         chest_opens: &mut chest_opens_outer,
@@ -549,6 +552,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         drop_removes: &mut drop_removes,
                         torch_orient_updates: &mut torch_orient_updates,
                         door_state_updates: &mut door_state_updates,
+                        chest_facing_updates: &mut chest_facing_updates,
                         kick_reason: &mut kick_reason,
                         chest_state_updates: &mut chest_state_updates,
                         furnace_state_updates: &mut furnace_state_updates,
@@ -729,6 +733,11 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for (v, orient) in torch_orient_updates {
             vx.torch_orient.insert(v, orient);
+        }
+        // W126: chest facing is render-side state; the entity pass
+        // reads the live map (no remesh needed).
+        for (v, facing) in chest_facing_updates {
+            vx.chest_facing.insert(v, facing);
         }
         // W125: apply door state + remesh the affected chunk(s) so
         // the panel flips on every peer.

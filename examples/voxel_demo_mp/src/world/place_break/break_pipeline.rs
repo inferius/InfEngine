@@ -160,6 +160,9 @@ pub(crate) fn apply_block_break(
             for id in block::chest::drain_drops(&chest_inv) {
                 vx.spawn_drop(BlockId(id), voxel);
             }
+            // W126: drop the render state with the chest.
+            vx.chest_facing.remove(&voxel);
+            vx.chest_lid_anim.remove(&voxel);
         }
         // Furnace break: drain 3 slots + drop the runtime entry.
         if broken.0 == FURNACE_ID {

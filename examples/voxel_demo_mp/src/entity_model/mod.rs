@@ -31,6 +31,7 @@
 use glam::{Mat4, Quat, Vec3};
 use infengine_render::{MeshHandle, MeshVertex, Renderer};
 
+pub(crate) mod chest;
 pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod pig;

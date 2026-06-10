@@ -1430,6 +1430,19 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.mob_lunge,
             vx.day_time,
         );
+        // W126: chest block entities (entity sheets, facing,
+        // double-chest halves, lid animation).
+        render::chests::draw_chests(
+            renderer,
+            &vx.chest_meshes,
+            &vx.chests,
+            &vx.chest_facing,
+            vx.chest_open,
+            &vx.chest_viewers,
+            &mut vx.chest_lid_anim,
+            vx.player_pos,
+            dt,
+        );
         // Render any live debris particles before the world cubes
         // so chunk faces draw on top when a particle ends up
         // inside a block.
