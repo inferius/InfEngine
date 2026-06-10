@@ -167,10 +167,10 @@ const BED_ID: u16 = 35;
 /// PlaceBlock when a shovel hits grass; the container/bed checks
 /// only depend on the target voxel so they win whenever the held
 /// item is irrelevant to them.
-/// W61.3: true when `id` is one of the trapdoor block ids.
-/// Currently W48.4 ids 548..=552.
+/// W61.3 / W125: trapdoor id check lives in `block::door` now
+/// (shared with the collision + render paths).
 fn is_trapdoor_block(id: u16) -> bool {
-    (548..=552).contains(&id)
+    crate::block::door::is_trapdoor_block(id)
 }
 
 pub fn classify_rmb_action(

@@ -91,37 +91,55 @@ impl Voxel {
         // the cube path is skipped. For all other blocks return `false`.
         let chunk_ref = chunk;
         let voxel_origin_ref = origin;
-        // W62.2: door open-state lookup. Cloned into the closure
-        // so the meshing path can render open doors as invisible
-        // (matches the "door swung aside" MC behavior; full
-        // hinge rotation lands in W62.2b).
-        let door_open_snapshot: std::collections::HashSet<[i32; 3]> =
-            self.door_open.clone();
+        // W125: door state snapshot (facing + open per lower half) -
+        // the same bake the worker remesh path receives, so sync- and
+        // worker-built chunks render doors identically.
+        let door_states = self.door_state_snapshot(coord);
         let emit_special = move |block: BlockId,
                                  voxel_origin: glam::Vec3,
                                  verts: &mut Vec<MeshVertex>,
                                  idxs: &mut Vec<u32>| {
-            // W62.2: door at open state -> emit nothing but
-            // return `true` so the greedy cube path skips this
-            // cell (door "disappears" visually).
+            // W125: doors render as a state-aware panel (closed =
+            // edge opposite the facing, open = hinge-left edge).
             if crate::block::door::is_door_block(block.0) {
                 let wp = [
                     voxel_origin.x.floor() as i32,
                     voxel_origin.y.floor() as i32,
                     voxel_origin.z.floor() as i32,
                 ];
-                // Lower-half resolution: the upper half also
-                // disappears when its sibling lower is open.
-                let lower = if (1..=78).contains(&block.0)
-                    && door_open_snapshot.contains(&[wp[0], wp[1] - 1, wp[2]])
-                {
-                    [wp[0], wp[1] - 1, wp[2]]
+                let below = [wp[0], wp[1] - 1, wp[2]];
+                let (lower, is_upper) = if door_states.contains_key(&wp) {
+                    (wp, false)
+                } else if door_states.contains_key(&below) {
+                    (below, true)
                 } else {
-                    wp
+                    // Unmapped door (pre-W125 save): infer the half
+                    // from the local chunk; boundary uppers degrade
+                    // to closed-lower.
+                    let lx = wp[0] - world_origin[0];
+                    let ly = wp[1] - world_origin[1];
+                    let lz = wp[2] - world_origin[2];
+                    let upper_guess = ly > 0
+                        && crate::block::door::is_door_block(
+                            chunk_ref
+                                .get(lx as usize, (ly - 1) as usize, lz as usize)
+                                .0,
+                        );
+                    (if upper_guess { below } else { wp }, upper_guess)
                 };
-                if door_open_snapshot.contains(&lower) {
-                    return true;
-                }
+                let (facing, open) =
+                    door_states.get(&lower).copied().unwrap_or((0, false));
+                let local = [
+                    wp[0] - world_origin[0],
+                    wp[1] - world_origin[1],
+                    wp[2] - world_origin[2],
+                ];
+                let light = light_lookup(local);
+                resource_pack::element_mesh::emit_door_panel(
+                    verts, idxs, voxel_origin, block.0, is_upper, facing,
+                    open, pack, light,
+                );
+                return true;
             }
             // Compute voxel local coords from world position.
             let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;

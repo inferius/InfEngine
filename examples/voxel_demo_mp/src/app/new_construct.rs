@@ -285,6 +285,7 @@ impl Voxel {
             brewing_open: None,
             brewing_held: None,
             door_open: std::collections::HashSet::new(),
+            door_facing: std::collections::HashMap::new(),
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_tick_accum: 0.0,

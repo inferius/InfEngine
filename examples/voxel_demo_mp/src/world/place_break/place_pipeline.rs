@@ -176,6 +176,36 @@ pub(crate) fn apply_block_place(
     // same id for both halves since we don't ship per-variant
     // upper ids yet.
     if crate::block::door::is_door_block(placed_block.0) {
+        // W125: record the door facing from the placer's look
+        // direction (MC: the door faces the way the player faces).
+        // Keyed by the LOWER half = the placed cell. Broadcast so
+        // every peer renders the same panel edge.
+        let facing = crate::block::door::facing_from_look(
+            vx.player_yaw.cos(),
+            -vx.player_yaw.sin(),
+        );
+        vx.door_facing.insert(target_voxel, facing);
+        let door_state_payload: ([i32; 3], u8, bool) =
+            (target_voxel, facing, false);
+        match &mut vx.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec(door_state_payload, cfg)
+                {
+                    server.broadcast_bytes("vx.door_state", buf);
+                }
+            }
+            NetRole::Client { client, .. } => {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec(door_state_payload, cfg)
+                {
+                    let _ = client.send_bytes("vx.door_state", buf);
+                }
+            }
+        }
         let upper_pos = [target_voxel[0], target_voxel[1] + 1, target_voxel[2]];
         if vx.world.get(upper_pos).is_air() {
             let upper_id = if placed_block.0 == 77 { 78 } else { placed_block.0 };

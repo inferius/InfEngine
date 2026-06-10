@@ -61,6 +61,120 @@ pub(crate) fn enable_mesher_debug_logging(on: bool) {
     MESHER_DEBUG.store(on, Ordering::Relaxed);
 }
 
+/// W125 - state-aware door panel emitter. The door is a 3/16-thick
+/// panel standing against one cell edge: closed = the edge opposite
+/// the facing (nearest the placer), open = the hinge-left edge.
+/// Replaces the static `door_lower` special model so the panel edge
+/// follows the recorded facing + open state and the texture resolves
+/// per VARIANT through the registry TileSpec (birch door renders
+/// birch, not the hardcoded oak of the old model).
+///
+/// `is_upper` picks the Top tile (door_*_top) vs Bottom
+/// (door_*_bottom), matching how the registry rows lay the halves
+/// out. `light` is the door cell's own (block, sky) pair.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_door_panel(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    is_upper: bool,
+    facing: u8,
+    open: bool,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    use crate::block::door::{closed_edge, open_edge, panel_box};
+    let edge = if open {
+        open_edge(facing)
+    } else {
+        closed_edge(facing)
+    };
+    let (bmin, bmax) = panel_box(edge);
+    let face = if is_upper {
+        super::BlockFace::Top
+    } else {
+        super::BlockFace::Bottom
+    };
+    let tile = pack
+        .block_face_ref(block_id, face)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [0, 1, 0],
+            )
+        });
+    let [tu0, tv0, tu1, tv1] = tile;
+    let (tw, th) = (tu1 - tu0, tv1 - tv0);
+    const T: f32 = 3.0 / 16.0;
+    // Sub-rects: big panel faces take the full tile; thin edge
+    // faces take a 3/16 strip so the wood grain isn't smeared.
+    let full = tile;
+    let strip_v = [tu0, tv0, tu0 + T * tw, tv1]; // 3 wide x 16 high
+    let strip_h = [tu0, tv0, tu1, tv0 + T * th]; // 16 wide x 3 deep
+    // Big faces lie on the panel's thin axis (X for edges 0/2,
+    // Z for edges 1/3).
+    let thin_x = edge % 2 == 0;
+    let o = origin;
+    let lo = [o.x + bmin[0], o.y + bmin[1], o.z + bmin[2]];
+    let hi = [o.x + bmax[0], o.y + bmax[1], o.z + bmax[2]];
+    // Corner shorthand: picks lo/hi per axis flag.
+    let c = |xh: bool, yh: bool, zh: bool| -> [f32; 3] {
+        [
+            if xh { hi[0] } else { lo[0] },
+            if yh { hi[1] } else { lo[1] },
+            if zh { hi[2] } else { lo[2] },
+        ]
+    };
+    // (normal, 4 CCW corners, atlas uv rect) per face.
+    type PanelFace = ([f32; 3], [[f32; 3]; 4], [f32; 4]);
+    let faces: [PanelFace; 6] = [
+        // +X (corners CCW viewed from +X; mirrors the FACES table
+        // in infengine_voxel).
+        (
+            [1.0, 0.0, 0.0],
+            [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)],
+            if thin_x { full } else { strip_v },
+        ),
+        // -X
+        (
+            [-1.0, 0.0, 0.0],
+            [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)],
+            if thin_x { full } else { strip_v },
+        ),
+        // +Y (top edge)
+        (
+            [0.0, 1.0, 0.0],
+            [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)],
+            strip_h,
+        ),
+        // -Y (bottom edge)
+        (
+            [0.0, -1.0, 0.0],
+            [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)],
+            strip_h,
+        ),
+        // +Z
+        (
+            [0.0, 0.0, 1.0],
+            [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)],
+            if thin_x { strip_v } else { full },
+        ),
+        // -Z
+        (
+            [0.0, 0.0, -1.0],
+            [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)],
+            if thin_x { strip_v } else { full },
+        ),
+    ];
+    for (normal, corners, uv) in faces {
+        infengine_voxel::emit_element_quad(
+            verts, idxs, corners, normal, uv, light, 0,
+        );
+    }
+}
+
 /// Attempt to emit model-element geometry for `block_id` at
 /// `voxel_origin` (world-space corner of the voxel).
 ///

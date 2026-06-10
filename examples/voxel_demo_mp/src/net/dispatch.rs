@@ -114,6 +114,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // its borrow on `vx.net`. Server arm also rebroadcasts so
         // every peer renders the matching wall mount.
         let mut torch_orient_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // W125: door place/toggle updates (lower pos, facing, open).
+        let mut door_state_updates: Vec<([i32; 3], u8, bool)> = Vec::new();
         // W5.3a/b: incoming chest + furnace state snapshots from
         // the host. Applied below to refresh the local chest /
         // furnace maps so the open UI mirrors the authoritative
@@ -180,6 +182,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         interp_updates: &mut interp_updates,
                         mob_hits_to_apply: &mut mob_hits_to_apply,
                         torch_orient_updates: &mut torch_orient_updates,
+                        door_state_updates: &mut door_state_updates,
                         chat_inbox: &mut chat_inbox,
                         pvp_self_damage: &mut pvp_self_damage,
                         chest_opens: &mut chest_opens_outer,
@@ -545,6 +548,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         drop_spawns: &mut drop_spawns,
                         drop_removes: &mut drop_removes,
                         torch_orient_updates: &mut torch_orient_updates,
+                        door_state_updates: &mut door_state_updates,
                         kick_reason: &mut kick_reason,
                         chest_state_updates: &mut chest_state_updates,
                         furnace_state_updates: &mut furnace_state_updates,
@@ -725,6 +729,31 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for (v, orient) in torch_orient_updates {
             vx.torch_orient.insert(v, orient);
+        }
+        // W125: apply door state + remesh the affected chunk(s) so
+        // the panel flips on every peer.
+        for (v, facing, open) in door_state_updates {
+            vx.door_facing.insert(v, facing);
+            if open {
+                vx.door_open.insert(v);
+            } else {
+                vx.door_open.remove(&v);
+            }
+            let cs = infengine_voxel::CHUNK_SIZE as i32;
+            let mut ccs = vec![[
+                v[0].div_euclid(cs),
+                v[1].div_euclid(cs),
+                v[2].div_euclid(cs),
+            ]];
+            let ucc = [
+                v[0].div_euclid(cs),
+                (v[1] + 1).div_euclid(cs),
+                v[2].div_euclid(cs),
+            ];
+            if !ccs.contains(&ucc) {
+                ccs.push(ucc);
+            }
+            vx.rebuild_chunks(&ccs);
         }
         if !liquid_level_updates.is_empty() {
             for (v, level) in liquid_level_updates {

@@ -30,6 +30,56 @@ pub(crate) fn is_door_block(id: u16) -> bool {
     matches!(id, 77..=79) || (568..=575).contains(&id)
 }
 
+/// W125: true when `id` is a trapdoor block (W48.4 ids 548..=552).
+/// Trapdoors share the door open-state set + toggle.
+pub(crate) fn is_trapdoor_block(id: u16) -> bool {
+    (548..=552).contains(&id)
+}
+
+/// W125: per-door facing, keyed by the LOWER half voxel.
+/// 0 = +X (east), 1 = +Z (south), 2 = -X (west), 3 = -Z (north) -
+/// the horizontal direction the PLACER was looking.
+pub(crate) type DoorFacings = std::collections::HashMap<[i32; 3], u8>;
+
+/// W125: facing code from a look vector (horizontal projection).
+pub(crate) fn facing_from_look(dx: f32, dz: f32) -> u8 {
+    if dx.abs() >= dz.abs() {
+        if dx >= 0.0 { 0 } else { 2 }
+    } else if dz >= 0.0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// W125: which cell edge the CLOSED panel rests against. MC places
+/// the panel at the edge nearest the placer = opposite the facing.
+/// Returns the facing code of that edge's outward direction.
+pub(crate) fn closed_edge(facing: u8) -> u8 {
+    (facing + 2) % 4
+}
+
+/// W125: which cell edge the OPEN panel swings to (hinge = left).
+/// East-facing door opens onto the north edge, etc.
+pub(crate) fn open_edge(facing: u8) -> u8 {
+    (facing + 3) % 4
+}
+
+/// W125: door panel quads for one half. The panel is a 3/16-thick
+/// slab standing against the cell edge `edge` (a facing code).
+/// Emits 6 faces via `emit` (positions relative to the voxel origin,
+/// `[min, max]` box corners + the face normal); the caller owns UV +
+/// light resolution. Box coords are in voxel-local 0..1 space.
+pub(crate) fn panel_box(edge: u8) -> ([f32; 3], [f32; 3]) {
+    const T: f32 = 3.0 / 16.0;
+    match edge % 4 {
+        0 => ([1.0 - T, 0.0, 0.0], [1.0, 1.0, 1.0]), // +X edge
+        1 => ([0.0, 0.0, 1.0 - T], [1.0, 1.0, 1.0]), // +Z edge
+        2 => ([0.0, 0.0, 0.0], [T, 1.0, 1.0]),       // -X edge
+        _ => ([0.0, 0.0, 0.0], [1.0, 1.0, T]),       // -Z edge
+    }
+}
+
 /// True when the cell directly above `pos` is the upper half of
 /// the door whose lower half lives at `pos`. Used by the place
 /// path to decide whether to auto-place an upper half.

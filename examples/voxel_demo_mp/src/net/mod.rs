@@ -536,6 +536,9 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub drop_spawns: &'a mut Vec<DropSpawnMsg>,
     pub drop_removes: &'a mut Vec<u32>,
     pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
+    /// W125: door place/toggle state updates (lower pos, facing,
+    /// open) received this tick. Applied + remeshed by dispatch.
+    pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
     pub kick_reason: &'a mut Option<String>,
     /// W5.3a/b: incoming chest + furnace state snapshots from the
     /// host. Applied by the main loop to overwrite the local
@@ -760,6 +763,16 @@ pub(crate) fn process_client_inbox(
                     ctx.torch_orient_updates.push((v, orient));
                 }
             }
+            "vx.door_state" => {
+                // W125: door facing/open from the host.
+                if let Ok(((v, facing, open), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8, bool), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.door_state_updates.push((v, facing, open));
+                }
+            }
             "vx.kick" => {
                 if let Ok((reason, _)) =
                     bincode::serde::decode_from_slice::<String, _>(&data, cfg)
@@ -807,6 +820,9 @@ pub(crate) struct ServerInboxCtx<'a> {
     pub interp_updates: &'a mut Vec<PlayerMsg>,
     pub mob_hits_to_apply: &'a mut Vec<(u32, u32)>,
     pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
+    /// W125: door place/toggle state updates (lower pos, facing,
+    /// open) received this tick. Applied + remeshed by dispatch.
+    pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
     pub chat_inbox: &'a mut Vec<String>,
     pub pvp_self_damage: &'a mut f32,
     /// W5.3a: pending chest open / act / close events for the
@@ -1056,6 +1072,25 @@ pub(crate) fn process_server_inbox(
                         bincode::serde::encode_to_vec((v, orient), cfg)
                     {
                         server.broadcast_bytes("vx.torch_orient", buf);
+                    }
+                }
+            }
+            "vx.door_state" => {
+                // W125: a client placed/toggled a door. Record
+                // locally + fan out so every peer flips the same
+                // panel. (Reach was validated by the paired
+                // vx.edit for places; toggles are cosmetic+door
+                // -local so a light touch is fine here.)
+                if let Ok(((v, facing, open), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8, bool), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.door_state_updates.push((v, facing, open));
+                    if let Ok(buf) =
+                        bincode::serde::encode_to_vec((v, facing, open), cfg)
+                    {
+                        server.broadcast_bytes("vx.door_state", buf);
                     }
                 }
             }

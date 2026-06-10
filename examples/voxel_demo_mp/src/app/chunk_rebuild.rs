@@ -5,6 +5,38 @@ use crate::lighting::HaloLighting;
 
 impl Voxel {
 
+    /// W125: bake the door state (facing + open per LOWER half) for
+    /// doors whose lower OR upper half voxel lands in `coord`. The
+    /// worker meshes from snapshots and can't read `door_open` /
+    /// `door_facing` live - without this the remesh always drew
+    /// doors closed (the "door never visually opens" bug). Union
+    /// over both maps so a toggled door without a facing row
+    /// (pre-W125 save) still ships its open flag.
+    pub(crate) fn door_state_snapshot(
+        &self,
+        coord: ChunkCoord,
+    ) -> std::collections::HashMap<[i32; 3], (u8, bool)> {
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let in_chunk = |p: [i32; 3]| -> bool {
+            [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
+                == coord
+        };
+        let mut out = std::collections::HashMap::new();
+        for (&pos, &facing) in &self.door_facing {
+            if in_chunk(pos) || in_chunk([pos[0], pos[1] + 1, pos[2]]) {
+                out.insert(pos, (facing, self.door_open.contains(&pos)));
+            }
+        }
+        for &pos in &self.door_open {
+            if !out.contains_key(&pos)
+                && (in_chunk(pos) || in_chunk([pos[0], pos[1] + 1, pos[2]]))
+            {
+                out.insert(pos, (0, true));
+            }
+        }
+        out
+    }
+
     /// W25: Dispatch remesh jobs for `coords` to the worker pool.
     /// For each coord a `Job::Remesh` is enqueued carrying a voxel
     /// snapshot + halo lighting. The actual mesh build runs off the
@@ -57,6 +89,7 @@ impl Voxel {
                 pack: Arc::clone(&pack_arc),
                 halo,
                 revision,
+                doors: self.door_state_snapshot(coord),
             });
             // If the send fails the pool is shutting down; ignore.
             if let Some(pool) = self.workers.as_ref() {

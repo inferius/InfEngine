@@ -764,27 +764,84 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 // state. The render path swaps the model on the
                 // next frame; AABB / ray-pass flips so the
                 // player walks through.
+                let target_id = vx.world.get(hit.voxel).0;
                 let world_ptr: *const infengine_voxel::World = &vx.world;
                 // SAFETY: read-only borrow for the duration of
                 // the toggle; vx.door_open is the only mutable
                 // field touched.
-                let was_open = unsafe {
+                let now_open = unsafe {
                     crate::block::door::toggle_door(
                         &mut vx.door_open, &*world_ptr, hit.voxel,
                     )
                 };
                 vx.lmb_pending = false;
                 vx.rmb_pending = false;
-                // Force a remesh of the chunk so the door model
-                // flips immediately.
-                let cs = infengine_voxel::CHUNK_SIZE as i32;
-                let cc = [
-                    hit.voxel[0].div_euclid(cs),
-                    hit.voxel[1].div_euclid(cs),
-                    hit.voxel[2].div_euclid(cs),
+                // W125: real MC open/close sounds per material.
+                let is_trap = crate::block::door::is_trapdoor_block(target_id);
+                let is_iron = target_id == 79 || target_id == 549;
+                let key = match (is_trap, is_iron, now_open) {
+                    (false, false, true) => "door/wood/open",
+                    (false, false, false) => "door/wood/close",
+                    (false, true, true) => "door/iron/open",
+                    (false, true, false) => "door/iron/close",
+                    (true, false, true) => "trapdoor/wood/open",
+                    (true, false, false) => "trapdoor/wood/close",
+                    (true, true, true) => "trapdoor/iron/open",
+                    (true, true, false) => "trapdoor/iron/close",
+                };
+                let spos = [
+                    hit.voxel[0] as f32 + 0.5,
+                    hit.voxel[1] as f32 + 0.5,
+                    hit.voxel[2] as f32 + 0.5,
                 ];
-                vx.rebuild_chunks(&[cc]);
-                let _ = was_open;
+                vx.sfx_at(key, spos, |_, _| {});
+                // W125: broadcast the toggle so every peer flips the
+                // same door (state is keyed by the LOWER half).
+                let lower =
+                    crate::block::door::lower_pos(&vx.world, hit.voxel);
+                let facing =
+                    vx.door_facing.get(&lower).copied().unwrap_or(0);
+                let payload: ([i32; 3], u8, bool) =
+                    (lower, facing, now_open);
+                match &mut vx.net {
+                    NetRole::Offline => {}
+                    NetRole::Server { server, .. } => {
+                        let cfg = bincode::config::standard();
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(payload, cfg)
+                        {
+                            server.broadcast_bytes("vx.door_state", buf);
+                        }
+                    }
+                    NetRole::Client { client, .. } => {
+                        let cfg = bincode::config::standard();
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(payload, cfg)
+                        {
+                            let _ =
+                                client.send_bytes("vx.door_state", buf);
+                        }
+                    }
+                }
+                // Force a remesh so the door model flips immediately.
+                // Include the upper half's chunk (the door can span a
+                // chunk boundary vertically).
+                let cs = infengine_voxel::CHUNK_SIZE as i32;
+                let upper = [lower[0], lower[1] + 1, lower[2]];
+                let mut ccs = vec![[
+                    lower[0].div_euclid(cs),
+                    lower[1].div_euclid(cs),
+                    lower[2].div_euclid(cs),
+                ]];
+                let ucc = [
+                    upper[0].div_euclid(cs),
+                    upper[1].div_euclid(cs),
+                    upper[2].div_euclid(cs),
+                ];
+                if !ccs.contains(&ucc) {
+                    ccs.push(ucc);
+                }
+                vx.rebuild_chunks(&ccs);
             } else if predicted == RmbAction::ToggleLever {
                 // W67.1: flip the lever + re-solve its redstone net.
                 crate::world::redstone::toggle_lever(vx, hit.voxel);

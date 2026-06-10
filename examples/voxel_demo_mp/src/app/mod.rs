@@ -710,6 +710,11 @@ pub(crate) struct Voxel {
     /// `block::door::toggle_door`; the render path checks via
     /// `block::door::is_open`.
     pub(crate) door_open: std::collections::HashSet<[i32; 3]>,
+    /// W125: per-door facing (0=+X,1=+Z,2=-X,3=-Z), keyed by the
+    /// LOWER-half voxel. Set at place time from the placer's look
+    /// direction; drives which cell edge the panel renders against
+    /// (closed = opposite the facing, open = hinge-left swing).
+    pub(crate) door_facing: std::collections::HashMap<[i32; 3], u8>,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No

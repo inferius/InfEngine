@@ -61,6 +61,9 @@ pub(crate) fn apply_block_break(
             let lower = std::cmp::min(voxel[1], sib[1]);
             vx.door_open
                 .remove(&[voxel[0], lower, voxel[2]]);
+            // W125: drop the facing record with the door.
+            vx.door_facing
+                .remove(&[voxel[0], lower, voxel[2]]);
             vx.world_set_tracked(sib, BlockId::AIR);
             let coords = Voxel::affected_chunks(sib);
             vx.rebuild_chunks(&coords);

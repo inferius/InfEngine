@@ -123,6 +123,11 @@ pub(crate) fn voxel_is_solid_with_doors(
             return false;
         }
     }
+    // W125: open trapdoor passes (closed = solid; W125 removed the
+    // unconditional F_AABB_PASS that made closed ones walk-through).
+    if crate::block::door::is_trapdoor_block(b.0) && door_open.contains(&v) {
+        return false;
+    }
     true
 }
 

@@ -157,11 +157,16 @@ impl WorkerPool {
                                     // worker using the pre-fetched halo
                                     // lighting + pack snapshot. Main thread
                                     // only does GPU upload.
+                                    // W125: freshly-generated chunks carry
+                                    // no doors (worldgen doesn't place
+                                    // them), so the door snapshot is empty.
+                                    let no_doors = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
                                         gj.coord,
                                         &gj.pack,
                                         &gj.halo,
+                                        &no_doors,
                                     );
 
                                     if res_tx
@@ -186,6 +191,7 @@ impl WorkerPool {
                                         rj.coord,
                                         &rj.pack,
                                         &rj.halo,
+                                        &rj.doors,
                                     );
                                     if res_tx
                                         .send(WorkerResult::Remeshed {
@@ -305,6 +311,7 @@ pub(crate) fn mesh_chunk_in_worker(
     coord: ChunkCoord,
     pack: &resource_pack::ResourcePack,
     halo: &HaloLighting,
+    doors: &std::collections::HashMap<[i32; 3], (u8, bool)>,
 ) -> Vec<infengine_voxel::ChunkSubmesh> {
     let origin = World::chunk_world_origin(coord);
     let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -357,6 +364,44 @@ pub(crate) fn mesh_chunk_in_worker(
         let lx = (voxel_origin.x - voxel_origin_ref.x) as i32;
         let ly = (voxel_origin.y - voxel_origin_ref.y) as i32;
         let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
+        // W125: doors render from the baked state snapshot (facing +
+        // open per lower half). Handled here so the static west-edge
+        // `door_lower` model never runs for doors.
+        if crate::block::door::is_door_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let below = [wp[0], wp[1] - 1, wp[2]];
+            // Snapshot rows are keyed by the LOWER half, so the map
+            // itself answers which half this voxel is - works across
+            // a vertical chunk boundary where the sibling voxel
+            // isn't in this chunk snapshot.
+            let (lower, is_upper) = if doors.contains_key(&wp) {
+                (wp, false)
+            } else if doors.contains_key(&below) {
+                (below, true)
+            } else {
+                // Unmapped door (pre-W125 save): infer from the
+                // local chunk; boundary uppers degrade to closed.
+                let upper_guess = ly > 0
+                    && crate::block::door::is_door_block(
+                        chunk
+                            .get(lx as usize, (ly - 1) as usize, lz as usize)
+                            .0,
+                    );
+                (if upper_guess { below } else { wp }, upper_guess)
+            };
+            let (facing, open) =
+                doors.get(&lower).copied().unwrap_or((0, false));
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_door_panel(
+                verts, idxs, voxel_origin, block.0, is_upper, facing,
+                open, pack, light,
+            );
+            return true;
+        }
         // W40.1: compute neighbour connection flags for multipart.
         let same_id = |dx: i32, dy: i32, dz: i32| -> bool {
             let nx = lx + dx;
@@ -604,5 +649,11 @@ pub(crate) struct RemeshJob {
     /// discard stale results (a second edit arrived before this one
     /// returned).
     pub(crate) revision: u64,
+    /// W125: door state snapshot for doors intersecting this chunk:
+    /// LOWER-half world pos -> (facing, open). The worker can't see
+    /// `Voxel::door_open` / `door_facing`, so the dispatcher bakes
+    /// them in - without this the remesh always drew doors closed
+    /// (the old "door never visually opens" bug).
+    pub(crate) doors: std::collections::HashMap<[i32; 3], (u8, bool)>,
 }
 

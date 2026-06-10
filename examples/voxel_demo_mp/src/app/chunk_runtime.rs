@@ -65,6 +65,10 @@ impl Voxel {
         self.persistent_leaves.clear();
         self.lever_on.clear();
         self.liquid_mesh_dirty = true;
+        // W125: door state is per-world; stale entries from the
+        // previous world must not leak open/facing flags in.
+        self.door_open.clear();
+        self.door_facing.clear();
         self.chests.clear();
         self.chest_open = None;
         self.chest_held = None;

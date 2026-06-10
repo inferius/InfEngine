@@ -88,16 +88,27 @@ fn every_w12_block_has_a_name() {
 
 #[test]
 fn w12_thin_blocks_are_aabb_passable() {
-    // Doors / fences / glass panes / iron bars are entities the
-    // player should be able to brush past while open; for W12.2
-    // we ship them as fully-passable (no swing-state yet).
+    // Fences / glass panes / iron bars stay flag-passable (W12.2
+    // simplification). W125: doors are NOT flag-passable any more -
+    // a closed door is solid + ray-targetable; the OPEN state passes
+    // through the door_open lookup in `voxel_is_solid_with_doors`
+    // (the unconditional flags were why closed doors were walk-
+    // through and untargetable - "doors don't work at all").
     use super::block_is_aabb_passable;
-    for id in [OAK_DOOR_ID, OAK_DOOR_UPPER_ID, IRON_DOOR_ID, OAK_FENCE_ID,
-        NETHER_BRICK_FENCE_ID, GLASS_PANE_ID, IRON_BARS_ID]
-    {
+    for id in [OAK_FENCE_ID, NETHER_BRICK_FENCE_ID, GLASS_PANE_ID, IRON_BARS_ID] {
         assert!(
             block_is_aabb_passable(BlockId(id)),
             "id {id} should be AABB passable",
+        );
+    }
+    for id in [OAK_DOOR_ID, OAK_DOOR_UPPER_ID, IRON_DOOR_ID] {
+        assert!(
+            !block_is_aabb_passable(BlockId(id)),
+            "id {id} must be solid when closed (state-aware pass)",
+        );
+        assert!(
+            !super::block_is_ray_passable(BlockId(id)),
+            "id {id} must be ray-targetable",
         );
     }
 }
