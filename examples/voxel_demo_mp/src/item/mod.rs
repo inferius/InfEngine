@@ -2284,6 +2284,11 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // matching png stem: short_grass.png / fern.png).
     ItemType { id: 651, name: "short_grass", display: Some("Grass"), places: Some(651), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 652, name: "fern", display: Some("Fern"), places: Some(652), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W127 - rails (Transportation; carts are a later wave).
+    ItemType { id: 653, name: "rail", display: None, places: Some(653), max_stack: 64, icon: None, category: ItemCategory::Transportation },
+    ItemType { id: 654, name: "powered_rail", display: None, places: Some(654), max_stack: 64, icon: None, category: ItemCategory::Transportation },
+    ItemType { id: 655, name: "detector_rail", display: None, places: Some(655), max_stack: 64, icon: None, category: ItemCategory::Transportation },
+    ItemType { id: 656, name: "activator_rail", display: None, places: Some(656), max_stack: 64, icon: None, category: ItemCategory::Transportation },
 ];
 
 // ---------------------------------------------------------------

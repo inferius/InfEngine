@@ -46,6 +46,96 @@ pub(crate) use super::blockstates::NeighborStates;
 /// gate: logs only fire when BOTH are enabled.
 static MESHER_DEBUG: AtomicBool = AtomicBool::new(false);
 
+/// W127 - rail quad emitter. A rail is a flat 16x16 quad 1 px above
+/// the floor (plus a mirrored underside so it reads from below),
+/// oriented by the derived `RailShape` code:
+/// - straight NS/EW rotate the `rail.png` track texture,
+/// - ascending shapes lift the two corners on the ascend side a
+///   full block (the MC slope),
+/// - curves swap to `rail_corner.png` with the matching rotation
+///   (plain rail only - the shape derivation never hands curves to
+///   powered/detector/activator rails).
+pub(crate) fn emit_rail_quad(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    shape: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    use crate::block::rail::*;
+    let straight = pack
+        .block_face_ref(block_id, super::BlockFace::Top)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [0, 1, 0],
+            )
+        });
+    // Curve texture only ships for the plain rail.
+    let corner = pack
+        .block_texture("rail_corner")
+        .map(|r| r.atlas_uv)
+        .unwrap_or(straight);
+    // (tile, texture rotation in 90-degree steps)
+    let (tile, rot) = match shape {
+        SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 1),
+        SHAPE_SE => (corner, 0),
+        SHAPE_SW => (corner, 1),
+        SHAPE_NW => (corner, 2),
+        SHAPE_NE => (corner, 3),
+        _ => (straight, 0), // NS + ascending N/S + fallback
+    };
+    // Corner heights: 1 px float, +1 block on the ascend side.
+    // World corners: 0=(x0,z0) 1=(x1,z0) 2=(x1,z1) 3=(x0,z1).
+    const H: f32 = 1.0 / 16.0;
+    let mut hy = [H; 4];
+    match shape {
+        SHAPE_ASC_E => {
+            hy[1] += 1.0;
+            hy[2] += 1.0;
+        }
+        SHAPE_ASC_W => {
+            hy[0] += 1.0;
+            hy[3] += 1.0;
+        }
+        SHAPE_ASC_S => {
+            hy[2] += 1.0;
+            hy[3] += 1.0;
+        }
+        SHAPE_ASC_N => {
+            hy[0] += 1.0;
+            hy[1] += 1.0;
+        }
+        _ => {}
+    }
+    let o = origin;
+    let p = [
+        [o.x, o.y + hy[0], o.z],
+        [o.x + 1.0, o.y + hy[1], o.z],
+        [o.x + 1.0, o.y + hy[2], o.z + 1.0],
+        [o.x, o.y + hy[3], o.z + 1.0],
+    ];
+    // Up-face corner order (CCW viewed from above, matching the
+    // door emitter's +Y face), cyclically rotated to spin the
+    // texture by 90-degree steps.
+    let up_order = [0usize, 1, 2, 3];
+    let mut up = [[0.0f32; 3]; 4];
+    for (i, slot) in up_order.iter().enumerate() {
+        up[(i + rot as usize) % 4] = p[*slot];
+    }
+    infengine_voxel::emit_element_quad(
+        verts, idxs, up, [0.0, 1.0, 0.0], tile, light, 0,
+    );
+    // Mirrored underside (reverse winding) so slopes read from below.
+    let down = [up[3], up[2], up[1], up[0]];
+    infengine_voxel::emit_element_quad(
+        verts, idxs, down, [0.0, -1.0, 0.0], tile, light, 0,
+    );
+}
+
 /// Enable or disable per-frame mesher debug logging at runtime.
 ///
 /// Intended usage: bind to F4 in main.rs, enable for one frame, then

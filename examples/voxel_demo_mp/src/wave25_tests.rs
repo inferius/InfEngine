@@ -60,6 +60,7 @@ fn remesh_job_has_revision_field() {
         halo,
         revision: 7,
         doors: std::collections::HashMap::new(),
+        rails: std::collections::HashMap::new(),
     };
     assert_eq!(rj.revision, 7);
     // Wrap in Job::Remesh to confirm the enum variant exists.

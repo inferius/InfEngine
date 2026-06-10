@@ -576,3 +576,9 @@ pub(crate) const REDSTONE_LAMP_ID: u16 = 650;
 // W80 - MC ground cover (cross-pattern, biome-tinted plants).
 pub(crate) const SHORT_GRASS_ID: u16 = 651;
 pub(crate) const FERN_ID: u16 = 652;
+// W127 - rails (flat dedicated-render ground blocks; shapes derive
+// from the neighbourhood at remesh time, MC RailShape style).
+pub(crate) const RAIL_ID: u16 = 653;
+pub(crate) const POWERED_RAIL_ID: u16 = 654;
+pub(crate) const DETECTOR_RAIL_ID: u16 = 655;
+pub(crate) const ACTIVATOR_RAIL_ID: u16 = 656;

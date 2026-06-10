@@ -102,6 +102,17 @@ impl WorkerPool {
                                                     lz as usize,
                                                 );
                                                 let wv = [ox + lx, oy + ly, oz + lz];
+                                                // W127: note rails so the
+                                                // main thread re-meshes with
+                                                // derived shapes (once per
+                                                // chunk - dedup below).
+                                                if crate::block::rail::is_rail_block(b.0)
+                                                    && !side_effects.iter().any(|se| {
+                                                        matches!(se, ChunkSideEffect::Rail)
+                                                    })
+                                                {
+                                                    side_effects.push(ChunkSideEffect::Rail);
+                                                }
                                                 // Snow cap (block id 15).
                                                 if b.0 == 15 {
                                                     side_effects.push(
@@ -157,16 +168,18 @@ impl WorkerPool {
                                     // worker using the pre-fetched halo
                                     // lighting + pack snapshot. Main thread
                                     // only does GPU upload.
-                                    // W125: freshly-generated chunks carry
-                                    // no doors (worldgen doesn't place
-                                    // them), so the door snapshot is empty.
+                                    // W125/W127: freshly-generated chunks
+                                    // carry no doors or rails (worldgen
+                                    // doesn't place them) - empty snapshots.
                                     let no_doors = std::collections::HashMap::new();
+                                    let no_rails = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
                                         gj.coord,
                                         &gj.pack,
                                         &gj.halo,
                                         &no_doors,
+                                        &no_rails,
                                     );
 
                                     if res_tx
@@ -192,6 +205,7 @@ impl WorkerPool {
                                         &rj.pack,
                                         &rj.halo,
                                         &rj.doors,
+                                        &rj.rails,
                                     );
                                     if res_tx
                                         .send(WorkerResult::Remeshed {
@@ -312,6 +326,7 @@ pub(crate) fn mesh_chunk_in_worker(
     pack: &resource_pack::ResourcePack,
     halo: &HaloLighting,
     doors: &std::collections::HashMap<[i32; 3], (u8, bool)>,
+    rails: &std::collections::HashMap<[i32; 3], u8>,
 ) -> Vec<infengine_voxel::ChunkSubmesh> {
     let origin = World::chunk_world_origin(coord);
     let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -368,6 +383,20 @@ pub(crate) fn mesh_chunk_in_worker(
         // it per frame with the real entity sheets + lid animation.
         // The chunk mesh emits nothing for its cell.
         if block.0 == crate::block::CHEST_ID {
+            return true;
+        }
+        // W127: rails render as a flat quad per the derived shape.
+        if crate::block::rail::is_rail_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let shape = rails.get(&wp).copied().unwrap_or(0);
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_rail_quad(
+                verts, idxs, voxel_origin, block.0, shape, pack, light,
+            );
             return true;
         }
         // W125: doors render from the baked state snapshot (facing +
@@ -538,6 +567,11 @@ pub(crate) enum ChunkSideEffect {
     /// `liquid.tick_period.max(1)` pre-computed on the worker so
     /// the main thread only does the addition.
     Liquid { pos: [i32; 3], tick_offset: u64 },
+    /// W127: a rail voxel exists in this chunk. The Generate path
+    /// meshes with an EMPTY rail-shape snapshot (the worker can't
+    /// see neighbours), so the main thread queues one remesh for
+    /// the chunk - that rebuild carries the derived shapes.
+    Rail,
 }
 
 // W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.
@@ -661,5 +695,9 @@ pub(crate) struct RemeshJob {
     /// them in - without this the remesh always drew doors closed
     /// (the old "door never visually opens" bug).
     pub(crate) doors: std::collections::HashMap<[i32; 3], (u8, bool)>,
+    /// W127: derived rail shapes for rails in this chunk (world pos
+    /// -> RailShape code). Computed on the main thread where the
+    /// full World is visible (cross-chunk neighbours included).
+    pub(crate) rails: std::collections::HashMap<[i32; 3], u8>,
 }
 

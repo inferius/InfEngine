@@ -47,11 +47,15 @@ pub(crate) fn apply_block_place(
         hit.place_at
     };
     // Reject when the new voxel would intersect the player capsule.
+    // W127: blocks WITHOUT a collision box (rails, flowers, ...) may
+    // place inside the player's space, exactly like MC - the check
+    // only guards blocks the player would get stuck in.
     let (min, max) = body_aabb(vx.player_pos);
     let p = target_voxel;
     let voxel_min = [p[0] as f32, p[1] as f32, p[2] as f32];
     let voxel_max = [p[0] as f32 + 1.0, p[1] as f32 + 1.0, p[2] as f32 + 1.0];
-    let overlaps = max.x > voxel_min[0]
+    let overlaps = !crate::block::block_is_aabb_passable(block)
+        && max.x > voxel_min[0]
         && min.x < voxel_max[0]
         && max.y > voxel_min[1]
         && min.y < voxel_max[1]
@@ -96,8 +100,19 @@ pub(crate) fn apply_block_place(
         block
     };
     if overlaps || torch_unsupported || occupied {
+        // W127: reject reasons at debug level - "I clicked and
+        // nothing happened" reports are undiagnosable without this.
+        tracing::debug!(
+            ?target_voxel,
+            block = block.0,
+            overlaps,
+            occupied,
+            torch_unsupported,
+            "block place rejected",
+        );
         return;
     }
+    tracing::debug!(?target_voxel, block = placed_block.0, "block placed");
     // W65.4: a planted crop starts at its immature stage and grows
     // via random tick. Swap before the edit is built / broadcast so
     // every peer sees the young sprite.

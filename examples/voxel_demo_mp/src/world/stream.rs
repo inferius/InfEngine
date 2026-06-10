@@ -230,6 +230,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     continue;
                 }
                 let t0 = std::time::Instant::now();
+                // W127: a loaded chunk containing rails re-meshes once
+                // so the rail quads pick up their derived shapes (the
+                // worker meshed it with an empty snapshot).
+                let mut needs_rail_remesh = false;
                 for se in &side_effects {
                     match se {
                         ChunkSideEffect::Snow(wv) => {
@@ -237,6 +241,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         }
                         ChunkSideEffect::Torch(wv) => {
                             vx.torch_positions.insert(*wv);
+                        }
+                        ChunkSideEffect::Rail => {
+                            needs_rail_remesh = true;
                         }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
                             // W115: tick_offset 0 = a static worldgen liquid
@@ -275,6 +282,11 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     &mut vx.fires,
                 );
                 vx.world.insert_chunk(coord, chunk);
+                // W127: rails meshed with an empty shape snapshot in the
+                // worker; queue one rebuild now that the chunk is live.
+                if needs_rail_remesh {
+                    vx.rebuild_chunks(&[coord]);
+                }
                 let cc = coord;
                 if !submeshes.is_empty() {
                     let atlas = vx.voxel_atlas.clone();

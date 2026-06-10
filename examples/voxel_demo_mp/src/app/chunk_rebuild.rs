@@ -37,6 +37,49 @@ impl Voxel {
         out
     }
 
+    /// W127: derive the rail shapes for every rail in `coord`.
+    /// Pure function of the World (cross-chunk neighbours seen),
+    /// computed on the main thread at dispatch time - rails carry
+    /// no stored state anywhere.
+    pub(crate) fn rail_state_snapshot(
+        &self,
+        coord: ChunkCoord,
+    ) -> std::collections::HashMap<[i32; 3], u8> {
+        let mut out = std::collections::HashMap::new();
+        let Some(chunk) = self.world.chunk(coord) else {
+            return out;
+        };
+        let cs = infengine_voxel::CHUNK_SIZE;
+        let origin = [
+            coord[0] * cs as i32,
+            coord[1] * cs as i32,
+            coord[2] * cs as i32,
+        ];
+        let rail_at = |p: [i32; 3]| -> bool {
+            crate::block::rail::is_rail_block(self.world.get(p).0)
+        };
+        for z in 0..cs {
+            for y in 0..cs {
+                for x in 0..cs {
+                    let id = chunk.get(x, y, z).0;
+                    if !crate::block::rail::is_rail_block(id) {
+                        continue;
+                    }
+                    let wp = [
+                        origin[0] + x as i32,
+                        origin[1] + y as i32,
+                        origin[2] + z as i32,
+                    ];
+                    out.insert(
+                        wp,
+                        crate::block::rail::compute_shape(id, wp, rail_at),
+                    );
+                }
+            }
+        }
+        out
+    }
+
     /// W25: Dispatch remesh jobs for `coords` to the worker pool.
     /// For each coord a `Job::Remesh` is enqueued carrying a voxel
     /// snapshot + halo lighting. The actual mesh build runs off the
@@ -90,6 +133,7 @@ impl Voxel {
                 halo,
                 revision,
                 doors: self.door_state_snapshot(coord),
+                rails: self.rail_state_snapshot(coord),
             });
             // If the send fails the pool is shutting down; ignore.
             if let Some(pool) = self.workers.as_ref() {

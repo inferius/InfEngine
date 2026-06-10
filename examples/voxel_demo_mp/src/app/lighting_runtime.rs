@@ -95,6 +95,8 @@ impl Voxel {
         // the same bake the worker remesh path receives, so sync- and
         // worker-built chunks render doors identically.
         let door_states = self.door_state_snapshot(coord);
+        // W127: derived rail shapes (same snapshot the worker gets).
+        let rail_states = self.rail_state_snapshot(coord);
         let emit_special = move |block: BlockId,
                                  voxel_origin: glam::Vec3,
                                  verts: &mut Vec<MeshVertex>,
@@ -102,6 +104,25 @@ impl Voxel {
             // W126: chest = block entity; the chunk mesh emits
             // nothing (render::chests draws it per frame).
             if block.0 == crate::block::CHEST_ID {
+                return true;
+            }
+            // W127: rails render as a flat quad per the derived shape.
+            if crate::block::rail::is_rail_block(block.0) {
+                let wp = [
+                    voxel_origin.x.floor() as i32,
+                    voxel_origin.y.floor() as i32,
+                    voxel_origin.z.floor() as i32,
+                ];
+                let shape = rail_states.get(&wp).copied().unwrap_or(0);
+                let local = [
+                    wp[0] - world_origin[0],
+                    wp[1] - world_origin[1],
+                    wp[2] - world_origin[2],
+                ];
+                let light = light_lookup(local);
+                resource_pack::element_mesh::emit_rail_quad(
+                    verts, idxs, voxel_origin, block.0, shape, pack, light,
+                );
                 return true;
             }
             // W125: doors render as a state-aware panel (closed =
