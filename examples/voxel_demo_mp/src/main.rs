@@ -188,6 +188,8 @@ mod entity_model;
 mod render;
 // W47.4 - ambient particle spawn loop extracted out of main.rs.
 mod ambient;
+// W123 - underwater/cave/music ambience audio timers.
+mod audio_ambience;
 // W47.9 - fire random-tick + apply-step + lava ignite glue.
 mod fire_runtime;
 // W47.13 - place / break decision helpers extracted from on_update.

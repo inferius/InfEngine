@@ -26,7 +26,8 @@ use super::kinds::{
 /// (`mob/<name>`) used by `sfx_at` to look up the matching MC
 /// event via `ENGINE_TO_MC`. Unknown kinds collapse to sheep so
 /// the existing fallback baa/step sound still fires.
-fn mob_sound_stem(kind: u8) -> &'static str {
+/// W123: pub(crate) - the damage + net paths key hurt/death off it.
+pub(crate) fn mob_sound_stem(kind: u8) -> &'static str {
     match kind {
         KIND_SHEEP => "mob/sheep",
         KIND_ZOMBIE => "mob/zombie",

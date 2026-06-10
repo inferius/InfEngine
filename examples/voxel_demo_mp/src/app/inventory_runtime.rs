@@ -37,6 +37,17 @@ impl Voxel {
     /// HUD in a wall of one-liners.
     pub(crate) fn note_pickup(&mut self, block: BlockId) {
         let now = std::time::Instant::now();
+        // W123: MC pickup pop (entity.item.pickup), rate-limited so a
+        // mass vacuum doesn't machine-gun; variants shuffle per fire.
+        let pop_ok = self
+            .last_pickup_sfx
+            .map(|t| now.duration_since(t).as_secs_f32() >= 0.09)
+            .unwrap_or(true);
+        if pop_ok {
+            self.last_pickup_sfx = Some(now);
+            let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+            self.sfx_at("item/pickup", pos, |_, _| {});
+        }
         if let Some(last) = self.pickup_toasts.last_mut()
             && last.1 == block
             && now.duration_since(last.0).as_secs_f32() < 1.5

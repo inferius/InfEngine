@@ -49,6 +49,7 @@ pub(crate) fn damage_mob_scaled(
     let mob_pos;
     let killed;
     let already_dying;
+    let kind;
     {
         let m = &mut voxel.mobs[idx];
         already_dying = m.dying > 0.0;
@@ -56,6 +57,7 @@ pub(crate) fn damage_mob_scaled(
             m.health -= MOB_HIT_DAMAGE * mult.max(0.1);
         }
         mob_pos = m.pos;
+        kind = m.kind;
         killed = m.health <= 0.0 && !already_dying;
     }
     // No re-damage during the death fade.
@@ -78,10 +80,16 @@ pub(crate) fn damage_mob_scaled(
             server.broadcast_bytes("vx.mob_event", buf);
         }
     }
-    // Hurt SFX locally too.
-    voxel.sfx_at("mob/sheep/say", mob_pos, |a, g| {
-        let _ = a.play_beep(280.0, 0.12, 0.20 * g);
-    });
+    // W123: per-kind hurt / death SFX (real MC OGGs via the bank).
+    // Death plays the death vocal, plain hits the hurt one. No synth
+    // fallback - silence beats the W56.1 beep when the pack is absent.
+    let stem = super::audio::mob_sound_stem(kind);
+    let key = if killed {
+        format!("{stem}/death")
+    } else {
+        format!("{stem}/hurt")
+    };
+    voxel.sfx_at(&key, mob_pos, |_, _| {});
     if !killed {
         return;
     }
@@ -96,7 +104,6 @@ pub(crate) fn damage_mob_scaled(
     // are seeded from the mob id so save / replay matches. The kill
     // either auto-collects to the host inventory or credits the
     // attacking client's server-side inventory.
-    let kind = voxel.mobs[idx].kind;
     let seed = mob_id.wrapping_mul(2654435761);
     let loot = mob_loot(kind, seed);
     match attacker_client_id {

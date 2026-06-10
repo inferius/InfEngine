@@ -206,8 +206,161 @@ pub(crate) fn block_material(b: BlockId) -> &'static str {
         // W64.2: gravel + red_sand are granular - share the soft sand
         // bank (closest match; MC's distinct gravel bank is a TODO).
         x if x == GRAVEL_ID || x == RED_SAND_ID => "sand",
-        _ => "stone",
+        // W123: everything else classifies by registry NAME so new
+        // blocks pick the right MC sound family without a fresh
+        // magic-number row here (the registry name IS the MC name).
+        _ => block_material_by_name(b.0),
     }
+}
+
+/// W123: name-driven sound-material classification. Keyword rules
+/// recover MC's SoundType grouping for the whole roster. Returns the
+/// engine material key used to build `dig:<mat>` / `step:<mat>`
+/// audio-bank keys; each returned value must have ENGINE_TO_MC rows.
+fn block_material_by_name(id: u16) -> &'static str {
+    let Some(bt) = block_type(id) else {
+        return "stone";
+    };
+    let n = bt.name;
+    // Order matters: the specific families match before the broad
+    // keyword buckets (deepslate before stone, iron_door before the
+    // wood "door" rule, nether_brick before "brick"-ish stone).
+    if n.contains("deepslate") {
+        "deepslate"
+    } else if n.contains("nether_brick") {
+        "nether_bricks"
+    } else if n.contains("netherrack") || n.contains("nether_quartz_ore") || n.contains("nether_gold_ore") {
+        "netherrack"
+    } else if n.contains("basalt") {
+        "basalt"
+    } else if n.contains("nylium") {
+        "nylium"
+    } else if n.contains("nether_wart") {
+        "nether_wart"
+    } else if n.contains("sculk") {
+        "sculk"
+    } else if n.contains("bone") {
+        "bone"
+    } else if n.contains("wool") || n.contains("carpet") {
+        "wool"
+    } else if n.contains("snow") {
+        "snow"
+    } else if n.contains("glass") {
+        "glass"
+    } else if n.contains("slime") {
+        "slime"
+    } else if n.contains("honey") {
+        "honey"
+    } else if n.contains("coral") {
+        "coral"
+    } else if n.contains("mud") {
+        "mud"
+    } else if n.contains("iron_block")
+        || n.contains("gold_block")
+        || n.contains("copper")
+        || n.contains("anvil")
+        || n.contains("chain")
+        || n.contains("iron_bars")
+        || n.contains("iron_door")
+        || n.contains("iron_trapdoor")
+        || n.contains("cauldron")
+        || n.contains("lantern")
+        || n.contains("raw_iron")
+        || n.contains("raw_gold")
+        || n.ends_with("_rail")
+        || n == "rail"
+    {
+        "metal"
+    } else if n.contains("sand") {
+        "sand"
+    } else if n.contains("gravel")
+        || n.contains("dirt")
+        || n.contains("podzol")
+        || n.contains("mycelium")
+        || n.contains("farmland")
+        || n.contains("leaves")
+        || n.contains("grass")
+        || n.contains("moss")
+        || n.contains("vine")
+        || n.contains("lily")
+        || n.contains("sapling")
+        || n.contains("fern")
+        || n.contains("wheat")
+        || n.contains("sugar_cane")
+        || n.contains("kelp")
+        || n.contains("seagrass")
+        || n.contains("bamboo")
+        || n.ends_with("_stem")
+    {
+        "grass"
+    } else if n.contains("plank")
+        || n.contains("log")
+        || n.contains("_wood")
+        || n.contains("stripped")
+        || n.contains("fence")
+        || n.contains("door")
+        || n.contains("trapdoor")
+        || n.contains("chest")
+        || n.contains("barrel")
+        || n.contains("table")
+        || n.contains("ladder")
+        || n.contains("sign")
+        || n.contains("bookshelf")
+        || n.contains("loom")
+        || n.contains("lectern")
+        || n.contains("composter")
+        || n.contains("scaffolding")
+        || n.contains("beehive")
+        || n.contains("bee_nest")
+        || n.contains("campfire")
+        || n.contains("jukebox")
+        || n.contains("note_block")
+        || n.contains("crafting")
+        || n.contains("bed")
+        || n.contains("torch")
+        || n.contains("pumpkin")
+        || n.contains("melon")
+    {
+        "wood"
+    } else {
+        "stone"
+    }
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+
+    fn id_of(name: &str) -> u16 {
+        BLOCK_TYPES
+            .iter()
+            .find(|bt| bt.name == name)
+            .unwrap_or_else(|| panic!("registry has no block named {name}"))
+            .id
+    }
+
+    /// W123: the name classifier recovers MC sound families for the
+    /// post-legacy roster (legacy low ids keep the id fast path).
+    #[test]
+    fn name_classifier_maps_core_families() {
+        for (name, want) in [
+            ("deepslate", "deepslate"),
+            ("deepslate_diamond_ore", "deepslate"),
+            ("blue_wool", "wool"),
+            ("copper_block", "metal"),
+            ("birch_planks", "wood"),
+            ("birch_leaves", "grass"),
+            ("glass_pane", "glass"),
+            ("diamond_ore", "stone"),
+        ] {
+            let got = block_material(BlockId(id_of(name)));
+            assert_eq!(got, want, "{name} should sound like {want}, got {got}");
+        }
+    }
+
+    // The "every emitted material has ENGINE_TO_MC dig+step rows"
+    // cross-check lives in resource_pack::sounds (bin-only module;
+    // the lib target doesn't compile resource_pack).
 }
 
 pub(crate) fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {

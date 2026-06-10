@@ -515,7 +515,8 @@ pub(crate) fn cmd_fw(
             },
         );
     }
-    voxel.sfx_at("firework", base, |a, g| {
+    // W123: real MC firework blast (launch pop kept as synth flavour).
+    voxel.sfx_at("firework/blast", base, |a, g| {
         let _ = a.play_thud(180.0, 0.3 * g);
     });
     lines.push("Boom.".to_string());

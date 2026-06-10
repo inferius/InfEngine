@@ -75,11 +75,14 @@ pub(crate) fn apply_combat(
                 }
             }
             vx.mob_hurt_flash.insert(mob_id, 0.30);
+            // W123: predicted per-kind hurt vocal (the server echoes
+            // the authoritative event, which remote peers hear).
             if let Some(mob) = vx.remote_mobs.get(&mob_id).copied() {
-                let pos = mob.pos;
-                vx.sfx_at("mob/sheep/say", pos, |a, g| {
-                    let _ = a.play_beep(280.0, 0.12, 0.18 * g);
-                });
+                let key = format!(
+                    "{}/hurt",
+                    crate::mob::audio::mob_sound_stem(mob.kind),
+                );
+                vx.sfx_at(&key, mob.pos, |_, _| {});
             }
         } else {
             let held = vx

@@ -213,6 +213,16 @@ impl Voxel {
             audio_bank: infengine_audio::AudioBank::new(),
             sounds_dir: None,
             step_cooldown: 0.0,
+            last_pickup_sfx: None,
+            rain_sfx_accum: 0.0,
+            underwater_was: false,
+            underwater_sfx_accum: 0.0,
+            // First cave sting is eligible a couple of minutes in;
+            // re-rolls randomised after each fire.
+            cave_sfx_in: 150.0,
+            // First music track a few minutes after launch (MC's
+            // music gap is 5-20 min; we sit at the friendly end).
+            music_in: 180.0,
             heartbeat_accum: 0.0,
             cactus_damage_accum: 0.0,
             fly_mode: false,

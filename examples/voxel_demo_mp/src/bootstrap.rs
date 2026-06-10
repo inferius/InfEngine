@@ -237,6 +237,12 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
         && !vx.resource_pack.sounds.is_empty()
     {
         for (engine_key, _) in resource_pack::sounds::ENGINE_TO_MC {
+            // W123: music tracks are multi-MB streams - they
+            // lazy-load one at a time when the music timer fires
+            // (audio_ambience), never in the startup preload.
+            if engine_key.starts_with("music/") {
+                continue;
+            }
             if vx.audio_bank.has(engine_key) {
                 continue;
             }

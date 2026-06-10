@@ -500,6 +500,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let _t = std::time::Instant::now();
             vx.update_play(ctx, dt);
             DIAG_UPDATE_PLAY_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
+            // W123: underwater / cave / music ambience timers.
+            crate::audio_ambience::tick(vx, dt);
             let _t = std::time::Instant::now();
             vx.stream_chunks();
             DIAG_STREAM_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);

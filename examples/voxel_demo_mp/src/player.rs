@@ -289,6 +289,12 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
     }
     if voxel.player_health <= 0.0 {
         tracing::warn!("player died (HP = 0) - respawning");
+        // W123: death vocal at the death spot (before the respawn
+        // teleport moves the listener away).
+        let death_pos = [voxel.player_pos.x, voxel.player_pos.y, voxel.player_pos.z];
+        voxel.sfx_at("player/death", death_pos, |a, g| {
+            let _ = a.play_thud(90.0, 0.5 * g);
+        });
         voxel.player_pos = voxel.safe_spawn();
         voxel.player_vel = Vec3::ZERO;
         voxel.player_health = PLAYER_MAX_HEALTH;

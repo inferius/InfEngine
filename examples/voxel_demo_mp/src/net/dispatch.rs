@@ -869,12 +869,19 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
             if evt.kind == 2 {
                 vx.mob_lunge.insert(evt.id, MOB_LUNGE_TIME);
             }
-            if let Some(mob) = vx.remote_mobs.get(&evt.id).copied() {
-                let pos = mob.pos;
-                let say_freq = if evt.kind == 1 { 200.0 } else { 280.0 };
-                vx.sfx_at("mob/sheep/say", pos, move |a, g| {
-                    let _ = a.play_beep(say_freq, 0.16, 0.20 * g);
-                });
+            // W123: per-kind hurt / death vocals (real MC OGGs).
+            // Lunge events (kind 2) carry no universal vocal. No
+            // synth fallback - silence beats the W56.1 beep.
+            if evt.kind <= 1
+                && let Some(mob) = vx.remote_mobs.get(&evt.id).copied()
+            {
+                let stem = crate::mob::audio::mob_sound_stem(mob.kind);
+                let key = if evt.kind == 1 {
+                    format!("{stem}/death")
+                } else {
+                    format!("{stem}/hurt")
+                };
+                vx.sfx_at(&key, mob.pos, |_, _| {});
             }
         }
         // W5.3a/b: apply queued chest + furnace messages. Each

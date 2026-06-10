@@ -325,6 +325,21 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             }
         }
         app.last_walk_xz = Some(cur_xz);
+        // W123: rain ambience loop. MC plays weather.rain segments
+        // back-to-back while it rains; our bank variants are short
+        // clips, so refire on a ~0.45 s cadence (clips overlap a
+        // touch, which reads as a continuous shower). No synth
+        // fallback - silence is better than a noise bed.
+        if app.weather == 1 {
+            app.rain_sfx_accum -= dt;
+            if app.rain_sfx_accum <= 0.0 {
+                app.rain_sfx_accum = 0.45;
+                let pos = [app.player_pos.x, app.player_pos.y, app.player_pos.z];
+                app.sfx_at("ambient/rain", pos, |_, _| {});
+            }
+        } else {
+            app.rain_sfx_accum = 0.0;
+        }
         // Lightning state machine. Only fires while raining.
         // `next_lightning_at` counts down; on zero we trigger a
         // 0.18s flash + a thud and seed the next interval at a

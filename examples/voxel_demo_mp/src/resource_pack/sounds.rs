@@ -354,6 +354,40 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("portal/travel", "block.portal.travel"),
     ("portal/trigger", "block.portal.trigger"),
     ("dragon_egg/jump", "block.dragon_egg.jump"),
+    // W123 - player feedback events.
+    ("player/hurt", "entity.player.hurt"),
+    ("player/death", "entity.player.death"),
+    ("hurt", "entity.player.hurt"),
+    ("drown", "entity.player.hurt_drown"),
+    ("burn", "entity.player.hurt_on_fire"),
+    ("void", "entity.player.hurt"),
+    ("eat", "entity.generic.eat"),
+    ("burp", "entity.player.burp"),
+    ("item/pickup", "entity.item.pickup"),
+    ("xp/pickup", "entity.experience_orb.pickup"),
+    ("player/levelup", "entity.player.levelup"),
+    // W123 - weather + world ambience.
+    ("thunder", "entity.lightning_bolt.thunder"),
+    ("thunder/impact", "entity.lightning_bolt.impact"),
+    ("ambient/rain", "weather.rain"),
+    ("ambient/cave", "ambient.cave"),
+    ("ambient/underwater", "ambient.underwater.loop"),
+    ("ambient/underwater_enter", "ambient.underwater.enter"),
+    ("ambient/underwater_exit", "ambient.underwater.exit"),
+    // W123 - misc events with real MC OGGs.
+    ("firework/launch", "entity.firework_rocket.launch"),
+    ("firework/blast", "entity.firework_rocket.blast"),
+    // W123 - per-material dig/step added with the name-driven
+    // block_material classifier.
+    ("dig:deepslate", "block.deepslate.break"),
+    ("step:deepslate", "block.deepslate.step"),
+    ("step:glass", "block.glass.step"),
+    ("dig:mud", "block.mud.break"),
+    ("step:mud", "block.mud.step"),
+    // W123 - background music (lazy-loaded one track at a time;
+    // see app_on_update music timer).
+    ("music/game", "music.game"),
+    ("music/creative", "music.creative"),
 ];
 
 #[cfg(test)]
@@ -490,6 +524,27 @@ mod tests {
         );
         let reg = load_sounds_json(&mc);
         assert!(reg.contains_key("block.stone.break"));
+    }
+
+    /// W123: every material `block_material` can emit must have
+    /// dig+step rows here, or the bank silently never loads it and
+    /// digging that family falls back to the synth thud.
+    #[test]
+    fn every_emitted_material_has_engine_rows() {
+        use crate::block::{BLOCK_TYPES, block_material};
+        use infengine_voxel::BlockId;
+        let keys: std::collections::HashSet<&str> =
+            ENGINE_TO_MC.iter().map(|(k, _)| *k).collect();
+        let mut seen = std::collections::HashSet::new();
+        for bt in BLOCK_TYPES {
+            seen.insert(block_material(BlockId(bt.id)));
+        }
+        for mat in seen {
+            let dig = format!("dig:{mat}");
+            let step = format!("step:{mat}");
+            assert!(keys.contains(dig.as_str()), "missing {dig} row");
+            assert!(keys.contains(step.as_str()), "missing {step} row");
+        }
     }
 
     #[test]

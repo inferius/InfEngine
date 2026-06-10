@@ -445,6 +445,25 @@ pub(crate) struct Voxel {
     /// is moving + grounded. Resets to STEP_PERIOD whenever a
     /// step sting fires.
     pub(crate) step_cooldown: f32,
+    /// W123: rate-limit stamp for the item-pickup pop so a mass
+    /// vacuum pickup doesn't machine-gun `entity.item.pickup`.
+    pub(crate) last_pickup_sfx: Option<std::time::Instant>,
+    /// W123: seconds until the next `weather.rain` ambience segment
+    /// fires while weather == rain. Transient (not saved).
+    pub(crate) rain_sfx_accum: f32,
+    /// W123: previous-frame submerged flag; drives the one-shot
+    /// `ambient.underwater.enter` / `.exit` stings.
+    pub(crate) underwater_was: bool,
+    /// W123: seconds until the next `ambient.underwater.loop`
+    /// segment refires while the camera stays submerged.
+    pub(crate) underwater_sfx_accum: f32,
+    /// W123: seconds until the next eligible `ambient.cave` sting
+    /// (rolls only while the player is in a dark underground spot).
+    pub(crate) cave_sfx_in: f32,
+    /// W123: seconds until the next background-music track. The
+    /// track itself lazy-loads into the bank under the "music" key
+    /// (one track resident at a time).
+    pub(crate) music_in: f32,
     /// Seconds since the last heartbeat thump. Drives the low-HP
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.
