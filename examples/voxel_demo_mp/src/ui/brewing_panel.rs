@@ -65,7 +65,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
             if let Some((id, n)) = held_local {
                 ui.label(format!(
                     "Holding: item {} x{}",
-                    crate::item::item_display_name(id),
+                    crate::lang::localized_item_name(id),
                     n,
                 ));
             }

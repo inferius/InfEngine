@@ -190,6 +190,8 @@ mod render;
 mod ambient;
 // W123 - underwater/cave/music ambience audio timers.
 mod audio_ambience;
+// W124 - MC language files + localized names + search haystack.
+mod lang;
 // W47.9 - fire random-tick + apply-step + lava ignite glue.
 mod fire_runtime;
 // W47.13 - place / break decision helpers extracted from on_update.

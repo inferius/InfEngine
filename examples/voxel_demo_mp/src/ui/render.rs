@@ -137,7 +137,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 if b == BlockId::AIR {
                     return None;
                 }
-                let name = block_type(b.0).map(|t| t.name).unwrap_or("?");
+                // W124: localized block name on the HUD target label.
+                let name = crate::lang::localized_block_name(b.0);
                 let pct = vx.mining.as_ref().and_then(|m| {
                     if m.voxel == hit.voxel && m.block == b {
                         Some(((m.progress / m.total).clamp(0.0, 1.0) * 100.0)
@@ -1586,14 +1587,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             .find(|(_, c)| *c == ic)
                                             .map(|(l, _)| *l)
                                             .unwrap_or("Ostatni");
-                                        let out_name =
-                                            crate::item::item_display_name(
-                                                r.output.0,
-                                            );
+                                        // W124: search the multilingual
+                                        // haystack (localized + English
+                                        // + raw names + keywords).
                                         let pass_filter = q.is_empty()
-                                            || out_name
-                                                .to_lowercase()
-                                                .contains(&q);
+                                            || crate::lang::search_haystack(
+                                                r.output.0,
+                                            )
+                                            .contains(&q);
                                         if !pass_filter {
                                             continue;
                                         }
@@ -1730,8 +1731,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 &creative_query_local,
                             );
                             filtered.sort_by(|a, b| {
-                                crate::item::item_display_name(a.id)
-                                    .cmp(&crate::item::item_display_name(b.id))
+                                crate::lang::localized_item_name(a.id)
+                                    .cmp(&crate::lang::localized_item_name(b.id))
                             });
                             egui::ScrollArea::vertical()
                                 .max_height(360.0)
@@ -1760,7 +1761,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                     })
                                             };
                                             let name =
-                                                crate::item::item_display_name(entry.id);
+                                                crate::lang::localized_item_name(entry.id);
                                             let resp = crate::ui::slot_widget::draw_slot_widget(
                                                 ui,
                                                 icon_slot,
@@ -1824,7 +1825,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             if let Some((id, n)) = chest_held_local {
                                 ui.label(format!(
                                     "Holding: item {} x{}",
-                                    crate::item::item_display_name(id),
+                                    crate::lang::localized_item_name(id),
                                     n
                                 ));
                             }
@@ -1936,7 +1937,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             if let Some((id, n)) = furnace_held_local {
                                 ui.label(format!(
                                     "Holding: item {} x{}",
-                                    crate::item::item_display_name(id),
+                                    crate::lang::localized_item_name(id),
                                     n,
                                 ));
                             }

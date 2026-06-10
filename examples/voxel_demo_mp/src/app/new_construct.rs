@@ -344,6 +344,7 @@ impl Voxel {
                 mc_assets_path: String::new(),
                 mc_assets_resolved: String::new(),
                 mc_assets_is_fallback: true,
+                language: "en_us".to_string(),
             }),
             plugins: Some(plugin::PluginRegistry::new()),
             plugin_blocks: Vec::new(),

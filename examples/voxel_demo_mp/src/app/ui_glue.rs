@@ -90,6 +90,8 @@ impl Voxel {
         self.menu.options.mc_assets_resolved =
             self.resource_pack.source.display().to_string();
         self.menu.options.mc_assets_is_fallback = self.resource_pack.is_fallback;
+        // W124: UI language.
+        self.menu.options.language = self.settings.language.clone();
     }
 
     /// Refresh the menu's worlds + saved-servers caches if they've

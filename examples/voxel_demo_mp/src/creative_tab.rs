@@ -22,7 +22,7 @@
 
 use infengine_voxel::BlockId;
 
-use crate::item::{ItemCategory, ITEM_TYPES, ItemType, item_display_name};
+use crate::item::{ItemCategory, ITEM_TYPES, ItemType};
 
 /// W12.9 - Creative tab category strip. Mirrors MC's
 /// `CreativeModeTab` enum but at a coarser grain. Each category
@@ -227,8 +227,9 @@ pub(crate) fn filter_items(
         .iter()
         .copied()
         .filter(|e| {
-            let name = item_display_name(e.id).to_lowercase();
-            name.contains(&q)
+            // W124: multilingual haystack - localized + English +
+            // raw MC names + per-item keyword aliases.
+            crate::lang::search_haystack(e.id).contains(&q)
         })
         .collect()
 }

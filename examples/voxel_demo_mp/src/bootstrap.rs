@@ -36,6 +36,9 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             Some(std::path::PathBuf::from(override_path)),
         ));
     }
+    // W124: load the UI language maps (persisted code; en_us
+    // fallback layer always loads alongside).
+    crate::lang::load_and_set(&vx.resource_pack, &vx.settings.language);
     vx.session_started = Some(std::time::Instant::now());
     // Drop the MOTD lines into the local chat log on startup.
     let motd = Voxel::motd_lines();

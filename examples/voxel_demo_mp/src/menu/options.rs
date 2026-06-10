@@ -57,6 +57,35 @@ pub(crate) fn draw(
     ui.checkbox(&mut ctx.options.lock_cursor, "Zamknout kurzor");
     ui.checkbox(&mut ctx.options.hide_cursor, "Skryt kurzor");
 
+    // W124: UI language. The discovered-language list is process-
+    // stable, so compute it once. Selection applies IMMEDIATELY
+    // (sync_menu_options re-mirrors options from settings every
+    // frame, so a deferred pick would visually snap back).
+    ui.separator();
+    static LANG_CHOICES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let choices = LANG_CHOICES.get_or_init(crate::lang::available_languages);
+    ui.horizontal(|ui| {
+        ui.label("Jazyk / Language:");
+        let before = ctx.options.language.clone();
+        egui::ComboBox::from_id_salt("options_language_combo")
+            .selected_text(ctx.options.language.clone())
+            .height(240.0)
+            .show_ui(ui, |ui| {
+                for code in choices {
+                    ui.selectable_value(
+                        &mut ctx.options.language,
+                        code.clone(),
+                        code,
+                    );
+                }
+            });
+        if ctx.options.language != before {
+            actions.push(MenuAction::ApplyOptions {
+                snapshot: ctx.options.clone(),
+            });
+        }
+    });
+
     // W9.7: resource pack section. Shows the discovered path +
     // a Reload button. The "Cesta" field is a free-form text
     // input; an empty value falls back to the auto-discovered

@@ -170,6 +170,11 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
             } else {
                 Some(trimmed.to_string())
             };
+            // W124: language switch reloads the lang maps in place.
+            if vx.settings.language != snapshot.language {
+                vx.settings.language = snapshot.language.clone();
+                crate::lang::load_and_set(&vx.resource_pack, &vx.settings.language);
+            }
             vx.menu.options = snapshot;
             vx.save_config();
         }

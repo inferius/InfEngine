@@ -92,6 +92,19 @@ impl AssetStore {
         let path = self.objects_dir.join(sub).join(hash);
         if path.is_file() { Some(path) } else { None }
     }
+
+    /// W124: language codes the index ships (`minecraft/lang/
+    /// <code>.json` entries). Unsorted; callers sort.
+    pub(crate) fn list_lang_codes(&self) -> Vec<String> {
+        self.index
+            .keys()
+            .filter_map(|k| {
+                let rest = k.strip_prefix("minecraft/lang/")?;
+                let code = rest.strip_suffix(".json")?;
+                Some(code.to_string())
+            })
+            .collect()
+    }
 }
 
 /// W57 entry point: discover an MC asset store on disk. Returns

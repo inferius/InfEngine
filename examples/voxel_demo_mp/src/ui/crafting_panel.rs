@@ -863,8 +863,8 @@ fn render_recipe_book_window(
                 .filter(|e| {
                     if !q.is_empty() {
                         let name = e.name.to_lowercase();
-                        let out = crate::item::item_display_name(e.output.0)
-                            .to_lowercase();
+                        // W124: multilingual haystack search.
+                        let out = crate::lang::search_haystack(e.output.0);
                         if !name.contains(&q) && !out.contains(&q) {
                             return false;
                         }
@@ -979,7 +979,7 @@ fn draw_recipe_card(
             ui.label(
                 egui::RichText::new(format!(
                     "-> {} x{}",
-                    crate::item::item_display_name(entry.output.0),
+                    crate::lang::localized_item_name(entry.output.0),
                     entry.output.1,
                 ))
                 .small(),

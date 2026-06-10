@@ -1021,6 +1021,10 @@ pub(crate) struct Settings {
     /// resolves to a usable `assets/minecraft/` tree, the engine
     /// loads textures + sounds from there instead.
     pub(crate) mc_assets_path: Option<String>,
+    /// W124: UI language code (MC lang file stem, e.g. "en_us",
+    /// "cs_cz"). Drives item/block display names via `lang`;
+    /// search always matches this language AND English.
+    pub(crate) language: String,
 }
 
 impl Default for Settings {
@@ -1035,6 +1039,7 @@ impl Default for Settings {
             invert_mouse_y: false,
             invert_wheel: false,
             mc_assets_path: None,
+            language: "en_us".to_string(),
         }
     }
 }

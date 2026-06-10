@@ -377,6 +377,7 @@ fn options_clamp_view_distance_to_max() {
         mc_assets_path: String::new(),
         mc_assets_resolved: String::new(),
         mc_assets_is_fallback: false,
+        language: "en_us".to_string(),
     };
     opt.clamp();
     assert_eq!(

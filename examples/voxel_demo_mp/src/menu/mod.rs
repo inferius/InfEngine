@@ -216,6 +216,8 @@ pub(crate) struct OptionsSnapshot {
     /// these via labels; the user can't edit them directly.
     pub(crate) mc_assets_resolved: String,
     pub(crate) mc_assets_is_fallback: bool,
+    /// W124: UI language code (MC lang stem, e.g. "cs_cz").
+    pub(crate) language: String,
 }
 
 impl OptionsSnapshot {
@@ -236,6 +238,16 @@ impl OptionsSnapshot {
             .take(24)
             .collect();
         self.player_name = sane;
+        // W124: lang codes are [a-z0-9_] stems.
+        self.language = self
+            .language
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .take(16)
+            .collect();
+        if self.language.is_empty() {
+            self.language = "en_us".to_string();
+        }
     }
 }
 

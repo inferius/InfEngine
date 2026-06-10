@@ -2440,6 +2440,39 @@ pub(crate) fn item_display_name(id: u16) -> String {
     }
 }
 
+/// W124: extra search keywords per item id. These are ALIASES on
+/// top of the localized + English + raw names the search already
+/// matches - synonyms, slang, and cross-language hooks so e.g.
+/// "bedna" finds the chest regardless of the UI language.
+/// Extend freely; matched lowercase by `lang::search_haystack`.
+pub(crate) const SEARCH_KEYWORDS: &[(u16, &[&str])] = &[
+    (9, &["okno", "window"]),
+    (10, &["svetlo", "light", "lampa"]),
+    (18, &["krumpac", "pick"]),
+    (25, &["mec", "zbran", "blade"]),
+    (31, &["lopata", "ryc"]),
+    (34, &["sekera", "sekyra", "hatchet"]),
+    (35, &["postel", "spanek", "sleep"]),
+    (38, &["kbelik", "vedro", "kyblik"]),
+    (41, &["truhla", "bedna", "truhlice", "uloziste", "storage"]),
+    (42, &["pec", "trouba", "smelt", "taveni"]),
+    (77, &["dvere", "vchod"]),
+    (162, &["jablko", "jidlo", "food"]),
+    (163, &["chleba", "chleb", "jidlo", "food"]),
+    (302, &["klacek", "hulka", "tyc"]),
+    (553, &["pracovni stul", "ponk", "vyroba", "craft"]),
+    (595, &["zebrik", "lezeni", "climb"]),
+];
+
+/// W124: keyword aliases for `id` (empty for the un-seeded rest).
+pub(crate) fn item_search_keywords(id: u16) -> &'static [&'static str] {
+    SEARCH_KEYWORDS
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, kws)| *kws)
+        .unwrap_or(&[])
+}
+
 /// Item category (defaults to `Decoration` for unknown ids - the
 /// least surprising bucket for a stray slot).
 pub(crate) fn item_category(id: u16) -> ItemCategory {

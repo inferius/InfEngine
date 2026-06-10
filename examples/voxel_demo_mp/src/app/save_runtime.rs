@@ -196,6 +196,8 @@ impl Voxel {
         if let Some(p) = self.settings.mc_assets_path.as_deref() {
             let _ = writeln!(text, "mc_assets_path={p}");
         }
+        // W124: UI language code.
+        let _ = writeln!(text, "language={}", self.settings.language);
         let path = Self::config_path();
         if let Err(err) = std::fs::write(&path, text) {
             warn!(error = %err, path = %path.display(), "config save failed");
@@ -234,6 +236,17 @@ impl Voxel {
                 "mouse_sensitivity" => {
                     if let Ok(v) = value.parse::<f32>() {
                         self.settings.mouse_sensitivity = v.clamp(0.05, 4.0);
+                    }
+                }
+                "language" => {
+                    // W124: lang codes are [a-z0-9_] stems.
+                    let sane: String = value
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .take(16)
+                        .collect();
+                    if !sane.is_empty() {
+                        self.settings.language = sane;
                     }
                 }
                 "show_fps" => {
