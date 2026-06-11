@@ -72,7 +72,118 @@ pub(crate) fn load_atlas(root: &Path) -> Option<AtlasOutput> {
         return None;
     }
     tracing::info!(count = entries.len(), "scanned MC texture entries");
+    apply_biome_tints(&tex_root, &mut entries);
     Some(pack(entries))
+}
+
+// ---------------------------------------------------------------
+// W135: biome-colormap tinting.
+// ---------------------------------------------------------------
+
+/// W135: bake the MC biome tint into the tintable tiles at atlas
+/// build time. Vanilla ships grass tops, every leaf variant, the
+/// grass/fern plants etc. as GRAYSCALE textures and multiplies them
+/// by a biome colour at render time (`tintindex` + the 256x256
+/// `colormap/{grass,foliage}.png` keyed by temperature/downfall).
+/// The engine never applied ANY tint, so the whole overworld read
+/// washed-out gray ("u nas se to MC nepodoba"). The chunk mesh has
+/// no per-vertex colour channel yet, so this bakes ONE faithful
+/// climate - the plains colour MC samples for temp 0.8 / downfall
+/// 0.4 - into the atlas; per-biome variation (desert olive, swamp
+/// murk) is the follow-up that needs a real tint vertex attribute.
+///
+/// Colours come from the pack's own colormaps (sampled exactly like
+/// `GrassColor.get` / `FoliageColor.get`); spruce/birch/lily-pad use
+/// MC's hardcoded constants (`FoliageColor.java`). Tiles that are
+/// not grayscale are left alone, so a pre-tinted pack (Bedrock-style
+/// `_carried` textures) never gets tinted twice.
+fn apply_biome_tints(tex_root: &Path, entries: &mut [PackEntry]) {
+    let cm_dir = tex_root.join("colormap");
+    let load_cm = |name: &str| -> Option<RgbaImage> {
+        image::open(cm_dir.join(name)).ok().map(|i| i.to_rgba8())
+    };
+    // MC GrassColor/FoliageColor: x = (1-temp)*255, y = (1-(downfall
+    // *temp))*255. Plains = (0.8, 0.4). Fallbacks are the vanilla
+    // 26.1.2 colormap values at those coords.
+    let sample = |img: Option<RgbaImage>, fallback: [u8; 3]| -> [u8; 3] {
+        let Some(img) = img else { return fallback };
+        let t: f32 = 0.8;
+        let d: f32 = 0.4 * t;
+        let x = (((1.0 - t) * 255.0) as u32).min(img.width() - 1);
+        let y = (((1.0 - d) * 255.0) as u32).min(img.height() - 1);
+        let p = img.get_pixel(x, y);
+        [p[0], p[1], p[2]]
+    };
+    let grass = sample(load_cm("grass.png"), [145, 189, 89]);
+    let foliage = sample(load_cm("foliage.png"), [119, 171, 47]);
+    let mut tinted = 0usize;
+    for e in entries.iter_mut() {
+        let TextureKey::Block(stem) = &e.key else {
+            continue;
+        };
+        let Some(tint) = tint_for_stem(stem, grass, foliage) else {
+            continue;
+        };
+        if !is_grayscale(&e.img) {
+            continue;
+        }
+        for p in e.img.pixels_mut() {
+            p[0] = ((p[0] as u16 * tint[0] as u16) / 255) as u8;
+            p[1] = ((p[1] as u16 * tint[1] as u16) / 255) as u8;
+            p[2] = ((p[2] as u16 * tint[2] as u16) / 255) as u8;
+        }
+        tinted += 1;
+    }
+    tracing::info!(
+        tinted,
+        grass = ?grass,
+        foliage = ?foliage,
+        "W135 biome colormap tints baked",
+    );
+}
+
+/// Which biome tint a texture stem takes. Mirrors the vanilla
+/// blockstate `tintindex` roster for the blocks the engine ships:
+/// grass-colormap surfaces, foliage-colormap leaves/vines, and the
+/// `FoliageColor.java` hardcoded evergreen/birch/lily constants.
+fn tint_for_stem(
+    stem: &str,
+    grass: [u8; 3],
+    foliage: [u8; 3],
+) -> Option<[u8; 3]> {
+    const SPRUCE: [u8; 3] = [0x61, 0x99, 0x61];
+    const BIRCH: [u8; 3] = [0x80, 0xA7, 0x55];
+    const LILY: [u8; 3] = [0x20, 0x80, 0x30];
+    match stem {
+        "grass_block_top"
+        | "grass_block_side_overlay"
+        | "short_grass"
+        | "tall_grass_top"
+        | "tall_grass_bottom"
+        | "fern"
+        | "large_fern_top"
+        | "large_fern_bottom"
+        | "sugar_cane" => Some(grass),
+        "oak_leaves"
+        | "jungle_leaves"
+        | "acacia_leaves"
+        | "dark_oak_leaves"
+        | "mangrove_leaves"
+        | "vine" => Some(foliage),
+        "spruce_leaves" => Some(SPRUCE),
+        "birch_leaves" => Some(BIRCH),
+        "lily_pad" => Some(LILY),
+        _ => None,
+    }
+}
+
+/// True when every sampled opaque pixel is (near-)gray. Guards the
+/// tint against pre-coloured packs.
+fn is_grayscale(img: &RgbaImage) -> bool {
+    img.pixels()
+        .filter(|p| p[3] > 8)
+        .take(512)
+        .all(|p| p[0].abs_diff(p[1]) < 16 && p[1].abs_diff(p[2]) < 16)
 }
 
 /// Recursively walk `dir` + push every PNG into `out`.
@@ -414,6 +525,60 @@ mod tests {
         let out = load_atlas(&mc).unwrap();
         // 5 tiles + 1 animated strip is far below the 256x256 cap.
         assert_eq!(out.atlas_size, (256, 256));
+    }
+
+    #[test]
+    fn w135_grayscale_grass_top_gets_colormap_tint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mc = stage_minimal_pack(tmp.path());
+        let blk = mc.join("textures").join("block");
+        // Grayscale grass top (the vanilla situation).
+        std::fs::write(
+            blk.join("grass_block_top.png"),
+            synth_png(1, &[[150, 150, 150]]),
+        )
+        .unwrap();
+        // Pre-coloured leaves must stay untouched (Bedrock-style pack).
+        std::fs::write(
+            blk.join("oak_leaves.png"),
+            synth_png(1, &[[40, 160, 40]]),
+        )
+        .unwrap();
+        // Solid-green colormap page -> the plains sample IS that green
+        // (the sampler clamps into the 16x16 fixture).
+        let cm = mc.join("textures").join("colormap");
+        std::fs::create_dir_all(&cm).unwrap();
+        std::fs::write(cm.join("grass.png"), synth_png(1, &[[100, 200, 50]]))
+            .unwrap();
+        let out = load_atlas(&mc).unwrap();
+        let (w, _h) = out.atlas_size;
+        let pixel_of = |key: &str| -> (u8, u8, u8) {
+            let tr = out
+                .textures
+                .get(&TextureKey::Block(key.to_string()))
+                .unwrap();
+            let px = (tr.atlas_uv[0] * w as f32) as u32 + 2;
+            let py = (tr.atlas_uv[1] * w as f32) as u32 + 2;
+            let idx = ((py * w + px) * 4) as usize;
+            (
+                out.atlas_rgba[idx],
+                out.atlas_rgba[idx + 1],
+                out.atlas_rgba[idx + 2],
+            )
+        };
+        // 150 * (100, 200, 50) / 255 = (58, 117, 29).
+        let (r, g, b) = pixel_of("grass_block_top");
+        assert!(
+            (r as i32 - 58).abs() <= 2
+                && (g as i32 - 117).abs() <= 2
+                && (b as i32 - 29).abs() <= 2,
+            "grass top should carry the colormap tint, got ({r},{g},{b})",
+        );
+        assert_eq!(
+            pixel_of("oak_leaves"),
+            (40, 160, 40),
+            "pre-coloured tiles must not be re-tinted",
+        );
     }
 
     #[test]
