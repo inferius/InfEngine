@@ -113,7 +113,16 @@ pub(crate) fn cmd_give(
     let block_id = BLOCK_TYPES
         .iter()
         .find(|bt| bt.name.eq_ignore_ascii_case(block_name))
-        .map(|bt| bt.id);
+        .map(|bt| bt.id)
+        // W136: item-only entries (minecart, ...) have no
+        // BLOCK_TYPES row; /give hands those out via ITEM_TYPES
+        // (one id space, the inventory stores them the same way).
+        .or_else(|| {
+            crate::item::ITEM_TYPES
+                .iter()
+                .find(|it| it.name.eq_ignore_ascii_case(block_name))
+                .map(|it| it.id)
+        });
     if let Some(id) = block_id {
         let bid = BlockId(id);
         let mut added = 0u32;
@@ -140,7 +149,7 @@ pub(crate) fn cmd_give(
         }
         lines.push(format!("Gave {added} x {block_name}."));
     } else {
-        lines.push(format!("Unknown block: {block_name}"));
+        lines.push(format!("Unknown block/item: {block_name}"));
     }
     true
 }
