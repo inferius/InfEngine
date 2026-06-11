@@ -193,6 +193,10 @@ impl ResourcePack {
         match discovered {
             Some(root) => {
                 tracing::info!(path = %root.display(), "MC resource pack discovered");
+                // W132: anchor the asset store search to the pack
+                // path (the env vars are absent in plain `cargo run`
+                // shells - sounds then silently never loaded).
+                mc_asset_store::remember_store_near(&root);
                 // W57: prefer the content-addressable asset store for
                 // sounds (launcher install / Mojang asset mirror).
                 // Falls back to the in-pack sounds.json if the store

@@ -185,26 +185,28 @@ fn append_chest_cube(
 
     // World-TOP face (MC y0): the "bottom"-slot tile (light planks
     // on the lid, plain underside art on the base), axis-true.
+    // W132: rotated 180 from the first cut (user report).
     add(
         [[x1, y0, z1], [x1, y0, z0], [x0, y0, z0], [x0, y0, z1]],
         [0.0, -1.0, 0.0],
         [
-            uv(bt_u1, tv1),
-            uv(bt_u1, tv0),
             uv(bt_u0, tv0),
             uv(bt_u0, tv1),
+            uv(bt_u1, tv1),
+            uv(bt_u1, tv0),
         ],
     );
     // World-BOTTOM face (MC y1): the "top"-slot tile (the dark
     // bordered lid inner / base interior floor), axis-true.
+    // W132: rotated 180 to match.
     add(
         [[x0, y1, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1]],
         [0.0, 1.0, 0.0],
         [
-            uv(t_u0, tv1),
-            uv(t_u0, tv0),
             uv(t_u1, tv0),
             uv(t_u1, tv1),
+            uv(t_u0, tv1),
+            uv(t_u0, tv0),
         ],
     );
 }

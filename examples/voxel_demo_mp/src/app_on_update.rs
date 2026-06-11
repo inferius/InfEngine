@@ -533,7 +533,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // to a torch no longer fails when the crosshair clips the
         // torch's full-voxel hitbox.
         vx.target = if matches!(vx.state, AppState::Playing) {
-            raycast_with(
+            // W132: thin-shape aware - a flat rail only blocks the
+            // ray inside its real outline box, like MC.
+            crate::world::targeting::raycast_target(
                 &vx.world,
                 vx.player_pos,
                 forward,
@@ -554,7 +556,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // wireframe-highlighting a falling stream would just
         // confuse the player.
         vx.mine_target = if matches!(vx.state, AppState::Playing) {
-            raycast_with(
+            // W132: same thin-shape awareness for the mining ray.
+            crate::world::targeting::raycast_target(
                 &vx.world,
                 vx.player_pos,
                 forward,

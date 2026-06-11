@@ -176,10 +176,15 @@ pub(crate) fn emit_rail_quad(
     {
         straight = on.atlas_uv;
     }
-    // Curve texture only ships for the plain rail.
+    // Curve texture only ships for the plain rail. W132: the tile
+    // is mirrored horizontally (swap U) - the user's in-game check
+    // showed every curve chirality-flipped ("prevratit vodorovne").
     let corner = pack
         .block_texture("rail_corner")
-        .map(|r| r.atlas_uv)
+        .map(|r| {
+            let [u0, v0, u1, v1] = r.atlas_uv;
+            [u1, v0, u0, v1]
+        })
         .unwrap_or(straight);
     // (tile, texture rotation in 90-degree steps)
     // W131: the W127 straight mapping was CORRECT (W128 wrongly

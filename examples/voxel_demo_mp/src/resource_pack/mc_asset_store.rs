@@ -107,6 +107,35 @@ impl AssetStore {
     }
 }
 
+/// W132: the store path remembered from pack discovery. The env
+/// var only exists in some shells (the user's `cargo run` had
+/// neither INFENGINE_MC_ASSET_STORE nor a .minecraft store, so
+/// sounds silently never loaded); the pack path itself is a far
+/// more reliable anchor - the store usually sits right next to it
+/// (`<...>/mc_assets/mc_pack/assets/minecraft` vs
+/// `<...>/mc_assets/asset_store`).
+static REMEMBERED_STORE: std::sync::RwLock<Option<PathBuf>> =
+    std::sync::RwLock::new(None);
+
+/// Probe the resolved resource-pack root's ancestors for an
+/// `asset_store` sibling and remember the first that loads. Called
+/// from `ResourcePack::load_with_override` whenever a real pack
+/// resolves (covers the settings-override path, which is how packs
+/// load when the INFENGINE_* env vars are absent).
+pub(crate) fn remember_store_near(pack_root: &Path) {
+    let mut anc = pack_root.to_path_buf();
+    for _ in 0..4 {
+        let Some(parent) = anc.parent() else { break };
+        anc = parent.to_path_buf();
+        let cand = anc.join("asset_store");
+        if AssetStore::load(&cand).is_some() {
+            tracing::info!(path = %cand.display(), "asset store found next to the resource pack");
+            *REMEMBERED_STORE.write().expect("store lock") = Some(cand);
+            return;
+        }
+    }
+}
+
 /// W57 entry point: discover an MC asset store on disk. Returns
 /// `None` when no candidate path exists.
 pub(crate) fn discover_asset_store() -> Option<AssetStore> {
@@ -124,6 +153,13 @@ fn candidate_paths() -> Vec<PathBuf> {
         && !env.trim().is_empty()
     {
         out.push(PathBuf::from(env));
+    }
+    // W132: the store remembered from pack discovery (most robust -
+    // works without any env vars set in the launching shell).
+    if let Ok(remembered) = REMEMBERED_STORE.read()
+        && let Some(p) = remembered.as_ref()
+    {
+        out.push(p.clone());
     }
     // W67.x: in test builds, skip the ambient `%APPDATA%/.minecraft`
     // store probe + the offline mirror so tests stay hermetic - they

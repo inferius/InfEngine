@@ -18,3 +18,5 @@ pub mod crop;
 pub mod tree;
 // W47.18 - per-frame chunk streamer (queue, unload, dispatch, drain).
 pub mod stream;
+// W132 - thin-shape-aware targeting raycast.
+pub mod targeting;
