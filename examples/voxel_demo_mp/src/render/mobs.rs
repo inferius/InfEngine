@@ -144,8 +144,8 @@ pub fn draw_remote_mobs(
                     KIND_SHEEP => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         if let Some(baked) = &mob_meshes.sheep_model {
-                            // W92 - universal MC SheepModel (quadruped, full
-                            // woolly texture). Same pipeline + yaw offset.
+                            // W92 - universal MC SheepModel (the skin
+                            // layer). Same pipeline + yaw offset.
                             let pos = Vec3::new(
                                 base_x,
                                 mob.pos[1] - death_sink + walk_bob,
@@ -160,6 +160,20 @@ pub fn draw_remote_mobs(
                                 apply_tint(white),
                                 |_| crate::entity_model::BonePose::default(),
                             );
+                            // W139 - the SheepFurModel wool overlay at
+                            // the same pose (vanilla layers the fur
+                            // over the skin; dye tint is a follow-up -
+                            // natural sheep render white).
+                            if let Some(fur) = &mob_meshes.sheep_fur_model {
+                                crate::entity_model::draw(
+                                    renderer,
+                                    fur,
+                                    pos,
+                                    model_yaw,
+                                    apply_tint(white),
+                                    |_| crate::entity_model::BonePose::default(),
+                                );
+                            }
                         } else {
                             // Legacy fallback.
                             let body = Mat4::from_scale_rotation_translation(

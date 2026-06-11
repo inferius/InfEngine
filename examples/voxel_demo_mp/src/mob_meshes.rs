@@ -470,6 +470,11 @@ pub(crate) struct MobMeshes {
     pub(crate) sheep_left_back_leg: Option<MeshHandle>,
     /// W92 - sheep baked from universal MC `SheepModel` data.
     pub(crate) sheep_model: Option<crate::entity_model::BakedModel>,
+    /// W139 - the `SheepFurModel` wool overlay baked from
+    /// `sheep/sheep_wool.png`. Drawn over `sheep_model` at the same
+    /// pose; `None` when the pack lacks the wool sheet (the sheep
+    /// then shows the bare skin like before).
+    pub(crate) sheep_fur_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Zombie ------------------------------------------------------------
     pub(crate) zombie_head: Option<MeshHandle>,
@@ -854,6 +859,35 @@ pub fn load_non_sheep_mob_meshes(
         // W92 - universal MC SheepModel. Render prefers this.
         mm.sheep_model = Some(crate::entity_model::bake(r, &crate::entity_model::sheep::MODEL, &img));
         info!(texture = format!("{w}x{h}"), "sheep entity texture bound (universal model + 6 legacy parts)");
+        // W139 - the SheepFurModel wool overlay. MC 26.x ships it
+        // at entity/sheep/sheep_wool.png (older packs name it
+        // sheep_fur.png); without it the sheep showed bare skin.
+        let wool = entity_roots
+            .iter()
+            .flat_map(|root| {
+                [
+                    root.join("sheep").join("sheep_wool.png"),
+                    root.join("sheep").join("sheep_fur.png"),
+                ]
+            })
+            .find(|p| p.is_file())
+            .and_then(|p| image::open(&p).ok().map(|i| i.to_rgba8()));
+        if let Some(wool_img) = wool {
+            let mut fur = crate::entity_model::bake(
+                r,
+                &crate::entity_model::sheep::FUR_MODEL,
+                &wool_img,
+            );
+            // The wool "socks" stop above the hooves, so the fur
+            // model's own ground offset sits higher than the skin's.
+            // Pin it to the SKIN offset so both layers share one
+            // ground plane (otherwise the wool floats ~5 px high).
+            if let Some(skin) = &mm.sheep_model {
+                fur.ground_offset = skin.ground_offset;
+            }
+            mm.sheep_fur_model = Some(fur);
+            info!("sheep wool overlay bound (SheepFurModel)");
+        }
     }
 
     // ---- Zombie (64x64) ----------------------------------------------------
