@@ -144,9 +144,41 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         let lerp_rate = 8.0_f32;
         let alpha = 1.0 - (-lerp_rate * dt).exp();
         app.fov_y_rad += (target_fov - app.fov_y_rad) * alpha;
-        let horizontal = (forward_horizontal * move_axis + right * strafe)
-            .normalize_or_zero()
-            * (PLAYER_SPEED * speed_mul);
+        // W134: riding a minecart suspends self-propelled motion -
+        // W/S become cart thrust (projected onto the rail by the
+        // cart tick), Shift requests a dismount, and the cart tick
+        // in app_on_update pins the player each frame. Everything
+        // past the motion block (ambience, breath, splash, walk
+        // distance) still runs.
+        let riding = app.riding_cart.is_some();
+        if riding {
+            let mut thrust = 0.0_f32;
+            if input_active {
+                if ctx.input.is_pressed(Key::W) {
+                    thrust += 1.0;
+                }
+                if ctx.input.is_pressed(Key::S) {
+                    thrust -= 1.0;
+                }
+                if ctx.input.is_pressed(Key::ShiftLeft)
+                    || ctx.input.is_pressed(Key::ShiftRight)
+                {
+                    app.cart_dismount_pending = true;
+                }
+            }
+            app.cart_input = thrust;
+            app.player_vel = Vec3::ZERO;
+            app.grounded = true;
+            app.fall_start_y = None;
+            app.sprinting = false;
+        }
+        let horizontal = if riding {
+            Vec3::ZERO
+        } else {
+            (forward_horizontal * move_axis + right * strafe)
+                .normalize_or_zero()
+                * (PLAYER_SPEED * speed_mul)
+        };
         let mut hvel_x = horizontal.x;
         let mut hvel_z = horizontal.z;
         // Sneak edge protection: a grounded sneaking player can't
@@ -168,7 +200,10 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         app.player_vel.x = hvel_x;
         app.player_vel.z = hvel_z;
 
-        if app.fly_mode {
+        if riding {
+            // W134: the cart carries the player - no jump, no
+            // gravity (vertical motion comes from the rail path).
+        } else if app.fly_mode {
             // Free-flight: Space = up, Shift = down. Velocity is
             // replaced (not integrated) so the player stops the
             // instant the key is released, the way Minecraft's

@@ -173,6 +173,12 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             r,
             mc_entity_dir.as_deref(),
         );
+        // W134: minecart entity mesh from the same entity dir.
+        vx.minecart_meshes =
+            crate::render::minecarts::load_minecart_meshes(
+                r,
+                mc_entity_dir.as_deref(),
+            );
     }
     // Best-effort audio: a missing output device disables SFX.
     match infengine_audio::AudioSystem::new() {

@@ -89,6 +89,13 @@ impl Voxel {
         self.brewing_runtimes.clear();
         self.brewing_open = None;
         self.brewing_held = None;
+        // W134: carts are per-world (not persisted yet - follow-up).
+        self.carts.clear();
+        self.remote_carts.clear();
+        self.riding_cart = None;
+        self.cart_input = 0.0;
+        self.cart_dismount_pending = false;
+        self.cart_net_accum = 0.0;
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into

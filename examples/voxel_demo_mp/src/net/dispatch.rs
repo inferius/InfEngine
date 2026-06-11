@@ -68,6 +68,10 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // Mob pose updates received this tick (client). Folded into
         // `vx.remote_mobs` after the match exits.
         let mut mob_updates: Vec<MobMsg> = Vec::new();
+        // W134: minecart snapshots / removals (client). Folded into
+        // `vx.remote_carts` after the match exits.
+        let mut cart_updates: Vec<crate::net::CartMsg> = Vec::new();
+        let mut cart_removals: Vec<u32> = Vec::new();
         let mut player_removals: Vec<u32> = Vec::new();
         // Pose updates collected this tick. Folded into the
         // smoothing buffer (`remote_interp`) after the net match
@@ -536,6 +540,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         mob_updates: &mut mob_updates,
                         mob_events: &mut mob_events,
                         mob_removals: &mut mob_removals,
+                        cart_updates: &mut cart_updates,
+                        cart_removals: &mut cart_removals,
                         player_removals: &mut player_removals,
                         interp_updates: &mut interp_updates,
                         pvp_self_damage: &mut pvp_self_damage,
@@ -681,6 +687,13 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for m in mob_updates {
             vx.remote_mobs.insert(m.id, m);
+        }
+        // W134: latest cart poses win; removals drop the entry.
+        for m in cart_updates {
+            vx.remote_carts.insert(m.id, m);
+        }
+        for id in cart_removals {
+            vx.remote_carts.remove(&id);
         }
         // Fold incoming pose updates into the interpolation buffer
         // so the render path can lerp toward each new snapshot

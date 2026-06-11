@@ -2289,6 +2289,9 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 654, name: "powered_rail", display: None, places: Some(654), max_stack: 64, icon: None, category: ItemCategory::Transportation },
     ItemType { id: 655, name: "detector_rail", display: None, places: Some(655), max_stack: 64, icon: None, category: ItemCategory::Transportation },
     ItemType { id: 656, name: "activator_rail", display: None, places: Some(656), max_stack: 64, icon: None, category: ItemCategory::Transportation },
+    // W134: the minecart is item-only (places=None) - RMB on a rail
+    // spawns a cart ENTITY via RmbAction::PlaceMinecart.
+    ItemType { id: 657, name: "minecart", display: None, places: None, max_stack: 1, icon: None, category: ItemCategory::Transportation },
 ];
 
 // ---------------------------------------------------------------

@@ -104,6 +104,18 @@ pub(crate) struct MobMsg {
     pub(crate) health: u8,
 }
 
+/// W134: snapshot of one host-side minecart. Sent as `vx.cart` at
+/// ~10 Hz; clients render the latest pose. Removal rides the
+/// separate `vx.cart_remove` (id) message.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct CartMsg {
+    pub(crate) id: u32,
+    pub(crate) pos: [f32; 3],
+    pub(crate) yaw: f32,
+    /// Signed path speed - reserved for client-side interpolation.
+    pub(crate) vel: f32,
+}
+
 /// Server -> all clients: a damage / death event for one mob.
 /// Lets every client play the same hurt flash + sound regardless
 /// of whether they were the attacker.
@@ -521,6 +533,9 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub mob_updates: &'a mut Vec<MobMsg>,
     pub mob_events: &'a mut Vec<MobEventMsg>,
     pub mob_removals: &'a mut Vec<u32>,
+    /// W134: minecart snapshots + removals from the host.
+    pub cart_updates: &'a mut Vec<CartMsg>,
+    pub cart_removals: &'a mut Vec<u32>,
     pub player_removals: &'a mut Vec<u32>,
     pub interp_updates: &'a mut Vec<PlayerMsg>,
     pub pvp_self_damage: &'a mut f32,
@@ -655,6 +670,20 @@ pub(crate) fn process_client_inbox(
                     bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
                 {
                     ctx.mob_removals.push(id);
+                }
+            }
+            "vx.cart" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<CartMsg, _>(&data, cfg)
+                {
+                    ctx.cart_updates.push(m);
+                }
+            }
+            "vx.cart_remove" => {
+                if let Ok((id, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    ctx.cart_removals.push(id);
                 }
             }
             "vx.player_remove" => {

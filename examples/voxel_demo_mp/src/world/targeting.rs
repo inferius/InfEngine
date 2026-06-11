@@ -23,8 +23,14 @@ const RAIL_PICK_HEIGHT: f32 = 0.25;
 
 /// Ray / AABB intersection via the slab method. Returns the
 /// `(t_enter, t_exit)` pair along `dir` (unnormalised ok) or `None`
-/// when the ray misses the box.
-fn ray_aabb(origin: Vec3, dir: Vec3, bmin: Vec3, bmax: Vec3) -> Option<(f32, f32)> {
+/// when the ray misses the box. W134: shared with the minecart
+/// picker (`minecart::raycast_cart`).
+pub(crate) fn ray_aabb(
+    origin: Vec3,
+    dir: Vec3,
+    bmin: Vec3,
+    bmax: Vec3,
+) -> Option<(f32, f32)> {
     let mut t0 = f32::NEG_INFINITY;
     let mut t1 = f32::INFINITY;
     for axis in 0..3 {

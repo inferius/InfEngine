@@ -151,6 +151,8 @@ mod game_mode;
 // itself stays inline in `render_ui` for now.
 mod creative_tab;
 mod menu;
+// W134 - minecarts: rail-riding cart entities (sim + interactions).
+mod minecart;
 mod mining;
 mod mob;
 mod player;

@@ -19,3 +19,5 @@ pub mod drops;
 pub mod players;
 // W126 - chest block-entity renderer (entity sheets + lid anim).
 pub mod chests;
+// W134 - minecart entity renderer (MC MinecartModel + minecart.png).
+pub mod minecarts;

@@ -724,6 +724,24 @@ pub(crate) struct Voxel {
     /// direction; drives which cell edge the panel renders against
     /// (closed = opposite the facing, open = hinge-left swing).
     pub(crate) door_facing: std::collections::HashMap<[i32; 3], u8>,
+    /// W134: live minecarts (offline/host authoritative; clients
+    /// keep this empty and render `remote_carts`).
+    pub(crate) carts: Vec<crate::minecart::Minecart>,
+    /// W134: monotonic cart id source (host).
+    pub(crate) next_cart_id: u32,
+    /// W134: id of the cart the LOCAL player is riding.
+    pub(crate) riding_cart: Option<u32>,
+    /// W134: rider W/S thrust this frame (-1..1, captured by
+    /// `update_play`, projected onto the rail by the cart tick).
+    pub(crate) cart_input: f32,
+    /// W134: Shift pressed while riding - dismount on the next tick.
+    pub(crate) cart_dismount_pending: bool,
+    /// W134: accumulator gating the host's ~10 Hz `vx.cart` stream.
+    pub(crate) cart_net_accum: f32,
+    /// W134: client-side view of the host's cart snapshots.
+    pub(crate) remote_carts: std::collections::HashMap<u32, crate::net::CartMsg>,
+    /// W134: baked minecart entity model.
+    pub(crate) minecart_meshes: crate::render::minecarts::MinecartMeshes,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No

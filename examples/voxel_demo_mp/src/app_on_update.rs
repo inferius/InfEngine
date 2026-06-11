@@ -505,6 +505,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let _t = std::time::Instant::now();
             vx.stream_chunks();
             DIAG_STREAM_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
+            // W134: minecart simulation + rider pin + host snapshot
+            // stream. Runs after update_play (which zeroed the walk
+            // velocity while riding) and before the targeting ray
+            // below so the camera follows the fresh cart pose.
+            crate::minecart::tick_all(vx, dt);
         } else {
             // Paused / in a menu screen: drop captured mouse motion
             // so the camera doesn't lurch when play resumes.
@@ -626,6 +631,24 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             mob_target,
             voxel_dist,
         );
+        // W134: LMB on a minecart pops it back to the item (MC's
+        // instant cart break) when no mob/player stands closer and
+        // the cart is nearer than the targeted voxel.
+        let mut cart_broken = false;
+        if combat_gate
+            && attack_mob.is_none()
+            && attack_player.is_none()
+            && let Some((cart_id, cart_d)) = crate::minecart::raycast_cart(
+                &vx.carts,
+                vx.player_pos,
+                forward,
+                4.0,
+            )
+            && voxel_dist.is_none_or(|vd| cart_d < vd)
+        {
+            crate::minecart::break_cart(vx, cart_id);
+            cart_broken = true;
+        }
         // W47.13k: stamina drain + PvP/mob attack dispatch
         // (host applies directly, client sends a hit request).
         crate::world::place_break::apply_combat(
@@ -641,6 +664,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // ships with `may_build = true`; this is a forward hook.
         let lmb_active = vx.lmb_held
             && !vx.any_panel_open()
+            && !cart_broken
             && attack_mob.is_none()
             && attack_player.is_none()
             && vx.abilities.may_build;
@@ -712,9 +736,31 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 vx.rmb_pending = false;
             }
         }
+        // W134: RMB on a cart mounts it (priority over the block
+        // cascade, mirroring the feed branch above). Shift hops
+        // back off; host/offline only - client riding is part of
+        // the MP cart follow-up.
+        let mut cart_mounted = false;
+        if rmb
+            && !fed
+            && !bucket_scooped
+            && !vx.any_panel_open()
+            && vx.riding_cart.is_none()
+            && !matches!(vx.net, NetRole::Client { .. })
+            && let Some((cart_id, _)) = crate::minecart::raycast_cart(
+                &vx.carts,
+                vx.player_pos,
+                forward,
+                3.5,
+            )
+        {
+            crate::minecart::mount(vx, cart_id);
+            cart_mounted = true;
+        }
         // Block place: RMB single click stays instant; no mining.
         if !fed
             && !bucket_scooped
+            && !cart_mounted
             && !vx.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = vx.target
@@ -871,6 +917,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 crate::world::place_break::apply_bucket_use(
                     vx, &hit, held, forward,
                 );
+            } else if predicted == RmbAction::PlaceMinecart {
+                // W134: drop a cart entity onto the targeted rail
+                // (consumes one minecart item outside creative).
+                crate::minecart::place_cart_from_click(vx, hit.voxel);
             } else if predicted == RmbAction::PlaceBlock
                 && let Some(block) = selected_block
             {
@@ -1445,6 +1495,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &mut vx.chest_lid_anim,
             vx.player_pos,
             dt,
+        );
+        // W134: minecart entities (local sim + remote snapshots).
+        render::minecarts::draw_minecarts(
+            renderer,
+            &vx.minecart_meshes,
+            &vx.carts,
+            &vx.remote_carts,
         );
         // Render any live debris particles before the world cubes
         // so chunk faces draw on top when a particle ends up

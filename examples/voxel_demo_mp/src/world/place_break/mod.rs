@@ -139,6 +139,9 @@ pub enum RmbAction {
     /// Right-click with an empty/water/lava bucket - scoops or
     /// pours a liquid voxel.
     BucketUse,
+    /// W134: right-click with the minecart item on a rail - spawns
+    /// a cart entity riding that rail.
+    PlaceMinecart,
     /// Right-click with a placeable block selected - places a new
     /// voxel at the adjacent (or replaceable) cell.
     PlaceBlock,
@@ -231,6 +234,16 @@ pub fn classify_rmb_action(
         }
         if matches!(h, BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID) {
             return RmbAction::BucketUse;
+        }
+        // W134: the minecart item only ever spawns a cart on a
+        // rail; it must NEVER fall through to PlaceBlock (its id
+        // is item-only - placing it would write a phantom block).
+        if h == crate::minecart::MINECART_ITEM_ID {
+            return if crate::block::rail::is_rail_block(target_id) {
+                RmbAction::PlaceMinecart
+            } else {
+                RmbAction::None
+            };
         }
     }
     // 4. Generic block place. Suppressed in Adventure mode, with
