@@ -309,3 +309,108 @@ fn tintindex_parses_for_grass() {
     let m = load_model_at(dir.path(), "block/grass_tinted").expect("model");
     assert_eq!(m.elements[0].faces.up.as_ref().unwrap().tintindex, Some(0));
 }
+
+// ---------------------------------------------------------------
+// W133: blockstate Y-rotation baking.
+// ---------------------------------------------------------------
+
+/// Build a fence_side-like model: a bar hugging the NORTH edge
+/// (z 0..9) with all six faces declared and a north cullface.
+fn north_arm_model() -> super::models::BlockModel {
+    use super::models::{ElementFaces, ModelElement, ModelFace};
+    let face = |cull: Option<CubeFace>| -> Option<ModelFace> {
+        Some(ModelFace {
+            uv: [7.0, 0.0, 9.0, 9.0],
+            texture: "oak_planks".into(),
+            cullface: cull,
+            tintindex: None,
+            rotation: 0,
+        })
+    };
+    super::models::BlockModel::new(vec![ModelElement {
+        from: [7.0, 6.0, 0.0],
+        to: [9.0, 9.0, 9.0],
+        rotation: None,
+        faces: ElementFaces {
+            down: face(None),
+            up: face(None),
+            north: face(Some(CubeFace::North)),
+            south: face(None),
+            west: face(None),
+            east: face(None),
+        },
+        shade: true,
+    }])
+}
+
+#[test]
+fn rotate_model_y_90_turns_north_arm_east() {
+    use super::models::rotate_model_y;
+    let m = north_arm_model();
+    let r = rotate_model_y(&m, 90);
+    let e = &r.elements[0];
+    // North arm (z 0..9 at x 7..9) becomes an east arm (x 7..16
+    // at z 7..9): (x, z) -> (16 - z, x).
+    assert_eq!(e.from, [7.0, 6.0, 7.0]);
+    assert_eq!(e.to, [16.0, 9.0, 9.0]);
+    // The face that pointed north now points east, cullface included.
+    let east = e.faces.east.as_ref().expect("east face");
+    assert_eq!(east.cullface, Some(CubeFace::East));
+    // Round the loop: what was west is now north, etc.
+    assert!(e.faces.north.is_some());
+    assert!(e.faces.south.is_some());
+    assert!(e.faces.west.is_some());
+}
+
+#[test]
+fn rotate_model_y_360_is_identity() {
+    use super::models::rotate_model_y;
+    let m = north_arm_model();
+    let r0 = rotate_model_y(&m, 0);
+    let r360 = rotate_model_y(&m, 360);
+    assert_eq!(m, r0);
+    assert_eq!(m, r360);
+}
+
+#[test]
+fn rotate_model_y_180_flips_north_arm_south() {
+    use super::models::rotate_model_y;
+    let m = north_arm_model();
+    let r = rotate_model_y(&m, 180);
+    let e = &r.elements[0];
+    // z 0..9 -> z 7..16, x band stays 7..9.
+    assert_eq!(e.from, [7.0, 6.0, 7.0]);
+    assert_eq!(e.to, [9.0, 9.0, 16.0]);
+    let south = e.faces.south.as_ref().expect("south face");
+    assert_eq!(south.cullface, Some(CubeFace::South));
+}
+
+#[test]
+fn rotate_element_rotation_axis_follows_yaw() {
+    use super::models::{
+        rotate_model_y, ElementRotation, ModelElement,
+    };
+    let mut m = north_arm_model();
+    m.elements[0].rotation = Some(ElementRotation {
+        origin: [8.0, 8.0, 8.0],
+        axis: RotationAxis::X,
+        angle_deg: 22.5,
+        rescale: false,
+    });
+    let r90 = rotate_model_y(&m, 90);
+    let rr = r90.elements[0].rotation.expect("rotation kept");
+    assert_eq!(rr.axis, RotationAxis::Z);
+    assert_eq!(rr.angle_deg, 22.5);
+    // Z-axis rotations swing back to X with the angle negated.
+    let mut mz = north_arm_model();
+    mz.elements[0].rotation = Some(ElementRotation {
+        origin: [8.0, 8.0, 8.0],
+        axis: RotationAxis::Z,
+        angle_deg: 22.5,
+        rescale: false,
+    });
+    let rz = rotate_model_y(&mz, 90);
+    let rrz = rz.elements[0].rotation.expect("rotation kept");
+    assert_eq!(rrz.axis, RotationAxis::X);
+    assert_eq!(rrz.angle_deg, -22.5);
+}

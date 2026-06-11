@@ -46,11 +46,19 @@ pub(crate) use super::blockstates::NeighborStates;
 /// gate: logs only fire when BOTH are enabled.
 static MESHER_DEBUG: AtomicBool = AtomicBool::new(false);
 
-/// W129 - state-aware trapdoor emitter. Closed = a 3/16 slab lying
-/// on the cell floor; open = a 3/16 panel standing against the
-/// HINGE edge (the facing edge recorded at place time), exactly the
-/// MC swing. Texture: the full tile on the two big faces, 3 px
-/// strips on the edges.
+/// W129 - state-aware trapdoor emitter. W133 ports the full MC
+/// TrapDoorBlock state space:
+/// - closed bottom half = a 3/16 slab on the cell floor,
+/// - closed TOP half = a 3/16 slab against the cell CEILING (bit 2
+///   of `facing` set; "meli by byt nahore" - and opening one swings
+///   the panel DOWN to vertical, which is the MC trapdoor-floor
+///   trick),
+/// - open (either half) = a 3/16 panel standing against the hinge
+///   edge: the edge OPPOSITE the recorded facing, i.e. flush against
+///   the block the player clicked (vanilla template_trapdoor_open
+///   puts the panel at z 13..16 for facing=north).
+/// Texture: the full tile on the two big faces, 3 px strips on the
+/// edges.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_trapdoor(
     verts: &mut Vec<MeshVertex>,
@@ -62,6 +70,8 @@ pub(crate) fn emit_trapdoor(
     pack: &ResourcePack,
     light: [f32; 2],
 ) {
+    let top_half = facing & crate::block::door::TRAPDOOR_TOP_BIT != 0;
+    let facing = facing & 3;
     let tile = pack
         .block_face_ref(block_id, super::BlockFace::Top)
         .map(|r| r.atlas_uv)
@@ -77,9 +87,13 @@ pub(crate) fn emit_trapdoor(
     let strip_h = [tu0, tv0, tu1, tv0 + T * th];
     let o = origin;
     let (bmin, bmax, big_axis) = if open {
-        // Standing panel at the hinge (facing) edge.
-        let (mn, mx) = crate::block::door::panel_box(facing);
+        // Standing panel against the hinge edge = opposite the
+        // facing (flush with the clicked support block).
+        let (mn, mx) = crate::block::door::panel_box((facing + 2) % 4);
         (mn, mx, if facing.is_multiple_of(2) { 0usize } else { 2 })
+    } else if top_half {
+        // Flat slab against the ceiling.
+        ([0.0, 1.0 - T, 0.0], [1.0, 1.0, 1.0], 1)
     } else {
         // Flat slab on the floor.
         ([0.0, 0.0, 0.0], [1.0, T, 1.0], 1)
@@ -193,12 +207,16 @@ pub(crate) fn emit_rail_quad(
     // UV frame (texture bottom = north, right = east) that is the
     // south<->east join, and each +1 rot step turns the frame 90
     // degrees counter-clockwise (north->west).
+    // W133: +2 steps on every curve - the user's in-game check after
+    // the W132 U-mirror showed each curve joining the two edges
+    // OPPOSITE its rails ("otocit o 180. tu odbocovaci"); the mirror
+    // flipped chirality AND rotated the arc 180, so un-rotate here.
     let (tile, rot) = match shape {
         SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 1),
-        SHAPE_SE => (corner, 0),
-        SHAPE_NE => (corner, 1),
-        SHAPE_NW => (corner, 2),
-        SHAPE_SW => (corner, 3),
+        SHAPE_SE => (corner, 2),
+        SHAPE_NE => (corner, 3),
+        SHAPE_NW => (corner, 0),
+        SHAPE_SW => (corner, 1),
         _ => (straight, 0), // NS + ascending N/S + fallback
     };
     // Corner heights: 1 px float, +1 block on the ascend side.

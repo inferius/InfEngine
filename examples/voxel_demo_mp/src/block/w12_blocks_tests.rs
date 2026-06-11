@@ -109,3 +109,38 @@ fn w12_thin_blocks_are_aabb_passable() {
         );
     }
 }
+
+/// W133: family-aware multipart connections (MC FenceBlock /
+/// IronBarsBlock / WallBlock predicates instead of strict same-id).
+#[test]
+fn w133_multipart_connects_families() {
+    use crate::block::{multipart_connects, BIRCH_FENCE_ID, DARK_OAK_FENCE_ID};
+    use infengine_voxel::BlockId;
+    // Wood fences interconnect across variants...
+    assert!(multipart_connects(OAK_FENCE_ID, BlockId(BIRCH_FENCE_ID)));
+    assert!(multipart_connects(DARK_OAK_FENCE_ID, BlockId(OAK_FENCE_ID)));
+    // ...and grab solid full blocks (stone)...
+    assert!(multipart_connects(OAK_FENCE_ID, BlockId(1)));
+    // ...but not air and not the nether brick fence (separate tag).
+    assert!(!multipart_connects(OAK_FENCE_ID, BlockId(0)));
+    assert!(!multipart_connects(
+        OAK_FENCE_ID,
+        BlockId(NETHER_BRICK_FENCE_ID)
+    ));
+    assert!(!multipart_connects(
+        NETHER_BRICK_FENCE_ID,
+        BlockId(OAK_FENCE_ID)
+    ));
+    assert!(multipart_connects(NETHER_BRICK_FENCE_ID, BlockId(1)));
+    // Panes/bars: each other + walls + solids, never fences.
+    assert!(multipart_connects(GLASS_PANE_ID, BlockId(IRON_BARS_ID)));
+    assert!(multipart_connects(IRON_BARS_ID, BlockId(COBBLESTONE_WALL_ID)));
+    assert!(!multipart_connects(GLASS_PANE_ID, BlockId(OAK_FENCE_ID)));
+    // Walls: walls + panes/bars + solids.
+    assert!(multipart_connects(COBBLESTONE_WALL_ID, BlockId(GLASS_PANE_ID)));
+    assert!(multipart_connects(COBBLESTONE_WALL_ID, BlockId(1)));
+    assert!(!multipart_connects(COBBLESTONE_WALL_ID, BlockId(OAK_FENCE_ID)));
+    // Leaves are transparent -> never "solid" (MC connection
+    // exception preserved).
+    assert!(!multipart_connects(OAK_FENCE_ID, BlockId(6)));
+}

@@ -129,6 +129,89 @@ impl CubeFace {
     }
 }
 
+/// W133: bake a blockstate `y` rotation (0/90/180/270; MC rotates
+/// the model clockwise viewed from above) into a resolved model.
+/// Both blockstate forms carry per-apply Y rotations - multipart
+/// fence/wall/pane arms and plain variants alike - and the cache
+/// builder previously DROPPED them, so e.g. every fence arm rendered
+/// as the un-rotated north arm (the user's "F"-shaped fences).
+/// Verified against vanilla data: oak_door's base model faces east
+/// and `facing=south` applies y=90; oak_fence's `east` arm applies
+/// y=90 to the north-pointing fence_side model.
+///
+/// Up/down face UVs are NOT counter-rotated (the rect-based UV
+/// mapping cannot express a 90-degree texture spin). The fence/wall/
+/// pane top strips are near-uniform wood/stone so the error is
+/// invisible; revisit if a y-rotated model with a directional top
+/// texture shows up.
+pub(crate) fn rotate_model_y(model: &BlockModel, y: u16) -> BlockModel {
+    let steps = ((y / 90) % 4) as usize;
+    if steps == 0 {
+        return model.clone();
+    }
+    let mut out = model.clone();
+    for el in &mut out.elements {
+        for _ in 0..steps {
+            rotate_element_90(el);
+        }
+    }
+    out
+}
+
+/// One +90-degree clockwise-from-above step: point (x, z) ->
+/// (16 - z, x); the face that pointed north now points east.
+fn rotate_element_90(el: &mut ModelElement) {
+    let rot = |x: f32, z: f32| -> (f32, f32) { (16.0 - z, x) };
+    let (ax, az) = rot(el.from[0], el.from[2]);
+    let (bx, bz) = rot(el.to[0], el.to[2]);
+    el.from = [ax.min(bx), el.from[1], az.min(bz)];
+    el.to = [ax.max(bx), el.to[1], az.max(bz)];
+    if let Some(r) = el.rotation.as_mut() {
+        let (ox, oz) = rot(r.origin[0], r.origin[2]);
+        r.origin = [ox, r.origin[1], oz];
+        // Conjugating the element rotation by the yaw step: the X
+        // axis maps to Z with the same angle; Z maps back to X with
+        // the angle negated.
+        match r.axis {
+            RotationAxis::X => r.axis = RotationAxis::Z,
+            RotationAxis::Z => {
+                r.axis = RotationAxis::X;
+                r.angle_deg = -r.angle_deg;
+            }
+            RotationAxis::Y => {}
+        }
+    }
+    let f = std::mem::take(&mut el.faces);
+    el.faces = ElementFaces {
+        down: f.down,
+        up: f.up,
+        east: f.north,
+        south: f.east,
+        west: f.south,
+        north: f.west,
+    };
+    for face in [
+        &mut el.faces.down,
+        &mut el.faces.up,
+        &mut el.faces.north,
+        &mut el.faces.south,
+        &mut el.faces.west,
+        &mut el.faces.east,
+    ] {
+        if let Some(mf) = face.as_mut()
+            && let Some(cf) = mf.cullface
+        {
+            mf.cullface = Some(match cf {
+                CubeFace::North => CubeFace::East,
+                CubeFace::East => CubeFace::South,
+                CubeFace::South => CubeFace::West,
+                CubeFace::West => CubeFace::North,
+                other => other,
+            });
+        }
+    }
+}
+
 /// A fully-resolved block model: every `#var` has been replaced
 /// with the final texture file stem (or dropped). The renderer can
 /// consume this without re-walking parents.

@@ -214,15 +214,32 @@ pub(crate) fn apply_block_place(
     if crate::block::door::is_door_block(placed_block.0)
         || crate::block::door::is_trapdoor_block(placed_block.0)
     {
-        // W125/W129: record the door OR trapdoor facing from the
-        // placer's look direction (MC: the door faces the way the
-        // player faces; the trapdoor hinges on the far edge).
-        // Keyed by the LOWER half = the placed cell. Broadcast so
-        // every peer renders the same panel edge.
-        let facing = crate::block::door::facing_from_look(
-            vx.player_yaw.cos(),
-            -vx.player_yaw.sin(),
-        );
+        // W125/W129: record the door OR trapdoor facing. Doors face
+        // the way the player faces. W133: trapdoors follow the MC
+        // placement rules instead - facing from the clicked face,
+        // half (bit 2) from the click height / clicked face - so
+        // side-placing high on a wall yields a ceiling trapdoor
+        // that swings DOWN when opened. Keyed by the placed cell;
+        // broadcast so every peer renders the same panel.
+        let facing = if crate::block::door::is_trapdoor_block(placed_block.0)
+        {
+            let look = [
+                vx.player_yaw.cos() * vx.player_pitch.cos(),
+                vx.player_pitch.sin(),
+                -vx.player_yaw.sin() * vx.player_pitch.cos(),
+            ];
+            crate::block::door::trapdoor_place_state(
+                hit.normal,
+                target_voxel,
+                [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z],
+                look,
+            )
+        } else {
+            crate::block::door::facing_from_look(
+                vx.player_yaw.cos(),
+                -vx.player_yaw.sin(),
+            )
+        };
         vx.door_facing.insert(target_voxel, facing);
         let door_state_payload: ([i32; 3], u8, bool) =
             (target_voxel, facing, false);

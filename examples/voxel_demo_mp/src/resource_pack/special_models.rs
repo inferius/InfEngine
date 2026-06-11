@@ -162,6 +162,11 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
             Vec::with_capacity(state.parts.len());
         for part in &state.parts {
             if let Some(m) = models::load_model(pack, &part.apply.model) {
+                // W133: bake the apply's Y rotation. Fence/wall/pane
+                // arms are ONE north-pointing model + y=90/180/270
+                // per direction; dropping the rotation drew every
+                // arm pointing north.
+                let m = models::rotate_model_y(&m, part.apply.y);
                 parts.push((part.when.clone(), m));
             }
         }
@@ -199,7 +204,12 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
                     elements = m.elements.len(),
                     "resolve_for_cache: single variant via JSON pipeline",
                 );
-                ResolvedBlockState::Single(m)
+                // W133: bake the variant's Y rotation too (same drop
+                // as the multipart branch).
+                ResolvedBlockState::Single(models::rotate_model_y(
+                    &m,
+                    model_ref.y,
+                ))
             }
             Some(_) => {
                 // W57.1: MC ships some blocks (chest, ender_chest,

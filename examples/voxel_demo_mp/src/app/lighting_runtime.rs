@@ -194,7 +194,8 @@ impl Voxel {
             let lz = (voxel_origin.z - voxel_origin_ref.z) as i32;
             // W40.1: compute horizontal neighbour connection flags so
             // multipart blockstates (fences, walls, panes) show arms.
-            // A neighbour "connects" when it carries the same block id.
+            // W133: family-aware (MC fence/wall/pane rules) instead
+            // of strict same-id, matching the worker path.
             let same_id = |dx: i32, dy: i32, dz: i32| -> bool {
                 let nx = lx + dx;
                 let ny = ly + dy;
@@ -203,7 +204,9 @@ impl Voxel {
                     && (0..CHUNK_SIZE as i32).contains(&ny)
                     && (0..CHUNK_SIZE as i32).contains(&nz)
                 {
-                    chunk_ref.get(nx as usize, ny as usize, nz as usize).0 == block.0
+                    let nb =
+                        chunk_ref.get(nx as usize, ny as usize, nz as usize);
+                    crate::block::multipart_connects(block.0, nb)
                 } else {
                     false
                 }

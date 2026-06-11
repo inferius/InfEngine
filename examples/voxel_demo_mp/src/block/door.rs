@@ -80,6 +80,59 @@ pub(crate) fn panel_box(edge: u8) -> ([f32; 3], [f32; 3]) {
     }
 }
 
+/// W133: bit 2 of the trapdoor state byte = TOP half (closed slab
+/// against the ceiling, the MC `half=top` state). Bits 0-1 stay the
+/// facing code, so door-state plumbing (snapshot, net, toggle)
+/// carries the half for free.
+pub(crate) const TRAPDOOR_TOP_BIT: u8 = 4;
+
+/// W133: port of MC `TrapDoorBlock::getStateForPlacement`. Returns
+/// the trapdoor state byte: facing (bits 0-1) | TRAPDOOR_TOP_BIT.
+/// - Clicking a block's TOP face -> bottom half; BOTTOM face -> top
+///   half; facing = horizontal look reversed (panel hinges on the
+///   far edge as seen by the placer).
+/// - Clicking a SIDE face -> facing = that face's outward normal,
+///   half from the exact click height within the face (above the
+///   midline = top). The click point is recovered by intersecting
+///   the eye ray with the clicked face plane.
+pub(crate) fn trapdoor_place_state(
+    normal: [i32; 3],
+    place_at: [i32; 3],
+    eye: [f32; 3],
+    look: [f32; 3],
+) -> u8 {
+    if normal[1] != 0 {
+        let f = closed_edge(facing_from_look(look[0], look[2]));
+        return if normal[1] > 0 { f } else { f | TRAPDOOR_TOP_BIT };
+    }
+    let f = match (normal[0], normal[2]) {
+        (1, _) => 0u8,
+        (_, 1) => 1,
+        (-1, _) => 2,
+        _ => 3,
+    };
+    // The clicked face is the shared plane between the support block
+    // and the place cell: at the place cell's low edge when the
+    // normal points +, high edge when -.
+    let (axis, plane) = if normal[0] != 0 {
+        let x = place_at[0] as f32;
+        (0usize, if normal[0] > 0 { x } else { x + 1.0 })
+    } else {
+        let z = place_at[2] as f32;
+        (2usize, if normal[2] > 0 { z } else { z + 1.0 })
+    };
+    let mut top = false;
+    let d = look[axis];
+    if d.abs() > 1e-6 {
+        let t = (plane - eye[axis]) / d;
+        if t > 0.0 {
+            let y_hit = eye[1] + look[1] * t;
+            top = y_hit - place_at[1] as f32 > 0.5;
+        }
+    }
+    if top { f | TRAPDOOR_TOP_BIT } else { f }
+}
+
 /// True when the cell directly above `pos` is the upper half of
 /// the door whose lower half lives at `pos`. Used by the place
 /// path to decide whether to auto-place an upper half.
@@ -166,6 +219,51 @@ mod tests {
         assert!(!is_door_block(76));
         assert!(!is_door_block(576));
         assert!(!is_door_block(1)); // stone
+    }
+
+    #[test]
+    fn trapdoor_place_side_click_height_picks_half() {
+        // Clicking the +X face of a support: facing = +X (code 0);
+        // the half follows the exact click height on that face.
+        // Place cell [5, 10, 5] -> face plane x = 5.0, midline 10.5.
+        let eye = [3.5, 11.4, 5.5];
+        let look = [1.0, -0.3, 0.0];
+        // t = 1.5 -> y_hit = 11.4 - 0.45 = 10.95 > 10.5 -> TOP half.
+        let s = trapdoor_place_state([1, 0, 0], [5, 10, 5], eye, look);
+        assert_eq!(s & 3, 0);
+        assert_ne!(s & TRAPDOOR_TOP_BIT, 0, "high click = top half");
+        // Aim straight at the lower part of the face -> bottom half.
+        let eye2 = [3.5, 10.2, 5.5];
+        let s2 = trapdoor_place_state(
+            [1, 0, 0],
+            [5, 10, 5],
+            eye2,
+            [1.0, 0.0, 0.0],
+        );
+        assert_eq!(s2 & 3, 0);
+        assert_eq!(s2 & TRAPDOOR_TOP_BIT, 0, "low click = bottom half");
+    }
+
+    #[test]
+    fn trapdoor_place_top_bottom_faces() {
+        // Top-face click -> BOTTOM half; facing = look reversed
+        // (looking +X -> facing -X = code 2).
+        let s = trapdoor_place_state(
+            [0, 1, 0],
+            [5, 10, 5],
+            [5.5, 12.0, 5.5],
+            [1.0, -1.0, 0.0],
+        );
+        assert_eq!(s & TRAPDOOR_TOP_BIT, 0, "floor placement = bottom");
+        assert_eq!(s & 3, 2);
+        // Bottom-face (ceiling) click -> TOP half.
+        let s2 = trapdoor_place_state(
+            [0, -1, 0],
+            [5, 10, 5],
+            [5.5, 9.0, 5.5],
+            [1.0, 1.0, 0.0],
+        );
+        assert_ne!(s2 & TRAPDOOR_TOP_BIT, 0, "ceiling placement = top");
     }
 
     #[test]

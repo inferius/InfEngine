@@ -455,6 +455,8 @@ pub(crate) fn mesh_chunk_in_worker(
             return true;
         }
         // W40.1: compute neighbour connection flags for multipart.
+        // W133: family-aware (MC fence/wall/pane rules) instead of
+        // strict same-id - fences grab other wood fences + solids.
         let same_id = |dx: i32, dy: i32, dz: i32| -> bool {
             let nx = lx + dx;
             let ny = ly + dy;
@@ -463,7 +465,8 @@ pub(crate) fn mesh_chunk_in_worker(
                 && (0..CHUNK_SIZE as i32).contains(&ny)
                 && (0..CHUNK_SIZE as i32).contains(&nz)
             {
-                chunk.get(nx as usize, ny as usize, nz as usize).0 == block.0
+                let nb = chunk.get(nx as usize, ny as usize, nz as usize);
+                crate::block::multipart_connects(block.0, nb)
             } else {
                 false
             }

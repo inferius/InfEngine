@@ -197,6 +197,49 @@ pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
     block_is_opaque(b)
 }
 
+/// W133: does a multipart block (fence/wall/pane) grow an arm toward
+/// `neighbor`? Ports the MC connection predicates instead of the old
+/// strict same-id rule (which left e.g. an oak fence next to a birch
+/// fence - or next to a stone wall it should grab - unconnected):
+/// - `FenceBlock::connectsTo`: wooden fences interconnect as a tag
+///   family; the nether brick fence is in FENCES but not
+///   WOODEN_FENCES so it only pairs with itself; both grab
+///   side-sturdy solids.
+/// - `IronBarsBlock::attachsTo`: panes + bars connect to any
+///   IronBarsBlock, to walls, and to solids.
+/// - `WallBlock::connectsTo`: walls connect to walls, panes/bars,
+///   and solids.
+///
+/// Everything else keeps same-id. Side-sturdiness approximated by
+/// `block_fully_occludes` (also excludes MC's connection exceptions
+/// - leaves are transparent, so they never read as solid here).
+/// Fence gates join the predicate once the engine ships them.
+pub(crate) fn multipart_connects(self_id: u16, neighbor: BlockId) -> bool {
+    let n = neighbor.0;
+    let wood_fence = |id: u16| {
+        id == OAK_FENCE_ID || (BIRCH_FENCE_ID..=DARK_OAK_FENCE_ID).contains(&id)
+    };
+    let wall = |id: u16| {
+        id == COBBLESTONE_WALL_ID
+            || (GRANITE_WALL_ID..=END_STONE_BRICK_WALL_ID).contains(&id)
+    };
+    let pane_or_bars = |id: u16| id == GLASS_PANE_ID || id == IRON_BARS_ID;
+    let solid = !neighbor.is_air() && block_fully_occludes(neighbor);
+    if wood_fence(self_id) {
+        return wood_fence(n) || solid;
+    }
+    if self_id == NETHER_BRICK_FENCE_ID {
+        return n == NETHER_BRICK_FENCE_ID || solid;
+    }
+    if pane_or_bars(self_id) {
+        return pane_or_bars(n) || wall(n) || solid;
+    }
+    if wall(self_id) {
+        return wall(n) || pane_or_bars(n) || solid;
+    }
+    n == self_id
+}
+
 /// Map a block id to the Minecraft sound-material name. Used to
 /// pick the right `dig:*` / `step:*` variant from `sound_assets`.
 /// Unknown blocks default to `"stone"` because that's the least

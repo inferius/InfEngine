@@ -116,8 +116,12 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 52, block: "soul_torch",     top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 53, block: "soul_torch",     top: "", bottom: "", sides: "" },
     // W46.21: copper torch family (MC 1.21+).
-    BlockNameMap { infengine_id: 351, block: "copper_torch",      top: "", bottom: "", sides: "" },
-    BlockNameMap { infengine_id: 352, block: "copper_wall_torch", top: "", bottom: "", sides: "" },
+    // W133: the wall id maps to the BASE torch texture like rows
+    // 51/53 - MC ships no copper_wall_torch.png (wall-torch models
+    // reference copper_torch.png; orientation comes from the
+    // dedicated torch render path).
+    BlockNameMap { infengine_id: 351, block: "copper_torch", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 352, block: "copper_torch", top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 54, block: "sea_lantern",    top: "", bottom: "", sides: "" },
     BlockNameMap {
         infengine_id: 55, block: "jack_o_lantern",
@@ -855,6 +859,8 @@ mod tests {
             12,  // raw_beef - item only
             35,  // red_bed - entity model, no block textures
             68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, // shape blocks
+            543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
+            568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)
             154, 155, 156, 157, 158, 159, 160, 161, // gold/diamond tools
             162, 163, 164, 165, 166, 167, 168,       // food items
