@@ -5,21 +5,24 @@
 
 use crate::Voxel;
 use crate::drops::DropItem;
+use crate::minecart::Minecart;
 use crate::mob::MobState;
 
 use crate::world_save::entities::{
-    DimensionEntities, DropSave, ENTITIES_FORMAT_VERSION, MobSave,
+    CartSave, DimensionEntities, DropSave, ENTITIES_FORMAT_VERSION, MobSave,
 };
 
 /// Build a `DimensionEntities` snapshot from raw refs. The
 /// per-dim save path (`dims::save_*_dim`) hands in either
-/// `voxel.mobs` / `voxel.dropped_items` (active dim) or the
-/// parking maps (`voxel.entities_by_dim[dim]`).
+/// `voxel.mobs` / `voxel.dropped_items` / `voxel.carts` (active
+/// dim) or the parking maps (`voxel.entities_by_dim[dim]`).
 pub(in crate::world_save::runtime) fn build_dimension_entities_from(
     mobs: &[MobState],
     drops: &[DropItem],
+    carts: &[Minecart],
     next_mob_id: u32,
     next_drop_id: u32,
+    next_cart_id: u32,
 ) -> DimensionEntities {
     let mob_saves: Vec<MobSave> = mobs
         .iter()
@@ -43,12 +46,26 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             age: d.age,
         })
         .collect();
+    // W137: carts persist their rail binding (cell + t), not the
+    // derived world position - `snap_to_rail` rebuilds that on load.
+    let cart_saves: Vec<CartSave> = carts
+        .iter()
+        .map(|c| CartSave {
+            id: c.id,
+            cell: c.cell,
+            t: c.t,
+            vel: c.vel,
+            yaw: c.yaw,
+        })
+        .collect();
     DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
         mobs: mob_saves,
         drops: drop_saves,
         next_mob_id,
         next_drop_id,
+        carts: cart_saves,
+        next_cart_id,
     }
 }
 
@@ -62,6 +79,9 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
     voxel.mobs.clear();
     voxel.remote_mobs.clear();
     voxel.dropped_items.clear();
+    voxel.carts.clear();
+    voxel.remote_carts.clear();
+    voxel.riding_cart = None;
     for m in entities.mobs {
         // Drop mobs with zero / negative health - they were dead on
         // last save and the runtime would only despawn them again.
@@ -94,10 +114,33 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
             pickup_delay_ticks: 0,
         });
     }
+    // W137: rebuild each cart's world pose from its rail binding.
+    // The chunks loaded before this call (load_active_dim order), so
+    // `snap_to_rail` sees the rails; a cart whose rail vanished
+    // (edited save) keeps cell-centre coords and freezes on next tick.
+    for c in entities.carts {
+        let mut cart = Minecart {
+            id: c.id,
+            cell: c.cell,
+            t: c.t,
+            vel: c.vel,
+            pos: glam::Vec3::new(
+                c.cell[0] as f32 + 0.5,
+                c.cell[1] as f32,
+                c.cell[2] as f32 + 0.5,
+            ),
+            yaw: c.yaw,
+        };
+        crate::minecart::snap_to_rail(&voxel.world, &mut cart);
+        voxel.carts.push(cart);
+    }
     voxel.next_mob_id = entities
         .next_mob_id
         .max(voxel.mobs.iter().map(|m| m.id).max().unwrap_or(0) + 1);
     voxel.next_drop_id = entities
         .next_drop_id
         .max(voxel.dropped_items.iter().map(|d| d.id).max().unwrap_or(0) + 1);
+    voxel.next_cart_id = entities
+        .next_cart_id
+        .max(voxel.carts.iter().map(|c| c.id).max().unwrap_or(0) + 1);
 }

@@ -84,8 +84,10 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
     let dim_entities = build_dimension_entities_from(
         &voxel.mobs,
         &voxel.dropped_items,
+        &voxel.carts,
         voxel.next_mob_id,
         voxel.next_drop_id,
+        voxel.next_cart_id,
     );
     entities::write_entities(slug, dim, &dim_entities)?;
     let dim_containers = build_dimension_containers_from(
@@ -123,12 +125,26 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         chunks::write_chunk(slug, dim, &payload)?;
         chunk_count += 1;
     }
-    // Entities: missing entry = no mobs/drops parked yet.
-    let (mobs, drops, nm, nd) = match voxel.entities_by_dim.get(dim) {
-        Some(e) => (e.mobs.as_slice(), e.drops.as_slice(), e.next_mob_id, e.next_drop_id),
-        None => (&[][..] as &[MobState], &[][..] as &[DropItem], 1u32, 1u32),
+    // Entities: missing entry = no mobs/drops/carts parked yet.
+    let (mobs, drops, carts, nm, nd, nc) = match voxel.entities_by_dim.get(dim) {
+        Some(e) => (
+            e.mobs.as_slice(),
+            e.drops.as_slice(),
+            e.carts.as_slice(),
+            e.next_mob_id,
+            e.next_drop_id,
+            e.next_cart_id,
+        ),
+        None => (
+            &[][..] as &[MobState],
+            &[][..] as &[DropItem],
+            &[][..] as &[crate::minecart::Minecart],
+            1u32,
+            1u32,
+            1u32,
+        ),
     };
-    let dim_entities = build_dimension_entities_from(mobs, drops, nm, nd);
+    let dim_entities = build_dimension_entities_from(mobs, drops, carts, nm, nd, nc);
     entities::write_entities(slug, dim, &dim_entities)?;
     let dim_containers = build_dimension_containers_from(
         &dw.chests,
@@ -313,12 +329,37 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
             pickup_delay_ticks: 0,
         });
     }
+    // W137: parked carts rebuild their pose against the parked
+    // dim's world (inserted into `voxel.worlds` above) so a later
+    // dim switch unparks them mid-rail, not at the origin.
+    let parked_world = voxel.worlds.get(dim).map(|d| &d.world);
+    for c in ents.carts {
+        let mut cart = crate::minecart::Minecart {
+            id: c.id,
+            cell: c.cell,
+            t: c.t,
+            vel: c.vel,
+            pos: glam::Vec3::new(
+                c.cell[0] as f32 + 0.5,
+                c.cell[1] as f32,
+                c.cell[2] as f32 + 0.5,
+            ),
+            yaw: c.yaw,
+        };
+        if let Some(w) = parked_world {
+            crate::minecart::snap_to_rail(w, &mut cart);
+        }
+        parked.carts.push(cart);
+    }
     parked.next_mob_id = ents
         .next_mob_id
         .max(parked.mobs.iter().map(|m| m.id).max().unwrap_or(0) + 1);
     parked.next_drop_id = ents
         .next_drop_id
         .max(parked.drops.iter().map(|d| d.id).max().unwrap_or(0) + 1);
+    parked.next_cart_id = ents
+        .next_cart_id
+        .max(parked.carts.iter().map(|c| c.id).max().unwrap_or(0) + 1);
     voxel.entities_by_dim.insert(dim.to_string(), parked);
 
     Ok(chunks_loaded)

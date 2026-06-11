@@ -110,6 +110,8 @@ fn entities_roundtrip_with_mobs() {
         drops: Vec::new(),
         next_mob_id: 3,
         next_drop_id: 0,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -140,6 +142,8 @@ fn entities_roundtrip_with_drops() {
         ],
         next_mob_id: 0,
         next_drop_id: 5,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -161,6 +165,8 @@ fn entities_roundtrip_mixed() {
         drops: vec![sample_drop(0, BLOCK_STONE), sample_drop(1, BLOCK_PLANK)],
         next_mob_id: 2,
         next_drop_id: 2,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -280,6 +286,8 @@ fn entities_recover_from_bak() {
         drops: Vec::new(),
         next_mob_id: 1,
         next_drop_id: 0,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     let second = DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
@@ -287,6 +295,8 @@ fn entities_recover_from_bak() {
         drops: Vec::new(),
         next_mob_id: 2,
         next_drop_id: 0,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_entities_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();

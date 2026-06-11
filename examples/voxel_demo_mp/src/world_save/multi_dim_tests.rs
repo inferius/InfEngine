@@ -105,6 +105,8 @@ fn per_dim_entities_files_independent() {
         drops: Vec::new(),
         next_mob_id: 2,
         next_drop_id: 1,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     let nt = DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
@@ -120,6 +122,8 @@ fn per_dim_entities_files_independent() {
         drops: Vec::new(),
         next_mob_id: 3,
         next_drop_id: 1,
+        carts: Vec::new(),
+        next_cart_id: 0,
     };
     write_entities_in_dir(tmp.path(), SLUG, "overworld", &ow).unwrap();
     write_entities_in_dir(tmp.path(), SLUG, "nether", &nt).unwrap();

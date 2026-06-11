@@ -387,9 +387,7 @@ fn rotate_model_y_180_flips_north_arm_south() {
 
 #[test]
 fn rotate_element_rotation_axis_follows_yaw() {
-    use super::models::{
-        rotate_model_y, ElementRotation, ModelElement,
-    };
+    use super::models::{rotate_model_y, ElementRotation};
     let mut m = north_arm_model();
     m.elements[0].rotation = Some(ElementRotation {
         origin: [8.0, 8.0, 8.0],

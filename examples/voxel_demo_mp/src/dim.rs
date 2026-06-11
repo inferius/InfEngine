@@ -50,8 +50,13 @@ pub(crate) const NETHER: &str = "nether";
 pub(crate) struct DimEntities {
     pub mobs: Vec<MobState>,
     pub drops: Vec<DropItem>,
+    /// W137: minecarts parked with their dim (previously carts
+    /// LEAKED across a dim switch - overworld carts rode nether
+    /// rails).
+    pub carts: Vec<crate::minecart::Minecart>,
     pub next_mob_id: u32,
     pub next_drop_id: u32,
+    pub next_cart_id: u32,
 }
 
 impl DimEntities {
@@ -60,8 +65,10 @@ impl DimEntities {
         Self {
             mobs: Vec::new(),
             drops: Vec::new(),
+            carts: Vec::new(),
             next_mob_id: 1,
             next_drop_id: 1,
+            next_cart_id: 1,
         }
     }
 }

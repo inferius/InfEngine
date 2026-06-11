@@ -72,14 +72,23 @@ impl Voxel {
             liquid_positions: std::mem::take(&mut self.liquid_positions),
         };
         self.worlds.insert(self.current_dim.clone(), parked);
+        // W137: a rider can't follow their cart into the parking
+        // map - hop off before the cart parks.
+        if self.riding_cart.is_some() {
+            crate::minecart::dismount(self);
+        }
         let parked_ents = dim::DimEntities {
             mobs: std::mem::take(&mut self.mobs),
             drops: std::mem::take(&mut self.dropped_items),
+            carts: std::mem::take(&mut self.carts),
             next_mob_id: self.next_mob_id,
             next_drop_id: self.next_drop_id,
+            next_cart_id: self.next_cart_id,
         };
         self.entities_by_dim
             .insert(self.current_dim.clone(), parked_ents);
+        // Remote snapshots are per-dim too.
+        self.remote_carts.clear();
 
         // Pull the target dim's state out (mint empty if first
         // visit this session).
@@ -106,8 +115,10 @@ impl Voxel {
             .unwrap_or_else(dim::DimEntities::empty);
         self.mobs = target_ents.mobs;
         self.dropped_items = target_ents.drops;
+        self.carts = target_ents.carts;
         self.next_mob_id = target_ents.next_mob_id;
         self.next_drop_id = target_ents.next_drop_id;
+        self.next_cart_id = target_ents.next_cart_id.max(1);
 
         // F.2e: switch_dim no longer touches the worldgen
         // atomics. Chunk gen reads the per-dim ctx via

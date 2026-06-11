@@ -45,7 +45,11 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 
 /// Envelope + payload format version. Bumped when the on-disk shape
 /// changes in a breaking way. Phase B.6 wires a migration registry.
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 1;
+/// - v1: mobs + drops.
+/// - v2 (W137): adds `carts` + `next_cart_id` (minecarts persist).
+///   Migration lives in `entities_v1_to_v2`, registered in
+///   `migrate::register_production_arrows`.
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 2;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
@@ -81,6 +85,10 @@ pub(crate) struct DimensionEntities {
     pub next_mob_id: u32,
     /// Same as `next_mob_id` but for dropped items.
     pub next_drop_id: u32,
+    /// W137 (v2): every minecart riding the dim's rails.
+    pub carts: Vec<CartSave>,
+    /// W137 (v2): monotonic id source for the next minted cart.
+    pub next_cart_id: u32,
 }
 
 impl DimensionEntities {
@@ -94,8 +102,30 @@ impl DimensionEntities {
             drops: Vec::new(),
             next_mob_id: 0,
             next_drop_id: 0,
+            carts: Vec::new(),
+            next_cart_id: 0,
         }
     }
+}
+
+/// W137 (v2): one persistent minecart entry. The cart is bound to a
+/// rail CELL + a parameter along that cell's path (see
+/// `minecart::Minecart`); world position is re-derived on load via
+/// `snap_to_rail`, so only the path binding + motion persist.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct CartSave {
+    /// Stable per-save cart id. Allocated from
+    /// `DimensionEntities::next_cart_id`.
+    pub id: u32,
+    /// Rail cell the cart is bound to (world voxel coords).
+    pub cell: [i32; 3],
+    /// Param along the cell's path, 0..1.
+    pub t: f32,
+    /// Signed speed (m/s) along +t.
+    pub vel: f32,
+    /// Heading - rotation around Y, radians (kept so a parked cart
+    /// faces the same way after reload).
+    pub yaw: f32,
 }
 
 /// One persistent mob entry.
@@ -364,6 +394,87 @@ fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
+// ---------------------------------------------------------------
+// Migration: v1 -> v2 (W137 - adds `carts` + `next_cart_id`).
+// ---------------------------------------------------------------
+
+/// Frozen snapshot of the v1 payload shape (mobs + drops only).
+/// Kept private to the migration arrow so the live struct can keep
+/// evolving without poisoning old decodes.
+#[derive(Debug, Deserialize)]
+struct DimensionEntitiesV1 {
+    #[allow(dead_code)]
+    format_version: u32,
+    mobs: Vec<MobSave>,
+    drops: Vec<DropSave>,
+    next_mob_id: u32,
+    next_drop_id: u32,
+}
+
+/// One-step v1 -> v2 migration arrow: decode the v1 envelope,
+/// re-encode as v2 with `carts: vec![]` / `next_cart_id: 0`. Same
+/// shape as `containers::containers_v1_to_v2` (the production
+/// precedent).
+pub(crate) fn entities_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("entities v1 envelope truncated"));
+    }
+    if &bytes[..4] != ENTITIES_MAGIC {
+        return Err(invalid("entities v1 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 1 {
+        return Err(invalid(format!(
+            "entities_v1_to_v2 expected v1, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v1: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("entities v1 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown entities v1 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v1, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV1, _>(&raw_v1, cfg)
+        .map_err(|err| invalid(format!("entities v1 payload decode failed: {err}")))?;
+    let v2 = DimensionEntities {
+        format_version: 2,
+        mobs: v1.mobs,
+        drops: v1.drops,
+        next_mob_id: v1.next_mob_id,
+        next_drop_id: v1.next_drop_id,
+        carts: Vec::new(),
+        next_cart_id: 0,
+    };
+    let raw_v2 = bincode::serde::encode_to_vec(&v2, cfg)
+        .map_err(|err| invalid(format!("entities v2 payload encode failed: {err}")))?;
+    let uncompressed_len_v2 = raw_v2.len() as u64;
+    let (kind_v2, body_v2): (u8, Vec<u8>) = match zstd::encode_all(&raw_v2[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v2.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v2),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v2.len() + 17);
+    out.extend_from_slice(ENTITIES_MAGIC);
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.push(kind_v2);
+    out.extend_from_slice(&uncompressed_len_v2.to_le_bytes());
+    out.extend_from_slice(&body_v2);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,7 +485,75 @@ mod tests {
         assert_eq!(e.format_version, ENTITIES_FORMAT_VERSION);
         assert!(e.mobs.is_empty());
         assert!(e.drops.is_empty());
+        assert!(e.carts.is_empty());
         assert_eq!(e.next_mob_id, 0);
         assert_eq!(e.next_drop_id, 0);
+        assert_eq!(e.next_cart_id, 0);
+    }
+
+    /// W137: a hand-built v1 envelope (mobs + drops, no carts) must
+    /// migrate to v2 through the production arrow with empty carts.
+    #[test]
+    fn v1_envelope_migrates_to_v2_with_empty_carts() {
+        // Encode a v1 payload using the frozen V1 field order.
+        #[derive(Serialize)]
+        struct V1Out {
+            format_version: u32,
+            mobs: Vec<MobSave>,
+            drops: Vec<DropSave>,
+            next_mob_id: u32,
+            next_drop_id: u32,
+        }
+        let v1 = V1Out {
+            format_version: 1,
+            mobs: vec![MobSave {
+                id: 7,
+                kind: 1,
+                pos: [1.0, 2.0, 3.0],
+                yaw: 0.5,
+                vel: [0.0; 3],
+                health: 8.0,
+                age_seconds: 0.0,
+            }],
+            drops: Vec::new(),
+            next_mob_id: 8,
+            next_drop_id: 1,
+        };
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(&v1, cfg).unwrap();
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(ENTITIES_MAGIC);
+        file.extend_from_slice(&1u32.to_le_bytes());
+        file.push(COMP_NONE);
+        file.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        file.extend_from_slice(&raw);
+
+        let v2_bytes = entities_v1_to_v2(&file).expect("migration");
+        // Re-decode through the standard reader path pieces.
+        let version =
+            u32::from_le_bytes([v2_bytes[4], v2_bytes[5], v2_bytes[6], v2_bytes[7]]);
+        assert_eq!(version, 2);
+        let kind = v2_bytes[8];
+        let len = u64::from_le_bytes([
+            v2_bytes[9], v2_bytes[10], v2_bytes[11], v2_bytes[12], v2_bytes[13],
+            v2_bytes[14], v2_bytes[15], v2_bytes[16],
+        ]) as usize;
+        let body = &v2_bytes[17..];
+        let raw2 = if kind == COMP_ZSTD {
+            decode_zstd(body, len).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let (v2, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+            &raw2,
+            cfg,
+        )
+        .unwrap();
+        assert_eq!(v2.format_version, 2);
+        assert_eq!(v2.mobs.len(), 1);
+        assert_eq!(v2.mobs[0].id, 7);
+        assert!(v2.carts.is_empty());
+        assert_eq!(v2.next_cart_id, 0);
+        assert_eq!(v2.next_mob_id, 8);
     }
 }

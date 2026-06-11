@@ -43,6 +43,7 @@ const RAIL_H: f32 = 1.0 / 16.0;
 /// Rider eye height above the cart origin (seated).
 const RIDER_EYE: f32 = 1.30;
 
+#[derive(Debug, Clone)]
 pub(crate) struct Minecart {
     pub(crate) id: u32,
     /// Rail cell the cart is currently bound to.

@@ -151,6 +151,7 @@ fn default_registry_has_phase_c_f_and_q2_arrows() {
     // - Phase C.4: Containers v1 -> v2 (added furnaces).
     // - Phase F:   WorldJson v1 -> v2 (added dimension_worldgens).
     // - Phase Q.2: Player    v1 -> v2 (added highlight_mode).
+    // - W137:      Entities  v1 -> v2 (added carts).
     // Every other (kind, from) slot must stay empty so a stray
     // arrow registration would fail this assertion.
     let reg = default_registry();
@@ -158,7 +159,7 @@ fn default_registry_has_phase_c_f_and_q2_arrows() {
     assert!(reg.plan(SaveKind::WorldJson, 1, 2).is_some());
     assert!(reg.plan(SaveKind::Chunk, 1, 2).is_none());
     assert!(reg.plan(SaveKind::Player, 1, 2).is_some());
-    assert!(reg.plan(SaveKind::Entities, 1, 2).is_none());
+    assert!(reg.plan(SaveKind::Entities, 1, 2).is_some());
     assert!(reg.plan(SaveKind::Timers, 1, 2).is_none());
     // Containers v1 -> v2 (the C.4 arrow) is the other half.
     assert!(reg.plan(SaveKind::Containers, 1, 2).is_some());

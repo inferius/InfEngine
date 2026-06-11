@@ -30,7 +30,7 @@ use super::chunks::{
 };
 use super::entities::{
     DimensionEntities, ENTITIES_FORMAT_VERSION, ENTITIES_MAGIC, entities_path_in_dir,
-    read_entities_in_dir_with_registry, write_entities_in_dir,
+    entities_v1_to_v2, read_entities_in_dir_with_registry, write_entities_in_dir,
 };
 use super::layout::{meta_path_in, world_dir_in, world_json_path_in};
 use super::meta::{META_FORMAT_VERSION, WorldMeta, create_meta, read_meta_in_dir_with_registry};
@@ -362,18 +362,20 @@ fn entities_migration_v0_to_v1_round_trip() {
     let bak = with_bak_suffix(&path);
     let _ = std::fs::remove_file(&bak);
 
+    // W137: entities are at v2 now - the chain is the test's v0 -> v1
+    // envelope bump followed by the PRODUCTION v1 -> v2 arrow. The
+    // freshly-written body is v2-shaped; the V1 decode inside the
+    // production arrow reads its five-field prefix (bincode tolerates
+    // the trailing carts bytes) and re-encodes a clean v2.
     let mut registry = MigrationRegistry::new();
-    registry.register(
-        SaveKind::Entities,
-        0,
-        ENTITIES_FORMAT_VERSION,
-        bump_envelope_v0_to_v1,
-    );
+    registry.register(SaveKind::Entities, 0, 1, bump_envelope_v0_to_v1);
+    registry.register(SaveKind::Entities, 1, 2, entities_v1_to_v2);
 
     let loaded = read_entities_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
         .expect("entities exist");
     assert_eq!(loaded.format_version, ENTITIES_FORMAT_VERSION);
+    assert!(loaded.carts.is_empty());
 
     let post = std::fs::read(&path).unwrap();
     assert_eq!(&post[..4], ENTITIES_MAGIC);

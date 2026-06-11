@@ -57,6 +57,7 @@ static MESHER_DEBUG: AtomicBool = AtomicBool::new(false);
 ///   edge: the edge OPPOSITE the recorded facing, i.e. flush against
 ///   the block the player clicked (vanilla template_trapdoor_open
 ///   puts the panel at z 13..16 for facing=north).
+///
 /// Texture: the full tile on the two big faces, 3 px strips on the
 /// edges.
 #[allow(clippy::too_many_arguments)]

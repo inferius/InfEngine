@@ -211,8 +211,10 @@ pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
 ///   and solids.
 ///
 /// Everything else keeps same-id. Side-sturdiness approximated by
-/// `block_fully_occludes` (also excludes MC's connection exceptions
-/// - leaves are transparent, so they never read as solid here).
+/// `block_fully_occludes`, which also excludes MC's connection
+/// exceptions (leaves are transparent, so they never read as solid
+/// here).
+///
 /// Fence gates join the predicate once the engine ships them.
 pub(crate) fn multipart_connects(self_id: u16, neighbor: BlockId) -> bool {
     let n = neighbor.0;

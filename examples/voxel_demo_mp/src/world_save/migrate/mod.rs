@@ -236,6 +236,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         3,
         super::containers::containers_v2_to_v3,
     );
+    // W137: entities v1 -> v2 adds `carts` + `next_cart_id`
+    // (minecart persistence). v1 saves migrate with empty carts.
+    reg.register(
+        SaveKind::Entities,
+        1,
+        2,
+        super::entities::entities_v1_to_v2,
+    );
     // world.json v1 -> v2: add per-dim worldgen map. v1 saves
     // (Phase B/C/D/E) lift cleanly by copying the legacy
     // `worldgen` field into the new `dimension_worldgens` map for
