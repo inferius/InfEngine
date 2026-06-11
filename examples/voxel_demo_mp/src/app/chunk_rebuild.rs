@@ -70,14 +70,78 @@ impl Voxel {
                         origin[1] + y as i32,
                         origin[2] + z as i32,
                     ];
-                    out.insert(
-                        wp,
-                        crate::block::rail::compute_shape(id, wp, rail_at),
-                    );
+                    // W130: bit 7 = redstone powered (torch/lever
+                    // adjacency + the 8-rail MC chain).
+                    let mut shape =
+                        crate::block::rail::compute_shape(id, wp, rail_at);
+                    if crate::block::rail::is_powerable(id)
+                        && self.rail_is_powered(wp, id)
+                    {
+                        shape |= 0x80;
+                    }
+                    out.insert(wp, shape);
                 }
             }
         }
         out
+    }
+
+    /// W130: is the powerable rail at `wp` redstone-powered? Direct
+    /// power = a redstone torch in the 6-neighbourhood or an ON
+    /// lever adjacent. Indirect = a connected same-kind rail chain
+    /// up to 8 hops away with direct power (MC powered-rail chain).
+    pub(crate) fn rail_is_powered(&self, wp: [i32; 3], id: u16) -> bool {
+        let direct = |p: [i32; 3]| -> bool {
+            let neigh = [
+                [p[0] + 1, p[1], p[2]],
+                [p[0] - 1, p[1], p[2]],
+                [p[0], p[1] + 1, p[2]],
+                [p[0], p[1] - 1, p[2]],
+                [p[0], p[1], p[2] + 1],
+                [p[0], p[1], p[2] - 1],
+            ];
+            neigh.iter().any(|n| {
+                let b = self.world.get(*n).0;
+                b == crate::block::REDSTONE_TORCH_ID
+                    || b == crate::block::REDSTONE_WALL_TORCH_ID
+                    || (b == crate::block::LEVER_ID
+                        && self.lever_on.contains(n))
+            })
+        };
+        if direct(wp) {
+            return true;
+        }
+        // BFS along connected same-kind rails (horizontal steps,
+        // one level up/down), bounded at 8 hops like MC.
+        let mut seen = std::collections::HashSet::new();
+        let mut frontier = vec![wp];
+        seen.insert(wp);
+        for _ in 0..8 {
+            let mut next = Vec::new();
+            for p in frontier {
+                for d in [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+                    for dy in [0i32, 1, -1] {
+                        let n = [p[0] + d[0], p[1] + dy, p[2] + d[2]];
+                        if seen.contains(&n) {
+                            continue;
+                        }
+                        if self.world.get(n).0 != id {
+                            continue;
+                        }
+                        if direct(n) {
+                            return true;
+                        }
+                        seen.insert(n);
+                        next.push(n);
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        false
     }
 
     /// W25: Dispatch remesh jobs for `coords` to the worker pool.

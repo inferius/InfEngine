@@ -106,6 +106,27 @@ impl Voxel {
             if block.0 == crate::block::CHEST_ID {
                 return true;
             }
+            // W129: trapdoors render closed/open from the door snapshot.
+            if crate::block::door::is_trapdoor_block(block.0) {
+                let wp = [
+                    voxel_origin.x.floor() as i32,
+                    voxel_origin.y.floor() as i32,
+                    voxel_origin.z.floor() as i32,
+                ];
+                let (facing, open) =
+                    door_states.get(&wp).copied().unwrap_or((3, false));
+                let local = [
+                    wp[0] - world_origin[0],
+                    wp[1] - world_origin[1],
+                    wp[2] - world_origin[2],
+                ];
+                let light = light_lookup(local);
+                resource_pack::element_mesh::emit_trapdoor(
+                    verts, idxs, voxel_origin, block.0, facing, open,
+                    pack, light,
+                );
+                return true;
+            }
             // W127: rails render as a flat quad per the derived shape.
             if crate::block::rail::is_rail_block(block.0) {
                 let wp = [

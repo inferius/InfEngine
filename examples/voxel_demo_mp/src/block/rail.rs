@@ -41,6 +41,12 @@ pub(crate) fn can_curve(id: u16) -> bool {
     id == RAIL_ID
 }
 
+/// W130: rails that take redstone power and show an `_on` texture.
+/// (The detector powers from carts, not redstone - no carts yet.)
+pub(crate) fn is_powerable(id: u16) -> bool {
+    matches!(id, POWERED_RAIL_ID | ACTIVATOR_RAIL_ID)
+}
+
 /// Neighbour connection level: how a rail in the adjacent column
 /// links to this one.
 #[derive(Clone, Copy, PartialEq)]

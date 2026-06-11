@@ -545,7 +545,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // (this chest above, partner below) and the apply path
         // routes actions to the matching backing container.
         let chest_partner_pos: Option<[i32; 3]> = chest_open_pos
-            .and_then(|p| block::chest::partner_for(&vx.world, &vx.chests, p));
+            .and_then(|p| {
+                block::chest::partner_for(
+                    &vx.world,
+                    &vx.chests,
+                    &vx.chest_facing,
+                    p,
+                )
+            });
         let chest_partner_snapshot: Option<container::Container> =
             chest_partner_pos.and_then(|p| vx.chests.get(&p).cloned());
         // Sentinel that the egui close-button + ESC inside the

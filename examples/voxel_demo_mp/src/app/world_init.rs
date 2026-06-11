@@ -13,6 +13,30 @@ impl Voxel {
         if self.world_loaded {
             return;
         }
+        // W128: a dead audio system was previously a silent mystery
+        // ("no sounds and no idea why"). Retry the init once on
+        // world entry (the output device may have been busy at
+        // launch - another instance, exclusive-mode app, ...) and
+        // surface the failure in chat if it still won't open.
+        if self.audio.is_none() {
+            match infengine_audio::AudioSystem::new() {
+                Ok(a) => {
+                    tracing::info!("audio system recovered on world entry");
+                    self.audio = Some(a);
+                    // The bank skipped loading while audio was dead.
+                    crate::bootstrap::load_mc_sound_bank(self);
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "audio init retry failed");
+                    self.chat_log.push((
+                        std::time::Instant::now(),
+                        "[audio] zvuk se nepodarilo otevrit - SFX vypnuto \
+                         (zarizeni drzi jina aplikace?)"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         // L.2: spin up workers first so `build_world` can push into
         // pending_chunks immediately.
         self.workers = Some(WorkerPool::spawn(pick_worker_count()));

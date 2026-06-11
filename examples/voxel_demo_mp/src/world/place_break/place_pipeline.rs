@@ -89,6 +89,17 @@ pub(crate) fn apply_block_place(
         .all(|v| unsupportive(vx.world.get(*v)));
         below_air && walls_clear
     };
+    // W130: rails need a solid floor (MC support rule). This also
+    // kills rail-on-rail vertical stacking - a rail below is not a
+    // full solid block.
+    let rail_unsupported = crate::block::rail::is_rail_block(block.0) && {
+        let below = vx.world.get([
+            target_voxel[0],
+            target_voxel[1] - 1,
+            target_voxel[2],
+        ]);
+        below.is_air() || !crate::block::block_fully_occludes(below)
+    };
     // Auto-switch torch -> wall_torch on horizontal placements.
     let placed_block = if hit.normal[1] == 0 {
         match block.0 {
@@ -99,7 +110,7 @@ pub(crate) fn apply_block_place(
     } else {
         block
     };
-    if overlaps || torch_unsupported || occupied {
+    if overlaps || torch_unsupported || occupied || rail_unsupported {
         // W127: reject reasons at debug level - "I clicked and
         // nothing happened" reports are undiagnosable without this.
         tracing::debug!(
@@ -108,6 +119,7 @@ pub(crate) fn apply_block_place(
             overlaps,
             occupied,
             torch_unsupported,
+            rail_unsupported,
             "block place rejected",
         );
         return;
@@ -190,9 +202,12 @@ pub(crate) fn apply_block_place(
     // other door variant (W48 birch/spruce/jungle/...) reuses the
     // same id for both halves since we don't ship per-variant
     // upper ids yet.
-    if crate::block::door::is_door_block(placed_block.0) {
-        // W125: record the door facing from the placer's look
-        // direction (MC: the door faces the way the player faces).
+    if crate::block::door::is_door_block(placed_block.0)
+        || crate::block::door::is_trapdoor_block(placed_block.0)
+    {
+        // W125/W129: record the door OR trapdoor facing from the
+        // placer's look direction (MC: the door faces the way the
+        // player faces; the trapdoor hinges on the far edge).
         // Keyed by the LOWER half = the placed cell. Broadcast so
         // every peer renders the same panel edge.
         let facing = crate::block::door::facing_from_look(
@@ -222,7 +237,9 @@ pub(crate) fn apply_block_place(
             }
         }
         let upper_pos = [target_voxel[0], target_voxel[1] + 1, target_voxel[2]];
-        if vx.world.get(upper_pos).is_air() {
+        if crate::block::door::is_door_block(placed_block.0)
+            && vx.world.get(upper_pos).is_air()
+        {
             let upper_id = if placed_block.0 == 77 { 78 } else { placed_block.0 };
             vx.world_set_tracked(upper_pos, BlockId(upper_id));
             let upper_coords = Voxel::affected_chunks(upper_pos);

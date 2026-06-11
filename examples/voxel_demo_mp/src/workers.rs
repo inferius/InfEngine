@@ -385,6 +385,23 @@ pub(crate) fn mesh_chunk_in_worker(
         if block.0 == crate::block::CHEST_ID {
             return true;
         }
+        // W129: trapdoors render closed (floor slab) or open
+        // (panel at the hinge edge) from the same door snapshot.
+        if crate::block::door::is_trapdoor_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let (facing, open) =
+                doors.get(&wp).copied().unwrap_or((3, false));
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_trapdoor(
+                verts, idxs, voxel_origin, block.0, facing, open, pack,
+                light,
+            );
+            return true;
+        }
         // W127: rails render as a flat quad per the derived shape.
         if crate::block::rail::is_rail_block(block.0) {
             let wp = [

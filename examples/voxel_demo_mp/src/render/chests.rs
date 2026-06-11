@@ -55,10 +55,15 @@ pub(crate) fn load_chest_meshes(
     if let Some(img) = load("normal.png") {
         out.single = Some(entity_model::bake(r, &entity_model::chest::MODEL, &img));
     }
-    if let Some(img) = load("normal_left.png") {
+    // Sheet pairing derives from the transparent SEAM tile: the MC
+    // box unwrap maps the "right" tile to the model +X face;
+    // normal_right.png leaves its "left" (-X) tile transparent, so
+    // it belongs to the half whose seam sits at model -X = EXT_POS
+    // (the flip negates X: world +X extension = model -X seam).
+    if let Some(img) = load("normal_right.png") {
         out.ext_pos = Some(entity_model::bake(r, &entity_model::chest::MODEL_EXT_POS, &img));
     }
-    if let Some(img) = load("normal_right.png") {
+    if let Some(img) = load("normal_left.png") {
         out.ext_neg = Some(entity_model::bake(r, &entity_model::chest::MODEL_EXT_NEG, &img));
     }
     tracing::info!(loaded = out.loaded(), "chest entity meshes baked");
@@ -78,16 +83,9 @@ fn yaw_for_facing(facing: u8) -> f32 {
     }
 }
 
-/// World direction the EXT_POS half extends toward, per facing
-/// (local +X rotated by the facing yaw).
-fn ext_pos_dir(facing: u8) -> [i32; 3] {
-    match facing % 4 {
-        0 => [0, 0, 1],  // facing east -> +Z
-        1 => [-1, 0, 0], // facing south -> -X
-        2 => [0, 0, -1], // facing west -> -Z
-        _ => [1, 0, 0],  // facing north -> +X
-    }
-}
+// W128: the EXT_POS extension direction is shared with the UI
+// pairing rule - see `block::chest::ext_pos_dir`.
+use crate::block::chest::ext_pos_dir;
 
 /// MC lid ease: `1 - (1-t)^3`, angle up to PI/2.
 fn lid_angle(t: f32) -> f32 {

@@ -8,7 +8,7 @@
 // emit_textured_*, flame_tint_for, lava_sources_in_chunk) all live in
 // this module now - they were relocated together so the per-frame
 // loop and its supporting helpers stay co-located.
-use crate::{resource_pack, LAVA_ID, TORCH_ID};
+use crate::{resource_pack, LAVA_ID, REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, TORCH_ID};
 
 pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
         /// Max ambient particles spawned per tick across ALL
@@ -65,6 +65,20 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
             let block_id = vx.emitter_positions.get(pos).copied()
                 .unwrap_or(TORCH_ID);
             let flame_tint = flame_tint_for(block_id);
+            // W128: redstone torches GLOW, they don't burn (MC has no
+            // flame or smoke on them - just the lit head + a subtle
+            // red shimmer). The old path stacked red flame cubes on
+            // the tip, which read as an opaque dark-red blob.
+            if block_id == REDSTONE_TORCH_ID || block_id == REDSTONE_WALL_TORCH_ID {
+                emit_textured_glow(
+                    &mut vx.textured_particles,
+                    pa,
+                    pos,
+                    vx.net_tick as u32,
+                );
+                spawned += 1;
+                continue;
+            }
             // Legacy CPU particle (tinted cube) for collision/gravity.
             spawn_flame_particle(&mut vx.particles, pos, &mut frame_seed, flame_tint);
             // W18.3: also push a textured billboard for the GPU pass.
@@ -178,9 +192,7 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
 // All previously pub(crate) at module root of main.rs.
 // ===========================================================================
 
-use crate::{
-    REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
-};
+use crate::{SOUL_TORCH_ID, SOUL_WALL_TORCH_ID};
 use infengine_voxel::{CHUNK_SIZE, Chunk, ChunkCoord};
 
 /// W38.2: Per-emitter flame colour. MC torch variants each have a
@@ -336,6 +348,40 @@ pub(crate) fn spawn_smoke_particle(
 /// pass it; per-tick non-determinism lives in the legacy
 /// `spawn_flame_particle` path that handles the rising/colliding
 /// CPU particle.
+/// W128: small translucent red shimmer for redstone torches (the
+/// `glow` sprite at low alpha). Gently pulses with the world tick so
+/// it reads as energised rather than burning.
+pub(crate) fn emit_textured_glow(
+    out: &mut Vec<infengine_render::TexturedParticleInstance>,
+    particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,
+    pos: &[i32; 3],
+    tick: u32,
+) {
+    let (uv_min, uv_max) = if let Some(pa) = particle_atlas {
+        if let Some(uv) = pa.sprite_uv("glow", 0) {
+            ([uv[0], uv[1]], [uv[2], uv[3]])
+        } else {
+            ([0.0f32, 0.0], [1.0, 1.0])
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0])
+    };
+    // Slow 2 s pulse between 0.30 and 0.50 alpha.
+    let phase = (tick % 40) as f32 / 40.0 * std::f32::consts::TAU;
+    let alpha = 0.40 + 0.10 * phase.sin();
+    out.push(infengine_render::TexturedParticleInstance {
+        center_world: [
+            pos[0] as f32 + 0.5,
+            pos[1] as f32 + 0.65,
+            pos[2] as f32 + 0.5,
+        ],
+        size: 0.11,
+        uv_min,
+        uv_max,
+        color: [1.0, 0.35, 0.28, alpha],
+    });
+}
+
 pub(crate) fn emit_textured_flame(
     out: &mut Vec<infengine_render::TexturedParticleInstance>,
     particle_atlas: Option<&crate::resource_pack::particle_atlas::ParticleAtlasData>,

@@ -36,23 +36,41 @@ pub(crate) fn new_chest() -> Container {
     Container::with_size(CHEST_SLOTS)
 }
 
-/// W55.2b - find the partner chest position for a double-chest
-/// arrangement. Walks the 4 horizontal neighbours; the first one
-/// that holds another chest block AND has a live `Container`
-/// entry is the partner. Walked in a deterministic order so two
-/// adjacent chests always settle on the same pair.
+/// W128: world direction the EXT_POS double-chest half extends
+/// toward, per facing (the axis PERPENDICULAR to the latch face).
+/// Shared by the renderer and the pairing rule so the visual merge
+/// and the 54-slot UI always agree.
+pub(crate) fn ext_pos_dir(facing: u8) -> [i32; 3] {
+    match facing % 4 {
+        0 => [0, 0, 1],  // facing east -> +Z
+        1 => [-1, 0, 0], // facing south -> -X
+        2 => [0, 0, -1], // facing west -> -Z
+        _ => [1, 0, 0],  // facing north -> +X
+    }
+}
+
+/// W55.2b / W128 - find the partner chest for a double-chest pair.
+/// MC rule: the adjacent chest along the axis PERPENDICULAR to the
+/// facing, with the SAME facing, both having live containers. (The
+/// old rule paired ANY adjacent chest, so the UI and the renderer
+/// could disagree about what is a double chest.)
 pub(crate) fn partner_for(
     world: &infengine_voxel::World,
     chests: &std::collections::HashMap<[i32; 3], Container>,
+    facing: &std::collections::HashMap<[i32; 3], u8>,
     pos: [i32; 3],
 ) -> Option<[i32; 3]> {
-    let offsets: [[i32; 3]; 4] = [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
-    for off in offsets {
-        let p = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
+    let f = facing.get(&pos).copied().unwrap_or(3);
+    let ext = ext_pos_dir(f);
+    for dir in [ext, [-ext[0], 0, -ext[2]]] {
+        let p = [pos[0] + dir[0], pos[1], pos[2] + dir[2]];
         if world.get(p).0 != crate::block::CHEST_ID {
             continue;
         }
         if !chests.contains_key(&p) {
+            continue;
+        }
+        if facing.get(&p).copied().unwrap_or(3) != f {
             continue;
         }
         return Some(p);

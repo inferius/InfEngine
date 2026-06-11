@@ -46,6 +46,98 @@ pub(crate) use super::blockstates::NeighborStates;
 /// gate: logs only fire when BOTH are enabled.
 static MESHER_DEBUG: AtomicBool = AtomicBool::new(false);
 
+/// W129 - state-aware trapdoor emitter. Closed = a 3/16 slab lying
+/// on the cell floor; open = a 3/16 panel standing against the
+/// HINGE edge (the facing edge recorded at place time), exactly the
+/// MC swing. Texture: the full tile on the two big faces, 3 px
+/// strips on the edges.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_trapdoor(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    facing: u8,
+    open: bool,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let tile = pack
+        .block_face_ref(block_id, super::BlockFace::Top)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [0, 1, 0],
+            )
+        });
+    let [tu0, tv0, tu1, tv1] = tile;
+    let th = tv1 - tv0;
+    const T: f32 = 3.0 / 16.0;
+    let strip_h = [tu0, tv0, tu1, tv0 + T * th];
+    let o = origin;
+    let (bmin, bmax, big_axis) = if open {
+        // Standing panel at the hinge (facing) edge.
+        let (mn, mx) = crate::block::door::panel_box(facing);
+        (mn, mx, if facing.is_multiple_of(2) { 0usize } else { 2 })
+    } else {
+        // Flat slab on the floor.
+        ([0.0, 0.0, 0.0], [1.0, T, 1.0], 1)
+    };
+    let lo = [o.x + bmin[0], o.y + bmin[1], o.z + bmin[2]];
+    let hi = [o.x + bmax[0], o.y + bmax[1], o.z + bmax[2]];
+    let c = |xh: bool, yh: bool, zh: bool| -> [f32; 3] {
+        [
+            if xh { hi[0] } else { lo[0] },
+            if yh { hi[1] } else { lo[1] },
+            if zh { hi[2] } else { lo[2] },
+        ]
+    };
+    // (normal, corners, uv) - big faces (perpendicular to big_axis)
+    // take the full tile, thin edges take a strip.
+    type TFace = ([f32; 3], [[f32; 3]; 4], [f32; 4]);
+    let pick = |axis: usize| -> [f32; 4] {
+        if axis == big_axis { tile } else { strip_h }
+    };
+    let faces: [TFace; 6] = [
+        (
+            [1.0, 0.0, 0.0],
+            [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)],
+            pick(0),
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)],
+            pick(0),
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)],
+            pick(1),
+        ),
+        (
+            [0.0, -1.0, 0.0],
+            [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)],
+            pick(1),
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)],
+            pick(2),
+        ),
+        (
+            [0.0, 0.0, -1.0],
+            [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)],
+            pick(2),
+        ),
+    ];
+    for (normal, corners, uv) in faces {
+        infengine_voxel::emit_element_quad(
+            verts, idxs, corners, normal, uv, light, 0,
+        );
+    }
+}
+
 /// W127 - rail quad emitter. A rail is a flat 16x16 quad 1 px above
 /// the floor (plus a mirrored underside so it reads from below),
 /// oriented by the derived `RailShape` code:
@@ -65,7 +157,11 @@ pub(crate) fn emit_rail_quad(
     light: [f32; 2],
 ) {
     use crate::block::rail::*;
-    let straight = pack
+    // W130: bit 7 of `shape` carries the redstone-powered flag; the
+    // powered/activator rails swap to their lit `_on` texture.
+    let powered = shape & 0x80 != 0;
+    let shape = shape & 0x7F;
+    let mut straight = pack
         .block_face_ref(block_id, super::BlockFace::Top)
         .map(|r| r.atlas_uv)
         .unwrap_or_else(|| {
@@ -74,19 +170,27 @@ pub(crate) fn emit_rail_quad(
                 [0, 1, 0],
             )
         });
+    if powered
+        && let Some(bt) = crate::block::block_type(block_id)
+        && let Some(on) = pack.block_texture(&format!("{}_on", bt.name))
+    {
+        straight = on.atlas_uv;
+    }
     // Curve texture only ships for the plain rail.
     let corner = pack
         .block_texture("rail_corner")
         .map(|r| r.atlas_uv)
         .unwrap_or(straight);
     // (tile, texture rotation in 90-degree steps)
+    // W130: rotations re-derived from the in-game evidence (the
+    // first cut had NS/EW swapped - sleepers ran along the track).
     let (tile, rot) = match shape {
-        SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 1),
-        SHAPE_SE => (corner, 0),
-        SHAPE_SW => (corner, 1),
-        SHAPE_NW => (corner, 2),
-        SHAPE_NE => (corner, 3),
-        _ => (straight, 0), // NS + ascending N/S + fallback
+        SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 0),
+        SHAPE_SE => (corner, 1),
+        SHAPE_SW => (corner, 2),
+        SHAPE_NW => (corner, 3),
+        SHAPE_NE => (corner, 0),
+        _ => (straight, 1), // NS + ascending N/S + fallback
     };
     // Corner heights: 1 px float, +1 block on the ascend side.
     // World corners: 0=(x0,z0) 1=(x1,z0) 2=(x1,z1) 3=(x0,z1).

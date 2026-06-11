@@ -242,6 +242,19 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
         }
     }
     // W9.6: extend the AudioBank with variants from the MC pack.
+    load_mc_sound_bank(vx);
+    // W8.1: CLI servers (`--server`) enter the world immediately;
+    // pure offline + client launches defer until the menu pick.
+    if matches!(vx.net, NetRole::Server { .. }) {
+        vx.enter_world();
+    }
+}
+
+/// W9.6 / W128: fill the AudioBank from the MC pack's sound
+/// registry. Extracted so the audio-recovery path (world entry
+/// after a failed launch-time init) can populate the bank too -
+/// recovering the device without the bank kept everything silent.
+pub(crate) fn load_mc_sound_bank(vx: &mut Voxel) {
     if let Some(a) = vx.audio.as_ref()
         && !vx.resource_pack.sounds.is_empty()
     {
@@ -268,11 +281,6 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
                 );
             }
         }
-    }
-    // W8.1: CLI servers (`--server`) enter the world immediately;
-    // pure offline + client launches defer until the menu pick.
-    if matches!(vx.net, NetRole::Server { .. }) {
-        vx.enter_world();
     }
 }
 
