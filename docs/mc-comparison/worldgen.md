@@ -16,24 +16,31 @@ table, 3D-noise caves, ellipsoid ravines, cobble dungeons, and a real nether.
 The decoration layer is respectable (7 tree species, flowers, ground cover,
 cactus, dead bush, bamboo, sugar cane).
 
+> **STATUS UPDATE (post-audit):** the underground headline items below
+> were implemented in **W121** — `worldgen/strata.rs` now places the
+> full MC-1.18 ore roster (gold/diamond/redstone/lapis/emerald/copper/
+> iron/coal) with triangular sea-relative depth bands, swaps the
+> deepslate-ore variants below the deepslate threshold, and lays a
+> jagged bedrock floor in `gen_natural`. The ore/deepslate/bedrock
+> bullets below describe the PRE-W121 state and are kept for context.
+> Structures/features/ocean items remain open.
+
 The gaps are almost entirely in **content breadth + faithfulness of
 distribution**, not engine plumbing:
 
-- **Ores**: only **coal + iron** generate. The block table already defines
-  gold/diamond/redstone/lapis/emerald/copper **and** all deepslate variants —
-  worldgen never places them. No depth-based MC 1.18 distribution.
-- **No deepslate layer** at all (block id 96 exists, gen never emits it), so the
-  256-tall world is uniform stone under the surface — the single biggest
-  "doesn't read like modern MC" miss.
+- ~~**Ores**: only **coal + iron** generate.~~ **DONE in W121** (strata.rs
+  depth-band table).
+- ~~**No deepslate layer**~~ **DONE in W121** (deepslate stratum + ore
+  variant swap).
 - **Structures**: only dungeons. No villages, mineshafts, strongholds, temples,
   monuments, ruined portals, shipwrecks, fossils, geodes.
 - **Features**: no lakes/springs, no gravel/clay/dirt blobs, no snow layers /
   ice, no aquifers, no underwater vegetation (kelp/coral/seagrass), no
   pumpkins/melons/mushrooms/vines/lily pads/cobwebs.
-- **Vertical magic numbers** (cave `y<10`, iron `max_y 14/24`, dungeon `y8..32`,
+- **Vertical magic numbers** in the CARVERS (cave `y<10`, dungeon `y8..32`,
   ravine `y10..50`) are still absolute, **not** rescaled relative to
-  `SEA_LEVEL=63`. They sit in the bottom ~1/8 of the world and will be wrong the
-  moment the world grows taller.
+  `SEA_LEVEL=63` (ores ARE sea-relative since W121). They sit in the bottom
+  ~1/8 of the world and will be wrong the moment the world grows taller.
 
 ---
 

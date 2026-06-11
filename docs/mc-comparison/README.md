@@ -11,28 +11,27 @@ per the CLAUDE.md MC-adoption checklist (data-driven, no magic numbers).
 | Blocks | 613 rows / 526 placeable (469 distinct MC) | ~1022 obtainable | **~46%** (553 missing) |
 | Items (non-block) | ~130 | ~480 (~270 core) | **~27%** |
 | Mobs | 7 | ~70 living | **~10%** |
-| Worldgen | sound bones, thin content | — | ores 2/12, no structures bar dungeons |
-| Rendering | functional, flat | — | no AO, no colormaps, 5/125 particles |
+| Worldgen | shape + underground solid (W121) | — | full ore roster + deepslate + bedrock ✅; no structures bar dungeons |
+| Rendering | AO ✅ (W122), colormap tint ✅ (W135, plains-only) | — | 5/125 particles; no per-biome tint variation |
 
 Detailed reports: [blocks](blocks.md) · [items](items.md) · [mobs](mobs.md) · [worldgen](worldgen.md) · [rendering-effects](rendering-effects.md)
 
 ## Cross-cutting P1 "biggest wins" (ranked by impact ÷ effort)
-1. **Vertex AO / smooth lighting** (rendering) — bakes one light value per
-   face across all 4 corners now → flat. Per-corner AO adds contact
-   shading AND **fixes the block-seam see-through** the user reported
-   (it's a flat-light discontinuity at greedy-quad/chunk edges, not atlas
-   bleed). GPU-free, transforms the whole look. **Top win.**
-2. **Worldgen underground = modern MC** — gold/diamond/redstone/lapis/
-   emerald/copper + all deepslate ores ALREADY EXIST as blocks but
-   worldgen never places them (only coal+iron); no deepslate stratum, no
-   bedrock floor; and the W112 sea-level raise left cave/ore/ravine/
-   dungeon depths as ABSOLUTE magic numbers → everything crammed below
-   y50 (under sea), 50+ blocks of empty stone under hills. Fix = rescale
-   depths relative to SEA_LEVEL + place the missing ores (MC-1.18 depth
-   bands) + deepslate below a depth + bedrock at the floor.
-3. **Biome colormaps** (rendering) — `grass.png`/`foliage.png` colormaps
-   never sampled → every biome's grass is one hardcoded green. Sample
-   them per biome → instant biome variety.
+1. ~~**Vertex AO / smooth lighting**~~ — **DONE (W122)**: per-corner
+   AO + smooth lighting in the greedy mesher. Residual: a geometric
+   seam see-through case remains as an open polish task.
+2. ~~**Worldgen underground = modern MC**~~ — **DONE (W121)**:
+   `worldgen/strata.rs` places the full MC-1.18 ore roster with
+   triangular sea-relative depth bands, swaps deepslate variants
+   below the stratum threshold, and lays a jagged bedrock floor.
+   Residual from this item: caves/ravines/dungeons still use a few
+   absolute Y consts (see worldgen.md §4.5) and there are no
+   gravel/dirt/clay/granite blobs yet.
+3. ~~**Biome colormaps**~~ — **DONE (W135)** at ONE climate:
+   grass/leaf/plant tiles are tinted with the plains colormap sample
+   at atlas-build time. Per-biome VARIATION (desert olive, swamp,
+   blending) still needs a per-vertex tint channel — that part stays
+   open.
 4. **Mob visuals the user keeps asking for** — sheep wool overlay
    (SheepFurModel), cow udder→belly (labelled-test-cube UV pass),
    skeleton bow+arrows. Plus wire the DEAD `mob/goal.rs` (flee, eat-grass)
@@ -62,9 +61,11 @@ Detailed reports: [blocks](blocks.md) · [items](items.md) · [mobs](mobs.md) ·
   verify in-world.
 
 ## Suggested order
-Smooth-lighting/AO (#1, biggest look jump + fixes the seam) → worldgen
-underground (#2, makes the world feel like MC + fixes the W112 bug) →
-biome colormaps (#3) → the mob visual trio (#4) → bubbles (#5) → then
+~~AO (#1)~~ → ~~worldgen underground (#2)~~ → ~~colormaps (#3)~~ all
+landed (W121/W122/W135). Next up: the mob visual trio (#4) → bubbles
+(#5) → ocean biomes / structure engine (worldgen.md wins 4-5) → then
 breadth (items/blocks) in P1-first batches. Code-only changes (worldgen,
-items, recipes, id-dedup) verify via build + 619 lib tests + a dump test;
-visual changes (lighting, mobs, particles) verify in-game.
+items, recipes, id-dedup) verify via build + 636 lib tests + a dump test;
+visual changes (lighting, mobs, particles) verify in-game — see the
+mc-parity-handoff memory for the chat-driven /fill+/tppos verification
+rig (synthetic clicks are unreliable; chat commands are not).

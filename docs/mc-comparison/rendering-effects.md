@@ -23,15 +23,17 @@ block+sky light, distance fog, translucent water, day/night sky tint, sun/moon
 discs, and a broad audio event map. The gaps are almost all **content
 breadth** and **two structural items**:
 
-1. **No ambient occlusion / smooth lighting.** The mesher bakes ONE light value
-   per face shared by all 4 corners (`crates/infengine_voxel/src/lib.rs:1091`
-   explicitly: *"the 4-corner AO smoothing pass is a follow-up"*). This is the
-   root of the surface-seam see-through the user is seeing (see §4.5), and it
-   makes the whole world read flatter than MC's smooth-lit look.
-2. **No biome colormap.** Grass/foliage/water tint is a single hardcoded
-   `color` constant per block in `block/registry.rs`; MC's
-   `textures/colormap/{grass,foliage}.png` exist in the pack but are never
-   sampled. Every biome's grass is the same green.
+1. ~~**No ambient occlusion / smooth lighting.**~~ **DONE (W122)** —
+   per-corner AO + smooth lighting landed in the greedy mesher
+   (FaceKey carries the 4 corners' quantised block/sky/ao). A
+   residual geometric seam-see-through case remains an open polish
+   task; the original text below describes the pre-W122 state.
+2. ~~**No biome colormap.**~~ **DONE at ONE climate (W135)** —
+   `apply_biome_tints` samples the pack's `colormap/{grass,foliage}.png`
+   at the plains climate during atlas build and tints the grayscale
+   grass/leaf/plant tiles (spruce/birch/lily use the FoliageColor.java
+   constants). Per-biome VARIATION (desert olive, swamp murk, blending)
+   still needs a per-vertex tint channel and stays open.
 
 Most of the particle roster and several animated-texture/environment features
 are "wired but unused" — the plumbing exists (atlas packs all particle PNGs;
