@@ -162,6 +162,13 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 73, block: "stone_stairs",       top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 74, block: "cobblestone_stairs",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 75, block: "oak_fence",          top: "", bottom: "", sides: "" },
+    // W131: W48 fence variants - the MC multipart blockstate grows
+    // the post + arms; names match MC exactly.
+    BlockNameMap { infengine_id: 543, block: "birch_fence",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 544, block: "spruce_fence",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 545, block: "jungle_fence",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 546, block: "acacia_fence",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 547, block: "dark_oak_fence",    top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 76, block: "nether_brick_fence",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 80, block: "glass_pane",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 81, block: "iron_bars",           top: "", bottom: "", sides: "" },

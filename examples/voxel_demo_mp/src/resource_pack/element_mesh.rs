@@ -182,15 +182,19 @@ pub(crate) fn emit_rail_quad(
         .map(|r| r.atlas_uv)
         .unwrap_or(straight);
     // (tile, texture rotation in 90-degree steps)
-    // W130: rotations re-derived from the in-game evidence (the
-    // first cut had NS/EW swapped - sleepers ran along the track).
+    // W131: the W127 straight mapping was CORRECT (W128 wrongly
+    // swapped it). Curves derived from rail_corner.png itself: the
+    // texture's arc joins its TOP and RIGHT edges; with the rot-0
+    // UV frame (texture bottom = north, right = east) that is the
+    // south<->east join, and each +1 rot step turns the frame 90
+    // degrees counter-clockwise (north->west).
     let (tile, rot) = match shape {
-        SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 0),
-        SHAPE_SE => (corner, 1),
-        SHAPE_SW => (corner, 2),
-        SHAPE_NW => (corner, 3),
-        SHAPE_NE => (corner, 0),
-        _ => (straight, 1), // NS + ascending N/S + fallback
+        SHAPE_EW | SHAPE_ASC_E | SHAPE_ASC_W => (straight, 1),
+        SHAPE_SE => (corner, 0),
+        SHAPE_NE => (corner, 1),
+        SHAPE_NW => (corner, 2),
+        SHAPE_SW => (corner, 3),
+        _ => (straight, 0), // NS + ascending N/S + fallback
     };
     // Corner heights: 1 px float, +1 block on the ascend side.
     // World corners: 0=(x0,z0) 1=(x1,z0) 2=(x1,z1) 3=(x0,z1).

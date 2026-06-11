@@ -89,6 +89,15 @@ pub(crate) fn apply_block_place(
         .all(|v| unsupportive(vx.world.get(*v)));
         below_air && walls_clear
     };
+    // W131: you cannot BUILD OFF a rail's face (MC: rails are not
+    // sturdy support). Clicking a rail with any block used to place
+    // it against the rail like a full block.
+    let clicked_rail =
+        crate::block::rail::is_rail_block(vx.world.get(hit.voxel).0);
+    if clicked_rail && target_voxel == hit.place_at {
+        tracing::debug!(?target_voxel, "place rejected: clicked a rail face");
+        return;
+    }
     // W130: rails need a solid floor (MC support rule). This also
     // kills rail-on-rail vertical stacking - a rail below is not a
     // full solid block.

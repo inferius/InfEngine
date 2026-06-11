@@ -12,10 +12,10 @@
 //!   driven by the local open UI + host-side viewer registry.
 
 use glam::Vec3;
-use infengine_render::Renderer;
+use infengine_render::{MeshVertex, Renderer};
 use std::collections::HashMap;
 
-use crate::entity_model::{self, BakedModel, BonePose};
+use crate::entity_model::{self, BakedBone, BakedModel, BonePose, EntityModel, McCube};
 
 /// Baked chest models + their sheets. `Default` = nothing loaded
 /// (fallback pack) - the draw pass just skips.
@@ -53,7 +53,7 @@ pub(crate) fn load_chest_meshes(
         }
     };
     if let Some(img) = load("normal.png") {
-        out.single = Some(entity_model::bake(r, &entity_model::chest::MODEL, &img));
+        out.single = Some(bake_chest(r, &entity_model::chest::MODEL, &img));
     }
     // Sheet pairing derives from the transparent SEAM tile: the MC
     // box unwrap maps the "right" tile to the model +X face;
@@ -61,13 +61,152 @@ pub(crate) fn load_chest_meshes(
     // it belongs to the half whose seam sits at model -X = EXT_POS
     // (the flip negates X: world +X extension = model -X seam).
     if let Some(img) = load("normal_right.png") {
-        out.ext_pos = Some(entity_model::bake(r, &entity_model::chest::MODEL_EXT_POS, &img));
+        out.ext_pos = Some(bake_chest(r, &entity_model::chest::MODEL_EXT_POS, &img));
     }
     if let Some(img) = load("normal_left.png") {
-        out.ext_neg = Some(entity_model::bake(r, &entity_model::chest::MODEL_EXT_NEG, &img));
+        out.ext_neg = Some(bake_chest(r, &entity_model::chest::MODEL_EXT_NEG, &img));
     }
     tracing::info!(loaded = out.loaded(), "chest entity meshes baked");
     out
+}
+
+
+/// W131: chest-specific bake. The generic mob `append_cube` maps
+/// the unwrap "top" slot onto the world-top face with its U axis
+/// along Z - fine for mobs, but the chest sheets are authored the
+/// other way: the LIGHT plank tile in the "bottom" slot is the
+/// closed lid's OUTSIDE, the dark-bordered "top"-slot tile is the
+/// lid's INNER face, and the black-bordered base "bottom" tile is
+/// the chest's interior floor (verified per-tile against
+/// normal.png + the user's report). The horizontal faces here use
+/// swapped slots and axis-true UVs (U along X, V along Z), which
+/// also un-rotates the double-half tops (15px tile onto the 15px
+/// axis). Side faces keep the proven seam-aware mapping.
+fn bake_chest(
+    r: &mut Renderer,
+    model: &EntityModel,
+    img: &image::RgbaImage,
+) -> BakedModel {
+    let albedo = r.make_mesh_albedo(img.width(), img.height(), img);
+    let (tw, th) = (img.width() as f32, img.height() as f32);
+    let mut bones = Vec::with_capacity(model.bones.len());
+    for bone in model.bones {
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        for cube in bone.cubes {
+            append_chest_cube(&mut verts, &mut idxs, cube, tw, th);
+        }
+        let mesh = r.create_mesh(bone.name, &verts, &idxs);
+        r.bind_mesh_albedo_arc(mesh, albedo.clone());
+        bones.push(BakedBone { bone: *bone, mesh });
+    }
+    // The chest base sits on the ground by construction (base box
+    // spans MC y -10..0 -> world 0..10/16).
+    BakedModel { bones, ground_offset: 0.0 }
+}
+
+/// One chest cube with the chest-sheet UV conventions (see
+/// `bake_chest`). The tiny latch keeps the fully standard unwrap.
+fn append_chest_cube(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    cube: &McCube,
+    tw: f32,
+    th: f32,
+) {
+    let [ox, oy, oz] = cube.origin;
+    let [sx, sy, sz] = cube.size;
+    let (x0, y0, z0) = (ox, oy, oz);
+    let (x1, y1, z1) = (ox + sx, oy + sy, oz + sz);
+    let (w, h, d) = (sx, sy, sz);
+    let (u0, v0) = (cube.uv[0] as f32, cube.uv[1] as f32);
+    let uv = |pu: f32, pv: f32| -> [f32; 2] { [pu / tw, pv / th] };
+
+    let mut add = |corners: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4]| {
+        let base = verts.len() as u32;
+        for i in 0..4 {
+            verts.push(
+                MeshVertex::new(corners[i], normal)
+                    .with_uv(uvs[i])
+                    .with_light(0.0, 1.0),
+            );
+        }
+        idxs.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+    };
+
+    // Standard unwrap strips (identical to the mob mapping).
+    let (r_u0, r_u1) = (u0, u0 + d);
+    let (f_u0, f_u1) = (u0 + d, u0 + d + w);
+    let (l_u0, l_u1) = (u0 + d + w, u0 + d + w + d);
+    let (b_u0, b_u1) = (u0 + d + w + d, u0 + d + w + d + w);
+    let sv0 = v0 + d;
+    let sv1 = v0 + d + h;
+    let (t_u0, t_u1) = (u0 + d, u0 + d + w);
+    let (bt_u0, bt_u1) = (u0 + d + w, u0 + d + w + w);
+    let (tv0, tv1) = (v0, v0 + d);
+
+    // Front (MC -Z), back, right (+X), left (-X): proven mapping.
+    add(
+        [[x1, y1, z0], [x0, y1, z0], [x0, y0, z0], [x1, y0, z0]],
+        [0.0, 0.0, -1.0],
+        [uv(f_u0, sv1), uv(f_u1, sv1), uv(f_u1, sv0), uv(f_u0, sv0)],
+    );
+    add(
+        [[x0, y1, z1], [x1, y1, z1], [x1, y0, z1], [x0, y0, z1]],
+        [0.0, 0.0, 1.0],
+        [uv(b_u0, sv1), uv(b_u1, sv1), uv(b_u1, sv0), uv(b_u0, sv0)],
+    );
+    add(
+        [[x1, y1, z1], [x1, y1, z0], [x1, y0, z0], [x1, y0, z1]],
+        [1.0, 0.0, 0.0],
+        [uv(r_u0, sv1), uv(r_u1, sv1), uv(r_u1, sv0), uv(r_u0, sv0)],
+    );
+    add(
+        [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]],
+        [-1.0, 0.0, 0.0],
+        [uv(l_u0, sv1), uv(l_u1, sv1), uv(l_u1, sv0), uv(l_u0, sv0)],
+    );
+
+    // The latch is tiny: standard top/bottom, done.
+    let is_latch = h == 4.0;
+    if is_latch {
+        add(
+            [[x1, y0, z1], [x1, y0, z0], [x0, y0, z0], [x0, y0, z1]],
+            [0.0, -1.0, 0.0],
+            [uv(t_u0, tv1), uv(t_u1, tv1), uv(t_u1, tv0), uv(t_u0, tv0)],
+        );
+        add(
+            [[x0, y1, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1]],
+            [0.0, 1.0, 0.0],
+            [uv(bt_u0, tv1), uv(bt_u1, tv1), uv(bt_u1, tv0), uv(bt_u0, tv0)],
+        );
+        return;
+    }
+
+    // World-TOP face (MC y0): the "bottom"-slot tile (light planks
+    // on the lid, plain underside art on the base), axis-true.
+    add(
+        [[x1, y0, z1], [x1, y0, z0], [x0, y0, z0], [x0, y0, z1]],
+        [0.0, -1.0, 0.0],
+        [
+            uv(bt_u1, tv1),
+            uv(bt_u1, tv0),
+            uv(bt_u0, tv0),
+            uv(bt_u0, tv1),
+        ],
+    );
+    // World-BOTTOM face (MC y1): the "top"-slot tile (the dark
+    // bordered lid inner / base interior floor), axis-true.
+    add(
+        [[x0, y1, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1]],
+        [0.0, 1.0, 0.0],
+        [
+            uv(t_u0, tv1),
+            uv(t_u0, tv0),
+            uv(t_u1, tv0),
+            uv(t_u1, tv1),
+        ],
+    );
 }
 
 /// Chest facing -> entity yaw. Facing codes match `block::door`

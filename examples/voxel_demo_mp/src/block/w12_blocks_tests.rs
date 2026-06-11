@@ -95,13 +95,10 @@ fn w12_thin_blocks_are_aabb_passable() {
     // (the unconditional flags were why closed doors were walk-
     // through and untargetable - "doors don't work at all").
     use super::block_is_aabb_passable;
-    for id in [OAK_FENCE_ID, NETHER_BRICK_FENCE_ID, GLASS_PANE_ID, IRON_BARS_ID] {
-        assert!(
-            block_is_aabb_passable(BlockId(id)),
-            "id {id} should be AABB passable",
-        );
-    }
-    for id in [OAK_DOOR_ID, OAK_DOOR_UPPER_ID, IRON_DOOR_ID] {
+    // W131: fences / panes / bars are SOLID in MC (you cannot walk
+    // through a fence). Everything below must block + be targetable.
+    for id in [OAK_DOOR_ID, OAK_DOOR_UPPER_ID, IRON_DOOR_ID,
+        OAK_FENCE_ID, NETHER_BRICK_FENCE_ID, GLASS_PANE_ID, IRON_BARS_ID] {
         assert!(
             !block_is_aabb_passable(BlockId(id)),
             "id {id} must be solid when closed (state-aware pass)",

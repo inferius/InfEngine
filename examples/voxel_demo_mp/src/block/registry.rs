@@ -690,7 +690,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // neighbour-aware multipart blockstate dispatch).
     BlockType {
         id: 75, name: "oak_fence", color: [0.78, 0.60, 0.36], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        // W131: fences are SOLID + targetable in MC (no walking
+        // through, breakable); the multipart blockstate grows arms.
+        flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 2, files: &["oak_planks.png"], keep_alpha: false },
@@ -698,7 +700,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Nether brick fence. Cite: `models/block/nether_brick_fence_post.json`.
     BlockType {
         id: 76, name: "nether_brick_fence", color: [0.35, 0.18, 0.20], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["nether_brick.png", "netherrack.png", "stone.png"], keep_alpha: false },
@@ -734,7 +736,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // 2x2 centre post + 4 connection arms.
     BlockType {
         id: 80, name: "glass_pane", color: [0.85, 0.92, 0.98], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
         bottom: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
         sides: TileSpec { col: 2, row: 2, files: &["glass.png"], keep_alpha: true },
@@ -742,7 +744,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Iron bars. Cite: `models/block/iron_bars_post.json`.
     BlockType {
         id: 81, name: "iron_bars", color: [0.55, 0.55, 0.60], transparent: true,
-        flags: F_RAY_PASS | F_AABB_PASS | F_DEDICATED_RENDER,
+        flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
         bottom: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["iron_bars.png", "iron_ore.png", "stone.png"], keep_alpha: true },
@@ -2801,11 +2803,11 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 541, name: "nether_brick_wall", color: [0.30, 0.16, 0.18], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["nether_bricks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["nether_bricks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["nether_bricks.png"], keep_alpha: true } },
     BlockType { id: 542, name: "end_stone_brick_wall", color: [0.86, 0.86, 0.65], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["end_stone_bricks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["end_stone_bricks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["end_stone_bricks.png"], keep_alpha: true } },
     // Fences (5).
-    BlockType { id: 543, name: "birch_fence", color: [0.90, 0.84, 0.60], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true } },
-    BlockType { id: 544, name: "spruce_fence", color: [0.50, 0.32, 0.18], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true } },
-    BlockType { id: 545, name: "jungle_fence", color: [0.78, 0.55, 0.32], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true } },
-    BlockType { id: 546, name: "acacia_fence", color: [0.78, 0.42, 0.18], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true } },
-    BlockType { id: 547, name: "dark_oak_fence", color: [0.32, 0.22, 0.12], transparent: true, flags: F_TRANSPARENT_RENDER, top: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true } },
+    BlockType { id: 543, name: "birch_fence", color: [0.90, 0.84, 0.60], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["birch_planks.png"], keep_alpha: true } },
+    BlockType { id: 544, name: "spruce_fence", color: [0.50, 0.32, 0.18], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["spruce_planks.png"], keep_alpha: true } },
+    BlockType { id: 545, name: "jungle_fence", color: [0.78, 0.55, 0.32], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["jungle_planks.png"], keep_alpha: true } },
+    BlockType { id: 546, name: "acacia_fence", color: [0.78, 0.42, 0.18], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["acacia_planks.png"], keep_alpha: true } },
+    BlockType { id: 547, name: "dark_oak_fence", color: [0.32, 0.22, 0.12], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["dark_oak_planks.png"], keep_alpha: true } },
     // Trapdoors (5).
     BlockType { id: 548, name: "oak_trapdoor", color: [0.78, 0.60, 0.36], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["oak_trapdoor.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["oak_trapdoor.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["oak_trapdoor.png"], keep_alpha: true } },
     BlockType { id: 549, name: "iron_trapdoor", color: [0.80, 0.80, 0.85], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["iron_trapdoor.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["iron_trapdoor.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["iron_trapdoor.png"], keep_alpha: true } },
