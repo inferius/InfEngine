@@ -27,7 +27,14 @@ const HEAD: &[McCube] = &[
     McCube::new([4.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22, 0]),
 ];
 
-const BODY: &[McCube] = &[McCube::new([-6.0, -10.0, -7.0], [12.0, 18.0, 10.0], [18, 4])];
+const BODY: &[McCube] = &[
+    McCube::new([-6.0, -10.0, -7.0], [12.0, 18.0, 10.0], [18, 4]),
+    // W139: the udder - vanilla `CowModel` adds it as a SECOND thin
+    // cube on the body bone (texOffs 52,0; 4x6x1 against the box's
+    // -Z side, which the body's xRot = PI/2 turns into the rear
+    // belly). The W91 port dropped it - the cow had no udder at all.
+    McCube::new([-2.0, 2.0, -8.0], [4.0, 6.0, 1.0], [52, 0]),
+];
 
 const BONES: &[Bone] = &[
     Bone { name: "cow_head", pivot: [0.0, 4.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
