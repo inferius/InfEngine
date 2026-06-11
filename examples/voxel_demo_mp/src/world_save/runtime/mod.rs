@@ -222,6 +222,25 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
         }
     };
     apply_player_save(voxel, &player_save);
+    // W138: never hand the player back INSIDE terrain (the
+    // "appeared in the ground" reports). Stale saves or a worldgen
+    // change underneath an old save can leave the saved pose
+    // buried; climb to the first free spot above it.
+    if let Some(fixed) = crate::player::unstuck_after_load(
+        &voxel.world,
+        &voxel.snow_positions,
+        &voxel.door_open,
+        voxel.player_pos,
+    ) {
+        warn!(
+            from_y = voxel.player_pos.y,
+            to_y = fixed.y,
+            "world_save: player pose was inside terrain - lifted to the surface",
+        );
+        voxel.player_pos = fixed;
+        voxel.player_vel = glam::Vec3::ZERO;
+        voxel.fall_start_y = None;
+    }
 
     // Timers + catch-up.
     let now_ms = current_wall_ms();

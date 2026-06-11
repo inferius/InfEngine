@@ -63,6 +63,10 @@ fn populated_furnace_at(pos: [i32; 3]) -> FurnaceSave {
 fn containers_roundtrip_furnaces_v2() {
     let tmp = TempDir::new().unwrap();
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: Vec::new(),
         furnaces: vec![
@@ -86,6 +90,10 @@ fn containers_roundtrip_furnaces_v2() {
 fn containers_roundtrip_chests_and_furnaces_together() {
     let tmp = TempDir::new().unwrap();
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: vec![populated_furnace_at([1, 64, 1])],
@@ -133,7 +141,8 @@ fn write_v1_containers_file(
 #[test]
 fn containers_v1_to_v2_migration_round_trip() {
     use super::containers::{
-        containers_v1_to_v2, containers_v2_to_v3, read_containers_in_dir_with_registry,
+        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
+        read_containers_in_dir_with_registry,
     };
 
     let tmp = TempDir::new().unwrap();
@@ -149,11 +158,14 @@ fn containers_v1_to_v2_migration_round_trip() {
     // edges, not transitive closure. Production uses the
     // `default_registry` which has both arrows pre-registered.
     registry.register(SaveKind::Containers, 1, 2, containers_v1_to_v2);
+    registry.register(SaveKind::Containers, 2, 3, containers_v2_to_v3);
+    // W138: the live format moved to v4 - chain the production
+    // 3 -> 4 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        2,
+        3,
         CONTAINERS_FORMAT_VERSION,
-        containers_v2_to_v3,
+        containers_v3_to_v4,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -185,7 +197,8 @@ fn containers_v1_to_v2_migration_via_default_registry() {
 #[test]
 fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     use super::containers::{
-        containers_v1_to_v2, containers_v2_to_v3, read_containers_in_dir_with_registry,
+        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
+        read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
     write_v1_containers_file(
@@ -200,11 +213,14 @@ fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     );
     let mut registry = MigrationRegistry::new();
     registry.register(SaveKind::Containers, 1, 2, containers_v1_to_v2);
+    registry.register(SaveKind::Containers, 2, 3, containers_v2_to_v3);
+    // W138: the live format moved to v4 - chain the production
+    // 3 -> 4 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        2,
+        3,
         CONTAINERS_FORMAT_VERSION,
-        containers_v2_to_v3,
+        containers_v3_to_v4,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

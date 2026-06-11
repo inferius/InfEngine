@@ -15,7 +15,6 @@
 //! that matches `voxel.current_dim` lands in the top-level live
 //! fields, the rest park in the `_by_dim` maps.
 
-use std::collections::HashMap;
 use std::io;
 
 use infengine_voxel::ChunkCoord;
@@ -35,7 +34,7 @@ use super::super::layout;
 use super::super::world_json::WorldJson;
 
 use super::helpers::{
-    apply_chunk_payload, apply_dimension_containers,
+    BlockStateRefs, apply_chunk_payload, apply_dimension_containers,
     apply_dimension_entities, build_dimension_containers_from,
     build_dimension_entities_from, collect_for_chunk,
     parse_chunk_filename,
@@ -95,6 +94,14 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         &voxel.furnaces,
         &voxel.furnace_runtimes,
         &voxel.fires,
+        BlockStateRefs {
+            door_facing: &voxel.door_facing,
+            door_open: &voxel.door_open,
+            chest_facing: &voxel.chest_facing,
+            brewing_stands: &voxel.brewing_stands,
+            brewing_runtimes: &voxel.brewing_runtimes,
+            lever_on: &voxel.lever_on,
+        },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
     Ok(chunk_count)
@@ -151,6 +158,14 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         &dw.furnaces,
         &dw.furnace_runtimes,
         &dw.fires,
+        BlockStateRefs {
+            door_facing: &dw.door_facing,
+            door_open: &dw.door_open,
+            chest_facing: &dw.chest_facing,
+            brewing_stands: &dw.brewing_stands,
+            brewing_runtimes: &dw.brewing_runtimes,
+            lever_on: &dw.lever_on,
+        },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
     Ok(chunk_count)
@@ -289,13 +304,7 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
     // Containers -> dw maps.
     let conts = containers::read_containers(slug, dim)?
         .unwrap_or_else(DimensionContainers::empty);
-    apply_dim_containers_to_maps(
-        &mut dw.chests,
-        &mut dw.furnaces,
-        &mut dw.furnace_runtimes,
-        &mut dw.fires,
-        conts,
-    );
+    apply_dim_containers_to_maps(&mut dw, conts);
     voxel.worlds.insert(dim.to_string(), dw);
 
     // Entities -> parked entity bundle.
@@ -366,25 +375,24 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
 }
 
 /// Apply a loaded `DimensionContainers` to the per-dim parked
-/// chest/furnace/runtime maps. Mirror of `helpers::apply_dimension_containers`
+/// block-state maps. Mirror of `helpers::apply_dimension_containers`
 /// but writing into the DimWorld parking maps instead of Voxel.
+/// W138: takes the whole `DimWorld` (the map list outgrew a sane
+/// parameter list once doors/brewing/levers joined).
 fn apply_dim_containers_to_maps(
-    chests: &mut HashMap<[i32; 3], Container>,
-    furnaces: &mut HashMap<[i32; 3], Container>,
-    furnace_runtimes: &mut HashMap<[i32; 3], FurnaceRuntime>,
-    fires: &mut HashMap<[i32; 3], u8>,
+    dw: &mut DimWorld,
     bundle: DimensionContainers,
 ) {
-    chests.clear();
+    dw.chests.clear();
     for c in bundle.chests {
         let mut row = Container::with_size(c.slots.len());
         for (i, slot) in c.slots.iter().enumerate() {
             row.set_slot(i, *slot);
         }
-        chests.insert(c.pos, row);
+        dw.chests.insert(c.pos, row);
     }
-    furnaces.clear();
-    furnace_runtimes.clear();
+    dw.furnaces.clear();
+    dw.furnace_runtimes.clear();
     for f in bundle.furnaces {
         let mut row = crate::block::furnace::new_furnace();
         if f.slots.len() != row.len() {
@@ -393,8 +401,8 @@ fn apply_dim_containers_to_maps(
         for (i, slot) in f.slots.iter().enumerate() {
             row.set_slot(i, *slot);
         }
-        furnaces.insert(f.pos, row);
-        furnace_runtimes.insert(
+        dw.furnaces.insert(f.pos, row);
+        dw.furnace_runtimes.insert(
             f.pos,
             FurnaceRuntime {
                 fuel_left_ms: f.fuel_left_ms,
@@ -406,9 +414,45 @@ fn apply_dim_containers_to_maps(
     // Q.4f: per-cell fire age. The world block at each pos was
     // already set by the chunk loader (FIRE_ID); we just restore
     // the parallel age state.
-    fires.clear();
+    dw.fires.clear();
     for f in bundle.fires {
-        fires.insert(f.pos, f.age);
+        dw.fires.insert(f.pos, f.age);
+    }
+    // W138: door / chest-facing / brewing / lever state into the
+    // parked maps (mirrors helpers::apply_dimension_containers).
+    dw.door_facing.clear();
+    dw.door_open.clear();
+    for d in bundle.doors {
+        dw.door_facing.insert(d.pos, d.facing);
+        if d.open {
+            dw.door_open.insert(d.pos);
+        }
+    }
+    dw.chest_facing.clear();
+    for f in bundle.chest_facings {
+        dw.chest_facing.insert(f.pos, f.facing);
+    }
+    dw.brewing_stands.clear();
+    dw.brewing_runtimes.clear();
+    for stand in bundle.brewing {
+        let mut row = crate::block::brewing::new_brewing_stand();
+        if stand.slots.len() != row.len() {
+            row = Container::with_size(stand.slots.len());
+        }
+        for (i, slot) in stand.slots.iter().enumerate() {
+            row.set_slot(i, *slot);
+        }
+        dw.brewing_stands.insert(stand.pos, row);
+        dw.brewing_runtimes.insert(
+            stand.pos,
+            crate::block::brewing::BrewingRuntime {
+                progress_ms: stand.progress_ms,
+            },
+        );
+    }
+    dw.lever_on.clear();
+    for pos in bundle.levers_on {
+        dw.lever_on.insert(pos);
     }
 }
 

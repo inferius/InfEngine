@@ -51,7 +51,15 @@ pub(crate) const CONTAINERS_MAGIC: &[u8; 4] = b"INFB";
 /// - v3: + `fires: Vec<FireSave>` (per-cell age for Q.4b/c/d/e fires).
 ///   Migration v2 -> v3 lives in `containers_v2_to_v3` and registers
 ///   into `default_registry()` at first read.
-pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 3;
+/// - v4 (W138): + `doors` (facing byte incl. the trapdoor half bit +
+///   open flag), `chest_facings`, `brewing` (slots + progress) and
+///   `levers_on`. None of these runtime maps were persisted before -
+///   doors reloaded with facing 0 + closed (the user's "visually
+///   open reversed AND not passable after load" report), chests lost
+///   their latch direction, brewing stands lost their contents and
+///   levers reset to off. Migration v3 -> v4 lives in
+///   `containers_v3_to_v4`.
+pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 4;
 
 /// Default zstd compression level. Matches the sibling save modules.
 const ZSTD_LEVEL: i32 = 3;
@@ -87,6 +95,17 @@ pub(crate) struct DimensionContainers {
     /// (no offline catch-up - fires don't tick while the world is
     /// unloaded, matching MC).
     pub fires: Vec<FireSave>,
+    /// W138 (v4): every door + trapdoor with recorded state. The
+    /// world blocks reload from chunk data; this carries the
+    /// parallel facing/open maps the renderer + collision read.
+    pub doors: Vec<DoorSave>,
+    /// W138 (v4): per-chest latch facing (W126 render state).
+    pub chest_facings: Vec<FacingSave>,
+    /// W138 (v4): brewing stands (slots + progress) - they were
+    /// silently dropped on save before.
+    pub brewing: Vec<BrewingSave>,
+    /// W138 (v4): every lever currently switched ON.
+    pub levers_on: Vec<[i32; 3]>,
 }
 
 impl DimensionContainers {
@@ -97,8 +116,47 @@ impl DimensionContainers {
             chests: Vec::new(),
             furnaces: Vec::new(),
             fires: Vec::new(),
+            doors: Vec::new(),
+            chest_facings: Vec::new(),
+            brewing: Vec::new(),
+            levers_on: Vec::new(),
         }
     }
+}
+
+/// W138 (v4): one persistent door / trapdoor state entry. `facing`
+/// is the runtime byte verbatim: bits 0-1 = facing code, bit 2 =
+/// trapdoor top-half (doors ignore it). `open` mirrors membership
+/// in `Voxel::door_open` (keyed by the LOWER half for doors).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct DoorSave {
+    /// Absolute world voxel coords (door lower half / trapdoor cell).
+    pub pos: [i32; 3],
+    /// Runtime facing byte (see `block::door`).
+    pub facing: u8,
+    /// True when the door/trapdoor is open.
+    pub open: bool,
+}
+
+/// W138 (v4): a bare per-position facing byte (chest latch today).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FacingSave {
+    /// Absolute world voxel coords.
+    pub pos: [i32; 3],
+    /// Facing code (0=+X, 1=+Z, 2=-X, 3=-Z).
+    pub facing: u8,
+}
+
+/// W138 (v4): one persistent brewing stand (5 slots + progress).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct BrewingSave {
+    /// Absolute world voxel coords of the stand block.
+    pub pos: [i32; 3],
+    /// Slot contents in slot-index order (ingredient, fuel, 3
+    /// bottles - the length is recorded so the layout can grow).
+    pub slots: Vec<Option<(u16, u8)>>,
+    /// Accumulated brew progress in milliseconds.
+    pub progress_ms: u32,
 }
 
 /// One persistent chest entry.
@@ -396,6 +454,16 @@ struct DimensionContainersV2 {
     pub furnaces: Vec<FurnaceSave>,
 }
 
+/// V3 on-disk shape (+ fires). Decoded just long enough to convert
+/// into the v4 shape during migration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionContainersV3 {
+    pub format_version: u32,
+    pub chests: Vec<ChestSave>,
+    pub furnaces: Vec<FurnaceSave>,
+    pub fires: Vec<FireSave>,
+}
+
 /// One-step v1 -> v2 migration arrow. Takes the raw envelope
 /// (magic + version + comp_kind + uncompressed_len + body) of a
 /// v1 file, returns the raw envelope of an equivalent v2 file.
@@ -520,7 +588,10 @@ pub(crate) fn containers_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v2, _read) = bincode::serde::decode_from_slice::<DimensionContainersV2, _>(&raw_v2, cfg)
         .map_err(|err| invalid(format!("v2 payload decode failed: {err}")))?;
-    let v3 = DimensionContainers {
+    // W138: encode the FROZEN v3 shape, not the live struct - the
+    // live struct moved on to v4 (doors/facings/brewing/levers) and
+    // would poison this arrow's payload.
+    let v3 = DimensionContainersV3 {
         format_version: 3,
         chests: v2.chests,
         furnaces: v2.furnaces,
@@ -542,6 +613,77 @@ pub(crate) fn containers_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------
+// Migration: v3 -> v4 (W138 - doors / chest facings / brewing /
+// levers).
+// ---------------------------------------------------------------
+
+/// One-step v3 -> v4 migration arrow. Same shape as the earlier
+/// arrows: decode the v3 envelope, re-encode as v4 with the four
+/// new collections empty (old saves simply had no recorded state -
+/// doors degrade to the same default they showed before W138).
+pub(crate) fn containers_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("containers v3 envelope truncated"));
+    }
+    if &bytes[..4] != CONTAINERS_MAGIC {
+        return Err(invalid("containers v3 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 3 {
+        return Err(invalid(format!(
+            "containers_v3_to_v4 expected v3, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v3: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v3 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v3 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v3, _read) = bincode::serde::decode_from_slice::<DimensionContainersV3, _>(&raw_v3, cfg)
+        .map_err(|err| invalid(format!("v3 payload decode failed: {err}")))?;
+    let v4 = DimensionContainers {
+        format_version: 4,
+        chests: v3.chests,
+        furnaces: v3.furnaces,
+        fires: v3.fires,
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
+    };
+    let raw_v4 = bincode::serde::encode_to_vec(&v4, cfg)
+        .map_err(|err| invalid(format!("v4 payload encode failed: {err}")))?;
+    let uncompressed_len_v4 = raw_v4.len() as u64;
+    let (kind_v4, body_v4): (u8, Vec<u8>) = match zstd::encode_all(&raw_v4[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v4.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v4),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v4.len() + 17);
+    out.extend_from_slice(CONTAINERS_MAGIC);
+    out.extend_from_slice(&4u32.to_le_bytes());
+    out.push(kind_v4);
+    out.extend_from_slice(&uncompressed_len_v4.to_le_bytes());
+    out.extend_from_slice(&body_v4);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +693,55 @@ mod tests {
         let c = DimensionContainers::empty();
         assert_eq!(c.format_version, CONTAINERS_FORMAT_VERSION);
         assert!(c.chests.is_empty());
+        assert!(c.doors.is_empty());
+        assert!(c.brewing.is_empty());
+    }
+
+    /// W138: a hand-built v3 envelope must migrate to v4 with the
+    /// new collections empty and the old ones intact.
+    #[test]
+    fn v3_envelope_migrates_to_v4() {
+        let v3 = DimensionContainersV3 {
+            format_version: 3,
+            chests: vec![ChestSave {
+                pos: [1, 2, 3],
+                slots: vec![None, Some((4, 5))],
+            }],
+            furnaces: Vec::new(),
+            fires: vec![FireSave { pos: [7, 8, 9], age: 3 }],
+        };
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(&v3, cfg).unwrap();
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(CONTAINERS_MAGIC);
+        file.extend_from_slice(&3u32.to_le_bytes());
+        file.push(COMP_NONE);
+        file.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        file.extend_from_slice(&raw);
+
+        let v4_bytes = containers_v3_to_v4(&file).expect("migration");
+        let version =
+            u32::from_le_bytes([v4_bytes[4], v4_bytes[5], v4_bytes[6], v4_bytes[7]]);
+        assert_eq!(version, 4);
+        let kind = v4_bytes[8];
+        let len = u64::from_le_bytes([
+            v4_bytes[9], v4_bytes[10], v4_bytes[11], v4_bytes[12], v4_bytes[13],
+            v4_bytes[14], v4_bytes[15], v4_bytes[16],
+        ]) as usize;
+        let body = &v4_bytes[17..];
+        let raw2 = if kind == COMP_ZSTD {
+            decode_zstd(body, len).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let (v4, _) = bincode::serde::decode_from_slice::<DimensionContainers, _>(
+            &raw2, cfg,
+        )
+        .unwrap();
+        assert_eq!(v4.format_version, 4);
+        assert_eq!(v4.chests.len(), 1);
+        assert_eq!(v4.fires.len(), 1);
+        assert!(v4.doors.is_empty());
+        assert!(v4.levers_on.is_empty());
     }
 }

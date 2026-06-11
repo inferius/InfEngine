@@ -70,6 +70,14 @@ impl Voxel {
             liquid_clock: std::mem::take(&mut self.liquid_clock),
             liquid_level: std::mem::take(&mut self.liquid_level),
             liquid_positions: std::mem::take(&mut self.liquid_positions),
+            // W138: block-state maps park with their dim (doors used
+            // to reload facing-0 + closed after a switch).
+            door_facing: std::mem::take(&mut self.door_facing),
+            door_open: std::mem::take(&mut self.door_open),
+            chest_facing: std::mem::take(&mut self.chest_facing),
+            brewing_stands: std::mem::take(&mut self.brewing_stands),
+            brewing_runtimes: std::mem::take(&mut self.brewing_runtimes),
+            lever_on: std::mem::take(&mut self.lever_on),
         };
         self.worlds.insert(self.current_dim.clone(), parked);
         // W137: a rider can't follow their cart into the parking
@@ -109,6 +117,12 @@ impl Voxel {
         self.liquid_clock = target_world.liquid_clock;
         self.liquid_level = target_world.liquid_level;
         self.liquid_positions = target_world.liquid_positions;
+        self.door_facing = target_world.door_facing;
+        self.door_open = target_world.door_open;
+        self.chest_facing = target_world.chest_facing;
+        self.brewing_stands = target_world.brewing_stands;
+        self.brewing_runtimes = target_world.brewing_runtimes;
+        self.lever_on = target_world.lever_on;
         let target_ents = self
             .entities_by_dim
             .remove(target)

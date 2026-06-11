@@ -100,6 +100,20 @@ pub(crate) struct DimWorld {
     pub liquid_clock: u64,
     pub liquid_level: HashMap<[i32; 3], u8>,
     pub liquid_positions: std::collections::HashSet<[i32; 3]>,
+    /// W138: door/trapdoor facing bytes (see `block::door`). These
+    /// runtime maps used to evaporate on a dim switch - the door
+    /// blocks stayed but rendered with default facing + closed.
+    pub door_facing: HashMap<[i32; 3], u8>,
+    /// W138: open doors/trapdoors (keyed by the lower half).
+    pub door_open: std::collections::HashSet<[i32; 3]>,
+    /// W138: chest latch facing (W126 render state).
+    pub chest_facing: HashMap<[i32; 3], u8>,
+    /// W138: brewing stands + their progress runtimes.
+    pub brewing_stands: HashMap<[i32; 3], Container>,
+    pub brewing_runtimes:
+        HashMap<[i32; 3], crate::block::brewing::BrewingRuntime>,
+    /// W138: levers currently switched ON.
+    pub lever_on: std::collections::HashSet<[i32; 3]>,
 }
 
 impl Default for DimWorld {
@@ -118,6 +132,12 @@ impl Default for DimWorld {
             liquid_clock: 0,
             liquid_level: HashMap::new(),
             liquid_positions: std::collections::HashSet::new(),
+            door_facing: HashMap::new(),
+            door_open: std::collections::HashSet::new(),
+            chest_facing: HashMap::new(),
+            brewing_stands: HashMap::new(),
+            brewing_runtimes: HashMap::new(),
+            lever_on: std::collections::HashSet::new(),
         }
     }
 }

@@ -34,7 +34,9 @@ pub(super) mod timers;
 
 // Section re-exports so the existing callers don't have to track
 // the new folder structure.
-pub(super) use containers::{apply_dimension_containers, build_dimension_containers_from};
+pub(super) use containers::{
+    BlockStateRefs, apply_dimension_containers, build_dimension_containers_from,
+};
 pub(super) use entities::{apply_dimension_entities, build_dimension_entities_from};
 pub(super) use player::{apply_player_save, build_player_save};
 pub(super) use timers::{apply_catch_up_events, build_timers, hydrate_liquid_schedule};

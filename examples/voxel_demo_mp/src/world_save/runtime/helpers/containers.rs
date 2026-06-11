@@ -1,13 +1,31 @@
-//! Per-dim chest + furnace + fire save / apply. Builds
-//! `DimensionContainers` from raw refs (so the per-dim save path can
-//! hand in either the active dim's live maps or a parked-dim
-//! snapshot) and writes the bundle back onto `voxel` on load.
+//! Per-dim block-state save / apply (chests, furnaces, fires,
+//! doors, brewing stands, levers). Builds `DimensionContainers`
+//! from raw refs (so the per-dim save path can hand in either the
+//! active dim's live maps or a parked-dim snapshot) and writes the
+//! bundle back onto `voxel` on load.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::Voxel;
 
 use crate::world_save::containers::{
-    CONTAINERS_FORMAT_VERSION, ChestSave, DimensionContainers, FurnaceSave,
+    BrewingSave, CONTAINERS_FORMAT_VERSION, ChestSave, DimensionContainers, DoorSave,
+    FacingSave, FurnaceSave,
 };
+
+/// W138: the per-position block-state maps beyond chests/furnaces/
+/// fires. Bundled so the build fn keeps a readable signature (the
+/// CLAUDE.md ctx-struct rule) - the save path fills it from either
+/// the live `Voxel` fields or a parked `DimWorld`.
+pub(in crate::world_save::runtime) struct BlockStateRefs<'a> {
+    pub door_facing: &'a HashMap<[i32; 3], u8>,
+    pub door_open: &'a HashSet<[i32; 3]>,
+    pub chest_facing: &'a HashMap<[i32; 3], u8>,
+    pub brewing_stands: &'a HashMap<[i32; 3], crate::container::Container>,
+    pub brewing_runtimes:
+        &'a HashMap<[i32; 3], crate::block::brewing::BrewingRuntime>,
+    pub lever_on: &'a HashSet<[i32; 3]>,
+}
 
 /// Build a `DimensionContainers` snapshot from the chest +
 /// furnace + runtime maps. The per-dim save path hands in either
@@ -20,6 +38,7 @@ pub(in crate::world_save::runtime) fn build_dimension_containers_from(
         crate::block::furnace::FurnaceRuntime,
     >,
     fires: &std::collections::HashMap<[i32; 3], u8>,
+    block_state: BlockStateRefs<'_>,
 ) -> DimensionContainers {
     let chest_saves: Vec<ChestSave> = chests
         .iter()
@@ -48,11 +67,50 @@ pub(in crate::world_save::runtime) fn build_dimension_containers_from(
             age: *age,
         })
         .collect();
+    // W138: doors (+trapdoors) persist their facing byte + open
+    // flag; chests their latch facing; brewing stands slots +
+    // progress; levers the on-set.
+    let door_saves: Vec<DoorSave> = block_state
+        .door_facing
+        .iter()
+        .map(|(pos, facing)| DoorSave {
+            pos: *pos,
+            facing: *facing,
+            open: block_state.door_open.contains(pos),
+        })
+        .collect();
+    let facing_saves: Vec<FacingSave> = block_state
+        .chest_facing
+        .iter()
+        .map(|(pos, facing)| FacingSave {
+            pos: *pos,
+            facing: *facing,
+        })
+        .collect();
+    let brewing_saves: Vec<BrewingSave> = block_state
+        .brewing_stands
+        .iter()
+        .map(|(pos, container)| BrewingSave {
+            pos: *pos,
+            slots: container.slots().to_vec(),
+            progress_ms: block_state
+                .brewing_runtimes
+                .get(pos)
+                .copied()
+                .unwrap_or_default()
+                .progress_ms,
+        })
+        .collect();
+    let levers_on: Vec<[i32; 3]> = block_state.lever_on.iter().copied().collect();
     DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: chest_saves,
         furnaces: furnace_saves,
         fires: fire_saves,
+        doors: door_saves,
+        chest_facings: facing_saves,
+        brewing: brewing_saves,
+        levers_on,
     }
 }
 
@@ -105,5 +163,43 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
     voxel.fires.clear();
     for fire in containers_bundle.fires {
         voxel.fires.insert(fire.pos, fire.age);
+    }
+    // W138: re-hydrate the door/chest/brewing/lever state maps -
+    // without these a reloaded door rendered with the default
+    // facing (looked open-reversed) and read as closed to the
+    // collision check.
+    voxel.door_facing.clear();
+    voxel.door_open.clear();
+    for door in containers_bundle.doors {
+        voxel.door_facing.insert(door.pos, door.facing);
+        if door.open {
+            voxel.door_open.insert(door.pos);
+        }
+    }
+    voxel.chest_facing.clear();
+    for f in containers_bundle.chest_facings {
+        voxel.chest_facing.insert(f.pos, f.facing);
+    }
+    voxel.brewing_stands.clear();
+    voxel.brewing_runtimes.clear();
+    for stand in containers_bundle.brewing {
+        let mut c = crate::block::brewing::new_brewing_stand();
+        if stand.slots.len() != c.len() {
+            c = crate::container::Container::with_size(stand.slots.len());
+        }
+        for (i, slot) in stand.slots.iter().enumerate() {
+            c.set_slot(i, *slot);
+        }
+        voxel.brewing_stands.insert(stand.pos, c);
+        voxel.brewing_runtimes.insert(
+            stand.pos,
+            crate::block::brewing::BrewingRuntime {
+                progress_ms: stand.progress_ms,
+            },
+        );
+    }
+    voxel.lever_on.clear();
+    for pos in containers_bundle.levers_on {
+        voxel.lever_on.insert(pos);
     }
 }

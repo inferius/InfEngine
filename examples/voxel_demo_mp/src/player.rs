@@ -75,6 +75,51 @@ pub(crate) fn is_passable(b: BlockId) -> bool {
     block_is_aabb_passable(b)
 }
 
+/// W138: lift a player pose out of solid terrain. A stale save (or
+/// a worldgen change underneath an old save) can hand back an eye
+/// position INSIDE blocks - the camera spawned "in the ground" and
+/// the player was stuck. Scans the body AABB against the collision
+/// predicate; when buried, climbs straight up and returns the first
+/// free eye position (`None` = already free / no free spot found).
+pub(crate) fn unstuck_after_load(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    door_open: &HashSet<[i32; 3]>,
+    eye: Vec3,
+) -> Option<Vec3> {
+    let stuck = |eye: Vec3| -> bool {
+        let (mn, mx) = body_aabb(eye);
+        let x0 = mn.x.floor() as i32;
+        let x1 = (mx.x - 1e-4).floor() as i32;
+        let y0 = mn.y.floor() as i32;
+        let y1 = (mx.y - 1e-4).floor() as i32;
+        let z0 = mn.z.floor() as i32;
+        let z1 = (mx.z - 1e-4).floor() as i32;
+        for y in y0..=y1 {
+            for z in z0..=z1 {
+                for x in x0..=x1 {
+                    if voxel_is_solid_with_doors(world, snow, door_open, [x, y, z]) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    };
+    if !stuck(eye) {
+        return None;
+    }
+    let mut lifted = eye;
+    // 256 = the full world height; plenty to clear any burial.
+    for _ in 0..256 {
+        lifted.y += 1.0;
+        if !stuck(lifted) {
+            return Some(lifted);
+        }
+    }
+    None
+}
+
 /// Combined solid lookup: world solid AND not in the passable
 /// decoration set AND, when the block is snow, has fewer than
 /// 8 stacked layers (so a fully-buried voxel becomes a solid

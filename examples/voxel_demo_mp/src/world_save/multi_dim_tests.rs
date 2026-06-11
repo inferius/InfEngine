@@ -144,6 +144,10 @@ fn per_dim_entities_files_independent() {
 fn per_dim_containers_files_independent() {
     let tmp = TempDir::new().unwrap();
     let ow = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![ChestSave {
             pos: [1, 2, 3],
@@ -159,6 +163,10 @@ fn per_dim_containers_files_independent() {
         fires: Vec::new(),
     };
     let nt = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![ChestSave {
             pos: [10, 20, 30],

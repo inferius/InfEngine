@@ -244,6 +244,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         2,
         super::entities::entities_v1_to_v2,
     );
+    // W138: containers v3 -> v4 adds doors / chest facings /
+    // brewing stands / levers-on (the runtime block-state maps
+    // that were never persisted - reloaded doors rendered open-
+    // reversed and stayed impassable).
+    reg.register(
+        SaveKind::Containers,
+        3,
+        4,
+        super::containers::containers_v3_to_v4,
+    );
     // world.json v1 -> v2: add per-dim worldgen map. v1 saves
     // (Phase B/C/D/E) lift cleanly by copying the legacy
     // `worldgen` field into the new `dimension_worldgens` map for

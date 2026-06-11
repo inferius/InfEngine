@@ -69,6 +69,10 @@ fn containers_roundtrip_single_empty_chest() {
     // doesn't know the slot count to mint on load.
     let tmp = TempDir::new().unwrap();
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([10, 64, -3])],
         furnaces: Vec::new(),
@@ -90,6 +94,10 @@ fn containers_roundtrip_populated_chest() {
     // to survive the bincode + zstd hop including stack counts.
     let tmp = TempDir::new().unwrap();
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 65, 0])],
         furnaces: Vec::new(),
@@ -114,6 +122,10 @@ fn containers_roundtrip_multi_chest() {
     // order so the on-load HashMap rebuild has a stable iteration.
     let tmp = TempDir::new().unwrap();
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![
             populated_chest_at([0, 64, 0]),
@@ -232,12 +244,20 @@ fn containers_recover_from_bak() {
     // and the next read returns the older (but valid) bundle.
     let tmp = TempDir::new().unwrap();
     let first = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([1, 64, 1])],
         furnaces: Vec::new(),
         fires: Vec::new(),
     };
     let second = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([1, 64, 1]), empty_chest_at([2, 64, 2])],
         furnaces: Vec::new(),
@@ -275,6 +295,10 @@ fn containers_slot_count_is_preserved() {
         },
     };
     let original = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![double_chest],
         furnaces: Vec::new(),
@@ -370,6 +394,10 @@ fn containers_full_save_load_through_typed_apis() {
         .collect();
     chests.sort_by_key(|c| c.pos);
     let bundle = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests,
         furnaces: Vec::new(),
@@ -399,12 +427,20 @@ fn containers_two_writes_keep_bak() {
     // write - matches `entities_recover_from_bak` precondition.
     let tmp = TempDir::new().unwrap();
     let first = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![empty_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
         fires: Vec::new(),
     };
     let second = DimensionContainers {
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
