@@ -149,10 +149,23 @@ fn step_one(
     // of walking right onto them (the "skeleton sticks to / glues onto the
     // player" bug). 1.0 block^2 stop is inside ZOMBIE_ATTACK_RANGE (1.4) so
     // the melee tick below still lands; the mob just stops advancing.
+    // W140: skeletons keep BOW range instead - they stop advancing at
+    // ~8 blocks and shoot (MC's RangedBowAttackGoal stand-off).
     const MOB_CHASE_STOP_D2: f32 = 1.0;
+    const SKELETON_HOLD_D2: f32 = 64.0;
     let chasing = chase_player_pos.is_some();
-    if chasing && d2 < MOB_CHASE_STOP_D2 {
+    let stop_d2 = if m.kind == KIND_SKELETON {
+        SKELETON_HOLD_D2
+    } else {
+        MOB_CHASE_STOP_D2
+    };
+    if chasing && d2 < stop_d2 {
         // Within reach: stand and attack, don't overshoot or wander.
+        // W140: keep facing the target while standing (the bow
+        // fires where the skeleton looks).
+        if m.kind == KIND_SKELETON {
+            m.yaw = (-dz).atan2(dx);
+        }
     } else if d2 < 0.25 || day_time >= m.retarget_at {
         // Pick a new wander target nearby (within 12 blocks).
         let theta = rng.next_f32() * std::f32::consts::TAU;
@@ -254,6 +267,46 @@ fn step_one(
     // a ranged-bow goal.
     if kind_is_hostile(m.kind) {
         m.attack_cd = (m.attack_cd - dt).max(0.0);
+        // W140: the skeleton's defining ranged attack. Out of melee
+        // reach but inside bow range -> loose an arrow at the
+        // nearest player with MC's muzzle speed + arc compensation
+        // and a touch of spread, on the 2 s bow cadence. The shared
+        // melee path below still covers point-blank range.
+        if m.kind == KIND_SKELETON
+            && m.attack_cd <= 0.0
+            && let Some(p) = chase_player_pos
+        {
+            const SKELETON_BOW_COOLDOWN: f32 = 2.0;
+            const BOW_MIN_D2: f32 = 3.0 * 3.0;
+            const BOW_MAX_D2: f32 = 16.0 * 16.0;
+            let ddx = p[0] - m.pos[0];
+            let ddy = p[1] - m.pos[1];
+            let ddz = p[2] - m.pos[2];
+            let pd2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (BOW_MIN_D2..=BOW_MAX_D2).contains(&pd2) {
+                m.attack_cd = SKELETON_BOW_COOLDOWN;
+                let eye = glam::Vec3::new(m.pos[0], m.pos[1] + 1.5, m.pos[2]);
+                // Player poses are eye-level - aim at the chest.
+                let tgt = glam::Vec3::new(p[0], p[1] - 0.6, p[2]);
+                let mut vel = crate::projectile::aim_at(
+                    eye,
+                    tgt,
+                    crate::projectile::SKELETON_ARROW_SPEED,
+                );
+                // Spread so the skeleton isn't a sniper.
+                vel += glam::Vec3::new(
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                ) * 1.6;
+                crate::projectile::spawn_arrow(voxel, eye, vel);
+                voxel.sfx_at(
+                    "mob/skeleton/shoot",
+                    [eye.x, eye.y, eye.z],
+                    |_, _| {},
+                );
+            }
+        }
         let dx = voxel.player_pos.x - m.pos[0];
         let dy = voxel.player_pos.y - m.pos[1];
         let dz = voxel.player_pos.z - m.pos[2];

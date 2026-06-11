@@ -263,6 +263,9 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/skeleton/step", "entity.skeleton.step"),
     ("mob/skeleton/hurt", "entity.skeleton.hurt"),
     ("mob/skeleton/death", "entity.skeleton.death"),
+    // W140 - skeleton bow + arrow impacts.
+    ("mob/skeleton/shoot", "entity.skeleton.shoot"),
+    ("arrow/hit", "entity.arrow.hit"),
     ("mob/spider/say", "entity.spider.ambient"),
     ("mob/spider/step", "entity.spider.step"),
     ("mob/spider/hurt", "entity.spider.hurt"),

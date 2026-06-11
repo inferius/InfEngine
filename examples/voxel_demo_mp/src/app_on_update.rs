@@ -510,6 +510,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             // velocity while riding) and before the targeting ray
             // below so the camera follows the fresh cart pose.
             crate::minecart::tick_all(vx, dt);
+            // W140: arrow ballistics + hits + host snapshot stream.
+            crate::projectile::tick_arrows(vx, dt);
         } else {
             // Paused / in a menu screen: drop captured mouse motion
             // so the camera doesn't lurch when play resumes.
@@ -1502,6 +1504,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.minecart_meshes,
             &vx.carts,
             &vx.remote_carts,
+        );
+        // W140: arrows in flight / stuck in walls.
+        render::projectiles::draw_arrows(
+            renderer,
+            &vx.arrow_meshes,
+            &vx.arrows,
+            &vx.remote_arrows,
         );
         // Render any live debris particles before the world cubes
         // so chunk faces draw on top when a particle ends up

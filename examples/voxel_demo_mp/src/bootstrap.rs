@@ -179,6 +179,11 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
                 r,
                 mc_entity_dir.as_deref(),
             );
+        // W140: arrow projectile mesh.
+        vx.arrow_meshes = crate::render::projectiles::load_arrow_meshes(
+            r,
+            mc_entity_dir.as_deref(),
+        );
     }
     // Best-effort audio: a missing output device disables SFX.
     match infengine_audio::AudioSystem::new() {

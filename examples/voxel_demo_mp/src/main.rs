@@ -156,6 +156,8 @@ mod minecart;
 mod mining;
 mod mob;
 mod player;
+// W140 - arrow projectiles (skeleton ranged attack).
+mod projectile;
 // Wave 7: Rust-dylib plugin host. Loads `<exec_dir>/plugins/*.{dll,so,dylib}`
 // at startup (overrideable via `INFENGINE_PLUGIN_DIR`). The same C-ABI
 // (defined in `infengine_sdk`) will back the C# CLR host in Phase K

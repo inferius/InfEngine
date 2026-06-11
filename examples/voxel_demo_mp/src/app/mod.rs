@@ -742,6 +742,15 @@ pub(crate) struct Voxel {
     pub(crate) remote_carts: std::collections::HashMap<u32, crate::net::CartMsg>,
     /// W134: baked minecart entity model.
     pub(crate) minecart_meshes: crate::render::minecarts::MinecartMeshes,
+    /// W140: live arrows (host authoritative; clients render
+    /// `remote_arrows`).
+    pub(crate) arrows: Vec<crate::projectile::Arrow>,
+    /// W140: monotonic arrow id source (host).
+    pub(crate) next_arrow_id: u32,
+    /// W140: client-side view of the host's arrow snapshots.
+    pub(crate) remote_arrows: std::collections::HashMap<u32, crate::net::ArrowMsg>,
+    /// W140: baked arrow mesh.
+    pub(crate) arrow_meshes: crate::render::projectiles::ArrowMeshes,
     /// MC-style per-cell tick schedule. `world_set_tracked` and
     /// the tick loop queue cells here with a `due_at_tick`; each
     /// frame pops due entries up to `MAX_LIQUID_PER_FRAME`. No

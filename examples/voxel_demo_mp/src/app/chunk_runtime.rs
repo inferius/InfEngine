@@ -89,13 +89,16 @@ impl Voxel {
         self.brewing_runtimes.clear();
         self.brewing_open = None;
         self.brewing_held = None;
-        // W134: carts are per-world (not persisted yet - follow-up).
+        // W134: carts are per-world (persisted since W137).
         self.carts.clear();
         self.remote_carts.clear();
         self.riding_cart = None;
         self.cart_input = 0.0;
         self.cart_dismount_pending = false;
         self.cart_net_accum = 0.0;
+        // W140: arrows are ephemeral - drop them with the world.
+        self.arrows.clear();
+        self.remote_arrows.clear();
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into

@@ -21,3 +21,5 @@ pub mod players;
 pub mod chests;
 // W134 - minecart entity renderer (MC MinecartModel + minecart.png).
 pub mod minecarts;
+// W140 - arrow projectile renderer (crossed quads + arrow.png).
+pub mod projectiles;
