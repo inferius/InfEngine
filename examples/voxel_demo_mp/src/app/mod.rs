@@ -730,6 +730,11 @@ pub(crate) struct Voxel {
     /// connections never re-bends when new rails appear nearby.
     /// Legacy rails from pre-W143 saves backfill on first remesh.
     pub(crate) rail_shapes: std::collections::HashMap<[i32; 3], u8>,
+    /// W147: per-mob walk-animation state (MC WalkAnimationState),
+    /// advanced by the render pass from observed positions. Purely
+    /// visual - never saved or broadcast.
+    pub(crate) mob_anim:
+        std::collections::HashMap<u32, crate::entity_model::animation::MobAnim>,
     /// W134: live minecarts (offline/host authoritative; clients
     /// keep this empty and render `remote_carts`).
     pub(crate) carts: Vec<crate::minecart::Minecart>,

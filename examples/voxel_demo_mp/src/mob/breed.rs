@@ -151,6 +151,8 @@ fn spawn_offspring(voxel: &mut Voxel, kind: u8, pos: [f32; 3]) {
             pos,
             yaw: 0.0,
             health: hp as u8,
+            head_yaw: 0.0,
+            head_pitch: 0.0,
         },
     );
 }

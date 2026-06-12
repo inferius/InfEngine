@@ -247,6 +247,8 @@ pub(crate) fn cmd_horde(
                 pos,
                 yaw: 0.0,
                 health: ZOMBIE_MAX_HEALTH as u8,
+                head_yaw: 0.0,
+                head_pitch: 0.0,
             },
         );
         spawned += 1;
@@ -334,6 +336,8 @@ pub(crate) fn cmd_spawnmob(
             pos,
             yaw: 0.0,
             health: initial_hp,
+            head_yaw: 0.0,
+            head_pitch: 0.0,
         },
     );
     lines.push(format!(

@@ -290,6 +290,7 @@ impl Voxel {
             door_open: std::collections::HashSet::new(),
             door_facing: std::collections::HashMap::new(),
             rail_shapes: std::collections::HashMap::new(),
+            mob_anim: std::collections::HashMap::new(),
             carts: Vec::new(),
             next_cart_id: 1,
             riding_cart: None,

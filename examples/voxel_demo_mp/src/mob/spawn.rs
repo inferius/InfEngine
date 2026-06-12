@@ -227,6 +227,8 @@ pub(crate) fn try_spawn_one(
             pos,
             yaw: 0.0,
             health: initial_hp,
+            head_yaw: 0.0,
+            head_pitch: 0.0,
         },
     );
     voxel.last_mob_spawn_time = day_time;

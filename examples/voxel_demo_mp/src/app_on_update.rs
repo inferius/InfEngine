@@ -1484,6 +1484,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.mob_dying,
             &vx.mob_lunge,
             vx.day_time,
+            &mut vx.mob_anim,
+            dt,
         );
         // W126: chest block entities (entity sheets, facing,
         // double-chest halves, lid animation).

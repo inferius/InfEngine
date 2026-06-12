@@ -44,7 +44,11 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
     let mobs_count = voxel.mobs.len();
     for i in 0..mobs_count {
         let m = voxel.mobs[i];
-        let m = step_one(voxel, m, day_time, dt, &mut rand_seed, &mut to_remove);
+        let mut m = step_one(voxel, m, day_time, dt, &mut rand_seed, &mut to_remove);
+        // W147: MC LookAtPlayerGoal - occasional player glances +
+        // smooth head steering, after the walk step so the body yaw
+        // is fresh.
+        head_look_step(voxel, &mut m, dt, &mut rand_seed);
         voxel.mobs[i] = m;
         voxel.remote_mobs.insert(
             m.id,
@@ -54,6 +58,8 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
                 pos: m.pos,
                 yaw: m.yaw,
                 health: m.health.max(0.0).round() as u8,
+                head_yaw: m.head_yaw,
+                head_pitch: m.head_pitch,
             },
         );
     }
@@ -73,6 +79,79 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
 /// skeleton off into a ranged-bow goal.
 fn kind_is_hostile(kind: u8) -> bool {
     matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+}
+
+/// W147 - MC `LookAtPlayerGoal` port. While a player is within 8
+/// blocks the mob occasionally (0.02/tick) starts a 2-4 s glance:
+/// the head steers toward the player's eyes at the look-control
+/// rate (~10 deg/tick), clamped to +-75 deg yaw / +-40 deg pitch
+/// off the body axis, then eases back to the body yaw when the
+/// glance ends. Looks at creative players too (the goal is not
+/// combat targeting).
+fn head_look_step(
+    voxel: &Voxel,
+    m: &mut MobState,
+    dt: f32,
+    rand_seed: &mut u32,
+) {
+    use crate::entity_model::animation::{
+        HEAD_PITCH_CLAMP, HEAD_YAW_CLAMP, approach_angle, wrap_angle,
+    };
+    if m.dying > 0.0 {
+        return;
+    }
+    // LookControl turn rate: ~10 deg per tick at 20 TPS.
+    let step = 3.5 * dt;
+    let mut nearest: Option<([f32; 3], f32)> = None;
+    let mut consider = |p: [f32; 3]| {
+        let dx = p[0] - m.pos[0];
+        let dz = p[2] - m.pos[2];
+        let d2 = dx * dx + dz * dz;
+        if nearest.is_none_or(|(_, bd)| d2 < bd) {
+            nearest = Some((p, d2));
+        }
+    };
+    consider([
+        voxel.player_pos.x,
+        voxel.player_pos.y,
+        voxel.player_pos.z,
+    ]);
+    if let NetRole::Server { poses, .. } = &voxel.net {
+        for p in poses.values() {
+            if p.id != 0 {
+                consider(p.pos);
+            }
+        }
+    }
+    let mut rng = spawn::SpawnRng::new(rand_seed);
+    let in_range = nearest.is_some_and(|(_, d2)| d2 < 8.0 * 8.0);
+    if m.look_left <= 0.0
+        && in_range
+        && rng.next_f32() < 0.02 * (dt * 20.0).min(1.0)
+    {
+        m.look_left = 2.0 + rng.next_f32() * 2.0;
+    }
+    m.look_left = (m.look_left - dt).max(0.0);
+    let (target_yaw, target_pitch) = match nearest {
+        Some((p, _)) if m.look_left > 0.0 && in_range => {
+            let dx = p[0] - m.pos[0];
+            let dz = p[2] - m.pos[2];
+            let dh = (dx * dx + dz * dz).sqrt().max(1e-4);
+            // Player poses are eye-level; approximate the mob's eye
+            // a body height above its feet.
+            let dy = p[1] - (m.pos[1] + 1.2);
+            let raw_yaw = (-dz).atan2(dx);
+            let yaw = m.yaw
+                + wrap_angle(raw_yaw - m.yaw)
+                    .clamp(-HEAD_YAW_CLAMP, HEAD_YAW_CLAMP);
+            // MC pitch convention: positive looks DOWN.
+            let pitch = (-dy).atan2(dh).clamp(-HEAD_PITCH_CLAMP, HEAD_PITCH_CLAMP);
+            (yaw, pitch)
+        }
+        _ => (m.yaw, 0.0),
+    };
+    m.head_yaw = approach_angle(m.head_yaw, target_yaw, step);
+    m.head_pitch = approach_angle(m.head_pitch, target_pitch, step);
 }
 
 /// HP regen: any mob that hasn't been hit in 6 s slowly
@@ -363,6 +442,8 @@ fn broadcast(voxel: &Voxel) {
                 pos: m.pos,
                 yaw: m.yaw,
                 health: m.health.max(0.0).round() as u8,
+                head_yaw: m.yaw,
+                head_pitch: 0.0,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.mob", buf);

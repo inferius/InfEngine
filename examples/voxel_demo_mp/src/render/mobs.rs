@@ -32,6 +32,10 @@ pub fn draw_remote_mobs(
     mob_dying: &HashMap<u32, f32>,
     mob_lunge: &HashMap<u32, f32>,
     day_time: f32,
+    // W147: per-mob walk-animation state (advanced here every frame)
+    // + the frame delta driving it.
+    mob_anim: &mut HashMap<u32, crate::entity_model::animation::MobAnim>,
+    dt: f32,
 ) {
         if !remote_mobs.is_empty() {
             // Body uses the dedicated textured sheep mesh when
@@ -111,6 +115,35 @@ pub fn draw_remote_mobs(
                 };
                 let fwd = Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin());
 
+                // W147: advance the MC walk animation from observed
+                // motion (works for the host sim and 10 Hz remote
+                // snapshots alike) + unpack the head-look pose. One
+                // universal closure serves every kind: bone-name
+                // suffixes route legs/arms/head, spider legs get
+                // their dedicated sway.
+                let (limb_pos, limb_amount) = {
+                    let a = mob_anim.entry(mob.id).or_default();
+                    crate::entity_model::animation::advance(a, mob.pos, dt);
+                    (a.limb_pos, a.limb_amount)
+                };
+                let (look_pitch, look_delta) =
+                    crate::entity_model::animation::head_pose(
+                        mob.head_pitch,
+                        mob.head_yaw,
+                        mob.yaw,
+                    );
+                let mob_pose = move |name: &str| -> crate::entity_model::BonePose {
+                    if name.starts_with("spider_leg") {
+                        crate::entity_model::animation::spider_leg_pose(
+                            name, limb_pos, limb_amount,
+                        )
+                    } else {
+                        crate::entity_model::animation::pose_for_bone(
+                            name, limb_pos, limb_amount, look_pitch, look_delta,
+                        )
+                    }
+                };
+
                 // Shorthand: build a transform at `pos` offset by
                 // `(fx, fy, fz)` in mob-local space and draw a mesh.
                 // `tint_base` is modulated by hurt_flash and brightness.
@@ -148,7 +181,7 @@ pub fn draw_remote_mobs(
                             // layer). Same pipeline + yaw offset.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -158,7 +191,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                             // W139 - the SheepFurModel wool overlay at
                             // the same pose (vanilla layers the fur
@@ -171,7 +204,7 @@ pub fn draw_remote_mobs(
                                     pos,
                                     model_yaw,
                                     apply_tint(white),
-                                    |_| crate::entity_model::BonePose::default(),
+                                    mob_pose,
                                 );
                             }
                         } else {
@@ -220,22 +253,20 @@ pub fn draw_remote_mobs(
                             // pose, the rest at the MC rest pose.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            // W147: the universal pose closure raises
+                            // the zombie arms (animateZombieArms) and
+                            // swings the legs.
                             crate::entity_model::draw(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |name| match name {
-                                    "zombie_arm_r" | "zombie_arm_l" => crate::entity_model::BonePose {
-                                        extra_rotation: [-std::f32::consts::FRAC_PI_2, 0.0, 0.0],
-                                    },
-                                    _ => crate::entity_model::BonePose::default(),
-                                },
+                                mob_pose,
                             );
                         } else {
                             // Fallback: tinted 2-cube silhouette.
@@ -260,7 +291,7 @@ pub fn draw_remote_mobs(
                             // wings). Same pipeline + yaw offset as the rest.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -270,7 +301,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
@@ -294,7 +325,7 @@ pub fn draw_remote_mobs(
                             // forward is +X, hence the -PI/2 yaw offset.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -304,7 +335,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
@@ -331,7 +362,7 @@ pub fn draw_remote_mobs(
                             // +X, so offset the model yaw by -PI/2 to align.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -341,7 +372,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
@@ -365,7 +396,7 @@ pub fn draw_remote_mobs(
                             // mirrored left side), arms at the MC rest pose.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -375,7 +406,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                         } else {
                             let body = Mat4::from_scale_rotation_translation(
@@ -404,7 +435,7 @@ pub fn draw_remote_mobs(
                             // the bone rotations. Same pipeline + yaw offset.
                             let pos = Vec3::new(
                                 base_x,
-                                mob.pos[1] - death_sink + walk_bob,
+                                mob.pos[1] - death_sink,
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
@@ -414,7 +445,7 @@ pub fn draw_remote_mobs(
                                 pos,
                                 model_yaw,
                                 apply_tint(white),
-                                |_| crate::entity_model::BonePose::default(),
+                                mob_pose,
                             );
                         } else {
                             // Fallback: flat dark elongated cube

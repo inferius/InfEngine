@@ -102,6 +102,14 @@ pub(crate) struct MobMsg {
     /// snapshots that didn't include health.
     #[serde(default)]
     pub(crate) health: u8,
+    /// W147: absolute world yaw of the head (MC LookAtPlayerGoal).
+    /// Defaults to 0 on old snapshots; the render treats a zero
+    /// delta as "head follows body".
+    #[serde(default)]
+    pub(crate) head_yaw: f32,
+    /// W147: head pitch, MC convention (positive = down).
+    #[serde(default)]
+    pub(crate) head_pitch: f32,
 }
 
 /// W134: snapshot of one host-side minecart. Sent as `vx.cart` at

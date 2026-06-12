@@ -57,6 +57,15 @@ pub(crate) struct MobState {
     /// W66.2: seconds before this animal can be bred again. Set on a
     /// successful breed so a pair can't multiply every tick.
     pub(crate) breed_cooldown: f32,
+    /// W147: absolute world yaw of the HEAD (MC `LookAtPlayerGoal`).
+    /// Follows the body yaw when idle; turns toward a nearby player
+    /// while `look_left` runs. Broadcast in `MobMsg` so every peer
+    /// renders the same glance.
+    pub(crate) head_yaw: f32,
+    /// W147: head pitch, MC convention (positive = looking DOWN).
+    pub(crate) head_pitch: f32,
+    /// W147: seconds left in the current look-at-player glance.
+    pub(crate) look_left: f32,
 }
 
 impl MobState {
@@ -87,6 +96,9 @@ impl MobState {
             far_despawn_timer: FAR_DESPAWN_TIMER,
             love: 0.0,
             breed_cooldown: 0.0,
+            head_yaw: yaw,
+            head_pitch: 0.0,
+            look_left: 0.0,
         }
     }
 }
