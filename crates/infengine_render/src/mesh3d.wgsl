@@ -380,7 +380,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let d = distribution_ggx(n_dot_h, roughness);
     let g = geometry_smith_ggx(n_dot_v, n_dot_l, roughness);
 
-    let specular = (d * g * f) / (4.0 * n_dot_v * n_dot_l + 1e-4);
+    // W154: matte-terrain specular kill. MC terrain has NO specular
+    // at all, but GGX at grazing angles (Fresnel -> 1) still painted
+    // a bright streak on fully-rough faces - glaring on dark albedo
+    // like obsidian (the user's "weird unstructured reflection").
+    // Scaling the whole lobe by (1-roughness)^2 zeroes it for matte
+    // blocks (default r=0.95, obsidian r=1.0) while glass / iron /
+    // water keep their shine.
+    let spec_scale = (1.0 - roughness) * (1.0 - roughness);
+    let specular = (d * g * f) / (4.0 * n_dot_v * n_dot_l + 1e-4) * spec_scale;
 
     // Energy conservation: diffuse only for non-metals.
     let k_d = (vec3<f32>(1.0) - f) * (1.0 - metallic);
@@ -419,7 +427,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let fp = fresnel_schlick(v_dot_hp, f0);
         let dp = distribution_ggx(n_dot_hp, roughness);
         let gp = geometry_smith_ggx(n_dot_v, n_dot_lp, roughness);
-        let spec_p = (dp * gp * fp) / (4.0 * n_dot_v * n_dot_lp + 1e-4);
+        // W154: same matte kill as the sun lobe above.
+        let spec_p = (dp * gp * fp) / (4.0 * n_dot_v * n_dot_lp + 1e-4)
+            * spec_scale;
         let k_dp = (vec3<f32>(1.0) - fp) * (1.0 - metallic);
         let diff_p = k_dp * albedo / PI;
         let intensity = pl.color.w;
