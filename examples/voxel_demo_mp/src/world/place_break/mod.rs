@@ -44,6 +44,7 @@ mod combat;
 mod containers;
 mod mining_tick;
 mod place_pipeline;
+pub(crate) mod rail_place;
 mod rmb_use;
 
 pub(crate) use break_pipeline::{apply_block_break, apply_shovel_grass_path};

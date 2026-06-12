@@ -163,6 +163,9 @@ fn default_registry_has_phase_c_f_and_q2_arrows() {
     assert!(reg.plan(SaveKind::Timers, 1, 2).is_none());
     // Containers v1 -> v2 (the C.4 arrow) is the other half.
     assert!(reg.plan(SaveKind::Containers, 1, 2).is_some());
+    // W138 + W143 container arrows.
+    assert!(reg.plan(SaveKind::Containers, 3, 4).is_some());
+    assert!(reg.plan(SaveKind::Containers, 4, 5).is_some());
 }
 
 #[test]

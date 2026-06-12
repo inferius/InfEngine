@@ -125,6 +125,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut door_state_updates: Vec<([i32; 3], u8, bool)> = Vec::new();
         // W126: chest facing records (pos, facing).
         let mut chest_facing_updates: Vec<([i32; 3], u8)> = Vec::new();
+        // W143: stored rail shape updates (pos, shape; 0xFF=removed).
+        let mut rail_shape_updates: Vec<([i32; 3], u8)> = Vec::new();
         // W5.3a/b: incoming chest + furnace state snapshots from
         // the host. Applied below to refresh the local chest /
         // furnace maps so the open UI mirrors the authoritative
@@ -193,6 +195,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         torch_orient_updates: &mut torch_orient_updates,
                         door_state_updates: &mut door_state_updates,
                         chest_facing_updates: &mut chest_facing_updates,
+                        rail_shape_updates: &mut rail_shape_updates,
                         chat_inbox: &mut chat_inbox,
                         pvp_self_damage: &mut pvp_self_damage,
                         chest_opens: &mut chest_opens_outer,
@@ -564,6 +567,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         torch_orient_updates: &mut torch_orient_updates,
                         door_state_updates: &mut door_state_updates,
                         chest_facing_updates: &mut chest_facing_updates,
+                        rail_shape_updates: &mut rail_shape_updates,
                         kick_reason: &mut kick_reason,
                         chest_state_updates: &mut chest_state_updates,
                         furnace_state_updates: &mut furnace_state_updates,
@@ -788,6 +792,14 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 ccs.push(ucc);
             }
             vx.rebuild_chunks(&ccs);
+        }
+        // W143: apply stored rail shapes from peers (insert/remove +
+        // remesh of every touched chunk).
+        if !rail_shape_updates.is_empty() {
+            crate::world::place_break::rail_place::apply_shape_changes(
+                vx,
+                &rail_shape_updates,
+            );
         }
         if !liquid_level_updates.is_empty() {
             for (v, level) in liquid_level_updates {

@@ -254,6 +254,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         4,
         super::containers::containers_v3_to_v4,
     );
+    // W143: containers v4 -> v5 adds stored rail shapes (stateful
+    // MC RailState port). v4 saves migrate with `rails: vec![]`;
+    // legacy rails backfill from the old derivation on first
+    // remesh, freezing their current look.
+    reg.register(
+        SaveKind::Containers,
+        4,
+        5,
+        super::containers::containers_v4_to_v5,
+    );
     // world.json v1 -> v2: add per-dim worldgen map. v1 saves
     // (Phase B/C/D/E) lift cleanly by copying the legacy
     // `worldgen` field into the new `dimension_worldgens` map for

@@ -569,6 +569,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
     /// W126: chest facing records (pos, facing) from places.
     pub chest_facing_updates: &'a mut Vec<([i32; 3], u8)>,
+    /// W143: stored rail shape updates (pos, shape; 0xFF = removed).
+    pub rail_shape_updates: &'a mut Vec<([i32; 3], u8)>,
     pub kick_reason: &'a mut Option<String>,
     /// W5.3a/b: incoming chest + furnace state snapshots from the
     /// host. Applied by the main loop to overwrite the local
@@ -841,6 +843,17 @@ pub(crate) fn process_client_inbox(
                     ctx.chest_facing_updates.push((v, facing));
                 }
             }
+            "vx.rail_shape" => {
+                // W143: stored rail shape from a peer placement
+                // (0xFF = rail removed).
+                if let Ok(((v, shape), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.rail_shape_updates.push((v, shape));
+                }
+            }
             "vx.kick" => {
                 if let Ok((reason, _)) =
                     bincode::serde::decode_from_slice::<String, _>(&data, cfg)
@@ -893,6 +906,8 @@ pub(crate) struct ServerInboxCtx<'a> {
     pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
     /// W126: chest facing records (pos, facing) from places.
     pub chest_facing_updates: &'a mut Vec<([i32; 3], u8)>,
+    /// W143: stored rail shape updates (pos, shape; 0xFF = removed).
+    pub rail_shape_updates: &'a mut Vec<([i32; 3], u8)>,
     pub chat_inbox: &'a mut Vec<String>,
     pub pvp_self_damage: &'a mut f32,
     /// W5.3a: pending chest open / act / close events for the
@@ -1177,6 +1192,23 @@ pub(crate) fn process_server_inbox(
                         bincode::serde::encode_to_vec((v, facing), cfg)
                     {
                         server.broadcast_bytes("vx.chest_facing", buf);
+                    }
+                }
+            }
+            "vx.rail_shape" => {
+                // W143: a client placed/broke a rail; its placement
+                // already computed the stateful shapes (reach was
+                // validated by the paired vx.edit). Record + fan out.
+                if let Ok(((v, shape), _)) =
+                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.rail_shape_updates.push((v, shape));
+                    if let Ok(buf) =
+                        bincode::serde::encode_to_vec((v, shape), cfg)
+                    {
+                        server.broadcast_bytes("vx.rail_shape", buf);
                     }
                 }
             }

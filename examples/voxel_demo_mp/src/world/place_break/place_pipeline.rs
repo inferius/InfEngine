@@ -89,15 +89,14 @@ pub(crate) fn apply_block_place(
         .all(|v| unsupportive(vx.world.get(*v)));
         below_air && walls_clear
     };
-    // W131: you cannot BUILD OFF a rail's face (MC: rails are not
-    // sturdy support). Clicking a rail with any block used to place
-    // it against the rail like a full block.
-    let clicked_rail =
-        crate::block::rail::is_rail_block(vx.world.get(hit.voxel).0);
-    if clicked_rail && target_voxel == hit.place_at {
-        tracing::debug!(?target_voxel, "place rejected: clicked a rail face");
-        return;
-    }
+    // W142: clicking a rail face places into the adjacent cell,
+    // exactly like MC (rails are not replaceable, so the click
+    // offsets along the hit face; full blocks need no support in
+    // vanilla, and a new RAIL in that cell is still gated by
+    // rail_unsupported below). The W131 blanket "no building off
+    // rails" rejection was stricter than vanilla - extending a
+    // line by clicking the last rail's end face must work.
+    //
     // W130: rails need a solid floor (MC support rule). This also
     // kills rail-on-rail vertical stacking - a rail below is not a
     // full solid block.
@@ -290,6 +289,13 @@ pub(crate) fn apply_block_place(
                 }
             }
         }
+    }
+    // W143: a placed rail decides its shape ONCE (MC RailState port)
+    // and reshapes at most the neighbours it connects to. Stored +
+    // broadcast so established junctions never re-bend from later
+    // placements nearby.
+    if crate::block::rail::is_rail_block(placed_block.0) {
+        super::rail_place::on_rail_placed(vx, target_voxel, placed_block.0);
     }
     // Chest place: empty 27-slot container.
     if block.0 == CHEST_ID {

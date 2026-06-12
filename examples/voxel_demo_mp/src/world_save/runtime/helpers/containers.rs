@@ -25,6 +25,8 @@ pub(in crate::world_save::runtime) struct BlockStateRefs<'a> {
     pub brewing_runtimes:
         &'a HashMap<[i32; 3], crate::block::brewing::BrewingRuntime>,
     pub lever_on: &'a HashSet<[i32; 3]>,
+    /// W143: stored rail shapes (stateful MC RailState port).
+    pub rail_shapes: &'a HashMap<[i32; 3], u8>,
 }
 
 /// Build a `DimensionContainers` snapshot from the chest +
@@ -102,6 +104,15 @@ pub(in crate::world_save::runtime) fn build_dimension_containers_from(
         })
         .collect();
     let levers_on: Vec<[i32; 3]> = block_state.lever_on.iter().copied().collect();
+    // W143: stored rail shapes (power bit is derived, never saved).
+    let rail_saves: Vec<crate::world_save::containers::RailShapeSave> = block_state
+        .rail_shapes
+        .iter()
+        .map(|(pos, shape)| crate::world_save::containers::RailShapeSave {
+            pos: *pos,
+            shape: *shape & 0x7F,
+        })
+        .collect();
     DimensionContainers {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: chest_saves,
@@ -111,6 +122,7 @@ pub(in crate::world_save::runtime) fn build_dimension_containers_from(
         chest_facings: facing_saves,
         brewing: brewing_saves,
         levers_on,
+        rails: rail_saves,
     }
 }
 
@@ -201,5 +213,13 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
     voxel.lever_on.clear();
     for pos in containers_bundle.levers_on {
         voxel.lever_on.insert(pos);
+    }
+    // W143: stored rail shapes. Cells whose rail block vanished
+    // from the save are pruned lazily by the break path; stale
+    // entries are harmless (the mesher only reads shapes for cells
+    // that actually hold rails).
+    voxel.rail_shapes.clear();
+    for r in containers_bundle.rails {
+        voxel.rail_shapes.insert(r.pos, r.shape & 0x7F);
     }
 }

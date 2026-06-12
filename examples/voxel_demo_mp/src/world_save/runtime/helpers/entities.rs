@@ -131,7 +131,7 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
             ),
             yaw: c.yaw,
         };
-        crate::minecart::snap_to_rail(&voxel.world, &mut cart);
+        crate::minecart::snap_to_rail(&voxel.world, &voxel.rail_shapes, &mut cart);
         voxel.carts.push(cart);
     }
     voxel.next_mob_id = entities

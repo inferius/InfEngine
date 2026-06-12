@@ -90,6 +90,11 @@ pub(crate) fn apply_block_break(
             vx.door_open.remove(&voxel);
         }
     }
+    // W143: a broken rail drops its stored shape; neighbours keep
+    // theirs (MC: removal never re-bends the rest of the line).
+    if crate::block::rail::is_rail_block(broken.0) {
+        super::rail_place::on_rail_broken(vx, voxel);
+    }
     // Tint the debris with the broken block's albedo.
     let break_color = vx
         .registry

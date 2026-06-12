@@ -114,6 +114,8 @@ pub(crate) struct DimWorld {
         HashMap<[i32; 3], crate::block::brewing::BrewingRuntime>,
     /// W138: levers currently switched ON.
     pub lever_on: std::collections::HashSet<[i32; 3]>,
+    /// W143: stored rail shapes (stateful MC RailState port).
+    pub rail_shapes: HashMap<[i32; 3], u8>,
 }
 
 impl Default for DimWorld {
@@ -138,6 +140,7 @@ impl Default for DimWorld {
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),
             lever_on: std::collections::HashSet::new(),
+            rail_shapes: HashMap::new(),
         }
     }
 }

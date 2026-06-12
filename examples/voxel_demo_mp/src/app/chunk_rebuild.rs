@@ -70,10 +70,16 @@ impl Voxel {
                         origin[1] + y as i32,
                         origin[2] + z as i32,
                     ];
+                    // W143: stored shape first (placed-time block
+                    // state); stateless derivation only as the
+                    // legacy fallback for rails the backfill has
+                    // not stamped yet.
                     // W130: bit 7 = redstone powered (torch/lever
                     // adjacency + the 8-rail MC chain).
-                    let mut shape =
-                        crate::block::rail::compute_shape(id, wp, rail_at);
+                    let mut shape = match self.rail_shapes.get(&wp) {
+                        Some(s) => *s & 0x7F,
+                        None => crate::block::rail::compute_shape(id, wp, rail_at),
+                    };
                     if crate::block::rail::is_powerable(id)
                         && self.rail_is_powered(wp, id)
                     {
@@ -84,6 +90,49 @@ impl Voxel {
             }
         }
         out
+    }
+
+    /// W143: stamp stored shapes for legacy rails (pre-W143 saves +
+    /// command-placed) in `coord`, freezing their CURRENT derived
+    /// look the first time their chunk meshes. From then on they are
+    /// real block state and stop re-bending like the stateless W127
+    /// system did. Runs before every remesh dispatch; already-stamped
+    /// rails are untouched.
+    pub(crate) fn backfill_rail_shapes(&mut self, coord: ChunkCoord) {
+        let Some(chunk) = self.world.chunk(coord) else {
+            return;
+        };
+        let cs = infengine_voxel::CHUNK_SIZE;
+        let origin = [
+            coord[0] * cs as i32,
+            coord[1] * cs as i32,
+            coord[2] * cs as i32,
+        ];
+        let mut missing: Vec<([i32; 3], u16)> = Vec::new();
+        for z in 0..cs {
+            for y in 0..cs {
+                for x in 0..cs {
+                    let id = chunk.get(x, y, z).0;
+                    if !crate::block::rail::is_rail_block(id) {
+                        continue;
+                    }
+                    let wp = [
+                        origin[0] + x as i32,
+                        origin[1] + y as i32,
+                        origin[2] + z as i32,
+                    ];
+                    if !self.rail_shapes.contains_key(&wp) {
+                        missing.push((wp, id));
+                    }
+                }
+            }
+        }
+        for (wp, id) in missing {
+            let shape = crate::block::rail::compute_shape(id, wp, |p| {
+                crate::block::rail::is_rail_block(self.world.get(p).0)
+            });
+            self.rail_shapes.insert(wp, shape);
+        }
     }
 
     /// W130: is the powerable rail at `wp` redstone-powered? Direct
@@ -157,6 +206,11 @@ impl Voxel {
         if self.workers.is_none() {
             return self.rebuild_chunks_sync(coords);
         }
+        // W143: stamp stored shapes for any legacy rails before the
+        // snapshot below reads them.
+        for &coord in coords {
+            self.backfill_rail_shapes(coord);
+        }
         let pack_arc = Arc::clone(&self.resource_pack);
         // W32 NOTE: proactive mesh-removal-on-dispatch was tried but caused
         // visible whole-chunk flicker on every edit (entire chunk disappeared
@@ -210,6 +264,10 @@ impl Voxel {
     /// pool is present (headless tests, pre-init). Builds submeshes on
     /// the main thread and uploads them immediately.
     pub(crate) fn rebuild_chunks_sync(&mut self, coords: &[ChunkCoord]) {
+        // W143: same legacy-rail stamp as the worker dispatch path.
+        for &coord in coords {
+            self.backfill_rail_shapes(coord);
+        }
         // Release old mesh handles for the affected chunks so the
         // mesh registry doesn't accumulate stale buffers across edits.
         // W26.4: HashMap remove is O(1) per coord.

@@ -78,6 +78,7 @@ impl Voxel {
             brewing_stands: std::mem::take(&mut self.brewing_stands),
             brewing_runtimes: std::mem::take(&mut self.brewing_runtimes),
             lever_on: std::mem::take(&mut self.lever_on),
+            rail_shapes: std::mem::take(&mut self.rail_shapes),
         };
         self.worlds.insert(self.current_dim.clone(), parked);
         // W137: a rider can't follow their cart into the parking
@@ -123,6 +124,7 @@ impl Voxel {
         self.brewing_stands = target_world.brewing_stands;
         self.brewing_runtimes = target_world.brewing_runtimes;
         self.lever_on = target_world.lever_on;
+        self.rail_shapes = target_world.rail_shapes;
         let target_ents = self
             .entities_by_dim
             .remove(target)

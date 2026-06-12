@@ -101,6 +101,7 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
             brewing_stands: &voxel.brewing_stands,
             brewing_runtimes: &voxel.brewing_runtimes,
             lever_on: &voxel.lever_on,
+            rail_shapes: &voxel.rail_shapes,
         },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
@@ -165,6 +166,7 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
             brewing_stands: &dw.brewing_stands,
             brewing_runtimes: &dw.brewing_runtimes,
             lever_on: &dw.lever_on,
+            rail_shapes: &dw.rail_shapes,
         },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
@@ -341,7 +343,10 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
     // W137: parked carts rebuild their pose against the parked
     // dim's world (inserted into `voxel.worlds` above) so a later
     // dim switch unparks them mid-rail, not at the origin.
-    let parked_world = voxel.worlds.get(dim).map(|d| &d.world);
+    let parked_world = voxel
+        .worlds
+        .get(dim)
+        .map(|d| (&d.world, &d.rail_shapes));
     for c in ents.carts {
         let mut cart = crate::minecart::Minecart {
             id: c.id,
@@ -355,8 +360,8 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
             ),
             yaw: c.yaw,
         };
-        if let Some(w) = parked_world {
-            crate::minecart::snap_to_rail(w, &mut cart);
+        if let Some((w, shapes)) = parked_world {
+            crate::minecart::snap_to_rail(w, shapes, &mut cart);
         }
         parked.carts.push(cart);
     }
@@ -453,6 +458,11 @@ fn apply_dim_containers_to_maps(
     dw.lever_on.clear();
     for pos in bundle.levers_on {
         dw.lever_on.insert(pos);
+    }
+    // W143: stored rail shapes ride along into the parked dim.
+    dw.rail_shapes.clear();
+    for r in bundle.rails {
+        dw.rail_shapes.insert(r.pos, r.shape & 0x7F);
     }
 }
 

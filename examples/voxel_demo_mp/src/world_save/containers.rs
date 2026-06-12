@@ -59,7 +59,13 @@ pub(crate) const CONTAINERS_MAGIC: &[u8; 4] = b"INFB";
 ///   their latch direction, brewing stands lost their contents and
 ///   levers reset to off. Migration v3 -> v4 lives in
 ///   `containers_v3_to_v4`.
-pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 4;
+/// - v5 (W143): + `rails` (per-rail stored `RailShape` byte). Rail
+///   shapes became real block state with the stateful MC RailState
+///   port; without persistence every junction re-derived (and
+///   re-bent) on load. Migration v4 -> v5 lives in
+///   `containers_v4_to_v5`; legacy rails backfill from the old
+///   derivation on first remesh.
+pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 5;
 
 /// Default zstd compression level. Matches the sibling save modules.
 const ZSTD_LEVEL: i32 = 3;
@@ -106,6 +112,8 @@ pub(crate) struct DimensionContainers {
     pub brewing: Vec<BrewingSave>,
     /// W138 (v4): every lever currently switched ON.
     pub levers_on: Vec<[i32; 3]>,
+    /// W143 (v5): per-rail stored shape (MC RailShape block state).
+    pub rails: Vec<RailShapeSave>,
 }
 
 impl DimensionContainers {
@@ -120,8 +128,18 @@ impl DimensionContainers {
             chest_facings: Vec::new(),
             brewing: Vec::new(),
             levers_on: Vec::new(),
+            rails: Vec::new(),
         }
     }
+}
+
+/// W143 (v5): one stored rail shape (see `block::rail` shape codes).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct RailShapeSave {
+    /// Absolute world voxel coords of the rail block.
+    pub pos: [i32; 3],
+    /// RailShape code 0..=9 (bit 7 power flag is derived, not stored).
+    pub shape: u8,
 }
 
 /// W138 (v4): one persistent door / trapdoor state entry. `facing`
@@ -464,6 +482,21 @@ struct DimensionContainersV3 {
     pub fires: Vec<FireSave>,
 }
 
+/// V4 on-disk shape (+ doors / chest facings / brewing / levers).
+/// FROZEN: the live struct moved on to v5 (rails); the v3->v4 and
+/// v4->v5 arrows must encode/decode exactly this shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionContainersV4 {
+    pub format_version: u32,
+    pub chests: Vec<ChestSave>,
+    pub furnaces: Vec<FurnaceSave>,
+    pub fires: Vec<FireSave>,
+    pub doors: Vec<DoorSave>,
+    pub chest_facings: Vec<FacingSave>,
+    pub brewing: Vec<BrewingSave>,
+    pub levers_on: Vec<[i32; 3]>,
+}
+
 /// One-step v1 -> v2 migration arrow. Takes the raw envelope
 /// (magic + version + comp_kind + uncompressed_len + body) of a
 /// v1 file, returns the raw envelope of an equivalent v2 file.
@@ -658,7 +691,10 @@ pub(crate) fn containers_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v3, _read) = bincode::serde::decode_from_slice::<DimensionContainersV3, _>(&raw_v3, cfg)
         .map_err(|err| invalid(format!("v3 payload decode failed: {err}")))?;
-    let v4 = DimensionContainers {
+    // W143: encode the FROZEN v4 shape, not the live struct - the
+    // live struct moved on to v5 (rails) and would poison this
+    // arrow's payload.
+    let v4 = DimensionContainersV4 {
         format_version: 4,
         chests: v3.chests,
         furnaces: v3.furnaces,
@@ -681,6 +717,77 @@ pub(crate) fn containers_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v4);
     out.extend_from_slice(&uncompressed_len_v4.to_le_bytes());
     out.extend_from_slice(&body_v4);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------
+// Migration: v4 -> v5 (W143 - stored rail shapes).
+// ---------------------------------------------------------------
+
+/// One-step v4 -> v5 migration arrow: decode the frozen v4 payload,
+/// re-encode as v5 with `rails: vec![]` (legacy rails backfill from
+/// the stateless derivation on first remesh, freezing their current
+/// look).
+pub(crate) fn containers_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("containers v4 envelope truncated"));
+    }
+    if &bytes[..4] != CONTAINERS_MAGIC {
+        return Err(invalid("containers v4 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 4 {
+        return Err(invalid(format!(
+            "containers_v4_to_v5 expected v4, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v4: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v4 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v4 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v4, _read) = bincode::serde::decode_from_slice::<DimensionContainersV4, _>(&raw_v4, cfg)
+        .map_err(|err| invalid(format!("v4 payload decode failed: {err}")))?;
+    let v5 = DimensionContainers {
+        format_version: 5,
+        chests: v4.chests,
+        furnaces: v4.furnaces,
+        fires: v4.fires,
+        doors: v4.doors,
+        chest_facings: v4.chest_facings,
+        brewing: v4.brewing,
+        levers_on: v4.levers_on,
+        rails: Vec::new(),
+    };
+    let raw_v5 = bincode::serde::encode_to_vec(&v5, cfg)
+        .map_err(|err| invalid(format!("v5 payload encode failed: {err}")))?;
+    let uncompressed_len_v5 = raw_v5.len() as u64;
+    let (kind_v5, body_v5): (u8, Vec<u8>) = match zstd::encode_all(&raw_v5[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v5.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v5),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v5.len() + 17);
+    out.extend_from_slice(CONTAINERS_MAGIC);
+    out.extend_from_slice(&5u32.to_le_bytes());
+    out.push(kind_v5);
+    out.extend_from_slice(&uncompressed_len_v5.to_le_bytes());
+    out.extend_from_slice(&body_v5);
     Ok(out)
 }
 
@@ -734,7 +841,9 @@ mod tests {
         } else {
             body.to_vec()
         };
-        let (v4, _) = bincode::serde::decode_from_slice::<DimensionContainers, _>(
+        // W143: the arrow encodes the FROZEN v4 shape (live moved
+        // to v5), so decode it as that.
+        let (v4, _) = bincode::serde::decode_from_slice::<DimensionContainersV4, _>(
             &raw2, cfg,
         )
         .unwrap();
@@ -743,5 +852,57 @@ mod tests {
         assert_eq!(v4.fires.len(), 1);
         assert!(v4.doors.is_empty());
         assert!(v4.levers_on.is_empty());
+    }
+
+    /// W143: a hand-built v4 envelope must migrate to v5 with the
+    /// rails empty and every v4 collection intact.
+    #[test]
+    fn v4_envelope_migrates_to_v5() {
+        let v4 = DimensionContainersV4 {
+            format_version: 4,
+            chests: vec![ChestSave {
+                pos: [1, 2, 3],
+                slots: vec![None, Some((4, 5))],
+            }],
+            furnaces: Vec::new(),
+            fires: Vec::new(),
+            doors: vec![DoorSave { pos: [4, 5, 6], facing: 2, open: true }],
+            chest_facings: Vec::new(),
+            brewing: Vec::new(),
+            levers_on: vec![[9, 9, 9]],
+        };
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(&v4, cfg).unwrap();
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(CONTAINERS_MAGIC);
+        file.extend_from_slice(&4u32.to_le_bytes());
+        file.push(COMP_NONE);
+        file.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        file.extend_from_slice(&raw);
+
+        let v5_bytes = containers_v4_to_v5(&file).expect("migration");
+        let version =
+            u32::from_le_bytes([v5_bytes[4], v5_bytes[5], v5_bytes[6], v5_bytes[7]]);
+        assert_eq!(version, 5);
+        let kind = v5_bytes[8];
+        let len = u64::from_le_bytes([
+            v5_bytes[9], v5_bytes[10], v5_bytes[11], v5_bytes[12], v5_bytes[13],
+            v5_bytes[14], v5_bytes[15], v5_bytes[16],
+        ]) as usize;
+        let body = &v5_bytes[17..];
+        let raw2 = if kind == COMP_ZSTD {
+            decode_zstd(body, len).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let (v5, _) = bincode::serde::decode_from_slice::<DimensionContainers, _>(
+            &raw2, cfg,
+        )
+        .unwrap();
+        assert_eq!(v5.format_version, 5);
+        assert_eq!(v5.chests.len(), 1);
+        assert_eq!(v5.doors.len(), 1);
+        assert_eq!(v5.levers_on.len(), 1);
+        assert!(v5.rails.is_empty());
     }
 }

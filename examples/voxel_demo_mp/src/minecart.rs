@@ -77,16 +77,26 @@ pub(crate) fn shape_path(shape: u8) -> ([f32; 3], [f32; 3]) {
     }
 }
 
-/// Derived rail shape at `pos`; `None` when the cell holds no rail.
-/// Same derivation the mesher snapshot uses, so the cart follows
-/// exactly what the player sees.
-pub(crate) fn rail_shape_at(world: &World, pos: [i32; 3]) -> Option<u8> {
+/// Rail shape at `pos`; `None` when the cell holds no rail. W143:
+/// stored block state first (what the mesher renders), with the
+/// stateless derivation as the legacy fallback - so the cart always
+/// follows exactly what the player sees.
+pub(crate) fn rail_shape_at(
+    world: &World,
+    shapes: &std::collections::HashMap<[i32; 3], u8>,
+    pos: [i32; 3],
+) -> Option<u8> {
     let id = world.get(pos).0;
     if !rail::is_rail_block(id) {
         return None;
     }
-    let rail_at = |p: [i32; 3]| rail::is_rail_block(world.get(p).0);
-    Some(rail::compute_shape(id, pos, rail_at))
+    Some(match shapes.get(&pos) {
+        Some(s) => *s & 0x7F,
+        None => {
+            let rail_at = |p: [i32; 3]| rail::is_rail_block(world.get(p).0);
+            rail::compute_shape(id, pos, rail_at)
+        }
+    })
 }
 
 fn cell_point(cell: [i32; 3], p: [f32; 3]) -> Vec3 {
@@ -103,8 +113,12 @@ fn path_len(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// Refresh `pos` + `yaw` from the bound cell/param. Keeps the last
 /// pose when the rail vanished (the cart freezes in place).
-pub(crate) fn snap_to_rail(world: &World, cart: &mut Minecart) {
-    let Some(shape) = rail_shape_at(world, cart.cell) else {
+pub(crate) fn snap_to_rail(
+    world: &World,
+    shapes: &std::collections::HashMap<[i32; 3], u8>,
+    cart: &mut Minecart,
+) {
+    let Some(shape) = rail_shape_at(world, shapes, cart.cell) else {
         return;
     };
     let (a, b) = shape_path(shape);
@@ -121,8 +135,13 @@ pub(crate) fn snap_to_rail(world: &World, cart: &mut Minecart) {
 /// Returns `false` when no rail continues there (caller stops the
 /// cart). Leaving an ascending TOP connects one block up; level
 /// exits continue level or drop onto a descending rail one below.
-fn advance_cell(world: &World, cart: &mut Minecart, exit_b: bool) -> bool {
-    let Some(shape) = rail_shape_at(world, cart.cell) else {
+fn advance_cell(
+    world: &World,
+    shapes: &std::collections::HashMap<[i32; 3], u8>,
+    cart: &mut Minecart,
+    exit_b: bool,
+) -> bool {
+    let Some(shape) = rail_shape_at(world, shapes, cart.cell) else {
         return false;
     };
     let (a, b) = shape_path(shape);
@@ -146,7 +165,7 @@ fn advance_cell(world: &World, cart: &mut Minecart, exit_b: bool) -> bool {
     };
     let exit_w = cell_point(cart.cell, e);
     for c in candidates {
-        let Some(ns) = rail_shape_at(world, c) else {
+        let Some(ns) = rail_shape_at(world, shapes, c) else {
             continue;
         };
         // Enter at whichever endpoint of the next path touches the
@@ -169,12 +188,13 @@ fn advance_cell(world: &World, cart: &mut Minecart, exit_b: bool) -> bool {
 /// when the cell holds a powered/activator rail.
 pub(crate) fn tick_cart(
     world: &World,
+    shapes: &std::collections::HashMap<[i32; 3], u8>,
     cart: &mut Minecart,
     dt: f32,
     input: f32,
     powered: Option<bool>,
 ) {
-    let Some(shape) = rail_shape_at(world, cart.cell) else {
+    let Some(shape) = rail_shape_at(world, shapes, cart.cell) else {
         // Rail mined / washed away under the cart: freeze in place
         // (no free ground rolling in the MVP).
         cart.vel = 0.0;
@@ -213,7 +233,7 @@ pub(crate) fn tick_cart(
         if remaining <= 1e-6 || cart.vel == 0.0 {
             break;
         }
-        let Some(shape) = rail_shape_at(world, cart.cell) else {
+        let Some(shape) = rail_shape_at(world, shapes, cart.cell) else {
             cart.vel = 0.0;
             break;
         };
@@ -232,12 +252,12 @@ pub(crate) fn tick_cart(
         }
         remaining -= room;
         cart.t = if fwd { 1.0 } else { 0.0 };
-        if !advance_cell(world, cart, fwd) {
+        if !advance_cell(world, shapes, cart, fwd) {
             cart.vel = 0.0;
             break;
         }
     }
-    snap_to_rail(world, cart);
+    snap_to_rail(world, shapes, cart);
 }
 
 /// Project the rider's raw W/S input (-1..1) onto the cart's +t
@@ -245,6 +265,7 @@ pub(crate) fn tick_cart(
 /// "the way I'm facing" regardless of the cart's param direction.
 pub(crate) fn rider_thrust(
     world: &World,
+    shapes: &std::collections::HashMap<[i32; 3], u8>,
     cart: &Minecart,
     raw: f32,
     yaw: f32,
@@ -252,7 +273,7 @@ pub(crate) fn rider_thrust(
     if raw == 0.0 {
         return 0.0;
     }
-    let Some(shape) = rail_shape_at(world, cart.cell) else {
+    let Some(shape) = rail_shape_at(world, shapes, cart.cell) else {
         return 0.0;
     };
     let (a, b) = shape_path(shape);
@@ -304,7 +325,7 @@ pub(crate) fn place_cart_from_click(vx: &mut crate::Voxel, cell: [i32; 3]) {
         tracing::info!("minecart place ignored on client (host-authoritative MVP)");
         return;
     }
-    if rail_shape_at(&vx.world, cell).is_none() {
+    if rail_shape_at(&vx.world, &vx.rail_shapes, cell).is_none() {
         return;
     }
     let id = vx.next_cart_id;
@@ -317,7 +338,7 @@ pub(crate) fn place_cart_from_click(vx: &mut crate::Voxel, cell: [i32; 3]) {
         pos: Vec3::ZERO,
         yaw: 0.0,
     };
-    snap_to_rail(&vx.world, &mut cart);
+    snap_to_rail(&vx.world, &vx.rail_shapes, &mut cart);
     vx.carts.push(cart);
     if !vx.abilities.instabuild
         && let Some((_, count)) = vx.inventory[vx.selected_slot].as_mut()
@@ -398,15 +419,16 @@ pub(crate) fn tick_all(vx: &mut crate::Voxel, dt: f32) {
             None
         };
         let thrust = if vx.riding_cart == Some(c.id) {
-            rider_thrust(&vx.world, c, vx.cart_input, vx.player_yaw)
+            rider_thrust(&vx.world, &vx.rail_shapes, c, vx.cart_input, vx.player_yaw)
         } else {
             0.0
         };
         params.push((thrust, powered));
     }
     let world = &vx.world;
+    let shapes = &vx.rail_shapes;
     for (cart, (thrust, powered)) in vx.carts.iter_mut().zip(params) {
-        tick_cart(world, cart, dt, thrust, powered);
+        tick_cart(world, shapes, cart, dt, thrust, powered);
     }
     // Pin the rider to the cart (after physics so the camera follows
     // the fresh pose; update_play zeroed the walk velocity already).
@@ -475,7 +497,7 @@ mod tests {
             (4..=12).map(|x| [x, 4, 4]).collect();
         let w = world_with_rails(&cells);
         let mut c = cart_at([5, 4, 4], 2.0);
-        tick_cart(&w, &mut c, 1.0, 0.0, None);
+        tick_cart(&w, &std::collections::HashMap::new(), &mut c, 1.0, 0.0, None);
         assert!(c.cell[0] > 5, "cart should hop east, at {:?}", c.cell);
         assert!(c.vel > 0.0, "still rolling");
         assert!(
@@ -491,7 +513,7 @@ mod tests {
         let w = world_with_rails(&[[4, 4, 4], [5, 4, 4], [6, 4, 4]]);
         let mut c = cart_at([5, 4, 4], 6.0);
         for _ in 0..40 {
-            tick_cart(&w, &mut c, 0.05, 0.0, None);
+            tick_cart(&w, &std::collections::HashMap::new(), &mut c, 0.05, 0.0, None);
         }
         assert_eq!(c.vel, 0.0, "track end stops the cart");
         assert_eq!(c.cell, [6, 4, 4], "parked on the last rail");
@@ -505,7 +527,7 @@ mod tests {
         let w = world_with_rails(&[[4, 4, 4], [5, 4, 4], [5, 4, 5], [5, 4, 6]]);
         let mut c = cart_at([4, 4, 4], 3.0);
         for _ in 0..40 {
-            tick_cart(&w, &mut c, 0.05, 0.0, None);
+            tick_cart(&w, &std::collections::HashMap::new(), &mut c, 0.05, 0.0, None);
         }
         assert!(
             c.cell[2] > 4,
@@ -519,7 +541,7 @@ mod tests {
         let w = world_with_rails(&[[4, 4, 4], [5, 5, 4], [6, 5, 4]]);
         let mut c = cart_at([4, 4, 4], 5.0);
         for _ in 0..40 {
-            tick_cart(&w, &mut c, 0.05, 0.0, None);
+            tick_cart(&w, &std::collections::HashMap::new(), &mut c, 0.05, 0.0, None);
         }
         assert_eq!(c.cell[1], 5, "cart climbed the slope, at {:?}", c.cell);
     }
@@ -529,7 +551,7 @@ mod tests {
         let cells: Vec<[i32; 3]> = (4..=12).map(|x| [x, 4, 4]).collect();
         let w = world_with_rails(&cells);
         let mut c = cart_at([5, 4, 4], 6.0);
-        tick_cart(&w, &mut c, 0.5, 0.0, Some(false));
+        tick_cart(&w, &std::collections::HashMap::new(), &mut c, 0.5, 0.0, Some(false));
         assert!(
             c.vel < 0.1,
             "unpowered booster must kill the speed, vel={}",

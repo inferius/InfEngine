@@ -724,6 +724,12 @@ pub(crate) struct Voxel {
     /// direction; drives which cell edge the panel renders against
     /// (closed = opposite the facing, open = hinge-left swing).
     pub(crate) door_facing: std::collections::HashMap<[i32; 3], u8>,
+    /// W143: stored rail shapes (MC `RailShape` block state), keyed
+    /// by the rail voxel. Decided at PLACE time via the RailState
+    /// port in `block::rail_state` - a junction with two established
+    /// connections never re-bends when new rails appear nearby.
+    /// Legacy rails from pre-W143 saves backfill on first remesh.
+    pub(crate) rail_shapes: std::collections::HashMap<[i32; 3], u8>,
     /// W134: live minecarts (offline/host authoritative; clients
     /// keep this empty and render `remote_carts`).
     pub(crate) carts: Vec<crate::minecart::Minecart>,

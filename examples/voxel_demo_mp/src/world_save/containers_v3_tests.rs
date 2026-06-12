@@ -49,6 +49,7 @@ fn containers_roundtrip_fires_v3() {
         chest_facings: Vec::new(),
         brewing: Vec::new(),
         levers_on: Vec::new(),
+        rails: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: Vec::new(),
         furnaces: Vec::new(),
@@ -86,6 +87,7 @@ fn containers_roundtrip_chests_furnaces_fires_together() {
         chest_facings: Vec::new(),
         brewing: Vec::new(),
         levers_on: Vec::new(),
+        rails: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: vec![populated_furnace_at([1, 64, 1])],
@@ -138,7 +140,7 @@ fn write_v2_containers_file(
 #[test]
 fn containers_v2_to_v3_migration_round_trip() {
     use super::containers::{
-        containers_v2_to_v3, containers_v3_to_v4, read_containers_in_dir_with_registry,
+        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5, read_containers_in_dir_with_registry,
     };
 
     let tmp = TempDir::new().unwrap();
@@ -153,11 +155,14 @@ fn containers_v2_to_v3_migration_round_trip() {
     registry.register(SaveKind::Containers, 2, 3, containers_v2_to_v3);
     // W138: the live format moved to v4 - chain the production
     // 3 -> 4 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
+    // W143: the live format moved to v5 - chain the production
+    // 4 -> 5 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        3,
+        4,
         CONTAINERS_FORMAT_VERSION,
-        containers_v3_to_v4,
+        containers_v4_to_v5,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -198,7 +203,7 @@ fn containers_v2_to_v3_migration_via_default_registry() {
 #[test]
 fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     use super::containers::{
-        containers_v2_to_v3, containers_v3_to_v4, read_containers_in_dir_with_registry,
+        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5, read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
     write_v2_containers_file(
@@ -218,11 +223,14 @@ fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     registry.register(SaveKind::Containers, 2, 3, containers_v2_to_v3);
     // W138: the live format moved to v4 - chain the production
     // 3 -> 4 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
+    // W143: the live format moved to v5 - chain the production
+    // 4 -> 5 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        3,
+        4,
         CONTAINERS_FORMAT_VERSION,
-        containers_v3_to_v4,
+        containers_v4_to_v5,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -243,6 +251,7 @@ fn fire_save_age_15_round_trips() {
         chest_facings: Vec::new(),
         brewing: Vec::new(),
         levers_on: Vec::new(),
+        rails: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: Vec::new(),
         furnaces: Vec::new(),
@@ -264,6 +273,7 @@ fn fire_save_position_negative_coords_round_trip() {
         chest_facings: Vec::new(),
         brewing: Vec::new(),
         levers_on: Vec::new(),
+        rails: Vec::new(),
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: Vec::new(),
         furnaces: Vec::new(),
