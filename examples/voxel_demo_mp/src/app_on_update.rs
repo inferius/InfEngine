@@ -923,6 +923,27 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 // W134: drop a cart entity onto the targeted rail
                 // (consumes one minecart item outside creative).
                 crate::minecart::place_cart_from_click(vx, hit.voxel);
+            } else if let RmbAction::SpawnEgg(kind) = predicted {
+                // W145: spawn the egg's mob on the clicked surface
+                // + consume one egg outside creative. Host/offline
+                // only - the server owns mob state.
+                if !matches!(vx.net, crate::net::NetRole::Client { .. }) {
+                    let p = [
+                        hit.place_at[0] as f32 + 0.5,
+                        hit.place_at[1] as f32,
+                        hit.place_at[2] as f32 + 0.5,
+                    ];
+                    crate::mob::spawn::spawn_from_egg(vx, kind, p);
+                    if !vx.abilities.instabuild
+                        && let Some((_, count)) =
+                            vx.inventory[vx.selected_slot].as_mut()
+                    {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            vx.inventory[vx.selected_slot] = None;
+                        }
+                    }
+                }
             } else if predicted == RmbAction::PlaceBlock
                 && let Some(block) = selected_block
             {

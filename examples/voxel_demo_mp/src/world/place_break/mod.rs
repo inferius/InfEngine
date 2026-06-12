@@ -143,6 +143,9 @@ pub enum RmbAction {
     /// W134: right-click with the minecart item on a rail - spawns
     /// a cart entity riding that rail.
     PlaceMinecart,
+    /// W145: right-click with a spawn egg - spawns the mob kind on
+    /// the clicked surface (consumes one egg outside creative).
+    SpawnEgg(u8),
     /// Right-click with a placeable block selected - places a new
     /// voxel at the adjacent (or replaceable) cell.
     PlaceBlock,
@@ -245,6 +248,11 @@ pub fn classify_rmb_action(
             } else {
                 RmbAction::None
             };
+        }
+        // W145: spawn eggs never place a block - they mint their
+        // mob on the clicked surface (MC SpawnEggItem::useOn).
+        if let Some(kind) = crate::item::spawn_egg_kind(h) {
+            return RmbAction::SpawnEgg(kind);
         }
     }
     // 4. Generic block place. Suppressed in Adventure mode, with

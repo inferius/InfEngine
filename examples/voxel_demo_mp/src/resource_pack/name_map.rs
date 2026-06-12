@@ -907,6 +907,79 @@ mod tests {
         }
     }
 
+    /// W145: every creative-menu item must resolve an inventory icon
+    /// through the real chain - matching item png stem, ITEM_NAME_MAP
+    /// override, or a block-face texture of the placed block. Anything
+    /// that fails here renders as a blank tinted swatch in the
+    /// creative tab (the user-reported "items with no icon"). Skips
+    /// silently when the MC pack isn't on disk.
+    #[test]
+    fn w145_every_creative_item_icon_resolves() {
+        let item_dir = std::path::Path::new(
+            r"C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\textures\item",
+        );
+        let block_dir = std::path::Path::new(
+            r"C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\textures\block",
+        );
+        if !item_dir.exists() || !block_dir.exists() {
+            return;
+        }
+        // Items whose icon legitimately has no flat texture in the
+        // pack:
+        // - 642 shield: MC renders the inventory icon from the entity
+        //   model (textures/entity/shield/...); a baked icon is an
+        //   engine follow-up.
+        const KNOWN_MODEL_RENDERED: &[u16] = &[642];
+        let mut missing: Vec<String> = Vec::new();
+        for it in crate::item::ITEM_TYPES.iter() {
+            if KNOWN_MODEL_RENDERED.contains(&it.id)
+                || crate::creative_tab::CREATIVE_BLACKLIST.contains(&it.id)
+            {
+                continue;
+            }
+            // 1. match-name path (png stem == item name).
+            if item_dir.join(format!("{}.png", it.name)).is_file() {
+                continue;
+            }
+            // 2. explicit ITEM_NAME_MAP override.
+            if let Some(mapped) = lookup_item(it.id)
+                && item_dir.join(format!("{mapped}.png")).is_file()
+            {
+                continue;
+            }
+            // 3. block-form fallback: any face texture of the placed
+            //    block (registry TileSpec candidates + name-map faces).
+            let bid = it.places.unwrap_or(it.id);
+            let mut ok = false;
+            if let Some(bt) = crate::block::block_type(bid) {
+                for f in bt.sides.files.iter().chain(bt.top.files.iter()) {
+                    let stem = f.trim_end_matches(".png");
+                    if block_dir.join(format!("{stem}.png")).is_file() {
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if !ok && let Some(e) = lookup_block(bid) {
+                for stem in [e.sides, e.top, e.block] {
+                    if !stem.is_empty()
+                        && block_dir.join(format!("{stem}.png")).is_file()
+                    {
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                missing.push(format!("{} {}", it.id, it.name));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "creative items with unresolvable icons: {missing:?}"
+        );
+    }
+
     // W45.1 spot checks for corrected entries.
     #[test]
     fn w45_corrected_entries() {

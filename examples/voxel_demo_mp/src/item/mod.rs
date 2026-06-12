@@ -2292,7 +2292,58 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // W134: the minecart is item-only (places=None) - RMB on a rail
     // spawns a cart ENTITY via RmbAction::PlaceMinecart.
     ItemType { id: 657, name: "minecart", display: None, places: None, max_stack: 1, icon: None, category: ItemCategory::Transportation },
+    // W145 - the 16 MC dyes (item-only; icons auto-resolve from the
+    // matching png stems). Wool/sheep dyeing wires up in a follow-up;
+    // the items exist so recipes + creative search match MC today.
+    ItemType { id: 658, name: "white_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 659, name: "light_gray_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 660, name: "gray_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 661, name: "black_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 662, name: "brown_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 663, name: "red_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 664, name: "orange_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 665, name: "yellow_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 666, name: "lime_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 667, name: "green_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 668, name: "cyan_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 669, name: "light_blue_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 670, name: "blue_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 671, name: "purple_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 672, name: "magenta_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 673, name: "pink_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    // W145 - simple MC items whose textures already ship in the pack.
+    ItemType { id: 674, name: "bone_meal", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 675, name: "brick", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 676, name: "beetroot_soup", display: None, places: None, max_stack: 1, icon: None, category: ItemCategory::Food },
+    // W145 - spawn eggs for every implemented mob kind. RMB on a
+    // block spawns the mob (RmbAction::SpawnEgg); 26.x packs ship
+    // per-mob egg textures so the icons auto-resolve by stem.
+    ItemType { id: 677, name: "chicken_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 678, name: "cow_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 679, name: "pig_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 680, name: "sheep_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 681, name: "zombie_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 682, name: "skeleton_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 683, name: "spider_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
 ];
+
+/// W145: mob kind spawned by a spawn-egg item id, `None` for
+/// everything else. Drives `RmbAction::SpawnEgg`. Raw `MobKind`
+/// discriminants (this module also builds in the lib target where
+/// `crate::mob` doesn't exist); the bin tree locks the values
+/// against `mob::kinds` in a test.
+pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
+    match item_id {
+        677 => Some(2), // chicken
+        678 => Some(4), // cow
+        679 => Some(3), // pig
+        680 => Some(0), // sheep
+        681 => Some(1), // zombie
+        682 => Some(5), // skeleton
+        683 => Some(6), // spider
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------
 // Lookup helpers.

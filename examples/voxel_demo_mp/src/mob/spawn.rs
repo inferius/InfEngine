@@ -119,6 +119,33 @@ fn is_hostile_kind(kind: u8) -> bool {
     matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
 }
 
+/// W145: mint one mob from a spawn egg at `pos` (clicked-cell
+/// centre). Host/offline only - mirrors the /spawnmob mint but the
+/// mob stays a NATURAL spawn (despawnable), exactly like MC eggs.
+pub(crate) fn spawn_from_egg(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3]) {
+    use crate::net::{MobMsg, NetRole};
+    if matches!(voxel.net, NetRole::Client { .. }) {
+        return;
+    }
+    let id = voxel.next_mob_id;
+    voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
+    let hp = initial_health_for(kind);
+    let mob = crate::mob::state::MobState::new_natural(id, kind, pos, pos, 0.0, 0.0, hp);
+    voxel.mobs.push(mob);
+    voxel.remote_mobs.insert(
+        id,
+        MobMsg {
+            id,
+            kind,
+            pos,
+            yaw: 0.0,
+            health: hp.max(0.0).round() as u8,
+            head_yaw: 0.0,
+            head_pitch: 0.0,
+        },
+    );
+}
+
 /// Initial HP for a freshly spawned mob. Pulled out so the place
 /// site + the wire-init match stay in sync.
 pub(crate) fn initial_health_for(kind: u8) -> f32 {

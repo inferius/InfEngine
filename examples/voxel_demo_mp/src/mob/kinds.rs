@@ -122,6 +122,22 @@ pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 mod tests {
     use super::*;
 
+    /// W145: the spawn-egg item table hardcodes kind bytes (it also
+    /// builds in the lib target where this module doesn't exist) -
+    /// lock them against the real discriminants.
+    #[test]
+    fn spawn_egg_kinds_match_mob_kinds() {
+        use crate::item::spawn_egg_kind;
+        assert_eq!(spawn_egg_kind(677), Some(KIND_CHICKEN));
+        assert_eq!(spawn_egg_kind(678), Some(KIND_COW));
+        assert_eq!(spawn_egg_kind(679), Some(KIND_PIG));
+        assert_eq!(spawn_egg_kind(680), Some(KIND_SHEEP));
+        assert_eq!(spawn_egg_kind(681), Some(KIND_ZOMBIE));
+        assert_eq!(spawn_egg_kind(682), Some(KIND_SKELETON));
+        assert_eq!(spawn_egg_kind(683), Some(KIND_SPIDER));
+        assert_eq!(spawn_egg_kind(657), None, "minecart is not an egg");
+    }
+
     #[test]
     fn kind_discriminants_match_legacy_consts() {
         // Reordering a variant would break save + wire compat.
