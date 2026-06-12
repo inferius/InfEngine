@@ -183,6 +183,104 @@ fn head_world_front(body_yaw: f32, pose: BonePose) -> glam::Vec3 {
 }
 
 #[cfg(test)]
+mod model_coverage {
+    //! W158: model-vs-texture coverage audit. For every entity
+    //! model, every cube's box-unwrap region must be mostly OPAQUE
+    //! in the real pack texture - wrong `texOffs` land in empty
+    //! sheet space and fail loudly here instead of rendering
+    //! garbage in game. Skips silently when no pack is on disk.
+    use super::super::{Bone, McCube};
+
+    const ENTITY_DIR: &str = r"C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft\textures\entity";
+
+    /// Opaque fraction of one cube's full unwrap (both strips).
+    fn cube_opacity(img: &image::RgbaImage, c: &McCube) -> f32 {
+        let (w, h, d) = (c.size[0], c.size[1], c.size[2]);
+        let (u0, v0) = (c.uv[0] as f32, c.uv[1] as f32);
+        // Top strip (top + bottom tiles) + side strip (4 tiles).
+        let rects = [
+            (u0 + d, v0, u0 + d + 2.0 * w, v0 + d),
+            (u0, v0 + d, u0 + 2.0 * d + 2.0 * w, v0 + d + h),
+        ];
+        let mut opaque = 0u32;
+        let mut total = 0u32;
+        for (x0, y0, x1, y1) in rects {
+            for y in (y0.max(0.0) as u32)..(y1.min(img.height() as f32) as u32) {
+                for x in (x0.max(0.0) as u32)..(x1.min(img.width() as f32) as u32) {
+                    total += 1;
+                    if img.get_pixel(x, y).0[3] >= 128 {
+                        opaque += 1;
+                    }
+                }
+            }
+        }
+        if total == 0 {
+            return 0.0;
+        }
+        opaque as f32 / total as f32
+    }
+
+    /// Audit one model against a texture file. `min_opaque` is the
+    /// REQUIRED fraction per cube (entity sheets keep cutout gaps,
+    /// so 0.35 catches off-by-a-tile errors without flagging the
+    /// genuinely holey cubes like chicken legs - those pass via the
+    /// explicit allow list).
+    fn audit(model: &[Bone], tex_rel: &str, allow_sparse: &[&str]) {
+        let path = std::path::Path::new(ENTITY_DIR).join(tex_rel);
+        if !path.is_file() {
+            return; // no pack on disk - skip silently
+        }
+        let img = image::open(&path).expect("entity sheet decodes").to_rgba8();
+        let mut bad: Vec<String> = Vec::new();
+        for bone in model {
+            for (i, cube) in bone.cubes.iter().enumerate() {
+                let frac = cube_opacity(&img, cube);
+                let floor = if allow_sparse.contains(&bone.name) {
+                    0.05
+                } else {
+                    0.35
+                };
+                if frac < floor {
+                    bad.push(format!(
+                        "{} cube#{i} uv({},{}) size {:?} opaque {:.0}%",
+                        bone.name, cube.uv[0], cube.uv[1], cube.size, frac * 100.0
+                    ));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{tex_rel}: cubes off the art: {bad:?}");
+    }
+
+    #[test]
+    fn w158_every_model_unwrap_lands_on_art() {
+        audit(
+            super::super::chicken::MODEL.bones,
+            "chicken/chicken_temperate.png",
+            &["chicken_leg_r", "chicken_leg_l"],
+        );
+        audit(super::super::pig::MODEL.bones, "pig/pig_temperate.png", &[]);
+        audit(super::super::cow::MODEL.bones, "cow/cow_temperate.png", &[]);
+        audit(super::super::sheep::MODEL.bones, "sheep/sheep.png", &[]);
+        audit(super::super::zombie::MODEL.bones, "zombie/zombie.png", &[]);
+        audit(
+            super::super::skeleton::MODEL.bones,
+            "skeleton/skeleton.png",
+            // The skeleton sheet is mostly cutout by design.
+            &[
+                "skeleton_head",
+                "skeleton_body",
+                "skeleton_arm_r",
+                "skeleton_arm_l",
+                "skeleton_leg_r",
+                "skeleton_leg_l",
+            ],
+        );
+        audit(super::super::spider::MODEL.bones, "spider/spider.png", &[]);
+        audit(super::super::wolf::MODEL.bones, "wolf/wolf.png", &[]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use glam::Vec3;

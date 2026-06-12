@@ -269,6 +269,11 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),
+    // W158 - wolf.
+    ("mob/wolf/say", "entity.wolf.ambient"),
+    ("mob/wolf/step", "entity.wolf.step"),
+    ("mob/wolf/hurt", "entity.wolf.hurt"),
+    ("mob/wolf/death", "entity.wolf.death"),
     ("mob/spider/say", "entity.spider.ambient"),
     ("mob/spider/step", "entity.spider.step"),
     ("mob/spider/hurt", "entity.spider.hurt"),

@@ -506,13 +506,14 @@ mod tests {
         assert!(strip.contains(&CreativeCategory::SpawnEggs));
     }
 
-    /// W148: eggs live in their own tab, not Misc.
+    /// W148: eggs live in their own tab, not Misc. (W158: +wolf = 8.)
     #[test]
     fn spawn_eggs_have_their_own_tab() {
         let items = available_items();
         let eggs = filter_by_category(&items, CreativeCategory::SpawnEggs);
         assert!(eggs.iter().any(|e| e.id == 677), "chicken egg in tab");
-        assert_eq!(eggs.len(), 7, "all 7 kinds: {eggs:?}");
+        assert!(eggs.iter().any(|e| e.id == 717), "wolf egg in tab");
+        assert_eq!(eggs.len(), 8, "all 8 kinds: {eggs:?}");
         let misc = filter_by_category(&items, CreativeCategory::Misc);
         assert!(!misc.iter().any(|e| e.id == 677), "eggs NOT in Misc");
     }

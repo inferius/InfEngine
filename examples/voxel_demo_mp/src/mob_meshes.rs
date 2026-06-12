@@ -494,6 +494,8 @@ pub(crate) struct MobMeshes {
     /// W92 - chicken baked from universal MC `ChickenModel` data
     /// (incl. beak, wattle, wings).
     pub(crate) chicken_model: Option<crate::entity_model::BakedModel>,
+    /// W158 - wolf baked from universal MC `WolfModel` data.
+    pub(crate) wolf_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Pig ---------------------------------------------------------------
     pub(crate) pig_head: Option<MeshHandle>,
@@ -925,6 +927,15 @@ pub fn load_non_sheep_mob_meshes(
         // W92 - universal MC ChickenModel (beak/wattle/wings). Render prefers this.
         mm.chicken_model = Some(crate::entity_model::bake(r, &crate::entity_model::chicken::MODEL, &img));
         info!(texture = format!("{w}x{h}"), "chicken entity texture bound (universal model + 4 legacy parts)");
+    }
+
+    // ---- Wolf (64x32) ------------------------------------------------------
+    if let Some(img) = try_open_entity(&entity_roots, "wolf", biome) {
+        let (w, h) = (img.width(), img.height());
+        // W158 - universal MC WolfModel only (no legacy parts; the
+        // render falls back to the generic cube pair when absent).
+        mm.wolf_model = Some(crate::entity_model::bake(r, &crate::entity_model::wolf::MODEL, &img));
+        info!(texture = format!("{w}x{h}"), "wolf entity texture bound (universal model)");
     }
 
     // ---- Pig (64x64) -------------------------------------------------------

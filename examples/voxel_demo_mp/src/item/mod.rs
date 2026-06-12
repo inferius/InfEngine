@@ -2328,6 +2328,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 681, name: "zombie_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     ItemType { id: 682, name: "skeleton_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     ItemType { id: 683, name: "spider_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    // W158 - wolf (ids 684-716 are the W150/W152 block families).
+    ItemType { id: 717, name: "wolf_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
@@ -2379,6 +2381,7 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
         681 => Some(1), // zombie
         682 => Some(5), // skeleton
         683 => Some(6), // spider
+        717 => Some(7), // wolf (W158)
         _ => None,
     }
 }

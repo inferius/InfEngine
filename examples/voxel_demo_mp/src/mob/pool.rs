@@ -21,7 +21,7 @@ use crate::worldgen::Biome;
 
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON, KIND_SPIDER,
-    KIND_ZOMBIE,
+    KIND_WOLF, KIND_ZOMBIE,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -48,12 +48,20 @@ const DESERT_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 2), (KIND_COW, 1)];
 const DESERT_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 50), (KIND_SKELETON, 80), (KIND_SPIDER, 20)];
 
-const FOREST_DAY: &[(u8, u32)] =
-    &[(KIND_CHICKEN, 6), (KIND_COW, 4), (KIND_PIG, 4), (KIND_SHEEP, 8)];
+// W158: MC forest pools carry wolves (weight 5).
+const FOREST_DAY: &[(u8, u32)] = &[
+    (KIND_CHICKEN, 6),
+    (KIND_COW, 4),
+    (KIND_PIG, 4),
+    (KIND_SHEEP, 8),
+    (KIND_WOLF, 5),
+];
 const FOREST_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30)];
 
-const TAIGA_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 4), (KIND_PIG, 2), (KIND_COW, 2)];
+// W158: the taiga is the wolf's home biome in MC (weight 8).
+const TAIGA_DAY: &[(u8, u32)] =
+    &[(KIND_SHEEP, 4), (KIND_PIG, 2), (KIND_COW, 2), (KIND_WOLF, 8)];
 const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40)];
 
 const TUNDRA_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2)];

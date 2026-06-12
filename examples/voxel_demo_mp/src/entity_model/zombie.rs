@@ -1,18 +1,23 @@
 //! W92 - the zombie, ported faithfully from MC `ZombieModel` /
 //! `HumanoidModel.createMesh`, texture 64x64.
 //!
-//! Modern (64x64) humanoids have dedicated left-limb texture regions, so
-//! the left arm/leg use their own `texOffs` (32,48 / 16,48) rather than
-//! mirroring the right - matching the engine's proven BoxUv table.
+//! W158: the modern 64x64 layout RESERVES left-limb regions at
+//! (32,48)/(16,48), but this pack's zombie.png leaves them fully
+//! transparent (it relies on the classic mirror behaviour) - the
+//! left arm + leg rendered INVISIBLE. The left limbs now mirror the
+//! right-limb tiles like MC's legacy path; caught by the
+//! `w158_every_model_unwrap_lands_on_art` coverage audit.
 
 use super::{Bone, EntityModel, McCube};
 
 const HEAD: &[McCube] = &[McCube::new([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [0, 0])];
 const BODY: &[McCube] = &[McCube::new([-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], [16, 16])];
 const ARM_R: &[McCube] = &[McCube::new([-3.0, -2.0, -2.0], [4.0, 12.0, 4.0], [40, 16])];
-const ARM_L: &[McCube] = &[McCube::new([-1.0, -2.0, -2.0], [4.0, 12.0, 4.0], [32, 48])];
+const ARM_L: &[McCube] =
+    &[McCube::new([-1.0, -2.0, -2.0], [4.0, 12.0, 4.0], [40, 16]).mirrored()];
 const LEG_R: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0, 16])];
-const LEG_L: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [16, 48])];
+const LEG_L: &[McCube] =
+    &[McCube::new([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0, 16]).mirrored()];
 
 const BONES: &[Bone] = &[
     Bone { name: "zombie_head", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },

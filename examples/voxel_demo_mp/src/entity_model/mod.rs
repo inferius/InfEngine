@@ -40,6 +40,7 @@ pub(crate) mod pig;
 pub(crate) mod sheep;
 pub(crate) mod skeleton;
 pub(crate) mod spider;
+pub(crate) mod wolf;
 pub(crate) mod zombie;
 
 /// MC model pixels -> world blocks, with MC's X/Y flip baked in

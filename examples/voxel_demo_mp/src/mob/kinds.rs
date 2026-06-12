@@ -37,6 +37,8 @@ pub(crate) enum MobKind {
     Cow = 4,
     Skeleton = 5,
     Spider = 6,
+    /// W158 - the first of the biome-animal expansion.
+    Wolf = 7,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -53,6 +55,7 @@ impl MobKind {
             4 => MobKind::Cow,
             5 => MobKind::Skeleton,
             6 => MobKind::Spider,
+            7 => MobKind::Wolf,
             _ => MobKind::Sheep,
         }
     }
@@ -82,6 +85,9 @@ impl MobKind {
                 | MobKind::Chicken
                 | MobKind::Pig
                 | MobKind::Cow
+                // W158: the wild wolf wanders like an animal (the
+                // MC neutral anger state is a follow-up).
+                | MobKind::Wolf
         )
     }
 
@@ -95,6 +101,7 @@ impl MobKind {
             MobKind::Cow => "cow",
             MobKind::Skeleton => "skeleton",
             MobKind::Spider => "spider",
+            MobKind::Wolf => "wolf",
         }
     }
 }
@@ -115,6 +122,7 @@ pub(crate) const KIND_PIG: u8 = MobKind::Pig as u8;
 pub(crate) const KIND_COW: u8 = MobKind::Cow as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SKELETON: u8 = MobKind::Skeleton as u8;
+pub(crate) const KIND_WOLF: u8 = MobKind::Wolf as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -135,6 +143,7 @@ mod tests {
         assert_eq!(spawn_egg_kind(681), Some(KIND_ZOMBIE));
         assert_eq!(spawn_egg_kind(682), Some(KIND_SKELETON));
         assert_eq!(spawn_egg_kind(683), Some(KIND_SPIDER));
+        assert_eq!(spawn_egg_kind(717), Some(KIND_WOLF));
         assert_eq!(spawn_egg_kind(657), None, "minecart is not an egg");
     }
 
@@ -169,8 +178,9 @@ mod tests {
     #[test]
     fn from_u8_unknown_collapses_to_sheep() {
         // Any future / corrupted byte should land on the passive
-        // fallback - no panic, no out-of-bounds.
-        for raw in [7u8, 8, 100, 255] {
+        // fallback - no panic, no out-of-bounds. (W158: 7 = Wolf.)
+        assert_eq!(MobKind::from_u8(7), MobKind::Wolf);
+        for raw in [8u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }
