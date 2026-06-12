@@ -816,10 +816,21 @@ pub fn load_non_sheep_mob_meshes(
             }
         };
         let mut img = image::open(path).ok()?.to_rgba8();
-        // Force alpha=255 so the cutout shader path can't punch holes
-        // through soft edges in .tga files with pre-multiplied alpha.
-        for px in img.chunks_exact_mut(4) {
-            px[3] = 255;
+        // W141: flatten alpha for legacy .tga exports ONLY - those carry
+        // soft pre-multiplied edges that would punch halo holes through
+        // the cutout discard. MC .png entity sheets are hard-edged cutout
+        // art whose transparent texels are MEANT to vanish (thin chicken
+        // legs, skeleton rib gaps); the previous unconditional flatten
+        // turned them into opaque black boxes (rgb 0 + forced alpha 255
+        // survives the shader's `alpha < 0.5` discard).
+        let is_tga = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("tga"));
+        if is_tga {
+            for px in img.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
         }
         Some(img)
     }

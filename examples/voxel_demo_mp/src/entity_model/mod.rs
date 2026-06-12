@@ -143,11 +143,10 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
     // UVs are normalized by the ACTUAL texture size (MC-asset-driven), not
     // a hardcoded model constant - so the same `texOffs` data is correct
     // whatever resolution the pack ships.
-    let (tex_w, tex_h) = (img.width(), img.height());
     let mut bones = Vec::with_capacity(model.bones.len());
     let mut lowest_world_y = 0.0_f32;
     for bone in model.bones {
-        let (verts, indices) = bake_bone(bone, tex_w, tex_h);
+        let (verts, indices) = bake_bone(bone, img);
         let mesh = r.create_mesh(bone.name, &verts, &indices);
         r.bind_mesh_albedo_arc(mesh, albedo.clone());
         bones.push(BakedBone { bone: *bone, mesh });
@@ -183,13 +182,59 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
 
 /// Bake one bone's cubes into a single mesh, expressed in bone-local MC
 /// pixels (cube coords as-is; the bone pivot is applied at draw time).
-fn bake_bone(bone: &Bone, tex_w: u32, tex_h: u32) -> (Vec<MeshVertex>, Vec<u32>) {
+fn bake_bone(bone: &Bone, img: &image::RgbaImage) -> (Vec<MeshVertex>, Vec<u32>) {
     let mut verts: Vec<MeshVertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     for cube in bone.cubes {
-        append_cube(&mut verts, &mut indices, cube, tex_w, tex_h);
+        append_cube(&mut verts, &mut indices, cube, img);
     }
     (verts, indices)
+}
+
+/// Alpha coverage of one face's UV tile, sampled from the entity sheet
+/// at bake time (threshold mirrors the shader's `alpha < 0.5` discard).
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum FaceCover {
+    /// Every texel opaque - bake the face single-sided (backface culling
+    /// hides the interior exactly like a closed MC box).
+    Opaque,
+    /// Mix of opaque + transparent texels - bake BOTH windings. MC draws
+    /// entities with `RenderType.entityCutoutNoCull`, so a mostly-
+    /// transparent face (the classic chicken leg) must show its art from
+    /// either side; our mesh pipeline backface-culls, hence the second
+    /// reversed copy (same depth, so exactly one side wins per view).
+    Mixed,
+    /// Every texel transparent - the face would discard entirely; skip
+    /// emitting it at all.
+    Empty,
+}
+
+/// Classify the pixel rect `[u_lo..u_hi) x [v_lo..v_hi)` of the sheet.
+/// Degenerate rects (zero-size cubes' edge faces, out-of-sheet offsets)
+/// count as `Empty`.
+fn face_cover(img: &image::RgbaImage, u_lo: f32, u_hi: f32, v_lo: f32, v_hi: f32) -> FaceCover {
+    let x0 = u_lo.min(u_hi).floor().max(0.0) as u32;
+    let x1 = (u_lo.max(u_hi).ceil().max(0.0) as u32).min(img.width());
+    let y0 = v_lo.min(v_hi).floor().max(0.0) as u32;
+    let y1 = (v_lo.max(v_hi).ceil().max(0.0) as u32).min(img.height());
+    if x0 >= x1 || y0 >= y1 {
+        return FaceCover::Empty;
+    }
+    let mut any_opaque = false;
+    let mut any_transparent = false;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if img.get_pixel(x, y).0[3] >= 128 {
+                any_opaque = true;
+            } else {
+                any_transparent = true;
+            }
+            if any_opaque && any_transparent {
+                return FaceCover::Mixed;
+            }
+        }
+    }
+    if any_opaque { FaceCover::Opaque } else { FaceCover::Empty }
 }
 
 /// Append one MC cube's 6 faces to the mesh buffers. Geometry is in MC
@@ -199,9 +244,9 @@ fn append_cube(
     verts: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
     cube: &McCube,
-    tex_w: u32,
-    tex_h: u32,
+    img: &image::RgbaImage,
 ) {
+    let (tex_w, tex_h) = (img.width(), img.height());
     let g = cube.inflate;
     let [ox, oy, oz] = cube.origin;
     let [sx, sy, sz] = cube.size;
@@ -237,13 +282,24 @@ fn append_cube(
     // mirror() flips each tile horizontally (swap its U min/max).
     let mu = |a: f32, b: f32| -> (f32, f32) { if cube.mirror { (b, a) } else { (a, b) } };
 
-    let mut add = |corners: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4]| {
-        let base = verts.len() as u32;
-        for i in 0..4 {
-            verts.push(MeshVertex::new(corners[i], normal).with_uv(uvs[i]).with_light(0.0, 1.0));
-        }
-        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-    };
+    // W141: classify each face's sheet rect once at bake. Fully-
+    // transparent faces are dropped (5 of the classic chicken leg's 6
+    // faces); partially-transparent faces additionally get the reverse
+    // winding so the art reads from both sides (MC entityCutoutNoCull).
+    let mut add =
+        |corners: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4], cover: FaceCover| {
+            if cover == FaceCover::Empty {
+                return;
+            }
+            let base = verts.len() as u32;
+            for i in 0..4 {
+                verts.push(MeshVertex::new(corners[i], normal).with_uv(uvs[i]).with_light(0.0, 1.0));
+            }
+            indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+            if cover == FaceCover::Mixed {
+                indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+        };
 
     // The six faces are MC's `build_box_uv_mesh` convention expressed in
     // MC model space (front = -Z, right = +X, up = -Y) so that after the
@@ -258,6 +314,7 @@ fn append_cube(
         [[x1, y1, z0], [x0, y1, z0], [x0, y0, z0], [x1, y0, z0]],
         [0.0, 0.0, -1.0],
         [uv(fa, sv1), uv(fb, sv1), uv(fb, sv0), uv(fa, sv0)],
+        face_cover(img, f_u0, f_u1, sv0, sv1),
     );
     // Back face (MC +Z).
     let (ba, bb) = mu(b_u0, b_u1);
@@ -265,6 +322,7 @@ fn append_cube(
         [[x0, y1, z1], [x1, y1, z1], [x1, y0, z1], [x0, y0, z1]],
         [0.0, 0.0, 1.0],
         [uv(ba, sv1), uv(bb, sv1), uv(bb, sv0), uv(ba, sv0)],
+        face_cover(img, b_u0, b_u1, sv0, sv1),
     );
     // Right face (MC +X).
     let (ra, rb) = mu(r_u0, r_u1);
@@ -272,6 +330,7 @@ fn append_cube(
         [[x1, y1, z1], [x1, y1, z0], [x1, y0, z0], [x1, y0, z1]],
         [1.0, 0.0, 0.0],
         [uv(ra, sv1), uv(rb, sv1), uv(rb, sv0), uv(ra, sv0)],
+        face_cover(img, r_u0, r_u1, sv0, sv1),
     );
     // Left face (MC -X).
     let (la, lb) = mu(l_u0, l_u1);
@@ -279,6 +338,7 @@ fn append_cube(
         [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]],
         [-1.0, 0.0, 0.0],
         [uv(la, sv1), uv(lb, sv1), uv(lb, sv0), uv(la, sv0)],
+        face_cover(img, l_u0, l_u1, sv0, sv1),
     );
     // Top face (MC -Y = up).
     let (ta, tb) = mu(t_u0, t_u1);
@@ -286,6 +346,7 @@ fn append_cube(
         [[x1, y0, z1], [x1, y0, z0], [x0, y0, z0], [x0, y0, z1]],
         [0.0, -1.0, 0.0],
         [uv(ta, tv1), uv(tb, tv1), uv(tb, tv0), uv(ta, tv0)],
+        face_cover(img, t_u0, t_u1, tv0, tv1),
     );
     // Bottom face (MC +Y).
     let (bta, btb) = mu(bt_u0, bt_u1);
@@ -293,6 +354,7 @@ fn append_cube(
         [[x0, y1, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1]],
         [0.0, 1.0, 0.0],
         [uv(bta, tv1), uv(btb, tv1), uv(btb, tv0), uv(bta, tv0)],
+        face_cover(img, bt_u0, bt_u1, tv0, tv1),
     );
 }
 
@@ -345,6 +407,11 @@ mod tests {
     fn uv_of(v: &MeshVertex) -> [f32; 2] {
         [v.uv_packed[0] as f32 / 65535.0, v.uv_packed[1] as f32 / 65535.0]
     }
+    /// Fully-opaque white sheet - every face classifies `Opaque`, so the
+    /// classic single-winding bake expectations hold unchanged.
+    fn opaque_sheet(w: u32, h: u32) -> image::RgbaImage {
+        image::RgbaImage::from_pixel(w, h, image::Rgba([255, 255, 255, 255]))
+    }
     fn normal_of(v: &MeshVertex) -> [f32; 3] {
         [
             v.normal_pad[0] as f32 / 127.0,
@@ -372,7 +439,7 @@ mod tests {
         let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, 64, 64);
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
         assert_eq!(v.len(), 24, "6 faces * 4 verts");
         assert_eq!(i.len(), 36, "6 faces * 2 tris");
 
@@ -401,7 +468,7 @@ mod tests {
         let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, 64, 64);
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
         // (x0,y0,z0)=(-4,-4,-6), (x1,y1,z1)=(4,4,0).
         let all = |f: &[MeshVertex], axis: usize, val: f32| {
             f.iter().all(|vt| (vt.position[axis] - val).abs() < 1e-4)
@@ -442,5 +509,53 @@ mod tests {
     fn flip_preserves_winding() {
         let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
         assert!(flip.determinant() > 0.0, "flip det must be positive");
+    }
+
+    /// W141: the classic chicken-leg situation - a cube whose sheet art
+    /// is one opaque column on the back tile, everything else transparent.
+    /// Fully-transparent faces must not be emitted at all, and the one
+    /// mixed face must carry BOTH windings (entityCutoutNoCull parity).
+    #[test]
+    fn transparent_faces_skipped_mixed_faces_double_wound() {
+        // Leg cube: texOffs(26,0), size 3x5x3 - the chicken's real data.
+        let cube = McCube::new([-1.0, 0.0, -3.0], [3.0, 5.0, 3.0], [26, 0]);
+        let mut img = image::RgbaImage::from_pixel(64, 32, image::Rgba([0, 0, 0, 0]));
+        // Opaque column inside the BACK tile (u 35..38, v 3..8): x=36.
+        for y in 3..8 {
+            img.put_pixel(36, y, image::Rgba([224, 187, 105, 255]));
+        }
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        append_cube(&mut v, &mut i, &cube, &img);
+        // Only the back face survives: 4 verts, 2 windings = 12 indices.
+        assert_eq!(v.len(), 4, "5 fully-transparent faces dropped");
+        assert_eq!(i.len(), 12, "mixed face = front + reverse winding");
+        // Both windings reference the same 4 vertices.
+        assert!(i.iter().all(|&ix| ix < 4));
+    }
+
+    /// W141: an all-opaque cube keeps the classic 24/36 single-winding
+    /// bake - no hidden extra geometry on solid mobs.
+    #[test]
+    fn opaque_cube_keeps_single_winding() {
+        let cube = McCube::new([0.0, 0.0, 0.0], [4.0, 4.0, 4.0], [0, 0]);
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
+        assert_eq!(v.len(), 24);
+        assert_eq!(i.len(), 36);
+    }
+
+    /// W141: face_cover classification basics, incl. degenerate rects.
+    #[test]
+    fn face_cover_classifies() {
+        let mut img = image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
+        img.put_pixel(1, 1, image::Rgba([0, 0, 0, 0]));
+        assert_eq!(face_cover(&img, 0.0, 8.0, 0.0, 8.0), FaceCover::Mixed);
+        assert_eq!(face_cover(&img, 4.0, 8.0, 4.0, 8.0), FaceCover::Opaque);
+        assert_eq!(face_cover(&img, 1.0, 2.0, 1.0, 2.0), FaceCover::Empty);
+        // Zero-area + fully out-of-sheet rects are Empty (skipped).
+        assert_eq!(face_cover(&img, 3.0, 3.0, 0.0, 8.0), FaceCover::Empty);
+        assert_eq!(face_cover(&img, 100.0, 104.0, 0.0, 4.0), FaceCover::Empty);
     }
 }
