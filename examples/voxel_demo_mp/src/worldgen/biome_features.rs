@@ -16,6 +16,27 @@ const BAMBOO: u16 = 500;
 const WATER: u16 = 36;
 const GRASS: u16 = 3;
 const SAND: u16 = 4;
+const PUMPKIN: u16 = 448;
+
+/// W146: rare pumpkin patches on grass, MC-style. A coarse 32x32
+/// cell occasionally hosts a small clump (centre + density from the
+/// chunk-independent cell hash, so clumps cross chunk borders
+/// seamlessly).
+fn pumpkin_here(wx: i32, wz: i32, seed: u32) -> bool {
+    let cell_x = wx.div_euclid(32);
+    let cell_z = wz.div_euclid(32);
+    let cell = hash2_for(cell_x ^ 0x70AD, cell_z ^ 0x0BAD, seed);
+    // 1 in 10 of the 32x32 cells hosts a clump.
+    if !cell.is_multiple_of(10) {
+        return false;
+    }
+    let cx = cell_x * 32 + ((cell >> 8) % 32) as i32;
+    let cz = cell_z * 32 + ((cell >> 13) % 32) as i32;
+    let (dx, dz) = (wx - cx, wz - cz);
+    // Clump radius ~2.2 blocks, ~1/3 fill = 1-4 pumpkins.
+    dx * dx + dz * dz <= 5
+        && hash2_for(wx ^ 0x600D, wz ^ 0x0F0D, seed).is_multiple_of(3)
+}
 
 /// Topmost non-air, non-water voxel y in a column, or `None`.
 fn top_solid(chunk: &Chunk, x: i32, z: i32, cs: i32) -> Option<i32> {
@@ -85,6 +106,15 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: ChunkCoord, c
                 && touches_water(chunk, x, surf_y, z, cs)
             {
                 stack(chunk, x, air_y, z, cs, 1 + ((rng >> 5) % 3) as i32, SUGAR_CANE);
+                continue;
+            }
+            // W146: rare pumpkin clumps on any grassy surface (MC
+            // spawns them in every grass-floored biome).
+            if surf == GRASS
+                && biome != Biome::Desert
+                && pumpkin_here(wx, wz, seed)
+            {
+                chunk.set(x as usize, air_y as usize, z as usize, BlockId(PUMPKIN));
             }
         }
     }
