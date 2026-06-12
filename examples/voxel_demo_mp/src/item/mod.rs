@@ -66,6 +66,9 @@ pub(crate) enum ItemCategory {
     Transportation,
     /// W49: Brewing - brewing_stand, nether_wart, potions (future).
     Brewing,
+    /// W148: spawn eggs - their own creative tab like MC's
+    /// `CreativeModeTabs.SPAWN_EGGS`.
+    SpawnEgg,
 }
 
 // ---------------------------------------------------------------
@@ -2318,13 +2321,13 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // W145 - spawn eggs for every implemented mob kind. RMB on a
     // block spawns the mob (RmbAction::SpawnEgg); 26.x packs ship
     // per-mob egg textures so the icons auto-resolve by stem.
-    ItemType { id: 677, name: "chicken_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 678, name: "cow_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 679, name: "pig_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 680, name: "sheep_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 681, name: "zombie_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 682, name: "skeleton_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
-    ItemType { id: 683, name: "spider_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 677, name: "chicken_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 678, name: "cow_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 679, name: "pig_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 680, name: "sheep_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 681, name: "zombie_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 682, name: "skeleton_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    ItemType { id: 683, name: "spider_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

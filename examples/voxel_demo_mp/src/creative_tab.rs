@@ -50,6 +50,8 @@ pub(crate) enum CreativeCategory {
     Combat,
     /// Food (meat + bread + apple + crops).
     Food,
+    /// W148: spawn eggs (MC's dedicated SPAWN_EGGS tab).
+    SpawnEggs,
     /// Misc - buckets + ingredients (feather, ingot, ...).
     Misc,
 }
@@ -68,14 +70,16 @@ impl CreativeCategory {
             CreativeCategory::Tools => "Tools",
             CreativeCategory::Combat => "Combat",
             CreativeCategory::Food => "Food",
+            CreativeCategory::SpawnEggs => "Spawn Eggs",
             CreativeCategory::Misc => "Misc",
         }
     }
 
     /// Every category in display order. Used by the tab strip
-    /// renderer. W49: order mirrors MC's CreativeModeTab enum.
+    /// renderer. W49: order mirrors MC's CreativeModeTab enum
+    /// (W148: + Spawn Eggs before Misc, like vanilla).
     #[allow(dead_code)]
-    pub(crate) const fn all() -> [CreativeCategory; 10] {
+    pub(crate) const fn all() -> [CreativeCategory; 11] {
         [
             CreativeCategory::All,
             CreativeCategory::Blocks,
@@ -86,6 +90,7 @@ impl CreativeCategory {
             CreativeCategory::Tools,
             CreativeCategory::Combat,
             CreativeCategory::Food,
+            CreativeCategory::SpawnEggs,
             CreativeCategory::Misc,
         ]
     }
@@ -105,6 +110,7 @@ impl CreativeCategory {
             CreativeCategory::Tools => matches!(ic, ItemCategory::Tool),
             CreativeCategory::Combat => matches!(ic, ItemCategory::Weapon),
             CreativeCategory::Food => matches!(ic, ItemCategory::Food),
+            CreativeCategory::SpawnEggs => matches!(ic, ItemCategory::SpawnEgg),
             CreativeCategory::Misc => matches!(
                 ic,
                 ItemCategory::Bucket | ItemCategory::Ingredient
@@ -488,15 +494,27 @@ mod tests {
     }
 
     #[test]
-    fn category_strip_lists_all_ten() {
+    fn category_strip_lists_all_eleven() {
         // W49: tab strip extended from 7 to 10 entries (added
         // Redstone, Transportation, Brewing per MC's
-        // CreativeModeTab layout).
+        // CreativeModeTab layout). W148: + Spawn Eggs = 11.
         let strip = CreativeCategory::all();
-        assert_eq!(strip.len(), 10);
+        assert_eq!(strip.len(), 11);
         // First is All, last is Misc per the display order.
         assert_eq!(strip[0], CreativeCategory::All);
         assert_eq!(strip[strip.len() - 1], CreativeCategory::Misc);
+        assert!(strip.contains(&CreativeCategory::SpawnEggs));
+    }
+
+    /// W148: eggs live in their own tab, not Misc.
+    #[test]
+    fn spawn_eggs_have_their_own_tab() {
+        let items = available_items();
+        let eggs = filter_by_category(&items, CreativeCategory::SpawnEggs);
+        assert!(eggs.iter().any(|e| e.id == 677), "chicken egg in tab");
+        assert_eq!(eggs.len(), 7, "all 7 kinds: {eggs:?}");
+        let misc = filter_by_category(&items, CreativeCategory::Misc);
+        assert!(!misc.iter().any(|e| e.id == 677), "eggs NOT in Misc");
     }
 
     #[test]

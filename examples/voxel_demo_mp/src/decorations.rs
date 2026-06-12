@@ -79,13 +79,29 @@ pub(crate) fn dislodge_unsupported(voxel: &mut Voxel, removed: [i32; 3]) {
             if b.is_air() {
                 continue;
             }
-            if !block_has_flag(b, F_NO_PLACE) {
-                continue;
-            }
-            if is_supported(voxel, c) {
-                continue;
+            // W148: rails are placeable (no F_NO_PLACE) but they do
+            // need a fully-occluding FLOOR - breaking the block under
+            // a rail pops the rail as an item, exactly like MC. Walls
+            // never hold rails, so only the above-neighbour case can
+            // trigger.
+            let rail_lost_floor = crate::block::rail::is_rail_block(b.0) && {
+                let below = voxel.world.get([c[0], c[1] - 1, c[2]]);
+                below.is_air() || !crate::block::block_fully_occludes(below)
+            };
+            if !rail_lost_floor {
+                if !block_has_flag(b, F_NO_PLACE) {
+                    continue;
+                }
+                if is_supported(voxel, c) {
+                    continue;
+                }
             }
             voxel.world_set_tracked(c, BlockId::AIR);
+            // W148: drop the stored rail shape with the block (also
+            // fans out the vx.rail_shape removal to peers).
+            if rail_lost_floor {
+                crate::world::place_break::rail_place::on_rail_broken(voxel, c);
+            }
             let coords = Voxel::affected_chunks(c);
             voxel.rebuild_chunks(&coords);
             // W10.2: Creative `instabuild` skips the cascade
