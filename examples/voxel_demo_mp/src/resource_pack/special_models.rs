@@ -387,6 +387,9 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         // visually stands apart from a plain plank block.
         x if x == crate::block::CHEST_ID => Some("block/chest"),
         x if x == GLASS_PANE_ID || x == IRON_BARS_ID => Some("block/glass_pane"),
+        // W152: the 16 stained glass panes share the thin-pane build
+        // (the builder samples each block's own TileSpec texture).
+        701..=716 => Some("block/glass_pane"),
         x if x == COBBLESTONE_WALL_ID => Some("block/wall_post"),
         _ => None,
     }

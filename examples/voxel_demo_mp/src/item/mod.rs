@@ -2346,6 +2346,23 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 698, name: "green_glazed_terracotta", display: Some("Green Glazed Terracotta"), places: Some(698), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 699, name: "red_glazed_terracotta", display: Some("Red Glazed Terracotta"), places: Some(699), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 700, name: "black_glazed_terracotta", display: Some("Black Glazed Terracotta"), places: Some(700), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W152: the 16 stained glass panes.
+    ItemType { id: 701, name: "white_stained_glass_pane", display: Some("White Stained Glass Pane"), places: Some(701), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 702, name: "orange_stained_glass_pane", display: Some("Orange Stained Glass Pane"), places: Some(702), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 703, name: "magenta_stained_glass_pane", display: Some("Magenta Stained Glass Pane"), places: Some(703), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 704, name: "light_blue_stained_glass_pane", display: Some("Light Blue Stained Glass Pane"), places: Some(704), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 705, name: "yellow_stained_glass_pane", display: Some("Yellow Stained Glass Pane"), places: Some(705), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 706, name: "lime_stained_glass_pane", display: Some("Lime Stained Glass Pane"), places: Some(706), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 707, name: "pink_stained_glass_pane", display: Some("Pink Stained Glass Pane"), places: Some(707), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 708, name: "gray_stained_glass_pane", display: Some("Gray Stained Glass Pane"), places: Some(708), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 709, name: "light_gray_stained_glass_pane", display: Some("Light Gray Stained Glass Pane"), places: Some(709), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 710, name: "cyan_stained_glass_pane", display: Some("Cyan Stained Glass Pane"), places: Some(710), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 711, name: "purple_stained_glass_pane", display: Some("Purple Stained Glass Pane"), places: Some(711), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 712, name: "blue_stained_glass_pane", display: Some("Blue Stained Glass Pane"), places: Some(712), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 713, name: "brown_stained_glass_pane", display: Some("Brown Stained Glass Pane"), places: Some(713), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 714, name: "green_stained_glass_pane", display: Some("Green Stained Glass Pane"), places: Some(714), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 715, name: "red_stained_glass_pane", display: Some("Red Stained Glass Pane"), places: Some(715), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 716, name: "black_stained_glass_pane", display: Some("Black Stained Glass Pane"), places: Some(716), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
