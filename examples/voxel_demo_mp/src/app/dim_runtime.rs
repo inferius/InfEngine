@@ -228,6 +228,16 @@ impl Voxel {
             self.portal_in_ticks = 0;
             return;
         }
+        // W156: the MC trigger hum starts the moment the player
+        // steps in and loops while they stand there.
+        if self.portal_in_ticks == 0 {
+            let p = [
+                self.player_pos.x,
+                self.player_pos.y,
+                self.player_pos.z,
+            ];
+            self.sfx_at("portal/trigger", p, |_, _| {});
+        }
         self.portal_in_ticks = self.portal_in_ticks.saturating_add(1);
         if self.portal_in_ticks >= block::portal::PORTAL_TRIGGER_TICKS {
             self.do_cross_dim_teleport(foot);
@@ -277,7 +287,16 @@ impl Voxel {
         // headless / test callers don't hit the rebuild path.
         if !edits.is_empty() {
             if self.renderer.is_some() {
-                let coords = Self::affected_chunks(dest);
+                // W156: rebuild around the GROUND-SNAPPED frame, not
+                // the raw scaled coord - they can sit chunks apart in
+                // Y, which left the freshly-built portal unmeshed
+                // ("the portal appeared inactive").
+                let mut coords = Self::affected_chunks(spawn);
+                for c in Self::affected_chunks(target) {
+                    if !coords.contains(&c) {
+                        coords.push(c);
+                    }
+                }
                 self.rebuild_chunks(&coords);
             }
             let portal_id = block::PORTAL_ID;
@@ -322,6 +341,13 @@ impl Voxel {
         self.player_vel = glam::Vec3::ZERO;
         self.portal_in_ticks = 0;
         self.portal_cooldown_ticks = block::portal::PORTAL_COOLDOWN_TICKS;
+        // W156: MC plays the travel whoosh on arrival.
+        let p = [
+            self.player_pos.x,
+            self.player_pos.y,
+            self.player_pos.z,
+        ];
+        self.sfx_at("portal/travel", p, |_, _| {});
         self.chat_log.push((
             std::time::Instant::now(),
             format!("-> dim '{}'", target_dim),
@@ -332,6 +358,12 @@ impl Voxel {
     /// `pos` (3x3 columns, the full vertical range) with the ACTIVE
     /// dim's worldgen so a cross-dim arrival has real terrain.
     /// Already-present chunks (visited before) stay untouched.
+    ///
+    /// W156: the streamer's worker path runs a side-effect scan on
+    /// every generated chunk (liquids / snow / flame emitters); this
+    /// synchronous path MUST do the same or the arrival zone's lava
+    /// sea is invisible (unregistered cells render nothing, while
+    /// the streamed chunks around it do - the user's lava pillars).
     pub(crate) fn ensure_generated_chunks_around(&mut self, pos: [i32; 3]) {
         let ctx = self.current_worldgen_ctx();
         let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -341,17 +373,49 @@ impl Voxel {
         // 0..=7); generating the whole column keeps the ground
         // scan + ceiling consistent whatever Y the player arrives.
         let vertical = crate::VERTICAL_CHUNKS;
+        let mut any_liquid = false;
         for dx in -1..=1 {
             for dz in -1..=1 {
                 for cy in 0..vertical.min(8) {
                     let c = [ccx + dx, cy, ccz + dz];
-                    if self.world.chunk(c).is_none() {
-                        let chunk =
-                            crate::worldgen::generate_chunk_at_ctx(c, &ctx);
-                        self.world.insert_chunk(c, chunk);
+                    if self.world.chunk(c).is_some() {
+                        continue;
                     }
+                    let chunk = crate::worldgen::generate_chunk_at_ctx(c, &ctx);
+                    // Same per-cell side effects the worker scan
+                    // applies (W115 rule: schedule only cells with
+                    // air directly below; the resting sea is
+                    // render-only).
+                    let origin = infengine_voxel::World::chunk_world_origin(c);
+                    let (ox, oy, oz) =
+                        (origin.x as i32, origin.y as i32, origin.z as i32);
+                    for ly in 0..cs {
+                        for lz in 0..cs {
+                            for lx in 0..cs {
+                                let b = chunk.get(lx as usize, ly as usize, lz as usize);
+                                if crate::liquid::liquid_for(b).is_none() {
+                                    continue;
+                                }
+                                let wv = [ox + lx, oy + ly, oz + lz];
+                                self.liquid_positions.insert(wv);
+                                any_liquid = true;
+                                let below_air = ly > 0
+                                    && chunk
+                                        .get(lx as usize, (ly - 1) as usize, lz as usize)
+                                        .is_air();
+                                if below_air {
+                                    let due = self.liquid_clock + 1;
+                                    self.liquid_schedule.schedule(wv, due);
+                                }
+                            }
+                        }
+                    }
+                    self.world.insert_chunk(c, chunk);
                 }
             }
+        }
+        if any_liquid {
+            self.liquid_mesh_dirty = true;
         }
     }
 

@@ -85,9 +85,25 @@ pub(crate) fn draw(
                 // W153: the REAL nether_portal texture when baked -
                 // the swirl now only pulses brightness on top of the
                 // MC art instead of fabricating a solid purple.
+                // W156: ONE flat sheet aligned with the frame, never
+                // a cross. Portal interiors are at least 2 cells wide,
+                // so a neighbouring portal cell along X means the
+                // curtain runs along X (panel faces +-Z); otherwise
+                // rotate the panel 90 deg.
                 if let Some(mesh) = effects.portal {
                     let pulse = 0.85 + 0.15 * swirl;
-                    let m = Mat4::from_translation(Vec3::new(cx, p[1] as f32, cz));
+                    let along_x = portal_positions
+                        .contains(&[p[0] - 1, p[1], p[2]])
+                        || portal_positions.contains(&[p[0] + 1, p[1], p[2]]);
+                    let rot = if along_x {
+                        glam::Quat::IDENTITY
+                    } else {
+                        glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
+                    };
+                    let m = Mat4::from_rotation_translation(
+                        rot,
+                        Vec3::new(cx, p[1] as f32, cz),
+                    );
                     renderer.draw_mesh_pbr(
                         mesh,
                         m.to_cols_array(),

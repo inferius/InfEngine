@@ -305,14 +305,16 @@ fn make_pos(plane: PortalPlane, a: i32, b: i32, fixed: i32) -> [i32; 3] {
 pub(crate) const COORD_SCALE: i32 = 8;
 
 /// Number of consecutive ticks the player must stand in a
-/// portal cell before triggering a teleport. MC ships 80; we
-/// shorten to 30 for snappier dev / test UX.
-pub(crate) const PORTAL_TRIGGER_TICKS: u32 = 30;
+/// portal cell before triggering a teleport. W156: back to MC's
+/// 80 ticks (4 s) - the 30-tick dev shortcut made the crossing
+/// feel like an instant cut (the user's "prechod byl moc rychly").
+pub(crate) const PORTAL_TRIGGER_TICKS: u32 = 80;
 
 /// Cool-down after a teleport. While > 0 the portal-overlap
 /// counter stays at 0 so the player doesn't immediately
-/// re-trigger on the destination portal.
-pub(crate) const PORTAL_COOLDOWN_TICKS: u32 = 30;
+/// re-trigger on the destination portal. MC uses 300 game ticks
+/// for players; we keep it shorter but long enough to step out.
+pub(crate) const PORTAL_COOLDOWN_TICKS: u32 = 60;
 
 /// Search radius around a target coord when looking for an
 /// existing portal at the destination dim. Matches MC's
@@ -466,6 +468,35 @@ pub(crate) fn ensure_return_portal(
         out.extend(new_edits);
     }
     target
+}
+
+/// W156: collect every portal block 6-connected to `start` - the
+/// curtain that must extinguish when its frame (or any curtain
+/// cell) breaks. Capped so a corrupt world can't scan forever.
+pub(crate) fn connected_portal_cells(world: &World, start: [i32; 3]) -> Vec<[i32; 3]> {
+    let mut out: Vec<[i32; 3]> = Vec::new();
+    let mut queue: Vec<[i32; 3]> = vec![start];
+    let mut seen: std::collections::HashSet<[i32; 3]> = std::collections::HashSet::new();
+    while let Some(p) = queue.pop() {
+        if out.len() >= 64 || !seen.insert(p) {
+            continue;
+        }
+        if world.get(p).0 != PORTAL_ID {
+            continue;
+        }
+        out.push(p);
+        for d in [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ] {
+            queue.push([p[0] + d[0], p[1] + d[1], p[2] + d[2]]);
+        }
+    }
+    out
 }
 
 /// Ensure the chunk containing `pos` AND its 26 neighbours are

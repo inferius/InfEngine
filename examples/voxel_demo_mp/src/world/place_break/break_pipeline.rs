@@ -95,6 +95,51 @@ pub(crate) fn apply_block_break(
     if crate::block::rail::is_rail_block(broken.0) {
         super::rail_place::on_rail_broken(vx, voxel);
     }
+    // W156: breaking any part of a lit portal (a curtain block or a
+    // frame obsidian) extinguishes the WHOLE connected curtain, like
+    // MC. The curtain cells clear to air + broadcast; no drops.
+    if broken.0 == block::PORTAL_ID || broken.0 == block::OBSIDIAN_ID {
+        let mut curtain: Vec<[i32; 3]> = Vec::new();
+        for d in [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ] {
+            let seed = [voxel[0] + d[0], voxel[1] + d[1], voxel[2] + d[2]];
+            for c in crate::block::portal::connected_portal_cells(&vx.world, seed) {
+                if !curtain.contains(&c) {
+                    curtain.push(c);
+                }
+            }
+        }
+        for c in curtain {
+            vx.world_set_tracked(c, BlockId::AIR);
+            let coords = Voxel::affected_chunks(c);
+            vx.rebuild_chunks(&coords);
+            let edit = EditMsg {
+                x: c[0],
+                y: c[1],
+                z: c[2],
+                block: 0,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                    vx.edit_history.push(edit);
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(edit);
+                }
+            }
+        }
+    }
     // Tint the debris with the broken block's albedo.
     let break_color = vx
         .registry
