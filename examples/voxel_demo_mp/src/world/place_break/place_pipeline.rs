@@ -61,10 +61,13 @@ pub(crate) fn apply_block_place(
         && min.y < voxel_max[1]
         && max.z > voxel_min[2]
         && min.z < voxel_max[2];
-    // Block-occupied check.
+    // Block-occupied check. W144: a REPLACEABLE block (water, snow
+    // layer, short grass / fern / dead bush) never blocks placement
+    // even when it also carries F_NO_PLACE - building into a grass
+    // cell simply overwrites the plant, like MC.
     let target_block = vx.world.get(target_voxel);
-    let occupied = block_is_placement_blocked(target_block)
-        || (!target_block.is_air() && !block_is_replaceable(target_block));
+    let occupied = !block_is_replaceable(target_block)
+        && (block_is_placement_blocked(target_block) || !target_block.is_air());
     // Torch support: floor or wall neighbour must be solid.
     let is_torch_item = matches!(
         block.0,

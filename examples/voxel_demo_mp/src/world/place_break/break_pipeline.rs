@@ -156,7 +156,41 @@ pub(crate) fn apply_block_break(
                 x if x == SOUL_WALL_TORCH_ID => SOUL_TORCH_ID,
                 _ => broken.0,
             };
-            vx.spawn_drop(BlockId(drop_id), voxel);
+            // W144: MC plant loot. Short grass / fern drop their
+            // item only when cut with SHEARS; by hand they roll the
+            // vanilla 1-in-8 wheat-seeds chance. A dead bush drops
+            // 0-2 sticks without shears. Everything else keeps the
+            // drop-itself path.
+            const WHEAT_SEEDS_ITEM: u16 = 338;
+            const STICK_ITEM: u16 = 302;
+            const SHEARS_ITEM: u16 = 640;
+            let held_is_shears = held.0 == SHEARS_ITEM;
+            // Same inline xorshift idiom as the other loot rolls
+            // (net_tick + position seeded, host-side only).
+            let mut rng: u32 = (vx.net_tick as u32)
+                .wrapping_mul(0x9E37_79B9)
+                ^ (voxel[0] as u32).wrapping_mul(0x85EB_CA6B)
+                ^ (voxel[1] as u32).wrapping_mul(0xC2B2_AE35)
+                ^ (voxel[2] as u32).wrapping_mul(0x27D4_EB2F);
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            match broken.0 {
+                x if (x == crate::block::SHORT_GRASS_ID
+                    || x == crate::block::FERN_ID)
+                    && !held_is_shears =>
+                {
+                    if rng.is_multiple_of(8) {
+                        vx.spawn_drop(BlockId(WHEAT_SEEDS_ITEM), voxel);
+                    }
+                }
+                x if x == crate::block::DEAD_BUSH_ID && !held_is_shears => {
+                    for _ in 0..(rng % 3) {
+                        vx.spawn_drop(BlockId(STICK_ITEM), voxel);
+                    }
+                }
+                _ => vx.spawn_drop(BlockId(drop_id), voxel),
+            }
         }
         // Chest break: drain contents as drops, drop the container.
         if broken.0 == CHEST_ID
