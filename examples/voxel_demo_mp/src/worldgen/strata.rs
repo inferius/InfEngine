@@ -259,6 +259,85 @@ const ORE_BANDS: &[OreBand] = &[
     },
 ];
 
+// ---------------------------------------------------------------
+// W149 - underground variety blobs (MC ore_dirt / ore_gravel /
+// granite / diorite / andesite / tuff features).
+// ---------------------------------------------------------------
+
+/// One variety-blob rule. MC scatters large coherent blobs of
+/// non-ore filler through the stone so digging never reads as a
+/// uniform grey wall. Each type rolls per coarse 8^3 cell: the cell
+/// hash decides existence + centre jitter + radius, so blobs are
+/// chunk-independent, rounded and fully contained in their cell.
+struct BlobKind {
+    /// Block id the blob places.
+    block_id: u16,
+    /// Shallow / deep edges of the band as depth fractions.
+    depth_lo: f32,
+    depth_hi: f32,
+    /// Fraction of cells in the band that host a blob.
+    cell_chance: f32,
+    /// Per-kind hash salt.
+    salt: u32,
+}
+
+/// MC 1.18 underground filler features mapped onto our depth
+/// fractions (same rescale as ORE_BANDS - no fresh magic Y):
+/// dirt + gravel run the full column like MC's -64..160 bands,
+/// the granitoids sit in the stone stratum, tuff in the deepslate
+/// stratum (MC: y < 0).
+const BLOB_KINDS: &[BlobKind] = &[
+    BlobKind { block_id: 2, depth_lo: 0.0, depth_hi: 0.60, cell_chance: 0.18, salt: 0xD127_0000 }, // dirt
+    BlobKind { block_id: 644, depth_lo: 0.0, depth_hi: 1.0, cell_chance: 0.14, salt: 0x96A7_0000 }, // gravel
+    BlobKind { block_id: 83, depth_lo: 0.05, depth_hi: 0.75, cell_chance: 0.12, salt: 0x96A1_0001 }, // granite
+    BlobKind { block_id: 84, depth_lo: 0.05, depth_hi: 0.75, cell_chance: 0.12, salt: 0xD105_0002 }, // diorite
+    BlobKind { block_id: 85, depth_lo: 0.05, depth_hi: 0.75, cell_chance: 0.12, salt: 0xA4DE_0003 }, // andesite
+    BlobKind { block_id: 95, depth_lo: 0.72, depth_hi: 1.0, cell_chance: 0.16, salt: 0x70FF_0004 }, // tuff
+];
+
+/// Coarse blob cell edge (blocks). Radius + jitter are constrained so
+/// a blob never leaves its cell - each voxel only consults its OWN
+/// cell, keeping the per-voxel cost at one hash per kind.
+const BLOB_CELL: i32 = 8;
+
+/// The variety-blob block at `(wx, wy, wz)`, or `None`. Checked after
+/// the ore bands (ores stay rare + valuable inside blobs too).
+fn blob_at(wx: i32, wy: i32, wz: i32, seed: u32) -> Option<BlockId> {
+    let d = depth_fraction(wy);
+    let cx = wx.div_euclid(BLOB_CELL);
+    let cy = wy.div_euclid(BLOB_CELL);
+    let cz = wz.div_euclid(BLOB_CELL);
+    for kind in BLOB_KINDS {
+        if d < kind.depth_lo || d > kind.depth_hi {
+            continue;
+        }
+        // Existence roll for this cell (cheap gate: one hash).
+        let h = ore_hash(cx, cy, cz, kind.salt, seed);
+        if h > kind.cell_chance {
+            continue;
+        }
+        // Centre jitter (1 block) + radius 2..3 derived from the same
+        // hash so the blob stays inside its 8^3 cell.
+        let bits = (h * 16_777_216.0) as u32;
+        let jx = (bits & 1) as i32;
+        let jy = ((bits >> 1) & 1) as i32;
+        let jz = ((bits >> 2) & 1) as i32;
+        let r2 = if (bits >> 3) & 1 == 0 { 4 } else { 9 }; // r = 2 or 3
+        let centre = [
+            cx * BLOB_CELL + 3 + jx,
+            cy * BLOB_CELL + 3 + jy,
+            cz * BLOB_CELL + 3 + jz,
+        ];
+        let dx = wx - centre[0];
+        let dy = wy - centre[1];
+        let dz = wz - centre[2];
+        if dx * dx + dy * dy + dz * dz <= r2 {
+            return Some(BlockId(kind.block_id));
+        }
+    }
+    None
+}
+
 /// Triangular weight in `[0, 1]`: 1 at `peak`, linearly down to 0 at the
 /// band edges `lo` / `hi`. Outside `[lo, hi]` returns 0.
 #[inline]
@@ -311,6 +390,11 @@ pub(crate) fn pick_block(wx: i32, wy: i32, wz: i32, biome: Biome, seed: u32) -> 
         if h > threshold {
             return BlockId(if deep { band.deepslate_id } else { band.stone_id });
         }
+    }
+    // W149: non-ore variety blobs (dirt / gravel / granitoids / tuff)
+    // fill in after the ores so the rare stuff keeps priority.
+    if let Some(b) = blob_at(wx, wy, wz, seed) {
+        return b;
     }
     bulk_block(wy)
 }
@@ -386,6 +470,8 @@ mod tests {
         let known = [
             STONE_ID, DEEPSLATE_ID, 13, 14, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
             246, 247, 248, 249,
+            // W149: variety blobs (dirt / gravel / granitoids / tuff).
+            2, 644, 83, 84, 85, 95,
         ];
         for wy in WORLD_FLOOR..SEA_LEVEL {
             for x in 0..8 {

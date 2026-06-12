@@ -17,6 +17,8 @@ const WATER: u16 = 36;
 const GRASS: u16 = 3;
 const SAND: u16 = 4;
 const PUMPKIN: u16 = 448;
+const SNOW_LAYER: u16 = 15;
+const ICE: u16 = 400;
 
 /// W146: rare pumpkin patches on grass, MC-style. A coarse 32x32
 /// cell occasionally hosts a small clump (centre + density from the
@@ -73,6 +75,7 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: ChunkCoord, c
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let ox = origin.x as i32;
+    let oy = origin.y as i32;
     let oz = origin.z as i32;
     let cs = CHUNK_SIZE as i32;
     for x in 0..cs {
@@ -80,12 +83,35 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: ChunkCoord, c
             let wx = ox + x;
             let wz = oz + z;
             let biome = biome_from_climate(climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed));
+            let cold = matches!(biome, Biome::Tundra | Biome::SnowyMountain);
+            // W149: MC freeze_top_layer - cold biomes turn exposed
+            // surface WATER to ice. Only the cell AT sea level can be
+            // an open-water surface (lower chunks of a sea column are
+            // all water and must stay liquid below the ice sheet).
+            if cold {
+                let sea_ly = super::climate::SEA_LEVEL - oy;
+                if (0..cs).contains(&sea_ly)
+                    && chunk.get(x as usize, sea_ly as usize, z as usize).0 == WATER
+                    && (sea_ly + 1 >= cs
+                        || chunk.get(x as usize, (sea_ly + 1) as usize, z as usize).0 == 0)
+                {
+                    chunk.set(x as usize, sea_ly as usize, z as usize, BlockId(ICE));
+                    continue;
+                }
+            }
             let Some(surf_y) = top_solid(chunk, x, z, cs) else {
                 continue;
             };
             let surf = chunk.get(x as usize, surf_y as usize, z as usize).0;
             let air_y = surf_y + 1;
             if air_y >= cs || chunk.get(x as usize, air_y as usize, z as usize).0 != 0 {
+                continue;
+            }
+            // W149: ...and every exposed cold surface gets a snow
+            // layer on top (grass, sand, stone, even tree canopies),
+            // exactly like the MC feature.
+            if cold {
+                chunk.set(x as usize, air_y as usize, z as usize, BlockId(SNOW_LAYER));
                 continue;
             }
             let rng = hash2_for(wx ^ 0x5EED, wz ^ 0x1B7A, seed);

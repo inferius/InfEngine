@@ -100,14 +100,18 @@ fn all_profiles_seed_0_byte_identical_after_split() {
 // SEA_LEVEL, so the new strata change their deep-block content. The
 // height curves are untouched. Flat + Islands (which never call the ore
 // picker) are byte-identical and were left as-is.
+// W149: Classic + Amplified re-snapshotted again after the underground
+// variety blobs (dirt / gravel / granite / diorite / andesite / tuff
+// via `strata::blob_at`) - same shared-picker reasoning as W121; Flat +
+// Islands verified byte-identical against the previous dump.
 const CLASSIC_SEED_0: [u64; 7] = [
-    0x6aaaf06ea75d741d,
+    0xb633d73168685d09,
     0x64ae3483fa398118,
     0xae07ac57270e8e31,
-    0x76719d392882f538,
-    0x746fb621be6b53fa,
+    0x9a7e997bc461acd7,
+    0x7591fcc7a14e587e,
     0xe5c77cb70ded7cb8,
-    0xcd38fb29d0ca8910,
+    0x7aba9185434ec05a,
 ];
 const FLAT_SEED_0: [u64; 7] = [
     0xcecbf0fbda0ee525,
@@ -128,13 +132,13 @@ const ISLANDS_SEED_0: [u64; 7] = [
     0x2dd75833bf438d8e,
 ];
 const AMPLIFIED_SEED_0: [u64; 7] = [
-    0xcd6d9069250682df,
+    0xa33b6196709cda6b,
     0x0094c725e278651d,
     0xb1e6b3be018b24fb,
-    0x3f81996ef5d380f3,
-    0xb2bea48d17d93a12,
+    0xe4c1742b1b1b9338,
+    0x7f046276b96df596,
     0x6a098145a6fead5e,
-    0x10175c2790e27d98,
+    0x7e94028ef7b7a41e,
 ];
 
 /// One-shot capture: run with `cargo test dump_snapshots -- --ignored
