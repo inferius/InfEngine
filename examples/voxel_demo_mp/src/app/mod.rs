@@ -735,6 +735,9 @@ pub(crate) struct Voxel {
     /// visual - never saved or broadcast.
     pub(crate) mob_anim:
         std::collections::HashMap<u32, crate::entity_model::animation::MobAnim>,
+    /// W151: live underwater bubbles (visual only; the textured
+    /// particle pass is immediate-mode so risers keep state here).
+    pub(crate) bubbles: Vec<crate::ambient::Bubble>,
     /// W134: live minecarts (offline/host authoritative; clients
     /// keep this empty and render `remote_carts`).
     pub(crate) carts: Vec<crate::minecart::Minecart>,

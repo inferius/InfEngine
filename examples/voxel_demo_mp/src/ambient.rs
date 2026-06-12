@@ -185,7 +185,105 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
             );
             spawned += 1;
         }
+        // W151: underwater bubbles (the user's "more underwater
+        // effects" polish item).
+        tick_underwater_bubbles(vx, dt, &mut frame_seed);
     }
+
+// ---------------------------------------------------------------
+// W151 - underwater bubbles.
+// ---------------------------------------------------------------
+
+/// One rising bubble. The textured-particle pass is immediate-mode
+/// (instances are re-emitted every frame), so moving bubbles keep
+/// their own tiny state list on `Voxel` and re-emit per frame.
+#[derive(Clone, Copy)]
+pub(crate) struct Bubble {
+    pub(crate) pos: [f32; 3],
+    pub(crate) vel: [f32; 3],
+    pub(crate) life: f32,
+}
+
+/// Soft cap on live bubbles (the swarm reads dense well before this).
+const BUBBLE_CAP: usize = 48;
+
+/// Spawn + advance + emit the underwater bubble swarm. While the
+/// camera is submerged, bubbles spawn around the player and float
+/// up, dying at their lifetime or the moment they leave water (the
+/// MC bubble particle pops at the surface).
+fn tick_underwater_bubbles(vx: &mut crate::Voxel, dt: f32, seed: &mut u32) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let eye = vx.player_pos;
+    let eye_voxel = [
+        eye.x.floor() as i32,
+        eye.y.floor() as i32,
+        eye.z.floor() as i32,
+    ];
+    let submerged = vx.world.get(eye_voxel).0 == crate::block::WATER_ID;
+    // Spawn: ~6 bubbles/s while submerged (MC shows a steady light
+    // stream around the swimming player).
+    if submerged && vx.bubbles.len() < BUBBLE_CAP && accumulator_fires(seed, (dt * 6.0).clamp(0.0, 1.0)) {
+        let off = [
+            (rand(seed) - 0.5) * 2.2,
+            (rand(seed) - 0.7) * 1.4,
+            (rand(seed) - 0.5) * 2.2,
+        ];
+        vx.bubbles.push(Bubble {
+            pos: [eye.x + off[0], eye.y + off[1], eye.z + off[2]],
+            vel: [
+                (rand(seed) - 0.5) * 0.15,
+                0.5 + rand(seed) * 0.4,
+                (rand(seed) - 0.5) * 0.15,
+            ],
+            life: 1.2 + rand(seed) * 1.3,
+        });
+    }
+    // Advance + cull (lifetime out, or risen out of the water).
+    let world = &vx.world;
+    vx.bubbles.retain_mut(|b| {
+        b.life -= dt;
+        if b.life <= 0.0 {
+            return false;
+        }
+        b.pos[0] += b.vel[0] * dt;
+        b.pos[1] += b.vel[1] * dt;
+        b.pos[2] += b.vel[2] * dt;
+        let cell = [
+            b.pos[0].floor() as i32,
+            b.pos[1].floor() as i32,
+            b.pos[2].floor() as i32,
+        ];
+        world.get(cell).0 == crate::block::WATER_ID
+    });
+    // Emit one textured billboard per live bubble.
+    if vx.bubbles.is_empty() {
+        return;
+    }
+    let pa = vx.resource_pack.particle_atlas.as_ref();
+    let (uv_min, uv_max) = if let Some(pa) = pa {
+        if let Some(uv) = pa.sprite_uv("bubble", 0) {
+            ([uv[0], uv[1]], [uv[2], uv[3]])
+        } else {
+            ([0.0f32, 0.0], [1.0, 1.0])
+        }
+    } else {
+        ([0.0f32, 0.0], [1.0, 1.0])
+    };
+    for b in &vx.bubbles {
+        vx.textured_particles.push(infengine_render::TexturedParticleInstance {
+            center_world: b.pos,
+            size: 0.07,
+            uv_min,
+            uv_max,
+            color: [1.0, 1.0, 1.0, 0.9],
+        });
+    }
+}
 
 // ===========================================================================
 // W47.5: particle spawn + emit helpers relocated from main.rs.
