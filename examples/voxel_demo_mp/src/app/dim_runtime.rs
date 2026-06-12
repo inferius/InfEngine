@@ -98,6 +98,19 @@ impl Voxel {
             .insert(self.current_dim.clone(), parked_ents);
         // Remote snapshots are per-dim too.
         self.remote_carts.clear();
+        // W155: EVERY per-dim render snapshot + visual cache must
+        // reset with the world. `remote_mobs` is the render source
+        // for all mobs (the host mirrors its own sim into it), so
+        // leaving it populated kept painting the old dim's animals
+        // into the nether sky (the user's ghost-mobs screenshot).
+        self.remote_mobs.clear();
+        self.mob_anim.clear();
+        self.mob_hurt_flash.clear();
+        self.mob_dying.clear();
+        self.mob_lunge.clear();
+        self.arrows.clear();
+        self.remote_arrows.clear();
+        self.bubbles.clear();
 
         // Pull the target dim's state out (mint empty if first
         // visit this session).
@@ -229,16 +242,34 @@ impl Voxel {
     pub(crate) fn do_cross_dim_teleport(&mut self, from_pos: [i32; 3]) {
         let target_dim = block::portal::pair_dim(&self.current_dim);
         let dest = block::portal::pair_coord(&self.current_dim, from_pos);
+        // W155: the nether dim must generate with the NETHER
+        // profile - a missing registration silently fell back to
+        // Classic (overworld terrain inside the nether).
+        if target_dim == dim::NETHER {
+            self.dim_worldgens
+                .entry(dim::NETHER.to_string())
+                .or_insert(crate::worldgen::WorldGen::Nether);
+        }
         // Swap the active dim. switch_dim does the heavy lifting
         // (move chunks/entities to the parking maps + load the
         // target dim's state).
         self.switch_dim(target_dim);
+        // W155: generate REAL terrain at the arrival column before
+        // any portal hunt. The old path inserted EMPTY chunks
+        // (void), clamped the frame to y<=100 mid-air and the
+        // player fell out of the sky; the empty shells also
+        // permanently shadowed worldgen for those coords.
+        self.ensure_generated_chunks_around(dest);
+        // Ground-snap the portal: first open spot with a solid
+        // floor, scanning down from the dest height band.
+        let ground = Self::portal_ground_y(&self.world, dest);
+        let target = [dest[0], ground, dest[2]];
         // Find or build a return portal at the scaled coord.
         let cfg = bincode::config::standard();
         let mut edits: Vec<[i32; 3]> = Vec::new();
         let spawn = block::portal::ensure_return_portal(
             &mut self.world,
-            dest,
+            target,
             Some(&mut edits),
         );
         // Broadcast portal edits so remote peers see the new
@@ -295,5 +326,57 @@ impl Voxel {
             std::time::Instant::now(),
             format!("-> dim '{}'", target_dim),
         ));
+    }
+
+    /// W155: synchronously generate the chunk column stack around
+    /// `pos` (3x3 columns, the full vertical range) with the ACTIVE
+    /// dim's worldgen so a cross-dim arrival has real terrain.
+    /// Already-present chunks (visited before) stay untouched.
+    pub(crate) fn ensure_generated_chunks_around(&mut self, pos: [i32; 3]) {
+        let ctx = self.current_worldgen_ctx();
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let ccx = pos[0].div_euclid(cs);
+        let ccz = pos[2].div_euclid(cs);
+        // Full vertical stack: the nether spans 0..=127 (chunks
+        // 0..=7); generating the whole column keeps the ground
+        // scan + ceiling consistent whatever Y the player arrives.
+        let vertical = crate::VERTICAL_CHUNKS;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                for cy in 0..vertical.min(8) {
+                    let c = [ccx + dx, cy, ccz + dz];
+                    if self.world.chunk(c).is_none() {
+                        let chunk =
+                            crate::worldgen::generate_chunk_at_ctx(c, &ctx);
+                        self.world.insert_chunk(c, chunk);
+                    }
+                }
+            }
+        }
+    }
+
+    /// W155: first Y (scanning down from the upper nether band)
+    /// whose cell + the two above are open with a fully-occluding
+    /// floor below - where a portal frame can stand. Falls back to
+    /// a mid-height shelf when the column is all solid / all air.
+    pub(crate) fn portal_ground_y(
+        world: &infengine_voxel::World,
+        dest: [i32; 3],
+    ) -> i32 {
+        let (x, z) = (dest[0], dest[2]);
+        let start = dest[1].clamp(40, 100);
+        // Prefer a spot near the arrival height, then sweep down.
+        for y in (6..=start).rev() {
+            let below = world.get([x, y - 1, z]);
+            let open = world.get([x, y, z]).is_air()
+                && world.get([x, y + 1, z]).is_air()
+                && world.get([x, y + 2, z]).is_air();
+            if open && crate::block::block_fully_occludes(below) {
+                return y;
+            }
+        }
+        // All-solid column: carve nothing, just use a mid shelf -
+        // build_minimal_portal overwrites the cells it needs.
+        48
     }
 }

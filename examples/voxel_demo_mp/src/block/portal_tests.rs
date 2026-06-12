@@ -107,11 +107,13 @@ mod portal_pair_tests {
         insert_neighbour_chunks(&mut w, 2);
         w.set([3, 8, 3], BlockId(PORTAL_ID));
         // Target near the existing portal: no new frame should
-        // be built; the spawn coord lands next to the portal.
+        // be built; W155: the spawn coord is the portal cell
+        // itself (arrive INSIDE like MC; the cool-down stops an
+        // instant re-trigger).
         let mut edits: Vec<[i32; 3]> = Vec::new();
         let spawn = ensure_return_portal(&mut w, [0, 8, 0], Some(&mut edits));
         assert!(edits.is_empty(), "no edits expected when reusing existing portal");
-        assert_eq!(spawn, [3, 8, 4]); // existing + south
+        assert_eq!(spawn, [3, 8, 3]); // in-portal arrival
     }
 
     #[test]

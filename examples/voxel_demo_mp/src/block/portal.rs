@@ -448,26 +448,24 @@ pub(crate) fn ensure_return_portal(
     target: [i32; 3],
     edits_out: Option<&mut Vec<[i32; 3]>>,
 ) -> [i32; 3] {
-    // Make sure the chunks around the destination exist before
-    // we try to set/get cells in them.
+    // Defensive: callers pre-generate REAL terrain around the
+    // destination (W155); this only backstops headless tests
+    // that drive the fn against a hand-built world.
     ensure_chunks_loaded(world, target);
     if let Some(existing) = find_portal_near(world, target) {
-        // Player lands one cell to the south so they aren't
-        // standing IN the portal (which would immediately
-        // re-trigger).
-        return [existing[0], existing[1], existing[2] + 1];
+        // W155: arrive INSIDE the portal like MC - the teleport
+        // cool-down prevents an instant re-trigger, and stepping
+        // out leaves the player right at the frame.
+        return existing;
     }
-    // Need to mint a new frame. Clamp target Y to a sane band
-    // before building so the frame doesn't end up underground
-    // or above the world.
-    let safe_y = target[1].clamp(4, 100);
-    let safe = [target[0], safe_y, target[2]];
-    ensure_chunks_loaded(world, safe);
-    let new_edits = build_minimal_portal(world, safe);
+    // Mint a new frame at the caller-resolved ground spot (the
+    // old y-clamp built frames mid-air; the caller now ground-
+    // snaps the target before handing it over).
+    let new_edits = build_minimal_portal(world, target);
     if let Some(out) = edits_out {
         out.extend(new_edits);
     }
-    [safe[0], safe[1], safe[2] + 1]
+    target
 }
 
 /// Ensure the chunk containing `pos` AND its 26 neighbours are

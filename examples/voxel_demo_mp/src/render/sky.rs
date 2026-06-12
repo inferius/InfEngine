@@ -23,6 +23,7 @@ use infengine_render::Renderer;
 /// The caller still owns `day_night(day_time)`; this helper takes the
 /// sky colour from there and only applies the tint mixes + the fog
 /// band setup.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_tint_and_fog(
     renderer: &mut Renderer,
     sun_dir: Vec3,
@@ -31,7 +32,18 @@ pub(crate) fn apply_tint_and_fog(
     lightning_flash: f32,
     view_distance_chunks: u8,
     underwater: bool,
+    // W155: nether mode - the dim is roofed, so the "sky" is a red
+    // haze with shorter fog instead of the blue distance band.
+    in_nether: bool,
 ) -> [f32; 3] {
+    if in_nether {
+        let haze = [0.16_f32, 0.05, 0.05];
+        renderer.set_sun_dir(sun_dir);
+        renderer.set_clear_color(haze[0] as f64, haze[1] as f64, haze[2] as f64, 1.0);
+        // MC nether visibility ~ a few chunks of reddish murk.
+        renderer.set_fog(8.0, 96.0, haze);
+        return haze;
+    }
     let mut sky = base_sky;
     // Rain: dark stormy grey.
     if weather == 1 {

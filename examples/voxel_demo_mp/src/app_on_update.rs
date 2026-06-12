@@ -1389,6 +1389,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             .get([eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32])
             .0
             == crate::block::WATER_ID;
+        // W155: the nether is roofed - no sky, no sun, red haze.
+        let in_nether = vx.current_dim == crate::dim::NETHER;
         let _sky = crate::render::sky::apply_tint_and_fog(
             renderer,
             sun_dir,
@@ -1397,17 +1399,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.lightning_flash,
             vx.settings.view_distance,
             underwater,
+            in_nether,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());
         let session_secs = vx.session_started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
-        crate::render::celestial::draw(
-            renderer,
-            player_cube_handle,
-            player_pos,
-            sun_dir,
-            vx.day_time,
-            session_secs,
-        );
+        if !in_nether {
+            crate::render::celestial::draw(
+                renderer,
+                player_cube_handle,
+                player_pos,
+                sun_dir,
+                vx.day_time,
+                session_secs,
+            );
+        }
         crate::render::point_lights::push(renderer, &vx.emitter_positions, player_pos, vx.day_time);
         // W46.13: legacy pre-MC torch render path REMOVED.
         //

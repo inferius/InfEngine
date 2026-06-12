@@ -27,15 +27,19 @@ use crate::block::{BEDROCK_ID, GLOWSTONE_ID, LAVA_ID, NETHERRACK_ID};
 use crate::worldgen::WorldgenCtx;
 use crate::worldgen::hash2_for;
 use crate::worldgen::height::cave_at;
+use crate::worldgen::ore::ore_hash;
 
 /// World-Y of the bedrock floor. Vanilla MC matches this; the
 /// nether's actual playable range is 1..127.
 pub(crate) const NETHER_FLOOR_Y: i32 = 0;
 
-/// World-Y of the solid netherrack ceiling row. Three rows of
-/// netherrack sit at `CEIL_Y..=CEIL_Y+2` so the player can't
-/// trivially break through.
+/// World-Y of the bedrock CEILING row (W155: MC roofs the nether
+/// with bedrock at y=127, jagged a few rows down - players cannot
+/// break through).
 pub(crate) const NETHER_CEILING_Y: i32 = 127;
+
+/// Bottom of the solid netherrack roof band under the bedrock cap.
+const ROOF_BAND_Y: i32 = 119;
 
 /// Mid-height of the netherrack bulk surface. Adds a per-(x,z)
 /// noise wobble around this value to produce uneven ground.
@@ -44,9 +48,15 @@ const BULK_BASE_Y: i32 = 40;
 /// Vertical extent of the bulk-noise wobble around `BULK_BASE_Y`.
 const BULK_AMP: i32 = 16;
 
-/// Y below which lava lakes can form when the bulk-floor noise
-/// dips into a "lake" basin.
-const LAVA_LAKE_Y_MAX: i32 = 32;
+/// W155: the LAVA SEA level. MC floods everything open at y<=31
+/// with lava - a sea, not scattered per-column lakes.
+const LAVA_SEA_Y: i32 = 31;
+
+/// W155 - nether filler blocks (ids from the block registry).
+const QUARTZ_ORE: u16 = 250;
+const NETHER_GOLD_ORE: u16 = 251;
+const SOUL_SAND: u16 = 149;
+const MAGMA_BLOCK: u16 = 58;
 
 /// `gen_nether` - deterministic chunk generator for the nether.
 pub(crate) fn gen_nether(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
@@ -70,47 +80,118 @@ pub(crate) fn gen_nether(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
 /// F.2c-2: takes an explicit seed so the noise calls are pure;
 /// callers thread `ctx.effective_seed()` through.
 pub(crate) fn nether_block_at(wx: f32, wy: i32, wz: f32, seed: u32) -> BlockId {
-    // Bedrock floor - one solid row at y=0. Anything below is
-    // out of bounds (chunks never extend there in practice but
-    // keep the guard).
+    let xi = wx as i32;
+    let zi = wz as i32;
+    // Bedrock floor: solid row at y=0 + a jagged ramp above it,
+    // exactly like the overworld floor treatment.
     if wy <= NETHER_FLOOR_Y {
         return BlockId(BEDROCK_ID);
     }
-    // Three solid ceiling rows + a scatter of glowstone embedded
-    // in the bottom-most row so the light bleeds down. Above the
-    // top ceiling row -> air (nothing should sit higher).
-    if wy >= NETHER_CEILING_Y + 2 {
+    if wy <= NETHER_FLOOR_Y + 3 {
+        let keep = (4 - wy) as f32 / 4.0;
+        if ore_hash(xi, wy, zi, 0xBED0_F100, seed) < keep {
+            return BlockId(BEDROCK_ID);
+        }
+        // fall through to bulk fill below.
+    }
+    // W155: bedrock CEILING. Solid cap at y=127, jagged bedrock
+    // mixed into the rows below (MC's 123..127 roof), then a
+    // netherrack roof band down to ROOF_BAND_Y with glowstone
+    // scattered along its underside.
+    if wy > NETHER_CEILING_Y {
         return BlockId::AIR;
     }
-    if wy >= NETHER_CEILING_Y {
-        // Bottom ceiling row -> sometimes glowstone, mostly
-        // netherrack. Hash2 keeps it deterministic.
-        if wy == NETHER_CEILING_Y && glowstone_at(wx, wz, seed) {
+    if wy == NETHER_CEILING_Y {
+        return BlockId(BEDROCK_ID);
+    }
+    if wy >= NETHER_CEILING_Y - 4 {
+        let keep = (wy - (NETHER_CEILING_Y - 5)) as f32 / 5.0;
+        if ore_hash(xi, wy, zi, 0xBED0_C311, seed) < keep {
+            return BlockId(BEDROCK_ID);
+        }
+        return BlockId(NETHERRACK_ID);
+    }
+    if wy >= ROOF_BAND_Y {
+        if wy == ROOF_BAND_Y && glowstone_at(wx, wz, seed) {
             return BlockId(GLOWSTONE_ID);
         }
         return BlockId(NETHERRACK_ID);
     }
-    // Compute the per-column ground height. Solid below, air
-    // above (modulo cave + lava-lake overrides).
+    // W155: glowstone clusters hanging in the open space under the
+    // roof (coarse-cell blobs, chunk-independent like the W149
+    // underground blobs).
+    if wy >= 96 && glowstone_blob_at(xi, wy, zi, seed) {
+        return BlockId(GLOWSTONE_ID);
+    }
+    // Per-column ground height. Solid below, air above (modulo
+    // the cave carve + the lava sea).
     let ground_h = nether_ground_height(wx, wz);
     if wy > ground_h {
-        // Above the surface curve - mostly air, plus lava that
-        // pools in basin columns from y=ground_h+1 up to
-        // LAVA_LAKE_Y_MAX. This produces visible lava lakes
-        // rather than a single thin row.
-        if wy <= LAVA_LAKE_Y_MAX && is_lava_lake(wx, wz, seed) {
+        // W155: the LAVA SEA - everything open at y<=31 floods
+        // with lava, like MC's nether ocean.
+        if wy <= LAVA_SEA_Y {
             return BlockId(LAVA_ID);
         }
         return BlockId::AIR;
     }
-    // Below the surface - mostly netherrack. Carve caves
-    // through the bulk for navigation. Skip the cave carve if
-    // we're inside an actual lava lake column so the cave gen
-    // doesn't punch holes into the lava floor.
-    if !is_lava_lake(wx, wz, seed) && cave_at(wx, wy as f32, wz) {
-        return BlockId::AIR;
+    // Caves through the bulk; below the sea level a carved cell
+    // floods with lava instead of air (MC caves there are lava
+    // tubes, never dry).
+    if cave_at(wx, wy as f32, wz) {
+        return if wy <= LAVA_SEA_Y {
+            BlockId(LAVA_ID)
+        } else {
+            BlockId::AIR
+        };
+    }
+    // W155: surface dressing + bulk fillers.
+    // Soul sand patches sit in the top rows of low-lying ground
+    // (MC soul sand valleys hug the lava sea level).
+    if wy >= ground_h - 1 && ground_h <= LAVA_SEA_Y + 6 && soul_patch(xi, zi, seed) {
+        return BlockId(SOUL_SAND);
+    }
+    // Magma sprinkles near the lava shoreline.
+    if wy >= ground_h - 1
+        && wy <= LAVA_SEA_Y + 2
+        && ore_hash(xi, wy, zi, 0x3A63_0001, seed) < 0.10
+    {
+        return BlockId(MAGMA_BLOCK);
+    }
+    // Quartz (common) + nether gold (rare) through the bulk.
+    if ore_hash(xi, wy, zi, 0x90A2_7200, seed) < 0.045 {
+        return BlockId(QUARTZ_ORE);
+    }
+    if ore_hash(xi, wy, zi, 0x901D_7201, seed) < 0.012 {
+        return BlockId(NETHER_GOLD_ORE);
     }
     BlockId(NETHERRACK_ID)
+}
+
+/// W155: coarse-cell hanging glowstone clusters (8^3 cells, ~1 in
+/// 14 cells in the under-roof band hosts a small blob).
+fn glowstone_blob_at(wx: i32, wy: i32, wz: i32, seed: u32) -> bool {
+    let cx = wx.div_euclid(8);
+    let cy = wy.div_euclid(8);
+    let cz = wz.div_euclid(8);
+    let h = ore_hash(cx, cy, cz, 0x910A_5703, seed);
+    if h > 0.07 {
+        return false;
+    }
+    let bits = (h * 16_777_216.0) as u32;
+    let centre = [
+        cx * 8 + 3 + (bits & 1) as i32,
+        cy * 8 + 3 + ((bits >> 1) & 1) as i32,
+        cz * 8 + 3 + ((bits >> 2) & 1) as i32,
+    ];
+    let dx = wx - centre[0];
+    let dy = wy - centre[1];
+    let dz = wz - centre[2];
+    dx * dx + dy * dy + dz * dz <= 4
+}
+
+/// W155: soul-sand patch mask (XZ cells ~12% near the sea level).
+fn soul_patch(wx: i32, wz: i32, seed: u32) -> bool {
+    hash2_for(wx ^ 0x50A1, wz ^ 0x5A2D, seed) % 100 < 12
 }
 
 /// Per-column ground height for the nether bulk. Same family
@@ -121,15 +202,6 @@ fn nether_ground_height(wx: f32, wz: f32) -> i32 {
     let b = ((wx + wz) * 0.05 + 11.0).sin() * 0.5;
     let h = BULK_BASE_Y as f32 + (a + b) * BULK_AMP as f32 * 0.5;
     h.round() as i32
-}
-
-/// Returns true when (wx, wz) sits inside a lava-lake basin.
-/// Threshold the standard `hash2` to about 12% coverage so
-/// lakes are sparse but visible. Pure XZ test - the caller
-/// gates on Y separately.
-fn is_lava_lake(wx: f32, wz: f32, seed: u32) -> bool {
-    let h = hash2_for(wx as i32, wz as i32, seed);
-    (h % 100) < 12
 }
 
 /// Returns true when (wx, wz) on the ceiling-bottom row should
@@ -180,38 +252,41 @@ mod tests {
     }
 
     #[test]
-    fn nether_ceiling_is_netherrack() {
-        // Top ceiling row: every column is either netherrack or
-        // glowstone (never air, never bedrock).
+    fn nether_ceiling_is_bedrock() {
+        // W155: the roof cap row is solid bedrock (unbreakable),
+        // and the row above it is out-of-world air.
         for wx in -4..4 {
             for wz in -4..4 {
                 let id = nether_block_at(wx as f32, NETHER_CEILING_Y, wz as f32, 0).0;
-                assert!(
-                    id == NETHERRACK_ID || id == GLOWSTONE_ID,
-                    "ceiling at ({wx}, {NETHER_CEILING_Y}, {wz}) = {id}"
-                );
+                assert_eq!(id, BEDROCK_ID, "cap at ({wx},{NETHER_CEILING_Y},{wz})");
+                let above =
+                    nether_block_at(wx as f32, NETHER_CEILING_Y + 1, wz as f32, 0);
+                assert!(above.is_air(), "above the cap must be air");
             }
         }
     }
 
     #[test]
-    fn nether_has_lava_somewhere_at_seed_zero() {
-        // Scan a wide XZ band looking for at least one column
-        // that resolves to a lava lake. Determinism contract:
-        // seed=0 must always have some lava on this band.
-        let mut found_lava = false;
-        for wx in -64..64 {
-            for wz in -64..64 {
-                if is_lava_lake(wx as f32, wz as f32, 0) {
-                    found_lava = true;
+    fn nether_has_a_lava_sea_at_seed_zero() {
+        // W155: every OPEN cell at y<=31 floods with lava. Find a
+        // low-ground column and assert the cell above its surface
+        // is lava, plus that mid-air above the sea level is air.
+        let mut checked = false;
+        for wx in -96..96 {
+            for wz in -96..96 {
+                let g = nether_ground_height(wx as f32, wz as f32);
+                if g < LAVA_SEA_Y - 2 {
+                    let id = nether_block_at(wx as f32, g + 1, wz as f32, 0).0;
+                    assert_eq!(id, LAVA_ID, "open cell above low ground = lava");
+                    checked = true;
                     break;
                 }
             }
-            if found_lava {
+            if checked {
                 break;
             }
         }
-        assert!(found_lava, "seed=0 should produce at least one lava lake");
+        assert!(checked, "seed-independent terrain must dip under the sea");
     }
 
     #[test]
