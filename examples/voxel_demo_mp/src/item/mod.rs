@@ -2328,6 +2328,24 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 681, name: "zombie_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     ItemType { id: 682, name: "skeleton_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     ItemType { id: 683, name: "spider_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    // W150: black terracotta + the 16 glazed terracottas.
+    ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 686, name: "orange_glazed_terracotta", display: Some("Orange Glazed Terracotta"), places: Some(686), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 687, name: "magenta_glazed_terracotta", display: Some("Magenta Glazed Terracotta"), places: Some(687), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 688, name: "light_blue_glazed_terracotta", display: Some("Light Blue Glazed Terracotta"), places: Some(688), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 689, name: "yellow_glazed_terracotta", display: Some("Yellow Glazed Terracotta"), places: Some(689), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 690, name: "lime_glazed_terracotta", display: Some("Lime Glazed Terracotta"), places: Some(690), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 691, name: "pink_glazed_terracotta", display: Some("Pink Glazed Terracotta"), places: Some(691), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 692, name: "gray_glazed_terracotta", display: Some("Gray Glazed Terracotta"), places: Some(692), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 693, name: "light_gray_glazed_terracotta", display: Some("Light Gray Glazed Terracotta"), places: Some(693), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 694, name: "cyan_glazed_terracotta", display: Some("Cyan Glazed Terracotta"), places: Some(694), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 695, name: "purple_glazed_terracotta", display: Some("Purple Glazed Terracotta"), places: Some(695), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 696, name: "blue_glazed_terracotta", display: Some("Blue Glazed Terracotta"), places: Some(696), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 697, name: "brown_glazed_terracotta", display: Some("Brown Glazed Terracotta"), places: Some(697), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 698, name: "green_glazed_terracotta", display: Some("Green Glazed Terracotta"), places: Some(698), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 699, name: "red_glazed_terracotta", display: Some("Red Glazed Terracotta"), places: Some(699), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 700, name: "black_glazed_terracotta", display: Some("Black Glazed Terracotta"), places: Some(700), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
