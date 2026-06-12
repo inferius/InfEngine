@@ -484,14 +484,26 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // (0, 0)-placeholder + tinted swatch when no pack loaded.
         let resource_pack = &vx.resource_pack;
         let icon = |slot: Option<(BlockId, u8)>| -> Option<SlotIcon> {
-            slot.and_then(|(b, c)| {
+            slot.map(|(b, c)| {
                 let bt = block_type(b.0);
                 // W20.2: use icon_uv_front which prefers the live MC pack
                 // atlas entry and falls back to the legacy 4x4 grid.
                 let uv = resource_pack.icon_uv_front(b);
-                vx.registry
-                    .get(b)
-                    .map(|d| (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")))
+                // W153: ITEM-ONLY ids (hoes, bow, arrow, minecart,
+                // dyes, spawn eggs, ...) have no block row in the
+                // voxel registry - they used to drop to None here and
+                // their slots rendered EMPTY even though the icon
+                // texture resolved fine. The icon carries the visual;
+                // fall back to a neutral swatch + the ITEM_TYPES name.
+                match vx.registry.get(b) {
+                    Some(d) => (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")),
+                    None => (
+                        [0.78, 0.78, 0.78],
+                        c,
+                        uv,
+                        crate::item::item_type(b.0).map(|it| it.name).unwrap_or("?"),
+                    ),
+                }
             })
         };
         let hotbar_snapshot: Vec<Option<SlotIcon>> = vx.inventory
@@ -636,18 +648,20 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             std::array::from_fn(|i| icon(vx.craft_grid[i]));
         let craft_match: Option<(BlockId, u8, &'static str)> =
             match_recipe_named(&vx.craft_grid);
-        let craft_output_snapshot = craft_match.and_then(|(b, c, _)| {
+        let craft_output_snapshot = craft_match.map(|(b, c, _)| {
             let bt = block_type(b.0);
             // W20.2: use icon_uv_front for MC atlas compatibility.
             let uv = vx.resource_pack.icon_uv_front(b);
-            vx.registry.get(b).map(|d| {
-                (
-                    d.color,
+            // W153: same item-only fallback as the `icon` closure.
+            match vx.registry.get(b) {
+                Some(d) => (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")),
+                None => (
+                    [0.78, 0.78, 0.78],
                     c,
                     uv,
-                    bt.map(|t| t.name).unwrap_or("?"),
-                )
-            })
+                    crate::item::item_type(b.0).map(|it| it.name).unwrap_or("?"),
+                ),
+            }
         });
         let craft_recipe_name: Option<&'static str> = craft_match.map(|(_, _, n)| n);
         let selected_slot = vx.selected_slot;
@@ -1622,18 +1636,28 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                 let uv = vx
                                                     .resource_pack
                                                     .icon_uv_front(BlockId(*bid));
-                                                let icon = vx
+                                                // W153: item-only fallback
+                                                // (no block row != no icon).
+                                                let icon = Some(match vx
                                                     .registry
                                                     .get(BlockId(*bid))
-                                                    .map(|d| {
-                                                        (
-                                                            d.color,
-                                                            *n,
-                                                            uv,
-                                                            bt.map(|t| t.name)
-                                                                .unwrap_or("?"),
-                                                        )
-                                                    });
+                                                {
+                                                    Some(d) => (
+                                                        d.color,
+                                                        *n,
+                                                        uv,
+                                                        bt.map(|t| t.name)
+                                                            .unwrap_or("?"),
+                                                    ),
+                                                    None => (
+                                                        [0.78, 0.78, 0.78],
+                                                        *n,
+                                                        uv,
+                                                        crate::item::item_type(*bid)
+                                                            .map(|it| it.name)
+                                                            .unwrap_or("?"),
+                                                    ),
+                                                });
                                                 crate::ui::slot_widget::draw_slot_widget(
                                                     ui,
                                                     icon,
@@ -1649,19 +1673,28 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             let out_uv = vx
                                                 .resource_pack
                                                 .icon_uv_front(BlockId(r.output.0));
-                                            let out_icon = vx
+                                            // W153: item-only fallback.
+                                            let out_icon = Some(match vx
                                                 .registry
                                                 .get(BlockId(r.output.0))
-                                                .map(|d| {
-                                                    (
-                                                        d.color,
-                                                        r.output.1,
-                                                        out_uv,
-                                                        out_bt
-                                                            .map(|t| t.name)
-                                                            .unwrap_or("?"),
-                                                    )
-                                                });
+                                            {
+                                                Some(d) => (
+                                                    d.color,
+                                                    r.output.1,
+                                                    out_uv,
+                                                    out_bt
+                                                        .map(|t| t.name)
+                                                        .unwrap_or("?"),
+                                                ),
+                                                None => (
+                                                    [0.78, 0.78, 0.78],
+                                                    r.output.1,
+                                                    out_uv,
+                                                    crate::item::item_type(r.output.0)
+                                                        .map(|it| it.name)
+                                                        .unwrap_or("?"),
+                                                ),
+                                            });
                                             // W20.4: highlight the recipe
                                             // that currently matches the
                                             // craft grid.
@@ -1756,16 +1789,30 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                 let uv = vx
                                                     .resource_pack
                                                     .icon_uv_front(BlockId(entry.id));
-                                                vx.registry
+                                                // W153: item-only ids (hoes,
+                                                // bow, arrow, minecart, dyes,
+                                                // spawn eggs) have no block
+                                                // row - the grid tile used to
+                                                // render EMPTY for them.
+                                                Some(match vx
+                                                    .registry
                                                     .get(BlockId(entry.id))
-                                                    .map(|d| {
-                                                        (
-                                                            d.color,
-                                                            1u8,
-                                                            uv,
-                                                            bt.map(|t| t.name).unwrap_or("?"),
-                                                        )
-                                                    })
+                                                {
+                                                    Some(d) => (
+                                                        d.color,
+                                                        1u8,
+                                                        uv,
+                                                        bt.map(|t| t.name).unwrap_or("?"),
+                                                    ),
+                                                    None => (
+                                                        [0.78, 0.78, 0.78],
+                                                        1u8,
+                                                        uv,
+                                                        crate::item::item_type(entry.id)
+                                                            .map(|it| it.name)
+                                                            .unwrap_or("?"),
+                                                    ),
+                                                })
                                             };
                                             let name =
                                                 crate::lang::localized_item_name(entry.id);

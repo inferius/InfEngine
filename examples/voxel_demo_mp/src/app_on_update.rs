@@ -1434,6 +1434,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.fires,
             &vx.liquid_mesh_handles,
             vx.day_time,
+            &vx.effect_meshes,
         );
         // Floating drop entities. Each renders as a small cube
         // (~0.3 voxel) bobbing in place. Pulled off

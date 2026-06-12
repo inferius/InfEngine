@@ -480,6 +480,92 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// W153: the REAL runtime icon audit - load the actual MC pack
+    /// atlas from disk and assert the icon resolution chain (the
+    /// same three steps `ResourcePack::icon_ref` walks) lands for
+    /// every creative item. The W145 audit only simulated against
+    /// raw PNG paths; the user-reported missing hoe/bow/arrow icons
+    /// mean something between disk and `item_icons` drops entries -
+    /// this test pins down which ids. Skips when no pack on disk.
+    #[test]
+    fn w153_atlas_item_icons_cover_every_creative_item() {
+        let root = Path::new(
+            r"C:\Users\micha\AppData\Roaming\InfEngine\voxel_demo_mp\data\cache\mc_assets\26.1.2\assets\minecraft",
+        );
+        if !root.exists() {
+            return;
+        }
+        let Some(out) = load_atlas(root) else {
+            panic!("atlas failed to load from the disk pack");
+        };
+        const KNOWN_MODEL_RENDERED: &[u16] = &[642]; // shield
+        let mut missing: Vec<String> = Vec::new();
+        for it in crate::item::ITEM_TYPES.iter() {
+            if KNOWN_MODEL_RENDERED.contains(&it.id)
+                || crate::creative_tab::CREATIVE_BLACKLIST.contains(&it.id)
+            {
+                continue;
+            }
+            // Step 1: explicit name_map override into item_icons.
+            if let Some(name) = super::super::name_map::lookup_item(it.id)
+                && out.item_icons.contains_key(name)
+            {
+                continue;
+            }
+            // Step 2: match-name item icon.
+            if it.places.is_none() && out.item_icons.contains_key(it.name) {
+                continue;
+            }
+            // Step 3: block top-face via BLOCK_TYPES TileSpec files
+            // or the name_map block faces.
+            let bid = it.places.unwrap_or(it.id);
+            let mut ok = false;
+            if let Some(bt) = crate::block::block_type(bid) {
+                for f in bt.top.files.iter().chain(bt.sides.files.iter()) {
+                    let stem = f.trim_end_matches(".png");
+                    if out.textures.contains_key(&TextureKey::Block(stem.to_string())) {
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if !ok
+                && let Some(e) = super::super::name_map::lookup_block(bid)
+            {
+                for stem in [e.top, e.sides, e.block] {
+                    if !stem.is_empty()
+                        && out.textures.contains_key(&TextureKey::Block(stem.to_string()))
+                    {
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                // Diagnostic detail for the failure message.
+                let bt_files: Vec<&str> = crate::block::block_type(bid)
+                    .map(|bt| {
+                        bt.top
+                            .files
+                            .iter()
+                            .chain(bt.sides.files.iter())
+                            .copied()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                missing.push(format!(
+                    "{} {} (places {:?}, block_files {:?})",
+                    it.id, it.name, it.places, bt_files
+                ));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "icon chain misses {} items in the LOADED atlas: {missing:?}",
+            missing.len()
+        );
+    }
+
     fn stage_minimal_pack(root: &Path) -> PathBuf {
         let mc = root.join("assets").join("minecraft");
         let blk = mc.join("textures").join("block");

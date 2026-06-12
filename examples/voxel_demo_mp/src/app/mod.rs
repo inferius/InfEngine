@@ -738,6 +738,9 @@ pub(crate) struct Voxel {
     /// W151: live underwater bubbles (visual only; the textured
     /// particle pass is immediate-mode so risers keep state here).
     pub(crate) bubbles: Vec<crate::ambient::Bubble>,
+    /// W153: textured fire + portal cell meshes (frame-0 crops of
+    /// the MC animation strips; legacy tinted slabs when absent).
+    pub(crate) effect_meshes: crate::render::effect_meshes::EffectMeshes,
     /// W134: live minecarts (offline/host authoritative; clients
     /// keep this empty and render `remote_carts`).
     pub(crate) carts: Vec<crate::minecart::Minecart>,

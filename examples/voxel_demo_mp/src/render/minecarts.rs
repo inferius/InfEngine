@@ -31,20 +31,35 @@ pub(crate) fn load_minecart_meshes(
 ) -> MinecartMeshes {
     let mut out = MinecartMeshes::default();
     let Some(dir) = entity_dir else { return out };
-    let p = dir.join("minecart.png");
-    match image::open(&p) {
-        Ok(img) => {
-            out.model = Some(entity_model::bake(
-                r,
-                &entity_model::minecart::MODEL,
-                &img.to_rgba8(),
-            ));
-        }
-        Err(err) => {
+    // W153: MC 26.x ships the sheet in a per-entity subfolder
+    // (entity/minecart/minecart.png); older packs keep it flat.
+    // The flat-only lookup left the model unbaked - carts could be
+    // ridden but were INVISIBLE (the user's report).
+    let candidates = [
+        dir.join("minecart").join("minecart.png"),
+        dir.join("minecart.png"),
+    ];
+    match candidates.iter().find(|p| p.is_file()) {
+        Some(p) => match image::open(p) {
+            Ok(img) => {
+                out.model = Some(entity_model::bake(
+                    r,
+                    &entity_model::minecart::MODEL,
+                    &img.to_rgba8(),
+                ));
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    path = %p.display(),
+                    "minecart sheet load failed",
+                );
+            }
+        },
+        None => {
             tracing::warn!(
-                error = %err,
-                path = %p.display(),
-                "minecart sheet load failed",
+                searched = ?candidates,
+                "minecart sheet not found - carts will be invisible",
             );
         }
     }

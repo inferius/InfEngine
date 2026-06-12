@@ -29,6 +29,8 @@ pub(crate) fn draw(
     fires: &std::collections::HashMap<[i32; 3], u8>,
     liquid_mesh_handles: &std::collections::HashMap<[i32; 3], Vec<(u16, infengine_render::MeshHandle)>>,
     day_time: f32,
+    // W153: textured fire + portal cell meshes (None = legacy tint).
+    effects: &crate::render::effect_meshes::EffectMeshes,
 ) {
     let _ = (block_type, LAVA_ID, WATER_ID); // silence unused on stripped paths
         // Snow layers: thin 1x0.12x1 slab covering the bottom
@@ -80,6 +82,21 @@ pub(crate) fn draw(
                 let phase_f =
                     (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 let swirl = (time * 2.0 + phase_f).sin();
+                // W153: the REAL nether_portal texture when baked -
+                // the swirl now only pulses brightness on top of the
+                // MC art instead of fabricating a solid purple.
+                if let Some(mesh) = effects.portal {
+                    let pulse = 0.85 + 0.15 * swirl;
+                    let m = Mat4::from_translation(Vec3::new(cx, p[1] as f32, cz));
+                    renderer.draw_mesh_pbr(
+                        mesh,
+                        m.to_cols_array(),
+                        [pulse, pulse, pulse, 1.0],
+                        0.0,
+                        0.9,
+                    );
+                    continue;
+                }
                 let intensity = (0.55 + 0.35 * swirl).clamp(0.2, 1.0);
                 let purple = [
                     0.6 * intensity,
@@ -140,6 +157,24 @@ pub(crate) fn draw(
                 let phase_f =
                     (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 let flicker = (time * 6.0 + phase_f).sin();
+                // W153: the REAL fire_0 texture when baked - flicker
+                // pulses brightness on top of the MC art.
+                if let Some(mesh) = effects.fire {
+                    let pulse = 0.9 + 0.1 * flicker;
+                    let m = Mat4::from_translation(Vec3::new(
+                        cx,
+                        p[1] as f32,
+                        cz,
+                    ));
+                    renderer.draw_mesh_pbr(
+                        mesh,
+                        m.to_cols_array(),
+                        [pulse, pulse, pulse, 1.0],
+                        0.0,
+                        0.9,
+                    );
+                    continue;
+                }
                 let intensity = (0.85 + 0.15 * flicker).clamp(0.5, 1.05);
                 let orange = [
                     1.0 * intensity,

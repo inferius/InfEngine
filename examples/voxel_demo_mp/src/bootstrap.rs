@@ -184,6 +184,17 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             r,
             mc_entity_dir.as_deref(),
         );
+        // W153: textured fire + portal cell meshes from the block
+        // texture dir (frame-0 crops of the animation strips).
+        let mc_block_dir = if !vx.resource_pack.is_fallback {
+            Some(vx.resource_pack.source.join("textures").join("block"))
+        } else {
+            None
+        };
+        vx.effect_meshes = crate::render::effect_meshes::load_effect_meshes(
+            r,
+            mc_block_dir.as_deref(),
+        );
     }
     // Best-effort audio: a missing output device disables SFX.
     match infengine_audio::AudioSystem::new() {

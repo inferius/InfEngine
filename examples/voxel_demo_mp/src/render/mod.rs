@@ -23,3 +23,5 @@ pub mod chests;
 pub mod minecarts;
 // W140 - arrow projectile renderer (crossed quads + arrow.png).
 pub mod projectiles;
+// W153 - textured fire + nether portal meshes (frame-0 strip crops).
+pub mod effect_meshes;

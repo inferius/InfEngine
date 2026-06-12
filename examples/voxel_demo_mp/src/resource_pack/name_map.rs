@@ -688,6 +688,9 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     ItemNameMap { infengine_id: 641, item: "fishing_rod" },
     ItemNameMap { infengine_id: 642, item: "shield" },
     ItemNameMap { infengine_id: 643, item: "arrow" },
+    // W153: pitcher_plant ships a dedicated ITEM icon png while the
+    // block faces use the pitcher_crop_* stages.
+    ItemNameMap { infengine_id: 491, item: "pitcher_plant" },
 ];
 
 pub(crate) fn lookup_item(id: u16) -> Option<&'static str> {
