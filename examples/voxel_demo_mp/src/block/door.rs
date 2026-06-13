@@ -35,7 +35,10 @@ pub(crate) fn is_door_block(id: u16) -> bool {
 /// Trapdoors share the door open-state set + toggle + emit_trapdoor
 /// render + collision/light gating, so this one predicate covers them.
 pub(crate) fn is_trapdoor_block(id: u16) -> bool {
-    (548..=552).contains(&id) || (722..=725).contains(&id)
+    (548..=552).contains(&id)
+        || (722..=725).contains(&id)
+        // W174: crimson / warped nether-wood trapdoors.
+        || (750..=751).contains(&id)
 }
 
 /// W167: true when `id` is a fence gate (726..=731). Fence gates share
@@ -235,7 +238,7 @@ mod tests {
     /// the shared path); neighbours are not trapdoors.
     #[test]
     fn trapdoor_block_range_matches_registry() {
-        for id in [548, 549, 550, 551, 552, 722, 723, 724, 725] {
+        for id in [548, 549, 550, 551, 552, 722, 723, 724, 725, 750, 751] {
             assert!(is_trapdoor_block(id), "id {id} should be a trapdoor");
         }
         assert!(!is_trapdoor_block(547)); // fence below the range

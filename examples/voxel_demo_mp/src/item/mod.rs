@@ -2370,6 +2370,9 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 748, name: "black_candle", display: Some("Black Candle"), places: Some(748), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W169 - barrel (container, was missing).
     ItemType { id: 749, name: "barrel", display: Some("Barrel"), places: Some(749), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W174 - nether-wood trapdoors.
+    ItemType { id: 750, name: "crimson_trapdoor", display: Some("Crimson Trapdoor"), places: Some(750), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 751, name: "warped_trapdoor", display: Some("Warped Trapdoor"), places: Some(751), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
