@@ -20,8 +20,8 @@
 use crate::worldgen::Biome;
 
 use super::kinds::{
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_SHEEP, KIND_SKELETON,
-    KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
+    KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -39,12 +39,20 @@ pub(crate) struct BiomeSpawnPool {
 
 const EMPTY: &[(u8, u32)] = &[];
 
-const PLAINS_DAY: &[(u8, u32)] =
-    &[(KIND_CHICKEN, 8), (KIND_COW, 4), (KIND_PIG, 4), (KIND_SHEEP, 4)];
+// W162: rabbits roam plains, deserts and snowy/taiga biomes in MC.
+const PLAINS_DAY: &[(u8, u32)] = &[
+    (KIND_CHICKEN, 8),
+    (KIND_COW, 4),
+    (KIND_PIG, 4),
+    (KIND_SHEEP, 4),
+    (KIND_RABBIT, 3),
+];
 const PLAINS_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30)];
 
-const DESERT_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 2), (KIND_COW, 1)];
+// W162: the desert is a classic rabbit biome (gold/desert variant).
+const DESERT_DAY: &[(u8, u32)] =
+    &[(KIND_CHICKEN, 2), (KIND_COW, 1), (KIND_RABBIT, 4)];
 const DESERT_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 50), (KIND_SKELETON, 80), (KIND_SPIDER, 20)];
 
@@ -60,12 +68,19 @@ const FOREST_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30)];
 
 // W158: the taiga is the wolf's home biome in MC (weight 8).
-const TAIGA_DAY: &[(u8, u32)] =
-    &[(KIND_SHEEP, 4), (KIND_PIG, 2), (KIND_COW, 2), (KIND_WOLF, 8)];
+const TAIGA_DAY: &[(u8, u32)] = &[
+    (KIND_SHEEP, 4),
+    (KIND_PIG, 2),
+    (KIND_COW, 2),
+    (KIND_WOLF, 8),
+    (KIND_RABBIT, 4),
+];
 const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40)];
 
 // W161: snowy tundra is the polar bear's home (MC: frozen biomes).
-const TUNDRA_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2), (KIND_POLAR_BEAR, 5)];
+// W162: snowy rabbits (white variant) roam the same tundra.
+const TUNDRA_DAY: &[(u8, u32)] =
+    &[(KIND_SHEEP, 2), (KIND_POLAR_BEAR, 5), (KIND_RABBIT, 4)];
 const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40)];
 
 const JUNGLE_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 8), (KIND_PIG, 6)];
@@ -160,7 +175,12 @@ mod tests {
             .day
             .iter()
             .filter(|(k, _)| {
-                *k == KIND_CHICKEN || *k == KIND_COW || *k == KIND_PIG || *k == KIND_SHEEP
+                *k == KIND_CHICKEN
+                    || *k == KIND_COW
+                    || *k == KIND_PIG
+                    || *k == KIND_SHEEP
+                    // W162: rabbit is a passive day spawner too.
+                    || *k == KIND_RABBIT
             })
             .map(|(_, w)| *w)
             .sum();

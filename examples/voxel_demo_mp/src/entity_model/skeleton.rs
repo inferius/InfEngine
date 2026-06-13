@@ -16,12 +16,12 @@ const LEG_R: &[McCube] = &[McCube::new([-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], [0, 
 const LEG_L: &[McCube] = &[McCube::new([-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], [0, 16]).mirrored()];
 
 const BONES: &[Bone] = &[
-    Bone { name: "skeleton_head", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
-    Bone { name: "skeleton_body", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BODY },
-    Bone { name: "skeleton_arm_r", pivot: [-5.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: ARM_R },
-    Bone { name: "skeleton_arm_l", pivot: [5.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: ARM_L },
-    Bone { name: "skeleton_leg_r", pivot: [-2.0, 12.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_R },
-    Bone { name: "skeleton_leg_l", pivot: [2.0, 12.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_L },
+    Bone { parent: None, name: "skeleton_head", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "skeleton_body", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "skeleton_arm_r", pivot: [-5.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: ARM_R },
+    Bone { parent: None, name: "skeleton_arm_l", pivot: [5.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: ARM_L },
+    Bone { parent: None, name: "skeleton_leg_r", pivot: [-2.0, 12.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_R },
+    Bone { parent: None, name: "skeleton_leg_l", pivot: [2.0, 12.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_L },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

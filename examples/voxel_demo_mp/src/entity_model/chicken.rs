@@ -22,13 +22,13 @@ const WING_R: &[McCube] = &[McCube::new([0.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24, 
 const WING_L: &[McCube] = &[McCube::new([-1.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24, 13])];
 
 const BONES: &[Bone] = &[
-    Bone { name: "chicken_head", pivot: [0.0, 15.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "chicken_head", pivot: [0.0, 15.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Body: offsetAndRotation(0, 16, 0, PI/2, 0, 0).
-    Bone { name: "chicken_body", pivot: [0.0, 16.0, 0.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "chicken_leg_r", pivot: [-2.0, 19.0, 1.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "chicken_leg_l", pivot: [1.0, 19.0, 1.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "chicken_wing_r", pivot: [-4.0, 13.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: WING_R },
-    Bone { name: "chicken_wing_l", pivot: [4.0, 13.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: WING_L },
+    Bone { parent: None, name: "chicken_body", pivot: [0.0, 16.0, 0.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "chicken_leg_r", pivot: [-2.0, 19.0, 1.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "chicken_leg_l", pivot: [1.0, 19.0, 1.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "chicken_wing_r", pivot: [-4.0, 13.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: WING_R },
+    Bone { parent: None, name: "chicken_wing_l", pivot: [4.0, 13.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: WING_L },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

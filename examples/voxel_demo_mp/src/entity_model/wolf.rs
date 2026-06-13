@@ -28,16 +28,16 @@ const LEG: &[McCube] = &[McCube::new([-1.0, 0.0, -1.0], [2.0, 8.0, 2.0], [0, 18]
 const TAIL: &[McCube] = &[McCube::new([-1.0, 0.0, -1.0], [2.0, 8.0, 2.0], [9, 18])];
 
 const BONES: &[Bone] = &[
-    Bone { name: "wolf_head", pivot: [-1.0, 13.5, -7.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "wolf_head", pivot: [-1.0, 13.5, -7.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Torso lies along Z (offsetAndRotation xRot = PI/2), MC-style.
-    Bone { name: "wolf_body", pivot: [0.0, 14.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "wolf_mane", pivot: [-1.0, 14.0, -3.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: MANE },
-    Bone { name: "wolf_leg_rh", pivot: [-2.5, 16.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "wolf_leg_lh", pivot: [0.5, 16.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "wolf_leg_rf", pivot: [-2.5, 16.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "wolf_leg_lf", pivot: [0.5, 16.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "wolf_body", pivot: [0.0, 14.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "wolf_mane", pivot: [-1.0, 14.0, -3.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: MANE },
+    Bone { parent: None, name: "wolf_leg_rh", pivot: [-2.5, 16.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "wolf_leg_lh", pivot: [0.5, 16.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "wolf_leg_rf", pivot: [-2.5, 16.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "wolf_leg_lf", pivot: [0.5, 16.0, -4.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
     // Resting tail angle ~ PI/5 like MC's idle pose.
-    Bone { name: "wolf_tail", pivot: [-1.0, 12.0, 8.0], rotation: [0.628, 0.0, 0.0], cubes: TAIL },
+    Bone { parent: None, name: "wolf_tail", pivot: [-1.0, 12.0, 8.0], rotation: [0.628, 0.0, 0.0], cubes: TAIL },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

@@ -30,13 +30,13 @@ const LEG_HIND: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 10.0, 8.0], [
 const LEG_FRONT: &[McCube] = &[McCube::new([-2.0, 0.0, -2.0], [4.0, 10.0, 6.0], [50, 40])];
 
 const BONES: &[Bone] = &[
-    Bone { name: "polar_bear_head", pivot: [0.0, 10.0, -16.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "polar_bear_head", pivot: [0.0, 10.0, -16.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Body lies along Z (offsetAndRotation xRot = PI/2), MC-style.
-    Bone { name: "polar_bear_body", pivot: [-2.0, 9.0, 12.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "polar_bear_leg_rh", pivot: [-4.5, 14.0, 6.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_HIND },
-    Bone { name: "polar_bear_leg_lh", pivot: [4.5, 14.0, 6.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_HIND },
-    Bone { name: "polar_bear_leg_rf", pivot: [-3.5, 14.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_FRONT },
-    Bone { name: "polar_bear_leg_lf", pivot: [3.5, 14.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_FRONT },
+    Bone { parent: None, name: "polar_bear_body", pivot: [-2.0, 9.0, 12.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "polar_bear_leg_rh", pivot: [-4.5, 14.0, 6.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_HIND },
+    Bone { parent: None, name: "polar_bear_leg_lh", pivot: [4.5, 14.0, 6.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_HIND },
+    Bone { parent: None, name: "polar_bear_leg_rf", pivot: [-3.5, 14.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_FRONT },
+    Bone { parent: None, name: "polar_bear_leg_lf", pivot: [3.5, 14.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_FRONT },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

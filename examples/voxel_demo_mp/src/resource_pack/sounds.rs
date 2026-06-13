@@ -279,6 +279,11 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/polar_bear/step", "entity.polar_bear.step"),
     ("mob/polar_bear/hurt", "entity.polar_bear.hurt"),
     ("mob/polar_bear/death", "entity.polar_bear.death"),
+    // W162 - rabbit.
+    ("mob/rabbit/say", "entity.rabbit.ambient"),
+    ("mob/rabbit/step", "entity.rabbit.jump"),
+    ("mob/rabbit/hurt", "entity.rabbit.hurt"),
+    ("mob/rabbit/death", "entity.rabbit.death"),
     ("mob/spider/say", "entity.spider.ambient"),
     ("mob/spider/step", "entity.spider.step"),
     ("mob/spider/hurt", "entity.spider.hurt"),

@@ -13,7 +13,7 @@ use infengine_render::{MeshHandle, Renderer};
 
 use crate::frustum::Frustum;
 use crate::mob::kinds::{
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_SHEEP, KIND_SKELETON,
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP, KIND_SKELETON,
     KIND_WOLF, KIND_ZOMBIE,
 };
 use crate::mob::state::{MOB_DEATH_FADE, MOB_LUNGE_TIME};
@@ -370,6 +370,33 @@ pub fn draw_remote_mobs(
                             let body = Mat4::from_scale_rotation_translation(
                                 Vec3::new(1.0, 0.9, 1.4), body_rot,
                                 Vec3::new(base_x, mob.pos[1] + 0.6 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube, body.to_cols_array(), apply_tint(white), 0.0, 0.95);
+                        }
+                    }
+
+                    // ---- Rabbit (W162) ----------------------------------
+                    KIND_RABBIT => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        if let Some(baked) = &mob_meshes.rabbit_model {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                apply_tint(white),
+                                mob_pose,
+                            );
+                        } else {
+                            // Tiny fallback cube (rabbits are small).
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.45, 0.5, 0.7), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.25 - death_sink + walk_bob, base_z));
                             renderer.draw_mesh_pbr(player_cube, body.to_cols_array(), apply_tint(white), 0.0, 0.95);
                         }
                     }

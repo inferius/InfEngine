@@ -2336,6 +2336,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 719, name: "enchanting_table", display: Some("Enchanting Table"), places: Some(719), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W161 - polar bear spawn egg.
     ItemType { id: 720, name: "polar_bear_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    // W162 - rabbit spawn egg.
+    ItemType { id: 721, name: "rabbit_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
@@ -2389,6 +2391,7 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
         683 => Some(6), // spider
         717 => Some(7), // wolf (W158)
         720 => Some(8), // polar bear (W161)
+        721 => Some(9), // rabbit (W162)
         _ => None,
     }
 }

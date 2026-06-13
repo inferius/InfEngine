@@ -23,13 +23,13 @@ const HEAD: &[McCube] = &[
 const BODY: &[McCube] = &[McCube::new([-5.0, -10.0, -7.0], [10.0, 16.0, 8.0], [28, 8])];
 
 const BONES: &[Bone] = &[
-    Bone { name: "pig_head", pivot: [0.0, 12.0, -6.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "pig_head", pivot: [0.0, 12.0, -6.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Body: QuadrupedModel offsetAndRotation(0, 11, 2, PI/2, 0, 0).
-    Bone { name: "pig_body", pivot: [0.0, 11.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "pig_leg_rh", pivot: [-3.0, 18.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "pig_leg_lh", pivot: [3.0, 18.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "pig_leg_rf", pivot: [-3.0, 18.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "pig_leg_lf", pivot: [3.0, 18.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "pig_body", pivot: [0.0, 11.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "pig_leg_rh", pivot: [-3.0, 18.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "pig_leg_lh", pivot: [3.0, 18.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "pig_leg_rf", pivot: [-3.0, 18.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "pig_leg_lf", pivot: [3.0, 18.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

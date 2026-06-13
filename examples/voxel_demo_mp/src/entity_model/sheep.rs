@@ -21,13 +21,13 @@ const HEAD: &[McCube] = &[McCube::new([-3.0, -4.0, -6.0], [6.0, 6.0, 8.0], [0, 0
 const BODY: &[McCube] = &[McCube::new([-4.0, -10.0, -7.0], [8.0, 16.0, 6.0], [28, 8])];
 
 const BONES: &[Bone] = &[
-    Bone { name: "sheep_head", pivot: [0.0, 6.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "sheep_head", pivot: [0.0, 6.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Body: QuadrupedModel offsetAndRotation(0, 5, 2, PI/2, 0, 0).
-    Bone { name: "sheep_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "sheep_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "sheep_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "sheep_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "sheep_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "sheep_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "sheep_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "sheep_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "sheep_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "sheep_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };
@@ -42,12 +42,12 @@ const FUR_LEG: &[McCube] =
     &[McCube::new([-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], [0, 16]).inflated(0.5)];
 
 const FUR_BONES: &[Bone] = &[
-    Bone { name: "sheep_fur_head", pivot: [0.0, 6.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_HEAD },
-    Bone { name: "sheep_fur_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: FUR_BODY },
-    Bone { name: "sheep_fur_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
-    Bone { name: "sheep_fur_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
-    Bone { name: "sheep_fur_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
-    Bone { name: "sheep_fur_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
+    Bone { parent: None, name: "sheep_fur_head", pivot: [0.0, 6.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_HEAD },
+    Bone { parent: None, name: "sheep_fur_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: FUR_BODY },
+    Bone { parent: None, name: "sheep_fur_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
+    Bone { parent: None, name: "sheep_fur_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
+    Bone { parent: None, name: "sheep_fur_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
+    Bone { parent: None, name: "sheep_fur_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
 ];
 
 pub(crate) const FUR_MODEL: EntityModel = EntityModel { bones: FUR_BONES };

@@ -38,6 +38,7 @@ pub(crate) mod cow;
 pub(crate) mod minecart;
 pub(crate) mod pig;
 pub(crate) mod polar_bear;
+pub(crate) mod rabbit;
 pub(crate) mod sheep;
 pub(crate) mod skeleton;
 pub(crate) mod spider;
@@ -92,7 +93,13 @@ impl McCube {
 #[derive(Clone, Copy)]
 pub(crate) struct Bone {
     pub name: &'static str,
-    /// `PartPose.offset` - the bone's pivot in the parent's MC space.
+    /// W162: parent bone name, or `None` for a root bone. Mirrors
+    /// MC's `addOrReplaceChild` tree: a child's `pivot` + `rotation`
+    /// are RELATIVE to its parent, and its cubes inherit the parent's
+    /// accumulated transform. Flat models leave every bone at `None`.
+    pub parent: Option<&'static str>,
+    /// `PartPose.offset` - the bone's pivot, relative to its parent
+    /// (or the entity origin for a root bone).
     pub pivot: [f32; 3],
     /// Default `PartPose` rotation (xRot, yRot, zRot) in radians.
     pub rotation: [f32; 3],
@@ -154,18 +161,12 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
         r.bind_mesh_albedo_arc(mesh, albedo.clone());
         bones.push(BakedBone { bone: *bone, mesh });
         // Track the lowest world point (the feet) to derive the ground
-        // offset. We rotate each cube's 8 corners by the bone's default
-        // rotation + pivot first, so splayed limbs (e.g. the spider's
-        // legs, rotated ~45 deg down) are measured at their real tips, not
-        // their un-rotated extents. world Y = -mc_y * scale, so the largest
-        // MC y is the lowest world y.
-        let rot = Quat::from_euler(
-            glam::EulerRot::ZYX,
-            bone.rotation[2],
-            bone.rotation[1],
-            bone.rotation[0],
-        );
-        let pivot = Vec3::from(bone.pivot);
+        // offset. W162: use the bone's ACCUMULATED default transform
+        // (its full parent chain) so nested limbs (rabbit haunches,
+        // bear legs) are measured at their real tips, not their local
+        // extents. world Y = -mc_y * scale, so the largest MC y is the
+        // lowest world y.
+        let acc = default_accumulated(model.bones, bone);
         for c in bone.cubes {
             let [ox, oy, oz] = c.origin;
             let [sx, sy, sz] = c.size;
@@ -173,7 +174,7 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
             for &cx in &[ox - g, ox + sx + g] {
                 for &cy in &[oy - g, oy + sy + g] {
                     for &cz in &[oz - g, oz + sz + g] {
-                        let p = rot * Vec3::new(cx, cy, cz) + pivot;
+                        let p = acc.transform_point3(Vec3::new(cx, cy, cz));
                         lowest_world_y = lowest_world_y.min(-p.y * MODEL_SCALE);
                     }
                 }
@@ -181,6 +182,41 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
         }
     }
     BakedModel { bones, ground_offset: -lowest_world_y }
+}
+
+/// W162: a bone's own local transform in MC pixel space:
+/// `translate(pivot) * rotate(rotation + pose.extra)`. The parent
+/// chain is composed on top of this by `draw` / `default_accumulated`.
+fn bone_local(pivot: [f32; 3], rotation: [f32; 3], extra: [f32; 3]) -> Mat4 {
+    let rx = rotation[0] + extra[0];
+    let ry = rotation[1] + extra[1];
+    let rz = rotation[2] + extra[2];
+    Mat4::from_translation(Vec3::from(pivot))
+        * Mat4::from_quat(Quat::from_euler(glam::EulerRot::ZYX, rz, ry, rx))
+}
+
+/// W162: a bone's accumulated DEFAULT (un-animated) transform - its
+/// own local times every ancestor's local, root-first. Used by the
+/// ground-offset scan in `bake`. Parent lookup is by name over the
+/// model's flat bone list; a missing / cyclic parent stops the walk.
+fn default_accumulated(all: &[Bone], bone: &Bone) -> Mat4 {
+    let mut acc = bone_local(bone.pivot, bone.rotation, [0.0; 3]);
+    let mut parent = bone.parent;
+    let mut guard = 0;
+    while let Some(pn) = parent {
+        guard += 1;
+        if guard > 16 {
+            break;
+        }
+        match all.iter().find(|b| b.name == pn) {
+            Some(p) => {
+                acc = bone_local(p.pivot, p.rotation, [0.0; 3]) * acc;
+                parent = p.parent;
+            }
+            None => break,
+        }
+    }
+    acc
 }
 
 /// Bake one bone's cubes into a single mesh, expressed in bone-local MC
@@ -361,9 +397,12 @@ fn append_cube(
     );
 }
 
-/// World transform for a bone: entity pos + yaw, the MC->engine flip,
-/// the bone pivot + (default + animated) rotation. Cube geometry is in
-/// bone-local MC pixels, so this is the only place coordinates convert.
+/// World transform for a SINGLE root bone: entity pos + yaw, the
+/// MC->engine flip, the bone pivot + (default + animated) rotation.
+/// W162: the live `draw` path composes the parent chain instead;
+/// this single-bone form is retained for the sign-convention unit
+/// tests (root-only bones, where it equals the chain result).
+#[cfg(test)]
 pub(crate) fn bone_matrix(
     world_pos: Vec3,
     yaw: f32,
@@ -387,6 +426,12 @@ pub(crate) fn bone_matrix(
 
 /// Draw every bone of a baked model at the entity's world pos + yaw.
 /// `pose_for` supplies the per-bone animation pose (default static).
+///
+/// W162: bones compose through their parent chain (MC ModelPart
+/// tree). Each bone's local matrix (pivot + default + animated
+/// rotation) is cached once, then a bone's world transform is
+/// `place * flip * (root_local * ... * own_local)` so animating a
+/// parent (or its default rotation) carries its children.
 pub(crate) fn draw(
     r: &mut Renderer,
     baked: &BakedModel,
@@ -395,9 +440,38 @@ pub(crate) fn draw(
     tint: [f32; 4],
     mut pose_for: impl FnMut(&str) -> BonePose,
 ) {
-    for bb in &baked.bones {
-        let pose = pose_for(bb.bone.name);
-        let m = bone_matrix(world_pos, yaw, baked.ground_offset, &bb.bone, pose);
+    let place = Mat4::from_translation(world_pos + Vec3::new(0.0, baked.ground_offset, 0.0))
+        * Mat4::from_rotation_y(yaw);
+    let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
+    // Cache each bone's local matrix (pose included) once, indexed
+    // by position so the parent walk is a cheap slice lookup.
+    let locals: Vec<Mat4> = baked
+        .bones
+        .iter()
+        .map(|bb| {
+            let p = pose_for(bb.bone.name);
+            bone_local(bb.bone.pivot, bb.bone.rotation, p.extra_rotation)
+        })
+        .collect();
+    for (i, bb) in baked.bones.iter().enumerate() {
+        // Accumulate own local times every ancestor (root-first).
+        let mut acc = locals[i];
+        let mut parent = bb.bone.parent;
+        let mut guard = 0;
+        while let Some(pn) = parent {
+            guard += 1;
+            if guard > 16 {
+                break;
+            }
+            match baked.bones.iter().position(|b| b.bone.name == pn) {
+                Some(pi) => {
+                    acc = locals[pi] * acc;
+                    parent = baked.bones[pi].bone.parent;
+                }
+                None => break,
+            }
+        }
+        let m = place * flip * acc;
         r.draw_mesh_pbr(bb.mesh, m.to_cols_array(), tint, 0.0, 0.9);
     }
 }
@@ -495,7 +569,7 @@ mod tests {
     /// the cow's udder/horn fix, verifiable without a GPU.
     #[test]
     fn bone_matrix_orients_mc_front_to_engine_plus_x() {
-        let bone = Bone { name: "b", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: &[] };
+        let bone = Bone { parent: None, name: "b", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: &[] };
         let m = bone_matrix(Vec3::ZERO, -FRAC_PI_2, 0.0, &bone, BonePose::default());
         let front = m.transform_point3(Vec3::new(0.0, 0.0, -1.0));
         assert!(
@@ -560,5 +634,80 @@ mod tests {
         // Zero-area + fully out-of-sheet rects are Empty (skipped).
         assert_eq!(face_cover(&img, 3.0, 3.0, 0.0, 8.0), FaceCover::Empty);
         assert_eq!(face_cover(&img, 100.0, 104.0, 0.0, 4.0), FaceCover::Empty);
+    }
+
+    /// Two transforms are equal iff they agree on a probe point.
+    fn same_xform(a: Mat4, b: Mat4, tol: f32) -> bool {
+        let p = Vec3::new(1.3, -2.1, 0.7);
+        (a.transform_point3(p) - b.transform_point3(p)).length() < tol
+    }
+
+    /// W162: a root bone (parent None) must accumulate to exactly its
+    /// own local transform - so every FLAT model renders identically
+    /// to the pre-W162 single-bone path.
+    #[test]
+    fn w162_root_bone_accumulates_to_own_local() {
+        let model = [Bone {
+            parent: None, name: "root", pivot: [1.0, 2.0, 3.0],
+            rotation: [0.3, -0.4, 0.5], cubes: &[],
+        }];
+        let acc = default_accumulated(&model, &model[0]);
+        let own = bone_local([1.0, 2.0, 3.0], [0.3, -0.4, 0.5], [0.0; 3]);
+        assert!(same_xform(acc, own, 1e-5), "root acc must equal its own local");
+    }
+
+    /// W162: regression guard - EVERY bone of a real flat model
+    /// (the zombie, all parents None) accumulates to its own local.
+    /// If this breaks, flat mobs silently shifted.
+    #[test]
+    fn w162_flat_model_is_unchanged() {
+        for b in super::zombie::MODEL.bones {
+            assert!(b.parent.is_none(), "zombie is a flat model");
+            let acc = default_accumulated(super::zombie::MODEL.bones, b);
+            let own = bone_local(b.pivot, b.rotation, [0.0; 3]);
+            assert!(same_xform(acc, own, 1e-5), "{} drifted under W162", b.name);
+        }
+    }
+
+    /// W162: a child bone composes as `parent_local * child_local`.
+    /// Concretely: a parent pivoted at y=10 and rotated +90deg about
+    /// X turns a child offset of +5 in Z into a -5 in Y, so the
+    /// child origin lands at (0, 5, 0).
+    #[test]
+    fn w162_child_composes_through_parent() {
+        let model = [
+            Bone {
+                parent: None, name: "p", pivot: [0.0, 10.0, 0.0],
+                rotation: [FRAC_PI_2, 0.0, 0.0], cubes: &[],
+            },
+            Bone {
+                parent: Some("p"), name: "c", pivot: [0.0, 0.0, 5.0],
+                rotation: [0.0, 0.0, 0.0], cubes: &[],
+            },
+        ];
+        let acc = default_accumulated(&model, &model[1]);
+        // Composition order matches MC: parent first, then child.
+        let expected = bone_local([0.0, 10.0, 0.0], [FRAC_PI_2, 0.0, 0.0], [0.0; 3])
+            * bone_local([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], [0.0; 3]);
+        assert!(same_xform(acc, expected, 1e-4), "child != parent_local * child_local");
+        // Tangible: the child's own origin lands at (0, 5, 0).
+        let origin = acc.transform_point3(Vec3::ZERO);
+        assert!(
+            (origin - Vec3::new(0.0, 5.0, 0.0)).length() < 1e-4,
+            "nested child origin should be (0,5,0), got {origin:?}"
+        );
+    }
+
+    /// W162: a missing / unknown parent name stops the walk instead of
+    /// looping forever - the orphaned bone just uses its own local.
+    #[test]
+    fn w162_unknown_parent_falls_back_to_own_local() {
+        let model = [Bone {
+            parent: Some("does_not_exist"), name: "orphan",
+            pivot: [2.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: &[],
+        }];
+        let acc = default_accumulated(&model, &model[0]);
+        let own = bone_local([2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0; 3]);
+        assert!(same_xform(acc, own, 1e-5), "orphan bone must not panic / loop");
     }
 }

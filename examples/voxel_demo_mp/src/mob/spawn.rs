@@ -158,6 +158,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_WOLF => 8.0,
         // W161: MC polar bear HP.
         x if x == super::kinds::KIND_POLAR_BEAR => 30.0,
+        // W162: MC rabbit HP (3 = 1.5 hearts).
+        x if x == super::kinds::KIND_RABBIT => 3.0,
         _ => MOB_MAX_HEALTH,
     }
 }
@@ -414,10 +416,13 @@ mod tests {
         let mut seed = 0xC0FFEEu32;
         let mut rng = SpawnRng::new(&mut seed);
         let kind = pick_kind_for(&v, [20, 60, 20], v.day_time, &mut rng);
+        // W162: the plains day pool now also carries cow + rabbit, so
+        // assert the picked kind is *passive* rather than enumerating
+        // the exact set (which is brittle against pool re-weighting).
+        let k = kind.expect("a passive mob should spawn on lit grass at noon");
         assert!(
-            kind == Some(KIND_SHEEP)
-                || kind == Some(KIND_CHICKEN)
-                || kind == Some(KIND_PIG)
+            super::super::kinds::MobKind::from_u8(k).is_passive(),
+            "expected a passive day spawn, got kind {k}"
         );
     }
 

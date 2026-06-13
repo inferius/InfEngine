@@ -37,14 +37,14 @@ const BODY: &[McCube] = &[
 ];
 
 const BONES: &[Bone] = &[
-    Bone { name: "cow_head", pivot: [0.0, 4.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "cow_head", pivot: [0.0, 4.0, -8.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
     // Body: MC offsetAndRotation(0, 5, 2, PI/2, 0, 0) - the xRot lays the
     // 18-tall box horizontal and puts the udder face on the belly.
-    Bone { name: "cow_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
-    Bone { name: "cow_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "cow_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "cow_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
-    Bone { name: "cow_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "cow_body", pivot: [0.0, 5.0, 2.0], rotation: [FRAC_PI_2, 0.0, 0.0], cubes: BODY },
+    Bone { parent: None, name: "cow_leg_rh", pivot: [-3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "cow_leg_lh", pivot: [3.0, 12.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "cow_leg_rf", pivot: [-3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
+    Bone { parent: None, name: "cow_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

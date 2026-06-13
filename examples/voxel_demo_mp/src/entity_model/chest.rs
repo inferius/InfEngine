@@ -35,9 +35,9 @@ const LID: &[McCube] = &[
 ];
 
 const BONES: &[Bone] = &[
-    Bone { name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE },
+    Bone { parent: None, name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE },
     // Hinge: world (x, 9/16, +7/16) = the top-back edge of the base.
-    Bone { name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID },
+    Bone { parent: None, name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };
@@ -64,13 +64,13 @@ const LID_EXT_NEG: &[McCube] = &[
 ];
 
 const BONES_EXT_POS: &[Bone] = &[
-    Bone { name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE_EXT_POS },
-    Bone { name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID_EXT_POS },
+    Bone { parent: None, name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE_EXT_POS },
+    Bone { parent: None, name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID_EXT_POS },
 ];
 
 const BONES_EXT_NEG: &[Bone] = &[
-    Bone { name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE_EXT_NEG },
-    Bone { name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID_EXT_NEG },
+    Bone { parent: None, name: "chest_base", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BASE_EXT_NEG },
+    Bone { parent: None, name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID_EXT_NEG },
 ];
 
 /// Half whose 15-wide box extends toward local +X (world +X at

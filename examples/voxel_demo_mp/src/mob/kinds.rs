@@ -41,6 +41,8 @@ pub(crate) enum MobKind {
     Wolf = 7,
     /// W161 - polar bear (snowy biomes).
     PolarBear = 8,
+    /// W162 - rabbit (first NESTED bone hierarchy; plains/desert/taiga).
+    Rabbit = 9,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -59,6 +61,7 @@ impl MobKind {
             6 => MobKind::Spider,
             7 => MobKind::Wolf,
             8 => MobKind::PolarBear,
+            9 => MobKind::Rabbit,
             _ => MobKind::Sheep,
         }
     }
@@ -94,6 +97,9 @@ impl MobKind {
                 // W161: polar bear wanders (MC neutral - hostile when
                 // a cub is near is a follow-up).
                 | MobKind::PolarBear
+                // W162: rabbit hops + flees (the MC hop gait is a
+                // follow-up; for now it wanders like other passives).
+                | MobKind::Rabbit
         )
     }
 
@@ -109,6 +115,7 @@ impl MobKind {
             MobKind::Spider => "spider",
             MobKind::Wolf => "wolf",
             MobKind::PolarBear => "polar_bear",
+            MobKind::Rabbit => "rabbit",
         }
     }
 }
@@ -131,6 +138,7 @@ pub(crate) const KIND_COW: u8 = MobKind::Cow as u8;
 pub(crate) const KIND_SKELETON: u8 = MobKind::Skeleton as u8;
 pub(crate) const KIND_WOLF: u8 = MobKind::Wolf as u8;
 pub(crate) const KIND_POLAR_BEAR: u8 = MobKind::PolarBear as u8;
+pub(crate) const KIND_RABBIT: u8 = MobKind::Rabbit as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -153,6 +161,7 @@ mod tests {
         assert_eq!(spawn_egg_kind(683), Some(KIND_SPIDER));
         assert_eq!(spawn_egg_kind(717), Some(KIND_WOLF));
         assert_eq!(spawn_egg_kind(720), Some(KIND_POLAR_BEAR));
+        assert_eq!(spawn_egg_kind(721), Some(KIND_RABBIT));
         assert_eq!(spawn_egg_kind(657), None, "minecart is not an egg");
     }
 
@@ -188,10 +197,11 @@ mod tests {
     fn from_u8_unknown_collapses_to_sheep() {
         // Any future / corrupted byte should land on the passive
         // fallback - no panic, no out-of-bounds. (W158: 7 = Wolf,
-        // W161: 8 = PolarBear.)
+        // W161: 8 = PolarBear, W162: 9 = Rabbit.)
         assert_eq!(MobKind::from_u8(7), MobKind::Wolf);
         assert_eq!(MobKind::from_u8(8), MobKind::PolarBear);
-        for raw in [9u8, 100, 255] {
+        assert_eq!(MobKind::from_u8(9), MobKind::Rabbit);
+        for raw in [10u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

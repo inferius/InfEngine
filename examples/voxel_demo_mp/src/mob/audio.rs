@@ -18,7 +18,7 @@ use crate::Voxel;
 use crate::net::MobMsg;
 
 use super::kinds::{
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_SHEEP,
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
 };
 
@@ -38,6 +38,7 @@ pub(crate) fn mob_sound_stem(kind: u8) -> &'static str {
         KIND_SPIDER => "mob/spider",
         KIND_WOLF => "mob/wolf",
         KIND_POLAR_BEAR => "mob/polar_bear",
+        KIND_RABBIT => "mob/rabbit",
         _ => "mob/sheep",
     }
 }

@@ -21,35 +21,35 @@ const WALL: &[McCube] =
 const BONES: &[Bone] = &[
     // offsetAndRotation(0, 4, 0, PI/2, 0, 0).
     Bone {
-        name: "cart_bottom",
+        parent: None, name: "cart_bottom",
         pivot: [0.0, 4.0, 0.0],
         rotation: [FRAC_PI_2, 0.0, 0.0],
         cubes: BOTTOM,
     },
     // offsetAndRotation(-9, 4, 0, 0, PI*1.5, 0).
     Bone {
-        name: "cart_front",
+        parent: None, name: "cart_front",
         pivot: [-9.0, 4.0, 0.0],
         rotation: [0.0, PI_1_5, 0.0],
         cubes: WALL,
     },
     // offsetAndRotation(9, 4, 0, 0, PI/2, 0).
     Bone {
-        name: "cart_back",
+        parent: None, name: "cart_back",
         pivot: [9.0, 4.0, 0.0],
         rotation: [0.0, FRAC_PI_2, 0.0],
         cubes: WALL,
     },
     // offsetAndRotation(0, 4, -7, 0, PI, 0).
     Bone {
-        name: "cart_left",
+        parent: None, name: "cart_left",
         pivot: [0.0, 4.0, -7.0],
         rotation: [0.0, PI, 0.0],
         cubes: WALL,
     },
     // offset(0, 4, 7).
     Bone {
-        name: "cart_right",
+        parent: None, name: "cart_right",
         pivot: [0.0, 4.0, 7.0],
         rotation: [0.0, 0.0, 0.0],
         cubes: WALL,

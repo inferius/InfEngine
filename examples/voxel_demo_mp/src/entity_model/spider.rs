@@ -22,19 +22,19 @@ const LEG_R: &[McCube] = &[McCube::new([-15.0, -1.0, -1.0], [16.0, 2.0, 2.0], [1
 const LEG_L: &[McCube] = &[McCube::new([-1.0, -1.0, -1.0], [16.0, 2.0, 2.0], [18, 0]).mirrored()];
 
 const BONES: &[Bone] = &[
-    Bone { name: "spider_head", pivot: [0.0, 15.0, -3.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
-    Bone { name: "spider_body0", pivot: [0.0, 15.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BODY0 },
-    Bone { name: "spider_body1", pivot: [0.0, 15.0, 9.0], rotation: [0.0, 0.0, 0.0], cubes: BODY1 },
+    Bone { parent: None, name: "spider_head", pivot: [0.0, 15.0, -3.0], rotation: [0.0, 0.0, 0.0], cubes: HEAD },
+    Bone { parent: None, name: "spider_body0", pivot: [0.0, 15.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: BODY0 },
+    Bone { parent: None, name: "spider_body1", pivot: [0.0, 15.0, 9.0], rotation: [0.0, 0.0, 0.0], cubes: BODY1 },
     // 8 legs: pivots at +-4 on X, z stepping back-to-front; rest rotation
     // (yRot spread, zRot splay) straight from MC SpiderModel.setupAnim.
-    Bone { name: "spider_leg_rh", pivot: [-4.0, 15.0, 2.0], rotation: [0.0, FRAC_PI_4, -FRAC_PI_4], cubes: LEG_R },
-    Bone { name: "spider_leg_lh", pivot: [4.0, 15.0, 2.0], rotation: [0.0, -FRAC_PI_4, FRAC_PI_4], cubes: LEG_L },
-    Bone { name: "spider_leg_rmh", pivot: [-4.0, 15.0, 1.0], rotation: [0.0, FRAC_PI_8, -Z_MID], cubes: LEG_R },
-    Bone { name: "spider_leg_lmh", pivot: [4.0, 15.0, 1.0], rotation: [0.0, -FRAC_PI_8, Z_MID], cubes: LEG_L },
-    Bone { name: "spider_leg_rmf", pivot: [-4.0, 15.0, 0.0], rotation: [0.0, -FRAC_PI_8, -Z_MID], cubes: LEG_R },
-    Bone { name: "spider_leg_lmf", pivot: [4.0, 15.0, 0.0], rotation: [0.0, FRAC_PI_8, Z_MID], cubes: LEG_L },
-    Bone { name: "spider_leg_rf", pivot: [-4.0, 15.0, -1.0], rotation: [0.0, -FRAC_PI_4, -FRAC_PI_4], cubes: LEG_R },
-    Bone { name: "spider_leg_lf", pivot: [4.0, 15.0, -1.0], rotation: [0.0, FRAC_PI_4, FRAC_PI_4], cubes: LEG_L },
+    Bone { parent: None, name: "spider_leg_rh", pivot: [-4.0, 15.0, 2.0], rotation: [0.0, FRAC_PI_4, -FRAC_PI_4], cubes: LEG_R },
+    Bone { parent: None, name: "spider_leg_lh", pivot: [4.0, 15.0, 2.0], rotation: [0.0, -FRAC_PI_4, FRAC_PI_4], cubes: LEG_L },
+    Bone { parent: None, name: "spider_leg_rmh", pivot: [-4.0, 15.0, 1.0], rotation: [0.0, FRAC_PI_8, -Z_MID], cubes: LEG_R },
+    Bone { parent: None, name: "spider_leg_lmh", pivot: [4.0, 15.0, 1.0], rotation: [0.0, -FRAC_PI_8, Z_MID], cubes: LEG_L },
+    Bone { parent: None, name: "spider_leg_rmf", pivot: [-4.0, 15.0, 0.0], rotation: [0.0, -FRAC_PI_8, -Z_MID], cubes: LEG_R },
+    Bone { parent: None, name: "spider_leg_lmf", pivot: [4.0, 15.0, 0.0], rotation: [0.0, FRAC_PI_8, Z_MID], cubes: LEG_L },
+    Bone { parent: None, name: "spider_leg_rf", pivot: [-4.0, 15.0, -1.0], rotation: [0.0, -FRAC_PI_4, -FRAC_PI_4], cubes: LEG_R },
+    Bone { parent: None, name: "spider_leg_lf", pivot: [4.0, 15.0, -1.0], rotation: [0.0, FRAC_PI_4, FRAC_PI_4], cubes: LEG_L },
 ];
 
 pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };

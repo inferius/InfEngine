@@ -170,7 +170,7 @@ fn head_world_front(body_yaw: f32, pose: BonePose) -> glam::Vec3 {
     use super::{Bone, bone_matrix};
     use glam::Vec3;
     let bone = Bone {
-        name: "test_head",
+        parent: None, name: "test_head",
         pivot: [0.0, 0.0, 0.0],
         rotation: [0.0, 0.0, 0.0],
         cubes: &[],
@@ -278,6 +278,9 @@ mod model_coverage {
         audit(super::super::spider::MODEL.bones, "spider/spider.png", &[]);
         audit(super::super::wolf::MODEL.bones, "wolf/wolf.png", &[]);
         audit(super::super::polar_bear::MODEL.bones, "bear/polarbear.png", &[]);
+        // W162: first nested model. Group bones carry no cubes, so the
+        // audit only checks the textured parts (body/head/ears/legs).
+        audit(super::super::rabbit::MODEL.bones, "rabbit/rabbit_brown.png", &[]);
     }
 }
 

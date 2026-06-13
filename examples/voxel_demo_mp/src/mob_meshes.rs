@@ -498,6 +498,9 @@ pub(crate) struct MobMeshes {
     pub(crate) wolf_model: Option<crate::entity_model::BakedModel>,
     /// W161 - polar bear baked from universal MC `PolarBearModel`.
     pub(crate) polar_bear_model: Option<crate::entity_model::BakedModel>,
+    /// W162 - rabbit baked from universal MC `AdultRabbitModel`
+    /// (first nested bone hierarchy).
+    pub(crate) rabbit_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Pig ---------------------------------------------------------------
     pub(crate) pig_head: Option<MeshHandle>,
@@ -952,6 +955,22 @@ pub fn load_non_sheep_mob_meshes(
             mm.polar_bear_model =
                 Some(crate::entity_model::bake(r, &crate::entity_model::polar_bear::MODEL, &img));
             info!(texture = format!("{w}x{h}"), "polar bear entity texture bound (universal model)");
+            break;
+        }
+    }
+
+    // ---- Rabbit (64x64) ----------------------------------------------------
+    // W162: MC ships colour variants (rabbit_brown / _white / _gold /
+    // ...); brown is the default. The stem doesn't match the mob name,
+    // so open it directly like the polar bear. First NESTED model -
+    // exercises the W162 bone-parent chain.
+    for root in &entity_roots {
+        let p = root.join("rabbit").join("rabbit_brown.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.rabbit_model =
+                Some(crate::entity_model::bake(r, &crate::entity_model::rabbit::MODEL, &img));
+            info!(texture = format!("{w}x{h}"), "rabbit entity texture bound (universal nested model)");
             break;
         }
     }
