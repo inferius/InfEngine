@@ -212,7 +212,12 @@ pub fn classify_rmb_action(
         return RmbAction::OpenFurnace;
     }
     // W169: barrel reuses the chest container store + UI.
-    if target_id == CHEST_ID || target_id == crate::block::BARREL_ID {
+    // W170: ender chest too (per-position store v1; MC's shared-across-
+    // all-ender-chests inventory is a follow-up).
+    if target_id == CHEST_ID
+        || target_id == crate::block::BARREL_ID
+        || target_id == crate::block::ENDER_CHEST_ID
+    {
         return RmbAction::OpenChest;
     }
     // W50.3: crafting table opens the 3x3 grid UI (client-side
