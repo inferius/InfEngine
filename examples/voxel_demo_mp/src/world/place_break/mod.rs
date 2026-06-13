@@ -50,7 +50,8 @@ mod rmb_use;
 pub(crate) use break_pipeline::{apply_block_break, apply_shovel_grass_path};
 pub(crate) use combat::apply_combat;
 pub(crate) use containers::{
-    open_brewing_stand, open_chest, open_crafting_table, open_furnace, try_sleep_bed,
+    open_brewing_stand, open_chest, open_crafting_table, open_furnace, play_note_block,
+    try_sleep_bed,
 };
 pub(crate) use mining_tick::tick_mining;
 pub(crate) use place_pipeline::apply_block_place;
@@ -131,6 +132,9 @@ pub enum RmbAction {
     /// W67.1: right-click on a lever - toggles its redstone power
     /// state + re-solves the network.
     ToggleLever,
+    /// W164: right-click on a note block - cycle its pitch one step
+    /// (25 steps, F#3..F#5) and play the note.
+    PlayNoteBlock,
     /// Right-click on a bed voxel (id 35) - tries to skip the
     /// night.
     SleepBed,
@@ -231,6 +235,10 @@ pub fn classify_rmb_action(
     // W67.1: lever toggles its redstone power state.
     if target_id == crate::block::LEVER_ID {
         return RmbAction::ToggleLever;
+    }
+    // W164: note block cycles pitch + plays the note.
+    if target_id == crate::block::NOTE_BLOCK_ID {
+        return RmbAction::PlayNoteBlock;
     }
     // 3. Held-item-driven branches: flint+steel and buckets.
     if let Some(h) = held_id {

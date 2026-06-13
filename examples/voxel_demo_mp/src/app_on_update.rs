@@ -810,6 +810,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 crate::world::place_break::open_brewing_stand(
                     vx, hit.voxel,
                 );
+            } else if predicted == RmbAction::PlayNoteBlock {
+                // W164: note block - cycle pitch + play the note.
+                crate::world::place_break::play_note_block(vx, hit.voxel);
             } else if predicted == RmbAction::ToggleDoor {
                 // W61.2 / W61.3: toggle door + trapdoor open
                 // state. The render path swaps the model on the

@@ -290,6 +290,7 @@ impl Voxel {
             brewing_open: None,
             brewing_held: None,
             door_open: std::collections::HashSet::new(),
+            note_pitches: std::collections::HashMap::new(),
             door_facing: std::collections::HashMap::new(),
             rail_shapes: std::collections::HashMap::new(),
             mob_anim: std::collections::HashMap::new(),

@@ -69,6 +69,8 @@ impl Voxel {
         // previous world must not leak open/facing flags in.
         self.door_open.clear();
         self.door_facing.clear();
+        // W164: note-block pitches are per-world too.
+        self.note_pitches.clear();
         // W143: stored rail shapes are per-world too.
         self.rail_shapes.clear();
         self.chests.clear();

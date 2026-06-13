@@ -89,6 +89,30 @@ pub(crate) fn open_crafting_table(vx: &mut crate::Voxel, pos: [i32; 3]) {
     vx.rmb_pending = false;
 }
 
+/// W164: RMB on a note block. Cycles the per-position pitch one step
+/// (MC's 25 steps, F#3..F#5) and plays the note. MC tunes the pitch
+/// on right-click and plays the resulting tone; the instrument by the
+/// block beneath + the note particle are documented follow-ups. The
+/// note block is a tonal instrument, so the synth `play_beep` tone is
+/// a faithful stand-in when the pack ships no OGG.
+/// MC note-block pitch -> tone frequency. Pitch 0 = F#3 (~185 Hz),
+/// one semitone per step, pitch 24 = F#5 (~740 Hz).
+pub(crate) fn note_block_freq(pitch: u8) -> f32 {
+    185.0_f32 * 2.0_f32.powf(pitch as f32 / 12.0)
+}
+
+pub(crate) fn play_note_block(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    let entry = vx.note_pitches.entry(pos).or_insert(0);
+    *entry = (*entry + 1) % 25;
+    let freq = note_block_freq(*entry);
+    let spos = [pos[0] as f32 + 0.5, pos[1] as f32 + 0.5, pos[2] as f32 + 0.5];
+    vx.sfx_at("noteblock/harp", spos, move |a, g| {
+        let _ = a.play_beep(freq, 0.5, (g * 0.5).clamp(0.0, 1.0));
+    });
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
 /// W47.13i: RMB on a bed. Checks the day phase: outside night the
 /// player gets a chat refusal; at night offline/host bumps the day
 /// clock forward, client ships a `vx.sleep` request to the host.
@@ -121,5 +145,22 @@ pub(crate) fn try_sleep_bed(vx: &mut crate::Voxel) {
                 "Asking host to skip the night...".to_string(),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_block_freq;
+
+    /// W164: note-block pitch spans exactly two octaves (F#3..F#5),
+    /// with the octave doubling at +12 semitones.
+    #[test]
+    fn note_block_freq_spans_two_octaves() {
+        let lo = note_block_freq(0);
+        let mid = note_block_freq(12);
+        let hi = note_block_freq(24);
+        assert!((lo - 185.0).abs() < 0.5, "pitch 0 ~= 185 Hz, got {lo}");
+        assert!((mid - 370.0).abs() < 1.0, "pitch 12 = one octave up, got {mid}");
+        assert!((hi - 740.0).abs() < 2.0, "pitch 24 = two octaves up, got {hi}");
     }
 }

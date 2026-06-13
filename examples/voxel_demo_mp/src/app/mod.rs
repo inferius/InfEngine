@@ -719,6 +719,9 @@ pub(crate) struct Voxel {
     /// `block::door::toggle_door`; the render path checks via
     /// `block::door::is_open`.
     pub(crate) door_open: std::collections::HashSet<[i32; 3]>,
+    /// W164: per-note-block pitch step (0..=24, F#3..F#5). RMB cycles
+    /// it; absent = pitch 0. Cleared on world / dimension reset.
+    pub(crate) note_pitches: std::collections::HashMap<[i32; 3], u8>,
     /// W125: per-door facing (0=+X,1=+Z,2=-X,3=-Z), keyed by the
     /// LOWER-half voxel. Set at place time from the placer's look
     /// direction; drives which cell edge the panel renders against
