@@ -299,6 +299,7 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/wall_torch" | "wall_torch" => Some(build_wall_torch()),
         "block/slab" | "slab" => Some(build_slab_bottom()),
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
+        "block/carpet" | "carpet" => Some(build_carpet()),
         "block/fence_post" | "fence_post" => Some(build_fence_post()),
         "block/door_lower" | "door_lower" => Some(build_door_lower()),
         "block/door_upper" | "door_upper" => Some(build_door_upper()),
@@ -339,6 +340,13 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         OAK_SLAB_TOP_ID, OAK_STAIRS_ID, SHORT_GRASS_ID, STONE_SLAB_ID,
         STONE_STAIRS_ID, TORCH_ID,
     };
+    // W165: any carpet colour (incl. moss carpet) renders as a thin
+    // 1px layer. Matched by name so id gaps don't matter.
+    if crate::block::block_type(id)
+        .is_some_and(|b| b.name == "carpet" || b.name.ends_with("_carpet"))
+    {
+        return Some("block/carpet");
+    }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
         // W45.2: redstone + soul torch variants now route through the real
@@ -696,6 +704,32 @@ pub(crate) fn build_slab_top() -> BlockModel {
                 south: Some(uv_face([0.0, 0.0, 16.0, 8.0], "#side", Some(CubeFace::South))),
                 west: Some(uv_face([0.0, 0.0, 16.0, 8.0], "#side", Some(CubeFace::West))),
                 east: Some(uv_face([0.0, 0.0, 16.0, 8.0], "#side", Some(CubeFace::East))),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W165: carpet - a 1px-thick layer on the floor. Cite MC
+/// `carpet.json` (`from = [0,0,0] to = [16,1,16]`). Faces use the
+/// block's own `#top/#side/#bottom` so every wool colour (+ moss
+/// carpet) resolves its own texture; the side strip samples the
+/// bottom 1px of the tile.
+pub(crate) fn build_carpet() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [0.0, 0.0, 0.0],
+            to: [16.0, 1.0, 16.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+                north: Some(uv_face([0.0, 15.0, 16.0, 16.0], "#side", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 15.0, 16.0, 16.0], "#side", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 15.0, 16.0, 16.0], "#side", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 15.0, 16.0, 16.0], "#side", Some(CubeFace::East))),
             },
         }],
         textures: HashMap::new(),
