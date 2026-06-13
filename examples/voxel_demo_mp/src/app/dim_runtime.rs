@@ -381,12 +381,27 @@ impl Voxel {
                 }
             }
         }
-        // Park the player adjacent to the return portal.
+        // Park the player at the return portal.
+        // W173 FIX: player_pos.y is the EYE, PLAYER_HEIGHT (1.7) above
+        // the feet. The arrival pocket clears spawn[1]..spawn[1]+2 so
+        // the feet stand at spawn[1] on the platform floor (spawn[1]-1).
+        // The old code set the EYE to spawn[1], which buried the feet
+        // ~1.7 blocks BELOW the floor - the player spawned inside the
+        // ground and got stuck on BOTH portal directions (the bug the
+        // user hit). The eye must sit PLAYER_HEIGHT above the pocket.
         self.player_pos = glam::Vec3::new(
             spawn[0] as f32 + 0.5,
-            spawn[1] as f32,
+            spawn[1] as f32 + PLAYER_HEIGHT,
             spawn[2] as f32 + 0.5,
         );
+        // Safety net: if the capsule is still embedded (an odd column
+        // the pocket build missed), lift it out instead of trapping
+        // the player.
+        let mut guard = 0;
+        while self.capsule_embedded(self.player_pos) && guard < 6 {
+            self.player_pos.y += 1.0;
+            guard += 1;
+        }
         self.player_vel = glam::Vec3::ZERO;
         self.portal_in_ticks = 0;
         self.portal_cooldown_ticks = block::portal::PORTAL_COOLDOWN_TICKS;
