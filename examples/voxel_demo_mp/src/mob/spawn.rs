@@ -156,6 +156,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         KIND_PIG => 10.0,
         // W158: MC wild wolf HP.
         x if x == super::kinds::KIND_WOLF => 8.0,
+        // W161: MC polar bear HP.
+        x if x == super::kinds::KIND_POLAR_BEAR => 30.0,
         _ => MOB_MAX_HEALTH,
     }
 }

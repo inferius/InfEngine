@@ -20,8 +20,8 @@
 use crate::worldgen::Biome;
 
 use super::kinds::{
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON, KIND_SPIDER,
-    KIND_WOLF, KIND_ZOMBIE,
+    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_SHEEP, KIND_SKELETON,
+    KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -64,7 +64,8 @@ const TAIGA_DAY: &[(u8, u32)] =
     &[(KIND_SHEEP, 4), (KIND_PIG, 2), (KIND_COW, 2), (KIND_WOLF, 8)];
 const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40)];
 
-const TUNDRA_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2)];
+// W161: snowy tundra is the polar bear's home (MC: frozen biomes).
+const TUNDRA_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2), (KIND_POLAR_BEAR, 5)];
 const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40)];
 
 const JUNGLE_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 8), (KIND_PIG, 6)];

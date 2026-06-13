@@ -496,6 +496,8 @@ pub(crate) struct MobMeshes {
     pub(crate) chicken_model: Option<crate::entity_model::BakedModel>,
     /// W158 - wolf baked from universal MC `WolfModel` data.
     pub(crate) wolf_model: Option<crate::entity_model::BakedModel>,
+    /// W161 - polar bear baked from universal MC `PolarBearModel`.
+    pub(crate) polar_bear_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Pig ---------------------------------------------------------------
     pub(crate) pig_head: Option<MeshHandle>,
@@ -936,6 +938,22 @@ pub fn load_non_sheep_mob_meshes(
         // render falls back to the generic cube pair when absent).
         mm.wolf_model = Some(crate::entity_model::bake(r, &crate::entity_model::wolf::MODEL, &img));
         info!(texture = format!("{w}x{h}"), "wolf entity texture bound (universal model)");
+    }
+
+    // ---- Polar bear (128x64) -----------------------------------------------
+    // W161: MC ships it at entity/bear/polarbear.png, NOT a per-mob
+    // subdir matching the mob name, so try_open_entity ("polarbear")
+    // would miss it. Direct open across the search roots (it's a .png,
+    // so the W141 .tga-only alpha flatten doesn't apply).
+    for root in &entity_roots {
+        let p = root.join("bear").join("polarbear.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.polar_bear_model =
+                Some(crate::entity_model::bake(r, &crate::entity_model::polar_bear::MODEL, &img));
+            info!(texture = format!("{w}x{h}"), "polar bear entity texture bound (universal model)");
+            break;
+        }
     }
 
     // ---- Pig (64x64) -------------------------------------------------------

@@ -40,6 +40,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Chicken => ("chicken", "chicken"),
         // W158.
         MobKind::Wolf => ("wolf", "wolf"),
+        // W161: MC ships the polar bear under entity/bear/.
+        MobKind::PolarBear => ("bear", "polarbear"),
     }
 }
 
@@ -103,6 +105,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) spider: Option<PathBuf>,
     /// W158.
     pub(crate) wolf: Option<PathBuf>,
+    /// W161.
+    pub(crate) polar_bear: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -116,6 +120,7 @@ impl MobSkinSet {
             skeleton: mob_skin_path(assets_root, MobKind::Skeleton),
             spider: mob_skin_path(assets_root, MobKind::Spider),
             wolf: mob_skin_path(assets_root, MobKind::Wolf),
+            polar_bear: mob_skin_path(assets_root, MobKind::PolarBear),
         }
     }
 
@@ -129,6 +134,7 @@ impl MobSkinSet {
             MobKind::Skeleton => &self.skeleton,
             MobKind::Spider => &self.spider,
             MobKind::Wolf => &self.wolf,
+            MobKind::PolarBear => &self.polar_bear,
         };
         opt.as_deref()
     }

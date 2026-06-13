@@ -277,6 +277,7 @@ mod model_coverage {
         );
         audit(super::super::spider::MODEL.bones, "spider/spider.png", &[]);
         audit(super::super::wolf::MODEL.bones, "wolf/wolf.png", &[]);
+        audit(super::super::polar_bear::MODEL.bones, "bear/polarbear.png", &[]);
     }
 }
 

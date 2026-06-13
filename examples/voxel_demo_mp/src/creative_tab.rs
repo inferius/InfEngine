@@ -513,7 +513,8 @@ mod tests {
         let eggs = filter_by_category(&items, CreativeCategory::SpawnEggs);
         assert!(eggs.iter().any(|e| e.id == 677), "chicken egg in tab");
         assert!(eggs.iter().any(|e| e.id == 717), "wolf egg in tab");
-        assert_eq!(eggs.len(), 8, "all 8 kinds: {eggs:?}");
+        assert!(eggs.iter().any(|e| e.id == 720), "polar bear egg in tab");
+        assert_eq!(eggs.len(), 9, "all 9 kinds: {eggs:?}");
         let misc = filter_by_category(&items, CreativeCategory::Misc);
         assert!(!misc.iter().any(|e| e.id == 677), "eggs NOT in Misc");
     }
