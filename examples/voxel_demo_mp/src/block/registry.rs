@@ -2724,6 +2724,11 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // W159: bookshelf was MISSING entirely (user report). Plank
     // top/bottom + the bookshelf texture on all four sides, like MC.
     BlockType { id: 718, name: "bookshelf", color: [0.62, 0.48, 0.30], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["oak_planks.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["oak_planks.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["bookshelf.png"], keep_alpha: false } },
+    // W160: enchanting table was MISSING (user meant this, not the
+    // crafting table). Full-cube for now with the correct MC faces;
+    // the 0.75-tall slab shape + floating bobbing book entity are a
+    // follow-up render (chest-style block entity).
+    BlockType { id: 719, name: "enchanting_table", color: [0.30, 0.12, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["enchanting_table_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["enchanting_table_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["enchanting_table_side.png"], keep_alpha: false } },
     // 18 misc utility decor.
     BlockType { id: 435, name: "hay_block", color: [0.78, 0.62, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["hay_block_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["hay_block_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["hay_block_side.png"], keep_alpha: false } },
     BlockType { id: 436, name: "dried_kelp_block", color: [0.30, 0.40, 0.30], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["dried_kelp_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["dried_kelp_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["dried_kelp_side.png"], keep_alpha: false } },

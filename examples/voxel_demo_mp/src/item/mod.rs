@@ -2332,6 +2332,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 717, name: "wolf_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     // W159 - bookshelf (was missing).
     ItemType { id: 718, name: "bookshelf", display: Some("Bookshelf"), places: Some(718), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W160 - enchanting table (was missing).
+    ItemType { id: 719, name: "enchanting_table", display: Some("Enchanting Table"), places: Some(719), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
