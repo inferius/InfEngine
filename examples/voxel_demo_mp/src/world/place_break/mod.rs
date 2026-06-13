@@ -50,8 +50,8 @@ mod rmb_use;
 pub(crate) use break_pipeline::{apply_block_break, apply_shovel_grass_path};
 pub(crate) use combat::apply_combat;
 pub(crate) use containers::{
-    open_brewing_stand, open_chest, open_crafting_table, open_furnace, play_note_block,
-    try_sleep_bed,
+    open_brewing_stand, open_chest, open_crafting_table, open_furnace, open_stonecutter,
+    play_note_block, try_sleep_bed,
 };
 pub(crate) use mining_tick::tick_mining;
 pub(crate) use place_pipeline::apply_block_place;
@@ -126,6 +126,8 @@ pub enum RmbAction {
     /// W50.5: right-click on a brewing_stand voxel - opens the
     /// 5-slot brewing UI.
     OpenBrewingStand,
+    /// W171: right-click on a stonecutter - opens the cut-select UI.
+    OpenStonecutter,
     /// W61.2: right-click on a door / trapdoor - toggles open
     /// state.
     ToggleDoor,
@@ -228,6 +230,10 @@ pub fn classify_rmb_action(
     // W50.5: brewing stand opens the 5-slot brewing UI.
     if target_id == crate::block::BREWING_STAND_ID {
         return RmbAction::OpenBrewingStand;
+    }
+    // W171: stonecutter opens the cut-select UI.
+    if target_id == crate::block::STONECUTTER_ID {
+        return RmbAction::OpenStonecutter;
     }
     // W61.2: door / trapdoor toggles open state.
     if crate::block::door::is_door_block(target_id)

@@ -599,6 +599,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut crafting_table_held_local = vx.crafting_table_held;
         // Set when the player clicks the 3x3 output slot.
         let mut crafting_table_take_output = false;
+        // W171: stonecutter snapshot (client-side, like the crafting
+        // table). The panel mutates the input + reports a clicked cut;
+        // reconciled with vx after the egui closure.
+        let stonecutter_open_pos = vx.stonecutter_open;
+        let mut stonecutter_open_local = stonecutter_open_pos.is_some();
+        let mut stonecutter_input_local = vx.stonecutter_input;
+        let mut stonecutter_craft: Option<usize> = None;
         // W50.5: brewing stand snapshot mirrors the chest/furnace
         // pattern - clone the live container so the panel paints
         // a stable view; collected actions land on vx after the
@@ -2141,6 +2148,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     );
                 }
 
+                // W171: stonecutter cut-select panel.
+                if stonecutter_open_pos.is_some() {
+                    ui::stonecutter_panel::render(
+                        ui::stonecutter_panel::StonecutterPanelInputs {
+                            ctx,
+                            input: &mut stonecutter_input_local,
+                            inv_view: &mut inv_plain_snapshot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut stonecutter_open_local,
+                            craft_out: &mut stonecutter_craft,
+                        },
+                    );
+                }
+
                 // W50.5: brewing stand panel.
                 if let Some(stand) = &brewing_snapshot {
                     ui::brewing_panel::render(
@@ -3229,6 +3251,41 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             //    (or spawn as drops when the inv is full).
             if !crafting_table_open_local {
                 vx.close_crafting_table_ui();
+            }
+        }
+        // W171: stonecutter apply. Sync the input back, run the
+        // clicked cut (consume 1 input + add the output to the inv),
+        // copy the inv snapshot back, and on close return the input.
+        if stonecutter_open_pos.is_some() {
+            vx.stonecutter_input = stonecutter_input_local;
+            if let Some(i) = stonecutter_craft
+                && let Some((in_id, in_n)) = vx.stonecutter_input
+            {
+                let cuts = crate::recipes::stonecutter::cuts_for(in_id);
+                if let Some(cut) = cuts.get(i) {
+                    ui::stonecutter_panel::give_to_inv(
+                        &mut inv_plain_snapshot,
+                        (cut.output, cut.count),
+                    );
+                    let n = in_n.saturating_sub(1);
+                    vx.stonecutter_input =
+                        if n == 0 { None } else { Some((in_id, n)) };
+                }
+            }
+            // Close-via-X: return the remaining input to the inventory.
+            if !stonecutter_open_local
+                && let Some(stack) = vx.stonecutter_input.take()
+            {
+                ui::stonecutter_panel::give_to_inv(&mut inv_plain_snapshot, stack);
+            }
+            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+                if i >= vx.inventory.len() {
+                    break;
+                }
+                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+            }
+            if !stonecutter_open_local {
+                vx.stonecutter_open = None;
             }
         }
         // W50.5: brewing panel apply.

@@ -140,6 +140,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         vx.close_crafting_table_ui();
                     } else if vx.brewing_open.is_some() {
                         vx.close_brewing_ui();
+                    } else if vx.stonecutter_open.is_some() {
+                        vx.close_stonecutter_ui();
                     } else if vx.creative_tab.open {
                         // W20.3: ESC closes the creative tab (same as E).
                         vx.creative_tab.close();
@@ -813,6 +815,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             } else if predicted == RmbAction::PlayNoteBlock {
                 // W164: note block - cycle pitch + play the note.
                 crate::world::place_break::play_note_block(vx, hit.voxel);
+            } else if predicted == RmbAction::OpenStonecutter {
+                // W171: stonecutter - open the cut-select UI.
+                crate::world::place_break::open_stonecutter(vx, hit.voxel);
             } else if predicted == RmbAction::ToggleDoor {
                 // W61.2 / W61.3: toggle door + trapdoor open
                 // state. The render path swaps the model on the

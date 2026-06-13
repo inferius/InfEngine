@@ -88,6 +88,9 @@ impl Voxel {
         self.crafting_table_open = None;
         self.craft_grid_3x3 = [None; 9];
         self.crafting_table_held = None;
+        // W171: stonecutter is client-side; drop its input on reset.
+        self.stonecutter_open = None;
+        self.stonecutter_input = None;
         // W50.5: brewing stand maps cleared on world reset.
         self.brewing_stands.clear();
         self.brewing_runtimes.clear();
@@ -169,6 +172,20 @@ impl Voxel {
                 // each drop accumulates on pickup.
                 self.spawn_drop(b, p);
             }
+        }
+    }
+
+    /// W171: close the stonecutter UI. Returns the input stack to
+    /// the inventory (or drops it at the block on overflow).
+    /// Client-side; used by the ESC path (the X-button close is
+    /// reconciled in `ui::render`).
+    pub(crate) fn close_stonecutter_ui(&mut self) {
+        let pos = self.stonecutter_open.take();
+        if let Some((id, c)) = self.stonecutter_input.take()
+            && !crate::inventory::inv_pickup_n(&mut self.inventory, BlockId(id), c)
+            && let Some(p) = pos
+        {
+            self.spawn_drop(BlockId(id), p);
         }
     }
 

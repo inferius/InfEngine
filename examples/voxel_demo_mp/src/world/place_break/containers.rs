@@ -89,6 +89,19 @@ pub(crate) fn open_crafting_table(vx: &mut crate::Voxel, pos: [i32; 3]) {
     vx.rmb_pending = false;
 }
 
+/// W171: RMB on a stonecutter. Marks it open + clears the other panel
+/// markers. Client-side only (a cut is a pure inventory transform, no
+/// shared server state), like the crafting table.
+pub(crate) fn open_stonecutter(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    vx.stonecutter_open = Some(pos);
+    vx.chest_open = None;
+    vx.furnace_open = None;
+    vx.crafting_table_open = None;
+    vx.brewing_open = None;
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
 /// W164: RMB on a note block. Cycles the per-position pitch one step
 /// (MC's 25 steps, F#3..F#5) and plays the note. MC tunes the pitch
 /// on right-click and plays the resulting tone; the instrument by the

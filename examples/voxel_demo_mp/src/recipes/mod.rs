@@ -13,6 +13,7 @@ pub(crate) mod brewing;
 pub(crate) mod matcher;
 pub(crate) mod shaped;
 pub(crate) mod smelting;
+pub(crate) mod stonecutter;
 
 // Local alias so the `BUCKET_EMPTY_ID` reference below resolves in
 // both the bin and the lib crate. The bin re-exports it at crate

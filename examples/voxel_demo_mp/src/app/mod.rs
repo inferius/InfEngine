@@ -703,6 +703,12 @@ pub(crate) struct Voxel {
     /// W50.3: cursor-held stack while the crafting table UI is open.
     /// Mirrors `chest_held` / `furnace_held`.
     pub(crate) crafting_table_held: Option<(u16, u8)>,
+    /// W171: open stonecutter block + its single input stack. Output
+    /// is taken straight into the inventory (no floating cursor) so
+    /// the interaction stays simple: click an inventory item to load
+    /// the input, click a cut to craft.
+    pub(crate) stonecutter_open: Option<[i32; 3]>,
+    pub(crate) stonecutter_input: Option<(u16, u8)>,
     /// W50.5: per-brewing-stand 5-slot container state, keyed by
     /// world voxel coords. Parallel to `furnaces`. Inserted on
     /// place, removed on break (drops fall as item entities).

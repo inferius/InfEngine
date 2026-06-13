@@ -285,6 +285,8 @@ impl Voxel {
             crafting_table_open: None,
             craft_grid_3x3: [None; 9],
             crafting_table_held: None,
+            stonecutter_open: None,
+            stonecutter_input: None,
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),
             brewing_open: None,

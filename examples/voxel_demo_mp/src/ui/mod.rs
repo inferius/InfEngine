@@ -14,6 +14,7 @@
 
 pub(crate) mod brewing_panel;
 pub(crate) mod crafting_panel;
+pub(crate) mod stonecutter_panel;
 pub(crate) mod render;
 pub(crate) mod slot_widget;
 
