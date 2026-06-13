@@ -197,6 +197,20 @@ impl Voxel {
         self.furnace_open = None;
         self.furnace_held = None;
         self.liquid_mesh_dirty = true;
+        // W159: THE "empty dim on return" FIX. The target dim's
+        // chunks are restored INTO `self.world` above, but their
+        // meshes were just dropped - and `stream_chunks` only ever
+        // queues chunks MISSING from the world, so present-but-
+        // unmeshed chunks render as void forever (the user's empty
+        // overworld after a nether round-trip + the floating
+        // inactive portal). Re-mesh every restored chunk once here.
+        if self.renderer.is_some() {
+            let restored: Vec<ChunkCoord> =
+                self.world.iter_chunks().map(|(c, _)| *c).collect();
+            if !restored.is_empty() {
+                self.rebuild_chunks(&restored);
+            }
+        }
     }
 
     /// Phase F.6: increment / reset the in-portal counter +
@@ -282,6 +296,41 @@ impl Voxel {
             target,
             Some(&mut edits),
         );
+        // W159: GUARANTEE a solid platform + clear pocket at the
+        // arrival, then re-mesh it. The surface scan can miss in
+        // lava-sea / all-air columns, which is how the portal ended
+        // up floating and the player fell. A dim-appropriate floor
+        // under the frame footprint + a cleared 3-tall pocket makes
+        // every arrival stand on solid ground like MC's platform.
+        {
+            let floor_block = if target_dim == dim::NETHER {
+                block::NETHERRACK_ID
+            } else {
+                1 // stone
+            };
+            let base_y = spawn[1];
+            for dx in -1..=2i32 {
+                for dz in -1..=2i32 {
+                    let fp = [spawn[0] + dx, base_y - 1, spawn[2] + dz];
+                    if self.world.get(fp).is_air() {
+                        self.world_set_tracked(fp, BlockId(floor_block));
+                        edits.push(fp);
+                    }
+                    // Clear a 3-tall standing pocket above the floor
+                    // (skip the frame's own obsidian + portal cells).
+                    for dy in 0..3 {
+                        let cp = [spawn[0] + dx, base_y + dy, spawn[2] + dz];
+                        let here = self.world.get(cp).0;
+                        let is_frame = here == block::OBSIDIAN_ID
+                            || here == block::PORTAL_ID;
+                        if !is_frame && !self.world.get(cp).is_air() {
+                            self.world_set_tracked(cp, BlockId::AIR);
+                            edits.push(cp);
+                        }
+                    }
+                }
+            }
+        }
         // Broadcast portal edits so remote peers see the new
         // frame appear. Guarded on the renderer being live so
         // headless / test callers don't hit the rebuild path.
@@ -299,18 +348,18 @@ impl Voxel {
                 }
                 self.rebuild_chunks(&coords);
             }
-            let portal_id = block::PORTAL_ID;
-            let obsidian_id = block::OBSIDIAN_ID;
+            // W159: broadcast the ACTUAL block at each edited cell -
+            // the edit set now includes the platform floor + cleared
+            // air pocket, not just the portal/obsidian frame, so the
+            // old "portal-or-obsidian-else-0" filter would have wiped
+            // the floor to air on remote peers.
             let edits_to_send: Vec<EditMsg> = edits
                 .iter()
                 .map(|p| EditMsg {
                     x: p[0],
                     y: p[1],
                     z: p[2],
-                    block: {
-                        let v = self.world.get(*p).0;
-                        if v == portal_id || v == obsidian_id { v } else { 0 }
-                    },
+                    block: self.world.get(*p).0,
                 })
                 .collect();
             match &mut self.net {
