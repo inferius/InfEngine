@@ -57,8 +57,11 @@ mod tests;
 
 /// Random-tick rate: 1 in `RATE_DENOM` net-tick frames per fire
 /// cell. MC uses 1/4096 per chunk section; we trade fidelity for
-/// readability in a smaller world.
-pub(crate) const RATE_DENOM: u32 = 30;
+/// readability in a smaller world. W159: 30 -> 12 so the MC-faithful
+/// catch odds (logs ~1.7%/tick) compound fast enough that a lit tree
+/// visibly burns down + spreads in seconds instead of guttering out
+/// after one voxel (the user's "shori kousek a hned zhasne" report).
+pub(crate) const RATE_DENOM: u32 = 12;
 
 /// Hash three i32s + a u64 + a salt into a u32. Mirror of the
 /// 2D `worldgen::hash2_for` shape, extended for fire ticks.

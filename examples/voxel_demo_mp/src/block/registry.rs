@@ -369,10 +369,15 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Per-face orientation is cosmetic and deferred - C.4 ships a
     // single side texture across all four lateral faces.
     BlockType {
+        // W159: sides were furnace_FRONT (the opening) on all four
+        // faces - every furnace looked like 4 stacked oven doors.
+        // Until per-facing front render lands (a chest-style W160),
+        // use the plain furnace_side everywhere so it reads as a
+        // stone box; top stays distinct.
         id: 42, name: "furnace", color: [0.55, 0.55, 0.58], transparent: false, flags: 0,
-        top: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "furnace_front.png", "stone.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "furnace_front.png", "stone.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 0, files: &["furnace_front.png", "furnace_side.png", "stone.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["furnace_top.png", "stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["furnace_side.png", "stone.png"], keep_alpha: false },
     },
     // Netherrack. Bulk material of the nether dimension. Opaque
     // reddish rock. Mineable with any pickaxe (tier 1+). Atlas
@@ -2716,6 +2721,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 714, name: "green_stained_glass_pane", color: [0.34, 0.46, 0.15], transparent: true, flags: F_DEDICATED_RENDER, top: TileSpec { col: 2, row: 2, files: &["green_stained_glass.png"], keep_alpha: true }, bottom: TileSpec { col: 2, row: 2, files: &["green_stained_glass.png"], keep_alpha: true }, sides: TileSpec { col: 2, row: 2, files: &["green_stained_glass.png"], keep_alpha: true } },
     BlockType { id: 715, name: "red_stained_glass_pane", color: [0.74, 0.18, 0.18], transparent: true, flags: F_DEDICATED_RENDER, top: TileSpec { col: 2, row: 2, files: &["red_stained_glass.png"], keep_alpha: true }, bottom: TileSpec { col: 2, row: 2, files: &["red_stained_glass.png"], keep_alpha: true }, sides: TileSpec { col: 2, row: 2, files: &["red_stained_glass.png"], keep_alpha: true } },
     BlockType { id: 716, name: "black_stained_glass_pane", color: [0.10, 0.10, 0.12], transparent: true, flags: F_DEDICATED_RENDER, top: TileSpec { col: 2, row: 2, files: &["black_stained_glass.png"], keep_alpha: true }, bottom: TileSpec { col: 2, row: 2, files: &["black_stained_glass.png"], keep_alpha: true }, sides: TileSpec { col: 2, row: 2, files: &["black_stained_glass.png"], keep_alpha: true } },
+    // W159: bookshelf was MISSING entirely (user report). Plank
+    // top/bottom + the bookshelf texture on all four sides, like MC.
+    BlockType { id: 718, name: "bookshelf", color: [0.62, 0.48, 0.30], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["oak_planks.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["oak_planks.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["bookshelf.png"], keep_alpha: false } },
     // 18 misc utility decor.
     BlockType { id: 435, name: "hay_block", color: [0.78, 0.62, 0.18], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["hay_block_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["hay_block_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["hay_block_side.png"], keep_alpha: false } },
     BlockType { id: 436, name: "dried_kelp_block", color: [0.30, 0.40, 0.30], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["dried_kelp_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["dried_kelp_bottom.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["dried_kelp_side.png"], keep_alpha: false } },
