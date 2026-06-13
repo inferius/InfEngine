@@ -251,10 +251,15 @@ pub(crate) fn draw_chests(
     lid_anim: &mut HashMap<[i32; 3], f32>,
     player_pos: Vec3,
     dt: f32,
+    // W172: vx.chests is now a shared container store (chests, barrels,
+    // ender chests, hoppers all live there). Only CHEST_ID positions
+    // render the chest entity model - the rest draw as their own cube.
+    world: &infengine_voxel::World,
 ) {
     if !meshes.loaded() {
         return;
     }
+    let is_chest = |p: [i32; 3]| world.get(p).0 == crate::block::CHEST_ID;
     const DRAW_RANGE_SQ: f32 = 96.0 * 96.0;
     // MC's lid moves 0.1 per tick = full swing in ~0.5 s.
     let step = dt / 0.5;
@@ -262,6 +267,11 @@ pub(crate) fn draw_chests(
         open_local == Some(p) || viewers.contains_key(&p)
     };
     for (&pos, _) in chests.iter() {
+        // W172: skip barrels / ender chests / hoppers - they share the
+        // store but render as their own cube, not a chest entity.
+        if !is_chest(pos) {
+            continue;
+        }
         let center = Vec3::new(
             pos[0] as f32 + 0.5,
             pos[1] as f32,
@@ -277,9 +287,11 @@ pub(crate) fn draw_chests(
         let pos_side = [pos[0] + ext[0], pos[1], pos[2] + ext[2]];
         let neg_side = [pos[0] - ext[0], pos[1], pos[2] - ext[2]];
         let pair_pos = chests.contains_key(&pos_side)
+            && is_chest(pos_side)
             && facing.get(&pos_side).copied().unwrap_or(3) == f;
         let pair_neg = !pair_pos
             && chests.contains_key(&neg_side)
+            && is_chest(neg_side)
             && facing.get(&neg_side).copied().unwrap_or(3) == f;
         // Lid state: a pair shares one lid - either half open lifts
         // both.

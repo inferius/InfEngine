@@ -246,10 +246,12 @@ pub(crate) fn apply_block_break(
             }
         }
         // Chest break: drain contents as drops, drop the container.
-        // W169/W170: barrel + ender chest share the chest store.
+        // W169/W170/W172: barrel + ender chest + hopper share the
+        // chest store.
         if (broken.0 == CHEST_ID
             || broken.0 == crate::block::BARREL_ID
-            || broken.0 == crate::block::ENDER_CHEST_ID)
+            || broken.0 == crate::block::ENDER_CHEST_ID
+            || broken.0 == crate::block::HOPPER_ID)
             && let Some(chest_inv) = vx.chests.remove(&voxel)
         {
             for id in block::chest::drain_drops(&chest_inv) {

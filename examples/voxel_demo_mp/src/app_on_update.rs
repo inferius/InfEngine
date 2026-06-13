@@ -1189,6 +1189,23 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &mut vx.brewing_runtimes,
             dt_ms,
         );
+        // W172: hopper transport. On a fixed cadence, each hopper
+        // pulls one item from the container above + pushes one to the
+        // container below (all stored in vx.chests). Wall-clock gated
+        // so the rate is frame-rate independent.
+        vx.hopper_clock_ms = vx.hopper_clock_ms.saturating_add(dt_ms);
+        if vx.hopper_clock_ms >= block::hopper::HOPPER_INTERVAL_MS {
+            vx.hopper_clock_ms = 0;
+            let hoppers: Vec<[i32; 3]> = vx
+                .chests
+                .keys()
+                .copied()
+                .filter(|p| vx.world.get(*p).0 == crate::block::HOPPER_ID)
+                .collect();
+            if !hoppers.is_empty() {
+                block::hopper::transport_round(&mut vx.chests, &hoppers);
+            }
+        }
         // W5.3b: broadcast furnace state snapshots to registered
         // viewers at ~5 Hz so a remote client sees the cook
         // progress + fuel bar move smoothly. The throttle gate
@@ -1534,6 +1551,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &mut vx.chest_lid_anim,
             vx.player_pos,
             dt,
+            &vx.world,
         );
         // W134: minecart entities (local sim + remote snapshots).
         render::minecarts::draw_minecarts(

@@ -343,6 +343,20 @@ pub(crate) fn apply_block_place(
             target_voxel,
         );
     }
+    // W172: chests / barrels / ender chests / hoppers mint their
+    // container on place so a hopper can pull/push even into a
+    // never-opened one. or_insert keeps any loaded save state.
+    if block.0 == CHEST_ID
+        || block.0 == crate::block::BARREL_ID
+        || block.0 == crate::block::ENDER_CHEST_ID
+    {
+        vx.chests.entry(target_voxel).or_insert_with(block::chest::new_chest);
+    }
+    if block.0 == crate::block::HOPPER_ID {
+        vx.chests
+            .entry(target_voxel)
+            .or_insert_with(|| crate::container::Container::with_size(block::hopper::HOPPER_SLOTS));
+    }
     // Decrement the active stack (host only, not creative).
     if !is_client
         && !vx.abilities.instabuild

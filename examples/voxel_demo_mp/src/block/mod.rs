@@ -27,6 +27,7 @@ pub(crate) mod rail_state;
 pub(crate) mod fire;
 pub(crate) mod flammability;
 pub(crate) mod furnace;
+pub(crate) mod hopper;
 mod ids;
 pub(crate) mod light_emission;
 pub(crate) mod portal;

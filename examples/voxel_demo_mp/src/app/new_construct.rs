@@ -278,6 +278,7 @@ impl Voxel {
             chest_held: None,
             furnaces: HashMap::new(),
             furnace_runtimes: HashMap::new(),
+            hopper_clock_ms: 0,
             fires: HashMap::new(),
             fire_clock: 0,
             furnace_open: None,

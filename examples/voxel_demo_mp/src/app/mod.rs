@@ -684,6 +684,9 @@ pub(crate) struct Voxel {
     /// `block::furnace::furnace_tick`; persisted alongside the
     /// slot vec.
     pub(crate) furnace_runtimes: HashMap<[i32; 3], block::furnace::FurnaceRuntime>,
+    /// W172: wall-clock accumulator (ms) for the hopper transport
+    /// cadence. Hoppers move one item per `HOPPER_INTERVAL_MS`.
+    pub(crate) hopper_clock_ms: u32,
     /// Position of the furnace the player has open. Mirrors
     /// `chest_open`. Cleared by ESC / walking too far / opening
     /// another panel.
