@@ -85,6 +85,10 @@ pub(crate) fn tick_mining(vx: &mut crate::Voxel, lmb_active: bool, dt: f32) -> O
                         vx.spawn_break_particles_tinted(m.voxel, color);
                     }
                     if done {
+                        // W175: a finished dig wears the held tool one
+                        // point (survival only - this branch never runs
+                        // under instabuild). Breaks the tool at 0.
+                        vx.consume_tool_durability();
                         mine_break = Some(m.voxel);
                     } else {
                         vx.mining = Some(m);

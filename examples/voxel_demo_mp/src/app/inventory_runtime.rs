@@ -31,6 +31,30 @@ impl Voxel {
         }
     }
 
+    /// W175: decrement the held tool's durability after a use (a
+    /// block mined / a mob hit). Inits to the tool's max on first use;
+    /// at 0 the tool breaks - the slot clears + the parallel tracker
+    /// entry drops. No-op when the held item isn't a tool (or is
+    /// unbreakable). Generalises `consume_flint_and_steel_use` to the
+    /// whole tool/weapon set via `item::tool_max_durability`.
+    pub(crate) fn consume_tool_durability(&mut self) {
+        let slot_idx = self.selected_slot;
+        let Some((held, _)) = self.inventory[slot_idx] else {
+            return;
+        };
+        let Some(max) = crate::item::tool_max_durability(held.0) else {
+            return;
+        };
+        let remaining = self.item_durability.get(&slot_idx).copied().unwrap_or(max);
+        let new = remaining.saturating_sub(1);
+        if new == 0 {
+            self.inventory[slot_idx] = None;
+            self.item_durability.remove(&slot_idx);
+        } else {
+            self.item_durability.insert(slot_idx, new);
+        }
+    }
+
     /// Register a successful pickup for the floating "+1 wood"
     /// toast HUD. Collapses adjacent picks of the same block into
     /// a single entry so spamming the same stack doesn't bury the
