@@ -2338,6 +2338,11 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 720, name: "polar_bear_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
     // W162 - rabbit spawn egg.
     ItemType { id: 721, name: "rabbit_spawn_egg", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::SpawnEgg },
+    // W166 - the remaining wood trapdoors (were missing).
+    ItemType { id: 722, name: "acacia_trapdoor", display: Some("Acacia Trapdoor"), places: Some(722), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 723, name: "dark_oak_trapdoor", display: Some("Dark Oak Trapdoor"), places: Some(723), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 724, name: "mangrove_trapdoor", display: Some("Mangrove Trapdoor"), places: Some(724), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 725, name: "cherry_trapdoor", display: Some("Cherry Trapdoor"), places: Some(725), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },

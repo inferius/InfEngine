@@ -31,9 +31,11 @@ pub(crate) fn is_door_block(id: u16) -> bool {
 }
 
 /// W125: true when `id` is a trapdoor block (W48.4 ids 548..=552).
-/// Trapdoors share the door open-state set + toggle.
+/// W166: + acacia / dark_oak / mangrove / cherry (722..=725).
+/// Trapdoors share the door open-state set + toggle + emit_trapdoor
+/// render + collision/light gating, so this one predicate covers them.
 pub(crate) fn is_trapdoor_block(id: u16) -> bool {
-    (548..=552).contains(&id)
+    (548..=552).contains(&id) || (722..=725).contains(&id)
 }
 
 /// W125: per-door facing, keyed by the LOWER half voxel.
@@ -219,6 +221,20 @@ mod tests {
         assert!(!is_door_block(76));
         assert!(!is_door_block(576));
         assert!(!is_door_block(1)); // stone
+    }
+
+    /// W166: the original 5 trapdoors plus the 4 new wood ones all
+    /// register as trapdoors (so they toggle + render + collide via
+    /// the shared path); neighbours are not trapdoors.
+    #[test]
+    fn trapdoor_block_range_matches_registry() {
+        for id in [548, 549, 550, 551, 552, 722, 723, 724, 725] {
+            assert!(is_trapdoor_block(id), "id {id} should be a trapdoor");
+        }
+        assert!(!is_trapdoor_block(547)); // fence below the range
+        assert!(!is_trapdoor_block(553)); // gap after the first run
+        assert!(!is_trapdoor_block(721)); // rabbit egg, just below
+        assert!(!is_trapdoor_block(726)); // just above the new run
     }
 
     #[test]
