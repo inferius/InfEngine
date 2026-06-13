@@ -190,7 +190,7 @@ pub fn classify_rmb_action(
 ) -> RmbAction {
     use crate::block::{
         BUCKET_EMPTY_ID, BUCKET_LAVA_ID, BUCKET_WATER_ID, CHEST_ID,
-        FLINT_AND_STEEL_ID, FURNACE_ID,
+        FLINT_AND_STEEL_ID,
     };
     if !rmb {
         return RmbAction::None;
@@ -203,7 +203,8 @@ pub fn classify_rmb_action(
     // 2. Containers + bed are target-only - the held block does
     //    not matter for these. A shovel on a furnace still opens
     //    the furnace.
-    if target_id == FURNACE_ID {
+    // W163: smoker + blast furnace share the furnace UI + tick.
+    if crate::block::furnace::is_furnace_like(target_id) {
         return RmbAction::OpenFurnace;
     }
     if target_id == CHEST_ID {
@@ -352,6 +353,21 @@ mod tests {
     fn furnace_target_opens_regardless_of_held() {
         assert_eq!(
             classify_rmb_action(true, FURNACE_ID, Some(50), 3, false, true),
+            RmbAction::OpenFurnace,
+        );
+    }
+
+    /// W163: smoker + blast furnace are furnace-family and route to
+    /// the same OpenFurnace action (were dead blocks before).
+    #[test]
+    fn smoker_and_blast_furnace_open_furnace() {
+        use crate::block::{BLAST_FURNACE_ID, SMOKER_ID};
+        assert_eq!(
+            classify_rmb_action(true, SMOKER_ID, None, 0, false, true),
+            RmbAction::OpenFurnace,
+        );
+        assert_eq!(
+            classify_rmb_action(true, BLAST_FURNACE_ID, None, 0, false, true),
             RmbAction::OpenFurnace,
         );
     }

@@ -334,8 +334,7 @@ mod tests {
     /// in-flight swing, then it decays to 0 over EQUIP_DUR.
     #[test]
     fn equip_raises_on_item_change_then_decays() {
-        let mut a = HeldAnim::default();
-        a.swing_progress = 0.5; // pretend mid-swing
+        let mut a = HeldAnim { swing_progress: 0.5, ..Default::default() };
         tick_held_anim(&mut a, 0.0, false, false, 42);
         assert_eq!(a.equip_progress, 1.0, "switch to id 42 raises equip");
         assert_eq!(a.swing_progress, 0.0, "switch cancels the swing");
@@ -352,8 +351,9 @@ mod tests {
     /// LMB stays held (continuous mining / attacking).
     #[test]
     fn lmb_held_swings_continuously() {
-        let mut a = HeldAnim::default();
-        a.last_held_id = 1; // no equip lockout
+        // last_held_id = 1 so the first tick sees no item change (no
+        // equip lockout).
+        let mut a = HeldAnim { last_held_id: 1, ..Default::default() };
         // First tick with LMB down kicks off a swing.
         tick_held_anim(&mut a, 0.0, true, false, 1);
         assert!(a.swing_progress > 0.0, "LMB held starts a swing");
@@ -369,8 +369,7 @@ mod tests {
     /// released and pressed again.
     #[test]
     fn rmb_swings_once_per_press() {
-        let mut a = HeldAnim::default();
-        a.last_held_id = 1;
+        let mut a = HeldAnim { last_held_id: 1, ..Default::default() };
         // Rising edge -> swing.
         tick_held_anim(&mut a, 0.0, false, true, 1);
         assert!(a.swing_progress > 0.0, "RMB press starts a swing");

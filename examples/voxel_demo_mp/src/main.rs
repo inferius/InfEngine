@@ -39,7 +39,7 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID,
-    BlockCategory, CHEST_ID, FURNACE_ID, LAVA_ID,
+    BlockCategory, CHEST_ID, LAVA_ID,
     REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
     TILE_PX, TORCH_ID, TileSpec, atlas_uv_rect, axe_tier,
     block_category, block_is_liquid,

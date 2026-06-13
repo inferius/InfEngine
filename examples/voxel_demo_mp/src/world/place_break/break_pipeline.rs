@@ -32,7 +32,7 @@ pub(crate) fn apply_block_break(
 ) {
     use crate::net::NetRole;
     use crate::{
-        BlockId, CHEST_ID, EditMsg, FURNACE_ID, REDSTONE_TORCH_ID,
+        BlockId, CHEST_ID, EditMsg, REDSTONE_TORCH_ID,
         REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID, Voxel,
         block, block_material, block_required_tier, tool_tier,
     };
@@ -249,7 +249,8 @@ pub(crate) fn apply_block_break(
             vx.chest_lid_anim.remove(&voxel);
         }
         // Furnace break: drain 3 slots + drop the runtime entry.
-        if broken.0 == FURNACE_ID {
+        // W163: smoker + blast furnace share the furnace state.
+        if block::furnace::is_furnace_like(broken.0) {
             let drops = block::furnace::break_furnace(
                 &mut vx.furnaces,
                 &mut vx.furnace_runtimes,

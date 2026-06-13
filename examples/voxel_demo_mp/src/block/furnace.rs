@@ -35,6 +35,18 @@ use std::collections::HashMap;
 use crate::container::Container;
 use crate::smelting::{fuel_burn_ticks, smelt_recipe};
 
+/// W163: the furnace-family blocks that share the smelting container,
+/// tick, place/break glue and RMB-open UI - plain furnace, smoker and
+/// blast furnace. They were dead blocks (placeable, no interaction)
+/// before this; routing them through the proven furnace path makes
+/// them smelt. MC's 2x speed + recipe partition (smoker = food,
+/// blast = ores/metal) is a documented follow-up - for now all three
+/// run the standard furnace recipe set at furnace speed.
+pub(crate) fn is_furnace_like(id: u16) -> bool {
+    use crate::block::{BLAST_FURNACE_ID, FURNACE_ID, SMOKER_ID};
+    id == FURNACE_ID || id == SMOKER_ID || id == BLAST_FURNACE_ID
+}
+
 // GridAction <-> furnace mutation helpers live in the sibling
 // `furnace_actions` module so this file stays under the 500-LOC
 // soft cap. Re-export the public surface.

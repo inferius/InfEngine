@@ -33,7 +33,7 @@ pub(crate) fn apply_block_place(
 ) {
     use crate::net::NetRole;
     use crate::{
-        BlockId, CHEST_ID, EditMsg, FURNACE_ID, REDSTONE_TORCH_ID,
+        BlockId, CHEST_ID, EditMsg, REDSTONE_TORCH_ID,
         REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
         TORCH_ID, Voxel, block, block_is_placement_blocked,
         block_is_replaceable, block_material, body_aabb,
@@ -333,7 +333,8 @@ pub(crate) fn apply_block_place(
         }
     }
     // Furnace place: empty 3-slot container + zeroed runtime.
-    if block.0 == FURNACE_ID {
+    // W163: smoker + blast furnace share the furnace state.
+    if block::furnace::is_furnace_like(block.0) {
         block::furnace::place_furnace(
             &mut vx.furnaces,
             &mut vx.furnace_runtimes,
