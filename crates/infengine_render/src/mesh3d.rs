@@ -510,6 +510,12 @@ pub(crate) struct Mesh3DPass {
     pipeline_transparent: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
+    /// W157: a SECOND instance buffer for the first-person viewmodel
+    /// (held item). It lives in its own buffer so the held-item draw
+    /// can run in a separate depth-cleared pass without clobbering the
+    /// world-mesh instance data already uploaded this frame.
+    vm_instance_buffer: wgpu::Buffer,
+    vm_instance_capacity: u64,
     albedo_texture: wgpu::Texture,
     albedo_view: wgpu::TextureView,
     sampler: wgpu::Sampler,
@@ -558,6 +564,14 @@ impl Mesh3DPass {
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::mesh_instance_buf"),
             size: INITIAL_INSTANCE_CAPACITY * std::mem::size_of::<MeshInstance>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // W157: viewmodel instance buffer (held item; tiny - a couple
+        // of instances at most). Starts at 8 and grows like the main.
+        let vm_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("infengine_render::vm_instance_buf"),
+            size: 8 * std::mem::size_of::<MeshInstance>() as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -866,6 +880,8 @@ impl Mesh3DPass {
             pipeline_transparent,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
+            vm_instance_buffer,
+            vm_instance_capacity: 8,
             albedo_texture,
             albedo_view,
             sampler,
@@ -1039,6 +1055,58 @@ impl Mesh3DPass {
         batches
     }
 
+    /// W157: upload the first-person viewmodel instances into the
+    /// dedicated `vm_instance_buffer`. Same packing as [`upload`] but
+    /// kept separate so the held-item draw runs in its own
+    /// depth-cleared pass without overwriting the world instances.
+    pub fn upload_viewmodel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pairs: &[(MeshHandle, MeshInstance)],
+    ) -> Vec<MeshBatch> {
+        if pairs.is_empty() {
+            return Vec::new();
+        }
+        let mut sorted: Vec<(MeshHandle, MeshInstance)> = pairs.to_vec();
+        sorted.sort_by_key(|(h, _)| h.0);
+
+        let needed = sorted.len() as u64;
+        if needed > self.vm_instance_capacity {
+            let mut new_cap = self.vm_instance_capacity.max(1);
+            while new_cap < needed {
+                new_cap *= 2;
+            }
+            self.vm_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("infengine_render::vm_instance_buf"),
+                size: new_cap * std::mem::size_of::<MeshInstance>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.vm_instance_capacity = new_cap;
+        }
+
+        let instances: Vec<MeshInstance> = sorted.iter().map(|(_, inst)| *inst).collect();
+        queue.write_buffer(&self.vm_instance_buffer, 0, bytemuck::cast_slice(&instances));
+
+        let mut batches = Vec::new();
+        let mut start = 0u32;
+        let mut current = sorted[0].0;
+        for (i, (h, _)) in sorted.iter().enumerate() {
+            if *h != current {
+                batches.push(MeshBatch { handle: current, start, count: i as u32 - start });
+                start = i as u32;
+                current = *h;
+            }
+        }
+        batches.push(MeshBatch {
+            handle: current,
+            start,
+            count: sorted.len() as u32 - start,
+        });
+        batches
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'a>(
         &'a self,
@@ -1090,6 +1158,54 @@ impl Mesh3DPass {
             if !registry.is_transparent(batch.handle) {
                 continue;
             }
+            let Some(entry) = registry.get(batch.handle) else {
+                continue;
+            };
+            let bg: &wgpu::BindGroup = match mesh_textures.get(&batch.handle) {
+                Some(arc) => arc.as_ref(),
+                None => &self.texture_bind_group,
+            };
+            rpass.set_bind_group(1, bg, &[]);
+            rpass.set_vertex_buffer(0, entry.vertex_buffer.slice(..));
+            rpass.set_index_buffer(entry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            rpass.draw_indexed(
+                0..entry.index_count,
+                0,
+                batch.start..batch.start + batch.count,
+            );
+        }
+    }
+
+    /// W157: draw the first-person viewmodel batches from the
+    /// `vm_instance_buffer`. The caller runs this inside a render pass
+    /// that has just CLEARED depth (load color, clear depth) so the
+    /// held item always paints on top of the world - MC clears the
+    /// depth buffer before the hand for exactly this reason. Held
+    /// items are opaque/cutout (never the translucent water branch),
+    /// so only the opaque pipeline is used.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_viewmodel<'a>(
+        &'a self,
+        rpass: &mut wgpu::RenderPass<'a>,
+        registry: &'a Mesh3DRegistry,
+        batches: &[MeshBatch],
+        shadow_bg: &'a wgpu::BindGroup,
+        lights_bg: &'a wgpu::BindGroup,
+        tile_anims_bg: &'a wgpu::BindGroup,
+        mesh_textures: &'a std::collections::HashMap<
+            MeshHandle,
+            std::sync::Arc<wgpu::BindGroup>,
+        >,
+    ) {
+        if batches.is_empty() {
+            return;
+        }
+        rpass.set_bind_group(2, shadow_bg, &[]);
+        rpass.set_bind_group(3, lights_bg, &[]);
+        rpass.set_bind_group(4, tile_anims_bg, &[]);
+        rpass.set_vertex_buffer(1, self.vm_instance_buffer.slice(..));
+        rpass.set_pipeline(&self.pipeline);
+        for batch in batches {
             let Some(entry) = registry.get(batch.handle) else {
                 continue;
             };

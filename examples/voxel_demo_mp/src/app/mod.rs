@@ -945,6 +945,9 @@ pub(crate) struct Voxel {
     /// first inventory render so we don't pay the upload cost until
     /// the player actually opens the menu.
     pub(crate) egui_atlas: Option<egui::TextureHandle>,
+    /// W157: per-item cached first-person held-item mesh. Built lazily
+    /// the first time an item is held + reused thereafter.
+    pub(crate) held_mesh_cache: crate::render::held_item::HeldMeshCache,
     /// W12.6: cached egui handle for the MC main-menu panorama
     /// (one of the 6 cube faces from
     /// `assets/minecraft/textures/gui/title/background/panorama_*.png`).

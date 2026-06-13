@@ -25,3 +25,5 @@ pub mod minecarts;
 pub mod projectiles;
 // W153 - textured fire + nether portal meshes (frame-0 strip crops).
 pub mod effect_meshes;
+// W157 - first-person held-item viewmodel.
+pub mod held_item;

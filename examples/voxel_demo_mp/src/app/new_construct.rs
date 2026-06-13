@@ -160,6 +160,7 @@ impl Voxel {
             voxel_atlas: None,
             atlas_rgba: None,
             egui_atlas: None,
+            held_mesh_cache: std::collections::HashMap::new(),
             egui_panorama: None,
             panorama_scroll: 0.0,
             texture_dir: None,

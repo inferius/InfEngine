@@ -97,6 +97,9 @@ pub struct Renderer {
     debug_vertices: Vec<DebugVertex>,
     mesh3d: Mesh3DPass,
     mesh3d_queue: Vec<(MeshHandle, MeshInstance)>,
+    /// W157: first-person viewmodel (held item) draws. Rendered in a
+    /// dedicated depth-cleared pass on top of the world, under the HUD.
+    viewmodel_queue: Vec<(MeshHandle, MeshInstance)>,
     meshes: Mesh3DRegistry,
     cube_handle: MeshHandle,
     depth_view: wgpu::TextureView,
@@ -413,6 +416,7 @@ impl Renderer {
             debug_vertices: Vec::new(),
             mesh3d,
             mesh3d_queue: Vec::new(),
+            viewmodel_queue: Vec::new(),
             meshes,
             cube_handle,
             depth_view,
@@ -504,6 +508,24 @@ impl Renderer {
     ) {
         let instance = MeshInstance::new(model, color).with_material(metallic, roughness);
         self.mesh3d_queue.push((handle, instance));
+    }
+
+    /// W157: queue a mesh as a FIRST-PERSON VIEWMODEL (held item). It
+    /// renders in a dedicated pass that clears depth first, so it always
+    /// paints on top of the world (never clipping into nearby blocks) -
+    /// exactly how MC draws the hand. `model` is a camera-relative
+    /// transform (build it from the camera basis). Drawn under the 2D
+    /// HUD so the hotbar / crosshair stay on top.
+    pub fn draw_mesh_viewmodel(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+    ) {
+        let instance = MeshInstance::new(model, color).with_material(metallic, roughness);
+        self.viewmodel_queue.push((handle, instance));
     }
 
     /// Same as [`Renderer::draw_mesh_pbr`] but tags the instance as a
@@ -1134,6 +1156,10 @@ impl Renderer {
         let mesh_batches = self
             .mesh3d
             .upload(&self.device, &self.queue, &self.mesh3d_queue);
+        // W157: pack the held-item viewmodel into its own buffer.
+        let vm_batches = self
+            .mesh3d
+            .upload_viewmodel(&self.device, &self.queue, &self.viewmodel_queue);
         self.debug3d
             .upload(&self.device, &self.queue, &self.debug3d_vertices);
         // Upload the per-frame point-light array.
@@ -1388,6 +1414,47 @@ impl Renderer {
             self.particle_pass.draw(&mut ppass, particle_count);
         }
 
+        // W157: first-person viewmodel (held item) pass. Loads the
+        // existing colour but CLEARS depth, so the held item paints on
+        // top of the whole world and never clips into a nearby block -
+        // the same depth-clear MC does before rendering the hand. Runs
+        // after the world + particles, before the 2D HUD pass below so
+        // the hotbar / crosshair overlay the item.
+        if !vm_batches.is_empty() {
+            let mut vpass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("infengine_render::viewmodel_pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            vpass.set_bind_group(0, &self.camera_3d_resource.bind_group, &[]);
+            self.mesh3d.draw_viewmodel(
+                &mut vpass,
+                &self.meshes,
+                &vm_batches,
+                &self.shadow.sample_bg,
+                &self.lights.bind_group,
+                &self.tile_anims.bind_group,
+                &self.mesh_albedos,
+            );
+        }
+
         {
             // Clear-or-load the color attachment: if the 3D pass ran it
             // already cleared and populated the surface, otherwise this
@@ -1432,6 +1499,7 @@ impl Renderer {
         self.sprite_queue.clear();
         self.debug_vertices.clear();
         self.mesh3d_queue.clear();
+        self.viewmodel_queue.clear();
         self.debug3d_vertices.clear();
         self.light_queue.clear();
         self.particle_instances.clear();
