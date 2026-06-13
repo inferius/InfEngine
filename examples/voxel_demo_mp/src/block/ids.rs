@@ -487,6 +487,8 @@ pub(crate) const COPPER_WALL_TORCH_ID: u16 = 352;
 #[allow(dead_code)] pub(crate) const LECTERN_ID: u16 = 560;
 #[allow(dead_code)] pub(crate) const SMOKER_ID: u16 = 561;
 #[allow(dead_code)] pub(crate) const BLAST_FURNACE_ID: u16 = 562;
+/// W169: barrel - a 27-slot container (reuses the chest store + UI).
+pub(crate) const BARREL_ID: u16 = 749;
 #[allow(dead_code)] pub(crate) const GRINDSTONE_ID: u16 = 563;
 #[allow(dead_code)] pub(crate) const STONECUTTER_ID: u16 = 564;
 #[allow(dead_code)] pub(crate) const LOOM_ID: u16 = 565;

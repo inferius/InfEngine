@@ -211,7 +211,8 @@ pub fn classify_rmb_action(
     if crate::block::furnace::is_furnace_like(target_id) {
         return RmbAction::OpenFurnace;
     }
-    if target_id == CHEST_ID {
+    // W169: barrel reuses the chest container store + UI.
+    if target_id == CHEST_ID || target_id == crate::block::BARREL_ID {
         return RmbAction::OpenChest;
     }
     // W50.3: crafting table opens the 3x3 grid UI (client-side

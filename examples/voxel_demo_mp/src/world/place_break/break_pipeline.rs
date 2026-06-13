@@ -246,7 +246,8 @@ pub(crate) fn apply_block_break(
             }
         }
         // Chest break: drain contents as drops, drop the container.
-        if broken.0 == CHEST_ID
+        // W169: barrel shares the chest store.
+        if (broken.0 == CHEST_ID || broken.0 == crate::block::BARREL_ID)
             && let Some(chest_inv) = vx.chests.remove(&voxel)
         {
             for id in block::chest::drain_drops(&chest_inv) {

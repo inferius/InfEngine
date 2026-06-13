@@ -2368,6 +2368,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 746, name: "green_candle", display: Some("Green Candle"), places: Some(746), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 747, name: "red_candle", display: Some("Red Candle"), places: Some(747), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 748, name: "black_candle", display: Some("Black Candle"), places: Some(748), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W169 - barrel (container, was missing).
+    ItemType { id: 749, name: "barrel", display: Some("Barrel"), places: Some(749), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
