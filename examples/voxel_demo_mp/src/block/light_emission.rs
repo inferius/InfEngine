@@ -232,6 +232,14 @@ pub(crate) fn emission_by_mc_name(name: &str) -> u8 {
 /// the engine-id mapping return 0 (non-emitter). Replaces the
 /// hand-written match in `lighting::block_emission`.
 pub(crate) fn light_emission_for_id(id: u16) -> u8 {
+    // W168: a (lit) candle emits light 3 in MC; checked by name so all
+    // 17 colours share it without 17 table rows (keeps the emission
+    // checksum stable). 1-4 count scaling (3/6/9/12) is a follow-up.
+    if crate::block::block_type(id)
+        .is_some_and(|b| b.name == "candle" || b.name.ends_with("_candle"))
+    {
+        return 3;
+    }
     match engine_id_to_mc_name(id) {
         Some(name) => emission_by_mc_name(name),
         None => 0,

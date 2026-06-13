@@ -300,6 +300,7 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/slab" | "slab" => Some(build_slab_bottom()),
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
         "block/carpet" | "carpet" => Some(build_carpet()),
+        "block/candle" | "candle" => Some(build_candle()),
         "block/fence_post" | "fence_post" => Some(build_fence_post()),
         "block/door_lower" | "door_lower" => Some(build_door_lower()),
         "block/door_upper" | "door_upper" => Some(build_door_upper()),
@@ -346,6 +347,12 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         .is_some_and(|b| b.name == "carpet" || b.name.ends_with("_carpet"))
     {
         return Some("block/carpet");
+    }
+    // W168: any candle colour renders as a thin pillar.
+    if crate::block::block_type(id)
+        .is_some_and(|b| b.name == "candle" || b.name.ends_with("_candle"))
+    {
+        return Some("block/candle");
     }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -734,6 +741,33 @@ pub(crate) fn build_carpet() -> BlockModel {
         }],
         textures: HashMap::new(),
         ambient_occlusion: true,
+    }
+}
+
+/// W168: candle - a single 2x2x6 pillar on the floor. Cite MC
+/// `template_candle.json` single-candle element [7,0,7]..[9,6,9].
+/// All faces sample the block's own candle texture (#side/#top/#bottom
+/// resolve per colour). No cullface - it's a thin floating pillar.
+/// (1-4 candle count + the flame geometry are follow-ups; the lit
+/// glow comes from the light-emission table.)
+pub(crate) fn build_candle() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [7.0, 0.0, 7.0],
+            to: [9.0, 6.0, 9.0],
+            rotation: None,
+            shade: false,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", None)),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+                north: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#side", None)),
+                south: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#side", None)),
+                west: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#side", None)),
+                east: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#side", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: false,
     }
 }
 
