@@ -39,6 +39,58 @@ pub(crate) struct HeldMesh {
 /// renderable texture (so we don't retry the disk / atlas lookup).
 pub(crate) type HeldMeshCache = HashMap<u16, Option<HeldMesh>>;
 
+/// First-person swing + equip animation state. Ticked once per frame
+/// from the input state; the two progress values drive the held-item
+/// transform.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HeldAnim {
+    /// 0 = idle, otherwise 0..1 sweeping through one swing arc.
+    pub swing_progress: f32,
+    /// 1 = item just equipped (raising from below), decays to 0.
+    pub equip_progress: f32,
+    /// Last held item id - a change retriggers the equip raise.
+    pub last_held_id: u16,
+    /// Previous RMB-held state, for rising-edge "use" detection.
+    pub prev_rmb: bool,
+}
+
+/// One swing lasts ~6 MC ticks (0.3 s); equip raise is quicker.
+const SWING_DUR: f32 = 0.3;
+const EQUIP_DUR: f32 = 0.15;
+
+/// Advance the swing + equip clocks and (re)trigger a swing. Call once
+/// per frame regardless of camera mode so the state stays coherent.
+/// `lmb_held` swings continuously (mining / attacking); a rising RMB
+/// edge swings once (use / place). New swings are suppressed during
+/// the equip raise so a fresh item settles before it can swing.
+pub(crate) fn tick_held_anim(
+    a: &mut HeldAnim,
+    dt: f32,
+    lmb_held: bool,
+    rmb_held: bool,
+    held_id: u16,
+) {
+    if held_id != a.last_held_id {
+        a.equip_progress = 1.0;
+        a.last_held_id = held_id;
+        a.swing_progress = 0.0;
+    }
+    if a.equip_progress > 0.0 {
+        a.equip_progress = (a.equip_progress - dt / EQUIP_DUR).max(0.0);
+    }
+    if a.swing_progress > 0.0 {
+        a.swing_progress += dt / SWING_DUR;
+        if a.swing_progress >= 1.0 {
+            a.swing_progress = 0.0;
+        }
+    }
+    let rmb_edge = rmb_held && !a.prev_rmb;
+    a.prev_rmb = rmb_held;
+    if a.swing_progress == 0.0 && a.equip_progress < 0.5 && (lmb_held || rmb_edge) {
+        a.swing_progress = 1e-4;
+    }
+}
+
 /// Build (or fetch from cache) the held-item mesh for `item_id`, then
 /// queue it as a first-person viewmodel. No-op when the item resolves
 /// to no renderable texture (cached as `None` so we try once only).
@@ -51,6 +103,8 @@ pub(crate) fn draw_held_item(
     item_id: u16,
     cam_pos: Vec3,
     cam_target: Vec3,
+    swing: f32,
+    equip: f32,
 ) {
     let held = match cache.get(&item_id) {
         Some(h) => *h,
@@ -84,30 +138,47 @@ pub(crate) fn draw_held_item(
         cam_pos.extend(1.0),
     );
 
-    let model = cam_basis * held_local_transform(held.is_block);
-    // Slightly emissive-free, matte: the viewmodel reads its tint as
-    // plain albedo. Held items pick up the scene lighting roughly via
-    // their camera-anchored world position.
+    let model = cam_basis * held_local_transform(held.is_block, swing, equip);
+    // Matte: the viewmodel reads its tint as plain albedo. Held items
+    // pick up the scene lighting roughly via their camera world pos.
     renderer.draw_mesh_viewmodel(held.mesh, model.to_cols_array(), [1.0; 4], 0.0, 0.85);
 }
 
-/// Fixed camera-space pose placing the item in the lower-right of the
-/// view. Approximates MC's `firstperson_righthand` display transform
-/// (blocks: yaw 45 deg, ~0.4 scale; flat items: a tilted tool grip).
-/// Hand-tuned pending the full MC arm-base port + the W157.3 swing.
-fn held_local_transform(is_block: bool) -> Mat4 {
+/// Camera-space pose placing the item in the lower-right of the view,
+/// with the swing + equip animation layered on. Approximates MC's
+/// `firstperson_righthand` display transform (blocks: yaw 45 deg,
+/// ~0.4 scale; flat items: a tilted tool grip), hand-tuned to sit on
+/// screen with the shared camera (MC's raw arm offsets assume a wider
+/// hand projection). The swing uses MC's easing curves
+/// (`sin(swing^2 * PI)` jab + `sin(sqrt(swing) * PI)` arc).
+fn held_local_transform(is_block: bool, swing: f32, equip: f32) -> Mat4 {
     use std::f32::consts::PI;
-    if is_block {
-        Mat4::from_translation(Vec3::new(0.38, -0.34, 0.52))
-            * Mat4::from_rotation_y(PI * 0.25)
-            * Mat4::from_rotation_x(PI * 0.06)
-            * Mat4::from_scale(Vec3::splat(0.42))
+    let (base, display) = if is_block {
+        (
+            Vec3::new(0.38, -0.34, 0.52),
+            Mat4::from_rotation_y(PI * 0.25)
+                * Mat4::from_rotation_x(PI * 0.06)
+                * Mat4::from_scale(Vec3::splat(0.42)),
+        )
     } else {
-        Mat4::from_translation(Vec3::new(0.42, -0.36, 0.52))
-            * Mat4::from_rotation_z(PI * 0.13)
-            * Mat4::from_rotation_y(-PI * 0.10)
-            * Mat4::from_scale(Vec3::splat(0.62))
-    }
+        (
+            Vec3::new(0.42, -0.36, 0.52),
+            Mat4::from_rotation_z(PI * 0.13)
+                * Mat4::from_rotation_y(-PI * 0.10)
+                * Mat4::from_scale(Vec3::splat(0.62)),
+        )
+    };
+    // Equip raise: a freshly-selected item rises from below + back.
+    let arm = Mat4::from_translation(base + Vec3::new(0.0, -equip * 0.5, equip * 0.12));
+    // Swing arc (identity at swing = 0): the item dips down, jabs
+    // forward and pitches over, then eases back - MC's first-person
+    // swing in spirit (exact axis-for-axis port pending visual tuning).
+    let f = (swing * swing * PI).sin();
+    let f1 = (swing.max(0.0).sqrt() * PI).sin();
+    let swing_xform = Mat4::from_translation(Vec3::new(0.0, -f1 * 0.18, f * 0.12))
+        * Mat4::from_rotation_x(-f1 * 1.3)
+        * Mat4::from_rotation_z(f1 * 0.35);
+    arm * swing_xform * display
 }
 
 // ----------------------------------------------------------------
@@ -253,4 +324,72 @@ fn block_cube_geometry() -> (Vec<MeshVertex>, Vec<u32>) {
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     (verts, indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Switching items raises the equip animation to 1 and clears any
+    /// in-flight swing, then it decays to 0 over EQUIP_DUR.
+    #[test]
+    fn equip_raises_on_item_change_then_decays() {
+        let mut a = HeldAnim::default();
+        a.swing_progress = 0.5; // pretend mid-swing
+        tick_held_anim(&mut a, 0.0, false, false, 42);
+        assert_eq!(a.equip_progress, 1.0, "switch to id 42 raises equip");
+        assert_eq!(a.swing_progress, 0.0, "switch cancels the swing");
+        assert_eq!(a.last_held_id, 42);
+        // Decay to zero.
+        for _ in 0..100 {
+            tick_held_anim(&mut a, 0.05, false, false, 42);
+        }
+        assert_eq!(a.equip_progress, 0.0);
+    }
+
+    /// Holding LMB starts a swing that advances to completion (back to
+    /// idle 0) over roughly SWING_DUR, then immediately restarts while
+    /// LMB stays held (continuous mining / attacking).
+    #[test]
+    fn lmb_held_swings_continuously() {
+        let mut a = HeldAnim::default();
+        a.last_held_id = 1; // no equip lockout
+        // First tick with LMB down kicks off a swing.
+        tick_held_anim(&mut a, 0.0, true, false, 1);
+        assert!(a.swing_progress > 0.0, "LMB held starts a swing");
+        // Advance most of the way without finishing.
+        tick_held_anim(&mut a, SWING_DUR * 0.5, true, false, 1);
+        assert!(a.swing_progress > 0.0 && a.swing_progress < 1.0);
+        // Overshoot the end: it wraps to 0 then restarts (LMB still held).
+        tick_held_anim(&mut a, SWING_DUR, true, false, 1);
+        assert!(a.swing_progress > 0.0, "swing restarts while LMB held");
+    }
+
+    /// A held RMB swings exactly once - no retrigger until it is
+    /// released and pressed again.
+    #[test]
+    fn rmb_swings_once_per_press() {
+        let mut a = HeldAnim::default();
+        a.last_held_id = 1;
+        // Rising edge -> swing.
+        tick_held_anim(&mut a, 0.0, false, true, 1);
+        assert!(a.swing_progress > 0.0, "RMB press starts a swing");
+        // Finish the swing while RMB stays held: must NOT retrigger.
+        tick_held_anim(&mut a, SWING_DUR + 0.01, false, true, 1);
+        assert_eq!(a.swing_progress, 0.0, "held RMB does not retrigger");
+        // Release + press again -> new swing.
+        tick_held_anim(&mut a, 0.0, false, false, 1);
+        tick_held_anim(&mut a, 0.0, false, true, 1);
+        assert!(a.swing_progress > 0.0, "re-press swings again");
+    }
+
+    /// No new swing may start while the equip raise is still prominent.
+    #[test]
+    fn no_swing_during_equip_raise() {
+        let mut a = HeldAnim::default();
+        // Equip just triggered (full raise); LMB down should be ignored.
+        tick_held_anim(&mut a, 0.0, true, false, 7);
+        assert_eq!(a.equip_progress, 1.0);
+        assert_eq!(a.swing_progress, 0.0, "swing suppressed mid-equip");
+    }
 }

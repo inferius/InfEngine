@@ -1725,28 +1725,41 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 }
             }
         }
-        // W157: first-person held-item viewmodel. Only in first-person
-        // view (MC hides the hand in third person); reads the live
-        // camera so the item rides with pitch + head-bob.
-        if vx.camera_mode == 0
-            && let Some((held, _)) = vx.inventory[vx.selected_slot]
-        {
-            let cam = renderer.camera_3d();
-            let (cam_pos, cam_tgt) = (cam.position, cam.target);
-            let tex_root = if vx.resource_pack.is_placeholder() {
-                None
-            } else {
-                Some(vx.resource_pack.source.join("textures"))
-            };
-            crate::render::held_item::draw_held_item(
-                renderer,
-                &mut vx.held_mesh_cache,
-                vx.atlas_rgba.as_ref(),
-                tex_root.as_deref(),
+        // W157: first-person held-item viewmodel. Advance the swing +
+        // equip animation every frame (so it stays coherent across
+        // camera modes), then draw the item only in first-person view
+        // (MC hides the hand in third person). Reads the live camera so
+        // the item rides with pitch + head-bob.
+        if let Some((held, _)) = vx.inventory[vx.selected_slot] {
+            crate::render::held_item::tick_held_anim(
+                &mut vx.held_anim,
+                dt,
+                vx.lmb_held,
+                vx.rmb_held,
                 held.0,
-                cam_pos,
-                cam_tgt,
             );
+            if vx.camera_mode == 0 {
+                let cam = renderer.camera_3d();
+                let (cam_pos, cam_tgt) = (cam.position, cam.target);
+                let (swing, equip) =
+                    (vx.held_anim.swing_progress, vx.held_anim.equip_progress);
+                let tex_root = if vx.resource_pack.is_placeholder() {
+                    None
+                } else {
+                    Some(vx.resource_pack.source.join("textures"))
+                };
+                crate::render::held_item::draw_held_item(
+                    renderer,
+                    &mut vx.held_mesh_cache,
+                    vx.atlas_rgba.as_ref(),
+                    tex_root.as_deref(),
+                    held.0,
+                    cam_pos,
+                    cam_tgt,
+                    swing,
+                    equip,
+                );
+            }
         }
         // W103: everything from frame start to here is the per-frame sim cost
         // (input, ticks, streaming, lighting, draw-queue build) — the part NOT

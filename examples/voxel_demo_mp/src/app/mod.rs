@@ -948,6 +948,8 @@ pub(crate) struct Voxel {
     /// W157: per-item cached first-person held-item mesh. Built lazily
     /// the first time an item is held + reused thereafter.
     pub(crate) held_mesh_cache: crate::render::held_item::HeldMeshCache,
+    /// W157.2: first-person swing + equip animation clocks.
+    pub(crate) held_anim: crate::render::held_item::HeldAnim,
     /// W12.6: cached egui handle for the MC main-menu panorama
     /// (one of the 6 cube faces from
     /// `assets/minecraft/textures/gui/title/background/panorama_*.png`).

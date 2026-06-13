@@ -161,6 +161,7 @@ impl Voxel {
             atlas_rgba: None,
             egui_atlas: None,
             held_mesh_cache: std::collections::HashMap::new(),
+            held_anim: Default::default(),
             egui_panorama: None,
             panorama_scroll: 0.0,
             texture_dir: None,
