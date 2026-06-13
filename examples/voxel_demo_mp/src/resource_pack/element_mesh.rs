@@ -153,6 +153,84 @@ pub(crate) fn emit_trapdoor(
     }
 }
 
+/// W167 - emit one axis-aligned cuboid (all 6 faces, full tile) in
+/// world coords. Shared by the fence-gate parts.
+fn emit_cuboid(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    lo: [f32; 3],
+    hi: [f32; 3],
+    tile: [f32; 4],
+    light: [f32; 2],
+) {
+    let c = |xh: bool, yh: bool, zh: bool| -> [f32; 3] {
+        [
+            if xh { hi[0] } else { lo[0] },
+            if yh { hi[1] } else { lo[1] },
+            if zh { hi[2] } else { lo[2] },
+        ]
+    };
+    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
+        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
+        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
+        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
+    ];
+    for (normal, corners) in faces {
+        infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
+    }
+}
+
+/// W167 - fence gate. Closed = two side posts + two horizontal rails
+/// spanning the opening; open = posts only (a gap to walk through).
+/// `facing` is the door-style horizontal facing (bit 0 picks the
+/// span axis); the MC swing-aside animation is a follow-up.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_fence_gate(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    facing: u8,
+    open: bool,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let tile = pack
+        .block_face_ref(block_id, super::BlockFace::Top)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(infengine_voxel::BlockId(block_id), [0, 1, 0])
+        });
+    let o = origin;
+    // facing 1/3 (N/S) -> the gate spans X (posts at the X ends);
+    // facing 0/2 (E/W) -> spans Z. The opposite axis stays a thin
+    // centre slab (7..9 px).
+    let span_x = facing & 1 == 1;
+    let mut bx = |x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32| {
+        let lo = [o.x + x0 / 16.0, o.y + y0 / 16.0, o.z + z0 / 16.0];
+        let hi = [o.x + x1 / 16.0, o.y + y1 / 16.0, o.z + z1 / 16.0];
+        emit_cuboid(verts, idxs, lo, hi, tile, light);
+    };
+    if span_x {
+        bx(0.0, 0.0, 7.0, 2.0, 16.0, 9.0);
+        bx(14.0, 0.0, 7.0, 16.0, 16.0, 9.0);
+        if !open {
+            bx(2.0, 6.0, 7.0, 14.0, 9.0, 9.0);
+            bx(2.0, 12.0, 7.0, 14.0, 15.0, 9.0);
+        }
+    } else {
+        bx(7.0, 0.0, 0.0, 9.0, 16.0, 2.0);
+        bx(7.0, 0.0, 14.0, 9.0, 16.0, 16.0);
+        if !open {
+            bx(7.0, 6.0, 2.0, 9.0, 9.0, 14.0);
+            bx(7.0, 12.0, 2.0, 9.0, 15.0, 14.0);
+        }
+    }
+}
+
 /// W127 - rail quad emitter. A rail is a flat 16x16 quad 1 px above
 /// the floor (plus a mirrored underside so it reads from below),
 /// oriented by the derived `RailShape` code:

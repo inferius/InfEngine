@@ -173,6 +173,10 @@ pub(crate) fn voxel_is_solid_with_doors(
     if crate::block::door::is_trapdoor_block(b.0) && door_open.contains(&v) {
         return false;
     }
+    // W167: open fence gate passes; closed = solid barrier.
+    if crate::block::door::is_fence_gate_block(b.0) && door_open.contains(&v) {
+        return false;
+    }
     true
 }
 

@@ -402,6 +402,23 @@ pub(crate) fn mesh_chunk_in_worker(
             );
             return true;
         }
+        // W167: fence gate - closed = two posts + two rails across the
+        // facing axis; open = posts only (a gap to walk through).
+        if crate::block::door::is_fence_gate_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let (facing, open) =
+                doors.get(&wp).copied().unwrap_or((0, false));
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_fence_gate(
+                verts, idxs, voxel_origin, block.0, facing, open, pack,
+                light,
+            );
+            return true;
+        }
         // W127: rails render as a flat quad per the derived shape.
         if crate::block::rail::is_rail_block(block.0) {
             let wp = [

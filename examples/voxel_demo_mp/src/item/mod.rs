@@ -2343,6 +2343,13 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 723, name: "dark_oak_trapdoor", display: Some("Dark Oak Trapdoor"), places: Some(723), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 724, name: "mangrove_trapdoor", display: Some("Mangrove Trapdoor"), places: Some(724), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 725, name: "cherry_trapdoor", display: Some("Cherry Trapdoor"), places: Some(725), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W167 - fence gates (were missing).
+    ItemType { id: 726, name: "oak_fence_gate", display: Some("Oak Fence Gate"), places: Some(726), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 727, name: "birch_fence_gate", display: Some("Birch Fence Gate"), places: Some(727), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 728, name: "spruce_fence_gate", display: Some("Spruce Fence Gate"), places: Some(728), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 729, name: "jungle_fence_gate", display: Some("Jungle Fence Gate"), places: Some(729), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 730, name: "acacia_fence_gate", display: Some("Acacia Fence Gate"), places: Some(730), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 731, name: "dark_oak_fence_gate", display: Some("Dark Oak Fence Gate"), places: Some(731), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W150: black terracotta + the 16 glazed terracottas.
     ItemType { id: 684, name: "black_terracotta", display: Some("Black Terracotta"), places: Some(684), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 685, name: "white_glazed_terracotta", display: Some("White Glazed Terracotta"), places: Some(685), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },

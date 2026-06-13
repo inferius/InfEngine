@@ -215,6 +215,8 @@ pub(crate) fn apply_block_place(
     // upper ids yet.
     if crate::block::door::is_door_block(placed_block.0)
         || crate::block::door::is_trapdoor_block(placed_block.0)
+        // W167: fence gates store facing too (door-style, horizontal).
+        || crate::block::door::is_fence_gate_block(placed_block.0)
     {
         // W125/W129: record the door OR trapdoor facing. Doors face
         // the way the player faces. W133: trapdoors follow the MC

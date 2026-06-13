@@ -90,6 +90,14 @@ pub(crate) fn apply_block_break(
             vx.door_open.remove(&voxel);
         }
     }
+    // W167: a broken fence gate / trapdoor drops its open + facing
+    // state so a fresh block at the same cell doesn't inherit it.
+    if crate::block::door::is_fence_gate_block(broken.0)
+        || crate::block::door::is_trapdoor_block(broken.0)
+    {
+        vx.door_open.remove(&voxel);
+        vx.door_facing.remove(&voxel);
+    }
     // W143: a broken rail drops its stored shape; neighbours keep
     // theirs (MC: removal never re-bends the rest of the line).
     if crate::block::rail::is_rail_block(broken.0) {

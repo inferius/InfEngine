@@ -226,6 +226,8 @@ pub fn classify_rmb_action(
     // W61.2: door / trapdoor toggles open state.
     if crate::block::door::is_door_block(target_id)
         || is_trapdoor_block(target_id)
+        // W167: fence gates toggle open/closed too.
+        || crate::block::door::is_fence_gate_block(target_id)
     {
         return RmbAction::ToggleDoor;
     }

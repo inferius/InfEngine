@@ -38,6 +38,13 @@ pub(crate) fn is_trapdoor_block(id: u16) -> bool {
     (548..=552).contains(&id) || (722..=725).contains(&id)
 }
 
+/// W167: true when `id` is a fence gate (726..=731). Fence gates share
+/// the door open-state set + facing + RMB toggle; closed = a solid
+/// barrier, open = walk-through.
+pub(crate) fn is_fence_gate_block(id: u16) -> bool {
+    (726..=731).contains(&id)
+}
+
 /// W125: per-door facing, keyed by the LOWER half voxel.
 /// 0 = +X (east), 1 = +Z (south), 2 = -X (west), 3 = -Z (north) -
 /// the horizontal direction the PLACER was looking.
@@ -234,7 +241,19 @@ mod tests {
         assert!(!is_trapdoor_block(547)); // fence below the range
         assert!(!is_trapdoor_block(553)); // gap after the first run
         assert!(!is_trapdoor_block(721)); // rabbit egg, just below
-        assert!(!is_trapdoor_block(726)); // just above the new run
+        assert!(!is_trapdoor_block(726)); // just above (a fence gate)
+    }
+
+    /// W167: fence gates are 726..=731 and are NOT trapdoors/doors.
+    #[test]
+    fn fence_gate_block_range() {
+        for id in 726..=731 {
+            assert!(is_fence_gate_block(id), "id {id} should be a fence gate");
+            assert!(!is_trapdoor_block(id));
+            assert!(!is_door_block(id));
+        }
+        assert!(!is_fence_gate_block(725)); // cherry trapdoor
+        assert!(!is_fence_gate_block(732));
     }
 
     #[test]
