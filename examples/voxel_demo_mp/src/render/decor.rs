@@ -253,8 +253,12 @@ pub(crate) fn draw(
             // sky - the two conditions whose absence caused the old W34
             // "invisible from above / weird from below" artefacts. Lava stays
             // fully opaque (MC parity).
+            // W179: water made more transparent + much less reflective
+            // per the user's MC comparison - the old 0.18 roughness read
+            // as a glossy mirror. MC water is see-through (you spot the
+            // bed + plants) with a soft, near-matte surface.
             let (alpha, rough) = match *liquid_id {
-                WATER_ID => (0.65_f32, 0.18_f32),
+                WATER_ID => (0.50_f32, 0.70_f32),
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };

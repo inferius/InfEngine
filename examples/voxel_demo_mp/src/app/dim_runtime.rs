@@ -302,18 +302,16 @@ impl Voxel {
         // up floating and the player fell. A dim-appropriate floor
         // under the frame footprint + a cleared 3-tall pocket makes
         // every arrival stand on solid ground like MC's platform.
-        {
-            let floor_block = if target_dim == dim::NETHER {
-                block::NETHERRACK_ID
-            } else {
-                1 // stone
-            };
-            let base_y = spawn[1];
+        let base_y = spawn[1];
+        if target_dim == dim::NETHER {
+            // MC builds a netherrack platform + cleared pocket in the
+            // NETHER (the arrival is over lava-sea / void). Overworld
+            // does NOT - see the else branch.
             for dx in -1..=2i32 {
                 for dz in -1..=2i32 {
                     let fp = [spawn[0] + dx, base_y - 1, spawn[2] + dz];
                     if self.world.get(fp).is_air() {
-                        self.world_set_tracked(fp, BlockId(floor_block));
+                        self.world_set_tracked(fp, BlockId(block::NETHERRACK_ID));
                         edits.push(fp);
                     }
                     // Clear a 3-tall standing pocket above the floor
@@ -328,6 +326,23 @@ impl Voxel {
                             edits.push(cp);
                         }
                     }
+                }
+            }
+        } else {
+            // W179: OVERWORLD return - NO stone platform. The old 4x4
+            // stone floor + carve walled the player in a stone box (the
+            // user's screenshot) because the overworld portal sits on
+            // real terrain, not over void. Just clear the player's own
+            // 1x1x3 standing column if it's buried so they don't
+            // suffocate; the W173 embedded-safety-net lifts them out if
+            // the spot is still solid.
+            for dy in 0..3 {
+                let cp = [spawn[0], base_y + dy, spawn[2]];
+                let here = self.world.get(cp).0;
+                let is_frame = here == block::OBSIDIAN_ID || here == block::PORTAL_ID;
+                if !is_frame && !self.world.get(cp).is_air() {
+                    self.world_set_tracked(cp, BlockId::AIR);
+                    edits.push(cp);
                 }
             }
         }
