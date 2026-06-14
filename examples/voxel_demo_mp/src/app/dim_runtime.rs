@@ -283,7 +283,7 @@ impl Voxel {
         // (void), clamped the frame to y<=100 mid-air and the
         // player fell out of the sky; the empty shells also
         // permanently shadowed worldgen for those coords.
-        self.ensure_generated_chunks_around(dest);
+        let arrival_region = self.ensure_generated_chunks_around(dest);
         // Ground-snap the portal: first open spot with a solid
         // floor, scanning down from the dest height band.
         let ground = Self::portal_ground_y(&self.world, dest);
@@ -331,23 +331,29 @@ impl Voxel {
                 }
             }
         }
-        // Broadcast portal edits so remote peers see the new
-        // frame appear. Guarded on the renderer being live so
-        // headless / test callers don't hit the rebuild path.
-        if !edits.is_empty() {
-            if self.renderer.is_some() {
-                // W156: rebuild around the GROUND-SNAPPED frame, not
-                // the raw scaled coord - they can sit chunks apart in
-                // Y, which left the freshly-built portal unmeshed
-                // ("the portal appeared inactive").
-                let mut coords = Self::affected_chunks(spawn);
-                for c in Self::affected_chunks(target) {
-                    if !coords.contains(&c) {
-                        coords.push(c);
-                    }
+        // W178: re-mesh the WHOLE arrival region, not just the portal
+        // frame's chunks. switch_dim dropped the meshes of restored
+        // chunks and the streamer only meshes chunks MISSING from the
+        // world - so the present-but-unmeshed arrival chunks rendered
+        // as a void (the floating portal + the chunk hole below/above
+        // it, and the "inactive" portal whose purple cells just weren't
+        // meshed). Rebuild every region chunk + the ground-snapped
+        // frame's chunks (W156: they can sit chunks apart in Y).
+        if self.renderer.is_some() {
+            let mut coords = arrival_region;
+            for c in Self::affected_chunks(spawn)
+                .into_iter()
+                .chain(Self::affected_chunks(target))
+            {
+                if !coords.contains(&c) {
+                    coords.push(c);
                 }
-                self.rebuild_chunks(&coords);
             }
+            self.rebuild_chunks(&coords);
+        }
+        // Broadcast portal edits so remote peers see the new frame
+        // appear.
+        if !edits.is_empty() {
             // W159: broadcast the ACTUAL block at each edited cell -
             // the edit set now includes the platform floor + cleared
             // air pocket, not just the portal/obsidian frame, so the
@@ -428,7 +434,15 @@ impl Voxel {
     /// synchronous path MUST do the same or the arrival zone's lava
     /// sea is invisible (unregistered cells render nothing, while
     /// the streamed chunks around it do - the user's lava pillars).
-    pub(crate) fn ensure_generated_chunks_around(&mut self, pos: [i32; 3]) {
+    /// W178: returns EVERY chunk coord in the 3x3 x vertical arrival
+    /// region (generated or pre-existing) so the caller can re-mesh
+    /// them all - the cross-dim arrival otherwise left present-but-
+    /// unmeshed chunks rendering as a void (the floating-portal +
+    /// chunk-hole the user saw).
+    pub(crate) fn ensure_generated_chunks_around(
+        &mut self,
+        pos: [i32; 3],
+    ) -> Vec<infengine_voxel::ChunkCoord> {
         let ctx = self.current_worldgen_ctx();
         let cs = infengine_voxel::CHUNK_SIZE as i32;
         let ccx = pos[0].div_euclid(cs);
@@ -438,10 +452,12 @@ impl Voxel {
         // scan + ceiling consistent whatever Y the player arrives.
         let vertical = crate::VERTICAL_CHUNKS;
         let mut any_liquid = false;
+        let mut region: Vec<infengine_voxel::ChunkCoord> = Vec::new();
         for dx in -1..=1 {
             for dz in -1..=1 {
                 for cy in 0..vertical.min(8) {
                     let c = [ccx + dx, cy, ccz + dz];
+                    region.push(c);
                     if self.world.chunk(c).is_some() {
                         continue;
                     }
@@ -481,6 +497,7 @@ impl Voxel {
         if any_liquid {
             self.liquid_mesh_dirty = true;
         }
+        region
     }
 
     /// W155: first Y (scanning down from the upper nether band)
