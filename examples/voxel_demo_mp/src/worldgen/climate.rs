@@ -89,9 +89,14 @@ pub(crate) fn climate_at(wx: f32, wz: f32, seed: u32) -> Climate {
     // Elevation rides a slightly higher frequency so coastlines
     // wrinkle inside biome regions, and humidity a slightly
     // lower one so swamps + jungles read as broad bands.
+    // W180: dropped elevation 0.014 -> 0.009 - it was the FASTEST
+    // channel, so biomes flipped (beach/swamp/forest) over short
+    // distances and read as speckled patches instead of MC's broad,
+    // coherent regions. Now elevation varies on the same slow scale
+    // as climate, so biomes form contiguous bands.
     let temperature = noise2(wx, wz, p_temp, 0.011).clamp(-1.0, 1.0);
     let humidity = noise2(wx, wz, p_hum, 0.008).clamp(-1.0, 1.0);
-    let elevation = noise2(wx, wz, p_elev, 0.014).clamp(-1.0, 1.0);
+    let elevation = noise2(wx, wz, p_elev, 0.009).clamp(-1.0, 1.0);
 
     Climate {
         temperature,

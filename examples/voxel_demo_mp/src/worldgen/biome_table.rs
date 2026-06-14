@@ -29,7 +29,10 @@ pub(crate) fn biome_from_climate(c: Climate) -> Biome {
     //    reads as Beach so coastlines look consistent across the
     //    climate space. (Below-sea cells become water in
     //    gen_realistic; Beach sits a hair above the waterline.)
-    if c.elevation < -0.55 {
+    // W180: raised -0.55 -> -0.78 - the old threshold fired on any
+    // minor elevation dip, scattering sand strips inland (the user's
+    // "weird patches"). Now only genuine coastal basins read as Beach.
+    if c.elevation < -0.78 {
         return Biome::Beach;
     }
     // 2) Mountains take over at high elevation. Cold high becomes
