@@ -47,6 +47,7 @@ pub(crate) mod dungeons;
 pub(crate) mod flowers;
 pub(crate) mod ground_cover;
 pub(crate) mod height;
+pub(crate) mod mcgen;
 pub(crate) mod natural;
 pub(crate) mod nether;
 #[cfg(test)]
