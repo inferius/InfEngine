@@ -125,9 +125,14 @@ pub(crate) fn snap_to_rail(
     let pa = cell_point(cart.cell, a);
     let pb = cell_point(cart.cell, b);
     cart.pos = pa.lerp(pb, cart.t.clamp(0.0, 1.0));
-    if cart.vel.abs() > 0.1 {
-        let d = (pb - pa) * cart.vel.signum();
-        cart.yaw = (-d.z).atan2(d.x);
+    // W177: align yaw to the rail axis ALWAYS, not only while moving.
+    // A freshly placed (stationary) cart kept its default yaw (0 =
+    // east), so it sat sideways on a north-south rail. Moving uses the
+    // travel direction (vel sign); parked aligns to the a->b chord.
+    let d = pb - pa;
+    if d.length_squared() > 1e-6 {
+        let dir = if cart.vel.abs() > 0.1 { d * cart.vel.signum() } else { d };
+        cart.yaw = (-dir.z).atan2(dir.x);
     }
 }
 
