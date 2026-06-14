@@ -98,7 +98,6 @@ pub(crate) fn tick_held_anim(
 pub(crate) fn draw_held_item(
     renderer: &mut Renderer,
     cache: &mut HeldMeshCache,
-    atlas: Option<&(u32, u32, Vec<u8>)>,
     tex_root: Option<&Path>,
     item_id: u16,
     cam_pos: Vec3,
@@ -109,7 +108,7 @@ pub(crate) fn draw_held_item(
     let held = match cache.get(&item_id) {
         Some(h) => *h,
         None => {
-            let built = build_held_mesh(renderer, atlas, tex_root, item_id);
+            let built = build_held_mesh(renderer, tex_root, item_id);
             cache.insert(item_id, built);
             built
         }
@@ -187,16 +186,19 @@ fn held_local_transform(is_block: bool, swing: f32, equip: f32) -> Mat4 {
 
 fn build_held_mesh(
     renderer: &mut Renderer,
-    atlas: Option<&(u32, u32, Vec<u8>)>,
     tex_root: Option<&Path>,
     item_id: u16,
 ) -> Option<HeldMesh> {
     let it = item_type(item_id)?;
+    let root = tex_root?;
     if let Some(block_id) = it.places {
-        // Block item: textured cube from the shared atlas tiles.
-        let (aw, _ah, rgba) = atlas?;
+        // Block item: a small textured cube. W176: composite the
+        // top/side/bottom face PNGs straight off disk - the earlier
+        // code cropped vx.atlas_rgba at (col,row)*TILE_PX, but that
+        // atlas is SHELF-PACKED by name (not a col/row grid), so the
+        // crop read garbage pixels = the "weird thing" the user saw.
         let bt = block_type(block_id)?;
-        let albedo = composite_block_albedo(*aw, rgba, bt);
+        let albedo = composite_block_albedo_from_disk(root, bt)?;
         let (verts, indices) = block_cube_geometry();
         let mesh = renderer.create_mesh("held_block", &verts, &indices);
         let a = renderer.make_mesh_albedo(TILE_PX, TILE_PX * 3, &albedo);
@@ -204,7 +206,7 @@ fn build_held_mesh(
         Some(HeldMesh { mesh, is_block: true })
     } else {
         // Flat item: load the real sprite PNG so the alpha survives.
-        let img = load_item_sprite(tex_root?, item_id)?;
+        let img = load_item_sprite(root, item_id)?;
         let (verts, indices) = flat_sprite_geometry();
         let mesh = renderer.create_mesh("held_item", &verts, &indices);
         let a = renderer.make_mesh_albedo(img.width(), img.height(), &img);
@@ -213,31 +215,45 @@ fn build_held_mesh(
     }
 }
 
-/// Composite a block's top / sides / bottom tiles into a vertical
-/// strip (`TILE_PX` wide, `3*TILE_PX` tall): row 0 = top, row 1 =
-/// sides, row 2 = bottom. The cube UVs index the matching third.
-fn composite_block_albedo(
-    aw: u32,
-    rgba: &[u8],
+/// W176: composite a block's top / sides / bottom face PNGs (loaded
+/// from `<root>/block/<file>`) into a vertical strip (`TILE_PX` wide,
+/// `3*TILE_PX` tall): row 0 = top, row 1 = sides, row 2 = bottom. The
+/// cube UVs index the matching third. Each face is nearest-resized to
+/// `TILE_PX`. Returns `None` if any face PNG is missing.
+fn composite_block_albedo_from_disk(
+    root: &Path,
     bt: &crate::block::BlockType,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
+    let load = |file: &str| -> Option<image::RgbaImage> {
+        let img = image::open(root.join("block").join(file)).ok()?.to_rgba8();
+        Some(if img.width() == TILE_PX && img.height() == TILE_PX {
+            img
+        } else {
+            image::imageops::resize(
+                &img,
+                TILE_PX,
+                TILE_PX,
+                image::imageops::FilterType::Nearest,
+            )
+        })
+    };
+    let faces = [
+        load(bt.top.files.first()?)?,
+        load(bt.sides.files.first()?)?,
+        load(bt.bottom.files.first()?)?,
+    ];
     let mut out = vec![0u8; (TILE_PX * TILE_PX * 3 * 4) as usize];
-    let faces = [&bt.top, &bt.sides, &bt.bottom];
-    for (fi, spec) in faces.iter().enumerate() {
-        let ox = spec.col * TILE_PX;
-        let oy = spec.row * TILE_PX;
+    for (fi, img) in faces.iter().enumerate() {
         for ty in 0..TILE_PX {
             for tx in 0..TILE_PX {
-                let sidx = (((oy + ty) * aw + ox + tx) * 4) as usize;
+                let src = img.get_pixel(tx, ty).0;
                 let dy = fi as u32 * TILE_PX + ty;
                 let didx = ((dy * TILE_PX + tx) * 4) as usize;
-                if sidx + 4 <= rgba.len() {
-                    out[didx..didx + 4].copy_from_slice(&rgba[sidx..sidx + 4]);
-                }
+                out[didx..didx + 4].copy_from_slice(&src);
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// Resolve + load the item sprite PNG. The filename comes from the

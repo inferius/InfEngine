@@ -1336,6 +1336,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // practice since `mine_target` matches every non-air
         // voxel).
         let target = vx.mine_target.or(vx.target);
+        // W176: snapshot panel-open BEFORE the renderer borrow (the
+        // held-item swing-gate needs it, and `any_panel_open()` borrows
+        // all of `vx` so it can't run while `renderer` is held).
+        let any_panel_open = vx.any_panel_open();
         let ui = vx.ui.as_mut();
         let Some(renderer) = vx.renderer.as_mut() else {
             return;
@@ -1757,11 +1761,16 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // (MC hides the hand in third person). Reads the live camera so
         // the item rides with pitch + head-bob.
         if let Some((held, _)) = vx.inventory[vx.selected_slot] {
+            // W176: don't swing the hand when a UI panel is open - a
+            // click in the inventory / chest / crafting grid is not an
+            // attack. (The mouse buttons are still "held" while the
+            // panel eats them.) `any_panel_open` was snapshot above the
+            // renderer borrow.
             crate::render::held_item::tick_held_anim(
                 &mut vx.held_anim,
                 dt,
-                vx.lmb_held,
-                vx.rmb_held,
+                vx.lmb_held && !any_panel_open,
+                vx.rmb_held && !any_panel_open,
                 held.0,
             );
             if vx.camera_mode == 0 {
@@ -1777,7 +1786,6 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 crate::render::held_item::draw_held_item(
                     renderer,
                     &mut vx.held_mesh_cache,
-                    vx.atlas_rgba.as_ref(),
                     tex_root.as_deref(),
                     held.0,
                     cam_pos,
