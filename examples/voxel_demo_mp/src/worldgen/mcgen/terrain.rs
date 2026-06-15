@@ -281,6 +281,65 @@ mod tests {
         }
     }
 
+    /// Evidence dump: terrain height profile + biome labels + water
+    /// coverage over a region, so the LOOK (rolling vs flat vs all-ocean,
+    /// biome spread) is decidable without the GUI. Run with
+    /// `cargo test dump_mc_terrain -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_mc_terrain() {
+        use std::collections::BTreeMap;
+        let ow = build_overworld(0);
+        let label = |b: Biome| match b {
+            Biome::Beach => "Bch",
+            Biome::Plains => "Pln",
+            Biome::Forest => "For",
+            Biome::Desert => "Des",
+            Biome::Taiga => "Tai",
+            Biome::Tundra => "Tun",
+            Biome::Jungle => "Jun",
+            Biome::Savanna => "Sav",
+            Biome::Swamp => "Swp",
+            Biome::Mountain => "Mtn",
+            Biome::SnowyMountain => "Snw",
+        };
+        // 1D transect: height + biome every 16 blocks for 1600 blocks.
+        println!("\n== MC terrain transect (seed 0, z=0, sea={}) ==", ow.sea_level);
+        for x in (0..1600).step_by(32) {
+            let h = surface_height(&ow, x, 0);
+            let b = ow.biome_at(x, 0);
+            let bar = "#".repeat(((h - 40).max(0) as usize / 2).min(60));
+            let wet = if h < ow.sea_level { "~" } else { " " };
+            println!("x{x:>4} h{h:>3}{wet} {} {bar}", label(b));
+        }
+        // Area stats: height range, water %, biome histogram.
+        let mut hmin = i32::MAX;
+        let mut hmax = i32::MIN;
+        let mut water = 0u32;
+        let mut total = 0u32;
+        let mut hist: BTreeMap<&str, u32> = BTreeMap::new();
+        for x in (-2000..2000).step_by(40) {
+            for z in (-2000..2000).step_by(40) {
+                let h = surface_height(&ow, x, z);
+                hmin = hmin.min(h);
+                hmax = hmax.max(h);
+                total += 1;
+                if h < ow.sea_level {
+                    water += 1;
+                }
+                *hist.entry(label(ow.biome_at(x, z))).or_default() += 1;
+            }
+        }
+        println!(
+            "\n== area 4000x4000: h [{hmin}..{hmax}], water {:.0}% ==",
+            100.0 * water as f32 / total as f32
+        );
+        for (b, n) in &hist {
+            println!("  {b}: {:.1}%", 100.0 * *n as f32 / total as f32);
+        }
+    }
+
     #[test]
     fn biome_field_is_varied_not_degenerate() {
         // The MC climate field must place a SPREAD of biomes, not collapse

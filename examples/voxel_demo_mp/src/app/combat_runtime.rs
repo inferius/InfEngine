@@ -146,6 +146,26 @@ impl Voxel {
                 }
             }
         }
+        // W186: no dry column in the streamed region - under MC worldgen
+        // the origin can sit in open ocean whose nearest shore is past
+        // both the spiral and the streamed chunks. Ask the generator for
+        // the nearest land (it reads no chunk data, so it sees terrain
+        // the in-world scan can't); continuous streaming fills those
+        // chunks in once the player is positioned. The in-world spiral
+        // stays primary so a normal land spawn keeps its cave/canopy
+        // rejection.
+        if dry.is_none() {
+            // Intermediate binding (not a collapsed let-chain) so the
+            // expensive search only runs on the ocean-origin path.
+            let land = crate::worldgen::chunk::find_land_spawn(&ctx);
+            if let Some((lx, lz, lh)) = land {
+                return Vec3::new(
+                    lx as f32 + 0.5,
+                    (lh + 1) as f32 + PLAYER_HEIGHT + 0.05,
+                    lz as f32 + 0.5,
+                );
+            }
+        }
         // Prefer the dry column; else the highest surface seen. Voxel
         // `sy` is solid with top at world y = sy + 1; the foot sits
         // there and `player_pos.y` is the eye/cap height, so it lands
