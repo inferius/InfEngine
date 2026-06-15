@@ -92,6 +92,11 @@ pub(crate) fn place_realistic_from_coord(
             // real terrain (Natural fills with natural_height, not
             // realistic_height).
             let ground = column_height(ctx, wx, wz);
+            // W188: never plant cactus on a submerged column - a desert
+            // seabed is still underwater. Cactus is a dry-land feature.
+            if ground <= crate::worldgen::climate::SEA_LEVEL {
+                continue;
+            }
             let height_voxels = 2 + ((h >> 4) % 2) as i32;
             for step in 1..=height_voxels {
                 let wy = ground + step;

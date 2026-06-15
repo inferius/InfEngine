@@ -73,22 +73,40 @@ fn overworld_for(seed: u32) -> Rc<Overworld> {
 }
 
 /// Topmost solid (`final_density > 0`) world-Y in the column at
-/// `(wx, wz)`. Coarse scan down from [`SCAN_TOP`] in `cellHeight`
-/// steps, then refine to the exact block. Returns `min_y` if the whole
-/// column reads open (deep ocean basins still get a bedrock floor +
-/// water from the fill pass).
+/// `(wx, wz)` that has real ground beneath it. Coarse scan down from
+/// [`SCAN_TOP`] in `cellHeight` steps, refine to the exact block, then
+/// reject thin floating crusts. Returns `min_y` if the whole column
+/// reads open (deep ocean basins still get a bedrock floor + water from
+/// the fill pass).
+///
+/// W188: the spike filter is load-bearing. Over open ocean the density
+/// hovers near zero, and sampling it at the noise-cell lattice turns
+/// stray slightly-positive cells into 1-2 block floating crusts. Taken
+/// as the surface, the heightmap fill grew them into sand pillars (the
+/// user's "underwater islands/cacti"). Requiring solid ground a few
+/// blocks below the candidate skips those crusts and finds the real
+/// seabed.
 fn surface_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
     let mut yc = SCAN_TOP;
     while yc > ow.min_y {
         if ow.density(wx, yc, wz) > 0.0 {
-            // Topmost solid is in (yc, yc + 8]; the corner above (yc+8)
-            // was open. Walk down from there for the exact block.
+            // Exact topmost solid in (yc, yc + 8].
+            let mut top = yc;
             for fy in (yc + 1..=yc + 8).rev() {
                 if ow.density(wx, fy, wz) > 0.0 {
-                    return fy;
+                    top = fy;
+                    break;
                 }
             }
-            return yc;
+            // Real surface = solid for at least 3 blocks down. A thinner
+            // crust is a near-zero-density artifact; drop below it and
+            // keep looking for the true ground.
+            let run = (1..=4).take_while(|&k| ow.density(wx, top - k, wz) > 0.0).count();
+            if run >= 3 {
+                return top;
+            }
+            yc = top - 4;
+            continue;
         }
         yc -= 8;
     }
@@ -184,104 +202,50 @@ pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     surface_height(&ow, wx, wz)
 }
 
-/// Trilinear interpolation of the chunk's density corner lattice at a
-/// local voxel. The lattice is `[5][3][5]` over `(x:0..16 by 4, y:0..16
-/// by 8, z:0..16 by 4)` - MC's `cellWidth=4 / cellHeight=8`.
-fn lattice_interp(d: &[[[f64; 5]; 3]; 5], lx: usize, ly: usize, lz: usize) -> f64 {
-    let (xi, fx) = (lx / 4, (lx % 4) as f64 / 4.0);
-    let (yj, fy) = (ly / 8, (ly % 8) as f64 / 8.0);
-    let (zk, fz) = (lz / 4, (lz % 4) as f64 / 4.0);
-    let c = |a: f64, b: f64, t: f64| a + (b - a) * t;
-    let x00 = c(d[xi][yj][zk], d[xi + 1][yj][zk], fx);
-    let x10 = c(d[xi][yj + 1][zk], d[xi + 1][yj + 1][zk], fx);
-    let x01 = c(d[xi][yj][zk + 1], d[xi + 1][yj][zk + 1], fx);
-    let x11 = c(d[xi][yj + 1][zk + 1], d[xi + 1][yj + 1][zk + 1], fx);
-    c(c(x00, x10, fy), c(x01, x11, fy), fz)
-}
-
-/// MC-profile chunk generator (W187): real 3D `final_density`, sampled
-/// on MC's cell-corner lattice + trilinearly interpolated, so the terrain
-/// has genuine overhangs / cliffs and density-native caves (no separate
-/// cave carver). Surface, water, strata + decoration reuse the proven
-/// Natural pipeline.
+/// MC-profile chunk generator: per-column surface height from the real
+/// MC `final_density`, then the proven Natural surface / water / strata
+/// / cave / decoration pipeline below it.
 ///
-/// Per column we walk top-down: the first solid cell reached from open
-/// sky is the surface (biome surface block), the next few are dirt, the
-/// rest stone/ore. Open cells are ocean water while still sky-connected
-/// and below sea level, otherwise air - so caves stay air (not flooded)
-/// and cave floors stay stone (no grass underground). The cached
-/// heightmap `h` is only a coarse "is the surface above or below this
-/// chunk" hint for where the top-down walk starts sky-connected.
+/// W188: reverted W187's per-voxel 3D solidity. Interpolating MC's
+/// near-zero ocean density at the noise-cell lattice spawned thin
+/// floating solid spires that the surface walk capped (+ grew cactus on)
+/// while the water beneath flowed into the hollow - the user's
+/// "underwater islands" plus a liquid-tick perf collapse. MC's overworld
+/// surface is essentially a heightmap anyway (overhangs are rare); a
+/// faithful 3D pass needs MC's aquifer system, deferred. The terrain
+/// SHAPE still comes from the real density (the spike-filtered topmost
+/// solid per column), so the world keeps its MC profile, and caves come
+/// from the engine carver as before.
 pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let origin = World::chunk_world_origin(coord);
-    let (oxi, oyi, ozi) = (origin.x as i32, origin.y as i32, origin.z as i32);
     let col = column_data_cached(&ow, coord[0], coord[2], seed);
 
-    // Density at the 5x3x5 cell corners; interpolated per voxel below.
-    let mut d = [[[0f64; 5]; 3]; 5];
-    for (xi, dx) in d.iter_mut().enumerate() {
-        for (yj, dy) in dx.iter_mut().enumerate() {
-            for (zk, dz) in dy.iter_mut().enumerate() {
-                *dz = ow.density(oxi + xi as i32 * 4, oyi + yj as i32 * 8, ozi + zk as i32 * 4);
-            }
-        }
-    }
-
-    let cs = CHUNK_SIZE as i32;
-    let top_y = oyi + cs - 1;
-    let mut blocks = [[[BlockId::AIR; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE];
-    for lx in 0..CHUNK_SIZE {
-        for lz in 0..CHUNK_SIZE {
-            let (h, biome) = col[lx][lz];
-            // Sky-connected at the chunk top iff the surface is at/below
-            // it; an underground chunk (surface well above) starts
-            // disconnected so its open cells read as caves, not sky. The
-            // -2 absorbs the coarse heightmap's point-vs-interpolated
-            // mismatch with the lattice surface.
-            let mut sky = top_y > h - 2;
-            let mut depth = i32::MAX; // cells below the sky-lit surface
-            for ly in (0..CHUNK_SIZE).rev() {
-                let wy = oyi + ly as i32;
-                if let Some(b) = strata::bedrock_floor_block(oxi + lx as i32, wy, ozi + lz as i32, seed) {
-                    blocks[lx][ly][lz] = b;
-                    sky = false;
-                    depth = i32::MAX;
-                    continue;
-                }
-                if lattice_interp(&d, lx, ly, lz) > 0.0 {
-                    blocks[lx][ly][lz] = if sky {
-                        sky = false;
-                        depth = 0;
-                        surface_block(biome, wy) // first solid from sky
-                    } else {
-                        depth = depth.saturating_add(1);
-                        if depth <= 3 {
-                            near_surface_block(biome)
-                        } else {
-                            pick_stone_or_ore(oxi as f32 + lx as f32, wy, ozi as f32 + lz as f32, biome, seed)
-                        }
-                    };
-                } else {
-                    // Open: ocean water while sky-connected + below sea,
-                    // else air (sky above sea, or an underground cave).
-                    blocks[lx][ly][lz] = if sky && wy <= SEA_LEVEL {
-                        BlockId(36)
-                    } else {
-                        BlockId::AIR
-                    };
-                }
-            }
-        }
-    }
-
     let mut chunk = Chunk::empty();
-    chunk.fill_with(|x, y, z| blocks[x][y][z]);
-    // The 3D density gives the terrain SHAPE (overhangs, cliffs, surface
-    // cave mouths) but MC's thin spaghetti/noodle caves are finer than
-    // the noise-cell lattice and alias away when interpolated; the proven
-    // engine carvers add reliable cave + ravine networks on top.
+    chunk.fill_with(|x, y, z| {
+        let wx = origin.x + x as f32;
+        let wz = origin.z + z as f32;
+        let wy = origin.y as i32 + y as i32;
+        if let Some(b) = strata::bedrock_floor_block(wx as i32, wy, wz as i32, seed) {
+            return b;
+        }
+        let (h, biome) = col[x][z];
+        if wy > h {
+            // Water fills open columns up to sea level; above is sky.
+            if wy <= SEA_LEVEL && h < SEA_LEVEL {
+                return BlockId(36);
+            }
+            return BlockId::AIR;
+        }
+        if wy == h {
+            surface_block(biome, h)
+        } else if wy >= h - 3 {
+            near_surface_block(biome)
+        } else {
+            pick_stone_or_ore(wx, wy, wz, biome, seed)
+        }
+    });
     caves::carve(&mut chunk, coord, ctx);
     ravines::carve(&mut chunk, coord, ctx);
     decor::place_realistic(&mut chunk, coord, ctx);
