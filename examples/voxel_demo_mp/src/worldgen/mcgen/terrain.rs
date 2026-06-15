@@ -99,14 +99,17 @@ fn surface_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
                 }
             }
             // Real surface = solid for at least 3 blocks down. A thinner
-            // crust is a near-zero-density artifact; drop below it and
-            // keep looking for the true ground.
+            // crust is a near-zero-density artifact; reject it and keep
+            // scanning further down for the true ground.
             let run = (1..=4).take_while(|&k| ow.density(wx, top - k, wz) > 0.0).count();
             if run >= 3 {
                 return top;
             }
-            yc = top - 4;
-            continue;
+            // Fall through to `yc -= 8`: the next band (below `yc`) can't
+            // contain this crust (`top > yc`), so we make progress and
+            // never re-scan it. W188 hang fix - the old `yc = top - 4`
+            // could move yc UP (top reaches yc+8), re-finding the same
+            // crust forever and freezing fresh-world generation.
         }
         yc -= 8;
     }
@@ -276,6 +279,22 @@ mod tests {
         }
         // Not every column the same height -> the terrain has relief.
         assert!(seen.len() > 1, "terrain is flat: {seen:?}");
+    }
+
+    #[test]
+    fn surface_height_terminates_over_grid() {
+        // W188 hang guard: surface_height must always return - the spike
+        // filter's rescan once looped forever on ocean crust columns,
+        // freezing fresh-world gen. Sweep a few hundred columns
+        // (including the watery near-origin region); if any hangs, this
+        // test never finishes.
+        let ow = build_overworld(0);
+        for x in (-160..160).step_by(8) {
+            for z in (-160..160).step_by(8) {
+                let h = surface_height(&ow, x, z);
+                assert!((ow.min_y..=SCAN_TOP).contains(&h));
+            }
+        }
     }
 
     #[test]
