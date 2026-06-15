@@ -23,6 +23,7 @@ use super::{
 /// can route the pick through the existing per-dim worldgen path
 /// without translating tags.
 pub(crate) const GENERATOR_TAGS: &[&str] = &[
+    "mc",
     "natural",
     "realistic",
     "classic",

@@ -257,7 +257,8 @@ pub(crate) fn build_tree() -> CommandNode {
 
     // /worldgen <profile>  +  /gen alias.
     {
-        let profiles: Vec<CommandNode> = ["classic", "flat", "islands", "amplified", "realistic"]
+        let profiles: Vec<CommandNode> =
+            ["mc", "natural", "realistic", "classic", "flat", "islands", "amplified"]
             .iter()
             .map(|p| CommandNode::literal(p, 4))
             .collect();

@@ -239,9 +239,16 @@ pub enum WorldGen {
     /// (continentalness + biome hills + detail + ridged peaks)
     /// replaces the sin/cos height of Classic / Realistic, giving
     /// irregular, non-repeating landscapes. Shares the Realistic
-    /// biome / surface / cave / decoration pipeline. Default for new
-    /// overworlds.
+    /// biome / surface / cave / decoration pipeline.
     Natural = 6,
+    /// W184: faithful MC (1.18+) terrain. Surface height comes from the
+    /// real overworld `final_density` (continentalness / erosion /
+    /// peaks-valleys / jaggedness splines), ported data-driven from the
+    /// game's `worldgen/` JSON (see the `mcgen` module). Reuses the
+    /// Realistic surface / water / strata / cave / decoration pipeline
+    /// below the surface. Default for new overworlds; `Natural` stays as
+    /// the lighter fallback.
+    Mc = 7,
 }
 
 impl WorldGen {
@@ -259,6 +266,7 @@ impl WorldGen {
             "realistic" | "real" => Some(Self::Realistic),
             "nether" | "hell" => Some(Self::Nether),
             "natural" | "nat" => Some(Self::Natural),
+            "mc" | "minecraft" | "faithful" => Some(Self::Mc),
             _ => None,
         }
     }

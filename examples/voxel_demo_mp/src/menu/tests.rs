@@ -342,11 +342,11 @@ fn new_world_action_with_nonempty_name_round_trips() {
 }
 
 #[test]
-fn default_new_world_uses_natural_and_survival() {
-    // W71: "Natural" (fBm fractal terrain) is the default generator;
-    // "Survival" is the default game mode. The form starts with both
-    // pre-selected so the user can just type a name + click Vytvorit
-    // svet.
+fn default_new_world_uses_mc_and_survival() {
+    // W184: "mc" (faithful MC final_density terrain) is the default
+    // generator; "Survival" is the default game mode. The form starts
+    // with both pre-selected so the user can just type a name + click
+    // Vytvorit svet.
     let s = default_new_world();
     match s {
         MenuScreen::NewWorld {
@@ -357,7 +357,7 @@ fn default_new_world_uses_natural_and_survival() {
         } => {
             assert!(name.is_empty());
             assert!(seed.is_empty());
-            assert_eq!(generator, "natural");
+            assert_eq!(generator, "mc");
             assert_eq!(game_mode, GameMode::Survival);
         }
         _ => panic!("expected NewWorld"),

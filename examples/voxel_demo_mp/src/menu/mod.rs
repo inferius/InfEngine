@@ -472,14 +472,14 @@ pub(crate) fn default_singleplayer() -> MenuScreen {
 }
 
 /// W8.2: build a fresh `NewWorld` screen. The form starts with
-/// the documented defaults: empty name + seed, Realistic
-/// generator, Survival mode. Reset on each re-entry from the
+/// the documented defaults: empty name + seed, the faithful MC
+/// generator (W184), Survival mode. Reset on each re-entry from the
 /// Singleplayer screen.
 pub(crate) fn default_new_world() -> MenuScreen {
     MenuScreen::NewWorld {
         name: String::new(),
         seed: String::new(),
-        generator: "natural".to_string(),
+        generator: "mc".to_string(),
         game_mode: GameMode::Survival,
     }
 }

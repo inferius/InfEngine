@@ -31,6 +31,7 @@ pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         WorldGen::Realistic => super::climate::gen_realistic(coord, ctx),
         WorldGen::Nether => super::nether::gen_nether(coord, ctx),
         WorldGen::Natural => super::natural::gen_natural(coord, ctx),
+        WorldGen::Mc => super::mcgen::terrain::gen_mc(coord, ctx),
     }
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
                 super::biome_table::biome_from_climate(super::climate::climate_at(fx, fz, seed));
             super::natural::natural_height(fx, fz, seed, biome)
         }
+        WorldGen::Mc => super::mcgen::terrain::mc_column_height(ctx, wx, wz),
         // Nether is roofed + lava-floored; its spawn is handled
         // separately. A mid-height fallback keeps the dispatch total.
         WorldGen::Nether => 32,

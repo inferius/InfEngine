@@ -32,3 +32,4 @@ pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod noise;
 pub(crate) mod overworld;
+pub(crate) mod terrain;
