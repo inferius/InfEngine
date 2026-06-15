@@ -184,41 +184,104 @@ pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     surface_height(&ow, wx, wz)
 }
 
-/// MC-profile chunk generator: real-density surface height + the
-/// Natural surface / water / strata / cave / decoration pipeline.
+/// Trilinear interpolation of the chunk's density corner lattice at a
+/// local voxel. The lattice is `[5][3][5]` over `(x:0..16 by 4, y:0..16
+/// by 8, z:0..16 by 4)` - MC's `cellWidth=4 / cellHeight=8`.
+fn lattice_interp(d: &[[[f64; 5]; 3]; 5], lx: usize, ly: usize, lz: usize) -> f64 {
+    let (xi, fx) = (lx / 4, (lx % 4) as f64 / 4.0);
+    let (yj, fy) = (ly / 8, (ly % 8) as f64 / 8.0);
+    let (zk, fz) = (lz / 4, (lz % 4) as f64 / 4.0);
+    let c = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let x00 = c(d[xi][yj][zk], d[xi + 1][yj][zk], fx);
+    let x10 = c(d[xi][yj + 1][zk], d[xi + 1][yj + 1][zk], fx);
+    let x01 = c(d[xi][yj][zk + 1], d[xi + 1][yj][zk + 1], fx);
+    let x11 = c(d[xi][yj + 1][zk + 1], d[xi + 1][yj + 1][zk + 1], fx);
+    c(c(x00, x10, fy), c(x01, x11, fy), fz)
+}
+
+/// MC-profile chunk generator (W187): real 3D `final_density`, sampled
+/// on MC's cell-corner lattice + trilinearly interpolated, so the terrain
+/// has genuine overhangs / cliffs and density-native caves (no separate
+/// cave carver). Surface, water, strata + decoration reuse the proven
+/// Natural pipeline.
+///
+/// Per column we walk top-down: the first solid cell reached from open
+/// sky is the surface (biome surface block), the next few are dirt, the
+/// rest stone/ore. Open cells are ocean water while still sky-connected
+/// and below sea level, otherwise air - so caves stay air (not flooded)
+/// and cave floors stay stone (no grass underground). The cached
+/// heightmap `h` is only a coarse "is the surface above or below this
+/// chunk" hint for where the top-down walk starts sky-connected.
 pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let origin = World::chunk_world_origin(coord);
-
-    // Per-column surface height (from the REAL MC density) + biome (from
-    // MC's real climate field). MC shapes terrain BEFORE biomes, so the
-    // biome here only colours the surface + drives decoration.
+    let (oxi, oyi, ozi) = (origin.x as i32, origin.y as i32, origin.z as i32);
     let col = column_data_cached(&ow, coord[0], coord[2], seed);
 
-    let mut chunk = Chunk::empty();
-    chunk.fill_with(|x, y, z| {
-        let wx = origin.x + x as f32;
-        let wz = origin.z + z as f32;
-        let wy = origin.y as i32 + y as i32;
-        if let Some(b) = strata::bedrock_floor_block(wx as i32, wy, wz as i32, seed) {
-            return b;
-        }
-        let (h, biome) = col[x][z];
-        if wy > h {
-            if wy <= SEA_LEVEL && h < SEA_LEVEL {
-                return BlockId(36); // water fills below sea level
+    // Density at the 5x3x5 cell corners; interpolated per voxel below.
+    let mut d = [[[0f64; 5]; 3]; 5];
+    for (xi, dx) in d.iter_mut().enumerate() {
+        for (yj, dy) in dx.iter_mut().enumerate() {
+            for (zk, dz) in dy.iter_mut().enumerate() {
+                *dz = ow.density(oxi + xi as i32 * 4, oyi + yj as i32 * 8, ozi + zk as i32 * 4);
             }
-            return BlockId::AIR;
         }
-        if wy == h {
-            surface_block(biome, h)
-        } else if wy >= h - 3 {
-            near_surface_block(biome)
-        } else {
-            pick_stone_or_ore(wx, wy, wz, biome, seed)
+    }
+
+    let cs = CHUNK_SIZE as i32;
+    let top_y = oyi + cs - 1;
+    let mut blocks = [[[BlockId::AIR; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE];
+    for lx in 0..CHUNK_SIZE {
+        for lz in 0..CHUNK_SIZE {
+            let (h, biome) = col[lx][lz];
+            // Sky-connected at the chunk top iff the surface is at/below
+            // it; an underground chunk (surface well above) starts
+            // disconnected so its open cells read as caves, not sky. The
+            // -2 absorbs the coarse heightmap's point-vs-interpolated
+            // mismatch with the lattice surface.
+            let mut sky = top_y > h - 2;
+            let mut depth = i32::MAX; // cells below the sky-lit surface
+            for ly in (0..CHUNK_SIZE).rev() {
+                let wy = oyi + ly as i32;
+                if let Some(b) = strata::bedrock_floor_block(oxi + lx as i32, wy, ozi + lz as i32, seed) {
+                    blocks[lx][ly][lz] = b;
+                    sky = false;
+                    depth = i32::MAX;
+                    continue;
+                }
+                if lattice_interp(&d, lx, ly, lz) > 0.0 {
+                    blocks[lx][ly][lz] = if sky {
+                        sky = false;
+                        depth = 0;
+                        surface_block(biome, wy) // first solid from sky
+                    } else {
+                        depth = depth.saturating_add(1);
+                        if depth <= 3 {
+                            near_surface_block(biome)
+                        } else {
+                            pick_stone_or_ore(oxi as f32 + lx as f32, wy, ozi as f32 + lz as f32, biome, seed)
+                        }
+                    };
+                } else {
+                    // Open: ocean water while sky-connected + below sea,
+                    // else air (sky above sea, or an underground cave).
+                    blocks[lx][ly][lz] = if sky && wy <= SEA_LEVEL {
+                        BlockId(36)
+                    } else {
+                        BlockId::AIR
+                    };
+                }
+            }
         }
-    });
+    }
+
+    let mut chunk = Chunk::empty();
+    chunk.fill_with(|x, y, z| blocks[x][y][z]);
+    // The 3D density gives the terrain SHAPE (overhangs, cliffs, surface
+    // cave mouths) but MC's thin spaghetti/noodle caves are finer than
+    // the noise-cell lattice and alias away when interpolated; the proven
+    // engine carvers add reliable cave + ravine networks on top.
     caves::carve(&mut chunk, coord, ctx);
     ravines::carve(&mut chunk, coord, ctx);
     decor::place_realistic(&mut chunk, coord, ctx);
@@ -360,6 +423,79 @@ mod tests {
         }
         assert!(seen.len() >= 4, "biome field too uniform: {} distinct", seen.len());
         assert!(land > 0, "no land biomes at all - continentalness is broken");
+    }
+
+    /// Diagnostic: does the RAW per-block density carve caves/overhangs
+    /// underground, and at what density? Tells aliasing (caves exist in
+    /// raw density but the 4x8 lattice smooths them) apart from a carve
+    /// failure (density never dips negative underground). Run with
+    /// `cargo test density_cave_probe -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn density_cave_probe() {
+        let ow = build_overworld(0);
+        let mut open = 0u64;
+        let mut solid = 0u64;
+        let mut overhangs = 0u32;
+        // Underground band y=8..56 over a 48x48 area.
+        for x in (0..48).step_by(1) {
+            for z in (0..48).step_by(1) {
+                let mut prev_solid = false;
+                let mut seen_air_after_solid = false;
+                for y in 8..56 {
+                    let s = ow.density(x, y, z) > 0.0;
+                    if s {
+                        solid += 1;
+                    } else {
+                        open += 1;
+                    }
+                    // Overhang/undercut signature: solid, then air, then
+                    // solid again, going UP the column.
+                    if prev_solid && !s {
+                        seen_air_after_solid = true;
+                    }
+                    if s && seen_air_after_solid {
+                        overhangs += 1;
+                        seen_air_after_solid = false;
+                    }
+                    prev_solid = s;
+                }
+            }
+        }
+        let total = open + solid;
+        println!(
+            "\n== raw density y8..56, 48x48: open(cave) {open}/{total} = {:.1}%, overhang transitions {overhangs} ==",
+            100.0 * open as f64 / total as f64
+        );
+    }
+
+    #[test]
+    fn gen_mc_produces_solid_and_open() {
+        // The 3D density gen must produce a real mix of solid terrain and
+        // open space (air caves / ocean water) across the underground
+        // band - not a degenerate all-solid block (a broken heightmap) or
+        // all-open void. Counts air + water as "open".
+        let c = ctx();
+        let mut open = 0u32;
+        let mut solid = 0u32;
+        for cc in [[0, 2, 0], [3, 2, 3], [-5, 3, 8], [10, 1, -6], [40, 3, 0]] {
+            let chunk = gen_mc(cc, &c);
+            for z in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        let id = chunk.get(x, y, z).0;
+                        if id == 0 || id == 36 {
+                            open += 1;
+                        } else {
+                            solid += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(solid > 0, "all open - terrain vanished");
+        assert!(open > 0, "all solid - density carved nothing (heightmap bug)");
     }
 
     #[test]
