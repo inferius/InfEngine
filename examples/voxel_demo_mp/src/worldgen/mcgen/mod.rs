@@ -28,4 +28,5 @@
 //! pipeline wires everything up.
 #![allow(dead_code)]
 
+pub(crate) mod density;
 pub(crate) mod noise;
