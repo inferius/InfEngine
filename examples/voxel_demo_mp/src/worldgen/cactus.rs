@@ -69,9 +69,7 @@ pub(crate) fn place_realistic_from_coord(
     coord: infengine_voxel::ChunkCoord,
     ctx: &WorldgenCtx,
 ) {
-    use super::biome_table::biome_from_climate;
     use super::chunk::column_height;
-    use super::climate::climate_at;
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
@@ -82,8 +80,7 @@ pub(crate) fn place_realistic_from_coord(
         for z in 0..cs {
             let wx = origin_x + x;
             let wz = origin_z + z;
-            let climate = climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed);
-            let biome = biome_from_climate(climate);
+            let biome = super::realistic_biome_at(ctx, wx as f32 + 0.5, wz as f32 + 0.5);
             if biome != Biome::Desert {
                 continue;
             }

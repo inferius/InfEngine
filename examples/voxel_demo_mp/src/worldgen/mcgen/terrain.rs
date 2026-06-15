@@ -24,8 +24,7 @@ use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 use super::overworld::{Overworld, build_overworld};
 use crate::worldgen::biome::Biome;
-use crate::worldgen::biome_table::biome_from_climate;
-use crate::worldgen::climate::{SEA_LEVEL, climate_at, near_surface_block, surface_block};
+use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
 use crate::worldgen::ore::pick_stone_or_ore;
 use crate::worldgen::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
 
@@ -39,6 +38,11 @@ const SCAN_TOP: i32 = 220;
 /// column).
 type HeightGrid = [[i32; CHUNK_SIZE]; CHUNK_SIZE];
 
+/// One chunk's 16x16 per-column terrain data: `(surface_height, biome)`.
+/// Cached together so the ~24 vertical chunks of a column reuse one
+/// density scan + one biome classification.
+type ColGrid = [[(i32, Biome); CHUNK_SIZE]; CHUNK_SIZE];
+
 thread_local! {
     /// Per-thread cache of the assembled overworld: one build per seed
     /// per worker thread. `build_overworld` parses ~60 JSON files and
@@ -50,7 +54,7 @@ thread_local! {
     /// (chunk `cx, cz, seed` -> 16x16 topmost-solid Y). The ~24
     /// vertical chunks of one column all need the same heightmap and
     /// stream in together, so this turns 24 density scans into one.
-    static H_CACHE: RefCell<HashMap<(i32, i32, u32), Box<HeightGrid>>> =
+    static H_CACHE: RefCell<HashMap<(i32, i32, u32), Box<ColGrid>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -125,13 +129,33 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// Cached 16x16 heightmap for `(cx, cz, seed)`.
-fn heightmap_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Box<[[i32; CHUNK_SIZE]; CHUNK_SIZE]> {
-    H_CACHE.with(|c| {
-        if let Some(h) = c.borrow().get(&(cx, cz, seed)) {
-            return h.clone();
+/// Per-column `(surface_height, biome)` for chunk `(cx, cz)`: the
+/// interpolated density heightmap plus MC's biome classification of the
+/// real climate field at each column.
+fn column_data(ow: &Overworld, cx: i32, cz: i32) -> ColGrid {
+    let h = heightmap(ow, cx, cz);
+    let ox = cx * CHUNK_SIZE as i32;
+    let oz = cz * CHUNK_SIZE as i32;
+    let mut col = [[(0i32, Biome::Plains); CHUNK_SIZE]; CHUNK_SIZE];
+    for (lx, row) in col.iter_mut().enumerate() {
+        for (lz, cell) in row.iter_mut().enumerate() {
+            let biome = ow.biome_at(ox + lx as i32, oz + lz as i32);
+            // `.max(1)`: keep a solid floor under every column so a
+            // density-empty basin is a seabed, not a void (the Natural
+            // floor invariant).
+            *cell = (h[lx][lz].max(1), biome);
         }
-        let h = Box::new(heightmap(ow, cx, cz));
+    }
+    col
+}
+
+/// Cached per-column data for `(cx, cz, seed)`.
+fn column_data_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Box<ColGrid> {
+    H_CACHE.with(|c| {
+        if let Some(col) = c.borrow().get(&(cx, cz, seed)) {
+            return col.clone();
+        }
+        let col = Box::new(column_data(ow, cx, cz));
         let mut map = c.borrow_mut();
         // Bound the cache: a streaming player visits new columns
         // constantly, so drop the lot once it grows large rather than
@@ -140,9 +164,16 @@ fn heightmap_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Box<[[i32; C
         if map.len() > 1024 {
             map.clear();
         }
-        map.insert((cx, cz, seed), h.clone());
-        h
+        map.insert((cx, cz, seed), col.clone());
+        col
     })
+}
+
+/// Engine biome at world column `(wx, wz)` from MC's real climate field.
+/// The unified biome accessor (`worldgen::realistic_biome_at`) routes
+/// the Mc profile here so terrain surface + decoration agree.
+pub(crate) fn mc_biome_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> Biome {
+    overworld_for(ctx.effective_seed()).biome_at(wx, wz)
 }
 
 /// Surface height at world column `(wx, wz)` for the MC profile - used
@@ -159,25 +190,11 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let origin = World::chunk_world_origin(coord);
-    let cx = coord[0];
-    let cz = coord[2];
 
-    // Surface height from the REAL MC density, biome from climate (MC
-    // shapes terrain before biomes, so biome only colours the surface).
-    let hmap = heightmap_cached(&ow, cx, cz, seed);
-    let mut col: [[(i32, Biome); CHUNK_SIZE]; CHUNK_SIZE] =
-        [[(0, Biome::Plains); CHUNK_SIZE]; CHUNK_SIZE];
-    for (lx, row) in col.iter_mut().enumerate() {
-        for (lz, cell) in row.iter_mut().enumerate() {
-            let wx = origin.x + lx as f32;
-            let wz = origin.z + lz as f32;
-            let biome = biome_from_climate(climate_at(wx, wz, seed));
-            // `.max(1)`: keep a solid floor under every column so a
-            // density-empty basin is a seabed, not a void (matches the
-            // Natural floor invariant).
-            *cell = (hmap[lx][lz].max(1), biome);
-        }
-    }
+    // Per-column surface height (from the REAL MC density) + biome (from
+    // MC's real climate field). MC shapes terrain BEFORE biomes, so the
+    // biome here only colours the surface + drives decoration.
+    let col = column_data_cached(&ow, coord[0], coord[2], seed);
 
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
@@ -262,6 +279,28 @@ mod tests {
                 assert_ne!(chunk.get(x, 0, z).0, 0, "void at column ({x},{z})");
             }
         }
+    }
+
+    #[test]
+    fn biome_field_is_varied_not_degenerate() {
+        // The MC climate field must place a SPREAD of biomes, not collapse
+        // to one (the real risk: our non-seed-identical noise could skew a
+        // channel so e.g. everything reads as ocean/Beach). Sweep a large
+        // area and demand several distinct biomes including a land one.
+        let ow = build_overworld(0);
+        let mut seen = std::collections::HashSet::new();
+        let mut land = 0;
+        for x in (-2000..2000).step_by(40) {
+            for z in (-2000..2000).step_by(40) {
+                let b = ow.biome_at(x, z);
+                seen.insert(b as u8);
+                if b != Biome::Beach {
+                    land += 1;
+                }
+            }
+        }
+        assert!(seen.len() >= 4, "biome field too uniform: {} distinct", seen.len());
+        assert!(land > 0, "no land biomes at all - continentalness is broken");
     }
 
     #[test]

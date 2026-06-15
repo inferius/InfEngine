@@ -11,8 +11,6 @@
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 use super::biome::Biome;
-use super::biome_table::biome_from_climate;
-use super::climate::climate_at;
 use super::{WorldgenCtx, hash2_for};
 use crate::block::{FERN_ID, SHORT_GRASS_ID};
 
@@ -52,7 +50,7 @@ pub(crate) fn place_realistic_from_coord(
         for z in 0..cs {
             let wx = origin_x + x;
             let wz = origin_z + z;
-            let biome = biome_from_climate(climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed));
+            let biome = super::realistic_biome_at(ctx, wx as f32 + 0.5, wz as f32 + 0.5);
             // Distinct salt from the flower pass so cover + flowers don't
             // land on a correlated subset of columns.
             let rng = hash2_for(wx ^ 0x6A3D, wz ^ 0x2C17, seed);

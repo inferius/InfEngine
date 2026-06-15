@@ -205,6 +205,20 @@ pub(crate) fn hash2_for(wx: i32, wz: i32, seed: u32) -> u32 {
 // through `hash2_for` / `seed_offset_for`. No globals in the
 // noise pipeline.
 
+/// Biome at world column `(wx, wz)` for the climate-table profile
+/// family (Realistic / Natural / Mc). The Mc surface pick and every
+/// decoration pass route through this single accessor so a column's
+/// surface block and the trees / flowers / grass placed on it agree on
+/// one biome. W185: the Mc profile reads MC's real climate field (so
+/// biome regions land where MC would put them); the others keep the
+/// engine's 3-channel climate table unchanged.
+pub(crate) fn realistic_biome_at(ctx: &WorldgenCtx, wx: f32, wz: f32) -> Biome {
+    match ctx.profile {
+        WorldGen::Mc => mcgen::terrain::mc_biome_at(ctx, wx.floor() as i32, wz.floor() as i32),
+        _ => biome_table::biome_from_climate(climate::climate_at(wx, wz, ctx.effective_seed())),
+    }
+}
+
 /// World-generation profile. Lives in `WorldgenCtx::profile` and
 /// (per-dim) in `Voxel::dim_worldgens`. The `--worldgen=<name>`
 /// CLI flag seeds the active dim's entry at startup; `/worldgen

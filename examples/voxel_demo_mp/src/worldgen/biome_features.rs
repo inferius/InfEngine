@@ -6,8 +6,6 @@
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 use super::biome::Biome;
-use super::biome_table::biome_from_climate;
-use super::climate::climate_at;
 use super::{WorldgenCtx, hash2_for};
 
 const DEAD_BUSH: u16 = 492;
@@ -82,7 +80,7 @@ pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: ChunkCoord, c
         for z in 0..cs {
             let wx = ox + x;
             let wz = oz + z;
-            let biome = biome_from_climate(climate_at(wx as f32 + 0.5, wz as f32 + 0.5, seed));
+            let biome = super::realistic_biome_at(ctx, wx as f32 + 0.5, wz as f32 + 0.5);
             let cold = matches!(biome, Biome::Tundra | Biome::SnowyMountain);
             // W149: MC freeze_top_layer - cold biomes turn exposed
             // surface WATER to ice. Only the cell AT sea level can be

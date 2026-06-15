@@ -28,6 +28,7 @@
 //! pipeline wires everything up.
 #![allow(dead_code)]
 
+pub(crate) mod biome;
 pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod noise;

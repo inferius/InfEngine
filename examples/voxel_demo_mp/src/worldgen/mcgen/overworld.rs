@@ -12,14 +12,25 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::biome::{mc_biome, peaks_valleys};
 use super::data;
 use super::density::{Df, NoiseResolver, parse};
 use super::noise::{NoiseParams, NormalNoise};
+use crate::worldgen::biome::Biome;
 
 /// The assembled overworld terrain sampler + the vertical config read
 /// from the MC noise settings.
 pub(crate) struct Overworld {
     final_density: Df,
+    /// The five climate parameters MC matches biomes against (the
+    /// `noise_router` entries). Temperature + vegetation are
+    /// shifted-noise; continents / erosion / ridges are the named
+    /// density functions. Sampled by [`Overworld::biome_at`].
+    temperature: Df,
+    vegetation: Df,
+    continents: Df,
+    erosion: Df,
+    ridges: Df,
     pub(crate) sea_level: i32,
     pub(crate) min_y: i32,
     pub(crate) height: i32,
@@ -31,6 +42,19 @@ impl Overworld {
     /// terrain stage).
     pub(crate) fn density(&self, x: i32, y: i32, z: i32) -> f64 {
         self.final_density.eval(x as f64, y as f64, z as f64)
+    }
+
+    /// Engine biome at world column `(x, z)`, from MC's real climate
+    /// field. The temperature / vegetation channels are xz-only and
+    /// continents / erosion / ridges are 2D, so `y` doesn't matter.
+    pub(crate) fn biome_at(&self, x: i32, z: i32) -> Biome {
+        let (fx, fz) = (x as f64, z as f64);
+        let t = self.temperature.eval(fx, 0.0, fz);
+        let v = self.vegetation.eval(fx, 0.0, fz);
+        let c = self.continents.eval(fx, 0.0, fz);
+        let e = self.erosion.eval(fx, 0.0, fz);
+        let w = self.ridges.eval(fx, 0.0, fz);
+        mc_biome(t, v, c, e, peaks_valleys(w))
     }
 }
 
@@ -63,8 +87,16 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         Some(Arc::new(NormalNoise::new(noise_seed(seed, n), &params)))
     };
 
-    let fd = &settings["noise_router"]["final_density"];
-    let final_density = parse(fd, &df_res, &noise_res as &NoiseResolver<'_>);
+    let nr = &settings["noise_router"];
+    let noise_res_ref = &noise_res as &NoiseResolver<'_>;
+    let p = |key: &str| parse(&nr[key], &df_res, noise_res_ref);
+    let final_density = p("final_density");
+    // The five climate channels MC matches biomes against.
+    let temperature = p("temperature");
+    let vegetation = p("vegetation");
+    let continents = p("continents");
+    let erosion = p("erosion");
+    let ridges = p("ridges");
 
     let noise = &settings["noise"];
     let min_y = noise["min_y"].as_i64().unwrap_or(-64) as i32;
@@ -72,7 +104,17 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     // sea_level lives at the top level (MC overworld = 63).
     let sea_level = settings["sea_level"].as_i64().unwrap_or(63) as i32;
 
-    Overworld { final_density, sea_level, min_y, height }
+    Overworld {
+        final_density,
+        temperature,
+        vegetation,
+        continents,
+        erosion,
+        ridges,
+        sea_level,
+        min_y,
+        height,
+    }
 }
 
 #[cfg(test)]
