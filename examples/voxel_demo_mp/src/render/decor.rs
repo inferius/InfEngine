@@ -253,16 +253,17 @@ pub(crate) fn draw(
             // sky - the two conditions whose absence caused the old W34
             // "invisible from above / weird from below" artefacts. Lava stays
             // fully opaque (MC parity).
-            // W179: water made much less reflective (old 0.18 roughness
-            // read as a glossy mirror); MC water has a soft, near-matte
-            // surface. W188: alpha 0.50 -> 0.70 - 0.50 let you see clean
-            // through to the seabed from above (the user's "moc pruhledna
-            // zvrchu"); 0.70 keeps it translucent (bed + plants still
-            // show in the shallows) but the deep no longer reads to the
-            // floor. A flat alpha is the simple lever until depth-based
-            // water fog lands.
+            // Water look knobs (the user iterates on these): `alpha` =
+            // surface opacity (higher = less see-through), `rough` =
+            // matte<->reflective (lower = more sky reflection).
+            // W179 0.50/0.18(mirror) -> 0.70(too flat); W188 0.50->0.70
+            // opacity; W194: alpha 0.70 -> 0.80 (still too see-through
+            // from above) and rough 0.70 -> 0.55 (the flat matte read as
+            // no reflection at all; 0.55 gives a soft sky reflection
+            // without the old mirror). A flat alpha is the simple lever
+            // until depth-based water fog lands.
             let (alpha, rough) = match *liquid_id {
-                WATER_ID => (0.70_f32, 0.70_f32),
+                WATER_ID => (0.80_f32, 0.55_f32),
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };
