@@ -175,6 +175,7 @@ impl Voxel {
                 }
             }
             self.liquid_chunk_sig.clear();
+            self.liquid_remesh_backlog.clear();
         }
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's

@@ -85,6 +85,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 }
             }
             vx.liquid_chunk_sig.remove(cc);
+            vx.liquid_remesh_backlog.remove(cc);
         }
         // Persist edits to disk on a background thread.
         if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)

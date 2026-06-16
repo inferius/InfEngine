@@ -905,6 +905,13 @@ pub(crate) struct Voxel {
     /// chunk's liquid cell positions + levels). The diff re-meshes only
     /// chunks whose signature changed. Transient, not persisted.
     pub(crate) liquid_chunk_sig: HashMap<ChunkCoord, u64>,
+    /// W195: chunks queued for a liquid remesh, drained a few per frame.
+    /// The expensive all-liquids signature scan runs ONCE when
+    /// `liquid_mesh_dirty` is set and fills this; draining it on later
+    /// frames needs no rescan, so a big settled ocean costs nothing per
+    /// frame (the old code rescanned ~400k cells every frame while the
+    /// mesh budget was backlogged - the "FPS zalostny u vody" bug).
+    pub(crate) liquid_remesh_backlog: std::collections::HashSet<ChunkCoord>,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different

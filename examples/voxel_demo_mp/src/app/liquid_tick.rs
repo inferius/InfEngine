@@ -207,101 +207,99 @@ impl Voxel {
     /// no throttle, and it scales to oceans. GPU work is budgeted to a few
     /// chunks per frame so a fresh chunk-load wave can't spike a frame.
     pub(crate) fn maybe_rebuild_liquid_mesh(&mut self) {
-        if !self.liquid_mesh_dirty {
-            return;
-        }
         if self.renderer.is_none() {
             return;
         }
         let cs = CHUNK_SIZE as i32;
-        let chunk_of = |p: [i32; 3]| -> ChunkCoord {
-            [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
-        };
-        // Per-chunk signature: a commutative fold (wrapping-add of a per-cell
-        // hash over position + level) so HashSet iteration order is irrelevant.
-        let mut cur_sig: HashMap<ChunkCoord, u64> = HashMap::new();
-        for p in self.liquid_positions.iter().copied() {
-            if liquid_for(self.world.get(p)).is_none() {
-                continue;
+        // W195: the per-chunk signature scan over ALL liquid_positions is
+        // O(total liquid) - ~16 ms for a big ocean (400k+ cells). The old
+        // code re-ran it EVERY frame while the mesh budget was backlogged
+        // (>24 changed chunks), pinning sim_ms at ~18 ms near water (the
+        // user's "FPS zalostny u vody"). Now the scan runs ONCE per
+        // dirty-set: it queues every changed chunk into the remesh backlog
+        // and updates the stored signatures immediately, so the backlog
+        // drains a few chunks per frame WITHOUT rescanning. A settled
+        // ocean then costs nothing per frame.
+        if self.liquid_mesh_dirty {
+            let chunk_of = |p: [i32; 3]| -> ChunkCoord {
+                [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
+            };
+            let mut cur_sig: HashMap<ChunkCoord, u64> = HashMap::new();
+            for p in self.liquid_positions.iter().copied() {
+                if liquid_for(self.world.get(p)).is_none() {
+                    continue;
+                }
+                let lvl = self.liquid_level.get(&p).copied().unwrap_or(0) as u64;
+                let mut hsh = 0xcbf2_9ce4_8422_2325u64;
+                for v in [p[0] as u64, p[1] as u64, p[2] as u64, lvl] {
+                    hsh ^= v;
+                    hsh = hsh.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                // W113: fold a boundary cell into the FACE-adjacent chunk too,
+                // so that neighbour re-meshes (re-culls the shared face) when
+                // this chunk's edge water changes - else a "wall" lingers at
+                // the seam.
+                let cc = chunk_of(p);
+                let lx = p[0].rem_euclid(cs);
+                let ly = p[1].rem_euclid(cs);
+                let lz = p[2].rem_euclid(cs);
+                let mut fold: [Option<ChunkCoord>; 7] = [Some(cc), None, None, None, None, None, None];
+                if lx == 0 { fold[1] = Some([cc[0] - 1, cc[1], cc[2]]); }
+                if lx == cs - 1 { fold[2] = Some([cc[0] + 1, cc[1], cc[2]]); }
+                if ly == 0 { fold[3] = Some([cc[0], cc[1] - 1, cc[2]]); }
+                if ly == cs - 1 { fold[4] = Some([cc[0], cc[1] + 1, cc[2]]); }
+                if lz == 0 { fold[5] = Some([cc[0], cc[1], cc[2] - 1]); }
+                if lz == cs - 1 { fold[6] = Some([cc[0], cc[1], cc[2] + 1]); }
+                for c in fold.into_iter().flatten() {
+                    let e = cur_sig.entry(c).or_insert(0u64);
+                    *e = e.wrapping_add(hsh);
+                }
             }
-            let lvl = self.liquid_level.get(&p).copied().unwrap_or(0) as u64;
-            let mut hsh = 0xcbf2_9ce4_8422_2325u64;
-            for v in [p[0] as u64, p[1] as u64, p[2] as u64, lvl] {
-                hsh ^= v;
-                hsh = hsh.wrapping_mul(0x0000_0100_0000_01b3);
+            // Queue every changed chunk + update its stored signature NOW, so
+            // a later rescan won't re-queue it (the queue drains over frames).
+            for (cc, sig) in &cur_sig {
+                if self.liquid_chunk_sig.get(cc) != Some(sig) {
+                    self.liquid_remesh_backlog.insert(*cc);
+                    self.liquid_chunk_sig.insert(*cc, *sig);
+                }
             }
-            // W113: fold this cell into its own chunk's signature AND into any
-            // FACE-adjacent chunk whose edge-face culling depends on it (a cell
-            // on a chunk boundary). Without the neighbour fold, a chunk meshed
-            // while its neighbour was still streaming keeps the seam face it
-            // culled against then-absent water: its OWN signature never changes
-            // when the neighbour's edge water later loads, so it never
-            // re-meshes - leaving a "wall" inside otherwise-continuous water at
-            // the chunk seam (the user's report). Folding the boundary cell
-            // into the neighbour's signature flips it the moment the water
-            // arrives, so that chunk re-meshes and re-culls the shared face -
-            // MC marks the adjacent section dirty on a boundary change the same
-            // way.
-            let cc = chunk_of(p);
-            let lx = p[0].rem_euclid(cs);
-            let ly = p[1].rem_euclid(cs);
-            let lz = p[2].rem_euclid(cs);
-            let mut fold: [Option<ChunkCoord>; 7] = [Some(cc), None, None, None, None, None, None];
-            if lx == 0 {
-                fold[1] = Some([cc[0] - 1, cc[1], cc[2]]);
+            let gone: Vec<ChunkCoord> = self
+                .liquid_chunk_sig
+                .keys()
+                .filter(|cc| !cur_sig.contains_key(*cc))
+                .copied()
+                .collect();
+            for cc in gone {
+                self.liquid_remesh_backlog.insert(cc);
+                self.liquid_chunk_sig.remove(&cc);
             }
-            if lx == cs - 1 {
-                fold[2] = Some([cc[0] + 1, cc[1], cc[2]]);
-            }
-            if ly == 0 {
-                fold[3] = Some([cc[0], cc[1] - 1, cc[2]]);
-            }
-            if ly == cs - 1 {
-                fold[4] = Some([cc[0], cc[1] + 1, cc[2]]);
-            }
-            if lz == 0 {
-                fold[5] = Some([cc[0], cc[1], cc[2] - 1]);
-            }
-            if lz == cs - 1 {
-                fold[6] = Some([cc[0], cc[1], cc[2] + 1]);
-            }
-            for c in fold.into_iter().flatten() {
-                let e = cur_sig.entry(c).or_insert(0u64);
-                *e = e.wrapping_add(hsh);
-            }
+            self.liquid_mesh_dirty = false;
         }
-        // Chunks to (re)mesh: new / changed signature, or liquid now gone.
-        let mut changed: Vec<ChunkCoord> = Vec::new();
-        for (cc, sig) in &cur_sig {
-            if self.liquid_chunk_sig.get(cc) != Some(sig) {
-                changed.push(*cc);
-            }
+
+        if self.liquid_remesh_backlog.is_empty() {
+            return;
         }
-        for cc in self.liquid_chunk_sig.keys() {
-            if !cur_sig.contains_key(cc) {
-                changed.push(*cc);
-            }
-        }
+        // Drain a budget of chunks per frame from the backlog - no rescan.
         const LIQUID_CHUNKS_PER_FRAME: usize = 24;
-        let budget_hit = changed.len() > LIQUID_CHUNKS_PER_FRAME;
-        changed.truncate(LIQUID_CHUNKS_PER_FRAME);
-        for cc in changed {
+        let to_mesh: Vec<ChunkCoord> = self
+            .liquid_remesh_backlog
+            .iter()
+            .take(LIQUID_CHUNKS_PER_FRAME)
+            .copied()
+            .collect();
+        for cc in to_mesh {
+            self.liquid_remesh_backlog.remove(&cc);
             // Per-kind vertex/index pool for THIS chunk only.
-            let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> =
-                HashMap::new();
+            let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
             let bx = cc[0] * cs;
             let by = cc[1] * cs;
             let bz = cc[2] * cs;
             let cells = (0..cs).flat_map(move |lx| {
-                (0..cs).flat_map(move |ly| {
-                    (0..cs).map(move |lz| [bx + lx, by + ly, bz + lz])
-                })
+                (0..cs).flat_map(move |ly| (0..cs).map(move |lz| [bx + lx, by + ly, bz + lz]))
             });
             for p in cells {
                 self.emit_liquid_cell(p, &mut buckets);
             }
-            // Swap THIS chunk's per-kind liquid meshes for the freshly
-            // built ones, then record its new signature.
             let renderer = self.renderer.as_mut().expect("renderer ready");
             if let Some(old) = self.liquid_mesh_handles.remove(&cc) {
                 for (_, h) in old {
@@ -313,8 +311,7 @@ impl Voxel {
                 if vertices.is_empty() || indices.is_empty() {
                     continue;
                 }
-                let label =
-                    format!("voxel_liquid_{}_{}_{}_{liquid_id}", cc[0], cc[1], cc[2]);
+                let label = format!("voxel_liquid_{}_{}_{}_{liquid_id}", cc[0], cc[1], cc[2]);
                 let h = renderer.create_mesh(&label, &vertices, &indices);
                 // W108: water translucent (alpha pipeline, cull_mode=None);
                 // lava opaque. Draw order handled in infengine_render::render().
@@ -323,24 +320,11 @@ impl Voxel {
                 }
                 handles.push((liquid_id, h));
             }
-            match cur_sig.get(&cc) {
-                Some(sig) => {
-                    self.liquid_chunk_sig.insert(cc, *sig);
-                }
-                None => {
-                    self.liquid_chunk_sig.remove(&cc);
-                }
-            }
             if handles.is_empty() {
                 self.liquid_mesh_handles.remove(&cc);
             } else {
                 self.liquid_mesh_handles.insert(cc, handles);
             }
-        }
-        // Clear dirty only once every changed chunk is re-meshed; any
-        // beyond the per-frame budget finish on following frames.
-        if !budget_hit {
-            self.liquid_mesh_dirty = false;
         }
         let _ = block_is_transparent_render;
     }

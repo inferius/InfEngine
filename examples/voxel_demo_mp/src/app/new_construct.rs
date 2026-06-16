@@ -154,6 +154,7 @@ impl Voxel {
             flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
             liquid_chunk_sig: HashMap::new(),
+            liquid_remesh_backlog: std::collections::HashSet::new(),
             sheep_mesh: None,
             sheep_head_mesh: None,
             mob_meshes: Default::default(),
