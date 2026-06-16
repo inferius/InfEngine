@@ -95,11 +95,11 @@ pub(crate) fn column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
 /// land and lets streaming fill the chunks in afterwards.
 pub(crate) fn find_land_spawn(ctx: &WorldgenCtx) -> Option<(i32, i32, i32)> {
     use super::climate::SEA_LEVEL;
-    // Probe every 2 chunks; search out to ~768 blocks. Coarse on
+    // Probe every 2 chunks; search out to ~1024 blocks. Coarse on
     // purpose - we want *some* nearby shore, not the exact nearest
     // column, and each probe samples the (heavy) density column.
     const STEP: i32 = 2 * CHUNK_SIZE as i32;
-    const MAX_R: i32 = 24;
+    const MAX_R: i32 = 32;
     for r in 0..=MAX_R {
         for dz in -r..=r {
             for dx in -r..=r {

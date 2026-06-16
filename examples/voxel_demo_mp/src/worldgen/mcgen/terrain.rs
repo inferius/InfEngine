@@ -150,6 +150,27 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
+/// Interpolated surface height at a single world column `(wx, wz)` -
+/// the SAME bilinear over the same global 4-aligned corners that
+/// [`heightmap`] / `gen_mc` fill the terrain from. Spawn placement and
+/// `column_height` use this (not raw `surface_height`) so the reported
+/// height matches the block actually generated there; a point sample
+/// drifts a few blocks from the interpolated surface, which spawned the
+/// player buried in / under the real terrain (W191).
+fn interp_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
+    let x0 = wx.div_euclid(4) * 4;
+    let z0 = wz.div_euclid(4) * 4;
+    let fx = (wx - x0) as f32 / 4.0;
+    let fz = (wz - z0) as f32 / 4.0;
+    let h00 = surface_height(ow, x0, z0) as f32;
+    let h10 = surface_height(ow, x0 + 4, z0) as f32;
+    let h01 = surface_height(ow, x0, z0 + 4) as f32;
+    let h11 = surface_height(ow, x0 + 4, z0 + 4) as f32;
+    let a = lerp(h00, h10, fx);
+    let b = lerp(h01, h11, fx);
+    lerp(a, b, fz).round() as i32
+}
+
 /// Per-column `(surface_height, biome)` for chunk `(cx, cz)`: the
 /// interpolated density heightmap plus MC's biome classification of the
 /// real climate field at each column.
@@ -202,7 +223,7 @@ pub(crate) fn mc_biome_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> Biome {
 /// overworld for the ctx seed.
 pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     let ow = overworld_for(ctx.effective_seed());
-    surface_height(&ow, wx, wz)
+    interp_height(&ow, wx, wz)
 }
 
 /// MC-profile chunk generator: per-column surface height from the real
