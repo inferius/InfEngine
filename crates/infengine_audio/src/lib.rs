@@ -306,8 +306,11 @@ impl AudioBank {
 
     /// Play `key` at world-space `source`, with the listener at
     /// `listener`. Volume falls off linearly with distance, cutting
-    /// to zero at `max_range`. Returns the computed gain when a
-    /// sample fired, `None` when out of range or the key is unknown.
+    /// to zero at `max_range`, then scales by `volume` (a per-sound
+    /// mix level - e.g. MC plays footsteps at 0.15). Returns the
+    /// computed gain when a sample fired, `None` when out of range or
+    /// the key is unknown.
+    #[allow(clippy::too_many_arguments)]
     pub fn play_at(
         &self,
         audio: &mut AudioSystem,
@@ -316,6 +319,7 @@ impl AudioBank {
         source: [f32; 3],
         max_range: f32,
         seed: u64,
+        volume: f32,
     ) -> Option<f32> {
         let dx = source[0] - listener[0];
         let dy = source[1] - listener[1];
@@ -324,7 +328,7 @@ impl AudioBank {
         if d >= max_range || max_range <= 0.0 {
             return None;
         }
-        let gain = (1.0 - d / max_range).clamp(0.0, 1.0);
+        let gain = (1.0 - d / max_range).clamp(0.0, 1.0) * volume.clamp(0.0, 1.5);
         if self.play(audio, key, seed, gain) {
             Some(gain)
         } else {

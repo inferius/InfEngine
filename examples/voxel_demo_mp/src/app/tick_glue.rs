@@ -37,6 +37,11 @@ impl Voxel {
             return;
         };
         let listener = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+        // Per-sound mix level. MC plays footsteps quiet (Entity
+        // .playStepSound uses volume * 0.15) - at full gain they drown
+        // everything else (the user's "kroky moc hlasite"). Match that
+        // for player + mob step keys; everything else stays at 1.0.
+        let volume = key_volume(key);
         // Seed the variant shuffle from tick + spatial position so
         // back-to-back triggers don't reuse the same recording.
         let seed = self.net_tick.wrapping_mul(2654435761)
@@ -44,7 +49,7 @@ impl Voxel {
             ^ (pos[2].to_bits() as u64);
         if self
             .audio_bank
-            .play_at(a, key, listener, pos, AUDIBLE_RANGE, seed)
+            .play_at(a, key, listener, pos, AUDIBLE_RANGE, seed, volume)
             .is_some()
         {
             return;
@@ -59,8 +64,20 @@ impl Voxel {
         if dist >= AUDIBLE_RANGE {
             return;
         }
-        let gain = (1.0 - dist / AUDIBLE_RANGE).clamp(0.0, 1.0);
+        let gain = (1.0 - dist / AUDIBLE_RANGE).clamp(0.0, 1.0) * volume;
         synth(a, gain);
     }
 
+}
+
+/// Per-sound mix level applied on top of the distance falloff.
+/// Footsteps (player `step:<material>` + mob `mob/<kind>/step`) play
+/// at MC's 0.15 so they don't dominate the mix; everything else is
+/// full volume. Mirrors `Entity.playStepSound`'s `volume * 0.15`.
+fn key_volume(key: &str) -> f32 {
+    if key.starts_with("step:") || key.ends_with("/step") {
+        0.15
+    } else {
+        1.0
+    }
 }
