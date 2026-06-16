@@ -141,6 +141,44 @@ impl WorkerPool {
                                                     // falling column still ticks via its higher
                                                     // cells. Placed/edited liquid is unaffected (it
                                                     // schedules through set_block, not here).
+                                                    // W192: skip fully-interior liquid cells
+                                                    // (every within-chunk neighbour the same
+                                                    // liquid, not on a chunk border). Such a cell
+                                                    // has no visible face, can't move, and never
+                                                    // ticks - registering every one made an ocean
+                                                    // ~900k liquid_positions, and the per-chunk mesh
+                                                    // signature rescans that whole set each time a
+                                                    // chunk streams in (the FPS drop approaching
+                                                    // water). The mesh iterates chunk cells, not
+                                                    // liquid_positions, so surface faces still
+                                                    // render; an edit re-registers the now-exposed
+                                                    // cells via set_block, so flow still works.
+                                                    let on_border = lx == 0
+                                                        || ly == 0
+                                                        || lz == 0
+                                                        || lx == cs - 1
+                                                        || ly == cs - 1
+                                                        || lz == cs - 1;
+                                                    let same = |dx: i32, dy: i32, dz: i32| {
+                                                        chunk
+                                                            .get(
+                                                                (lx + dx) as usize,
+                                                                (ly + dy) as usize,
+                                                                (lz + dz) as usize,
+                                                            )
+                                                            .0
+                                                            == b.0
+                                                    };
+                                                    let exposed = on_border
+                                                        || !same(-1, 0, 0)
+                                                        || !same(1, 0, 0)
+                                                        || !same(0, -1, 0)
+                                                        || !same(0, 1, 0)
+                                                        || !same(0, 0, -1)
+                                                        || !same(0, 0, 1);
+                                                    if !exposed {
+                                                        continue;
+                                                    }
                                                     let below_air = ly > 0
                                                         && chunk
                                                             .get(
