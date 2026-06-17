@@ -128,19 +128,63 @@ fn surface_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
     ow.min_y
 }
 
-/// 16x16 surface heightmap for chunk column `(cx, cz)`, built by
-/// sampling the real density at the 5x5 cell corners (every 4 blocks,
-/// MC's horizontal noise resolution) and bilinearly interpolating. The
-/// shared `lx == 16` / `lz == 16` corners match the neighbouring
-/// chunk's `0` corners, so heights are seamless across chunk borders.
+/// Median of a 3x3 sample block - discards isolated height spikes (up to
+/// ~2 cells wide) while preserving slopes and cliffs.
+fn median9(mut v: [i32; 9]) -> i32 {
+    v.sort_unstable();
+    v[4]
+}
+
+/// Spike-filtered surface height at a 4-aligned global corner: the median
+/// of `surface_height` over the 3x3 block of +/-4 neighbours.
+///
+/// W197.1: MC evaluates density on a 4-block horizontal cell lattice and
+/// interpolates, so it never renders sub-cell terrain; our per-block
+/// `surface_height` DOES catch high-frequency density spires that stand
+/// alone in the ocean (the user's "underwater pillars" - thin stone
+/// columns poking 100+ blocks through the sea). The 3x3 median reproduces
+/// MC's cell-scale smoothing: a spire narrower than ~2 corner cells reads
+/// high only over a few of the nine samples, so the median discards it,
+/// while terrain wider than a cell keeps its height. Global coords keep
+/// it seamless across chunk borders.
+fn corner_height(ow: &Overworld, gx: i32, gz: i32) -> i32 {
+    let mut v = [0i32; 9];
+    let mut k = 0;
+    for dx in [-4, 0, 4] {
+        for dz in [-4, 0, 4] {
+            v[k] = surface_height(ow, gx + dx, gz + dz);
+            k += 1;
+        }
+    }
+    median9(v)
+}
+
+/// 16x16 surface heightmap for chunk column `(cx, cz)`: spike-filtered
+/// height at the 5x5 cell corners (every 4 blocks, MC's horizontal noise
+/// resolution), bilinearly interpolated. A 7x7 raw scan (one ring of
+/// padding) feeds each used corner's 3x3 median without re-sampling. The
+/// shared `lx == 16` / `lz == 16` corners equal the neighbouring chunk's
+/// `0` corners, so heights stay seamless across chunk borders.
 fn heightmap(ow: &Overworld, cx: i32, cz: i32) -> [[i32; CHUNK_SIZE]; CHUNK_SIZE] {
     let ox = cx * CHUNK_SIZE as i32;
     let oz = cz * CHUNK_SIZE as i32;
-    // 5 corners per axis at local 0,4,8,12,16.
+    // 7x7 raw topmost-solid at local -4,0,4,8,12,16,20.
+    let mut raw = [[0i32; 7]; 7];
+    for (i, rrow) in raw.iter_mut().enumerate() {
+        for (j, r) in rrow.iter_mut().enumerate() {
+            *r = surface_height(ow, ox + (i as i32 - 1) * 4, oz + (j as i32 - 1) * 4);
+        }
+    }
+    // 5x5 spike-filtered corners (3x3 median over the 7x7).
     let mut corner = [[0i32; 5]; 5];
-    for (i, crow) in corner.iter_mut().enumerate() {
-        for (j, c) in crow.iter_mut().enumerate() {
-            *c = surface_height(ow, ox + i as i32 * 4, oz + j as i32 * 4);
+    for (ci, crow) in corner.iter_mut().enumerate() {
+        for (cj, c) in crow.iter_mut().enumerate() {
+            let (i, j) = (ci + 1, cj + 1);
+            *c = median9([
+                raw[i - 1][j - 1], raw[i - 1][j], raw[i - 1][j + 1],
+                raw[i][j - 1], raw[i][j], raw[i][j + 1],
+                raw[i + 1][j - 1], raw[i + 1][j], raw[i + 1][j + 1],
+            ]);
         }
     }
     let mut h = [[0i32; CHUNK_SIZE]; CHUNK_SIZE];
@@ -162,22 +206,22 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// Interpolated surface height at a single world column `(wx, wz)` -
-/// the SAME bilinear over the same global 4-aligned corners that
-/// [`heightmap`] / `gen_mc` fill the terrain from. Spawn placement and
-/// `column_height` use this (not raw `surface_height`) so the reported
-/// height matches the block actually generated there; a point sample
-/// drifts a few blocks from the interpolated surface, which spawned the
-/// player buried in / under the real terrain (W191).
+/// Interpolated surface height at a single world column `(wx, wz)` - the
+/// SAME spike-filtered bilinear over the same global 4-aligned corners
+/// that [`heightmap`] / `gen_mc` fill the terrain from. Spawn placement
+/// and `column_height` use this (not raw `surface_height`) so the
+/// reported height matches the block actually generated there; a point
+/// sample drifts a few blocks from the interpolated surface, which
+/// spawned the player buried in / under the real terrain (W191).
 fn interp_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
     let x0 = wx.div_euclid(4) * 4;
     let z0 = wz.div_euclid(4) * 4;
     let fx = (wx - x0) as f32 / 4.0;
     let fz = (wz - z0) as f32 / 4.0;
-    let h00 = surface_height(ow, x0, z0) as f32;
-    let h10 = surface_height(ow, x0 + 4, z0) as f32;
-    let h01 = surface_height(ow, x0, z0 + 4) as f32;
-    let h11 = surface_height(ow, x0 + 4, z0 + 4) as f32;
+    let h00 = corner_height(ow, x0, z0) as f32;
+    let h10 = corner_height(ow, x0 + 4, z0) as f32;
+    let h01 = corner_height(ow, x0, z0 + 4) as f32;
+    let h11 = corner_height(ow, x0 + 4, z0 + 4) as f32;
     let a = lerp(h00, h10, fx);
     let b = lerp(h01, h11, fx);
     lerp(a, b, fz).round() as i32
@@ -399,18 +443,66 @@ mod tests {
         }
     }
 
+    /// Evidence: count ocean "spires" (columns poking well above their
+    /// +/-4 neighbours) with the RAW per-block height vs the spike-filtered
+    /// `corner_height`. The plus-median should cut them to near zero - the
+    /// user's underwater stone pillars. Run with
+    /// `cargo test dump_spire_count -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_spire_count() {
+        let ow = build_overworld(0);
+        let (mut raw, mut smoothed, mut total) = (0u32, 0u32, 0u32);
+        let mut max_excess = 0i32;
+        let mut worst = (0, 0, 0, 0);
+        for x in (-520..520).step_by(16) {
+            for z in (-520..520).step_by(16) {
+                total += 1;
+                let rh = surface_height(&ow, x, z);
+                let rn = [
+                    surface_height(&ow, x - 4, z),
+                    surface_height(&ow, x + 4, z),
+                    surface_height(&ow, x, z - 4),
+                    surface_height(&ow, x, z + 4),
+                ];
+                let nmax = *rn.iter().max().unwrap();
+                let excess = rh - nmax; // how far this column pokes above its tallest neighbour
+                if excess > max_excess {
+                    max_excess = excess;
+                    worst = (x, z, rh, nmax);
+                }
+                if excess > 10 {
+                    raw += 1;
+                }
+                let sh = corner_height(&ow, x, z);
+                let sn = [
+                    corner_height(&ow, x - 4, z),
+                    corner_height(&ow, x + 4, z),
+                    corner_height(&ow, x, z - 4),
+                    corner_height(&ow, x, z + 4),
+                ];
+                if sh - *sn.iter().max().unwrap() > 10 {
+                    smoothed += 1;
+                }
+            }
+        }
+        println!("\n== spires over {total} cols (1040x1040): raw {raw}, smoothed {smoothed} ==");
+        println!("   max excess {max_excess} at (x{},z{}) h={} nmax={}", worst.0, worst.1, worst.2, worst.3);
+    }
+
     #[test]
     fn heightmap_corners_are_seamless() {
-        // This chunk's lx=16 column == the east neighbour's lx=0 column;
-        // both sample the same world column, so the heights must match.
+        // The east neighbour's local x=0 corners are global x=16, the same
+        // corners this chunk's east edge uses. Both go through the global
+        // spike-filtered `corner_height`, so the shared corners (every 4
+        // in z) must match exactly - no seam, even after the median.
         let ow = build_overworld(7);
-        let _here = heightmap(&ow, 0, 0); // exercised by the gen test below
         let east = heightmap(&ow, 1, 0);
-        // east neighbour's local x=0 world column is this chunk's x=16,
-        // which the bilinear pins to corner[4][*]; compare the z line.
-        for (lz, &e) in east[0].iter().enumerate() {
-            let mine = surface_height(&ow, CHUNK_SIZE as i32, lz as i32);
-            assert_eq!(mine, e, "seam mismatch at lz={lz}");
+        for cj in 0..4 {
+            let lz = cj * 4;
+            let expected = corner_height(&ow, CHUNK_SIZE as i32, lz as i32);
+            assert_eq!(east[0][lz], expected, "seam corner mismatch at lz={lz}");
         }
     }
 
