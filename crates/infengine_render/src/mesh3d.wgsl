@@ -295,9 +295,11 @@ fn water_ripple(world_xz: vec2<f32>, flow: vec2<f32>, t: f32) -> f32 {
     // Bias the layers so caustics read as bright streaks on a
     // medium-blue base rather than the previous muted noise.
     let n = coarse * 0.55 + mid * 0.30 + fine * 0.15;
-    // Output range [0.78, 1.55] - same midpoint, much wider
-    // contrast band, MC-style sparkle without blowing out.
-    return 1.05 + (n - 0.5) * 1.0;
+    // Output range ~[0.90, 1.15] - a gentle shimmer around 1.0. W197.2:
+    // the old wide [0.78, 1.55] band read as harsh blotchy streaks from
+    // above (the user's "divny pruhy"); this keeps a subtle caustic
+    // without muddying the flat MC-blue surface.
+    return 1.02 + (n - 0.5) * 0.5;
 }
 
 @fragment
@@ -485,7 +487,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
     if fog_end > fog_start {
         let fog_factor = smoothstep(fog_start, fog_end, world_dist);
-        lit_color = mix(lit_color, camera.sky_color.rgb, fog_factor);
+        // W197.2: land fades to the sky colour (normal atmospheric
+        // perspective), but WATER fades to a deep ocean blue instead - at
+        // dawn/dusk the warm sky colour otherwise blends distant water to
+        // purple. MC's far water reads deep blue, not sky-tinted.
+        var fog_target = camera.sky_color.rgb;
+        if is_water {
+            fog_target = vec3<f32>(0.11, 0.27, 0.58);
+        }
+        lit_color = mix(lit_color, fog_target, fog_factor);
     }
 
     var out_alpha = alpha;

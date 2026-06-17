@@ -297,7 +297,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // neighbours and culls water-water seams. Breaks instantly
     // with a bare hand.
     BlockType {
-        id: 36, name: "water", color: [0.20, 0.40, 0.85], transparent: true,
+        id: 36, name: "water", color: [0.247, 0.463, 0.894], transparent: true,
         flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
         top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
         bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
