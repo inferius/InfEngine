@@ -505,18 +505,22 @@ pub(crate) fn cmd_rd(
     lines: &mut Vec<String>,
 ) -> bool {
     // Without args: report current view
-    // distance. With one arg (2..=12):
+    // distance. With one arg (2..=VIEW_DISTANCE_MAX):
     // set it. Routes through the same
     // settings field the Settings panel
     // slider drives, so the change takes
-    // effect on the next stream pass.
+    // effect on the next stream pass. W198:
+    // cap raised from 12 to the engine max
+    // (32) - it already matched the GUI
+    // slider; the chat cap was the only thing
+    // pinning it to 12.
     if arg.is_empty() {
         lines.push(format!(
             "Render distance: {}",
             voxel.settings.view_distance
         ));
     } else if let Ok(v) = arg.parse::<u8>() {
-        voxel.settings.view_distance = v.clamp(2, 12);
+        voxel.settings.view_distance = v.clamp(2, crate::VIEW_DISTANCE_MAX as u8);
         voxel.save_config();
         lines.push(format!(
             "Render distance set to {}.",
