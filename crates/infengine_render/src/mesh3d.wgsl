@@ -482,11 +482,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // or both are zero (default no-fog state).
     let fog_start = camera.fog.x;
     let fog_end = camera.fog.y;
+    let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
     if fog_end > fog_start {
-        let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
         let fog_factor = smoothstep(fog_start, fog_end, world_dist);
         lit_color = mix(lit_color, camera.sky_color.rgb, fog_factor);
     }
 
-    return vec4<f32>(lit_color, alpha);
+    var out_alpha = alpha;
+    if is_water {
+        // Distance-based opacity. MC's deep/distant water is opaque - you
+        // can't see the seabed through it - which also hides the chunks
+        // PAST the load boundary that transparent water otherwise reveals
+        // as see-through "holes" (the user's report: holes far + downward
+        // through the water). Near water stays translucent (you spot the
+        // bed in the shallows); by ~90 blocks it reads solid, so the far
+        // ocean is one continuous surface fading into fog, not a
+        // hole-punched sheet. (A true per-pixel depth-thickness fade needs
+        // a render-pass split + depth-texture bind; this camera-distance
+        // approximation covers the visible case at far lower risk.)
+        let opacify = smoothstep(28.0, 90.0, world_dist);
+        out_alpha = mix(alpha, 1.0, opacify);
+    }
+
+    return vec4<f32>(lit_color, out_alpha);
 }
