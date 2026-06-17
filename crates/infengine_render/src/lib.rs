@@ -279,7 +279,16 @@ impl Renderer {
             format,
             width: width.max(1),
             height: height.max(1),
-            present_mode: PresentMode::AutoVsync,
+            // W198: AutoNoVsync (Immediate, else Mailbox) instead of
+            // AutoVsync (Fifo). Fifo hard-caps the framerate to the
+            // monitor refresh and, when a frame misses the deadline,
+            // quantizes down to refresh/2, /3, ... - that is exactly the
+            // user's "40 / 80 FPS" stepping. NoVsync uncaps it so the true
+            // frame rate shows (needed for the 240 FPS target) and reveals
+            // the real CPU/GPU bottleneck instead of hiding it behind the
+            // sync wait. Tearing is the trade-off; a vsync toggle can come
+            // later if wanted.
+            present_mode: PresentMode::AutoNoVsync,
             desired_maximum_frame_latency: 2,
             alpha_mode: CompositeAlphaMode::Auto,
             view_formats: Vec::new(),

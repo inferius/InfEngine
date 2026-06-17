@@ -75,6 +75,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let liq_us = DIAG_LIQUIDS_US.swap(0, DiagOrd::Relaxed);
             let dq_us = DIAG_DRAWQ_US.swap(0, DiagOrd::Relaxed);
             let f = frames.max(1);
+            // W198: also stash the per-phase ms so the F3 overlay can show
+            // them (the user screenshots the HUD instead of the console).
+            crate::perf::store(&crate::perf::RENDER_MS, (rend_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::SIM_MS, (sim_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::STREAM_MS, (str_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::LIQUIDS_MS, (liq_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::DRAWQ_MS, (dq_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::MOBS_MS, (mob_us / f) as f32 / 1000.0);
             tracing::info!(
                 fps = vx.fps_ema as i32,
                 chunks = vx.world.iter_chunks().count(),

@@ -204,6 +204,8 @@ mod world;
 mod bootstrap;
 // W47.22 - per-frame on_update body (relocated from impl AppHandler).
 mod app_on_update;
+// W198 - shared perf snapshot for the F3 overlay ms breakdown.
+mod perf;
 // W47.23 - movement/camera/input update_play body.
 mod update_play;
 // W47.24 - Voxel runtime struct + PluginBlock row.
