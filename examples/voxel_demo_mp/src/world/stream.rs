@@ -235,6 +235,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // so the rail quads pick up their derived shapes (the
                 // worker meshed it with an empty snapshot).
                 let mut needs_rail_remesh = false;
+                let mut chunk_got_liquid = false;
                 for se in &side_effects {
                     match se {
                         ChunkSideEffect::Snow(wv) => {
@@ -262,10 +263,28 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 );
                             }
                             if vx.liquid_positions.insert(*pos) {
-                                vx.liquid_mesh_dirty = true;
+                                chunk_got_liquid = true;
                             }
                         }
                     }
+                }
+                // W199: a streamed-in liquid chunk needs its OWN liquid mesh
+                // built - but it must NOT trip the global `liquid_mesh_dirty`
+                // rescan, which re-signatures ALL ~300k ocean cells on every
+                // streamed chunk (W195 only de-duped the per-frame REPEAT, not
+                // the per-chunk-load TRIGGER, so flying over ocean still paid
+                // an O(all-liquid) ~14ms scan every frame). Instead enqueue
+                // just this chunk + its 6 face neighbours (so the shared
+                // faces re-cull) straight into the per-chunk remesh backlog,
+                // which drains a budget of chunks per frame.
+                if chunk_got_liquid {
+                    vx.liquid_remesh_backlog.insert(coord);
+                    vx.liquid_remesh_backlog.insert([coord[0] - 1, coord[1], coord[2]]);
+                    vx.liquid_remesh_backlog.insert([coord[0] + 1, coord[1], coord[2]]);
+                    vx.liquid_remesh_backlog.insert([coord[0], coord[1] - 1, coord[2]]);
+                    vx.liquid_remesh_backlog.insert([coord[0], coord[1] + 1, coord[2]]);
+                    vx.liquid_remesh_backlog.insert([coord[0], coord[1], coord[2] - 1]);
+                    vx.liquid_remesh_backlog.insert([coord[0], coord[1], coord[2] + 1]);
                 }
                 let side_effect_us = t0.elapsed().as_micros();
                 if side_effect_us > CHUNK_PHASE_WARN_US {
