@@ -3053,4 +3053,14 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 654, name: "powered_rail", color: [0.60, 0.45, 0.30], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS, top: TileSpec { col: 0, row: 0, files: &["powered_rail.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["powered_rail.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["powered_rail.png"], keep_alpha: true } },
     BlockType { id: 655, name: "detector_rail", color: [0.55, 0.45, 0.35], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS, top: TileSpec { col: 0, row: 0, files: &["detector_rail.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["detector_rail.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["detector_rail.png"], keep_alpha: true } },
     BlockType { id: 656, name: "activator_rail", color: [0.55, 0.42, 0.35], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS, top: TileSpec { col: 0, row: 0, files: &["activator_rail.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["activator_rail.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["activator_rail.png"], keep_alpha: true } },
+    // W197 Phase 5c - full snow block (opaque white cube), the surface of
+    // snowy biomes from the MC `surface_rule`. MC's thin snow LAYER stays
+    // the separate id 15; this is the full `snow_block`. powder_snow maps
+    // here for now (its sink-in physics is a deferred behavior port).
+    BlockType {
+        id: 752, name: "snow_block", color: [0.95, 0.96, 0.99], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
+    },
 ];

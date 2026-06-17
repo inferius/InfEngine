@@ -25,15 +25,16 @@ use super::noise::NormalNoise;
 use crate::worldgen::biome::Biome;
 
 /// Engine block ids the surface rules place. `grass_block` is the
-/// engine's "grass" (3); the engine has no full snow_block / powder_snow
-/// yet, so those fall back to the snow id (15) until a real block lands.
+/// engine's "grass" (3); `snow_block` is the full opaque cube added in
+/// W197 Phase 5c (752), which `powder_snow` also maps to for now (its
+/// sink-in physics is a deferred behavior port - not the thin layer 15).
 mod ids {
     pub const AIR: u16 = 0;
     pub const STONE: u16 = 1;
     pub const DIRT: u16 = 2;
     pub const GRASS_BLOCK: u16 = 3;
     pub const SAND: u16 = 4;
-    pub const SNOW: u16 = 15; // engine snow layer; placeholder for snow_block/powder_snow
+    pub const SNOW_BLOCK: u16 = 752; // full opaque snow cube (W197 Phase 5c)
     pub const SANDSTONE: u16 = 26;
     pub const BEDROCK: u16 = 45;
     pub const DEEPSLATE: u16 = 96;
@@ -73,7 +74,7 @@ fn block_id(name: &str) -> u16 {
         "water" => ids::WATER,
         "ice" => ids::ICE,
         "packed_ice" => ids::PACKED_ICE,
-        "snow_block" | "powder_snow" => ids::SNOW,
+        "snow_block" | "powder_snow" => ids::SNOW_BLOCK,
         "calcite" => ids::CALCITE,
         "bedrock" => ids::BEDROCK,
         "deepslate" => ids::DEEPSLATE,
@@ -454,6 +455,23 @@ mod tests {
         c.surface = 70;
         let got = sr.eval(&c);
         assert_eq!(got, Some(ids::GRASS_BLOCK), "plains surface should be grass, got {got:?}");
+    }
+
+    #[test]
+    fn snowy_mountain_surface_is_snow() {
+        // The snowy peaks (frozen_peaks / snowy_slopes / jagged_peaks /
+        // grove all collapse to SnowyMountain) must paint a snow_block
+        // surface, not green grass - the user's "cold biomes are green"
+        // complaint. With no noise resolver the powder_snow branch is
+        // skipped, so the snow_block default wins.
+        let nr = |_: &str| None;
+        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let c = ctx(80, Biome::SnowyMountain);
+        assert_eq!(
+            sr.eval(&c),
+            Some(ids::SNOW_BLOCK),
+            "snowy mountain surface should be a snow block"
+        );
     }
 
     #[test]

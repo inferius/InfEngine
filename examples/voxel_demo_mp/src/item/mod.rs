@@ -2408,6 +2408,9 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 714, name: "green_stained_glass_pane", display: Some("Green Stained Glass Pane"), places: Some(714), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 715, name: "red_stained_glass_pane", display: Some("Red Stained Glass Pane"), places: Some(715), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 716, name: "black_stained_glass_pane", display: Some("Black Stained Glass Pane"), places: Some(716), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W197 Phase 5c - full snow block (id 752). Icon falls through to the
+    // block-form TileSpec (snow.png) via the places=Some path.
+    ItemType { id: 752, name: "snow_block", display: Some("Snow Block"), places: Some(752), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
