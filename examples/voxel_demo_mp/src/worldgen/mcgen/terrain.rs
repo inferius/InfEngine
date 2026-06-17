@@ -23,6 +23,7 @@ use std::rc::Rc;
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
 use super::overworld::{Overworld, build_overworld};
+use super::surface_rule::SurfaceCtx;
 use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
 use crate::worldgen::ore::pick_stone_or_ore;
@@ -33,6 +34,17 @@ use crate::worldgen::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
 /// overworld land, so scanning from here never misses a peak while
 /// skipping the always-empty sky band.
 const SCAN_TOP: i32 = 220;
+
+/// How many solid blocks below the surface the MC `surface_rule` is
+/// evaluated for. The deepest overworld surface rule (desert
+/// sand+sandstone) reaches ~12 down; 16 covers it with margin. Below the
+/// band the column is the noise-fill stone/ore.
+const SURFACE_BAND: i32 = 16;
+
+/// MC's base `surfaceDepth` (the soft grass/sand layer thickness). MC
+/// wobbles this with the `surface` noise; we use the constant mean for
+/// now (a noise-driven depth is a later refinement).
+const SURFACE_DEPTH: i32 = 3;
 
 /// One chunk's 16x16 surface heightmap (topmost-solid world-Y per
 /// column).
@@ -226,6 +238,42 @@ pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     interp_height(&ow, wx, wz)
 }
 
+/// 16x16 "steep slope" flags from the heightmap gradient: a column is
+/// steep when an orthogonal neighbour's surface differs by >= 4 blocks,
+/// which is where MC's `steep` surface condition shows stone / gravel
+/// faces instead of grass. Edge columns clamp to in-chunk neighbours (a
+/// 1-block seam inaccuracy, never visible as a hole).
+fn steep_grid(col: &ColGrid) -> [[bool; CHUNK_SIZE]; CHUNK_SIZE] {
+    let mut s = [[false; CHUNK_SIZE]; CHUNK_SIZE];
+    for x in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            let h = col[x][z].0;
+            let mut d = 0;
+            if x > 0 {
+                d = d.max((h - col[x - 1][z].0).abs());
+            }
+            if x + 1 < CHUNK_SIZE {
+                d = d.max((h - col[x + 1][z].0).abs());
+            }
+            if z > 0 {
+                d = d.max((h - col[x][z - 1].0).abs());
+            }
+            if z + 1 < CHUNK_SIZE {
+                d = d.max((h - col[x][z + 1].0).abs());
+            }
+            s[x][z] = d >= 4;
+        }
+    }
+    s
+}
+
+/// Cold columns paint MC's frozen surface (snow / ice) via the
+/// `temperature` surface condition. The engine's two snowy biomes stand
+/// in for MC's frozen-temperature columns.
+fn is_frozen(biome: Biome) -> bool {
+    matches!(biome, Biome::Tundra | Biome::SnowyMountain)
+}
+
 /// MC-profile chunk generator: per-column surface height from the real
 /// MC `final_density`, then the proven Natural surface / water / strata
 /// / cave / decoration pipeline below it.
@@ -246,6 +294,12 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let origin = World::chunk_world_origin(coord);
     let col = column_data_cached(&ow, coord[0], coord[2], seed);
 
+    // Steepness per column for the surface rule's `steep` condition,
+    // computed once from the chunk heightmap.
+    let steep = steep_grid(&col);
+    let min_y = ow.min_y;
+    let max_y = ow.min_y + ow.height;
+
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
         let wx = origin.x + x as f32;
@@ -261,6 +315,33 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
                 return BlockId(36);
             }
             return BlockId::AIR;
+        }
+        // Top surface band: paint with MC's real `surface_rule` (grass /
+        // dirt depth / sand+sandstone / gravel-or-sand beaches / podzol /
+        // snow on frozen columns). `stone_depth_above = h - wy` drives the
+        // depth conditions; `water_height` is sea level over a seabed
+        // column (so shallow seabed gets the underwater branch) or absent
+        // over land. Below the band - or wherever the rule yields nothing
+        // - fall back to the proven engine surface/stone fill.
+        if wy >= h - SURFACE_BAND {
+            let sctx = SurfaceCtx {
+                x: wx as i32,
+                y: wy,
+                z: wz as i32,
+                stone_depth_above: h - wy,
+                stone_depth_below: i32::MAX / 2, // heightmap terrain has no ceilings
+                water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
+                surface: h - SURFACE_BAND, // above_preliminary_surface holds across the band
+                surface_depth: SURFACE_DEPTH,
+                steep: steep[x][z],
+                frozen: is_frozen(biome),
+                biome,
+                min_y,
+                max_y,
+            };
+            if let Some(id) = ow.surface_eval(&sctx) {
+                return BlockId(id);
+            }
         }
         if wy == h {
             surface_block(biome, h)
@@ -404,6 +485,94 @@ mod tests {
         );
         for (b, n) in &hist {
             println!("  {b}: {:.1}%", 100.0 * *n as f32 / total as f32);
+        }
+    }
+
+    /// Evidence dump: what surface blocks does `gen_mc` actually place?
+    /// Scans a wide chunk area, finds the topmost non-air/non-water block
+    /// per column + the block 2 deeper, and histograms both. Proof the
+    /// `surface_rule` fires: SANDSTONE under sand, GRAVEL beaches, PODZOL,
+    /// SNOW - blocks the old per-biome surface fill never produced. Run:
+    /// `cargo test dump_mc_surface -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_mc_surface() {
+        use std::collections::BTreeMap;
+        let c = ctx();
+        let name = |id: u16| match id {
+            1 => "stone",
+            2 => "dirt",
+            3 => "grass_block",
+            4 => "sand",
+            15 => "snow",
+            26 => "sandstone",
+            394 => "podzol",
+            396 => "coarse_dirt",
+            397 => "mud",
+            400 => "ice",
+            644 => "gravel",
+            645 => "red_sand",
+            358 => "red_sandstone",
+            other => return format!("id{other}"),
+        }
+        .to_string();
+        let mut top: BTreeMap<u16, u32> = BTreeMap::new();
+        let mut sub: BTreeMap<u16, u32> = BTreeMap::new();
+        let mut land_top: BTreeMap<u16, u32> = BTreeMap::new();
+        let ow = build_overworld(0);
+        // Wide sparse sweep so we hit land, not just the watery origin.
+        // NOTE: the topmost block includes DECORATION (leaves/logs/grass/
+        // flowers from `decor::place_realistic`), so the real terrain
+        // surface is the cube blocks here (grass/sand/stone/...); the
+        // sub-surface + sandstone count is the cleaner signal.
+        for cx in (-30..30).step_by(6) {
+            for cz in (-30..30).step_by(6) {
+                let mut stack = Vec::new();
+                for cy in 0..11 {
+                    stack.push(gen_mc([cx, cy, cz], &c));
+                }
+                for x in 0..CHUNK_SIZE {
+                    for z in 0..CHUNK_SIZE {
+                        // topmost non-air, non-water world-Y in the stack
+                        let mut ty = -1i32;
+                        for (cy, ch) in stack.iter().enumerate() {
+                            for y in 0..CHUNK_SIZE {
+                                let id = ch.get(x, y, z).0;
+                                if id != 0 && id != 36 {
+                                    ty = (cy * CHUNK_SIZE + y) as i32;
+                                }
+                            }
+                        }
+                        if ty < 2 {
+                            continue;
+                        }
+                        let at = |wy: i32| {
+                            let cy = (wy as usize) / CHUNK_SIZE;
+                            let ly = (wy as usize) % CHUNK_SIZE;
+                            stack[cy].get(x, ly, z).0
+                        };
+                        *top.entry(at(ty)).or_default() += 1;
+                        *sub.entry(at(ty - 2)).or_default() += 1;
+                        // Land = surface at/above sea level (dry column).
+                        if ty >= ow.sea_level {
+                            *land_top.entry(at(ty)).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("\n== surface (topmost) blocks, seed 0, sparse sweep ==");
+        for (id, n) in &top {
+            println!("  {:>13}: {n}", name(*id));
+        }
+        println!("== 2 blocks below surface ==");
+        for (id, n) in &sub {
+            println!("  {:>13}: {n}", name(*id));
+        }
+        println!("== LAND surface (topmost >= sea level {}) ==", ow.sea_level);
+        for (id, n) in &land_top {
+            println!("  {:>13}: {n}", name(*id));
         }
     }
 

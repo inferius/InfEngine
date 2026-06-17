@@ -16,6 +16,7 @@ use super::biome::{mc_biome, peaks_valleys};
 use super::data;
 use super::density::{Df, NoiseResolver, parse};
 use super::noise::{NoiseParams, NormalNoise};
+use super::surface_rule::{SurfaceCtx, SurfaceRules};
 use crate::worldgen::biome::Biome;
 
 /// The assembled overworld terrain sampler + the vertical config read
@@ -31,6 +32,10 @@ pub(crate) struct Overworld {
     continents: Df,
     erosion: Df,
     ridges: Df,
+    /// MC's `surface_rule` (grass / sand+sandstone / gravel / podzol /
+    /// snow), parsed from the same settings. Evaluated per surface column
+    /// by the terrain stage.
+    surface: SurfaceRules,
     pub(crate) sea_level: i32,
     pub(crate) min_y: i32,
     pub(crate) height: i32,
@@ -55,6 +60,12 @@ impl Overworld {
         let e = self.erosion.eval(fx, 0.0, fz);
         let w = self.ridges.eval(fx, 0.0, fz);
         mc_biome(t, v, c, e, peaks_valleys(w))
+    }
+
+    /// MC surface block for a column cell, or `None` to leave whatever
+    /// the terrain stage placed (deep stone). See [`SurfaceCtx`].
+    pub(crate) fn surface_eval(&self, ctx: &SurfaceCtx) -> Option<u16> {
+        self.surface.eval(ctx)
     }
 }
 
@@ -97,6 +108,9 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     let continents = p("continents");
     let erosion = p("erosion");
     let ridges = p("ridges");
+    // The surface rule reuses the same seeded-noise resolver (it samples
+    // the `surface` / `surface_swamp` / `gravel` / ... noises).
+    let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res);
 
     let noise = &settings["noise"];
     let min_y = noise["min_y"].as_i64().unwrap_or(-64) as i32;
@@ -111,6 +125,7 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         continents,
         erosion,
         ridges,
+        surface,
         sea_level,
         min_y,
         height,
