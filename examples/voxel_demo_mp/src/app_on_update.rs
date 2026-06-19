@@ -54,6 +54,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         static DIAG_MOBS_US: AtomicU64 = AtomicU64::new(0);
         static DIAG_LIQUIDS_US: AtomicU64 = AtomicU64::new(0);
         static DIAG_DRAWQ_US: AtomicU64 = AtomicU64::new(0);
+        // W198.2: liquid mesh rebuild, the untimed sim_ms gap suspect.
+        static DIAG_LIQMESH_US: AtomicU64 = AtomicU64::new(0);
         // W95: fire on a ~2.5s WALL-CLOCK interval, not every 600 frames.
         // At 10 FPS a 600-frame gate only logged once per 60s, so a frame
         // collapse produced no diag before the user quit. Now a stall is
@@ -74,6 +76,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let mob_us = DIAG_MOBS_US.swap(0, DiagOrd::Relaxed);
             let liq_us = DIAG_LIQUIDS_US.swap(0, DiagOrd::Relaxed);
             let dq_us = DIAG_DRAWQ_US.swap(0, DiagOrd::Relaxed);
+            let liqm_us = DIAG_LIQMESH_US.swap(0, DiagOrd::Relaxed);
             let f = frames.max(1);
             // W198: also stash the per-phase ms so the F3 overlay can show
             // them (the user screenshots the HUD instead of the console).
@@ -83,6 +86,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::perf::store(&crate::perf::LIQUIDS_MS, (liq_us / f) as f32 / 1000.0);
             crate::perf::store(&crate::perf::DRAWQ_MS, (dq_us / f) as f32 / 1000.0);
             crate::perf::store(&crate::perf::MOBS_MS, (mob_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::LIQMESH_MS, (liqm_us / f) as f32 / 1000.0);
             tracing::info!(
                 fps = vx.fps_ema as i32,
                 chunks = vx.world.iter_chunks().count(),
@@ -98,6 +102,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 mobs_ms = (mob_us / f) as f32 / 1000.0,
                 liquids_ms = (liq_us / f) as f32 / 1000.0,
                 drawq_ms = (dq_us / f) as f32 / 1000.0,
+                liqmesh_ms = (liqm_us / f) as f32 / 1000.0,
                 liq_pos = vx.liquid_positions.len(),
                 liq_sched = vx.liquid_schedule.len(),
                 "voxel: perf diag"
@@ -1325,7 +1330,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // set. Done before the renderer borrow below so the
         // create_mesh / remove_mesh churn doesn't fight with the
         // per-frame draw calls.
+        let liqmesh_t0 = std::time::Instant::now();
         vx.maybe_rebuild_liquid_mesh();
+        DIAG_LIQMESH_US.fetch_add(liqmesh_t0.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         let player_pos = vx.player_pos;
         // W77: borrow the mesh table instead of cloning the whole
         // HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>> every frame.

@@ -294,11 +294,26 @@ impl Voxel {
             let bx = cc[0] * cs;
             let by = cc[1] * cs;
             let bz = cc[2] * cs;
-            let cells = (0..cs).flat_map(move |lx| {
-                (0..cs).flat_map(move |ly| (0..cs).map(move |lz| [bx + lx, by + ly, bz + lz]))
-            });
-            for p in cells {
-                self.emit_liquid_cell(p, &mut buckets);
+            // W198.2: skip non-liquid cells via ONE chunk borrow + local
+            // array reads instead of a `world.get` (HashMap) lookup per
+            // cell. Only actual liquid cells pay emit_liquid_cell's
+            // neighbour scan, so an all-air neighbour chunk (enqueued for
+            // seam re-cull on stream-in) now costs 4096 cheap array reads
+            // rather than 4096 hashmap lookups + emit. The old code's
+            // per-cell world.get over 24 chunks/frame was the bulk of the
+            // "flying over ocean" sim_ms (per-frame main-thread liquid
+            // meshing); this is its dominant term.
+            if let Some(chunk) = self.world.chunk(cc) {
+                for lx in 0..cs {
+                    for ly in 0..cs {
+                        for lz in 0..cs {
+                            let local = chunk.get(lx as usize, ly as usize, lz as usize);
+                            if liquid_for(local).is_some() {
+                                self.emit_liquid_cell([bx + lx, by + ly, bz + lz], &mut buckets);
+                            }
+                        }
+                    }
+                }
             }
             let renderer = self.renderer.as_mut().expect("renderer ready");
             if let Some(old) = self.liquid_mesh_handles.remove(&cc) {

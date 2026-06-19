@@ -1162,11 +1162,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 // ~2.5s) so a perf report is one screenshot.
                                 ui.separator();
                                 ui.label(format!(
-                                    "ms r{:.1} sim{:.1} str{:.1} liq{:.1} dq{:.1} mob{:.1}",
+                                    "ms r{:.1} sim{:.1} str{:.1} liqM{:.1} dq{:.1} mob{:.1}",
                                     crate::perf::load(&crate::perf::RENDER_MS),
                                     crate::perf::load(&crate::perf::SIM_MS),
                                     crate::perf::load(&crate::perf::STREAM_MS),
-                                    crate::perf::load(&crate::perf::LIQUIDS_MS),
+                                    crate::perf::load(&crate::perf::LIQMESH_MS),
                                     crate::perf::load(&crate::perf::DRAWQ_MS),
                                     crate::perf::load(&crate::perf::MOBS_MS),
                                 ));
