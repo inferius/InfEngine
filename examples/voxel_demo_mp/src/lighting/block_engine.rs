@@ -23,7 +23,7 @@
 //! two-phase unlight tracking from MC - we just blow the affected
 //! region away and re-derive it from scratch. Cheap at 16^3 chunks.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
 
@@ -105,7 +105,7 @@ fn clear_block_layer(state: &mut LightingState, affected: &[ChunkCoord]) {
 /// write happened, `None` otherwise.
 fn try_set_block_light(
     state: &mut LightingState,
-    affected: &[ChunkCoord],
+    affected: &HashSet<ChunkCoord>,
     pos: [i32; 3],
     light: u8,
 ) -> Option<u8> {
@@ -125,7 +125,7 @@ fn try_set_block_light(
 
 /// Read block-light at `pos`. Returns 0 for chunks outside `affected`
 /// (the BFS treats them as void / unlit).
-fn get_block_light(state: &LightingState, affected: &[ChunkCoord], pos: [i32; 3]) -> u8 {
+fn get_block_light(state: &LightingState, affected: &HashSet<ChunkCoord>, pos: [i32; 3]) -> u8 {
     let (cc, lc) = split(pos);
     if !affected.contains(&cc) {
         return 0;
@@ -140,7 +140,7 @@ fn get_block_light(state: &LightingState, affected: &[ChunkCoord], pos: [i32; 3]
 fn seed_emitters(
     world: &impl LightingWorldAccess,
     state: &mut LightingState,
-    affected: &[ChunkCoord],
+    affected: &HashSet<ChunkCoord>,
 ) -> VecDeque<([i32; 3], u8)> {
     let mut queue: VecDeque<([i32; 3], u8)> = VecDeque::new();
     for cc in affected {
@@ -165,7 +165,7 @@ fn seed_emitters(
 }
 
 /// BFS-propagate the seeded queue across the affected region.
-fn propagate(world: &impl LightingWorldAccess, state: &mut LightingState, affected: &[ChunkCoord], mut queue: VecDeque<([i32; 3], u8)>) {
+fn propagate(world: &impl LightingWorldAccess, state: &mut LightingState, affected: &HashSet<ChunkCoord>, mut queue: VecDeque<([i32; 3], u8)>) {
     while let Some((pos, level)) = queue.pop_front() {
         if level <= 1 {
             // A 1-light cell can only push 0 -> nothing to add.
@@ -213,8 +213,12 @@ pub(crate) fn propagate_block_light(
     affected: &[ChunkCoord],
 ) {
     clear_block_layer(state, affected);
-    let queue = seed_emitters(world, state, affected);
-    propagate(world, state, affected, queue);
+    // W198.3: O(1) chunk-membership via a HashSet. The hot try_set / get
+    // paths ran `affected.contains` (a linear scan over the whole batch)
+    // for every cell + neighbour - O(cells * batch), the bulk of block_ms.
+    let affected: HashSet<ChunkCoord> = affected.iter().copied().collect();
+    let queue = seed_emitters(world, state, &affected);
+    propagate(world, state, &affected, queue);
 }
 
 /// W28.5: Two-queue incremental block-light update.
@@ -247,6 +251,10 @@ pub(crate) fn propagate_block_light_incremental(
     old_emission: u8,
     new_emission: u8,
 ) {
+    // W198.3: O(1) chunk membership. This path's `affected` is small (the
+    // edited chunk + neighbours), but it shares the now-HashSet helpers
+    // with the full-reflood engine.
+    let affected: HashSet<ChunkCoord> = affected.iter().copied().collect();
     // Phase 1: unlight. BFS that zeros cells and collects border
     // cells that still have external light (relight seeds).
     let mut relight: VecDeque<([i32; 3], u8)> = VecDeque::new();
@@ -254,7 +262,7 @@ pub(crate) fn propagate_block_light_incremental(
     if old_emission > 0 {
         // Seed the unlight queue with the old emitter's former value.
         let mut unlight: VecDeque<([i32; 3], u8)> = VecDeque::new();
-        let old_val = get_block_light(state, affected, changed_pos);
+        let old_val = get_block_light(state, &affected, changed_pos);
         if old_val > 0 {
             // Zero and seed from this cell.
             if let Some(g) = {
@@ -374,11 +382,11 @@ pub(crate) fn propagate_block_light_incremental(
 
     // Phase 2: seed the new emitter (if any) and propagate.
     if new_emission > 0
-        && try_set_block_light(state, affected, changed_pos, new_emission).is_some()
+        && try_set_block_light(state, &affected, changed_pos, new_emission).is_some()
     {
         relight.push_back((changed_pos, new_emission));
     }
 
     // Standard propagation from all relight seeds.
-    propagate(world, state, affected, relight);
+    propagate(world, state, &affected, relight);
 }

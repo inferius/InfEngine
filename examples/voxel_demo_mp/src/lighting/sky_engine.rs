@@ -18,7 +18,7 @@
 //! engine) keeps the implementation small; MC's incremental
 //! `setSkyLight*` paths are a follow-up.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use infengine_voxel::{CHUNK_SIZE, ChunkCoord};
 
@@ -69,7 +69,7 @@ fn clear_sky_layer(state: &mut LightingState, affected: &[ChunkCoord]) {
 
 fn try_set_sky_light(
     state: &mut LightingState,
-    affected: &[ChunkCoord],
+    affected: &HashSet<ChunkCoord>,
     pos: [i32; 3],
     light: u8,
 ) -> Option<u8> {
@@ -87,7 +87,7 @@ fn try_set_sky_light(
     }
 }
 
-fn get_sky_light(state: &LightingState, affected: &[ChunkCoord], pos: [i32; 3]) -> u8 {
+fn get_sky_light(state: &LightingState, affected: &HashSet<ChunkCoord>, pos: [i32; 3]) -> u8 {
     let (cc, lc) = split(pos);
     if !affected.contains(&cc) {
         return 0;
@@ -118,8 +118,15 @@ fn y_range(affected: &[ChunkCoord]) -> Option<(i32, i32)> {
 }
 
 /// Set of unique `(x, z)` columns in the affected region.
+///
+/// W198.3: dedup via a `HashSet`, not `Vec::contains`. The old linear
+/// `out.contains(&p)` made this O(columns^2) - for a ~100-chunk lighting
+/// batch that is ~25k columns and hundreds of millions of comparisons,
+/// the bulk of `sky_ms` (200-650ms/batch in the user's logs) and why it
+/// exploded with view distance.
 fn affected_columns(affected: &[ChunkCoord]) -> Vec<(i32, i32)> {
     let cs = CHUNK_SIZE as i32;
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
     let mut out: Vec<(i32, i32)> = Vec::new();
     for cc in affected {
         let bx = cc[0] * cs;
@@ -127,7 +134,7 @@ fn affected_columns(affected: &[ChunkCoord]) -> Vec<(i32, i32)> {
         for dz in 0..cs {
             for dx in 0..cs {
                 let p = (bx + dx, bz + dz);
-                if !out.contains(&p) {
+                if seen.insert(p) {
                     out.push(p);
                 }
             }
@@ -147,12 +154,13 @@ fn affected_columns(affected: &[ChunkCoord]) -> Vec<(i32, i32)> {
 fn column_walk(
     world: &impl LightingWorldAccess,
     state: &mut LightingState,
-    affected: &[ChunkCoord],
+    affected: &HashSet<ChunkCoord>,
+    columns: &[(i32, i32)],
     y_min: i32,
     y_max: i32,
 ) -> VecDeque<([i32; 3], u8)> {
     let mut queue: VecDeque<([i32; 3], u8)> = VecDeque::new();
-    for (x, z) in affected_columns(affected) {
+    for &(x, z) in columns {
         let mut light = SKY_FULL;
         for y in (y_min..=y_max).rev() {
             let p = [x, y, z];
@@ -182,7 +190,7 @@ fn column_walk(
 fn propagate(
     world: &impl LightingWorldAccess,
     state: &mut LightingState,
-    affected: &[ChunkCoord],
+    affected: &HashSet<ChunkCoord>,
     mut queue: VecDeque<([i32; 3], u8)>,
 ) {
     while let Some((pos, level)) = queue.pop_front() {
@@ -226,6 +234,12 @@ pub(crate) fn propagate_sky_light(
     let Some((y_min, y_max)) = y_range(affected) else {
         return;
     };
-    let queue = column_walk(world, state, affected, y_min, y_max);
-    propagate(world, state, affected, queue);
+    // W198.3: O(1) chunk-membership via a HashSet (the hot try_set / get
+    // paths ran `affected.contains` - a linear scan over the whole batch -
+    // for every cell, which with the O(columns^2) dedup was the bulk of
+    // sky_ms).
+    let columns = affected_columns(affected);
+    let affected: HashSet<ChunkCoord> = affected.iter().copied().collect();
+    let queue = column_walk(world, state, &affected, &columns, y_min, y_max);
+    propagate(world, state, &affected, queue);
 }
