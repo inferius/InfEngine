@@ -1353,6 +1353,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     if dbg_fly { "  fly" } else { "" }
                                 ));
                                 ui.label(format!("fps: {fps:.0}"));
+                                // W198.3: per-phase ms (~2.5s avg) so a perf
+                                // report is one F3 screenshot.
+                                ui.label(format!(
+                                    "ms r{:.1} sim{:.1} str{:.1} liqM{:.1} dq{:.1}",
+                                    crate::perf::load(&crate::perf::RENDER_MS),
+                                    crate::perf::load(&crate::perf::SIM_MS),
+                                    crate::perf::load(&crate::perf::STREAM_MS),
+                                    crate::perf::load(&crate::perf::LIQMESH_MS),
+                                    crate::perf::load(&crate::perf::DRAWQ_MS),
+                                ));
                                 ui.label(format!("net: {dbg_net}"));
                                 let h = dbg_playtime / 3600;
                                 let m = (dbg_playtime % 3600) / 60;
