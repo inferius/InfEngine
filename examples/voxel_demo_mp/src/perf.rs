@@ -20,6 +20,14 @@ pub(crate) static MOBS_MS: AtomicU32 = AtomicU32::new(0);
 /// which is NOT inside any named sim phase - the prime suspect for the
 /// untimed `sim_ms` gap while flying over ocean.
 pub(crate) static LIQMESH_MS: AtomicU32 = AtomicU32::new(0);
+/// W198.4: cumulative ms from frame start at two checkpoints, to localize
+/// the still-untimed `sim_ms` gap (standing still: sim ~25ms but every
+/// named phase ~0). CHK_MID = before the entity/particle render-prep
+/// block; CHK_RPREP = after it. Instantaneous (last frame), so on a stable
+/// scene: head+update+stream ~= CHK_MID, render-prep = CHK_RPREP-CHK_MID,
+/// drawq+tail = sim-CHK_RPREP.
+pub(crate) static CHK_MID_MS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static CHK_RPREP_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Store a ms value (kept to 0.01 ms resolution).
 pub(crate) fn store(field: &AtomicU32, ms: f32) {

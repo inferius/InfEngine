@@ -1363,6 +1363,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     crate::perf::load(&crate::perf::LIQMESH_MS),
                                     crate::perf::load(&crate::perf::DRAWQ_MS),
                                 ));
+                                // W198.4: cumulative-at-checkpoint, to find
+                                // the untimed sim gap. cmid = up to entity
+                                // render-prep; crp = after it.
+                                ui.label(format!(
+                                    "ms2 cmid{:.1} crp{:.1}",
+                                    crate::perf::load(&crate::perf::CHK_MID_MS),
+                                    crate::perf::load(&crate::perf::CHK_RPREP_MS),
+                                ));
                                 ui.label(format!("net: {dbg_net}"));
                                 let h = dbg_playtime / 3600;
                                 let m = (dbg_playtime % 3600) / 60;

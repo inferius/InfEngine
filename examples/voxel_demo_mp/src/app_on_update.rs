@@ -1504,6 +1504,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W47.17: remote + local player cube render moved into
         // render::players. own_id derives from net role; remote
         // sampling skipped offline; local override added in 3rd-person.
+        // W198.4: cumulative time up to the start of the entity/particle
+        // render-prep block, to localize the untimed sim gap.
+        crate::perf::store(
+            &crate::perf::CHK_MID_MS,
+            _frame_start.elapsed().as_secs_f32() * 1000.0,
+        );
         let own_id: u32 = match &vx.net {
             NetRole::Offline => u32::MAX,
             NetRole::Server { .. } => 0,
@@ -1598,6 +1604,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             renderer.queue_textured_particle(*tp);
         }
         vx.textured_particles.clear();
+        // W198.4: cumulative time after the render-prep block. The delta
+        // CHK_RPREP - CHK_MID is the cost of players/mobs/chests/minecarts/
+        // arrows/particles draw-prep.
+        crate::perf::store(
+            &crate::perf::CHK_RPREP_MS,
+            _frame_start.elapsed().as_secs_f32() * 1000.0,
+        );
         let model = Mat4::IDENTITY.to_cols_array();
         // W13.4: build frustum from the current view-projection so we
         // can skip draw_mesh_pbr for chunks outside the visible cone.
