@@ -304,13 +304,39 @@ impl Voxel {
             // "flying over ocean" sim_ms (per-frame main-thread liquid
             // meshing); this is its dominant term.
             if let Some(chunk) = self.world.chunk(cc) {
+                let cu = cs as usize;
                 for lx in 0..cs {
                     for ly in 0..cs {
                         for lz in 0..cs {
-                            let local = chunk.get(lx as usize, ly as usize, lz as usize);
-                            if liquid_for(local).is_some() {
-                                self.emit_liquid_cell([bx + lx, by + ly, bz + lz], &mut buckets);
+                            let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
+                            let id = chunk.get(ux, uy, uz);
+                            if liquid_for(id).is_none() {
+                                continue;
                             }
+                            // W198.6: skip cells fully enclosed by the SAME
+                            // liquid - they emit ZERO faces, but emit still
+                            // pays ~10 world.get (HashMap) lookups per cell
+                            // to discover that. For a deep-ocean chunk that's
+                            // nearly every cell (the bulk of liqM over water).
+                            // Only decidable locally for interior cells; border
+                            // cells have cross-chunk neighbours, so emit them.
+                            let interior =
+                                ux > 0 && uy > 0 && uz > 0 && ux < cu - 1 && uy < cu - 1 && uz < cu - 1;
+                            if interior {
+                                let same = |dx: usize, dy: usize, dz: usize| {
+                                    chunk.get(dx, dy, dz).0 == id.0
+                                };
+                                if same(ux + 1, uy, uz)
+                                    && same(ux - 1, uy, uz)
+                                    && same(ux, uy + 1, uz)
+                                    && same(ux, uy - 1, uz)
+                                    && same(ux, uy, uz + 1)
+                                    && same(ux, uy, uz - 1)
+                                {
+                                    continue;
+                                }
+                            }
+                            self.emit_liquid_cell([bx + lx, by + ly, bz + lz], &mut buckets);
                         }
                     }
                 }
