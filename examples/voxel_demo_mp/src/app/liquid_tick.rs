@@ -289,7 +289,15 @@ impl Voxel {
             return;
         }
         // Drain a budget of chunks per frame from the backlog - no rescan.
-        const LIQUID_CHUNKS_PER_FRAME: usize = 24;
+        // W198.11: lowered 24 -> 8. Meshing a water chunk costs ~1.9ms
+        // (emit does ~10 world.get per exposed cell), so 24/frame was ~45ms
+        // over open ocean - a per-frame stall while flying. 8/frame caps it
+        // to ~15ms and spreads the rest over the next frames (water meshes
+        // trail a touch behind the terrain while moving fast, which the
+        // distance-opaque far water largely hides). The real fix is
+        // chunk-local neighbour access in the liquid mesher (the recurring
+        // HashMap-per-cell pattern); this is the immediate relief.
+        const LIQUID_CHUNKS_PER_FRAME: usize = 8;
         let to_mesh: Vec<ChunkCoord> = self
             .liquid_remesh_backlog
             .iter()

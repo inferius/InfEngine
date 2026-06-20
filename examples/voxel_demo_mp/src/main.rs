@@ -339,7 +339,13 @@ const RESULTS_BUDGET_MS: u64 = 6;
 // 495 / 64 ~= 8 frames instead of 62. Workers pick the jobs up
 // at their own rate; the main-thread cap was only a back-pressure
 // safety, never the actual bottleneck on a 24-worker pool.
-const REMESH_DEFERRED_PER_FRAME: usize = 64;
+// W198.11: lowered 64 -> 16. At 64, the post-lighting re-mesh wave built
+// 64 worker snapshots (chunk clones) on the MAIN thread in a single frame
+// after every lighting batch - a ~20-30ms stream_ms spike = the "hitch
+// when the next chunk loads" the user reported. 16/frame spreads the same
+// wave over more frames (chunks light up as a gentle sweep, no stall);
+// the 24-worker pool still meshes them just as fast.
+const REMESH_DEFERRED_PER_FRAME: usize = 16;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`
