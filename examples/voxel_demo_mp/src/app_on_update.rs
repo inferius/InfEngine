@@ -512,6 +512,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             //
             // W8.1: also gated on `world_loaded` so the simulation
             // path can't run while the user is on the main menu.
+            // W198.9: cumulative time up to here = the frame head (plugin
+            // tick, master-query drain, ESC/input). Splits the untimed gap.
+            crate::perf::store(
+                &crate::perf::CHK_HEAD_MS,
+                _frame_start.elapsed().as_secs_f32() * 1000.0,
+            );
             let _t = std::time::Instant::now();
             vx.update_play(ctx, dt);
             DIAG_UPDATE_PLAY_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
@@ -1290,6 +1296,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         vx.tick_ambient_particles(dt);
         // Tick particles regardless of net role.
         vx.particles.tick(dt);
+        // W198.9: cumulative after the per-frame world-tick block (mobs/
+        // liquids/drops/fire/ambient/particles). CHK_WORLD - CHK_HEAD is the
+        // tick cost; CHK_MID - CHK_WORLD is the camera/sky/lighting-tick
+        // pre-render cost. Localizes the untimed ~20ms gap.
+        crate::perf::store(
+            &crate::perf::CHK_WORLD_MS,
+            _frame_start.elapsed().as_secs_f32() * 1000.0,
+        );
         // Tick the day clock unconditionally - even paused / in
         // menus the world keeps turning so the host's lighting is
         // never out of sync with what a client sees. /freezetime

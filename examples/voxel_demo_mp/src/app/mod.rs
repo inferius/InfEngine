@@ -811,6 +811,16 @@ pub(crate) struct Voxel {
     /// block id at the world coord tells the mesher which
     /// liquid lives at that cell.
     pub(crate) liquid_positions: HashSet<[i32; 3]>,
+    /// W198.10: the LAVA subset of `liquid_positions` (level-0 source
+    /// cells). Lava is rare (a few cave pools) while water dominates
+    /// `liquid_positions` (300k+ in an ocean world), so `tick_lava_fire_emit`
+    /// must NOT scan all liquids every frame to find lava - that O(all
+    /// liquids) per-frame `world.get` was a ~20ms CPU stall (cache-miss
+    /// bound, so a release build didn't help). Rebuilt cheaply inside the
+    /// liquid-mesh rescan (which already walks every liquid on change);
+    /// `tick_lava_fire_emit` re-validates each entry against the world, so a
+    /// momentarily stale entry is harmless.
+    pub(crate) lava_positions: HashSet<[i32; 3]>,
     /// W64: cells queued for a falling-block check. A freshly placed
     /// falling block (sand / concrete_powder / gravel) and the cell
     /// directly above any removed block land here; the host-only

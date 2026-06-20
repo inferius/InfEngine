@@ -62,6 +62,7 @@ impl Voxel {
         self.liquid_remesh_backlog.clear();
         self.liquid_level.clear();
         self.liquid_positions.clear();
+        self.lava_positions.clear();
         self.falling_pending.clear();
         self.persistent_leaves.clear();
         self.lever_on.clear();

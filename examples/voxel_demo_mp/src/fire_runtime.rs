@@ -172,14 +172,21 @@ pub(crate) fn tick_lava_fire_emit(vx: &mut crate::Voxel) {
         if matches!(vx.net, NetRole::Client { .. }) {
             return;
         }
-        if vx.liquid_positions.is_empty() {
+        // W198.10: gate on the lava subset, not all liquids. Standing in an
+        // ocean world `liquid_positions` is 300k+ cells; lava is a handful.
+        if vx.lava_positions.is_empty() {
             return;
         }
         let clock = vx.fire_clock;
         // Snapshot source cells - only level-0 lava blocks count
         // per MC (`fluid_lava_flow_does_not_ignite` test).
         let mut sources: Vec<[i32; 3]> = Vec::new();
-        for pos in vx.liquid_positions.iter().copied() {
+        // W198.10: iterate only the lava candidate set (rebuilt on liquid
+        // change in the mesh rescan), not all ~300k liquids every frame -
+        // that O(all-liquids) per-frame world.get sweep was the ~20ms stall.
+        // Re-validate against the world so a momentarily stale entry is
+        // skipped.
+        for pos in vx.lava_positions.iter().copied() {
             if vx.world.get(pos).0 != block::LAVA_ID {
                 continue;
             }

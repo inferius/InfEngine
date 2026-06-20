@@ -28,6 +28,13 @@ pub(crate) static LIQMESH_MS: AtomicU32 = AtomicU32::new(0);
 /// drawq+tail = sim-CHK_RPREP.
 pub(crate) static CHK_MID_MS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static CHK_RPREP_MS: AtomicU32 = AtomicU32::new(0);
+/// W198.9: split [frame_start -> CHK_MID] further. CHK_HEAD = cumulative
+/// up to the start of update_play (head: plugin tick, query drain, input);
+/// CHK_WORLD = cumulative after the per-frame tick block (mobs/liquids/
+/// drops/fire/ambient). So head=CHK_HEAD, world-tick=CHK_WORLD-CHK_HEAD,
+/// pre-render = CHK_MID-CHK_WORLD. Pins the still-untimed ~20ms gap.
+pub(crate) static CHK_HEAD_MS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static CHK_WORLD_MS: AtomicU32 = AtomicU32::new(0);
 /// W198.5: the egui UI build (`render_ui`), the biggest discrete untimed
 /// call before CHK_MID - prime suspect for the constant ~24ms sim gap.
 pub(crate) static UI_MS: AtomicU32 = AtomicU32::new(0);

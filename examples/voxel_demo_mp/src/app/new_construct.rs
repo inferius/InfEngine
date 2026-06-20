@@ -318,6 +318,7 @@ impl Voxel {
             mob_tick_accum: 0.0,
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
+            lava_positions: HashSet::new(),
             falling_pending: HashSet::new(),
             persistent_leaves: HashSet::new(),
             lever_on: HashSet::new(),
