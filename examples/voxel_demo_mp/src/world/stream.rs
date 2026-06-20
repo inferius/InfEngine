@@ -41,109 +41,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
 
     let (cy_min, cy_max) = Voxel::vertical_chunk_range(vx.player_pos.y);
 
-    // Queue missing chunks inside the view radius.
-    for dz in -view_dist..=view_dist {
-        for dx in -view_dist..=view_dist {
-            let dist_sq = (dx * dx + dz * dz) as i64;
-            for cy in cy_min..=cy_max {
-                let cc = [player_chunk[0] + dx, cy, player_chunk[2] + dz];
-                if vx.world.chunk(cc).is_none() && vx.pending_set.insert(cc) {
-                    vx.pending_chunks.push(PendingChunk {
-                        neg_dist_sq: -dist_sq,
-                        coord: cc,
-                    });
-                }
-            }
-        }
-    }
-
-    // Unload chunks beyond the keep radius.
-    let to_unload: std::collections::HashSet<ChunkCoord> = vx
-        .world
-        .iter_chunks()
-        .map(|(c, _)| *c)
-        .filter(|c| {
-            let dx = (c[0] - player_chunk[0]).abs();
-            let dz = (c[2] - player_chunk[2]).abs();
-            let horizontal_out = dx > unload_dist || dz > unload_dist;
-            let vertical_out = c[1] < cy_min - 1 || c[1] > cy_max + 1;
-            horizontal_out || vertical_out
-        })
-        .collect();
-    if !to_unload.is_empty() {
-        let renderer = vx.renderer.as_mut().expect("renderer ready");
-        for cc in &to_unload {
-            if let Some(subs) = vx.chunk_meshes.remove(cc) {
-                for (_block, handle) in subs {
-                    renderer.remove_chunk_mesh(handle);
-                }
-            }
-            // W111: drop this chunk's per-chunk liquid mesh + signature.
-            if let Some(kinds) = vx.liquid_mesh_handles.remove(cc) {
-                for (_id, h) in kinds {
-                    renderer.remove_mesh(h);
-                }
-            }
-            vx.liquid_chunk_sig.remove(cc);
-            vx.liquid_remesh_backlog.remove(cc);
-        }
-        // Persist edits to disk on a background thread.
-        if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)
-            && let Some(slug) = vx.current_world_slug.clone()
-        {
-            let dim = vx.current_dim.clone();
-            let mut payloads: Vec<world_save::chunks::ChunkPayload> =
-                Vec::with_capacity(to_unload.len());
-            for cc in &to_unload {
-                if let Some(p) = world_save::build_chunk_payload(vx, *cc) {
-                    payloads.push(p);
-                }
-            }
-            if !payloads.is_empty() {
-                std::thread::Builder::new()
-                    .name("voxel_demo_mp::unload_writer".to_string())
-                    .spawn(move || {
-                        for payload in payloads {
-                            let coord = payload.coord;
-                            if let Err(err) =
-                                world_save::write_chunk_payload(&slug, &dim, &payload)
-                            {
-                                tracing::warn!(
-                                    coord = ?coord,
-                                    error = %err,
-                                    "world_save: async unload-save failed",
-                                );
-                            }
-                        }
-                    })
-                    .ok();
-            }
-        }
-        // Prune side maps for unloaded chunk volumes.
-        let cs = infengine_voxel::CHUNK_SIZE as i32;
-        for cc in &to_unload {
-            let xmin = cc[0] * cs;
-            let xmax = xmin + cs;
-            let ymin = cc[1] * cs;
-            let ymax = ymin + cs;
-            let zmin = cc[2] * cs;
-            let zmax = zmin + cs;
-            let in_chunk = |p: &[i32; 3]| {
-                p[0] >= xmin && p[0] < xmax
-                    && p[1] >= ymin && p[1] < ymax
-                    && p[2] >= zmin && p[2] < zmax
-            };
-            vx.emitter_positions.retain(|p, _| !in_chunk(p));
-            vx.torch_positions.retain(|p| !in_chunk(p));
-            vx.torch_orient.retain(|p, _| !in_chunk(p));
-            vx.fires.retain(|p, _| !in_chunk(p));
-            vx.snow_positions.retain(|p, _| !in_chunk(p));
-            vx.liquid_positions.retain(|p| !in_chunk(p));
-            vx.liquid_level.retain(|p, _| !in_chunk(p));
-        }
-        for cc in &to_unload {
-            vx.world.remove_chunk(*cc);
-        }
+    // W198.13: the queue-missing + unload scans are the only uncapped
+    // O(N) work in the streamer (everything past them is count- or
+    // time-budgeted). Their RESULT only changes when the player crosses
+    // a chunk boundary (horizontal or vertical) or the view distance
+    // changes - so run them only then. Standing still / turning in
+    // place no longer pays ~30k HashMap lookups + a full iter_chunks()
+    // pass every frame. Dispatch + delivery + remesh below still run
+    // every frame to keep draining the existing queues.
+    let origin = (player_chunk[0], player_chunk[2], cy_min, cy_max, view_dist);
+    if vx.last_stream_origin != Some(origin) {
+        vx.last_stream_origin = Some(origin);
+        rescan_chunk_radius(vx, player_chunk, view_dist, unload_dist, cy_min, cy_max);
     }
 
     // Dispatch pending chunks to the worker pool.
@@ -469,5 +378,129 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         }
         vx.rebuild_chunks(&[coord]);
         remesh_done += 1;
+    }
+}
+
+/// W198.13: queue missing chunks in the view radius + unload chunks
+/// beyond the keep radius, then prune their side maps. Split out of
+/// `stream_chunks` so the caller can gate it on player chunk-boundary
+/// crossings (see `Voxel::last_stream_origin`) rather than paying its
+/// O(view_dist^2 * height) queue scan + O(all-loaded) unload scan on
+/// every single frame. Body is byte-for-byte the pre-W198.13 inline
+/// logic; only the receiver moved.
+fn rescan_chunk_radius(
+    vx: &mut Voxel,
+    player_chunk: [i32; 3],
+    view_dist: i32,
+    unload_dist: i32,
+    cy_min: i32,
+    cy_max: i32,
+) {
+    let cs = CHUNK_SIZE as i32;
+
+    // Queue missing chunks inside the view radius.
+    for dz in -view_dist..=view_dist {
+        for dx in -view_dist..=view_dist {
+            let dist_sq = (dx * dx + dz * dz) as i64;
+            for cy in cy_min..=cy_max {
+                let cc = [player_chunk[0] + dx, cy, player_chunk[2] + dz];
+                if vx.world.chunk(cc).is_none() && vx.pending_set.insert(cc) {
+                    vx.pending_chunks.push(PendingChunk {
+                        neg_dist_sq: -dist_sq,
+                        coord: cc,
+                    });
+                }
+            }
+        }
+    }
+
+    // Unload chunks beyond the keep radius.
+    let to_unload: std::collections::HashSet<ChunkCoord> = vx
+        .world
+        .iter_chunks()
+        .map(|(c, _)| *c)
+        .filter(|c| {
+            let dx = (c[0] - player_chunk[0]).abs();
+            let dz = (c[2] - player_chunk[2]).abs();
+            let horizontal_out = dx > unload_dist || dz > unload_dist;
+            let vertical_out = c[1] < cy_min - 1 || c[1] > cy_max + 1;
+            horizontal_out || vertical_out
+        })
+        .collect();
+    if to_unload.is_empty() {
+        return;
+    }
+
+    let renderer = vx.renderer.as_mut().expect("renderer ready");
+    for cc in &to_unload {
+        if let Some(subs) = vx.chunk_meshes.remove(cc) {
+            for (_block, handle) in subs {
+                renderer.remove_chunk_mesh(handle);
+            }
+        }
+        // W111: drop this chunk's per-chunk liquid mesh + signature.
+        if let Some(kinds) = vx.liquid_mesh_handles.remove(cc) {
+            for (_id, h) in kinds {
+                renderer.remove_mesh(h);
+            }
+        }
+        vx.liquid_chunk_sig.remove(cc);
+        vx.liquid_remesh_backlog.remove(cc);
+    }
+    // Persist edits to disk on a background thread.
+    if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)
+        && let Some(slug) = vx.current_world_slug.clone()
+    {
+        let dim = vx.current_dim.clone();
+        let mut payloads: Vec<world_save::chunks::ChunkPayload> =
+            Vec::with_capacity(to_unload.len());
+        for cc in &to_unload {
+            if let Some(p) = world_save::build_chunk_payload(vx, *cc) {
+                payloads.push(p);
+            }
+        }
+        if !payloads.is_empty() {
+            std::thread::Builder::new()
+                .name("voxel_demo_mp::unload_writer".to_string())
+                .spawn(move || {
+                    for payload in payloads {
+                        let coord = payload.coord;
+                        if let Err(err) =
+                            world_save::write_chunk_payload(&slug, &dim, &payload)
+                        {
+                            tracing::warn!(
+                                coord = ?coord,
+                                error = %err,
+                                "world_save: async unload-save failed",
+                            );
+                        }
+                    }
+                })
+                .ok();
+        }
+    }
+    // Prune side maps for unloaded chunk volumes.
+    for cc in &to_unload {
+        let xmin = cc[0] * cs;
+        let xmax = xmin + cs;
+        let ymin = cc[1] * cs;
+        let ymax = ymin + cs;
+        let zmin = cc[2] * cs;
+        let zmax = zmin + cs;
+        let in_chunk = |p: &[i32; 3]| {
+            p[0] >= xmin && p[0] < xmax
+                && p[1] >= ymin && p[1] < ymax
+                && p[2] >= zmin && p[2] < zmax
+        };
+        vx.emitter_positions.retain(|p, _| !in_chunk(p));
+        vx.torch_positions.retain(|p| !in_chunk(p));
+        vx.torch_orient.retain(|p, _| !in_chunk(p));
+        vx.fires.retain(|p, _| !in_chunk(p));
+        vx.snow_positions.retain(|p, _| !in_chunk(p));
+        vx.liquid_positions.retain(|p| !in_chunk(p));
+        vx.liquid_level.retain(|p, _| !in_chunk(p));
+    }
+    for cc in &to_unload {
+        vx.world.remove_chunk(*cc);
     }
 }

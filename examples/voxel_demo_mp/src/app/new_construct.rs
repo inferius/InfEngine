@@ -37,6 +37,7 @@ impl Voxel {
             pending_set: HashSet::new(),
             pending_remesh: VecDeque::new(),
             pending_remesh_set: HashSet::new(),
+            last_stream_origin: None,
             workers: None,
             chunk_revisions: HashMap::new(),
             pending_lighting_jobs: 0,

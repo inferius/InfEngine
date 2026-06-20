@@ -113,6 +113,17 @@ pub(crate) struct Voxel {
     /// arriving chunks list it as a neighbour. Cleared in sync with
     /// pending_remesh (pop removes from set; clear drains both).
     pub(crate) pending_remesh_set: HashSet<ChunkCoord>,
+    /// W198.13: `(chunk_x, chunk_z, cy_min, cy_max, view_distance)` the
+    /// last time the streamer ran its queue-missing + unload scans.
+    /// Those two scans are O(view_dist^2 * height) HashMap lookups and
+    /// O(all-loaded) respectively, yet their result only changes when
+    /// the player crosses a chunk boundary (horizontal OR vertical) or
+    /// the view distance changes. Gating them on this key skips ~30k
+    /// pointless lookups/frame while the player stands still or merely
+    /// turns in place (the residual turning judder after W198.12).
+    /// Dispatch + delivery + remesh still run every frame to keep
+    /// draining the existing queues.
+    pub(crate) last_stream_origin: Option<(i32, i32, i32, i32, i32)>,
     /// Worker pool the streaming code dispatches generation to. CPU-
     /// heavy `generate_chunk` + `chunk_mesh` run on the workers; the
     /// main thread only does the GPU buffer upload + neighbour
