@@ -539,7 +539,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // Build UI state first so the immediate-mode pass mutates vx
         // freely. The renderer is borrowed afterwards once UI state has
         // settled.
+        let _ui_t = std::time::Instant::now();
         vx.render_ui(window);
+        crate::perf::store(&crate::perf::UI_MS, _ui_t.elapsed().as_secs_f32() * 1000.0);
 
         let forward = Vec3::new(
             vx.player_yaw.cos() * vx.player_pitch.cos(),

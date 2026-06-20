@@ -1367,9 +1367,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 // the untimed sim gap. cmid = up to entity
                                 // render-prep; crp = after it.
                                 ui.label(format!(
-                                    "ms2 cmid{:.1} crp{:.1}",
+                                    "ms2 cmid{:.1} crp{:.1} ui{:.1}",
                                     crate::perf::load(&crate::perf::CHK_MID_MS),
                                     crate::perf::load(&crate::perf::CHK_RPREP_MS),
+                                    crate::perf::load(&crate::perf::UI_MS),
                                 ));
                                 ui.label(format!("net: {dbg_net}"));
                                 let h = dbg_playtime / 3600;

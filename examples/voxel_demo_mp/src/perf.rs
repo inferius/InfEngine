@@ -28,6 +28,9 @@ pub(crate) static LIQMESH_MS: AtomicU32 = AtomicU32::new(0);
 /// drawq+tail = sim-CHK_RPREP.
 pub(crate) static CHK_MID_MS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static CHK_RPREP_MS: AtomicU32 = AtomicU32::new(0);
+/// W198.5: the egui UI build (`render_ui`), the biggest discrete untimed
+/// call before CHK_MID - prime suspect for the constant ~24ms sim gap.
+pub(crate) static UI_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Store a ms value (kept to 0.01 ms resolution).
 pub(crate) fn store(field: &AtomicU32, ms: f32) {
