@@ -315,6 +315,7 @@ impl Voxel {
             liquid_schedule: LiquidSchedule::new(),
             liquid_clock: 0,
             liquid_tick_accum: 0.0,
+            mob_tick_accum: 0.0,
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
             falling_pending: HashSet::new(),

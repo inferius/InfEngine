@@ -36,6 +36,34 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
     if matches!(voxel.net, NetRole::Client { .. }) {
         return;
     }
+    // W198.7: run the AI at a FIXED 20 Hz (MC's tick rate), not once per
+    // render frame. Per-frame ticking made every mob's goal + walk +
+    // head-look step run EVERY frame, so 25 mobs cost ~1ms each - a
+    // framerate-dependent CPU load (more FPS = more mob work, so it
+    // self-limited the frame rate) that dominated sim_ms and was
+    // invisible on the F3 panel. At 20 Hz most frames do zero mob work;
+    // render still animates limbs/head from `mob_anim` per frame so motion
+    // stays smooth. Cap catch-up so a stall can't avalanche.
+    const MOB_TICK_DT: f32 = 1.0 / 20.0;
+    const MOB_MAX_CATCHUP: u32 = 4;
+    voxel.mob_tick_accum += dt;
+    if voxel.mob_tick_accum < MOB_TICK_DT {
+        return;
+    }
+    let mut catch = 0;
+    while voxel.mob_tick_accum >= MOB_TICK_DT && catch < MOB_MAX_CATCHUP {
+        voxel.mob_tick_accum -= MOB_TICK_DT;
+        catch += 1;
+        tick_mobs_once(voxel, MOB_TICK_DT);
+    }
+    if voxel.mob_tick_accum > MOB_TICK_DT {
+        voxel.mob_tick_accum = 0.0;
+    }
+}
+
+/// One fixed-timestep mob AI tick (the former per-frame body): HP regen,
+/// per-mob goal + walk + head-look, despawn / spawn / breed, broadcast.
+fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
     hp_regen_pass(voxel, dt);
     let day_time = voxel.day_time;
     let mut rand_seed: u32 =

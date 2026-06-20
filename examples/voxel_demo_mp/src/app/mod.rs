@@ -799,6 +799,12 @@ pub(crate) struct Voxel {
     /// advancement to a fixed 20 Hz so liquid flow speed is independent
     /// of frame rate. Transient - not persisted; reset on world load.
     pub(crate) liquid_tick_accum: f32,
+    /// W198.7: same fixed-20 Hz accumulator for mob AI. Mob `step_one`
+    /// (goals + walk + head-look) ran once per RENDER frame, so 25 mobs
+    /// cost ~1ms each EVERY frame - framerate-dependent CPU that capped
+    /// sim_ms (and was invisible in the F3 panel). MC ticks mobs at 20
+    /// TPS; this gates `tick_mobs` to the same cadence. Transient.
+    pub(crate) mob_tick_accum: f32,
     /// Every liquid voxel currently in the world. Maintained on
     /// every peer (host + clients) so the dedicated slope-mesh
     /// render path can iterate without scanning chunks. The
