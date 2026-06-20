@@ -480,26 +480,31 @@ fn rescan_chunk_radius(
         }
     }
     // Prune side maps for unloaded chunk volumes.
-    for cc in &to_unload {
-        let xmin = cc[0] * cs;
-        let xmax = xmin + cs;
-        let ymin = cc[1] * cs;
-        let ymax = ymin + cs;
-        let zmin = cc[2] * cs;
-        let zmax = zmin + cs;
-        let in_chunk = |p: &[i32; 3]| {
-            p[0] >= xmin && p[0] < xmax
-                && p[1] >= ymin && p[1] < ymax
-                && p[2] >= zmin && p[2] < zmax
-        };
-        vx.emitter_positions.retain(|p, _| !in_chunk(p));
-        vx.torch_positions.retain(|p| !in_chunk(p));
-        vx.torch_orient.retain(|p, _| !in_chunk(p));
-        vx.fires.retain(|p, _| !in_chunk(p));
-        vx.snow_positions.retain(|p, _| !in_chunk(p));
-        vx.liquid_positions.retain(|p| !in_chunk(p));
-        vx.liquid_level.retain(|p, _| !in_chunk(p));
-    }
+    //
+    // W198.15: ONE pass per map, not one per unloaded chunk. The old
+    // loop ran a full `retain()` for EVERY chunk in `to_unload`, i.e.
+    // O(unloaded * all_positions). At travel speed a single crossing
+    // unloads a whole column at once, so e.g. `liquid_positions` (~355k
+    // cells in an ocean world) was rescanned 20+ times in one frame -
+    // a multi-million-op main-thread spike, the travel judder. Each map
+    // is now scanned once and the cell's owning chunk is looked up in
+    // the `to_unload` HashSet in O(1). Equivalent result (a cell's chunk
+    // is in `to_unload` iff it fell inside one of the unloaded volumes).
+    let chunk_of = |p: &[i32; 3]| {
+        [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
+    };
+    vx.emitter_positions.retain(|p, _| !to_unload.contains(&chunk_of(p)));
+    vx.torch_positions.retain(|p| !to_unload.contains(&chunk_of(p)));
+    vx.torch_orient.retain(|p, _| !to_unload.contains(&chunk_of(p)));
+    vx.fires.retain(|p, _| !to_unload.contains(&chunk_of(p)));
+    vx.snow_positions.retain(|p, _| !to_unload.contains(&chunk_of(p)));
+    vx.liquid_positions.retain(|p| !to_unload.contains(&chunk_of(p)));
+    vx.liquid_level.retain(|p, _| !to_unload.contains(&chunk_of(p)));
+    // W198.15: lava_positions (W198.10 lava-emitter subset) was never
+    // pruned on unload, leaving stale entries for unloaded chunks. Cheap
+    // to keep tidy in the same single pass; the lava fire tick already
+    // re-validates, so this is just hygiene against unbounded growth.
+    vx.lava_positions.retain(|p| !to_unload.contains(&chunk_of(p)));
     for cc in &to_unload {
         vx.world.remove_chunk(*cc);
     }
