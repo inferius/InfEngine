@@ -206,6 +206,23 @@ impl Voxel {
     /// (cheap), never the whole 30k+ cell world mesh every tick - no judder,
     /// no throttle, and it scales to oceans. GPU work is budgeted to a few
     /// chunks per frame so a fresh chunk-load wave can't spike a frame.
+    /// W198.12: queue a chunk + its 6 face neighbours for an INCREMENTAL
+    /// liquid remesh (neighbours re-cull their shared faces). The liquid
+    /// tick / merge use this so a settled-ocean liquid change re-meshes only
+    /// the touched chunks, instead of setting `liquid_mesh_dirty` and
+    /// tripping the global O(all-liquids) signature scan - that periodic
+    /// scan (fired ~20Hz by the handful of oscillating shore cells) was the
+    /// ~15ms spike that juddered the view while just turning in place.
+    pub(crate) fn enqueue_liquid_remesh(&mut self, cc: ChunkCoord) {
+        self.liquid_remesh_backlog.insert(cc);
+        self.liquid_remesh_backlog.insert([cc[0] - 1, cc[1], cc[2]]);
+        self.liquid_remesh_backlog.insert([cc[0] + 1, cc[1], cc[2]]);
+        self.liquid_remesh_backlog.insert([cc[0], cc[1] - 1, cc[2]]);
+        self.liquid_remesh_backlog.insert([cc[0], cc[1] + 1, cc[2]]);
+        self.liquid_remesh_backlog.insert([cc[0], cc[1], cc[2] - 1]);
+        self.liquid_remesh_backlog.insert([cc[0], cc[1], cc[2] + 1]);
+    }
+
     pub(crate) fn maybe_rebuild_liquid_mesh(&mut self) {
         if self.renderer.is_none() {
             return;
@@ -479,6 +496,12 @@ impl Voxel {
         // W103: one batched remesh dispatch for every chunk this frame's
         // liquid ticks touched - one job per distinct chunk.
         if !dirty.is_empty() {
+            // W198.12: enqueue the touched chunks for an INCREMENTAL liquid
+            // remesh (no global O(all-liquids) scan - that periodic scan was
+            // the turning judder). Block remesh still goes via rebuild_chunks.
+            for &cc in &dirty {
+                self.enqueue_liquid_remesh(cc);
+            }
             let coords: Vec<ChunkCoord> = dirty.into_iter().collect();
             self.rebuild_chunks(&coords);
         }
@@ -569,13 +592,11 @@ impl Voxel {
                 dirty.insert(c);
             }
         }
-        if !tape.evaporated.is_empty()
-            || !tape.placed.is_empty()
-            || !tape.decayed.is_empty()
-            || !tape.solidified.is_empty()
-        {
-            self.liquid_mesh_dirty = true;
-        }
+        // W198.12: the touched chunks are already in `dirty` (collected
+        // above) and the caller (tick_liquids) enqueues them for an
+        // incremental liquid remesh, so we no longer set liquid_mesh_dirty
+        // here - that tripped the global O(all-liquids) signature scan on
+        // every liquid tick (~15ms spike = the turning judder).
         // Broadcast edits + level updates over the wire.
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
@@ -703,7 +724,16 @@ impl Voxel {
         for pos in &promoted {
             self.liquid_level.insert(*pos, 0);
         }
-        self.liquid_mesh_dirty = true;
+        // W198.12: incremental remesh of the promoted cells' chunks instead
+        // of the global O(all-liquids) scan.
+        let cs = CHUNK_SIZE as i32;
+        for pos in &promoted {
+            self.enqueue_liquid_remesh([
+                pos[0].div_euclid(cs),
+                pos[1].div_euclid(cs),
+                pos[2].div_euclid(cs),
+            ]);
+        }
         let cfg = bincode::config::standard();
         if let NetRole::Server { server, .. } = &mut self.net {
             for pos in &promoted {
