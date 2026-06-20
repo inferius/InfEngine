@@ -38,6 +38,19 @@ pub(crate) static CHK_WORLD_MS: AtomicU32 = AtomicU32::new(0);
 /// W198.5: the egui UI build (`render_ui`), the biggest discrete untimed
 /// call before CHK_MID - prime suspect for the constant ~24ms sim gap.
 pub(crate) static UI_MS: AtomicU32 = AtomicU32::new(0);
+/// W198.14: lighting dispatch (`tick_lighting`) cost. Runs at ~10 Hz and
+/// synchronously clones the affected chunks + face-neighbour halo into the
+/// worker snapshot ON THE MAIN THREAD, so during travel (dirty-set always
+/// full) it is a periodic spike - previously invisible, lumped into `sim`.
+pub(crate) static LIGHT_MS: AtomicU32 = AtomicU32::new(0);
+/// W198.14: PEAK (worst single frame) over the diag window for the spiky
+/// phases. Averages HIDE stutter - a 25 ms spike 10x/s averages to <0.5 ms
+/// yet is felt as judder, which is exactly why the turning/travel stutter
+/// kept eluding the averaged counters. These expose the worst frame so a
+/// periodic spike is attributable to its phase. Stored raw (not /frames).
+pub(crate) static SIM_PEAK_MS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static STREAM_PEAK_MS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static LIGHT_PEAK_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Store a ms value (kept to 0.01 ms resolution).
 pub(crate) fn store(field: &AtomicU32, ms: f32) {

@@ -56,6 +56,17 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         static DIAG_DRAWQ_US: AtomicU64 = AtomicU64::new(0);
         // W198.2: liquid mesh rebuild, the untimed sim_ms gap suspect.
         static DIAG_LIQMESH_US: AtomicU64 = AtomicU64::new(0);
+        // W198.14: lighting dispatch (`tick_lighting`) - clones chunks on
+        // the main thread at 10 Hz; a periodic travel-stutter suspect that
+        // was previously lumped into `sim`.
+        static DIAG_LIGHT_US: AtomicU64 = AtomicU64::new(0);
+        // W198.14: per-phase PEAK (worst single frame) via fetch_max. The
+        // averages above dilute a periodic spike into nothing (a 25ms hitch
+        // 10x/s reads as <0.5ms avg) - peaks are the only way to localize
+        // the felt turning/travel stutter to a phase.
+        static DIAG_SIM_PEAK_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_STREAM_PEAK_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_LIGHT_PEAK_US: AtomicU64 = AtomicU64::new(0);
         // W95: fire on a ~2.5s WALL-CLOCK interval, not every 600 frames.
         // At 10 FPS a 600-frame gate only logged once per 60s, so a frame
         // collapse produced no diag before the user quit. Now a stall is
@@ -77,6 +88,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let liq_us = DIAG_LIQUIDS_US.swap(0, DiagOrd::Relaxed);
             let dq_us = DIAG_DRAWQ_US.swap(0, DiagOrd::Relaxed);
             let liqm_us = DIAG_LIQMESH_US.swap(0, DiagOrd::Relaxed);
+            let light_us = DIAG_LIGHT_US.swap(0, DiagOrd::Relaxed);
+            let sim_pk = DIAG_SIM_PEAK_US.swap(0, DiagOrd::Relaxed);
+            let str_pk = DIAG_STREAM_PEAK_US.swap(0, DiagOrd::Relaxed);
+            let light_pk = DIAG_LIGHT_PEAK_US.swap(0, DiagOrd::Relaxed);
             let f = frames.max(1);
             // W198: also stash the per-phase ms so the F3 overlay can show
             // them (the user screenshots the HUD instead of the console).
@@ -87,6 +102,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::perf::store(&crate::perf::DRAWQ_MS, (dq_us / f) as f32 / 1000.0);
             crate::perf::store(&crate::perf::MOBS_MS, (mob_us / f) as f32 / 1000.0);
             crate::perf::store(&crate::perf::LIQMESH_MS, (liqm_us / f) as f32 / 1000.0);
+            crate::perf::store(&crate::perf::LIGHT_MS, (light_us / f) as f32 / 1000.0);
+            // W198.14: peaks stored raw (worst single frame), NOT averaged.
+            crate::perf::store(&crate::perf::SIM_PEAK_MS, sim_pk as f32 / 1000.0);
+            crate::perf::store(&crate::perf::STREAM_PEAK_MS, str_pk as f32 / 1000.0);
+            crate::perf::store(&crate::perf::LIGHT_PEAK_MS, light_pk as f32 / 1000.0);
             tracing::info!(
                 fps = vx.fps_ema as i32,
                 chunks = vx.world.iter_chunks().count(),
@@ -103,6 +123,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 liquids_ms = (liq_us / f) as f32 / 1000.0,
                 drawq_ms = (dq_us / f) as f32 / 1000.0,
                 liqmesh_ms = (liqm_us / f) as f32 / 1000.0,
+                light_ms = (light_us / f) as f32 / 1000.0,
+                sim_peak_ms = sim_pk as f32 / 1000.0,
+                stream_peak_ms = str_pk as f32 / 1000.0,
+                light_peak_ms = light_pk as f32 / 1000.0,
                 liq_pos = vx.liquid_positions.len(),
                 liq_sched = vx.liquid_schedule.len(),
                 "voxel: perf diag"
@@ -525,7 +549,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::audio_ambience::tick(vx, dt);
             let _t = std::time::Instant::now();
             vx.stream_chunks();
-            DIAG_STREAM_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
+            let stream_us = _t.elapsed().as_micros() as u64;
+            DIAG_STREAM_US.fetch_add(stream_us, DiagOrd::Relaxed);
+            DIAG_STREAM_PEAK_US.fetch_max(stream_us, DiagOrd::Relaxed);
             // W134: minecart simulation + rider pin + host snapshot
             // stream. Runs after update_play (which zeroed the walk
             // velocity while riding) and before the targeting ray
@@ -1318,10 +1344,17 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         vx.last_lighting_tick_s += dt;
         if vx.last_lighting_tick_s >= LIGHTING_TICK_PERIOD_S {
             vx.last_lighting_tick_s = 0.0;
+            // W198.14: time the lighting dispatch separately - it clones the
+            // affected chunks + halo on the main thread and was invisible,
+            // folded into `sim`. fetch_max captures the worst 10 Hz spike.
+            let light_t0 = std::time::Instant::now();
             let affected = vx.tick_lighting();
             if !affected.is_empty() && vx.renderer.is_some() {
                 vx.rebuild_chunks(&affected);
             }
+            let light_us = light_t0.elapsed().as_micros() as u64;
+            DIAG_LIGHT_US.fetch_add(light_us, DiagOrd::Relaxed);
+            DIAG_LIGHT_PEAK_US.fetch_max(light_us, DiagOrd::Relaxed);
         }
         // Day <-> night transition announcer. Fires once per
         // crossing using the sun elevation so the chat doesn't
@@ -1843,10 +1876,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // (input, ticks, streaming, lighting, draw-queue build) — the part NOT
         // counted by render_ms. Lets the diag attribute a frame collapse.
         let _diag_rt = std::time::Instant::now();
-        DIAG_SIM_US.fetch_add(
-            _diag_rt.duration_since(_frame_start).as_micros() as u64,
-            DiagOrd::Relaxed,
-        );
+        let sim_frame_us = _diag_rt.duration_since(_frame_start).as_micros() as u64;
+        DIAG_SIM_US.fetch_add(sim_frame_us, DiagOrd::Relaxed);
+        // W198.14: keep the worst single-frame sim cost so the F3 overlay
+        // can expose stutter the average buries.
+        DIAG_SIM_PEAK_US.fetch_max(sim_frame_us, DiagOrd::Relaxed);
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
         } else {

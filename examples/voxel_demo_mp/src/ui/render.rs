@@ -1374,6 +1374,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     crate::perf::load(&crate::perf::CHK_MID_MS),
                                     crate::perf::load(&crate::perf::UI_MS),
                                 ));
+                                // W198.14: lighting-dispatch avg + WORST-FRAME
+                                // peaks. Peaks expose stutter the averages
+                                // bury (a periodic spike reads ~0 averaged).
+                                ui.label(format!(
+                                    "ms3 lgt{:.1} | peak sim{:.1} str{:.1} lgt{:.1}",
+                                    crate::perf::load(&crate::perf::LIGHT_MS),
+                                    crate::perf::load(&crate::perf::SIM_PEAK_MS),
+                                    crate::perf::load(&crate::perf::STREAM_PEAK_MS),
+                                    crate::perf::load(&crate::perf::LIGHT_PEAK_MS),
+                                ));
                                 ui.label(format!("net: {dbg_net}"));
                                 let h = dbg_playtime / 3600;
                                 let m = (dbg_playtime % 3600) / 60;
