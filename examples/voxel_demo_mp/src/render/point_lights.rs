@@ -25,8 +25,26 @@ pub(crate) fn push(
     // W12.5: build candidate set from emitter_positions
     // (world_set_tracked keeps this in sync). Sort by squared
     // distance; far emitters drop out at the cap.
+    //
+    // W198.8: pre-filter by distance BEFORE sample_for + collect. The old
+    // code built a sample for EVERY emitter in EVERY loaded chunk and then
+    // sorted them all, every frame. At high view distance the caves below
+    // the player are full of lava (tens of thousands of emitters), so this
+    // O(all-emitters) build + sort was the constant ~25ms sim_ms gap that
+    // capped the frame rate regardless of where the player stood. A point
+    // light only reaches 14 blocks, so anything past a generous cull radius
+    // can never be picked - a cheap squared-distance test drops it before
+    // the expensive sample_for / alloc / sort path.
+    let pp = [player_pos.x, player_pos.y, player_pos.z];
+    const CULL_R2: f32 = 40.0 * 40.0;
     let samples: Vec<emitter_lights::EmitterSample> = emitter_positions
         .iter()
+        .filter(|(p, _)| {
+            let dx = p[0] as f32 + 0.5 - pp[0];
+            let dy = p[1] as f32 + 0.5 - pp[1];
+            let dz = p[2] as f32 + 0.5 - pp[2];
+            dx * dx + dy * dy + dz * dz <= CULL_R2
+        })
         .filter_map(|(p, id)| {
             emitter_lights::sample_for(
                 *id,
@@ -34,11 +52,8 @@ pub(crate) fn push(
             )
         })
         .collect();
-    let picked = emitter_lights::pick_nearest(
-        &samples,
-        [player_pos.x, player_pos.y, player_pos.z],
-        emitter_lights::MAX_POINT_LIGHTS,
-    );
+    let picked =
+        emitter_lights::pick_nearest(&samples, pp, emitter_lights::MAX_POINT_LIGHTS);
     for s in picked.iter() {
         // Subtle flicker on each light's intensity hashed by position
         // so the room reads as living torchlight, not a static lamp.
