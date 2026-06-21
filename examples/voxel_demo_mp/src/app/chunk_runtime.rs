@@ -320,7 +320,22 @@ impl Voxel {
     #[inline]
     pub(crate) fn current_results_budget(&self) -> (usize, u64) {
         if matches!(self.state, AppState::Loading { .. }) {
-            (32, 8)
+            return (32, 8);
+        }
+        // W198.17: streamed chunks arrive mesh-complete (the worker does
+        // gen+mesh+light in one job), so how fast a freshly-entered area
+        // "fills in" is bounded by how many of those meshes we GPU-upload
+        // per frame = RESULTS_BUDGET_MS. While the player is essentially
+        // stationary there is no movement-hitch risk, so spend a larger
+        // budget to drain the backlog fast (the "docitani" pop-in the user
+        // asked to tune). A ~12 ms frame standing still is imperceptible
+        // (~80 FPS, one-time) and snaps the view in. The instant the player
+        // moves we drop back to the conservative 6 ms so uploads never
+        // cause a travel stutter.
+        let v = self.player_vel;
+        let speed_sq = v.x * v.x + v.y * v.y + v.z * v.z;
+        if speed_sq < 4.0 {
+            (RESULTS_PER_FRAME * 2, 12)
         } else {
             (RESULTS_PER_FRAME, RESULTS_BUDGET_MS)
         }
