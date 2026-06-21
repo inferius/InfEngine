@@ -20,6 +20,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W103 perf-diag: wall-clock start of this frame's on_update so the
         // 2.5s diag can split total frame cost into sim phases vs render.
         let _frame_start = std::time::Instant::now();
+        // W198.16: this frame's discrete phase costs, captured so the
+        // low-FPS auto-log can print a hitch's breakdown into the log
+        // (deduped to once per diag window) - the user can't reliably
+        // screenshot the F3 peak line while the FPS is bouncing.
+        let mut stream_us_frame: u64 = 0;
+        let mut light_us_frame: u64 = 0;
         // Wave 7: fire on_tick for every loaded plugin BEFORE
         // anything else in the frame so plugins see a stable
         // world state (no edits applied mid-tick). day_time
@@ -67,6 +73,18 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         static DIAG_SIM_PEAK_US: AtomicU64 = AtomicU64::new(0);
         static DIAG_STREAM_PEAK_US: AtomicU64 = AtomicU64::new(0);
         static DIAG_LIGHT_PEAK_US: AtomicU64 = AtomicU64::new(0);
+        // W198.16: full phase breakdown of the WORST sim frame in the
+        // window, captured when a new max is seen. At window flush, if that
+        // worst frame crossed the hitch threshold, its breakdown is logged
+        // once - a deduped (<=1 per 2.5s) low-FPS hitch record so the user
+        // doesn't have to screenshot the bouncing F3 line. All in us.
+        static DIAG_WSIM_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WHEAD_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WWORLD_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WMID_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WRPREP_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WSTREAM_US: AtomicU64 = AtomicU64::new(0);
+        static DIAG_WLIGHT_US: AtomicU64 = AtomicU64::new(0);
         // W95: fire on a ~2.5s WALL-CLOCK interval, not every 600 frames.
         // At 10 FPS a 600-frame gate only logged once per 60s, so a frame
         // collapse produced no diag before the user quit. Now a stall is
@@ -107,6 +125,37 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::perf::store(&crate::perf::SIM_PEAK_MS, sim_pk as f32 / 1000.0);
             crate::perf::store(&crate::perf::STREAM_PEAK_MS, str_pk as f32 / 1000.0);
             crate::perf::store(&crate::perf::LIGHT_PEAK_MS, light_pk as f32 / 1000.0);
+            // W198.16: deduped low-FPS hitch log (<=1 per 2.5s window). If the
+            // worst frame this window crossed the hitch line, log its phase
+            // breakdown so a stutter is diagnosable from the log alone - no
+            // racing to screenshot the bouncing F3 line. world_tick = wworld-
+            // whead, pre_render = wmid-wworld, render_prep = wrprep-wmid,
+            // drawq_tail = wsim-wrprep; stream/light are discrete.
+            const HITCH_SIM_US: u64 = 14_000; // ~below 70 FPS in sim alone
+            let wsim = DIAG_WSIM_US.swap(0, DiagOrd::Relaxed);
+            let whead = DIAG_WHEAD_US.swap(0, DiagOrd::Relaxed);
+            let wworld = DIAG_WWORLD_US.swap(0, DiagOrd::Relaxed);
+            let wmid = DIAG_WMID_US.swap(0, DiagOrd::Relaxed);
+            let wrprep = DIAG_WRPREP_US.swap(0, DiagOrd::Relaxed);
+            let wstream = DIAG_WSTREAM_US.swap(0, DiagOrd::Relaxed);
+            let wlight = DIAG_WLIGHT_US.swap(0, DiagOrd::Relaxed);
+            if wsim >= HITCH_SIM_US {
+                let ms = |u: u64| u as f32 / 1000.0;
+                tracing::warn!(
+                    worst_sim_ms = ms(wsim),
+                    head_ms = ms(whead),
+                    world_tick_ms = ms(wworld.saturating_sub(whead)),
+                    pre_render_ms = ms(wmid.saturating_sub(wworld)),
+                    render_prep_ms = ms(wrprep.saturating_sub(wmid)),
+                    drawq_tail_ms = ms(wsim.saturating_sub(wrprep)),
+                    stream_ms = ms(wstream),
+                    light_ms = ms(wlight),
+                    chunks = vx.world.iter_chunks().count(),
+                    remesh_q = vx.pending_remesh.len(),
+                    light_jobs = vx.pending_lighting_jobs,
+                    "W198.16: low-FPS hitch (worst frame this 2.5s window)"
+                );
+            }
             tracing::info!(
                 fps = vx.fps_ema as i32,
                 chunks = vx.world.iter_chunks().count(),
@@ -550,6 +599,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let _t = std::time::Instant::now();
             vx.stream_chunks();
             let stream_us = _t.elapsed().as_micros() as u64;
+            stream_us_frame = stream_us;
             DIAG_STREAM_US.fetch_add(stream_us, DiagOrd::Relaxed);
             DIAG_STREAM_PEAK_US.fetch_max(stream_us, DiagOrd::Relaxed);
             // W134: minecart simulation + rider pin + host snapshot
@@ -1353,6 +1403,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 vx.rebuild_chunks(&affected);
             }
             let light_us = light_t0.elapsed().as_micros() as u64;
+            light_us_frame = light_us;
             DIAG_LIGHT_US.fetch_add(light_us, DiagOrd::Relaxed);
             DIAG_LIGHT_PEAK_US.fetch_max(light_us, DiagOrd::Relaxed);
         }
@@ -1881,6 +1932,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W198.14: keep the worst single-frame sim cost so the F3 overlay
         // can expose stutter the average buries.
         DIAG_SIM_PEAK_US.fetch_max(sim_frame_us, DiagOrd::Relaxed);
+        // W198.16: if this is the worst sim frame of the window, snapshot its
+        // full phase breakdown for the deduped low-FPS auto-log. The CHK_*
+        // checkpoints were perf::store'd earlier this frame (cumulative ms
+        // from frame start); stream/light are this frame's discrete costs.
+        if sim_frame_us > DIAG_WSIM_US.load(DiagOrd::Relaxed) {
+            let us = |ms: f32| (ms * 1000.0) as u64;
+            DIAG_WSIM_US.store(sim_frame_us, DiagOrd::Relaxed);
+            DIAG_WHEAD_US.store(us(crate::perf::load(&crate::perf::CHK_HEAD_MS)), DiagOrd::Relaxed);
+            DIAG_WWORLD_US.store(us(crate::perf::load(&crate::perf::CHK_WORLD_MS)), DiagOrd::Relaxed);
+            DIAG_WMID_US.store(us(crate::perf::load(&crate::perf::CHK_MID_MS)), DiagOrd::Relaxed);
+            DIAG_WRPREP_US.store(us(crate::perf::load(&crate::perf::CHK_RPREP_MS)), DiagOrd::Relaxed);
+            DIAG_WSTREAM_US.store(stream_us_frame, DiagOrd::Relaxed);
+            DIAG_WLIGHT_US.store(light_us_frame, DiagOrd::Relaxed);
+        }
         let render_result = if let Some(ui) = ui {
             renderer.render(|d, q, e, v, s| ui.render(d, q, e, v, s))
         } else {
