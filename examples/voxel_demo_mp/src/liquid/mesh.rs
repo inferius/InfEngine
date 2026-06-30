@@ -232,6 +232,11 @@ pub(crate) fn bottom_open(
 /// Writes a per-cell flow direction into the `uv` slot - water
 /// meshes don't sample the albedo texture so UV is repurposed as
 /// the scroll vector the animated water shader reads.
+///
+/// W199: `depth` is the normalized water-column depth at this cell
+/// ([0,1] over ~12 blocks), baked into the spare light byte so the
+/// shader can fade the surface from translucent (shallow) to opaque
+/// (deep). Pass 0.0 for lava (opaque anyway) or non-depth quads.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn push_quad_flow(
     verts: &mut Vec<MeshVertex>,
@@ -242,11 +247,12 @@ pub(crate) fn push_quad_flow(
     v3: [f32; 3],
     normal: [f32; 3],
     flow: [f32; 2],
+    depth: f32,
 ) {
     let base = verts.len() as u32;
-    verts.push(MeshVertex::new(v0, normal).with_uv(flow));
-    verts.push(MeshVertex::new(v1, normal).with_uv(flow));
-    verts.push(MeshVertex::new(v2, normal).with_uv(flow));
-    verts.push(MeshVertex::new(v3, normal).with_uv(flow));
+    verts.push(MeshVertex::new(v0, normal).with_uv(flow).with_water_depth(depth));
+    verts.push(MeshVertex::new(v1, normal).with_uv(flow).with_water_depth(depth));
+    verts.push(MeshVertex::new(v2, normal).with_uv(flow).with_water_depth(depth));
+    verts.push(MeshVertex::new(v3, normal).with_uv(flow).with_water_depth(depth));
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }

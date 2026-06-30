@@ -120,6 +120,20 @@ impl Voxel {
         // Per-cell flow vector, baked into the faces so the water shader
         // scrolls its caustics in the right direction (zero -> isotropic).
         let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
+        // W199: water-column depth below this cell, normalized for the
+        // shader's depth-based surface opacity (deep ocean reads opaque so
+        // it isn't see-through to the void; shallow ponds stay translucent).
+        // Walk down counting same-liquid cells, capped at DEPTH_FULL blocks.
+        let depth = {
+            const DEPTH_FULL: i32 = 12;
+            let mut d = 1i32;
+            while d <= DEPTH_FULL
+                && self.world.get([vx, vy - d, vz]).0 == liquid_id
+            {
+                d += 1;
+            }
+            d as f32 / DEPTH_FULL as f32
+        };
         // Top face (CCW from above so the Back-cull keeps it) - only when
         // the cell above isn't the same liquid.
         let above_same = self.world.get([vx, vy + 1, vz]).0 == liquid_id;
@@ -129,7 +143,7 @@ impl Voxel {
             let t2 = [fx + 1.0, fy + h11, fz + 1.0];
             let t3 = [fx + 1.0, fy + h10, fz];
             let normal = water_face_normal(t0, t1, t2, t3);
-            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, flow);
+            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, flow, depth);
         }
         // Side faces: only when the in-plane neighbour is open (air /
         // passable). Same-liquid cancels (shared face is interior).
@@ -143,6 +157,7 @@ impl Voxel {
                 [fx, fy, fz],
                 [-1.0, 0.0, 0.0],
                 flow,
+                depth,
             );
         }
         if side_open(&self.world, vx + 1, vy, vz, liquid_id) {
@@ -155,6 +170,7 @@ impl Voxel {
                 [fx + 1.0, fy, fz + 1.0],
                 [1.0, 0.0, 0.0],
                 flow,
+                depth,
             );
         }
         if side_open(&self.world, vx, vy, vz - 1, liquid_id) {
@@ -167,6 +183,7 @@ impl Voxel {
                 [fx + 1.0, fy, fz],
                 [0.0, 0.0, -1.0],
                 flow,
+                depth,
             );
         }
         if side_open(&self.world, vx, vy, vz + 1, liquid_id) {
@@ -179,6 +196,7 @@ impl Voxel {
                 [fx, fy, fz + 1.0],
                 [0.0, 0.0, 1.0],
                 flow,
+                depth,
             );
         }
         // Bottom face: only when the cell below is open (air / passable) -
@@ -194,6 +212,7 @@ impl Voxel {
                 [fx, fy, fz + 1.0],
                 [0.0, -1.0, 0.0],
                 flow,
+                depth,
             );
         }
     }

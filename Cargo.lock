@@ -2377,6 +2377,7 @@ dependencies = [
  "infengine_core",
  "infengine_particles",
  "infengine_window",
+ "naga",
  "pollster",
  "thiserror 2.0.18",
  "tracing",

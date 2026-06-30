@@ -24,3 +24,9 @@ pollster = { workspace = true }
 winit = { workspace = true }
 gltf = { workspace = true }
 image = { workspace = true }
+
+[dev-dependencies]
+# W199: validate bundled .wgsl shaders at `cargo test` time (same naga
+# version wgpu 27 uses) so a shader error fails the test suite instead of
+# crashing the app at create_shader_module() on launch.
+naga = { version = "27", features = ["wgsl-in"] }

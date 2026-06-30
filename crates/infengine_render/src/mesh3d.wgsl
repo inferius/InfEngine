@@ -148,6 +148,11 @@ struct VertexOutput {
     // can pick the right tile_anims entry. Flat-interpolated
     // because every vertex of a quad shares the same slot.
     @location(6) @interpolate(flat) anim_id: u32,
+    // W199: per-vertex water-column depth (light byte 3, normalized to
+    // [0,1] over ~12 blocks). Drives depth-based surface opacity so deep
+    // ocean reads opaque (no see-through "void") while shallow water /
+    // ponds stay translucent. 0 for all non-water meshes.
+    @location(10) water_depth: f32,
 };
 
 @vertex
@@ -194,6 +199,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = tile_uv0;
     out.light = light;
     out.anim_id = in.anim_id;
+    // W199: forward the packed water depth (light byte 3). 0 for meshes
+    // that never set it (with_water_depth), i.e. everything but water.
+    out.water_depth = in.light_packed.w;
     out.tile_uv0_out = tile_uv0;
     out.tile_size_out = tile_size;
     out.quad_uv_out = quad_uv;
@@ -252,9 +260,16 @@ fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
 // Cheap hash-based value noise. Used by the water shader to fake
 // caustic ripples without sampling an animated texture. Returns
 // a smooth scalar in [0, 1].
+//
+// W199: integer bit-mix hash (Dave Hoskins `hash12`). The previous
+// `fract(sin(dot(p, k)) * 43758)` hash aliased into a DIAGONAL BANDING
+// pattern on the flat water plane - the regular fragment lattice beats
+// against sin()'s periodicity and paints a tan cross-hatch grid (the
+// user's "grid on the water"). This mix has no trig and no banding.
 fn hash21(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    return fract(sin(h) * 43758.5453);
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 = p3 + dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
 fn value_noise(p: vec2<f32>) -> f32 {
@@ -500,18 +515,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var out_alpha = alpha;
     if is_water {
-        // Distance-based opacity. MC's deep/distant water is opaque - you
-        // can't see the seabed through it - which also hides the chunks
-        // PAST the load boundary that transparent water otherwise reveals
-        // as see-through "holes" (the user's report: holes far + downward
-        // through the water). Near water stays translucent (you spot the
-        // bed in the shallows); by ~90 blocks it reads solid, so the far
-        // ocean is one continuous surface fading into fog, not a
-        // hole-punched sheet. (A true per-pixel depth-thickness fade needs
-        // a render-pass split + depth-texture bind; this camera-distance
-        // approximation covers the visible case at far lower risk.)
-        let opacify = smoothstep(28.0, 90.0, world_dist);
-        out_alpha = mix(alpha, 1.0, opacify);
+        // W199: opacity from the actual WATER-COLUMN DEPTH, not camera
+        // distance. The old camera-distance hack made the water directly
+        // below a high-flying player read as see-through (it's "near", so
+        // translucent) - even over deep ocean, so you saw straight through
+        // to the dark seabed / load-boundary void ("flying over nothing").
+        // MC's deep water is opaque because of the water VOLUME below the
+        // surface; `water_depth` (baked per-vertex at mesh build) captures
+        // exactly that. Deep ocean -> opaque; ponds / shallows stay
+        // translucent so you still spot the bed. A camera-distance term is
+        // max'd in only as a far-field backstop that hides the load
+        // boundary far off.
+        let depth_opacify = smoothstep(0.12, 0.85, in.water_depth);
+        let dist_opacify = smoothstep(40.0, 110.0, world_dist);
+        out_alpha = mix(alpha, 1.0, max(depth_opacify, dist_opacify));
     }
 
     return vec4<f32>(lit_color, out_alpha);

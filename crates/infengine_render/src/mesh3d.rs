@@ -164,6 +164,17 @@ impl MeshVertex {
         self
     }
 
+    /// W199: Override the per-vertex water-column depth (light byte 3,
+    /// otherwise unused). Normalized to `[0, 1]` over the depth that
+    /// reads fully opaque (~12 blocks). The water shader uses it to
+    /// fade the surface from translucent (shallow) to opaque (deep) so
+    /// deep ocean isn't see-through to the void. No effect on non-water
+    /// meshes (the shader only reads it when `material.w >= 0.5`).
+    pub fn with_water_depth(mut self, depth: f32) -> Self {
+        self.light_pad[3] = (depth.clamp(0.0, 1.0) * 255.0) as u8;
+        self
+    }
+
     /// Wave 9.y: tag this vertex with an animation slot id. `0`
     /// means static (no UV scroll); `1..=32` references an entry
     /// in the shader's `tile_anim` uniform array. Slots outside
