@@ -431,7 +431,14 @@ impl Renderer {
             depth_view,
             shadow,
             grid,
-            show_grid: true,
+            // W199.1: the infinite y=0 reference grid is a dev/editor aid,
+            // not something a shipped scene wants. It was defaulting ON, and
+            // because it draws after opaque geometry (occluded via depth) it
+            // was invisible on land but showed straight THROUGH transparent
+            // water and during world/dim transitions (before terrain loads)
+            // - the user's "engine grid under the water". Default OFF; the
+            // editor / debug tools opt in with `set_show_grid(true)`.
+            show_grid: false,
             debug3d,
             debug3d_vertices: Vec::new(),
             mesh_albedos,
