@@ -64,6 +64,21 @@ impl Voxel {
         if dist >= AUDIBLE_RANGE {
             return;
         }
+        // W200.1: log each bank-missed key ONCE so any audible synth
+        // fallback (beeps/clicks the MC pack should have covered) is
+        // attributable from the log instead of guessed at. The repeat
+        // offenders so far: mob beeps (W56.1), footstep clicks (W200.1).
+        {
+            use std::collections::HashSet;
+            use std::sync::{Mutex, OnceLock};
+            static MISSED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+            let missed = MISSED.get_or_init(|| Mutex::new(HashSet::new()));
+            if let Ok(mut set) = missed.lock()
+                && set.insert(key.to_string())
+            {
+                tracing::warn!(key, "W200.1: sfx bank miss -> synth fallback");
+            }
+        }
         let gain = (1.0 - dist / AUDIBLE_RANGE).clamp(0.0, 1.0) * volume;
         synth(a, gain);
     }

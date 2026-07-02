@@ -293,9 +293,14 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 let mat = block_material(under);
                 let key = format!("step:{mat}");
                 let pos = [app.player_pos.x, app.player_pos.y, app.player_pos.z];
-                app.sfx_at(&key, pos, |a, g| {
-                    let _ = a.play_swish(0.10 * g);
-                });
+                // W200.1: NO synth fallback for footsteps. The old
+                // play_swish fallback produced a synthetic CLICK every
+                // 0.42s of walking whenever the step:<mat> bank entry
+                // didn't load - the persistent "clicking" while moving.
+                // MC plays nothing when a sample is missing; the bank
+                // miss is logged once per key by sfx_at (W200.1) so a
+                // silent material is diagnosable instead of audible.
+                app.sfx_at(&key, pos, |_, _| {});
                 // Sprint dust: a small puff per step matching the
                 // surface colour. Walking sneak / normal speed
                 // skips this so dust is a sprint-only flourish.
