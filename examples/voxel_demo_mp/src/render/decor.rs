@@ -267,23 +267,27 @@ pub(crate) fn draw(
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };
-            // W34: route BOTH water + lava through the water-marker
-            // shader path. The liquid mesh writes per-vertex flow into
-            // the `uv` slot (push_quad_flow); the regular PBR sampling
-            // path interpreted that as atlas UV and sampled the wrong
-            // tile -> lava appeared as static noise (per user's screen).
-            // Water-marker branch ignores `uv` for sampling (sets
-            // tex=white) and uses `color * ripple` so the per-block
-            // colour from BLOCK_TYPES gives the right tint (water blue,
-            // lava orange) + the ripple shader provides the animated
-            // flow look. MC's lava also has an animated flowing surface;
-            // approximating it via the same shader as water is
-            // visually acceptable until a dedicated lava shader lands.
+            // W200: liquid meshes carry real atlas UVs + anim slots for
+            // MC's water_still / lava_still textures (bound to the block
+            // atlas at mesh build). The draw tint follows MC's rules:
+            // water_still is a GRAYSCALE texture tinted by the biome
+            // water colour -> tint with the BLOCK_TYPES water blue;
+            // lava_still is a fully COLOURED texture -> tint white (the
+            // orange registry colour would double-saturate it).
+            // draw_mesh_water routes through the material.w >= 0.5
+            // marker, which now only drives the depth-based alpha
+            // (W199) - sampling is the same animated-tile path as
+            // chunk meshes.
+            let tint = if *liquid_id == LAVA_ID {
+                [1.0, 1.0, 1.0, alpha]
+            } else {
+                [bt.color[0], bt.color[1], bt.color[2], alpha]
+            };
             if *liquid_id == WATER_ID || *liquid_id == LAVA_ID {
                 renderer.draw_mesh_water(
                     *handle,
                     Mat4::IDENTITY.to_cols_array(),
-                    [bt.color[0], bt.color[1], bt.color[2], alpha],
+                    tint,
                     0.0,
                     rough,
                 );
@@ -291,7 +295,7 @@ pub(crate) fn draw(
                 renderer.draw_mesh_pbr(
                     *handle,
                     Mat4::IDENTITY.to_cols_array(),
-                    [bt.color[0], bt.color[1], bt.color[2], alpha],
+                    tint,
                     0.0,
                     rough,
                 );

@@ -296,12 +296,19 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // transparent so the chunk mesher emits faces against air
     // neighbours and culls water-water seams. Breaks instantly
     // with a bare hand.
+    // W200: files point at MC's real animated liquid textures
+    // (water_still / lava_still). The old entries listed "water.png"
+    // (not a pack name) with a "stone.png" FALLBACK - harmless while
+    // nothing resolved liquid faces, but the W200 textured liquid mesh
+    // resolves via block_face_ref, and the stone fallback would have
+    // painted the ocean as stone. water_still is grayscale in MC and
+    // tinted by `color` at draw time (biome water tint).
     BlockType {
         id: 36, name: "water", color: [0.247, 0.463, 0.894], transparent: true,
         flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
-        top: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 0, files: &["water.png", "stone.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 0, files: &["water_still.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["water_still.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["water_still.png"], keep_alpha: false },
     },
     // Lava: second liquid using the same generic flow physics
     // as water. Slower spread + shorter range follow MC's
@@ -311,9 +318,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 37, name: "lava", color: [1.00, 0.40, 0.10], transparent: true,
         flags: F_AABB_PASS | F_TRANSPARENT_RENDER | F_SWIM | F_DEDICATED_RENDER | F_REPLACEABLE | F_RAY_PASS,
-        top: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
-        bottom: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
-        sides: TileSpec { col: 0, row: 0, files: &["lava.png", "stone.png"], keep_alpha: false },
+        top: TileSpec { col: 0, row: 0, files: &["lava_still.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["lava_still.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["lava_still.png"], keep_alpha: false },
     },
     // Bucket item ids 38..=40. Tool-class slots (no block place);
     // RMB on a liquid scoops, RMB on a placement target empties

@@ -117,9 +117,25 @@ impl Voxel {
         let fx = vx as f32;
         let fy = vy as f32;
         let fz = vz as f32;
-        // Per-cell flow vector, baked into the faces so the water shader
-        // scrolls its caustics in the right direction (zero -> isotropic).
-        let flow = self.liquid_flow_dir([vx, vy, vz], liquid_id);
+        // W200: resolve the MC animated liquid texture (water_still /
+        // lava_still) once per cell - frame-0 atlas rect + tile-anim slot.
+        // The quads sample it exactly like animated chunk-mesh tiles, so
+        // liquids finally LOOK like MC liquids instead of a flat tinted
+        // plane with a procedural shimmer. Falls back to the pack's
+        // missing-texture sentinel when the pack has no entry (pack-less
+        // dev runs), same policy as the chunk mesher.
+        let (tile, anim) = {
+            let pack = &self.resource_pack;
+            match pack.block_face_ref(liquid_id, crate::resource_pack::BlockFace::Top) {
+                Some(r) => {
+                    (r.atlas_uv, pack.anim_slot_for_ref(r) as u32)
+                }
+                None => (
+                    pack.icon_uv_for(block, [0, 1, 0]),
+                    0,
+                ),
+            }
+        };
         // W199: water-column depth below this cell, normalized for the
         // shader's depth-based surface opacity (deep ocean reads opaque so
         // it isn't see-through to the void; shallow ponds stay translucent).
@@ -143,7 +159,7 @@ impl Voxel {
             let t2 = [fx + 1.0, fy + h11, fz + 1.0];
             let t3 = [fx + 1.0, fy + h10, fz];
             let normal = water_face_normal(t0, t1, t2, t3);
-            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, flow, depth);
+            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, tile, anim, depth);
         }
         // Side faces: only when the in-plane neighbour is open (air /
         // passable). Same-liquid cancels (shared face is interior).
@@ -156,7 +172,8 @@ impl Voxel {
                 [fx, fy + h00, fz],
                 [fx, fy, fz],
                 [-1.0, 0.0, 0.0],
-                flow,
+                tile,
+                anim,
                 depth,
             );
         }
@@ -169,7 +186,8 @@ impl Voxel {
                 [fx + 1.0, fy + h11, fz + 1.0],
                 [fx + 1.0, fy, fz + 1.0],
                 [1.0, 0.0, 0.0],
-                flow,
+                tile,
+                anim,
                 depth,
             );
         }
@@ -182,7 +200,8 @@ impl Voxel {
                 [fx + 1.0, fy + h10, fz],
                 [fx + 1.0, fy, fz],
                 [0.0, 0.0, -1.0],
-                flow,
+                tile,
+                anim,
                 depth,
             );
         }
@@ -195,7 +214,8 @@ impl Voxel {
                 [fx, fy + h01, fz + 1.0],
                 [fx, fy, fz + 1.0],
                 [0.0, 0.0, 1.0],
-                flow,
+                tile,
+                anim,
                 depth,
             );
         }
@@ -211,7 +231,8 @@ impl Voxel {
                 [fx + 1.0, fy, fz + 1.0],
                 [fx, fy, fz + 1.0],
                 [0.0, -1.0, 0.0],
-                flow,
+                tile,
+                anim,
                 depth,
             );
         }
@@ -407,6 +428,12 @@ impl Voxel {
                 }
                 let label = format!("voxel_liquid_{}_{}_{}_{liquid_id}", cc[0], cc[1], cc[2]);
                 let h = renderer.create_mesh(&label, &vertices, &indices);
+                // W200: liquids sample the MC animated texture from the
+                // block atlas now - bind it (unbound meshes fall back to
+                // the 1x1 white default = the old flat look).
+                if let Some(a) = self.voxel_atlas.clone() {
+                    renderer.bind_mesh_albedo_arc(h, a);
+                }
                 // W108: water translucent (alpha pipeline, cull_mode=None);
                 // lava opaque. Draw order handled in infengine_render::render().
                 if liquid_id == crate::block::WATER_ID {

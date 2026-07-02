@@ -257,122 +257,59 @@ fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
     return sum / 9.0;
 }
 
-// Cheap hash-based value noise. Used by the water shader to fake
-// caustic ripples without sampling an animated texture. Returns
-// a smooth scalar in [0, 1].
-//
-// W199: integer bit-mix hash (Dave Hoskins `hash12`). The previous
-// `fract(sin(dot(p, k)) * 43758)` hash aliased into a DIAGONAL BANDING
-// pattern on the flat water plane - the regular fragment lattice beats
-// against sin()'s periodicity and paints a tan cross-hatch grid (the
-// user's "grid on the water"). This mix has no trig and no banding.
-fn hash21(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
-    p3 = p3 + dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn value_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let a = hash21(i);
-    let b = hash21(i + vec2<f32>(1.0, 0.0));
-    let c = hash21(i + vec2<f32>(0.0, 1.0));
-    let d = hash21(i + vec2<f32>(1.0, 1.0));
-    let u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y)
-        + 0.5 * mix(mix(a, b, u.x), mix(c, d, u.x), u.y) - 0.25;
-}
-
-// Animated water surface: takes the world-space XZ position of
-// the fragment, a per-vertex flow direction (already passed via
-// `in.uv`) and the global time. Returns an albedo modulation in
-// [0.8, 1.15] that approximates MC's slow caustic shimmer. The
-// flow direction biases the scrolling so flowing cells stream in
-// their flow direction while pond cells stay isotropic.
-fn water_ripple(world_xz: vec2<f32>, flow: vec2<f32>, t: f32) -> f32 {
-    // Three octaves of scrolling value noise. Coarse layer
-    // drifts along the flow direction; mid layer scrolls
-    // perpendicular for a directional crisscross; fine layer
-    // adds the sparkle. Static pond cells (flow == 0) fall
-    // back to a slower isotropic shimmer.
-    let speed = 0.45;
-    let perp = vec2<f32>(-flow.y, flow.x);
-    let coarse_uv = world_xz * 0.95 + flow * t * speed;
-    let mid_uv = world_xz * 2.2 + perp * t * speed * 1.4
-        + vec2<f32>(t * 0.12, t * 0.10);
-    let fine_uv = world_xz * 5.5
-        + flow * t * speed * 0.6
-        + vec2<f32>(t * 0.18, -t * 0.13);
-    let coarse = value_noise(coarse_uv);
-    let mid = value_noise(mid_uv);
-    let fine = value_noise(fine_uv);
-    // Bias the layers so caustics read as bright streaks on a
-    // medium-blue base rather than the previous muted noise.
-    let n = coarse * 0.55 + mid * 0.30 + fine * 0.15;
-    // Output range ~[0.90, 1.15] - a gentle shimmer around 1.0. W197.2:
-    // the old wide [0.78, 1.55] band read as harsh blotchy streaks from
-    // above (the user's "divny pruhy"); this keeps a subtle caustic
-    // without muddying the flat MC-blue surface.
-    return 1.02 + (n - 0.5) * 0.5;
-}
+// W200: the procedural water ripple (hash noise + scrolling octaves)
+// is gone. Liquids now carry real atlas UVs for MC's animated
+// water_still / lava_still textures and sample them like any other
+// animated tile - the texture animation IS the water movement,
+// exactly as in MC. The shader keeps only the water-specific alpha
+// (depth-based opacity) and material handling.
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let metallic = clamp(in.material.x, 0.0, 1.0);
     let roughness = clamp(in.material.y, 0.04, 1.0);
-    // material.w >= 0.5 marks the water-surface meshes - they
-    // skip the albedo texture lookup (uv is hijacked to carry
-    // the per-vertex flow direction) and add an animated
-    // caustic ripple instead.
+    // material.w >= 0.5 marks the liquid-surface meshes (water + lava).
+    // W200: they sample the atlas exactly like chunk meshes now (their
+    // vertices carry the water_still / lava_still tile rect + anim slot);
+    // the flag only drives the water-specific alpha below.
     let is_water = in.material.w >= 0.5;
-    var tex: vec4<f32>;
-    if is_water {
-        tex = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    // W30 fix: per-fragment tile-fract UV. Interpolated quad_uv
+    // gives true fractional values across the merged greedy quad;
+    // fract() wraps it within [0, 1] per tile, then we map back
+    // into the atlas rect [tile_uv0, tile_uv0 + tile_size]. When
+    // tile_size = 0 (per-voxel mesher set up via with_uv), the
+    // formula collapses to in.uv = tile_uv0 = legacy UV.
+    //
+    // W31.3: clamp the result to the interior of the tile to prevent
+    // the 1-pixel seam artifact at integer voxel boundaries inside
+    // merged greedy quads. fract(N.0) can land on exactly 0.0 or
+    // 1.0 at tile edges due to floating-point precision, causing
+    // the sampler to bleed into the adjacent tile. Clamping to
+    // [tile_uv0 + half_texel, tile_uv0 + tile_size - half_texel]
+    // keeps the UV strictly inside this tile's texels.
+    let tile_size = in.tile_size_out;
+    var final_uv: vec2<f32>;
+    if tile_size.x > 0.0 && tile_size.y > 0.0 {
+        let raw_uv = in.tile_uv0_out + fract(in.quad_uv_out) * tile_size;
+        let atlas_dim = vec2<f32>(textureDimensions(albedo_tex));
+        let half_texel = 0.5 / atlas_dim;
+        final_uv = clamp(
+            raw_uv,
+            in.tile_uv0_out + half_texel,
+            in.tile_uv0_out + tile_size - half_texel,
+        );
     } else {
-        // W30 fix: per-fragment tile-fract UV. Interpolated quad_uv
-        // gives true fractional values across the merged greedy quad;
-        // fract() wraps it within [0, 1] per tile, then we map back
-        // into the atlas rect [tile_uv0, tile_uv0 + tile_size]. When
-        // tile_size = 0 (per-voxel mesher set up via with_uv), the
-        // formula collapses to in.uv = tile_uv0 = legacy UV.
-        //
-        // W31.3: clamp the result to the interior of the tile to prevent
-        // the 1-pixel seam artifact at integer voxel boundaries inside
-        // merged greedy quads. fract(N.0) can land on exactly 0.0 or
-        // 1.0 at tile edges due to floating-point precision, causing
-        // the sampler to bleed into the adjacent tile. Clamping to
-        // [tile_uv0 + half_texel, tile_uv0 + tile_size - half_texel]
-        // keeps the UV strictly inside this tile's texels.
-        let tile_size = in.tile_size_out;
-        var final_uv: vec2<f32>;
-        if tile_size.x > 0.0 && tile_size.y > 0.0 {
-            let raw_uv = in.tile_uv0_out + fract(in.quad_uv_out) * tile_size;
-            let atlas_dim = vec2<f32>(textureDimensions(albedo_tex));
-            let half_texel = 0.5 / atlas_dim;
-            final_uv = clamp(
-                raw_uv,
-                in.tile_uv0_out + half_texel,
-                in.tile_uv0_out + tile_size - half_texel,
-            );
-        } else {
-            final_uv = in.uv;
-        }
-        // Wave 9.y: scroll UV.v through the active frame of an
-        // animated tile. `camera.time.x` is seconds since app
-        // start; the slot stores frametime_ms, so we convert to
-        // ms before the per-frame floor.
-        let time_ms = camera.time.x * 1000.0;
-        let sampled_uv = animated_uv(final_uv, in.anim_id, time_ms);
-        tex = textureSample(albedo_tex, albedo_smp, sampled_uv);
+        final_uv = in.uv;
     }
+    // Wave 9.y: scroll UV.v through the active frame of an
+    // animated tile. `camera.time.x` is seconds since app
+    // start; the slot stores frametime_ms, so we convert to
+    // ms before the per-frame floor.
+    let time_ms = camera.time.x * 1000.0;
+    let sampled_uv = animated_uv(final_uv, in.anim_id, time_ms);
+    let tex = textureSample(albedo_tex, albedo_smp, sampled_uv);
     var albedo = in.color.rgb * tex.rgb;
     let alpha = in.color.a * tex.a;
-    if is_water {
-        let flow = in.uv;
-        let ripple = water_ripple(in.world_pos.xz, flow, camera.time.x);
-        albedo = albedo * ripple;
-    }
     // Simple alpha cutout for foliage / leaves. The default 1x1
     // white texture has alpha=1 so opaque blocks are unaffected;
     // atlas tiles with see-through pixels (e.g. leaves) get the
@@ -502,15 +439,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
     if fog_end > fog_start {
         let fog_factor = smoothstep(fog_start, fog_end, world_dist);
-        // W197.2: land fades to the sky colour (normal atmospheric
-        // perspective), but WATER fades to a deep ocean blue instead - at
-        // dawn/dusk the warm sky colour otherwise blends distant water to
-        // purple. MC's far water reads deep blue, not sky-tinted.
-        var fog_target = camera.sky_color.rgb;
-        if is_water {
-            fog_target = vec3<f32>(0.11, 0.27, 0.58);
-        }
-        lit_color = mix(lit_color, fog_target, fog_factor);
+        // W200: EVERYTHING fogs to the sky colour, water included. The
+        // W197.2 water-fogs-to-deep-blue special case made the far ocean a
+        // saturated blue sheet against the hazy horizon - the whole scene
+        // faded into atmosphere except the water, which visibly "did not
+        // belong" (the user's words). MC fogs water into the same
+        // atmospheric haze as land.
+        lit_color = mix(lit_color, camera.sky_color.rgb, fog_factor);
     }
 
     var out_alpha = alpha;

@@ -229,9 +229,15 @@ pub(crate) fn bottom_open(
 
 /// Append one quad to `verts` / `idx`. Corners must be CCW from
 /// the `normal` side. Two triangles, four vertices, six indices.
-/// Writes a per-cell flow direction into the `uv` slot - water
-/// meshes don't sample the albedo texture so UV is repurposed as
-/// the scroll vector the animated water shader reads.
+///
+/// W200: liquid quads now carry REAL atlas coordinates for the MC
+/// animated liquid texture (water_still / lava_still) instead of the
+/// old repurposed-UV flow vector + procedural shader ripple. `tile` is
+/// the frame-0 atlas rect `[u0, v0, u1, v1]` from `block_face_ref`;
+/// `anim` is the tile-anim slot (0 = static) so the shader scrolls the
+/// frame strip exactly like animated chunk-mesh tiles. Each corner gets
+/// quad_uv (0,0)/(1,0)/(1,1)/(0,1) - one full texture tile per cell,
+/// matching MC's per-block liquid tiling.
 ///
 /// W199: `depth` is the normalized water-column depth at this cell
 /// ([0,1] over ~12 blocks), baked into the spare light byte so the
@@ -246,13 +252,22 @@ pub(crate) fn push_quad_flow(
     v2: [f32; 3],
     v3: [f32; 3],
     normal: [f32; 3],
-    flow: [f32; 2],
+    tile: [f32; 4],
+    anim: u32,
     depth: f32,
 ) {
     let base = verts.len() as u32;
-    verts.push(MeshVertex::new(v0, normal).with_uv(flow).with_water_depth(depth));
-    verts.push(MeshVertex::new(v1, normal).with_uv(flow).with_water_depth(depth));
-    verts.push(MeshVertex::new(v2, normal).with_uv(flow).with_water_depth(depth));
-    verts.push(MeshVertex::new(v3, normal).with_uv(flow).with_water_depth(depth));
+    let uv0 = [tile[0], tile[1]];
+    let size = [tile[2] - tile[0], tile[3] - tile[1]];
+    const CORNER_UV: [[f32; 2]; 4] =
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    for (v, cuv) in [v0, v1, v2, v3].into_iter().zip(CORNER_UV) {
+        verts.push(
+            MeshVertex::new(v, normal)
+                .with_tile_uv(uv0, size, cuv)
+                .with_anim_id(anim)
+                .with_water_depth(depth),
+        );
+    }
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
