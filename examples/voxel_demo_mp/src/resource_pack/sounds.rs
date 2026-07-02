@@ -225,6 +225,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("step:grass", "block.grass.step"),
     ("step:sand", "block.sand.step"),
     ("step:gravel", "block.gravel.step"),
+    // W201 - underwater plants (kelp / seagrass) use MC's wet_grass
+    // sound family.
+    ("dig:wet_grass", "block.wet_grass.break"),
+    ("step:wet_grass", "block.wet_grass.step"),
     // Fire + lava.
     ("fire:ignite", "item.flintandsteel.use"),
     ("fire:ambient", "block.fire.ambient"),

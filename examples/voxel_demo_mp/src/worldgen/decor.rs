@@ -12,7 +12,7 @@
 
 use infengine_voxel::{Chunk, ChunkCoord};
 
-use super::{WorldgenCtx, biome_features, cactus, flowers, ground_cover, trees};
+use super::{WorldgenCtx, biome_features, cactus, flowers, ground_cover, mcgen, trees};
 
 /// Run every decoration pass on a freshly carved chunk. Order matters:
 /// trees first (they own the vertical space + cast the canopy), then the
@@ -27,4 +27,7 @@ pub(crate) fn place_realistic(chunk: &mut Chunk, coord: ChunkCoord, ctx: &Worldg
     // grass/ferns fill the rest of the surface.
     ground_cover::place_realistic_from_coord(chunk, coord, ctx);
     cactus::place_realistic_from_coord(chunk, coord, ctx);
+    // W201: MC ocean flora (kelp + seagrass) from the real MC
+    // placed_feature rules. Internally gated to the Mc profile.
+    mcgen::features::place_from_coord(chunk, coord, ctx);
 }

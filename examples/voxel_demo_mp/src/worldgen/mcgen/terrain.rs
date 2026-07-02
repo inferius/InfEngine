@@ -282,6 +282,19 @@ pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     interp_height(&ow, wx, wz)
 }
 
+/// W201: seabed/surface height at world column `(wx, wz)` from the SAME
+/// cached per-chunk column grid `gen_mc` filled the terrain with - so the
+/// ocean-flora pass sees exactly the floor that was generated (and pays
+/// one cached chunk-grid build instead of a fresh interp_height per
+/// probe; the flora pass probes hundreds of columns per chunk).
+pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
+    let seed = ctx.effective_seed();
+    let ow = overworld_for(seed);
+    let cs = CHUNK_SIZE as i32;
+    let col = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
+    col[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize].0
+}
+
 /// 16x16 "steep slope" flags from the heightmap gradient: a column is
 /// steep when an orthogonal neighbour's surface differs by >= 4 blocks,
 /// which is where MC's `steep` surface condition shows stone / gravel

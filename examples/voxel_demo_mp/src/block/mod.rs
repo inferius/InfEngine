@@ -310,6 +310,10 @@ fn block_material_by_name(id: u16) -> &'static str {
         "coral"
     } else if n.contains("mud") {
         "mud"
+    } else if n.contains("kelp") || n.contains("seagrass") {
+        // W201: underwater plants use MC's wet_grass family. Must match
+        // BEFORE the broad "grass"/"kelp" rules in the grass bucket below.
+        "wet_grass"
     } else if n.contains("iron_block")
         || n.contains("gold_block")
         || n.contains("copper")

@@ -578,6 +578,16 @@ pub(crate) const REDSTONE_LAMP_ID: u16 = 650;
 // W80 - MC ground cover (cross-pattern, biome-tinted plants).
 pub(crate) const SHORT_GRASS_ID: u16 = 651;
 pub(crate) const FERN_ID: u16 = 652;
+// W201 - ocean flora (Phase 6a of the MC worldgen port). Underwater
+// cross-plants placed by the data-driven MC placed_feature rules in
+// `worldgen::ocean_flora`. tall_seagrass is MC's two-block plant
+// (half=lower/upper -> two engine ids); the kelp column is kelp_plant
+// stem segments topped by one kelp (the growing tip).
+pub(crate) const SEAGRASS_ID: u16 = 753;
+pub(crate) const TALL_SEAGRASS_BOTTOM_ID: u16 = 754;
+pub(crate) const TALL_SEAGRASS_TOP_ID: u16 = 755;
+pub(crate) const KELP_ID: u16 = 756;
+pub(crate) const KELP_PLANT_ID: u16 = 757;
 // W127 - rails (flat dedicated-render ground blocks; shapes derive
 // from the neighbourhood at remesh time, MC RailShape style).
 pub(crate) const RAIL_ID: u16 = 653;

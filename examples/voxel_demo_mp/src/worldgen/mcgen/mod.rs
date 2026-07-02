@@ -31,6 +31,7 @@
 pub(crate) mod biome;
 pub(crate) mod data;
 pub(crate) mod density;
+pub(crate) mod features;
 pub(crate) mod noise;
 pub(crate) mod overworld;
 pub(crate) mod surface_rule;

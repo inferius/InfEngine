@@ -3070,4 +3070,22 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["snow.png"], keep_alpha: false },
     },
+    // ============================================================
+    // W201 - ocean flora (Phase 6a of the MC worldgen port).
+    // Underwater plants: the same passable-plant flag set as
+    // short_grass/fern (F_RAY_PASS | F_AABB_PASS | F_WASHABLE), which
+    // also opts them into the W96 universal cross-plant render. The
+    // engine has no waterlogging, so a plant cell REPLACES the water
+    // cell; the liquid mesh renders the surrounding water faces
+    // (side_open treats F_AABB_PASS blocks as open), so visually the
+    // plant sits "in" the water like MC. Textures are the MC animated
+    // stems (frame 0 in the chunk mesh - the sway animation is a
+    // deferred polish).
+    BlockType { id: 753, name: "seagrass", color: [0.22, 0.52, 0.28], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE | F_REPLACEABLE, top: TileSpec { col: 0, row: 0, files: &["seagrass.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["seagrass.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["seagrass.png"], keep_alpha: true } },
+    BlockType { id: 754, name: "tall_seagrass_bottom", color: [0.20, 0.50, 0.26], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE | F_REPLACEABLE, top: TileSpec { col: 0, row: 0, files: &["tall_seagrass_bottom.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["tall_seagrass_bottom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["tall_seagrass_bottom.png"], keep_alpha: true } },
+    BlockType { id: 755, name: "tall_seagrass_top", color: [0.20, 0.50, 0.26], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE | F_REPLACEABLE, top: TileSpec { col: 0, row: 0, files: &["tall_seagrass_top.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["tall_seagrass_top.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["tall_seagrass_top.png"], keep_alpha: true } },
+    // Kelp column: `kelp` is the growing tip (MC block "kelp"),
+    // `kelp_plant` the stem segments below it.
+    BlockType { id: 756, name: "kelp", color: [0.30, 0.55, 0.25], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["kelp.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["kelp.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["kelp.png"], keep_alpha: true } },
+    BlockType { id: 757, name: "kelp_plant", color: [0.28, 0.52, 0.24], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["kelp_plant.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["kelp_plant.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["kelp_plant.png"], keep_alpha: true } },
 ];

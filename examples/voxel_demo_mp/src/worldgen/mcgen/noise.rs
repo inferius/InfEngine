@@ -58,8 +58,9 @@ impl SplitMix64 {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    /// Uniform double in [0, 1).
-    fn next_f64(&mut self) -> f64 {
+    /// Uniform double in [0, 1). `pub(crate)` since W201 - the
+    /// placed-feature streams (ocean flora) roll probabilities too.
+    pub(crate) fn next_f64(&mut self) -> f64 {
         // 53-bit mantissa precision.
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }

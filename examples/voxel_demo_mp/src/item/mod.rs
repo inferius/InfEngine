@@ -2411,6 +2411,16 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // W197 Phase 5c - full snow block (id 752). Icon falls through to the
     // block-form TileSpec (snow.png) via the places=Some path.
     ItemType { id: 752, name: "snow_block", display: Some("Snow Block"), places: Some(752), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W201 - ocean flora. seagrass + kelp are the real MC item forms;
+    // the tall_seagrass halves and kelp_plant stems are technical
+    // blocks with no MC item, but the engine invariant is 1:1
+    // block<->item, so they get non-placeable rows (places: None,
+    // same pattern as the minecart).
+    ItemType { id: 753, name: "seagrass", display: Some("Seagrass"), places: Some(753), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 754, name: "tall_seagrass_bottom", display: Some("Tall Seagrass"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 755, name: "tall_seagrass_top", display: Some("Tall Seagrass"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 756, name: "kelp", display: Some("Kelp"), places: Some(756), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 757, name: "kelp_plant", display: Some("Kelp"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
