@@ -26,6 +26,11 @@ use super::state::{
     ZOMBIE_SIGHT_RANGE, ZOMBIE_SPEED, ZOMBIE_TOUCH_DAMAGE,
 };
 
+/// W198.7 fixed mob-tick period (MC's 20 Hz). Module-scope since W204:
+/// the renderer computes its interpolation alpha from it
+/// (`mob_tick_accum / MOB_TICK_DT`).
+pub(crate) const MOB_TICK_DT: f32 = 1.0 / 20.0;
+
 /// Authoritative mob AI tick: step every server-side mob
 /// toward its target, retarget on arrival / timeout, spawn
 /// new mobs when the cap allows. Builds the broadcast list as
@@ -44,7 +49,6 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
     // invisible on the F3 panel. At 20 Hz most frames do zero mob work;
     // render still animates limbs/head from `mob_anim` per frame so motion
     // stays smooth. Cap catch-up so a stall can't avalanche.
-    const MOB_TICK_DT: f32 = 1.0 / 20.0;
     const MOB_MAX_CATCHUP: u32 = 4;
     voxel.mob_tick_accum += dt;
     if voxel.mob_tick_accum < MOB_TICK_DT {
@@ -64,6 +68,13 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
 /// One fixed-timestep mob AI tick (the former per-frame body): HP regen,
 /// per-mob goal + walk + head-look, despawn / spawn / breed, broadcast.
 fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
+    // W204: snapshot every mob's pre-step position. The renderer lerps
+    // prev -> current by the tick-accumulator fraction, so the 20 Hz
+    // position steps stop reading as "vibrating" mobs at high FPS.
+    voxel.mob_prev_pos.clear();
+    for m in &voxel.mobs {
+        voxel.mob_prev_pos.insert(m.id, m.pos);
+    }
     hp_regen_pass(voxel, dt);
     let day_time = voxel.day_time;
     let mut rand_seed: u32 =

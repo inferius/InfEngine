@@ -816,6 +816,12 @@ pub(crate) struct Voxel {
     /// sim_ms (and was invisible in the F3 panel). MC ticks mobs at 20
     /// TPS; this gates `tick_mobs` to the same cadence. Transient.
     pub(crate) mob_tick_accum: f32,
+    /// W204: every mob's position at the START of the last 20 Hz tick.
+    /// The renderer lerps prev -> current by `mob_tick_accum /
+    /// MOB_TICK_DT` so mobs glide between ticks instead of stepping
+    /// 20x/s ("vibrating" at high FPS). Host-only (clients receive
+    /// snapshots and keep their existing behaviour); transient.
+    pub(crate) mob_prev_pos: HashMap<u32, [f32; 3]>,
     /// Every liquid voxel currently in the world. Maintained on
     /// every peer (host + clients) so the dedicated slope-mesh
     /// render path can iterate without scanning chunks. The

@@ -37,6 +37,13 @@ pub fn draw_remote_mobs(
     // + the frame delta driving it.
     mob_anim: &mut HashMap<u32, crate::entity_model::animation::MobAnim>,
     dt: f32,
+    // W204: pre-tick positions + the tick-accumulator fraction. Mobs
+    // simulate at a fixed 20 Hz (W198.7); rendering the raw tick
+    // positions at 100+ FPS reads as stepping/"vibrating". Each mob
+    // draws at lerp(prev, current, alpha) instead. Mobs without a prev
+    // entry (fresh spawns, client-side snapshots) render unlerped.
+    mob_prev_pos: &HashMap<u32, [f32; 3]>,
+    lerp_alpha: f32,
 ) {
         if !remote_mobs.is_empty() {
             // Body uses the dedicated textured sheep mesh when
@@ -66,7 +73,16 @@ pub fn draw_remote_mobs(
             };
             let mobs_snapshot: Vec<MobMsg> =
                 remote_mobs.values().copied().collect();
-            for mob in mobs_snapshot {
+            for mut mob in mobs_snapshot {
+                // W204: interpolate the 20 Hz tick positions. Shadowing
+                // `mob.pos` here keeps every use below (body, head,
+                // frustum cull, animation advance) on the smooth path.
+                if let Some(prev) = mob_prev_pos.get(&mob.id) {
+                    let a = lerp_alpha.clamp(0.0, 1.0);
+                    for (p, prev_c) in mob.pos.iter_mut().zip(prev) {
+                        *p = prev_c + (*p - prev_c) * a;
+                    }
+                }
                 let hurt_flash = mob_hurt_flash
                     .get(&mob.id)
                     .copied()

@@ -1528,11 +1528,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // water, so the sky/fog setup can wash the view blue + pull the fog in
         // tight (MC's submerged look). player_pos.y is the eye height.
         let eye = vx.player_pos;
-        let underwater = vx
-            .world
-            .get([eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32])
-            .0
-            == crate::block::WATER_ID;
+        // W203: waterlogged plant cells count as water - the murk must
+        // not flicker off while swimming through a kelp forest.
+        let underwater = crate::block::block_is_watery(
+            vx.world
+                .get([eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32])
+                .0,
+        );
         // W155: the nether is roofed - no sky, no sun, red haze.
         let in_nether = vx.current_dim == crate::dim::NETHER;
         let _sky = crate::render::sky::apply_tint_and_fog(
@@ -1663,6 +1665,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.day_time,
             &mut vx.mob_anim,
             dt,
+            &vx.mob_prev_pos,
+            // W204: fraction of the 20 Hz mob tick elapsed this frame.
+            vx.mob_tick_accum / crate::mob::ai::MOB_TICK_DT,
         );
         // W126: chest block entities (entity sheets, facing,
         // double-chest halves, lid animation).
