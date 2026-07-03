@@ -96,7 +96,16 @@ pub(crate) fn dislodge_unsupported(voxel: &mut Voxel, removed: [i32; 3]) {
                     continue;
                 }
             }
-            voxel.world_set_tracked(c, BlockId::AIR);
+            // W205: a dislodged waterlogged plant (kelp stalk segment,
+            // seagrass) reverts to WATER, not air - the cell was water
+            // in MC terms, and ocean sources never tick to refill an
+            // air hole.
+            let restore = if crate::block::block_is_waterlogged(b.0) {
+                BlockId(crate::block::WATER_ID)
+            } else {
+                BlockId::AIR
+            };
+            voxel.world_set_tracked(c, restore);
             // W148: drop the stored rail shape with the block (also
             // fans out the vx.rail_shape removal to peers).
             if rail_lost_floor {
@@ -115,7 +124,7 @@ pub(crate) fn dislodge_unsupported(voxel: &mut Voxel, removed: [i32; 3]) {
                 x: c[0],
                 y: c[1],
                 z: c[2],
-                block: 0,
+                block: restore.0,
             };
             voxel.edit_history.push(edit);
             if let NetRole::Server { server, .. } = &mut voxel.net {

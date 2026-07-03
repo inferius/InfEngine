@@ -373,10 +373,22 @@ impl Voxel {
         // chunk-local neighbour access in the liquid mesher (the recurring
         // HashMap-per-cell pattern); this is the immediate relief.
         const LIQUID_CHUNKS_PER_FRAME: usize = 8;
+        // W205: adaptive drain. While flying, chunk streaming enqueues up
+        // to ~7 backlog entries per streamed chunk (self + face
+        // neighbours) x ~32 dispatches/frame, so a fixed 8/frame drain
+        // falls ever further behind - the water surface visibly trailed
+        // the terrain at the streaming frontier (kelp standing "dry" on
+        // the edge, the user's cut-off water boundary). Scale the drain
+        // with the backlog (an eighth per frame, capped) so a burst
+        // catches up in a few frames while the steady-state cost stays
+        // at the old 8.
+        let drain = LIQUID_CHUNKS_PER_FRAME
+            .max(self.liquid_remesh_backlog.len() / 8)
+            .min(64);
         let to_mesh: Vec<ChunkCoord> = self
             .liquid_remesh_backlog
             .iter()
-            .take(LIQUID_CHUNKS_PER_FRAME)
+            .take(drain)
             .copied()
             .collect();
         for cc in to_mesh {

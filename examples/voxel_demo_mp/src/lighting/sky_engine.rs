@@ -178,6 +178,17 @@ fn column_walk(
                 let _ = try_set_sky_light(state, affected, p, 0);
                 continue;
             }
+            // W205: water attenuates the falling column - MC gives
+            // water a light opacity of 1, which breaks the "skylight
+            // stays full going down" rule, so every water block costs
+            // one level (first water cell = 14, seabed under 12 blocks
+            // of ocean = 3 = MC's dark deep floor). Waterlogged plant
+            // cells count as water. This is what makes deep water read
+            // dark from above now that the surface is uniformly
+            // translucent again.
+            if crate::block::block_is_watery(b.0) {
+                light = light.saturating_sub(1);
+            }
             // Transparent cell - keep current column light.
             if let Some(v) = try_set_sky_light(state, affected, p, light) {
                 queue.push_back((p, v));

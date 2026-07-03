@@ -450,20 +450,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var out_alpha = alpha;
     if is_water {
-        // W199: opacity from the actual WATER-COLUMN DEPTH, not camera
-        // distance. The old camera-distance hack made the water directly
-        // below a high-flying player read as see-through (it's "near", so
-        // translucent) - even over deep ocean, so you saw straight through
-        // to the dark seabed / load-boundary void ("flying over nothing").
-        // MC's deep water is opaque because of the water VOLUME below the
-        // surface; `water_depth` (baked per-vertex at mesh build) captures
-        // exactly that. Deep ocean -> opaque; ponds / shallows stay
-        // translucent so you still spot the bed. A camera-distance term is
-        // max'd in only as a far-field backstop that hides the load
-        // boundary far off.
-        let depth_opacify = smoothstep(0.12, 0.85, in.water_depth);
+        // W205: uniform MC-style translucency. The W199 depth-based
+        // opacity made deep water a solid sheet you could never see
+        // into from the surface - but in MC you CAN look into water
+        // from above; the deep ocean reads dark because sky light
+        // attenuates per water block (now implemented in the lighting
+        // engine), not because the surface goes opaque. `water_depth`
+        // stays in the vertex stream for future use but no longer
+        // drives alpha. The far-distance backstop remains: it hides
+        // unloaded-boundary holes that fog alone misses at grazing
+        // angles.
         let dist_opacify = smoothstep(40.0, 110.0, world_dist);
-        out_alpha = mix(alpha, 1.0, max(depth_opacify, dist_opacify));
+        out_alpha = mix(alpha, 1.0, dist_opacify);
     }
 
     return vec4<f32>(lit_color, out_alpha);

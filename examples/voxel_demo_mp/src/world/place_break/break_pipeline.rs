@@ -154,14 +154,25 @@ pub(crate) fn apply_block_break(
         .get(broken)
         .map(|d| d.color)
         .unwrap_or([0.75, 0.55, 0.30]);
+    // W205: breaking a waterlogged plant (kelp / seagrass) restores
+    // WATER, not air - in MC the cell contained water all along. The
+    // ocean's worldgen sources never tick (equilibrium cells are
+    // deliberately unscheduled), so an air hole would persist forever;
+    // world_set_tracked(WATER) re-registers the cell as a source and
+    // re-meshes the body.
+    let restore = if crate::block::block_is_waterlogged(broken.0) {
+        BlockId(crate::block::WATER_ID)
+    } else {
+        BlockId::AIR
+    };
     let edit = EditMsg {
         x: voxel[0],
         y: voxel[1],
         z: voxel[2],
-        block: 0,
+        block: restore.0,
     };
     if is_client {
-        vx.world_set_tracked(voxel, BlockId::AIR);
+        vx.world_set_tracked(voxel, restore);
         let coords = Voxel::affected_chunks(voxel);
         vx.rebuild_chunks(&coords);
         vx.spawn_break_particles_tinted(voxel, break_color);
@@ -169,7 +180,7 @@ pub(crate) fn apply_block_break(
             pending_edits.push(edit);
         }
     } else {
-        vx.world_set_tracked(voxel, BlockId::AIR);
+        vx.world_set_tracked(voxel, restore);
         let coords = Voxel::affected_chunks(voxel);
         vx.rebuild_chunks(&coords);
         vx.spawn_break_particles_tinted(voxel, break_color);
