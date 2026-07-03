@@ -26,7 +26,6 @@ use super::overworld::{Overworld, build_overworld};
 use super::surface_rule::SurfaceCtx;
 use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
-use crate::worldgen::ore::pick_stone_or_ore;
 use crate::worldgen::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
 
 /// Topmost world-Y the surface scan starts from. MC's top slide
@@ -405,7 +404,12 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         } else if wy >= h - 3 {
             near_surface_block(biome)
         } else {
-            pick_stone_or_ore(wx, wy, wz, biome, seed)
+            // W202: PLAIN bulk stone/deepslate - no per-block hash ores.
+            // The MC profile's ores AND the variety strata (dirt /
+            // gravel / granite / diorite / andesite / tuff) all come
+            // from the real MC ore veins in `mcgen::features` now;
+            // keeping the legacy per-voxel roll would double-generate.
+            strata::bulk_block(wy)
         }
     });
     caves::carve(&mut chunk, coord, ctx);

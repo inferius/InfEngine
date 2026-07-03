@@ -1,4 +1,5 @@
-//! W201 - MC placed_features, Phase 6a: ocean flora (kelp + seagrass).
+//! W201/W202 - MC placed_features: ocean flora (Phase 6a) + ore veins
+//! (Phase 6b).
 //!
 //! Data-driven from the REAL MC worldgen JSON (extracted from the same
 //! client jar as the density/noise data - see `data/feature/`):
@@ -45,10 +46,73 @@ use crate::worldgen::climate::SEA_LEVEL;
 use super::noise::{NoiseParams, NormalNoise, SplitMix64};
 use super::terrain::mc_floor_at;
 
-const SEAGRASS_PLACED: &str = include_str!("data/feature/seagrass_normal.json");
-const SEAGRASS_CONFIGURED: &str = include_str!("data/feature/seagrass_short.json");
-const KELP_PLACED: &str = include_str!("data/feature/kelp_cold.json");
-const KELP_CONFIGURED: &str = include_str!("data/feature/kelp.json");
+const SEAGRASS_PLACED: &str = include_str!("data/feature/placed/seagrass_normal.json");
+const SEAGRASS_CONFIGURED: &str = include_str!("data/feature/configured/seagrass_short.json");
+const KELP_PLACED: &str = include_str!("data/feature/placed/kelp_cold.json");
+const KELP_CONFIGURED: &str = include_str!("data/feature/configured/kelp.json");
+
+/// W202: every `ore_*` placed_feature the overworld biomes list in their
+/// underground_ores step (the set is identical across biomes; extracted
+/// from `biome/ocean.json`).
+const ORE_PLACED: &[(&str, &str)] = &[
+    ("ore_dirt", include_str!("data/feature/placed/ore_dirt.json")),
+    ("ore_gravel", include_str!("data/feature/placed/ore_gravel.json")),
+    ("ore_granite_upper", include_str!("data/feature/placed/ore_granite_upper.json")),
+    ("ore_granite_lower", include_str!("data/feature/placed/ore_granite_lower.json")),
+    ("ore_diorite_upper", include_str!("data/feature/placed/ore_diorite_upper.json")),
+    ("ore_diorite_lower", include_str!("data/feature/placed/ore_diorite_lower.json")),
+    ("ore_andesite_upper", include_str!("data/feature/placed/ore_andesite_upper.json")),
+    ("ore_andesite_lower", include_str!("data/feature/placed/ore_andesite_lower.json")),
+    ("ore_tuff", include_str!("data/feature/placed/ore_tuff.json")),
+    ("ore_coal_upper", include_str!("data/feature/placed/ore_coal_upper.json")),
+    ("ore_coal_lower", include_str!("data/feature/placed/ore_coal_lower.json")),
+    ("ore_iron_upper", include_str!("data/feature/placed/ore_iron_upper.json")),
+    ("ore_iron_middle", include_str!("data/feature/placed/ore_iron_middle.json")),
+    ("ore_iron_small", include_str!("data/feature/placed/ore_iron_small.json")),
+    ("ore_gold", include_str!("data/feature/placed/ore_gold.json")),
+    ("ore_gold_lower", include_str!("data/feature/placed/ore_gold_lower.json")),
+    ("ore_redstone", include_str!("data/feature/placed/ore_redstone.json")),
+    ("ore_redstone_lower", include_str!("data/feature/placed/ore_redstone_lower.json")),
+    ("ore_diamond", include_str!("data/feature/placed/ore_diamond.json")),
+    ("ore_diamond_medium", include_str!("data/feature/placed/ore_diamond_medium.json")),
+    ("ore_diamond_large", include_str!("data/feature/placed/ore_diamond_large.json")),
+    ("ore_diamond_buried", include_str!("data/feature/placed/ore_diamond_buried.json")),
+    ("ore_lapis", include_str!("data/feature/placed/ore_lapis.json")),
+    ("ore_lapis_buried", include_str!("data/feature/placed/ore_lapis_buried.json")),
+    ("ore_copper", include_str!("data/feature/placed/ore_copper.json")),
+];
+
+/// The configured ore features the placed set references.
+const ORE_CONFIGURED: &[(&str, &str)] = &[
+    ("ore_andesite", include_str!("data/feature/configured/ore_andesite.json")),
+    ("ore_coal", include_str!("data/feature/configured/ore_coal.json")),
+    ("ore_coal_buried", include_str!("data/feature/configured/ore_coal_buried.json")),
+    ("ore_copper_small", include_str!("data/feature/configured/ore_copper_small.json")),
+    ("ore_diamond_buried", include_str!("data/feature/configured/ore_diamond_buried.json")),
+    ("ore_diamond_large", include_str!("data/feature/configured/ore_diamond_large.json")),
+    ("ore_diamond_medium", include_str!("data/feature/configured/ore_diamond_medium.json")),
+    ("ore_diamond_small", include_str!("data/feature/configured/ore_diamond_small.json")),
+    ("ore_diorite", include_str!("data/feature/configured/ore_diorite.json")),
+    ("ore_dirt", include_str!("data/feature/configured/ore_dirt.json")),
+    ("ore_gold_buried", include_str!("data/feature/configured/ore_gold_buried.json")),
+    ("ore_granite", include_str!("data/feature/configured/ore_granite.json")),
+    ("ore_gravel", include_str!("data/feature/configured/ore_gravel.json")),
+    ("ore_iron", include_str!("data/feature/configured/ore_iron.json")),
+    ("ore_iron_small", include_str!("data/feature/configured/ore_iron_small.json")),
+    ("ore_lapis", include_str!("data/feature/configured/ore_lapis.json")),
+    ("ore_lapis_buried", include_str!("data/feature/configured/ore_lapis_buried.json")),
+    ("ore_redstone", include_str!("data/feature/configured/ore_redstone.json")),
+    ("ore_tuff", include_str!("data/feature/configured/ore_tuff.json")),
+];
+
+/// The MC block tags the ore targets replace (extracted from
+/// `data/minecraft/tags/block/`).
+const TAG_STONE_ORE_REPLACEABLES: &str =
+    include_str!("data/feature/tags/stone_ore_replaceables.json");
+const TAG_DEEPSLATE_ORE_REPLACEABLES: &str =
+    include_str!("data/feature/tags/deepslate_ore_replaceables.json");
+const TAG_BASE_STONE_OVERWORLD: &str =
+    include_str!("data/feature/tags/base_stone_overworld.json");
 
 /// Per-feature random-stream salts (arbitrary, fixed).
 const SALT_SEAGRASS: u64 = 0x5EA6_7A55;
@@ -251,14 +315,433 @@ fn kelp_try(
     }
 }
 
-/// Per-chunk ocean-flora pass. Mc profile only (the rules are MC's).
+// ===================================================================
+// W202 - MC ore veins (Phase 6b).
+// ===================================================================
+
+/// A parsed MC block-tag: the set of engine block ids it contains.
+/// Names the engine has no block for are simply absent from the set.
+fn parse_tag(json: &str) -> std::collections::HashSet<u16> {
+    let v: serde_json::Value = serde_json::from_str(json).expect("tag json parses");
+    v["values"]
+        .as_array()
+        .expect("tag values")
+        .iter()
+        .filter_map(|n| block_id_by_name(n.as_str()?))
+        .collect()
+}
+
+/// Engine block id for an MC block name ("minecraft:coal_ore" or bare
+/// "coal_ore") via the registry name column. The two legacy rows keep
+/// their original short names ("coal" id 13, "iron" id 14 - renaming
+/// them would ripple through every name-driven system), so the MC ore
+/// names alias onto them explicitly.
+fn block_id_by_name(name: &str) -> Option<u16> {
+    use std::collections::HashMap;
+    static MAP: OnceLock<HashMap<&'static str, u16>> = OnceLock::new();
+    let map = MAP.get_or_init(|| {
+        let mut m: HashMap<&'static str, u16> =
+            crate::block::BLOCK_TYPES.iter().map(|bt| (bt.name, bt.id)).collect();
+        m.insert("coal_ore", 13);
+        m.insert("iron_ore", 14);
+        m
+    });
+    map.get(name.strip_prefix("minecraft:").unwrap_or(name)).copied()
+}
+
+/// MC vertical anchors, adapted to the engine's world band: the engine
+/// has no negative depth (MC -64..320 vs engine 0..255), so
+/// `above_bottom`/`below_top` anchor to the ENGINE bottom/top. That
+/// keeps each distribution's SHAPE (e.g. diamond's trapezoid peaking at
+/// the world floor) inside the depth that exists; sampled ys outside
+/// the band are discarded like MC discards out-of-dimension positions.
+#[derive(Clone, Copy, Debug)]
+enum Anchor {
+    Absolute(i32),
+    AboveBottom(i32),
+    BelowTop(i32),
+}
+
+const ENGINE_BOTTOM: i32 = 1;
+const ENGINE_TOP: i32 = 255;
+
+impl Anchor {
+    fn parse(v: &serde_json::Value) -> Anchor {
+        if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) {
+            Anchor::Absolute(a as i32)
+        } else if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) {
+            Anchor::AboveBottom(a as i32)
+        } else if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) {
+            Anchor::BelowTop(a as i32)
+        } else {
+            panic!("unknown height anchor: {v}")
+        }
+    }
+    fn resolve(self) -> i32 {
+        match self {
+            Anchor::Absolute(v) => v,
+            Anchor::AboveBottom(v) => ENGINE_BOTTOM + v,
+            Anchor::BelowTop(v) => ENGINE_TOP - v,
+        }
+    }
+}
+
+/// MC height providers used by the ore set.
+#[derive(Clone, Copy, Debug)]
+enum HeightProvider {
+    Uniform { min: Anchor, max: Anchor },
+    /// MC trapezoid (plateau 0): the mean of two uniform rolls.
+    Trapezoid { min: Anchor, max: Anchor },
+}
+
+impl HeightProvider {
+    fn parse(v: &serde_json::Value) -> HeightProvider {
+        let min = Anchor::parse(&v["min_inclusive"]);
+        let max = Anchor::parse(&v["max_inclusive"]);
+        match v["type"].as_str() {
+            Some("minecraft:uniform") => HeightProvider::Uniform { min, max },
+            Some("minecraft:trapezoid") => HeightProvider::Trapezoid { min, max },
+            other => panic!("unsupported height provider {other:?}"),
+        }
+    }
+    /// Sample a y. Consumes a FIXED number of rolls per variant so the
+    /// replayed streams stay aligned across chunks.
+    fn sample(self, rng: &mut SplitMix64) -> Option<i32> {
+        let (lo, hi, y) = match self {
+            HeightProvider::Uniform { min, max } => {
+                let lo = min.resolve();
+                let hi = max.resolve();
+                if hi < lo {
+                    let _ = rng.next_u64();
+                    return None;
+                }
+                let span = (hi - lo + 1) as u64;
+                (lo, hi, lo + (rng.next_u64() % span) as i32)
+            }
+            HeightProvider::Trapezoid { min, max } => {
+                let lo = min.resolve();
+                let hi = max.resolve();
+                if hi < lo {
+                    let _ = rng.next_u64();
+                    let _ = rng.next_u64();
+                    return None;
+                }
+                let span = (hi - lo + 1) as u64;
+                let a = (rng.next_u64() % span) as i32;
+                let b = (rng.next_u64() % span) as i32;
+                (lo, hi, lo + (a + b) / 2)
+            }
+        };
+        let _ = (lo, hi);
+        (ENGINE_BOTTOM..=ENGINE_TOP).contains(&y).then_some(y)
+    }
+}
+
+/// `count` is either a literal or a uniform int provider (ore_gold_lower).
+#[derive(Clone, Copy, Debug)]
+enum CountProvider {
+    Fixed(u32),
+    Uniform { min: u32, max: u32 },
+}
+
+impl CountProvider {
+    fn parse(v: &serde_json::Value) -> CountProvider {
+        if let Some(n) = v.as_u64() {
+            return CountProvider::Fixed(n as u32);
+        }
+        assert_eq!(v["type"].as_str(), Some("minecraft:uniform"), "count provider {v}");
+        CountProvider::Uniform {
+            min: v["min_inclusive"].as_u64().expect("count min") as u32,
+            max: v["max_inclusive"].as_u64().expect("count max") as u32,
+        }
+    }
+    fn sample(self, rng: &mut SplitMix64) -> u32 {
+        match self {
+            CountProvider::Fixed(n) => n,
+            CountProvider::Uniform { min, max } => {
+                min + (rng.next_u64() % (max - min + 1) as u64) as u32
+            }
+        }
+    }
+}
+
+/// One replaceable->ore mapping of an ore configured_feature.
+struct OreTarget {
+    replaceable: std::collections::HashSet<u16>,
+    state: u16,
+}
+
+/// A fully-resolved ore placed_feature.
+pub(crate) struct OreRule {
+    pub(crate) name: &'static str,
+    count: CountProvider,
+    /// rarity_filter: Some(n) = 1-in-n chunks run this feature.
+    rarity: Option<u32>,
+    height: HeightProvider,
+    size: u32,
+    discard_on_air: f64,
+    targets: Vec<OreTarget>,
+}
+
+fn parse_ore_rules() -> Vec<OreRule> {
+    let configured: std::collections::HashMap<&str, serde_json::Value> = ORE_CONFIGURED
+        .iter()
+        .map(|(n, j)| (*n, serde_json::from_str(j).expect("ore configured parses")))
+        .collect();
+    let tag_of = |name: &str| -> std::collections::HashSet<u16> {
+        match name {
+            "minecraft:stone_ore_replaceables" => parse_tag(TAG_STONE_ORE_REPLACEABLES),
+            "minecraft:deepslate_ore_replaceables" => {
+                parse_tag(TAG_DEEPSLATE_ORE_REPLACEABLES)
+            }
+            "minecraft:base_stone_overworld" => parse_tag(TAG_BASE_STONE_OVERWORLD),
+            other => panic!("unembedded ore target tag {other}"),
+        }
+    };
+    ORE_PLACED
+        .iter()
+        .map(|(name, json)| {
+            let placed: serde_json::Value =
+                serde_json::from_str(json).expect("ore placed parses");
+            let feature = placed["feature"].as_str().expect("feature ref");
+            let feature = feature.strip_prefix("minecraft:").unwrap_or(feature);
+            let conf = configured
+                .get(feature)
+                .unwrap_or_else(|| panic!("{name}: configured {feature} not embedded"));
+            assert_eq!(conf["type"].as_str(), Some("minecraft:ore"), "{name}");
+            let cfg = &conf["config"];
+            let size = cfg["size"].as_u64().expect("ore size") as u32;
+            let discard_on_air =
+                cfg["discard_chance_on_air_exposure"].as_f64().unwrap_or(0.0);
+            let targets = cfg["targets"]
+                .as_array()
+                .expect("ore targets")
+                .iter()
+                .filter_map(|t| {
+                    let state_name = t["state"]["Name"].as_str()?;
+                    let Some(state) = block_id_by_name(state_name) else {
+                        // The engine has no block for this state (e.g. a
+                        // deepslate variant not yet in the registry) -
+                        // skip the target; the vein just won't paint
+                        // into that stratum.
+                        tracing::warn!(state_name, rule = name, "W202: ore state has no engine block");
+                        return None;
+                    };
+                    let tag = t["target"]["tag"].as_str()?;
+                    Some(OreTarget { replaceable: tag_of(tag), state })
+                })
+                .collect();
+
+            let mut count = CountProvider::Fixed(1);
+            let mut rarity = None;
+            let mut height = None;
+            for m in placed["placement"].as_array().expect("placement").iter() {
+                match m["type"].as_str() {
+                    Some("minecraft:count") => count = CountProvider::parse(&m["count"]),
+                    Some("minecraft:rarity_filter") => {
+                        rarity = Some(m["chance"].as_u64().expect("rarity chance") as u32)
+                    }
+                    Some("minecraft:height_range") => {
+                        height = Some(HeightProvider::parse(&m["height"]))
+                    }
+                    _ => {} // in_square + biome are implicit in the pass
+                }
+            }
+            OreRule {
+                name,
+                count,
+                rarity,
+                height: height.unwrap_or_else(|| panic!("{name}: no height_range")),
+                size,
+                discard_on_air,
+                targets,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn ore_rules() -> &'static [OreRule] {
+    static RULES: OnceLock<Vec<OreRule>> = OnceLock::new();
+    RULES.get_or_init(parse_ore_rules)
+}
+
+/// Deterministic [0,1) roll from a world position (for
+/// discard_chance_on_air_exposure - keyed by position, not stream, so
+/// vertical chunk replays agree without tracking stream consumption).
+fn pos_roll(x: i32, y: i32, z: i32, seed: u32) -> f64 {
+    let mut h = SplitMix64::new(
+        (seed as u64)
+            ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+            ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9),
+    );
+    h.next_f64()
+}
+
+/// One ore vein, the MC `OreFeature.place` shape: a short random
+/// diagonal, walked in `size` steps; each step carries a sphere whose
+/// radius follows a half-sine bump along the walk. Cells inside a
+/// sphere that match a target's replaceable tag become that target's
+/// ore state. RNG consumption is fixed per call (3 + size rolls after
+/// the y sample) so replayed streams stay aligned; the air-exposure
+/// discard rolls come from `pos_roll`, not the stream.
+#[allow(clippy::too_many_arguments)]
+fn ore_try(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    rule: &OreRule,
+    rng: &mut SplitMix64,
+    scx: i32,
+    scz: i32,
+    seed: u32,
+) {
+    let cs = CHUNK_SIZE as i32;
+    let rx = (rng.next_u64() % 16) as i32;
+    let rz = (rng.next_u64() % 16) as i32;
+    let Some(cy) = rule.height.sample(rng) else {
+        // Keep consumption fixed: the angle roll below still burns even
+        // for a discarded y (mirrors the "always roll" discipline).
+        let _ = rng.next_f64();
+        return;
+    };
+    let cx = scx * cs + rx;
+    let cz = scz * cs + rz;
+
+    let angle = rng.next_f64() * std::f64::consts::PI;
+    let g = rule.size as f64 / 8.0;
+    // Line endpoints (MC: +/- sin/cos * size/8 around the center, with
+    // each end's y jittered by nextInt(3) - 2).
+    let x1 = cx as f64 + angle.sin() * g;
+    let x2 = cx as f64 - angle.sin() * g;
+    let z1 = cz as f64 + angle.cos() * g;
+    let z2 = cz as f64 - angle.cos() * g;
+    let y1 = (cy as i64 + (rng.next_u64() % 3) as i64 - 2) as f64;
+    let y2 = (cy as i64 + (rng.next_u64() % 3) as i64 - 2) as f64;
+
+    // Quick reject once the fixed rolls are burnt: can this vein touch
+    // this chunk at all? Max reach = line half-length + max sphere
+    // radius (~size/16 + 1).
+    let reach = g + rule.size as f64 / 16.0 + 2.0;
+    let (ox, oy, oz) = (origin[0], origin[1], origin[2]);
+    let hit = (cx as f64 + reach) >= ox as f64
+        && (cx as f64 - reach) < (ox + cs) as f64
+        && (cz as f64 + reach) >= oz as f64
+        && (cz as f64 - reach) < (oz + cs) as f64
+        && (cy as f64 + reach) >= oy as f64
+        && (cy as f64 - reach) < (oy + cs) as f64;
+
+    let size = rule.size.max(1);
+    for s in 0..size {
+        let t = s as f64 / size as f64;
+        // The radius roll burns whether or not we paint (alignment).
+        let rad_roll = rng.next_f64() * rule.size as f64 / 16.0;
+        if !hit {
+            continue;
+        }
+        let px = x1 + (x2 - x1) * t;
+        let py = y1 + (y2 - y1) * t;
+        let pz = z1 + (z2 - z1) * t;
+        let r = (((std::f64::consts::PI * t).sin() + 1.0) * rad_roll + 1.0) / 2.0;
+        let r2 = r * r;
+        let (bx0, bx1) = ((px - r).floor() as i32, (px + r).ceil() as i32);
+        let (by0, by1) = ((py - r).floor() as i32, (py + r).ceil() as i32);
+        let (bz0, bz1) = ((pz - r).floor() as i32, (pz + r).ceil() as i32);
+        for bx in bx0..=bx1 {
+            for by in by0..=by1 {
+                for bz in bz0..=bz1 {
+                    let dx = bx as f64 + 0.5 - px;
+                    let dy = by as f64 + 0.5 - py;
+                    let dz = bz as f64 + 0.5 - pz;
+                    if dx * dx + dy * dy + dz * dz >= r2 {
+                        continue;
+                    }
+                    let (lx, ly, lz) = (bx - ox, by - oy, bz - oz);
+                    if !(0..cs).contains(&lx)
+                        || !(0..cs).contains(&ly)
+                        || !(0..cs).contains(&lz)
+                    {
+                        continue;
+                    }
+                    let here = chunk.get(lx as usize, ly as usize, lz as usize).0;
+                    let Some(target) =
+                        rule.targets.iter().find(|t| t.replaceable.contains(&here))
+                    else {
+                        continue;
+                    };
+                    // discard_chance_on_air_exposure: skip if a face
+                    // neighbour (within this chunk) is air and the roll
+                    // fails. Buried variants use 1.0.
+                    if rule.discard_on_air > 0.0 {
+                        let exposed = [
+                            (lx + 1, ly, lz),
+                            (lx - 1, ly, lz),
+                            (lx, ly + 1, lz),
+                            (lx, ly - 1, lz),
+                            (lx, ly, lz + 1),
+                            (lx, ly, lz - 1),
+                        ]
+                        .into_iter()
+                        .any(|(nx, ny, nz)| {
+                            (0..cs).contains(&nx)
+                                && (0..cs).contains(&ny)
+                                && (0..cs).contains(&nz)
+                                && chunk.get(nx as usize, ny as usize, nz as usize).is_air()
+                        });
+                        if exposed && pos_roll(bx, by, bz, seed) < rule.discard_on_air {
+                            continue;
+                        }
+                    }
+                    chunk.set(lx as usize, ly as usize, lz as usize, BlockId(target.state));
+                }
+            }
+        }
+    }
+}
+
+/// Per-feature salt so every ore rule gets an independent stream.
+fn ore_salt(index: usize) -> u64 {
+    0x04E5_0000u64 ^ ((index as u64) << 32)
+}
+
+/// The per-chunk ore pass: replay the 3x3 source-column neighbourhood
+/// of every ore rule (veins reach a few blocks past their source
+/// chunk) and paint the cells that land here.
+fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
+    let seed = ctx.effective_seed();
+    for (idx, rule) in ore_rules().iter().enumerate() {
+        for scx in (coord[0] - 1)..=(coord[0] + 1) {
+            for scz in (coord[2] - 1)..=(coord[2] + 1) {
+                let mut rng =
+                    SplitMix64::new(stream_seed(seed, scx, scz, ore_salt(idx)));
+                if let Some(r) = rule.rarity {
+                    // rarity_filter: 1-in-r chunks run the feature.
+                    if !rng.next_u64().is_multiple_of(r as u64) {
+                        continue;
+                    }
+                }
+                let count = rule.count.sample(&mut rng);
+                for _ in 0..count {
+                    ore_try(chunk, origin, rule, &mut rng, scx, scz, seed);
+                }
+            }
+        }
+    }
+}
+
+/// Per-chunk MC placed-features pass (ores + ocean flora). Mc profile
+/// only (the rules are MC's).
 pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
     if !matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
         return;
     }
     let origin_v = World::chunk_world_origin(coord);
     let origin = [origin_v.x as i32, origin_v.y as i32, origin_v.z as i32];
-    // Whole chunk above sea level -> nothing can place.
+    // W202: ore veins first (MC's underground_ores step runs before
+    // vegetal decoration). Ores run at EVERY height (coal/iron reach
+    // the mountain tops); flora is gated below sea level.
+    place_ores(chunk, coord, ctx, origin);
+
+    // Whole chunk above sea level -> no ocean flora can place.
     if origin[1] > SEA_LEVEL {
         return;
     }
@@ -384,5 +867,82 @@ mod tests {
         panic!(
             "no flora in {ocean_chunks} ocean chunks: seagrass={seagrass} kelp={kelp}"
         );
+    }
+
+    // ---------------- W202: ores ----------------
+
+    #[test]
+    fn ore_rules_parse_the_embedded_mc_json() {
+        let rules = ore_rules();
+        assert_eq!(rules.len(), 25, "one rule per embedded ore placed_feature");
+        let by_name = |n: &str| rules.iter().find(|r| r.name == n).unwrap();
+        // Pins from the 26.1.2 data: prove the values come from the
+        // JSON, not a hardcode.
+        let coal = by_name("ore_coal_upper");
+        assert!(matches!(coal.count, CountProvider::Fixed(30)));
+        assert_eq!(coal.size, 17);
+        let dia = by_name("ore_diamond_large");
+        assert_eq!(dia.rarity, Some(9));
+        assert!((dia.discard_on_air - 0.7).abs() < 1e-9 || dia.discard_on_air >= 0.0);
+        let gold_lower = by_name("ore_gold_lower");
+        assert!(matches!(gold_lower.count, CountProvider::Uniform { min: 0, max: 1 }));
+        // Every rule must have resolved at least one paintable target
+        // (a rule with zero targets would silently no-op).
+        for r in rules {
+            assert!(!r.targets.is_empty(), "{} has no engine targets", r.name);
+        }
+    }
+
+    #[test]
+    fn key_ore_states_resolve_to_engine_blocks() {
+        // The core ore roster must exist in the registry, in both stone
+        // and deepslate forms - otherwise veins skip that stratum.
+        for name in [
+            "coal_ore", "iron_ore", "copper_ore", "gold_ore", "redstone_ore",
+            "diamond_ore", "lapis_ore", "deepslate_coal_ore", "deepslate_iron_ore",
+            "deepslate_gold_ore", "deepslate_diamond_ore", "stone", "granite",
+            "diorite", "andesite", "tuff", "deepslate", "dirt", "gravel",
+        ] {
+            assert!(
+                block_id_by_name(name).is_some(),
+                "registry has no block named {name}"
+            );
+        }
+    }
+
+    /// Evidence: veins actually paint ore into underground chunks.
+    #[test]
+    fn underground_chunks_grow_ores() {
+        let c = ctx();
+        let coal = block_id_by_name("coal_ore").unwrap();
+        let deep_coal = block_id_by_name("deepslate_coal_ore").unwrap();
+        let iron = block_id_by_name("iron_ore").unwrap();
+        let deep_iron = block_id_by_name("deepslate_iron_ore").unwrap();
+        let mut found_coal = 0u32;
+        let mut found_iron = 0u32;
+        for cx in -6..6 {
+            for cz in -6..6 {
+                // A solidly-underground band (y 16..48).
+                for cy in 1..3 {
+                    let chunk = generate_chunk_at_ctx([cx, cy, cz], &c);
+                    for x in 0..16 {
+                        for y in 0..16 {
+                            for z in 0..16 {
+                                let id = chunk.get(x, y, z).0;
+                                if id == coal || id == deep_coal {
+                                    found_coal += 1;
+                                } else if id == iron || id == deep_iron {
+                                    found_iron += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                if found_coal > 0 && found_iron > 0 {
+                    return;
+                }
+            }
+        }
+        panic!("no ores underground: coal={found_coal} iron={found_iron}");
     }
 }
