@@ -374,6 +374,18 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         // were falling back to the cube TileSpec -> grass texture on top).
         x if x == SHORT_GRASS_ID => Some("block/cross/short_grass"),
         x if x == FERN_ID => Some("block/cross/fern"),
+        // W203: underwater plants carry F_SWIM (waterlogged cells swim
+        // like water), which the universal W96 cross fallback excludes -
+        // so they get explicit cross entries like the flowers above.
+        x if x == crate::block::SEAGRASS_ID => Some("block/cross/seagrass"),
+        x if x == crate::block::TALL_SEAGRASS_BOTTOM_ID => {
+            Some("block/cross/tall_seagrass_bottom")
+        }
+        x if x == crate::block::TALL_SEAGRASS_TOP_ID => {
+            Some("block/cross/tall_seagrass_top")
+        }
+        x if x == crate::block::KELP_ID => Some("block/cross/kelp"),
+        x if x == crate::block::KELP_PLANT_ID => Some("block/cross/kelp_plant"),
         // W12.2 - slab / fence / door / stairs / pane / bars / wall.
         x if x == OAK_SLAB_ID
             || x == STONE_SLAB_ID

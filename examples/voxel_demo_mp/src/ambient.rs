@@ -224,7 +224,9 @@ fn tick_underwater_bubbles(vx: &mut crate::Voxel, dt: f32, seed: &mut u32) {
         eye.y.floor() as i32,
         eye.z.floor() as i32,
     ];
-    let submerged = vx.world.get(eye_voxel).0 == crate::block::WATER_ID;
+    // W203: waterlogged plant cells count as water for the bubble
+    // stream too.
+    let submerged = crate::block::block_is_watery(vx.world.get(eye_voxel).0);
     // Spawn: ~6 bubbles/s while submerged (MC shows a steady light
     // stream around the swimming player).
     if submerged && vx.bubbles.len() < BUBBLE_CAP && accumulator_fires(seed, (dt * 6.0).clamp(0.0, 1.0)) {
@@ -258,7 +260,7 @@ fn tick_underwater_bubbles(vx: &mut crate::Voxel, dt: f32, seed: &mut u32) {
             b.pos[1].floor() as i32,
             b.pos[2].floor() as i32,
         ];
-        world.get(cell).0 == crate::block::WATER_ID
+        crate::block::block_is_watery(world.get(cell).0)
     });
     // Emit one textured billboard per live bubble.
     if vx.bubbles.is_empty() {

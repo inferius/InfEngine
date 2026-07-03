@@ -11,8 +11,21 @@ use infengine_render::MeshVertex;
 use infengine_voxel::World;
 
 use crate::block::{
-    block_is_aabb_passable, block_is_washable, block_skips_chunk_mesh,
+    block_is_aabb_passable, block_is_washable, block_is_waterlogged,
+    block_skips_chunk_mesh,
 };
+
+/// W203: does block `id` count as part of a `liquid_id` body for
+/// MESHING? MC's underwater plants are waterlogged - the cell contains
+/// both the plant and water - so the water body must treat them as
+/// water: no interior "air pocket" faces around a kelp stalk, the
+/// surface stays continuous over kelp that reaches it, and the depth
+/// fade sees through them. Applies to water only; lava has no
+/// waterlogged blocks.
+pub(crate) fn counts_as_liquid(id: u16, liquid_id: u16) -> bool {
+    id == liquid_id
+        || (liquid_id == crate::block::WATER_ID && block_is_waterlogged(id))
+}
 
 /// Y position of the top of a liquid voxel's slope ramp. Returns 1.0
 /// (full cube) for sources, for cells with the same liquid directly
@@ -25,10 +38,10 @@ pub(crate) fn liquid_surface_height_at(
     pos: [i32; 3],
     liquid_id: u16,
 ) -> f32 {
-    if world.get(pos).0 != liquid_id {
+    if !counts_as_liquid(world.get(pos).0, liquid_id) {
         return 0.0;
     }
-    if world.get([pos[0], pos[1] + 1, pos[2]]).0 == liquid_id {
+    if counts_as_liquid(world.get([pos[0], pos[1] + 1, pos[2]]).0, liquid_id) {
         return 1.0;
     }
     let level = level_map.get(&pos).copied().unwrap_or(0);
@@ -67,8 +80,8 @@ pub(crate) fn liquid_corner_height_at(
     // of a falling column (same liquid both at this y and at
     // y+1), the corner snaps to full height.
     for t in &touching {
-        if world.get(*t).0 == liquid_id
-            && world.get([t[0], t[1] + 1, t[2]]).0 == liquid_id
+        if counts_as_liquid(world.get(*t).0, liquid_id)
+            && counts_as_liquid(world.get([t[0], t[1] + 1, t[2]]).0, liquid_id)
         {
             return 1.0;
         }
@@ -80,7 +93,7 @@ pub(crate) fn liquid_corner_height_at(
     let mut weight_total = 0.0_f32;
     for t in &touching {
         let b = world.get(*t);
-        if b.0 == liquid_id {
+        if counts_as_liquid(b.0, liquid_id) {
             let h = liquid_surface_height_at(world, level_map, *t, liquid_id);
             weighted_sum += h * LIQUID_WEIGHT;
             weight_total += LIQUID_WEIGHT;
@@ -194,7 +207,9 @@ pub(crate) fn side_open(
     liquid_id: u16,
 ) -> bool {
     let nb = world.get([nx, ny, nz]);
-    if nb.0 == liquid_id {
+    // W203: waterlogged plant cells count as the water body - no face
+    // toward them, or every kelp stalk grows an air-pocket box.
+    if counts_as_liquid(nb.0, liquid_id) {
         return false;
     }
     nb.is_air()
@@ -219,7 +234,8 @@ pub(crate) fn bottom_open(
     liquid_id: u16,
 ) -> bool {
     let nb = world.get([nx, ny, nz]);
-    if nb.0 == liquid_id {
+    // W203: same waterlogged-cell rule as `side_open`.
+    if counts_as_liquid(nb.0, liquid_id) {
         return false;
     }
     nb.is_air()

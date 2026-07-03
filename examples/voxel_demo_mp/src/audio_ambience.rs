@@ -48,7 +48,9 @@ pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
     let pos = [eye.x, eye.y, eye.z];
 
     // --- Underwater enter / exit / loop -------------------------
-    let underwater = vx.world.get(eye_voxel).0 == crate::block::WATER_ID;
+    // W203: waterlogged plant cells (kelp/seagrass) count as water -
+    // swimming through a kelp forest keeps the underwater ambience.
+    let underwater = crate::block::block_is_watery(vx.world.get(eye_voxel).0);
     if underwater != vx.underwater_was {
         let key = if underwater {
             "ambient/underwater_enter"

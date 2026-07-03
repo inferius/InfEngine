@@ -108,6 +108,26 @@ pub(crate) fn block_is_transparent_render(b: BlockId) -> bool {
     block_has_flag(b, F_TRANSPARENT_RENDER)
 }
 
+/// W203: underwater plants occupy their cell INSTEAD of water (the
+/// engine has no waterlogged block states), but in MC these blocks are
+/// waterlogged - the cell contains the plant AND water. Everything that
+/// asks "is this cell part of the water body" (liquid meshing, the
+/// depth fade, swim, underwater ambience) must treat them as water, or
+/// the water renders an air-pocket box around every plant.
+pub(crate) fn block_is_waterlogged(id: u16) -> bool {
+    matches!(
+        id,
+        SEAGRASS_ID | TALL_SEAGRASS_BOTTOM_ID | TALL_SEAGRASS_TOP_ID
+            | KELP_ID | KELP_PLANT_ID
+    )
+}
+
+/// W203: "the eye/cell is in water" - true water or a waterlogged
+/// plant cell (swimming through a kelp stalk is still swimming).
+pub(crate) fn block_is_watery(id: u16) -> bool {
+    id == WATER_ID || block_is_waterlogged(id)
+}
+
 /// Voxel is a liquid the player can swim in.
 #[inline]
 pub(crate) fn block_is_swim_medium(b: BlockId) -> bool {

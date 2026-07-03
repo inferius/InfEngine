@@ -32,7 +32,8 @@ use infengine_voxel::BlockId;
 pub(crate) use apply::liquid_apply_plan;
 pub(crate) use merge::liquid_merge_step;
 pub(crate) use mesh::{
-    bottom_open, liquid_corner_height_at, push_quad_flow, side_open,
+    bottom_open, counts_as_liquid, liquid_corner_height_at, push_quad_flow,
+    side_open,
 };
 // `distance_to_drop_at` and `liquid_plan_step` are used by the
 // test sim only; re-exporting them under `cfg(test)` keeps the

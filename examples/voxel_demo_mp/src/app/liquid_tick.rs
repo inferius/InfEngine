@@ -102,8 +102,16 @@ impl Voxel {
         buckets: &mut HashMap<u16, (Vec<MeshVertex>, Vec<u32>)>,
     ) {
         let block = self.world.get(p);
-        let liquid_id = block.0;
-        if liquid_for(block).is_none() {
+        // W203: waterlogged plant cells ARE water for the liquid mesh -
+        // they emit water faces exactly like a water cell (so the sea
+        // surface stays continuous over a kelp tip and the body has no
+        // holes), while the plant cross renders via the chunk mesh.
+        let liquid_id = if crate::block::block_is_waterlogged(block.0) {
+            crate::block::WATER_ID
+        } else {
+            block.0
+        };
+        if liquid_for(BlockId(liquid_id)).is_none() {
             return;
         }
         let (vertices, indices) = buckets.entry(liquid_id).or_default();
@@ -143,16 +151,26 @@ impl Voxel {
         let depth = {
             const DEPTH_FULL: i32 = 12;
             let mut d = 1i32;
+            // W203: the walk continues through waterlogged plant cells -
+            // stopping at a kelp stalk made the water above kelp forests
+            // read "shallow" = translucent while neighbouring columns
+            // were opaque (the patchy surface from above).
             while d <= DEPTH_FULL
-                && self.world.get([vx, vy - d, vz]).0 == liquid_id
+                && crate::liquid::counts_as_liquid(
+                    self.world.get([vx, vy - d, vz]).0,
+                    liquid_id,
+                )
             {
                 d += 1;
             }
             d as f32 / DEPTH_FULL as f32
         };
         // Top face (CCW from above so the Back-cull keeps it) - only when
-        // the cell above isn't the same liquid.
-        let above_same = self.world.get([vx, vy + 1, vz]).0 == liquid_id;
+        // the cell above isn't the same liquid (waterlogged counts).
+        let above_same = crate::liquid::counts_as_liquid(
+            self.world.get([vx, vy + 1, vz]).0,
+            liquid_id,
+        );
         if !above_same {
             let t0 = [fx, fy + h00, fz];
             let t1 = [fx, fy + h01, fz + 1.0];
@@ -383,7 +401,15 @@ impl Voxel {
                     for ly in 0..cs {
                         for lz in 0..cs {
                             let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
-                            let id = chunk.get(ux, uy, uz);
+                            let raw = chunk.get(ux, uy, uz);
+                            // W203: waterlogged plant cells emit water
+                            // faces too (the cell IS water in MC terms).
+                            let watery = crate::block::block_is_waterlogged(raw.0);
+                            let id = if watery {
+                                BlockId(crate::block::WATER_ID)
+                            } else {
+                                raw
+                            };
                             if liquid_for(id).is_none() {
                                 continue;
                             }
@@ -397,8 +423,14 @@ impl Voxel {
                             let interior =
                                 ux > 0 && uy > 0 && uz > 0 && ux < cu - 1 && uy < cu - 1 && uz < cu - 1;
                             if interior {
+                                // W203: waterlogged neighbours count as the
+                                // same body, so a water cell ringed by kelp
+                                // still skips (and vice versa).
                                 let same = |dx: usize, dy: usize, dz: usize| {
-                                    chunk.get(dx, dy, dz).0 == id.0
+                                    crate::liquid::counts_as_liquid(
+                                        chunk.get(dx, dy, dz).0,
+                                        id.0,
+                                    )
                                 };
                                 if same(ux + 1, uy, uz)
                                     && same(ux - 1, uy, uz)
