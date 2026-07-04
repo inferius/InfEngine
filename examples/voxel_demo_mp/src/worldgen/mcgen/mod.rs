@@ -36,3 +36,4 @@ pub(crate) mod noise;
 pub(crate) mod overworld;
 pub(crate) mod surface_rule;
 pub(crate) mod terrain;
+pub(crate) mod trees;

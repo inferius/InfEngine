@@ -96,6 +96,12 @@ pub(crate) fn place_realistic_from_coord(
     coord: infengine_voxel::ChunkCoord,
     ctx: &WorldgenCtx,
 ) {
+    // W208: the Mc profile grows the REAL MC trees via
+    // `mcgen::trees::place_trees` (data-driven trunk/foliage placers) -
+    // the legacy hand-rolled shapes here would double-plant.
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return;
+    }
     use crate::worldgen::chunk::column_height;
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);

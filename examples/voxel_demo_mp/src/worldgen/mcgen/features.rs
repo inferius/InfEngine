@@ -216,7 +216,7 @@ fn kelp_count(rules: &OceanFloraRules, wx: i32, wz: i32) -> u32 {
 }
 
 /// Mixed per-(source chunk column, feature) stream seed.
-fn stream_seed(seed: u32, cx: i32, cz: i32, salt: u64) -> u64 {
+pub(crate) fn stream_seed(seed: u32, cx: i32, cz: i32, salt: u64) -> u64 {
     (seed as u64)
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add((cx as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F))
@@ -332,11 +332,11 @@ fn parse_tag(json: &str) -> std::collections::HashSet<u16> {
 }
 
 /// Engine block id for an MC block name ("minecraft:coal_ore" or bare
-/// "coal_ore") via the registry name column. The two legacy rows keep
-/// their original short names ("coal" id 13, "iron" id 14 - renaming
-/// them would ripple through every name-driven system), so the MC ore
-/// names alias onto them explicitly.
-fn block_id_by_name(name: &str) -> Option<u16> {
+/// "coal_ore") via the registry name column. The legacy rows keep
+/// their original short names ("coal" 13, "iron" 14, "wood" 5,
+/// "leaves" 6 - renaming them would ripple through every name-driven
+/// system), so the MC names alias onto them explicitly.
+pub(crate) fn block_id_by_name(name: &str) -> Option<u16> {
     use std::collections::HashMap;
     static MAP: OnceLock<HashMap<&'static str, u16>> = OnceLock::new();
     let map = MAP.get_or_init(|| {
@@ -344,6 +344,9 @@ fn block_id_by_name(name: &str) -> Option<u16> {
             crate::block::BLOCK_TYPES.iter().map(|bt| (bt.name, bt.id)).collect();
         m.insert("coal_ore", 13);
         m.insert("iron_ore", 14);
+        // W208: the oak set are the legacy wood/leaves rows.
+        m.insert("oak_log", 5);
+        m.insert("oak_leaves", 6);
         m
     });
     map.get(name.strip_prefix("minecraft:").unwrap_or(name)).copied()
@@ -740,6 +743,10 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // vegetal decoration). Ores run at EVERY height (coal/iron reach
     // the mountain tops); flora is gated below sea level.
     place_ores(chunk, coord, ctx, origin);
+
+    // W208: MC trees (vegetal step) - before the underwater plants,
+    // matching the biome feature-list order.
+    super::trees::place_trees(chunk, coord, ctx, origin);
 
     // Whole chunk above sea level -> no ocean flora can place.
     if origin[1] > SEA_LEVEL {
