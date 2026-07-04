@@ -816,6 +816,11 @@ pub(crate) struct Voxel {
     /// sim_ms (and was invisible in the F3 panel). MC ticks mobs at 20
     /// TPS; this gates `tick_mobs` to the same cadence. Transient.
     pub(crate) mob_tick_accum: f32,
+    /// W207: ticks (in MC's 20 Hz scale) the eye has been submerged,
+    /// clamped 0..=600 - drives MC's waterVision underwater-fog ramp
+    /// (`render::sky::water_vision_mult`). +20/s underwater, -200/s
+    /// surfaced, exactly LocalPlayer.waterVisionTime.
+    pub(crate) water_vision_time: f32,
     /// W204: every mob's position at the START of the last 20 Hz tick.
     /// The renderer lerps prev -> current by `mob_tick_accum /
     /// MOB_TICK_DT` so mobs glide between ticks instead of stepping

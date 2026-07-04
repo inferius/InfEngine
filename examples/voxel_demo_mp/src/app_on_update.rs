@@ -1535,6 +1535,16 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 .get([eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32])
                 .0,
         );
+        // W207: MC waterVision ramp - the eye adjusts to the water the
+        // longer it stays submerged (+20 tick-units/s under, -200/s
+        // out, clamp 0..600, exactly LocalPlayer.waterVisionTime).
+        if underwater {
+            vx.water_vision_time = (vx.water_vision_time + dt * 20.0).min(600.0);
+        } else {
+            vx.water_vision_time = (vx.water_vision_time - dt * 200.0).max(0.0);
+        }
+        let water_vision =
+            crate::render::sky::water_vision_mult(vx.water_vision_time);
         // W155: the nether is roofed - no sky, no sun, red haze.
         let in_nether = vx.current_dim == crate::dim::NETHER;
         let _sky = crate::render::sky::apply_tint_and_fog(
@@ -1545,6 +1555,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.lightning_flash,
             vx.settings.view_distance,
             underwater,
+            water_vision,
             in_nether,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());

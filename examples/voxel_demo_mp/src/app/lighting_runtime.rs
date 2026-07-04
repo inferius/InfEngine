@@ -351,30 +351,11 @@ impl Voxel {
         // pending per-voxel mark so we don't re-flood on next tick.
         let _ = self.lighting.take_dirty();
 
-        if let Some(pool) = self.workers.as_ref() {
-            // W27.4: build the owned snapshot for the worker.
-            // Clone every loaded chunk (~8 KB each). For 1296 chunks
-            // that is ~10 MB - a one-time allocation acceptable at
-            // load time.
-            let snap_entries: HashMap<ChunkCoord, Chunk> = coords
-                .iter()
-                .filter_map(|cc| self.world.chunk(*cc).map(|c| (*cc, c.clone())))
-                .collect();
-            // Warm-start from any existing grids (usually empty on
-            // first load; populated on dim switch).
-            let existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> = coords
-                .iter()
-                .filter_map(|cc| {
-                    self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
-                })
-                .collect();
-            let job = Job::Lighting(LightingJob {
-                affected: coords,
-                snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
-                existing_grids,
-            });
-            let _ = pool.req_tx.send(job);
-            self.pending_lighting_jobs += 1;
+        if self.workers.is_some() {
+            // W207: split into per-region segments so the initial-load
+            // BFS parallelises across the whole worker pool instead of
+            // one worker grinding a 500-chunk job while the rest idle.
+            self.dispatch_lighting_segments(coords);
             return;
         }
 
@@ -389,6 +370,72 @@ impl Voxel {
             &mut self.lighting,
             &coords,
         );
+    }
+
+    /// W207: split an affected-chunk batch into per-region segments and
+    /// dispatch one `Job::Lighting` per segment, so the BFS load spreads
+    /// across the whole worker pool. Previously ONE job carried the
+    /// entire batch (100-500 chunks): one worker ground it for
+    /// 200-600 ms while the other 23 idled, and the generator outran
+    /// the lighting frontier at high view distance.
+    ///
+    /// Segments are 4x4-chunk-column XZ buckets (full vertical range),
+    /// each shipped with its own face-neighbour snapshot halo. Segment
+    /// boundaries have the same conservative semantics the old batch
+    /// boundaries already had (a job only writes its own affected set;
+    /// cross-boundary spill comes from the halo snapshot).
+    fn dispatch_lighting_segments(&mut self, affected: Vec<ChunkCoord>) {
+        use std::collections::HashMap as Map;
+        let Some(pool) = self.workers.as_ref() else {
+            return;
+        };
+        // Bucket by XZ region (4x4 chunk columns). BTreeMap for a
+        // deterministic dispatch order.
+        let mut segments: std::collections::BTreeMap<(i32, i32), Vec<ChunkCoord>> =
+            std::collections::BTreeMap::new();
+        for cc in affected {
+            segments
+                .entry((cc[0].div_euclid(4), cc[2].div_euclid(4)))
+                .or_default()
+                .push(cc);
+        }
+        for (_, seg) in segments {
+            // Snapshot: segment chunks + face-neighbours (BFS frontier
+            // correctness at chunk edges), cloned off the live world.
+            let mut snap_entries: Map<ChunkCoord, Chunk> = Map::new();
+            for cc in &seg {
+                if let Some(c) = self.world.chunk(*cc) {
+                    snap_entries.insert(*cc, c.clone());
+                }
+                for n in [
+                    [cc[0] - 1, cc[1], cc[2]],
+                    [cc[0] + 1, cc[1], cc[2]],
+                    [cc[0], cc[1] - 1, cc[2]],
+                    [cc[0], cc[1] + 1, cc[2]],
+                    [cc[0], cc[1], cc[2] - 1],
+                    [cc[0], cc[1], cc[2] + 1],
+                ] {
+                    if let Some(c) = self.world.chunk(n) {
+                        snap_entries.entry(n).or_insert_with(|| c.clone());
+                    }
+                }
+            }
+            // Warm-start grids for the segment (cheap Arc clones).
+            let existing_grids: Map<ChunkCoord, Arc<lighting::LightGrid>> = seg
+                .iter()
+                .filter_map(|cc| {
+                    self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
+                })
+                .collect();
+            let job = Job::Lighting(LightingJob {
+                affected: seg,
+                snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
+                existing_grids,
+            });
+            if pool.req_tx.send(job).is_ok() {
+                self.pending_lighting_jobs += 1;
+            }
+        }
     }
 
     /// Drain the lighting dirty-set + dispatch a `Job::Lighting` to the
@@ -427,8 +474,14 @@ impl Voxel {
         // away. Classic worldgen never hit any of this (no water -> fast BFS
         // -> the counter stayed at 0-1). The sync (no-worker, test) path is
         // untouched and still processes the whole set in one pass.
-        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 6;
-        const MAX_DIRTY_PER_TICK: usize = 8;
+        // W207: raised 6 -> 24 and 8 -> 32. Jobs are now split into
+        // per-region segments (dispatch_lighting_segments) and the BFS
+        // block access is chunk-cached, so individual jobs are small and
+        // parallel - the old caps starved the 24-worker pool and made
+        // the lighting frontier trail the generator at high view
+        // distance (the "slow chunk appearance").
+        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 24;
+        const MAX_DIRTY_PER_TICK: usize = 32;
         if self.workers.is_some()
             && self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
         {
@@ -485,51 +538,17 @@ impl Voxel {
         // W27.3: if a worker pool is available, dispatch the BFS
         // off the main thread. The result arrives as
         // WorkerResult::Lit a few frames later.
-        if let Some(pool) = self.workers.as_ref() {
-            // Build the voxel snapshot: affected chunks + their 6
-            // face-neighbours so the BFS frontier is correct at
-            // chunk boundaries. ~27 chunks x ~8 KB = ~216 KB.
-            let mut snap_entries: HashMap<ChunkCoord, Chunk> = HashMap::new();
-            for cc in &affected {
-                if let Some(c) = self.world.chunk(*cc) {
-                    snap_entries.insert(*cc, c.clone());
-                }
-                // Include face-neighbours so the BFS doesn't lose
-                // data at chunk edges.
-                for n in [
-                    [cc[0] - 1, cc[1], cc[2]],
-                    [cc[0] + 1, cc[1], cc[2]],
-                    [cc[0], cc[1] - 1, cc[2]],
-                    [cc[0], cc[1] + 1, cc[2]],
-                    [cc[0], cc[1], cc[2] - 1],
-                    [cc[0], cc[1], cc[2] + 1],
-                ] {
-                    if let Some(c) = self.world.chunk(n) {
-                        snap_entries.entry(n).or_insert_with(|| c.clone());
-                    }
-                }
-            }
-            // Warm-start grids for affected chunks (cheap Arc clone).
-            let existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> = affected
-                .iter()
-                .filter_map(|cc| {
-                    self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
-                })
-                .collect();
-            let job = Job::Lighting(LightingJob {
-                affected,
-                snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
-                existing_grids,
-            });
-            let _ = pool.req_tx.send(job);
-            // Track the in-flight job so the loading phase can wait.
-            self.pending_lighting_jobs += 1;
+        if self.workers.is_some() {
+            // W207: per-region segments -> parallel workers.
+            self.dispatch_lighting_segments(affected);
             // Remesh will be triggered by WorkerResult::Lit delivery.
             return Vec::new();
         }
 
         // Fallback (no worker pool): synchronous BFS on main thread.
         // Used by headless tests where WorkerPool is never spawned.
+        //
+        // (see dispatch_lighting_segments below for the worker path)
         //
         // W28.5 + W34.3: use two-queue incremental update when every
         // dirty voxel has a recorded emission change. W34.3 extends

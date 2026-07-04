@@ -32,6 +32,10 @@ pub(crate) fn apply_tint_and_fog(
     lightning_flash: f32,
     view_distance_chunks: u8,
     underwater: bool,
+    // W207: MC's waterVision multiplier in [0.25, 1.0] - underwater
+    // visibility grows the longer the eye stays submerged (see
+    // `water_vision_mult`). Ignored unless `underwater`.
+    water_vision: f32,
     // W155: nether mode - the dim is roofed, so the "sky" is a red
     // haze with shorter fog instead of the blue distance band.
     in_nether: bool,
@@ -78,9 +82,20 @@ pub(crate) fn apply_tint_and_fog(
     // roughly MC's underwater visibility. A dedicated fullscreen blue overlay
     // (for the immediate foreground) can layer on later if wanted.
     if underwater {
-        let murk = [0.06_f32, 0.18, 0.36];
+        // W207: MC 26.1.2 water fog, from the decompiled source
+        // (EnvironmentAttributes + WaterFogEnvironment): start -8,
+        // end 96 * waterVision. The old hardcoded 0.5..22 band capped
+        // underwater visibility at ~1.4 chunks regardless of the view
+        // distance - a quarter of MC's fully-adjusted 96. The fog
+        // colour is MC's default water_fog_color 0x050533 (the biome
+        // attribute; per-biome values are a later data pass).
+        let murk = [
+            0x05 as f32 / 255.0,
+            0x05 as f32 / 255.0,
+            0x33 as f32 / 255.0,
+        ];
         renderer.set_clear_color(murk[0] as f64, murk[1] as f64, murk[2] as f64, 1.0);
-        renderer.set_fog(0.5, 22.0, murk);
+        renderer.set_fog(-8.0, 96.0 * water_vision.clamp(0.25, 1.0), murk);
         return sky;
     }
     renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
@@ -93,4 +108,24 @@ pub(crate) fn apply_tint_and_fog(
     let fog_end = vd * cs * 0.95;
     renderer.set_fog(fog_start, fog_end, [sky[0], sky[1], sky[2]]);
     sky
+}
+
+/// W207: MC's `LocalPlayer.getWaterVision()` curve, ported from the
+/// decompiled 26.1.2 source. `t` is ticks with the eye submerged
+/// (0..=600, +1/tick underwater, -10/tick surfaced): returns 0 out of
+/// water, else `a * 0.6 + b * 0.4` where `a = clamp(t/100)` ramps the
+/// first 5 s and `b = clamp((t-100)/500)` the remaining 25 s, reaching
+/// 1.0 at t >= 600. The water fog END multiplies by `max(0.25, this)` -
+/// eyes "adjust" to the water the longer you stay under.
+pub(crate) fn water_vision_mult(t: f32) -> f32 {
+    if t >= 600.0 {
+        return 1.0;
+    }
+    let a = (t / 100.0).clamp(0.0, 1.0);
+    let b = if t < 100.0 {
+        0.0
+    } else {
+        ((t - 100.0) / 500.0).clamp(0.0, 1.0)
+    };
+    a * 0.6 + b * 0.4
 }

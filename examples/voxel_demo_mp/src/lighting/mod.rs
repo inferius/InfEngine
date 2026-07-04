@@ -94,6 +94,64 @@ impl LightingWorldAccess for ChunkSnapshot {
     }
 }
 
+/// W207: MC's LightEngine last-chunk cache, ported from the real 26.1.2
+/// source (`LightEngine.getChunk` keeps `lastChunkPos[2]`/`lastChunk[2]`
+/// and checks them before the map): BFS block access is extremely local,
+/// so remembering the last two (coord -> &Chunk) resolutions turns the
+/// per-cell HashMap lookup into one or two array compares for the
+/// overwhelming majority of accesses. The per-cell HashMap walk was THE
+/// dominant cost of the worker lighting BFS (sky_ms 200-600ms on
+/// 100-450-chunk jobs = the sluggish chunk appearance at high view
+/// distance). `Cell` interior mutability: each lighting job runs
+/// single-threaded on one worker, so no synchronisation is needed (the
+/// type is deliberately !Sync, exactly like MC's engine-owned cache).
+pub(crate) struct CachedSnapshotAccess<'a> {
+    snap: &'a ChunkSnapshot,
+    cache: std::cell::Cell<[(ChunkCoord, Option<&'a Chunk>); 2]>,
+}
+
+impl<'a> CachedSnapshotAccess<'a> {
+    pub(crate) fn new(snap: &'a ChunkSnapshot) -> Self {
+        // Sentinel coord no real probe will match.
+        let empty = ([i32::MIN; 3], None);
+        Self { snap, cache: std::cell::Cell::new([empty, empty]) }
+    }
+}
+
+impl LightingWorldAccess for CachedSnapshotAccess<'_> {
+    #[inline]
+    fn get_block(&self, pos: [i32; 3]) -> BlockId {
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            pos[0].div_euclid(cs),
+            pos[1].div_euclid(cs),
+            pos[2].div_euclid(cs),
+        ];
+        let lc = [
+            pos[0].rem_euclid(cs) as usize,
+            pos[1].rem_euclid(cs) as usize,
+            pos[2].rem_euclid(cs) as usize,
+        ];
+        let mut cache = self.cache.get();
+        let chunk = if cache[0].0 == cc {
+            cache[0].1
+        } else if cache[1].0 == cc {
+            // Promote to the MRU slot (MC keeps insertion order the
+            // same way - newest first).
+            cache.swap(0, 1);
+            self.cache.set(cache);
+            cache[0].1
+        } else {
+            let c = self.snap.chunks.get(&cc);
+            cache[1] = cache[0];
+            cache[0] = (cc, c);
+            self.cache.set(cache);
+            c
+        };
+        chunk.map(|c| c.get(lc[0], lc[1], lc[2])).unwrap_or(BlockId::AIR)
+    }
+}
+
 #[cfg(test)]
 mod grid_tests;
 #[cfg(test)]

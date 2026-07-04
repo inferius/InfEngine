@@ -266,14 +266,19 @@ impl WorkerPool {
                                     let bfs_start = std::time::Instant::now();
                                     let mut local_state =
                                         lighting::LightingState::with_grids(lj.existing_grids);
+                                    // W207: MC's last-chunk cache in front of the
+                                    // snapshot - the BFS's per-cell HashMap lookup
+                                    // was the bulk of sky_ms/block_ms.
+                                    let access =
+                                        lighting::CachedSnapshotAccess::new(&lj.snapshot);
                                     lighting::block_engine::propagate_block_light(
-                                        &lj.snapshot,
+                                        &access,
                                         &mut local_state,
                                         &lj.affected,
                                     );
                                     let block_done_ms = bfs_start.elapsed().as_millis() as u64;
                                     lighting::sky_engine::propagate_sky_light(
-                                        &lj.snapshot,
+                                        &access,
                                         &mut local_state,
                                         &lj.affected,
                                     );
