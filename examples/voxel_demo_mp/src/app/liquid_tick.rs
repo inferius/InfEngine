@@ -382,9 +382,13 @@ impl Voxel {
         // with the backlog (an eighth per frame, capped) so a burst
         // catches up in a few frames while the steady-state cost stays
         // at the old 8.
+        // W205.1: cap 64 -> 16. The user's load log showed the 64-chunk
+        // drain costing 17-75 ms/frame in a water-heavy world (each ocean
+        // chunk emit is ~1 ms) - the catch-up must never dominate the
+        // frame. 16/frame still clears a 1200-entry load burst in ~5 s.
         let drain = LIQUID_CHUNKS_PER_FRAME
             .max(self.liquid_remesh_backlog.len() / 8)
-            .min(64);
+            .min(16);
         let to_mesh: Vec<ChunkCoord> = self
             .liquid_remesh_backlog
             .iter()
