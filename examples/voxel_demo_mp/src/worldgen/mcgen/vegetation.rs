@@ -85,6 +85,11 @@ const VEG_PLACED: &[(&str, &str)] = &[
     ("patch_pumpkin", include_str!("data/feature/placed/patch_pumpkin.json")),
     ("patch_melon", include_str!("data/feature/placed/patch_melon.json")),
     ("patch_melon_sparse", include_str!("data/feature/placed/patch_melon_sparse.json")),
+    // W222 audit batch: the old-growth + swamp mushroom variants.
+    ("brown_mushroom_old_growth", include_str!("data/feature/placed/brown_mushroom_old_growth.json")),
+    ("red_mushroom_old_growth", include_str!("data/feature/placed/red_mushroom_old_growth.json")),
+    ("brown_mushroom_swamp", include_str!("data/feature/placed/brown_mushroom_swamp.json")),
+    ("red_mushroom_swamp", include_str!("data/feature/placed/red_mushroom_swamp.json")),
 ];
 
 const VEG_CONFIGURED: &[(&str, &str)] = &[
@@ -454,6 +459,7 @@ pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
         B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga",
             "patch_dead_bush", "brown_mushroom_normal", "red_mushroom_normal",
+            "brown_mushroom_old_growth", "red_mushroom_old_growth",
             "patch_berry_common", "patch_pumpkin", "patch_sugar_cane",
         ],
         B::Jungle | B::BambooJungle => &[
@@ -473,7 +479,7 @@ pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
         ],
         B::Swamp => &[
             "flower_swamp", "patch_grass_normal", "patch_dead_bush",
-            "brown_mushroom_normal", "red_mushroom_normal",
+            "brown_mushroom_swamp", "red_mushroom_swamp",
             "patch_sugar_cane_swamp", "patch_pumpkin",
         ],
         // mangrove_swamp lists no flowers or mushrooms; its grass is the

@@ -58,6 +58,10 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("jungle_bush", include_str!("data/feature/placed/jungle_bush.json")),
     ("jungle_tree", include_str!("data/feature/placed/jungle_tree.json")),
     ("mega_jungle_tree_checked", include_str!("data/feature/placed/mega_jungle_tree_checked.json")),
+    ("mega_spruce_checked", include_str!("data/feature/placed/mega_spruce_checked.json")),
+    ("mega_pine_checked", include_str!("data/feature/placed/mega_pine_checked.json")),
+    ("super_birch_bees_0002", include_str!("data/feature/placed/super_birch_bees_0002.json")),
+    ("fallen_super_birch_tree", include_str!("data/feature/placed/fallen_super_birch_tree.json")),
     ("oak_bees_0002_leaf_litter", include_str!("data/feature/placed/oak_bees_0002_leaf_litter.json")),
     ("oak_checked", include_str!("data/feature/placed/oak_checked.json")),
     ("pine_checked", include_str!("data/feature/placed/pine_checked.json")),
@@ -68,6 +72,13 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("trees_birch", include_str!("data/feature/placed/trees_birch.json")),
     ("trees_birch_and_oak_leaf_litter", include_str!("data/feature/placed/trees_birch_and_oak_leaf_litter.json")),
     ("trees_flower_forest", include_str!("data/feature/placed/trees_flower_forest.json")),
+    // W222 audit batch: old-growth taigas, tall birch, sparse jungle,
+    // ocean/river bank oaks.
+    ("trees_old_growth_spruce_taiga", include_str!("data/feature/placed/trees_old_growth_spruce_taiga.json")),
+    ("trees_old_growth_pine_taiga", include_str!("data/feature/placed/trees_old_growth_pine_taiga.json")),
+    ("birch_tall", include_str!("data/feature/placed/birch_tall.json")),
+    ("trees_sparse_jungle", include_str!("data/feature/placed/trees_sparse_jungle.json")),
+    ("trees_water", include_str!("data/feature/placed/trees_water.json")),
     ("trees_jungle", include_str!("data/feature/placed/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/placed/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/placed/trees_savanna.json")),
@@ -103,6 +114,16 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("trees_birch", include_str!("data/feature/configured/trees_birch.json")),
     ("trees_birch_and_oak_leaf_litter", include_str!("data/feature/configured/trees_birch_and_oak_leaf_litter.json")),
     ("trees_flower_forest", include_str!("data/feature/configured/trees_flower_forest.json")),
+    // W222 audit batch.
+    ("trees_old_growth_spruce_taiga", include_str!("data/feature/configured/trees_old_growth_spruce_taiga.json")),
+    ("trees_old_growth_pine_taiga", include_str!("data/feature/configured/trees_old_growth_pine_taiga.json")),
+    ("birch_tall", include_str!("data/feature/configured/birch_tall.json")),
+    ("trees_sparse_jungle", include_str!("data/feature/configured/trees_sparse_jungle.json")),
+    ("trees_water", include_str!("data/feature/configured/trees_water.json")),
+    ("mega_spruce", include_str!("data/feature/configured/mega_spruce.json")),
+    ("mega_pine", include_str!("data/feature/configured/mega_pine.json")),
+    ("super_birch_bees_0002", include_str!("data/feature/configured/super_birch_bees_0002.json")),
+    ("fallen_super_birch_tree", include_str!("data/feature/configured/fallen_super_birch_tree.json")),
     ("trees_jungle", include_str!("data/feature/configured/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/configured/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/configured/trees_savanna.json")),
@@ -155,6 +176,9 @@ enum Trunk {
     /// MegaJungleTrunkPlacer: 2x2 giant trunk + spiral side branches,
     /// W209.
     MegaJungle,
+    /// W222: GiantTrunkPlacer - the plain 2x2 column (mega spruce /
+    /// pine), no side branches.
+    Giant,
 }
 
 #[derive(Clone, Debug)]
@@ -168,6 +192,10 @@ enum Foliage {
     Fancy { height: i32 },
     /// MegaJungleFoliagePlacer ("jungle_foliage_placer").
     MegaJungle { height: i32 },
+    /// W222: MegaPineFoliagePlacer - the old-growth taiga crown
+    /// (radius widens 3.5 blocks over the crown, +1 jag on even
+    /// world-Y rows).
+    MegaPine { crown: IntProv },
 }
 
 /// One fully-parsed MC tree configured_feature.
@@ -247,6 +275,7 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         Some("minecraft:forking_trunk_placer") => Trunk::Forking,
         Some("minecraft:fancy_trunk_placer") => Trunk::Fancy,
         Some("minecraft:mega_jungle_trunk_placer") => Trunk::MegaJungle,
+        Some("minecraft:giant_trunk_placer") => Trunk::Giant,
         _ => return TreeRef::Unsupported(name), // dark_oak / bending / ...
     };
     let fp = &cfg["foliage_placer"];
@@ -269,6 +298,9 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         },
         Some("minecraft:jungle_foliage_placer") => Foliage::MegaJungle {
             height: fp["height"].as_i64().expect("jungle height") as i32,
+        },
+        Some("minecraft:mega_pine_foliage_placer") => Foliage::MegaPine {
+            crown: IntProv::parse(&fp["crown_height"]),
         },
         _ => return TreeRef::Unsupported(name),
     };
@@ -390,6 +422,11 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "trees_swamp",
             "trees_birch",
             "trees_flower_forest",
+            "trees_old_growth_spruce_taiga",
+            "trees_old_growth_pine_taiga",
+            "birch_tall",
+            "trees_sparse_jungle",
+            "trees_water",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -398,31 +435,35 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
     all.iter().find(|b| b.name == root).expect("known tree root")
 }
 
-/// W211: the vegetal tree root per REAL MC biome. Honest fallbacks
-/// where the exact list needs unported content: dark forest (dark_oak
-/// placer) uses the plain forest list, old-growth taigas (mega spruce)
-/// the taiga list, bamboo/sparse jungle the jungle list.
+/// W211/W222: the vegetal tree root per REAL MC biome. Remaining
+/// honest fallbacks (unported blocks): dark forest (dark_oak placer)
+/// uses the plain forest list, bamboo jungle (bamboo) the jungle list,
+/// mangrove swamp the swamp oaks.
 pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Option<&'static str> {
     use crate::worldgen::mcgen::biome::McBiome as B;
     match mc {
         B::Plains | B::SunflowerPlains => Some("trees_plains"),
         B::Forest | B::DarkForest => Some("trees_birch_and_oak_leaf_litter"),
         B::FlowerForest => Some("trees_flower_forest"),
-        B::BirchForest | B::OldGrowthBirchForest => Some("trees_birch"),
-        B::Taiga | B::SnowyTaiga | B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => {
-            Some("trees_taiga")
-        }
+        B::BirchForest => Some("trees_birch"),
+        // W222: tall super birches (with the fallen variants).
+        B::OldGrowthBirchForest => Some("birch_tall"),
+        B::Taiga | B::SnowyTaiga => Some("trees_taiga"),
+        // W222: the real old-growth lists (mega spruce / mega pine).
+        B::OldGrowthSpruceTaiga => Some("trees_old_growth_spruce_taiga"),
+        B::OldGrowthPineTaiga => Some("trees_old_growth_pine_taiga"),
         B::SnowyPlains | B::IceSpikes | B::SnowySlopes => Some("trees_snowy"),
         B::WindsweptHills => Some("trees_windswept_hills"),
-        B::Jungle | B::SparseJungle | B::BambooJungle => Some("trees_jungle"),
+        B::Jungle | B::BambooJungle => Some("trees_jungle"),
+        // W222: the real sparse-jungle list (bushes + fancy oaks).
+        B::SparseJungle => Some("trees_sparse_jungle"),
         B::Savanna => Some("trees_savanna"),
         // Mangrove swamp: swamp oaks stand in until the mangrove placer
         // + roots/propagule blocks exist.
         B::Swamp | B::MangroveSwamp => Some("trees_swamp"),
-        B::Desert
-        | B::Beach
-        | B::SnowyBeach
-        | B::River
+        // W222: trees_water - the rare bank/island oaks the ocean +
+        // river biomes list (surface_water_depth 0 keeps them on land).
+        B::River
         | B::FrozenRiver
         | B::Ocean
         | B::DeepOcean
@@ -432,7 +473,8 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         | B::DeepFrozenOcean
         | B::LukewarmOcean
         | B::DeepLukewarmOcean
-        | B::WarmOcean => None,
+        | B::WarmOcean => Some("trees_water"),
+        B::Desert | B::Beach | B::SnowyBeach => None,
     }
 }
 
@@ -576,8 +618,9 @@ fn place_leaves_row(
                     let fz = adz as f32 + 0.5;
                     fx * fx + fz * fz > (radius * radius) as f32
                 }
-                // MegaJungleFoliagePlacer: circular + the dx+dz >= 7 cut.
-                Foliage::MegaJungle { .. } => {
+                // MegaJungle + MegaPine share the circular + dx+dz >= 7
+                // cut (both placers' shouldSkipLocation).
+                Foliage::MegaJungle { .. } | Foliage::MegaPine { .. } => {
                     adx + adz >= 7 || adx * adx + adz * adz > radius * radius
                 }
             };
@@ -611,6 +654,7 @@ fn place_tree(
             (tree_height - trunk_height.sample(rng)).max(4)
         }
         Foliage::Pine { height } => height.sample(rng),
+        Foliage::MegaPine { crown } => crown.sample(rng),
         Foliage::Acacia => 0,
     };
     let trunk_height = tree_height - foliage_height;
@@ -730,6 +774,20 @@ fn place_tree(
                 attachments.push(([base[0] + bx, base[1] + branch_h, base[2] + bz], -2, false));
                 branch_h -= 2 + (rng.next_u64() % 4) as i32;
             }
+        }
+        Trunk::Giant => {
+            // W222: GiantTrunkPlacer - a plain 2x2 column, the three
+            // extra corners stopping one short of the top; one crown
+            // attachment (double trunk).
+            for y in 0..tree_height {
+                set_log(chunk, origin, base[0], base[1] + y, base[2], def.log);
+                if y < tree_height - 1 {
+                    set_log(chunk, origin, base[0] + 1, base[1] + y, base[2], def.log);
+                    set_log(chunk, origin, base[0] + 1, base[1] + y, base[2] + 1, def.log);
+                    set_log(chunk, origin, base[0], base[1] + y, base[2] + 1, def.log);
+                }
+            }
+            attachments.push(([base[0], base[1] + tree_height, base[2]], 0, true));
         }
         Trunk::Forking => {
             // ForkingTrunkPlacer, line-for-line: a lean near the top +
@@ -856,6 +914,37 @@ fn place_tree(
                     let r = leaf_radius + rad_off + 1 - yo;
                     place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     yo -= 1;
+                }
+            }
+            Foliage::MegaPine { .. } => {
+                // W222: MegaPineFoliagePlacer, ascending rows: radius
+                // widens by floor(yo/height * 3.5) toward the bottom,
+                // with a +1 jag when the radius repeats on an even
+                // world-Y row.
+                let mut prev = i32::MIN;
+                let mut row_y = att[1] - foliage_height + offset;
+                while row_y <= att[1] + offset {
+                    let yo = att[1] - row_y;
+                    let smooth = leaf_radius
+                        + rad_off
+                        + ((yo as f32 / foliage_height.max(1) as f32) * 3.5).floor() as i32;
+                    let jagged = if yo > 0 && smooth == prev && row_y & 1 == 0 {
+                        smooth + 1
+                    } else {
+                        smooth
+                    };
+                    place_leaves_row(
+                        chunk,
+                        origin,
+                        rng,
+                        def,
+                        att,
+                        jagged,
+                        row_y - att[1],
+                        double_trunk,
+                    );
+                    prev = smooth;
+                    row_y += 1;
                 }
             }
         }

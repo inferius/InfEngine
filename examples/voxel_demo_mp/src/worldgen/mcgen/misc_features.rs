@@ -44,18 +44,35 @@ fn next_between(r: &mut SplitMix64, min: i32, max: i32) -> i32 {
     min + next_int(r, max - min + 1)
 }
 
-/// One disk rule (from the disk_* configured JSONs).
+/// W222: where a disk try anchors + what gates it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum DiskGate {
+    /// Origin cell (floor + 1) must be water (sand/clay/gravel disks).
+    Underwater,
+    /// Origin is the FLOOR cell itself (random_offset y -1) and must be
+    /// this block (ice_patch on snow_block, disk_grass on mud).
+    FloorIs(&'static str),
+}
+
+/// One disk rule (from the disk_* / ice_patch configured JSONs).
 struct DiskDef {
     /// Fallback state + the below-is-air override (sand -> sandstone).
     state: u16,
     below_air_state: Option<u16>,
+    /// W222 disk_grass rule: grass_block where nothing solid/watery
+    /// sits above, dirt otherwise.
+    grass_when_open_above: bool,
     /// Blocks the disk replaces.
     targets: &'static [&'static str],
     half_height: i32,
     r_min: i32,
     r_max: i32,
-    /// count placement (disk_sand 3; clay/gravel 1).
+    /// count placement (disk_sand 3; the rest 1-2).
     count: u32,
+    gate: DiskGate,
+    /// Biome restriction: None = the 33-biome default set (everything
+    /// except the swamps); Some = exactly these.
+    biomes: Option<&'static [McBiome]>,
 }
 
 fn disk_defs() -> &'static Vec<DiskDef> {
@@ -68,31 +85,72 @@ fn disk_defs() -> &'static Vec<DiskDef> {
             DiskDef {
                 state: id("sand"),
                 below_air_state: Some(id("sandstone")),
+                grass_when_open_above: false,
                 targets: &["dirt", "grass_block"],
                 half_height: 2,
                 r_min: 2,
                 r_max: 6,
                 count: 3,
+                gate: DiskGate::Underwater,
+                biomes: None,
             },
-            // disk_clay: r 2..3, half 1, targets dirt+clay, count 1.
+            // disk_clay: r 2..3, half 1, targets dirt+clay, count 1
+            // (every biome incl. the swamps).
             DiskDef {
                 state: id("clay"),
                 below_air_state: None,
+                grass_when_open_above: false,
                 targets: &["dirt", "clay"],
                 half_height: 1,
                 r_min: 2,
                 r_max: 3,
                 count: 1,
+                gate: DiskGate::Underwater,
+                biomes: Some(McBiome::ALL.as_slice()),
             },
             // disk_gravel: r 2..5, half 2, targets dirt+grass, count 1.
             DiskDef {
                 state: id("gravel"),
                 below_air_state: None,
+                grass_when_open_above: false,
                 targets: &["dirt", "grass_block"],
                 half_height: 2,
                 r_min: 2,
                 r_max: 5,
                 count: 1,
+                gate: DiskGate::Underwater,
+                biomes: None,
+            },
+            // W222 ice_patch (snowy_slopes): packed ice poking through
+            // the snow, r 2..3, half 1, count 2, anchored on snow_block.
+            DiskDef {
+                state: id("packed_ice"),
+                below_air_state: None,
+                grass_when_open_above: false,
+                targets: &[
+                    "dirt", "grass_block", "podzol", "coarse_dirt", "mycelium",
+                    "snow_block", "ice",
+                ],
+                half_height: 1,
+                r_min: 2,
+                r_max: 3,
+                count: 2,
+                gate: DiskGate::FloorIs("snow_block"),
+                biomes: Some(&[McBiome::SnowySlopes]),
+            },
+            // W222 disk_grass (mangrove swamp): grass/dirt patches in
+            // the mud, r 2..6, half 2, count 1, anchored on mud.
+            DiskDef {
+                state: id("dirt"),
+                below_air_state: None,
+                grass_when_open_above: true,
+                targets: &["dirt", "mud"],
+                half_height: 2,
+                r_min: 2,
+                r_max: 6,
+                count: 1,
+                gate: DiskGate::FloorIs("mud"),
+                biomes: Some(&[McBiome::MangroveSwamp]),
             },
         ]
     })
@@ -110,17 +168,52 @@ pub(crate) fn place_disks(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
     let seed = ctx.effective_seed();
     for (di, def) in disk_defs().iter().enumerate() {
         let targets = target_ids(def.targets);
+        let anchor_block = match def.gate {
+            DiskGate::FloorIs(name) => block_id_by_name(name),
+            DiskGate::Underwater => None,
+        };
         for scx in (coord[0] - 1)..=(coord[0] + 1) {
             for scz in (coord[2] - 1)..=(coord[2] + 1) {
+                if let Some(list) = def.biomes {
+                    let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+                    if !list.contains(&mc) {
+                        continue;
+                    }
+                } else {
+                    // The 33-biome default set: everything but the swamps.
+                    let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+                    if matches!(mc, McBiome::Swamp | McBiome::MangroveSwamp) {
+                        continue;
+                    }
+                }
                 let mut rng =
                     SplitMix64::new(stream_seed(seed, scx, scz, SALT_DISK ^ ((di as u64) << 40)));
                 for _ in 0..def.count {
                     let wx = scx * cs + next_int(&mut rng, 16);
                     let wz = scz * cs + next_int(&mut rng, 16);
                     let floor = mc_floor_at(ctx, wx, wz);
-                    let wy = floor + 1;
-                    // matching_fluids water: only under water.
-                    if wy >= crate::worldgen::climate::SEA_LEVEL {
+                    // Underwater disks anchor at floor+1 (must be water);
+                    // floor-anchored ones at the floor cell itself
+                    // (random_offset y -1), which must be the gate block.
+                    let wy = match def.gate {
+                        DiskGate::Underwater => floor + 1,
+                        DiskGate::FloorIs(_) => floor,
+                    };
+                    let gate_ok = match def.gate {
+                        DiskGate::Underwater => wy < crate::worldgen::climate::SEA_LEVEL,
+                        DiskGate::FloorIs(_) => {
+                            // Chunk-local anchor read; off-chunk anchors
+                            // skip (their own column's replay covers them).
+                            let (lx, ly, lz) =
+                                (wx - origin[0], wy - origin[1], wz - origin[2]);
+                            (0..cs).contains(&lx)
+                                && (0..cs).contains(&ly)
+                                && (0..cs).contains(&lz)
+                                && anchor_block
+                                    == Some(chunk.get(lx as usize, ly as usize, lz as usize).0)
+                        }
+                    };
+                    if !gate_ok {
                         // Roll consumption stays fixed for alignment.
                         let _ = next_int(&mut rng, def.r_max - def.r_min + 1);
                         continue;
@@ -147,13 +240,20 @@ pub(crate) fn place_disks(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                                 if !targets.contains(&here) {
                                     continue;
                                 }
-                                // rule_based provider: below air -> the
-                                // override (sandstone under sand).
+                                // rule_based providers: sandstone under
+                                // air (disk_sand); grass where nothing
+                                // sits above (disk_grass).
                                 let below_air = ly > 0
                                     && chunk.get(lx as usize, (ly - 1) as usize, lz as usize).is_air();
-                                let state = match (below_air, def.below_air_state) {
-                                    (true, Some(s)) => s,
-                                    _ => def.state,
+                                let open_above = ly + 1 < cs
+                                    && chunk.get(lx as usize, (ly + 1) as usize, lz as usize).is_air();
+                                let state = if def.grass_when_open_above && open_above {
+                                    3 // grass_block
+                                } else {
+                                    match (below_air, def.below_air_state) {
+                                        (true, Some(s)) => s,
+                                        _ => def.state,
+                                    }
                                 };
                                 chunk.set(lx as usize, ly as usize, lz as usize, BlockId(state));
                             }
@@ -184,12 +284,36 @@ fn spring_valid() -> &'static HashSet<u16> {
 /// W219: SpringFeature (step 8). Chunk-local: water springs count 25
 /// (uniform y 1..192), lava springs count 20 (very_biased_to_bottom
 /// 1..247 inner 8).
+/// W222: spring_lava_frozen's valid set (snow / ice rock).
+fn spring_valid_frozen() -> &'static HashSet<u16> {
+    static SET: OnceLock<HashSet<u16>> = OnceLock::new();
+    SET.get_or_init(|| {
+        ["snow_block", "powder_snow", "packed_ice"]
+            .iter()
+            .filter_map(|n| block_id_by_name(n))
+            .collect()
+    })
+}
+
 pub(crate) fn place_springs(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
     let cs = CHUNK_SIZE as i32;
     let seed = ctx.effective_seed();
-    let valid = spring_valid();
-    // (fluid id, count, salt, lava?).
-    for (fluid, count, salt, lava) in [(36u16, 25, SALT_SPRING, false), (37, 20, SALT_SPRING ^ (1 << 40), true)] {
+    // W222: snowy_slopes additionally runs the frozen lava variant
+    // (springs through snow/ice walls).
+    let frozen_biome = matches!(
+        mc_full_biome_at(ctx, coord[0] * cs + 8, coord[2] * cs + 8),
+        McBiome::SnowySlopes
+    );
+    // (fluid id, count, salt, lava?, frozen valid set?).
+    let mut rows: Vec<(u16, u32, u64, bool, bool)> = vec![
+        (36u16, 25, SALT_SPRING, false, false),
+        (37, 20, SALT_SPRING ^ (1 << 40), true, false),
+    ];
+    if frozen_biome {
+        rows.push((37, 20, SALT_SPRING ^ (2 << 40), true, true));
+    }
+    for (fluid, count, salt, lava, frozen) in rows {
+        let valid = if frozen { spring_valid_frozen() } else { spring_valid() };
         let mut rng = SplitMix64::new(stream_seed(seed, coord[0], coord[2], salt ^ (coord[1] as u64) << 8));
         for _ in 0..count {
             let lx = next_int(&mut rng, 16);
@@ -515,11 +639,13 @@ mod tests {
     #[test]
     fn disk_defs_resolve_engine_blocks() {
         let defs = disk_defs();
-        assert_eq!(defs.len(), 3);
+        assert_eq!(defs.len(), 5);
         // sand disk paints sandstone under air; clay resolves the W219
-        // block.
+        // block; the W222 rows anchor on their gate blocks.
         assert!(defs[0].below_air_state.is_some());
         assert_eq!(block_id_by_name("clay"), Some(defs[1].state));
+        assert_eq!(defs[3].gate, DiskGate::FloorIs("snow_block"));
+        assert!(defs[4].grass_when_open_above);
     }
 
     #[test]
