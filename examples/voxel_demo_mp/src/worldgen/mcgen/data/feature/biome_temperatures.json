@@ -1,0 +1,14 @@
+{
+ "plains": 0.8,
+ "forest": 0.7,
+ "taiga": 0.25,
+ "snowy_plains": 0.0,
+ "snowy_slopes": -0.3,
+ "windswept_hills": 0.2,
+ "jungle": 0.95,
+ "savanna": 2.0,
+ "swamp": 0.8,
+ "desert": 2.0,
+ "beach": 0.8,
+ "ocean": 0.5
+}

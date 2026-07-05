@@ -747,6 +747,11 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W208: MC trees (vegetal step) - before the underwater plants,
     // matching the biome feature-list order.
     super::trees::place_trees(chunk, coord, ctx, origin);
+    // W210: grass/flower/mushroom patches, then the freeze_top_layer
+    // (ice + snow blanket) as the LAST step, exactly MC's step order -
+    // snow must land on the finished canopy.
+    super::vegetation::place_vegetation(chunk, coord, ctx, origin);
+    super::vegetation::place_freeze_top_layer(chunk, coord, ctx, origin);
 
     // Whole chunk above sea level -> no ocean flora can place.
     if origin[1] > SEA_LEVEL {

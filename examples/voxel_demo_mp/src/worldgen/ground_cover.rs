@@ -41,6 +41,11 @@ pub(crate) fn place_realistic_from_coord(
     coord: ChunkCoord,
     ctx: &WorldgenCtx,
 ) {
+    // W210: the Mc profile gets its ground cover from the real MC
+    // vegetation patches (mcgen::vegetation) - skip the legacy pass.
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return;
+    }
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;

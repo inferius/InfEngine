@@ -2421,6 +2421,15 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 755, name: "tall_seagrass_top", display: Some("Tall Seagrass"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 756, name: "kelp", display: Some("Kelp"), places: Some(756), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 757, name: "kelp_plant", display: Some("Kelp"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W210 - vegetation-patch plants (1:1 block<->item mirror; the
+    // two-block halves are technical, non-placeable rows).
+    ItemType { id: 758, name: "tall_grass_bottom", display: Some("Tall Grass"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 759, name: "tall_grass_top", display: Some("Tall Grass"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 760, name: "large_fern_bottom", display: Some("Large Fern"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 761, name: "large_fern_top", display: Some("Large Fern"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 762, name: "sweet_berry_bush", display: Some("Sweet Berry Bush"), places: Some(762), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 763, name: "brown_mushroom", display: Some("Brown Mushroom"), places: Some(763), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 764, name: "red_mushroom", display: Some("Red Mushroom"), places: Some(764), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

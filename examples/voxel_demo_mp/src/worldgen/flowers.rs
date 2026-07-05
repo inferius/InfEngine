@@ -131,6 +131,11 @@ pub(crate) fn place_realistic_from_coord(
     coord: infengine_voxel::ChunkCoord,
     ctx: &WorldgenCtx,
 ) {
+    // W210: the Mc profile grows flowers via the real MC vegetation
+    // patches (mcgen::vegetation) - the legacy pass would double-plant.
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return;
+    }
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;
