@@ -796,9 +796,10 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     let origin = [origin_v.x as i32, origin_v.y as i32, origin_v.z as i32];
     // W220: lakes (step 1) - lava pools, surface + underground.
     super::misc_features::place_lava_lakes(chunk, coord, ctx, origin);
-    // W225: local_modifications (step 2) - amethyst geodes lead the
-    // step, then the old-growth taiga boulders.
+    // W225/W226: local_modifications (step 2) - amethyst geodes lead
+    // the step, then icebergs, then the old-growth taiga boulders.
     super::geode::place_geodes(chunk, coord, ctx, origin);
+    super::iceberg::place_icebergs(chunk, coord, ctx, origin);
     super::misc_features::place_forest_rocks(chunk, coord, ctx, origin);
     // W202: ore veins (underground_ores, step 6) before vegetal
     // decoration. Ores run at EVERY height (coal/iron reach the
