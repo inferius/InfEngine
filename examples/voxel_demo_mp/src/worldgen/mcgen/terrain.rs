@@ -45,10 +45,6 @@ const LATTICE_TOP: i32 = 224;
 /// band the column is the noise-fill stone/ore.
 const SURFACE_BAND: i32 = 16;
 
-/// MC's base `surfaceDepth` (the soft grass/sand layer thickness). MC
-/// wobbles this with the `surface` noise; we use the constant mean for
-/// now (a noise-driven depth is a later refinement).
-const SURFACE_DEPTH: i32 = 3;
 
 /// One column's terrain summary.
 #[derive(Clone, Copy)]
@@ -57,6 +53,10 @@ pub(crate) struct McCol {
     /// basin; the bedrock floor still seals the world bottom).
     pub(crate) top: i32,
     pub(crate) biome: Biome,
+    /// W217: the noise-driven soft-layer thickness
+    /// (`SurfaceSystem.getSurfaceDepth`), feeding the surface rule's
+    /// depth conditions.
+    pub(crate) surface_depth: i32,
 }
 
 /// W213: everything the ~24 vertical chunks of one chunk column share:
@@ -129,7 +129,8 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
     let cells = ow.build_cells(ox, oz, LATTICE_TOP);
     let aquifer = RefCell::new(Aquifer::new(ow, seed, ox, oz));
     let mut solid = Box::new([[[0u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]);
-    let mut cols = [[McCol { top: 0, biome: Biome::Plains }; CHUNK_SIZE]; CHUNK_SIZE];
+    let mut cols =
+        [[McCol { top: 0, biome: Biome::Plains, surface_depth: 3 }; CHUNK_SIZE]; CHUNK_SIZE];
     for lx in 0..CHUNK_SIZE {
         for lz in 0..CHUNK_SIZE {
             let wx = ox + lx as i32;
@@ -141,7 +142,11 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
                     top = y;
                 }
             }
-            cols[lx][lz] = McCol { top, biome: ow.biome_at(wx, wz) };
+            cols[lx][lz] = McCol {
+                top,
+                biome: ow.biome_at(wx, wz),
+                surface_depth: ow.surface_depth(wx, wz, seed),
+            };
         }
     }
     McColumnData { cols, solid, cells, aquifer }
@@ -272,7 +277,7 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         if wy > LATTICE_TOP {
             return BlockId::AIR;
         }
-        let McCol { top: h, biome } = data.cols[x][z];
+        let McCol { top: h, biome, surface_depth } = data.cols[x][z];
         if data.is_solid(x, wy, z) {
             // Solid rock. The surface band runs from each solid RUN's
             // top (SurfaceSystem semantics: an air gap - a cave -
@@ -290,7 +295,7 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
                     stone_depth_below: i32::MAX / 2,
                     water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
                     surface: run_top - SURFACE_BAND,
-                    surface_depth: SURFACE_DEPTH,
+                    surface_depth,
                     steep: steep[x][z],
                     frozen: is_frozen(biome),
                     biome,

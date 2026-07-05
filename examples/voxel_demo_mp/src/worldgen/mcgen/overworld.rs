@@ -51,6 +51,9 @@ pub(crate) struct Overworld {
     /// snow), parsed from the same settings. Evaluated per surface column
     /// by the terrain stage.
     surface: SurfaceRules,
+    /// W217: the `surface` noise driving `SurfaceSystem.getSurfaceDepth`
+    /// (the wobbling grass/dirt layer thickness).
+    surface_noise: Arc<NormalNoise>,
     pub(crate) sea_level: i32,
     pub(crate) min_y: i32,
     pub(crate) height: i32,
@@ -152,6 +155,18 @@ impl Overworld {
     pub(crate) fn surface_eval(&self, ctx: &SurfaceCtx) -> Option<u16> {
         self.surface.eval(ctx)
     }
+
+    /// W217: `SurfaceSystem.getSurfaceDepth`, exactly: the surface
+    /// noise at (x, 0, z) * 2.75 + 3.0 + a positional 0..0.25 jitter.
+    pub(crate) fn surface_depth(&self, x: i32, z: i32, seed: u32) -> i32 {
+        let noise = self.surface_noise.value(x as f64, 0.0, z as f64);
+        let mut r = super::noise::SplitMix64::new(
+            (seed as u64) ^ 0x5FCE_DEA7
+                ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (z as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F),
+        );
+        (noise * 2.75 + 3.0 + r.next_f64() * 0.25) as i32
+    }
 }
 
 /// Per-noise seed: fold the noise name into the world seed so the
@@ -219,6 +234,8 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     // The surface rule reuses the same seeded-noise resolver (it samples
     // the `surface` / `surface_swamp` / `gravel` / ... noises).
     let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res);
+    // W217: the surface-depth noise is the SAME seeded "surface" noise.
+    let surface_noise = noise_res("surface").expect("surface noise params embedded");
 
     let noise = &settings["noise"];
     let min_y = noise["min_y"].as_i64().unwrap_or(-64) as i32;
@@ -243,6 +260,7 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         vein_ridged,
         vein_gap,
         surface,
+        surface_noise,
         sea_level,
         min_y,
         height,
