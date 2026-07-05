@@ -820,6 +820,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W223: bamboo stands + sea pickles share the vegetal step.
     super::bamboo::place_bamboo(chunk, coord, ctx, origin);
     super::aquatic_features::place_sea_pickles(chunk, coord, ctx, origin);
+    // W224: jungle vines (after the trees so canopies host them).
+    super::vines::place_vines(chunk, coord, ctx, origin);
     // W210: grass/flower/mushroom patches, then the freeze_top_layer
     // (ice + snow blanket) as the LAST step, exactly MC's step order -
     // snow must land on the finished canopy.

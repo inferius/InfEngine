@@ -79,6 +79,12 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("birch_tall", include_str!("data/feature/placed/birch_tall.json")),
     ("trees_sparse_jungle", include_str!("data/feature/placed/trees_sparse_jungle.json")),
     ("trees_water", include_str!("data/feature/placed/trees_water.json")),
+    // W224: the dark forest canopy + the leaf-litter tree wrappers.
+    ("dark_forest_vegetation", include_str!("data/feature/placed/dark_forest_vegetation.json")),
+    ("dark_oak_leaf_litter", include_str!("data/feature/placed/dark_oak_leaf_litter.json")),
+    ("oak_leaf_litter", include_str!("data/feature/placed/oak_leaf_litter.json")),
+    ("birch_leaf_litter", include_str!("data/feature/placed/birch_leaf_litter.json")),
+    ("fancy_oak_leaf_litter", include_str!("data/feature/placed/fancy_oak_leaf_litter.json")),
     ("trees_jungle", include_str!("data/feature/placed/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/placed/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/placed/trees_savanna.json")),
@@ -124,6 +130,13 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("mega_pine", include_str!("data/feature/configured/mega_pine.json")),
     ("super_birch_bees_0002", include_str!("data/feature/configured/super_birch_bees_0002.json")),
     ("fallen_super_birch_tree", include_str!("data/feature/configured/fallen_super_birch_tree.json")),
+    // W224.
+    ("dark_forest_vegetation", include_str!("data/feature/configured/dark_forest_vegetation.json")),
+    ("dark_oak", include_str!("data/feature/configured/dark_oak.json")),
+    ("dark_oak_leaf_litter", include_str!("data/feature/configured/dark_oak_leaf_litter.json")),
+    ("oak_leaf_litter", include_str!("data/feature/configured/oak_leaf_litter.json")),
+    ("birch_leaf_litter", include_str!("data/feature/configured/birch_leaf_litter.json")),
+    ("fancy_oak_leaf_litter", include_str!("data/feature/configured/fancy_oak_leaf_litter.json")),
     ("trees_jungle", include_str!("data/feature/configured/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/configured/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/configured/trees_savanna.json")),
@@ -179,6 +192,9 @@ enum Trunk {
     /// W222: GiantTrunkPlacer - the plain 2x2 column (mega spruce /
     /// pine), no side branches.
     Giant,
+    /// W224: DarkOakTrunkPlacer - a leaning 2x2 column with short
+    /// corner branches under the crown.
+    DarkOak,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +212,9 @@ enum Foliage {
     /// (radius widens 3.5 blocks over the crown, +1 jag on even
     /// world-Y rows).
     MegaPine { crown: IntProv },
+    /// W224: DarkOakFoliagePlacer - the wide flat canopy (rows -1..=2
+    /// with the corner trims from source).
+    DarkOak,
 }
 
 /// One fully-parsed MC tree configured_feature.
@@ -276,7 +295,8 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         Some("minecraft:fancy_trunk_placer") => Trunk::Fancy,
         Some("minecraft:mega_jungle_trunk_placer") => Trunk::MegaJungle,
         Some("minecraft:giant_trunk_placer") => Trunk::Giant,
-        _ => return TreeRef::Unsupported(name), // dark_oak / bending / ...
+        Some("minecraft:dark_oak_trunk_placer") => Trunk::DarkOak,
+        _ => return TreeRef::Unsupported(name), // bending / upwards_branching / ...
     };
     let fp = &cfg["foliage_placer"];
     let foliage = match fp["type"].as_str() {
@@ -302,6 +322,7 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         Some("minecraft:mega_pine_foliage_placer") => Foliage::MegaPine {
             crown: IntProv::parse(&fp["crown_height"]),
         },
+        Some("minecraft:dark_oak_foliage_placer") => Foliage::DarkOak,
         _ => return TreeRef::Unsupported(name),
     };
     let log_name = cfg["trunk_provider"]["state"]["Name"].as_str().expect("trunk block");
@@ -427,6 +448,7 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "birch_tall",
             "trees_sparse_jungle",
             "trees_water",
+            "dark_forest_vegetation",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -443,7 +465,10 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
     use crate::worldgen::mcgen::biome::McBiome as B;
     match mc {
         B::Plains | B::SunflowerPlains => Some("trees_plains"),
-        B::Forest | B::DarkForest => Some("trees_birch_and_oak_leaf_litter"),
+        B::Forest => Some("trees_birch_and_oak_leaf_litter"),
+        // W224: the real dark-forest canopy (dark oaks, leaf-litter
+        // oaks/birches; the huge mushrooms wait for their blocks).
+        B::DarkForest => Some("dark_forest_vegetation"),
         B::FlowerForest => Some("trees_flower_forest"),
         B::BirchForest => Some("trees_birch"),
         // W222: tall super birches (with the fallen variants).
@@ -623,6 +648,9 @@ fn place_leaves_row(
                 Foliage::MegaJungle { .. } | Foliage::MegaPine { .. } => {
                     adx + adz >= 7 || adx * adx + adz * adz > radius * radius
                 }
+                // DarkOak places its rows inline (signed trims) and
+                // never routes through this helper.
+                Foliage::DarkOak => false,
             };
             if !skip {
                 set_leaf(chunk, origin, att[0] + dx, att[1] + y, att[2] + dz, def.leaves);
@@ -655,6 +683,7 @@ fn place_tree(
         }
         Foliage::Pine { height } => height.sample(rng),
         Foliage::MegaPine { crown } => crown.sample(rng),
+        Foliage::DarkOak => 4,
         Foliage::Acacia => 0,
     };
     let trunk_height = tree_height - foliage_height;
@@ -789,6 +818,45 @@ fn place_tree(
             }
             attachments.push(([base[0], base[1] + tree_height, base[2]], 0, true));
         }
+        Trunk::DarkOak => {
+            // W224: DarkOakTrunkPlacer - the 2x2 column leans 0..2
+            // steps sideways near the top; short corner branches hang
+            // under the crown, each with its own small canopy.
+            const DIRS: [[i32; 2]; 4] = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+            let lean_dir = DIRS[(rng.next_u64() % 4) as usize];
+            let lean_height = tree_height - (rng.next_u64() % 4) as i32;
+            let mut lean_steps = 2 - (rng.next_u64() % 3) as i32;
+            let (mut tx, mut tz) = (base[0], base[2]);
+            let ey = base[1] + tree_height - 1;
+            for dy in 0..tree_height {
+                if dy >= lean_height && lean_steps > 0 {
+                    tx += lean_dir[0];
+                    tz += lean_dir[1];
+                    lean_steps -= 1;
+                }
+                let yy = base[1] + dy;
+                set_log(chunk, origin, tx, yy, tz, def.log);
+                set_log(chunk, origin, tx + 1, yy, tz, def.log);
+                set_log(chunk, origin, tx, yy, tz + 1, def.log);
+                set_log(chunk, origin, tx + 1, yy, tz + 1, def.log);
+            }
+            attachments.push(([tx, ey, tz], 0, true));
+            for ox in -1..=2 {
+                for oz in -1..=2 {
+                    if (0..=1).contains(&ox) && (0..=1).contains(&oz) {
+                        continue;
+                    }
+                    if !rng.next_u64().is_multiple_of(3) {
+                        continue;
+                    }
+                    let length = (rng.next_u64() % 3) as i32 + 2;
+                    for by in 0..length {
+                        set_log(chunk, origin, base[0] + ox, ey - by - 1, base[2] + oz, def.log);
+                    }
+                    attachments.push(([base[0] + ox, ey, base[2] + oz], 0, false));
+                }
+            }
+        }
         Trunk::Forking => {
             // ForkingTrunkPlacer, line-for-line: a lean near the top +
             // an optional second branch.
@@ -914,6 +982,57 @@ fn place_tree(
                     let r = leaf_radius + rad_off + 1 - yo;
                     place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     yo -= 1;
+                }
+            }
+            Foliage::DarkOak => {
+                // W224: fixed rows -1..=2 with the source's trims. The
+                // corner rules need SIGNED offsets, so the rows place
+                // inline instead of through place_leaves_row.
+                let r = leaf_radius + rad_off;
+                let rows: &[(i32, i32, bool)] = if double_trunk {
+                    // (y offset, radius, fifty-fifty gate)
+                    &[(-1, 2, false), (0, 3, false), (1, 2, false), (2, 0, true)]
+                } else {
+                    &[(-1, 2, false), (0, 1, false)]
+                };
+                for &(yo, extra, gated) in rows {
+                    if gated && !rng.next_u64().is_multiple_of(2) {
+                        continue;
+                    }
+                    let radius = r + extra;
+                    let ext = if double_trunk { 1 } else { 0 };
+                    for dx in -radius..=radius + ext {
+                        for dz in -radius..=radius + ext {
+                            // Signed corner trim (shouldSkipLocationSigned):
+                            // row 0 of a double trunk drops the square's
+                            // corners.
+                            if yo == 0
+                                && double_trunk
+                                && (dx == -radius || dx >= radius)
+                                && (dz == -radius || dz >= radius)
+                            {
+                                continue;
+                            }
+                            let (adx, adz) = if double_trunk {
+                                (dx.abs().min((dx - 1).abs()), dz.abs().min((dz - 1).abs()))
+                            } else {
+                                (dx.abs(), dz.abs())
+                            };
+                            // Unsigned rules: bottom row of the single
+                            // canopies drops its far corner; row 1 trims
+                            // to the diamond.
+                            let skip = if yo == -1 && !double_trunk {
+                                adx == radius && adz == radius
+                            } else if yo == 1 {
+                                adx + adz > radius * 2 - 2
+                            } else {
+                                false
+                            };
+                            if !skip {
+                                set_leaf(chunk, origin, att[0] + dx, att[1] + yo, att[2] + dz, def.leaves);
+                            }
+                        }
+                    }
                 }
             }
             Foliage::MegaPine { .. } => {

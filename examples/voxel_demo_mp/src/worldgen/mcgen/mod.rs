@@ -46,3 +46,4 @@ pub(crate) mod surface_rule;
 pub(crate) mod terrain;
 pub(crate) mod trees;
 pub(crate) mod vegetation;
+pub(crate) mod vines;
