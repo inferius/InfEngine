@@ -325,6 +325,11 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             Substance::Lava => BlockId(37),
         }
     });
+    // W214: the MC worm carvers (cave / cave_extra_underground /
+    // canyon) cut through the filled+painted terrain, with the same
+    // aquifer deciding what the carved cells become.
+    let origin_i = [origin.x as i32, origin.y as i32, origin.z as i32];
+    super::carver::carve_mc(&mut chunk, coord, ctx, &ow, &mut aquifer, origin_i);
     drop(aquifer);
     decor::place_realistic(&mut chunk, coord, ctx);
     chunk

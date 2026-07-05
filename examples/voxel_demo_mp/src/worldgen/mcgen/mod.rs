@@ -30,6 +30,7 @@
 
 pub(crate) mod aquifer;
 pub(crate) mod biome;
+pub(crate) mod carver;
 pub(crate) mod colors;
 pub(crate) mod data;
 pub(crate) mod density;
