@@ -306,9 +306,11 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             } else if wy >= h - 3 && depth_above <= 3 {
                 near_surface_block(biome)
             } else {
-                // W202: PLAIN bulk stone - ores + variety strata come
-                // from the real MC ore veins in `mcgen::features`.
-                strata::bulk_block(wy)
+                // W215: the giant ore veins substitute the default
+                // stone (OreVeinifier); W202's placed ore features
+                // paint the small blobs later in decoration.
+                super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
+                    .unwrap_or_else(|| strata::bulk_block(wy))
             };
         }
         // Open cell: above the aquifer's sampling ceiling the global
@@ -319,7 +321,10 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         }
         let density = ow.density_cells(wx, wy, wz, &data.cells);
         match aquifer.substance(&ow, wx, wy, wz, density) {
-            Substance::Solid => strata::bulk_block(wy),
+            // Pressure-sealed cells take veins too (MC's filler chain
+            // runs oreVeinify wherever the base state is stone).
+            Substance::Solid => super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
+                .unwrap_or_else(|| strata::bulk_block(wy)),
             Substance::Air => BlockId::AIR,
             Substance::Water => BlockId(36),
             Substance::Lava => BlockId(37),

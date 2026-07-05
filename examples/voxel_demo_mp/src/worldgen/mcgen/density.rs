@@ -217,11 +217,14 @@ pub(crate) const CELL_W: i32 = 4;
 pub(crate) const CELL_H: i32 = 8;
 
 impl CellLattices {
-    /// Fill the lattices for `root` over the chunk column at block
-    /// origin `(x0, z0)`, corners `y = 0, 8, .., (ny-1)*8`.
-    pub(crate) fn build(root: &Df, x0: i32, z0: i32, ny: usize) -> CellLattices {
+    /// Fill the lattices for the `interpolated` nodes of `roots` (in
+    /// the SAME order their ids were assigned) over the chunk column at
+    /// block origin `(x0, z0)`, corners `y = 0, 8, .., (ny-1)*8`.
+    pub(crate) fn build(roots: &[&Df], x0: i32, z0: i32, ny: usize) -> CellLattices {
         let mut nodes = Vec::new();
-        root.collect_interp(&mut nodes);
+        for root in roots {
+            root.collect_interp(&mut nodes);
+        }
         let grids = nodes
             .iter()
             .map(|inner| {

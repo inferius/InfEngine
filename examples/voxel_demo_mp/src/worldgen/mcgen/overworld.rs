@@ -41,6 +41,12 @@ pub(crate) struct Overworld {
     lava: Df,
     depth: Df,
     preliminary_surface: Df,
+    /// W215: the giant-ore-vein router channels (OreVeinifier). Their
+    /// `interpolated` wrappers share the chunk-column lattices with
+    /// `final_density` (ids continue after its nodes).
+    vein_toggle: Df,
+    vein_ridged: Df,
+    vein_gap: Df,
     /// MC's `surface_rule` (grass / sand+sandstone / gravel / podzol /
     /// snow), parsed from the same settings. Evaluated per surface column
     /// by the terrain stage.
@@ -68,9 +74,27 @@ impl Overworld {
 
     /// Build the interpolation lattices for the chunk column at block
     /// origin `(x0, z0)`, spanning `0..=(ny-1)*CELL_H` vertically.
+    /// Covers `final_density` AND the vein channels (id order).
     pub(crate) fn build_cells(&self, x0: i32, z0: i32, top_y: i32) -> CellLattices {
         let ny = (top_y / CELL_H) as usize + 2;
-        CellLattices::build(&self.final_density, x0, z0, ny)
+        CellLattices::build(
+            &[&self.final_density, &self.vein_toggle, &self.vein_ridged, &self.vein_gap],
+            x0,
+            z0,
+            ny,
+        )
+    }
+
+    /// W215: the vein channels with cell semantics (toggle + ridged
+    /// are `interpolated` in the JSON; gap is a plain block-res noise).
+    pub(crate) fn vein_toggle_cells(&self, x: i32, y: i32, z: i32, cells: &CellLattices) -> f64 {
+        self.vein_toggle.eval_cells(x as f64, y as f64, z as f64, cells)
+    }
+    pub(crate) fn vein_ridged_cells(&self, x: i32, y: i32, z: i32, cells: &CellLattices) -> f64 {
+        self.vein_ridged.eval_cells(x as f64, y as f64, z as f64, cells)
+    }
+    pub(crate) fn vein_gap_cells(&self, x: i32, y: i32, z: i32, cells: &CellLattices) -> f64 {
+        self.vein_gap.eval_cells(x as f64, y as f64, z as f64, cells)
     }
 
     /// W213: `preliminary_surface_level` router entry, exactly
@@ -181,6 +205,14 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     let lava = p("lava");
     let depth = p("depth");
     let preliminary_surface = p("preliminary_surface_level");
+    // W215: the ore-vein channels; their interpolated ids continue
+    // after final_density's so all four share one CellLattices.
+    let mut vein_toggle = p("vein_toggle");
+    let mut vein_ridged = p("vein_ridged");
+    let mut vein_gap = p("vein_gap");
+    vein_toggle.assign_interp_ids(&mut next_id);
+    vein_ridged.assign_interp_ids(&mut next_id);
+    vein_gap.assign_interp_ids(&mut next_id);
     // The surface rule reuses the same seeded-noise resolver (it samples
     // the `surface` / `surface_swamp` / `gravel` / ... noises).
     let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res);
@@ -204,6 +236,9 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         lava,
         depth,
         preliminary_surface,
+        vein_toggle,
+        vein_ridged,
+        vein_gap,
         surface,
         sea_level,
         min_y,

@@ -36,6 +36,7 @@ pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod features;
 pub(crate) mod noise;
+pub(crate) mod ore_vein;
 pub(crate) mod overworld;
 pub(crate) mod surface_rule;
 pub(crate) mod terrain;
