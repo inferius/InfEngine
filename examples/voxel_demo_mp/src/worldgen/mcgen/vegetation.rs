@@ -90,6 +90,17 @@ const VEG_PLACED: &[(&str, &str)] = &[
     ("red_mushroom_old_growth", include_str!("data/feature/placed/red_mushroom_old_growth.json")),
     ("brown_mushroom_swamp", include_str!("data/feature/placed/brown_mushroom_swamp.json")),
     ("red_mushroom_swamp", include_str!("data/feature/placed/red_mushroom_swamp.json")),
+    // W223: the audit's remaining flora (blocks landed this wave).
+    ("forest_flowers", include_str!("data/feature/placed/forest_flowers.json")),
+    ("flower_forest_flowers", include_str!("data/feature/placed/flower_forest_flowers.json")),
+    ("patch_sunflower", include_str!("data/feature/placed/patch_sunflower.json")),
+    ("wildflowers_birch_forest", include_str!("data/feature/placed/wildflowers_birch_forest.json")),
+    ("patch_bush", include_str!("data/feature/placed/patch_bush.json")),
+    ("patch_dry_grass_desert", include_str!("data/feature/placed/patch_dry_grass_desert.json")),
+    ("patch_waterlily", include_str!("data/feature/placed/patch_waterlily.json")),
+    ("patch_firefly_bush_near_water", include_str!("data/feature/placed/patch_firefly_bush_near_water.json")),
+    ("patch_firefly_bush_near_water_swamp", include_str!("data/feature/placed/patch_firefly_bush_near_water_swamp.json")),
+    ("patch_firefly_bush_swamp", include_str!("data/feature/placed/patch_firefly_bush_swamp.json")),
 ];
 
 const VEG_CONFIGURED: &[(&str, &str)] = &[
@@ -110,6 +121,14 @@ const VEG_CONFIGURED: &[(&str, &str)] = &[
     ("dead_bush", include_str!("data/feature/configured/dead_bush.json")),
     ("pumpkin", include_str!("data/feature/configured/pumpkin.json")),
     ("melon", include_str!("data/feature/configured/melon.json")),
+    // W223.
+    ("forest_flowers", include_str!("data/feature/configured/forest_flowers.json")),
+    ("sunflower", include_str!("data/feature/configured/sunflower.json")),
+    ("wildflower", include_str!("data/feature/configured/wildflower.json")),
+    ("bush", include_str!("data/feature/configured/bush.json")),
+    ("dry_grass", include_str!("data/feature/configured/dry_grass.json")),
+    ("waterlily", include_str!("data/feature/configured/waterlily.json")),
+    ("firefly_bush", include_str!("data/feature/configured/firefly_bush.json")),
 ];
 
 const BIOME_TEMPERATURES: &str = include_str!("data/feature/biome_temperatures.json");
@@ -142,6 +161,8 @@ enum FloorRule {
     Cactus,
     /// DeadBushBlock.mayPlaceOn: sand / red sand / dirt family.
     DeadBush,
+    /// W223: lily pads - the cell below must be water.
+    Water,
 }
 
 /// MC block-state name -> engine plant, folding the two-block plants
@@ -305,17 +326,93 @@ enum Step {
     RandomOffset { xz: (i32, i32), y: (i32, i32) },
 }
 
+/// W223: what a patch does per placed position - one provider
+/// (simple_block / block_column), or the forest_flowers
+/// `simple_random_selector`: pick ONE sub-entry per position and run
+/// its own inner pipeline from there (a whole lilac/peony/rose-bush
+/// cluster grows from each anchor).
+enum PatchKind {
+    Simple(Provider),
+    Selector(Vec<(Vec<Step>, Provider)>),
+}
+
 /// A parsed vegetation placed_feature.
 pub(crate) struct PatchDef {
     pub(crate) name: &'static str,
     steps: Vec<Step>,
-    provider: Provider,
+    kind: PatchKind,
     /// W218: the base cell's floor requirement (per-block canSurvive).
     floor: FloorRule,
 }
 
 fn lookup(table: &[(&'static str, &'static str)], name: &str) -> Option<&'static str> {
     table.iter().find(|(n, _)| *n == name).map(|(_, j)| *j)
+}
+
+/// A parsed placement pipeline + the predicate-derived floor hints.
+struct ParsedSteps {
+    steps: Vec<Step>,
+    needs_grass_floor: bool,
+    survive: &'static str,
+}
+
+/// Parse a `placement` array into pipeline steps (shared by the outer
+/// placed pipeline and the selector entries' inner pipelines).
+fn parse_steps(placement: &serde_json::Value) -> Option<ParsedSteps> {
+    let mut steps = Vec::new();
+    let mut needs_grass_floor = false;
+    let mut survive = "";
+    let trap = |v: &serde_json::Value| -> (i32, i32) {
+        (
+            v["min"].as_i64().unwrap_or(0) as i32,
+            v["max"].as_i64().unwrap_or(0) as i32,
+        )
+    };
+    for m in placement.as_array()? {
+        match m["type"].as_str() {
+            Some("minecraft:count") => {
+                steps.push(Step::Count(m["count"].as_u64().unwrap_or(1) as u32));
+            }
+            Some("minecraft:noise_threshold_count") => steps.push(Step::NoiseCount {
+                level: m["noise_level"].as_f64().unwrap_or(0.0),
+                below: m["below_noise"].as_u64().unwrap_or(0) as u32,
+                above: m["above_noise"].as_u64().unwrap_or(0) as u32,
+            }),
+            Some("minecraft:rarity_filter") => {
+                steps.push(Step::Rarity(m["chance"].as_u64().unwrap_or(1) as u32));
+            }
+            Some("minecraft:in_square") => steps.push(Step::InSquare),
+            Some("minecraft:heightmap") => steps.push(Step::Heightmap),
+            Some("minecraft:random_offset") => steps.push(Step::RandomOffset {
+                xz: trap(&m["xz_spread"]),
+                y: trap(&m["y_spread"]),
+            }),
+            Some("minecraft:block_predicate_filter") => {
+                // air is implicit in the placer; grass_block floors
+                // (berries/pumpkin/melon), would_survive states (sugar
+                // cane / cactus) and W223's near-water fluids test
+                // (firefly bush) map onto FloorRule.
+                let s = m["predicate"].to_string();
+                if s.contains("grass_block") {
+                    needs_grass_floor = true;
+                }
+                if s.contains("would_survive") {
+                    if s.contains("sugar_cane") {
+                        survive = "sugar_cane";
+                    } else if s.contains("cactus") {
+                        survive = "cactus";
+                    }
+                }
+                if survive.is_empty() && s.contains("\"minecraft:water\"") {
+                    // matching_fluids water nearby - the sugar-cane
+                    // floor rule models it (dirt/sand + adjacent water).
+                    survive = "sugar_cane";
+                }
+            }
+            _ => {} // biome: implicit (we drive from the biome's list)
+        }
+    }
+    Some(ParsedSteps { steps, needs_grass_floor, survive })
 }
 
 /// W218: parse a `block_column` configured feature (sugar cane /
@@ -349,70 +446,52 @@ fn parse_patch(name: &'static str) -> Option<PatchDef> {
     let conf_name = pj["feature"].as_str()?.trim_start_matches("minecraft:");
     let cj: serde_json::Value =
         serde_json::from_str(lookup(VEG_CONFIGURED, conf_name)?).expect("veg conf parses");
-    let (provider, mut survive) = match cj["type"].as_str() {
+    let outer = parse_steps(&pj["placement"])?;
+    // W223: forest_flowers - one random sub-entry per anchor, each with
+    // its own inner pipeline (count-96 clusters of a single species).
+    if cj["type"].as_str() == Some("minecraft:simple_random_selector") {
+        let mut subs = Vec::new();
+        for e in cj["config"]["features"].as_array()? {
+            let Some(prov) = Provider::parse(&e["feature"]["config"]["to_place"]) else {
+                continue; // species without an engine block drop out
+            };
+            let inner = parse_steps(&e["placement"])?;
+            subs.push((inner.steps, prov));
+        }
+        if subs.is_empty() {
+            return None;
+        }
+        return Some(PatchDef {
+            name,
+            steps: outer.steps,
+            kind: PatchKind::Selector(subs),
+            floor: FloorRule::DirtFamily,
+        });
+    }
+    let (provider, conf_survive) = match cj["type"].as_str() {
         Some("minecraft:simple_block") => (Provider::parse(&cj["config"]["to_place"])?, ""),
         Some("minecraft:block_column") => parse_block_column(&cj)?,
         _ => return None,
     };
-    // simple_block canSurvive: dead_bush has sand-family placement
-    // rules of its own (no would_survive in the placed pipeline).
-    if conf_name == "dead_bush" {
-        survive = "dead_bush";
-    }
-    let mut steps = Vec::new();
-    let mut needs_grass_floor = false;
-    let trap = |v: &serde_json::Value| -> (i32, i32) {
-        (
-            v["min"].as_i64().unwrap_or(0) as i32,
-            v["max"].as_i64().unwrap_or(0) as i32,
-        )
+    // Per-block canSurvive rules the pipelines don't spell out:
+    // dead bush + dry grass want sand, lily pads want water below.
+    let mut survive = match conf_name {
+        "dead_bush" | "dry_grass" => "dead_bush",
+        "waterlily" => "water",
+        _ => conf_survive,
     };
-    for m in pj["placement"].as_array()? {
-        match m["type"].as_str() {
-            Some("minecraft:count") => {
-                steps.push(Step::Count(m["count"].as_u64().unwrap_or(1) as u32));
-            }
-            Some("minecraft:noise_threshold_count") => steps.push(Step::NoiseCount {
-                level: m["noise_level"].as_f64().unwrap_or(0.0),
-                below: m["below_noise"].as_u64().unwrap_or(0) as u32,
-                above: m["above_noise"].as_u64().unwrap_or(0) as u32,
-            }),
-            Some("minecraft:rarity_filter") => {
-                steps.push(Step::Rarity(m["chance"].as_u64().unwrap_or(1) as u32));
-            }
-            Some("minecraft:in_square") => steps.push(Step::InSquare),
-            Some("minecraft:heightmap") => steps.push(Step::Heightmap),
-            Some("minecraft:random_offset") => steps.push(Step::RandomOffset {
-                xz: trap(&m["xz_spread"]),
-                y: trap(&m["y_spread"]),
-            }),
-            Some("minecraft:block_predicate_filter") => {
-                // air is implicit in the placer; grass_block floors
-                // (berries/pumpkin/melon) + would_survive states
-                // (sugar cane / cactus) map onto FloorRule.
-                let s = m["predicate"].to_string();
-                if s.contains("grass_block") {
-                    needs_grass_floor = true;
-                }
-                if s.contains("would_survive") {
-                    if s.contains("sugar_cane") {
-                        survive = "sugar_cane";
-                    } else if s.contains("cactus") {
-                        survive = "cactus";
-                    }
-                }
-            }
-            _ => {} // biome: implicit (we drive from the biome's list)
-        }
+    if survive.is_empty() {
+        survive = outer.survive;
     }
     let floor = match survive {
         "sugar_cane" => FloorRule::SugarCane,
         "cactus" => FloorRule::Cactus,
         "dead_bush" => FloorRule::DeadBush,
-        _ if needs_grass_floor => FloorRule::GrassBlock,
+        "water" => FloorRule::Water,
+        _ if outer.needs_grass_floor => FloorRule::GrassBlock,
         _ => FloorRule::DirtFamily,
     };
-    Some(PatchDef { name, steps, provider, floor })
+    Some(PatchDef { name, steps: outer.steps, kind: PatchKind::Simple(provider), floor })
 }
 
 pub(crate) fn patch(name: &'static str) -> Option<&'static PatchDef> {
@@ -431,78 +510,110 @@ pub(crate) fn patch(name: &'static str) -> Option<&'static PatchDef> {
 pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
     use McBiome as B;
     match mc {
-        B::Plains | B::SunflowerPlains => &[
+        B::Plains => &[
             "patch_tall_grass_2", "flower_plains", "patch_grass_plain",
-            "brown_mushroom_normal", "red_mushroom_normal",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_bush", "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
-        B::Forest | B::BirchForest | B::OldGrowthBirchForest | B::DarkForest => &[
-            "flower_default", "patch_grass_forest",
+        B::SunflowerPlains => &[
+            "patch_tall_grass_2", "patch_sunflower", "flower_plains",
+            "patch_grass_plain", "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        B::Forest | B::DarkForest => &[
+            "forest_flowers", "flower_default", "patch_grass_forest",
+            "patch_bush", "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        B::BirchForest | B::OldGrowthBirchForest => &[
+            "forest_flowers", "wildflowers_birch_forest", "flower_default",
+            "patch_grass_forest", "patch_bush",
             "brown_mushroom_normal", "red_mushroom_normal",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         B::FlowerForest => &[
-            "flower_flower_forest", "patch_grass_badlands",
+            "flower_forest_flowers", "flower_flower_forest", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         B::Taiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga_2",
             "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_common",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         B::SnowyTaiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga_2",
             "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_rare",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga",
             "patch_dead_bush", "brown_mushroom_normal", "red_mushroom_normal",
             "brown_mushroom_old_growth", "red_mushroom_old_growth",
             "patch_berry_common", "patch_pumpkin", "patch_sugar_cane",
+            "patch_firefly_bush_near_water",
         ],
         B::Jungle | B::BambooJungle => &[
             "flower_warm", "patch_grass_jungle",
             "brown_mushroom_normal", "red_mushroom_normal",
             "patch_pumpkin", "patch_sugar_cane", "patch_melon",
+            "patch_firefly_bush_near_water",
         ],
         B::SparseJungle => &[
             "flower_warm", "patch_grass_jungle",
             "brown_mushroom_normal", "red_mushroom_normal",
             "patch_pumpkin", "patch_sugar_cane", "patch_melon_sparse",
+            "patch_firefly_bush_near_water",
         ],
         B::Savanna => &[
             "patch_tall_grass", "flower_warm", "patch_grass_savanna",
             "brown_mushroom_normal", "red_mushroom_normal",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         B::Swamp => &[
             "flower_swamp", "patch_grass_normal", "patch_dead_bush",
-            "brown_mushroom_swamp", "red_mushroom_swamp",
+            "patch_waterlily", "brown_mushroom_swamp", "red_mushroom_swamp",
             "patch_sugar_cane_swamp", "patch_pumpkin",
+            "patch_firefly_bush_swamp", "patch_firefly_bush_near_water_swamp",
         ],
-        // mangrove_swamp lists no flowers or mushrooms; its grass is the
-        // plain patch (trees_mangrove / waterlily unhosted).
-        B::MangroveSwamp => &["patch_grass_normal", "patch_dead_bush"],
+        // mangrove_swamp: plain grass, dead bushes, waterlilies.
+        B::MangroveSwamp => &[
+            "patch_grass_normal", "patch_dead_bush", "patch_waterlily",
+        ],
         B::Desert => &[
-            "flower_default", "patch_grass_badlands", "patch_dead_bush_2",
-            "brown_mushroom_normal", "red_mushroom_normal",
+            "flower_default", "patch_grass_badlands", "patch_dry_grass_desert",
+            "patch_dead_bush_2", "brown_mushroom_normal", "red_mushroom_normal",
             "patch_sugar_cane_desert", "patch_pumpkin", "patch_cactus_desert",
         ],
         // The addDefaultFlowers + badlands-grass set shared by the
-        // plain cold / shore biomes.
-        B::SnowyPlains | B::IceSpikes | B::WindsweptHills
-        | B::Beach | B::SnowyBeach | B::River | B::FrozenRiver => &[
+        // plain cold biomes.
+        B::SnowyPlains | B::IceSpikes | B::WindsweptHills => &[
             "flower_default", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
-            "patch_pumpkin", "patch_sugar_cane",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        // Rivers list bushes on their banks too.
+        B::River | B::FrozenRiver => &[
+            "flower_default", "patch_grass_badlands", "patch_bush",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        B::Beach | B::SnowyBeach => &[
+            "flower_default", "patch_grass_badlands",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
         // snowy_slopes: pumpkins are its only hosted vegetal entry.
         B::SnowySlopes => &["patch_pumpkin"],
+        // Oceans carry the default coast set - it only materialises on
+        // their islands above the water line.
         B::Ocean | B::DeepOcean | B::ColdOcean | B::DeepColdOcean
         | B::FrozenOcean | B::DeepFrozenOcean | B::LukewarmOcean
-        | B::DeepLukewarmOcean | B::WarmOcean => &[],
+        | B::DeepLukewarmOcean | B::WarmOcean => &[
+            "flower_default", "patch_grass_badlands",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
     }
 }
 
@@ -646,6 +757,7 @@ fn place_plant(
                     wet
                 }
             }
+            FloorRule::Water => crate::block::block_is_watery(below),
             FloorRule::Cactus => {
                 // Sand floor + no solid horizontal neighbour at the
                 // base cell (CactusBlock.canSurvive).
@@ -711,21 +823,14 @@ fn place_plant(
     }
 }
 
-/// Run one patch's placement pipeline for source chunk `(scx, scz)` and
-/// write the cells that land in `chunk`.
-#[allow(clippy::too_many_arguments)]
-fn run_patch(
-    chunk: &mut Chunk,
-    origin: [i32; 3],
-    ctx: &WorldgenCtx,
-    def: &PatchDef,
+/// Fold a position list through pipeline steps in file order (shared
+/// by the outer patch pipeline and the selector entries' inner ones).
+fn fold_steps(
+    mut positions: Vec<[i32; 3]>,
+    steps: &[Step],
     rng: &mut SplitMix64,
-    scx: i32,
-    scz: i32,
-) {
-    let cs = CHUNK_SIZE as i32;
-    let base = [scx * cs, 0, scz * cs];
-    let mut positions: Vec<[i32; 3]> = vec![base];
+    ctx: &WorldgenCtx,
+) -> Vec<[i32; 3]> {
     let trap_sample = |rng: &mut SplitMix64, (min, max): (i32, i32)| -> i32 {
         if max <= min {
             return min;
@@ -735,7 +840,7 @@ fn run_patch(
         let b = (rng.next_u64() % span) as i32;
         min + (a + b) / 2
     };
-    for step in &def.steps {
+    for step in steps {
         match step {
             Step::Count(n) => {
                 let mut next = Vec::with_capacity(positions.len() * *n as usize);
@@ -768,7 +873,12 @@ fn run_patch(
             }
             Step::Heightmap => {
                 for p in &mut positions {
-                    p[1] = mc_floor_at(ctx, p[0], p[2]) + 1;
+                    // WORLD_SURFACE semantics: first air above the
+                    // terrain, or above the WATER surface for submerged
+                    // columns (W223 - lily pads anchor on pools; dirt
+                    // checks fail on water either way for land plants).
+                    let f = mc_floor_at(ctx, p[0], p[2]) + 1;
+                    p[1] = if f < SEA_LEVEL { SEA_LEVEL } else { f };
                 }
             }
             Step::RandomOffset { xz, y } => {
@@ -780,9 +890,43 @@ fn run_patch(
             }
         }
     }
-    for p in positions {
-        let plant = def.provider.pick(rng, p[0], p[1], p[2]);
-        place_plant(chunk, origin, ctx, plant, p[0], p[1], p[2], def.floor, rng);
+    positions
+}
+
+/// Run one patch's placement pipeline for source chunk `(scx, scz)` and
+/// write the cells that land in `chunk`.
+#[allow(clippy::too_many_arguments)]
+fn run_patch(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    ctx: &WorldgenCtx,
+    def: &PatchDef,
+    rng: &mut SplitMix64,
+    scx: i32,
+    scz: i32,
+) {
+    let cs = CHUNK_SIZE as i32;
+    let base = [scx * cs, 0, scz * cs];
+    let positions = fold_steps(vec![base], &def.steps, rng, ctx);
+    match &def.kind {
+        PatchKind::Simple(provider) => {
+            for p in positions {
+                let plant = provider.pick(rng, p[0], p[1], p[2]);
+                place_plant(chunk, origin, ctx, plant, p[0], p[1], p[2], def.floor, rng);
+            }
+        }
+        PatchKind::Selector(subs) => {
+            // W223: SimpleRandomSelector - one uniformly random entry
+            // per anchor, its inner pipeline run from there.
+            for p in positions {
+                let idx = (rng.next_u64() % subs.len() as u64) as usize;
+                let (inner_steps, provider) = &subs[idx];
+                for q in fold_steps(vec![p], inner_steps, rng, ctx) {
+                    let plant = provider.pick(rng, q[0], q[1], q[2]);
+                    place_plant(chunk, origin, ctx, plant, q[0], q[1], q[2], def.floor, rng);
+                }
+            }
+        }
     }
 }
 
@@ -878,6 +1022,14 @@ mod tests {
         WorldgenCtx { base_seed: 0, dim: String::new(), profile: WorldGen::Mc }
     }
 
+    /// The simple-kind provider of a patch (test helper).
+    fn provider_of(def: &PatchDef) -> &Provider {
+        match &def.kind {
+            PatchKind::Simple(p) => p,
+            PatchKind::Selector(_) => panic!("{}: expected a simple patch", def.name),
+        }
+    }
+
     #[test]
     fn patches_parse_the_embedded_mc_json() {
         // Pins from the 26.1.2 data.
@@ -887,25 +1039,24 @@ mod tests {
             Step::NoiseCount { below: 5, above: 10, .. }
         )));
         assert!(plains.steps.iter().any(|s| matches!(s, Step::Count(32))));
-        assert!(matches!(plains.provider, Provider::Simple(Plant::Single(id)) if id == 651));
+        assert!(matches!(provider_of(plains), Provider::Simple(Plant::Single(id)) if *id == 651));
         let flowers = patch("flower_plains").expect("plains flowers parse");
         assert!(flowers.steps.iter().any(|s| matches!(s, Step::Rarity(32))));
-        assert!(matches!(flowers.provider, Provider::NoiseThreshold { .. }));
         let tall = patch("patch_tall_grass_2").expect("tall grass parses");
-        assert!(matches!(tall.provider, Provider::Simple(Plant::Double(758, 759))));
+        assert!(matches!(provider_of(tall), Provider::Simple(Plant::Double(758, 759))));
         let berry = patch("patch_berry_common").expect("berry parses");
         assert_eq!(berry.floor, FloorRule::GrassBlock);
         // W218: block_column features + the survival floor rules.
         let cane = patch("patch_sugar_cane").expect("sugar cane parses");
         assert_eq!(cane.floor, FloorRule::SugarCane);
         assert!(matches!(
-            cane.provider,
+            provider_of(cane),
             Provider::Simple(Plant::Column { min_h: 2, max_h: 4, .. })
         ));
         let cactus = patch("patch_cactus_desert").expect("cactus parses");
         assert_eq!(cactus.floor, FloorRule::Cactus);
         assert!(matches!(
-            cactus.provider,
+            provider_of(cactus),
             Provider::Simple(Plant::Column { min_h: 1, max_h: 3, .. })
         ));
         let bush = patch("patch_dead_bush_2").expect("dead bush parses");
@@ -916,7 +1067,7 @@ mod tests {
         // W211: flower_forest's noise_provider - all 11 flowers resolve
         // and the noise scale is the JSON's 1/48, not a global constant.
         let ff = patch("flower_flower_forest").expect("flower forest parses");
-        match &ff.provider {
+        match provider_of(ff) {
             Provider::Noise { states, noise } => {
                 assert_eq!(states.len(), 11);
                 assert!((noise.scale - 0.020833334).abs() < 1e-9);
@@ -924,12 +1075,38 @@ mod tests {
             _ => panic!("flower_flower_forest should parse as noise_provider"),
         }
         // flower_plain's threshold provider carries its own 0.005 scale.
-        match &flowers.provider {
+        match provider_of(flowers) {
             Provider::NoiseThreshold { noise, .. } => {
                 assert!((noise.scale - 0.005).abs() < 1e-9);
             }
             _ => panic!("flower_plains should parse as noise_threshold_provider"),
         }
+    }
+
+    /// W223: the audit's flora - selector patches, water floors and the
+    /// near-water firefly rule all parse from the embedded data.
+    #[test]
+    fn w223_flora_parse() {
+        let forest = patch("forest_flowers").expect("forest_flowers parses");
+        match &forest.kind {
+            PatchKind::Selector(subs) => {
+                assert!(!subs.is_empty(), "selector needs entries");
+                // Inner pipelines carry the count-96 clusters.
+                assert!(subs.iter().any(|(steps, _)| steps
+                    .iter()
+                    .any(|s| matches!(s, Step::Count(96)))));
+            }
+            _ => panic!("forest_flowers should parse as a selector"),
+        }
+        let lily = patch("patch_waterlily").expect("waterlily parses");
+        assert_eq!(lily.floor, FloorRule::Water);
+        let firefly = patch("patch_firefly_bush_near_water").expect("firefly parses");
+        assert_eq!(firefly.floor, FloorRule::SugarCane);
+        let dry = patch("patch_dry_grass_desert").expect("dry grass parses");
+        assert_eq!(dry.floor, FloorRule::DeadBush);
+        assert!(patch("patch_sunflower").is_some());
+        assert!(patch("wildflowers_birch_forest").is_some());
+        assert!(patch("patch_bush").is_some());
     }
 
     #[test]

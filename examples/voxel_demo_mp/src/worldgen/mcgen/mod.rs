@@ -28,9 +28,12 @@
 //! pipeline wires everything up.
 #![allow(dead_code)]
 
+pub(crate) mod aquatic_features;
 pub(crate) mod aquifer;
+pub(crate) mod bamboo;
 pub(crate) mod biome;
 pub(crate) mod carver;
+pub(crate) mod cave_features;
 pub(crate) mod colors;
 pub(crate) mod data;
 pub(crate) mod density;

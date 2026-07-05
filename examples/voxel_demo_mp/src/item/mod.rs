@@ -2432,6 +2432,17 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 764, name: "red_mushroom", display: Some("Red Mushroom"), places: Some(764), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W219 - clay (disk_clay river/lake floors).
     ItemType { id: 765, name: "clay", display: Some("Clay"), places: Some(765), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W223 - the audit's missing worldgen plants + blocks.
+    ItemType { id: 766, name: "wildflowers", display: Some("Wildflowers"), places: Some(766), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 767, name: "firefly_bush", display: Some("Firefly Bush"), places: Some(767), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 768, name: "bush", display: Some("Bush"), places: Some(768), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 769, name: "short_dry_grass", display: Some("Short Dry Grass"), places: Some(769), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 770, name: "tall_dry_grass", display: Some("Tall Dry Grass"), places: Some(770), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 771, name: "leaf_litter", display: Some("Leaf Litter"), places: Some(771), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 772, name: "lily_pad", display: Some("Lily Pad"), places: Some(772), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 773, name: "infested_stone", display: Some("Infested Stone"), places: Some(773), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 774, name: "sea_pickle", display: Some("Sea Pickle"), places: Some(774), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 775, name: "vine", display: Some("Vines"), places: Some(775), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

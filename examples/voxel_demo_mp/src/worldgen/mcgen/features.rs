@@ -98,8 +98,9 @@ const ORE_PLACED: &[(&str, &str)] = &[
     ("ore_lapis", include_str!("data/feature/placed/ore_lapis.json")),
     ("ore_lapis_buried", include_str!("data/feature/placed/ore_lapis_buried.json")),
     ("ore_copper", include_str!("data/feature/placed/ore_copper.json")),
-    // W219: windswept-hills-only (the biome step gate below).
+    // W219/W223: windswept-hills-only (the biome step gate below).
     ("ore_emerald", include_str!("data/feature/placed/ore_emerald.json")),
+    ("ore_infested", include_str!("data/feature/placed/ore_infested.json")),
 ];
 
 /// The configured ore features the placed set references.
@@ -124,6 +125,7 @@ const ORE_CONFIGURED: &[(&str, &str)] = &[
     ("ore_redstone", include_str!("data/feature/configured/ore_redstone.json")),
     ("ore_tuff", include_str!("data/feature/configured/ore_tuff.json")),
     ("ore_emerald", include_str!("data/feature/configured/ore_emerald.json")),
+    ("ore_infested", include_str!("data/feature/configured/ore_infested.json")),
 ];
 
 /// The MC block tags the ore targets replace (extracted from
@@ -753,9 +755,9 @@ fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [
     for (idx, rule) in ore_rules().iter().enumerate() {
         for scx in (coord[0] - 1)..=(coord[0] + 1) {
             for scz in (coord[2] - 1)..=(coord[2] + 1) {
-                // W219: emerald is the one biome-gated overworld ore
-                // (only windswept_hills lists it in step 6).
-                if rule.name == "ore_emerald"
+                // W219/W223: the windswept-hills-gated ores (emerald in
+                // step 6, infested stone in step 7).
+                if matches!(rule.name, "ore_emerald" | "ore_infested")
                     && !matches!(
                         super::terrain::mc_full_biome_at(
                             ctx,
@@ -803,12 +805,21 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W219: the floor disks share step 6 (they run after the ore
     // entries in every biome list).
     super::misc_features::place_disks(chunk, coord, ctx, origin);
+    // W223: underwater magma patches close step 6.
+    super::aquatic_features::place_underwater_magma(chunk, coord, ctx, origin);
+    // W223: glow lichen (underground_decoration, step 7).
+    super::cave_features::place_glow_lichen(chunk, coord, ctx, origin);
     // W219: fluid springs (step 8) before the vegetal step.
     super::misc_features::place_springs(chunk, coord, ctx, origin);
 
+    // W223: blue-ice sprouts (frozen oceans, surface_structures step).
+    super::aquatic_features::place_blue_ice(chunk, coord, ctx, origin);
     // W208: MC trees (vegetal step) - before the underwater plants,
     // matching the biome feature-list order.
     super::trees::place_trees(chunk, coord, ctx, origin);
+    // W223: bamboo stands + sea pickles share the vegetal step.
+    super::bamboo::place_bamboo(chunk, coord, ctx, origin);
+    super::aquatic_features::place_sea_pickles(chunk, coord, ctx, origin);
     // W210: grass/flower/mushroom patches, then the freeze_top_layer
     // (ice + snow blanket) as the LAST step, exactly MC's step order -
     // snow must land on the finished canopy.
@@ -977,7 +988,7 @@ mod tests {
     #[test]
     fn ore_rules_parse_the_embedded_mc_json() {
         let rules = ore_rules();
-        assert_eq!(rules.len(), 26, "one rule per embedded ore placed_feature");
+        assert_eq!(rules.len(), 27, "one rule per embedded ore placed_feature");
         let by_name = |n: &str| rules.iter().find(|r| r.name == n).unwrap();
         // W219: emerald parses (100 tries, trapezoid) - the biome gate
         // lives in place_ores, not the rule.

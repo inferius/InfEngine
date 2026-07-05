@@ -3110,4 +3110,27 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["clay.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["clay.png"], keep_alpha: false },
     },
+    // ============================================================
+    // W223 - the audit's missing worldgen plants + blocks.
+    // ============================================================
+    // 26.x ground flora (cross renders like the W210 plants).
+    BlockType { id: 766, name: "wildflowers", color: [0.85, 0.75, 0.35], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["wildflowers.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["wildflowers.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["wildflowers.png"], keep_alpha: true } },
+    BlockType { id: 767, name: "firefly_bush", color: [0.30, 0.42, 0.22], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["firefly_bush.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["firefly_bush.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["firefly_bush.png"], keep_alpha: true } },
+    BlockType { id: 768, name: "bush", color: [0.32, 0.52, 0.25], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["bush.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["bush.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["bush.png"], keep_alpha: true } },
+    BlockType { id: 769, name: "short_dry_grass", color: [0.75, 0.65, 0.40], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["short_dry_grass.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["short_dry_grass.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["short_dry_grass.png"], keep_alpha: true } },
+    BlockType { id: 770, name: "tall_dry_grass", color: [0.75, 0.65, 0.40], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["tall_dry_grass.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["tall_dry_grass.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["tall_dry_grass.png"], keep_alpha: true } },
+    // Flat plates via the carpet special model (W165 builder).
+    BlockType { id: 771, name: "leaf_litter", color: [0.55, 0.40, 0.25], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["leaf_litter.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["leaf_litter.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["leaf_litter.png"], keep_alpha: true } },
+    BlockType { id: 772, name: "lily_pad", color: [0.18, 0.50, 0.25], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS | F_NO_PLACE, top: TileSpec { col: 0, row: 0, files: &["lily_pad.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["lily_pad.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["lily_pad.png"], keep_alpha: true } },
+    // Infested stone: the silverfish spawn behaviour is a later mob
+    // wave; the block is the stone lookalike ore_infested paints.
+    BlockType {
+        id: 773, name: "infested_stone", color: [0.55, 0.55, 0.55], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["stone.png"], keep_alpha: false },
+    },
+    // Waterlogged like kelp (W203 semantics via the watery list).
+    BlockType { id: 774, name: "sea_pickle", color: [0.55, 0.65, 0.35], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE | F_SWIM, top: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true } },
+    BlockType { id: 775, name: "vine", color: [0.25, 0.45, 0.18], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true } },
 ];
