@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::biome::{McBiome, mc_biome_full};
 use super::data;
-use super::density::{Df, NoiseResolver, parse};
+use super::density::{CELL_H, CellLattices, Df, NoiseResolver, parse};
 use super::noise::{NoiseParams, NormalNoise};
 use super::surface_rule::{SurfaceCtx, SurfaceRules};
 use crate::worldgen::biome::Biome;
@@ -32,6 +32,15 @@ pub(crate) struct Overworld {
     continents: Df,
     erosion: Df,
     ridges: Df,
+    /// W213: the aquifer router entries (`Aquifer.NoiseBasedAquifer`
+    /// reads these off the NoiseRouter) + the preliminary surface and
+    /// depth channels.
+    barrier: Df,
+    fluid_level_floodedness: Df,
+    fluid_level_spread: Df,
+    lava: Df,
+    depth: Df,
+    preliminary_surface: Df,
     /// MC's `surface_rule` (grass / sand+sandstone / gravel / podzol /
     /// snow), parsed from the same settings. Evaluated per surface column
     /// by the terrain stage.
@@ -42,11 +51,55 @@ pub(crate) struct Overworld {
 }
 
 impl Overworld {
-    /// MC terrain density at a world block. `> 0` = solid (stone),
-    /// `<= 0` = open (air, or water below sea level - resolved by the
-    /// terrain stage).
+    /// MC terrain density at a world block, FULL RESOLUTION (the
+    /// `interpolated` wrappers evaluate their subtree directly). Kept
+    /// for tests/diagnostics; terrain generation uses
+    /// [`Overworld::density_cells`], which is what MC actually renders.
     pub(crate) fn density(&self, x: i32, y: i32, z: i32) -> f64 {
         self.final_density.eval(x as f64, y as f64, z as f64)
+    }
+
+    /// W213: `final_density` with MC's cell semantics - `interpolated`
+    /// subtrees sampled from the prebuilt per-chunk-column corner
+    /// lattices, everything outside per block. `> 0` = solid.
+    pub(crate) fn density_cells(&self, x: i32, y: i32, z: i32, cells: &CellLattices) -> f64 {
+        self.final_density.eval_cells(x as f64, y as f64, z as f64, cells)
+    }
+
+    /// Build the interpolation lattices for the chunk column at block
+    /// origin `(x0, z0)`, spanning `0..=(ny-1)*CELL_H` vertically.
+    pub(crate) fn build_cells(&self, x0: i32, z0: i32, top_y: i32) -> CellLattices {
+        let ny = (top_y / CELL_H) as usize + 2;
+        CellLattices::build(&self.final_density, x0, z0, ny)
+    }
+
+    /// W213: `preliminary_surface_level` router entry, exactly
+    /// `NoiseChunk.computePreliminarySurfaceLevel`: floor of the Df at
+    /// the QUART-quantized column, y = 0. The aquifer keys everything
+    /// off this surface.
+    pub(crate) fn preliminary_surface(&self, x: i32, z: i32) -> i32 {
+        let qx = (x.div_euclid(4) * 4) as f64;
+        let qz = (z.div_euclid(4) * 4) as f64;
+        self.preliminary_surface.eval(qx, 0.0, qz).floor() as i32
+    }
+
+    /// Aquifer noise channels (block-resolution Df evals).
+    pub(crate) fn barrier(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.barrier.eval(x as f64, y as f64, z as f64)
+    }
+    pub(crate) fn floodedness(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.fluid_level_floodedness.eval(x as f64, y as f64, z as f64)
+    }
+    pub(crate) fn fluid_spread(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.fluid_level_spread.eval(x as f64, y as f64, z as f64)
+    }
+    pub(crate) fn lava_noise(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.lava.eval(x as f64, y as f64, z as f64)
+    }
+    /// erosion + depth at a block - `OverworldBiomeBuilder.isDeepDarkRegion`.
+    pub(crate) fn is_deep_dark(&self, x: i32, y: i32, z: i32) -> bool {
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        self.erosion.eval(fx, fy, fz) < -0.225 && self.depth.eval(fx, fy, fz) > 0.9
     }
 
     /// Engine biome at world column `(x, z)` - the full classification
@@ -109,13 +162,25 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     let nr = &settings["noise_router"];
     let noise_res_ref = &noise_res as &NoiseResolver<'_>;
     let p = |key: &str| parse(&nr[key], &df_res, noise_res_ref);
-    let final_density = p("final_density");
+    let mut final_density = p("final_density");
+    // W213: number the `interpolated` subtrees so the terrain stage can
+    // build one corner lattice per node and sample with MC's cell
+    // semantics.
+    let mut next_id = 0usize;
+    final_density.assign_interp_ids(&mut next_id);
     // The five climate channels MC matches biomes against.
     let temperature = p("temperature");
     let vegetation = p("vegetation");
     let continents = p("continents");
     let erosion = p("erosion");
     let ridges = p("ridges");
+    // W213: the aquifer channels + preliminary surface + depth.
+    let barrier = p("barrier");
+    let fluid_level_floodedness = p("fluid_level_floodedness");
+    let fluid_level_spread = p("fluid_level_spread");
+    let lava = p("lava");
+    let depth = p("depth");
+    let preliminary_surface = p("preliminary_surface_level");
     // The surface rule reuses the same seeded-noise resolver (it samples
     // the `surface` / `surface_swamp` / `gravel` / ... noises).
     let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res);
@@ -133,6 +198,12 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         continents,
         erosion,
         ridges,
+        barrier,
+        fluid_level_floodedness,
+        fluid_level_spread,
+        lava,
+        depth,
+        preliminary_surface,
         surface,
         sea_level,
         min_y,
@@ -143,6 +214,82 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Evidence dump: how open is the FULL-RES density underground, and
+    /// what do the individual cave sub-functions evaluate to? Run with
+    /// `cargo test dump_cave_terms -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_cave_terms() {
+        let ow = build_overworld(0);
+        for y in [15, 30, 45] {
+            let mut open = 0u32;
+            let mut total = 0u32;
+            for x in (-512..512).step_by(8) {
+                for z in (-512..512).step_by(8) {
+                    total += 1;
+                    if ow.density(x, y, z) <= 0.0 {
+                        open += 1;
+                    }
+                }
+            }
+            println!("y={y}: open {open}/{total} ({:.1}%)", 100.0 * open as f32 / total as f32);
+        }
+        // Individual cave terms at a few underground probes.
+        let df_res = |name: &str| -> Option<serde_json::Value> {
+            let n = name.strip_prefix("minecraft:").unwrap_or(name);
+            data::df_json(n).and_then(|j| serde_json::from_str(j).ok())
+        };
+        let noise_res = move |name: &str| -> Option<std::sync::Arc<NormalNoise>> {
+            let n = name.strip_prefix("minecraft:").unwrap_or(name);
+            let params: NoiseParams = serde_json::from_str(data::noise_json(n)?).ok()?;
+            Some(std::sync::Arc::new(NormalNoise::new(12345, &params)))
+        };
+        let noise_ref = &noise_res as &NoiseResolver<'_>;
+        for name in [
+            "overworld/caves/entrances",
+            "overworld/caves/spaghetti_2d",
+            "overworld/caves/noodle",
+            "overworld/caves/pillars",
+            "overworld/sloped_cheese",
+        ] {
+            let v = df_res(name).expect("df json");
+            let d = parse(&v, &df_res, noise_ref);
+            let samples: Vec<f64> = [(0, 30, 0), (100, 20, -50), (-200, 40, 300), (37, 25, 941)]
+                .iter()
+                .map(|&(x, y, z)| d.eval(x as f64, y as f64, z as f64))
+                .collect();
+            println!("{name}: {samples:?}");
+        }
+        // Full-res vs cell-interpolated, same chunk column.
+        for cxz in [(0, 0), (128, 128), (-256, 64)] {
+            let cells = ow.build_cells(cxz.0, cxz.1, 224);
+            let (mut full_open, mut cell_open, mut n) = (0u32, 0u32, 0u32);
+            let mut diffs = 0.0f64;
+            for y in [15, 25, 35, 45] {
+                for lx in 0..16 {
+                    for lz in 0..16 {
+                        let (x, z) = (cxz.0 + lx, cxz.1 + lz);
+                        let f = ow.density(x, y, z);
+                        let c = ow.density_cells(x, y, z, &cells);
+                        n += 1;
+                        diffs += (f - c).abs();
+                        if f <= 0.0 {
+                            full_open += 1;
+                        }
+                        if c <= 0.0 {
+                            cell_open += 1;
+                        }
+                    }
+                }
+            }
+            println!(
+                "col {cxz:?}: full_open {full_open} cell_open {cell_open} / {n}, mean |diff| {:.4}",
+                diffs / n as f64
+            );
+        }
+    }
 
     #[test]
     fn settings_parse_with_mc_vertical_config() {

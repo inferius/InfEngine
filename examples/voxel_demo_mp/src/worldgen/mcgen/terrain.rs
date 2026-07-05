@@ -2,19 +2,22 @@
 //! `final_density` (wave 3a) into chunks behind the `WorldGen::Mc`
 //! profile.
 //!
-//! MC 1.18 generates terrain BEFORE biomes: the 3D shape comes purely
-//! from `final_density` (continentalness / erosion / peaks-and-valleys
-//! / jaggedness splines -> sloped_cheese -> slides), independent of the
-//! biome. This wave takes the surface height from that real density and
-//! reuses the proven Natural pipeline for everything below it (biome
-//! surface block, water fill, strata ores, bedrock, caves, decoration).
-//! So the headline (MC's actual terrain SHAPE) lands now; full 3D density
-//! (overhangs, density-native caves, aquifers) is a follow-up.
+//! W213: FULL 3D. The chunk fill reads `final_density` with MC's cell
+//! semantics - each `interpolated` subtree is evaluated at 4x8x4 cell
+//! corners once per chunk column and trilinearly interpolated
+//! ([`CellLattices`]), everything outside per block - so overhangs and
+//! the density-native caves (cheese / spaghetti / noodle / pillars)
+//! exist exactly where MC's field puts them. Open cells route through
+//! the ported MC aquifer ([`super::aquifer`]) to decide air vs water
+//! (dry caves under oceans, sealed underground lakes); the legacy
+//! hash carvers / ravines / dungeons no longer run for this profile.
+//! The pre-W213 spike filter + heightmap machinery is gone - the
+//! interpolation itself is MC's smoothing.
 //!
-//! Faithful, not a shortcut: the height is sampled on the same 4-block
-//! horizontal lattice MC's noise runs on (cellWidth = size_horizontal
-//! << 2 = 4) and bilinearly interpolated across the chunk, exactly the
-//! granularity MC's `NoiseChunk` interpolates at.
+//! Engine band note: the engine world floor is y=0 (MC -64..0 is not
+//! realized - the established Anchor convention), so the deepslate
+//! band, the global lava sea (y < -54) and the deep aquifer lava
+//! pockets are out of range; everything above behaves like MC.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,17 +25,19 @@ use std::rc::Rc;
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
+use super::aquifer::{Aquifer, Substance};
+use super::density::CellLattices;
 use super::overworld::{Overworld, build_overworld};
 use super::surface_rule::SurfaceCtx;
 use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
-use crate::worldgen::{WorldgenCtx, caves, decor, dungeons, ravines, strata};
+use crate::worldgen::{WorldgenCtx, decor, strata};
 
-/// Topmost world-Y the surface scan starts from. MC's top slide
+/// Top of the realized terrain band. MC's top slide
 /// (`y_clamped_gradient` 240 -> 256) forces air well above any real
-/// overworld land, so scanning from here never misses a peak while
-/// skipping the always-empty sky band.
-const SCAN_TOP: i32 = 220;
+/// overworld land; the interpolation lattice spans `0..=LATTICE_TOP`
+/// (+ one corner row of margin) and everything above is sky.
+const LATTICE_TOP: i32 = 224;
 
 /// How many solid blocks below the surface the MC `surface_rule` is
 /// evaluated for. The deepest overworld surface rule (desert
@@ -45,14 +50,46 @@ const SURFACE_BAND: i32 = 16;
 /// now (a noise-driven depth is a later refinement).
 const SURFACE_DEPTH: i32 = 3;
 
-/// One chunk's 16x16 surface heightmap (topmost-solid world-Y per
-/// column).
-type HeightGrid = [[i32; CHUNK_SIZE]; CHUNK_SIZE];
+/// One column's terrain summary.
+#[derive(Clone, Copy)]
+pub(crate) struct McCol {
+    /// Topmost solid world-Y of the interpolated field (0 = fully open
+    /// basin; the bedrock floor still seals the world bottom).
+    pub(crate) top: i32,
+    pub(crate) biome: Biome,
+}
 
-/// One chunk's 16x16 per-column terrain data: `(surface_height, biome)`.
-/// Cached together so the ~24 vertical chunks of a column reuse one
-/// density scan + one biome classification.
-type ColGrid = [[(i32, Biome); CHUNK_SIZE]; CHUNK_SIZE];
+/// W213: everything the ~24 vertical chunks of one chunk column share:
+/// per-column tops + biomes, the 256-bit per-column solidity bitsets,
+/// the interpolation lattices and the (lazily filling) aquifer.
+pub(crate) struct McColumnData {
+    cols: [[McCol; CHUNK_SIZE]; CHUNK_SIZE],
+    solid: Box<[[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    cells: CellLattices,
+    aquifer: RefCell<Aquifer>,
+}
+
+impl McColumnData {
+    fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
+        if !(0..256).contains(&y) {
+            return false;
+        }
+        (self.solid[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
+    }
+
+    /// Solid cells between `y` and the top of its contiguous solid run
+    /// (0 at a run's top block) - MC's `stoneDepthAbove - 1`, reset by
+    /// every air gap, so cave roofs restart the surface band exactly
+    /// like `SurfaceSystem`. Capped at `cap` (callers only compare
+    /// against the surface band, so deep stone stops scanning early).
+    fn depth_above(&self, lx: usize, y: i32, lz: usize, cap: i32) -> i32 {
+        let mut d = 0;
+        while d <= cap && self.is_solid(lx, y + d + 1, lz) {
+            d += 1;
+        }
+        d
+    }
+}
 
 thread_local! {
     /// Per-thread cache of the assembled overworld: one build per seed
@@ -61,11 +98,10 @@ thread_local! {
     /// to redo per chunk.
     static OW_CACHE: RefCell<Option<(u32, Rc<Overworld>)>> = const { RefCell::new(None) };
 
-    /// Per-thread cache of the per-chunk-column surface heightmap
-    /// (chunk `cx, cz, seed` -> 16x16 topmost-solid Y). The ~24
-    /// vertical chunks of one column all need the same heightmap and
-    /// stream in together, so this turns 24 density scans into one.
-    static H_CACHE: RefCell<HashMap<(i32, i32, u32), Box<ColGrid>>> =
+    /// Per-thread cache of the per-chunk-column data. The ~24 vertical
+    /// chunks of one column stream in together, so this turns 24
+    /// lattice + solidity builds into one.
+    static H_CACHE: RefCell<HashMap<(i32, i32, u32), Rc<McColumnData>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -83,182 +119,48 @@ fn overworld_for(seed: u32) -> Rc<Overworld> {
     })
 }
 
-/// Topmost solid (`final_density > 0`) world-Y in the column at
-/// `(wx, wz)` that has real ground beneath it. Coarse scan down from
-/// [`SCAN_TOP`] in `cellHeight` steps, refine to the exact block, then
-/// reject thin floating crusts. Returns `min_y` if the whole column
-/// reads open (deep ocean basins still get a bedrock floor + water from
-/// the fill pass).
-///
-/// W188: the spike filter is load-bearing. Over open ocean the density
-/// hovers near zero, and sampling it at the noise-cell lattice turns
-/// stray slightly-positive cells into 1-2 block floating crusts. Taken
-/// as the surface, the heightmap fill grew them into sand pillars (the
-/// user's "underwater islands/cacti"). Requiring solid ground a few
-/// blocks below the candidate skips those crusts and finds the real
-/// seabed.
-fn surface_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
-    let mut yc = SCAN_TOP;
-    while yc > ow.min_y {
-        if ow.density(wx, yc, wz) > 0.0 {
-            // Exact topmost solid in (yc, yc + 8].
-            let mut top = yc;
-            for fy in (yc + 1..=yc + 8).rev() {
-                if ow.density(wx, fy, wz) > 0.0 {
-                    top = fy;
-                    break;
+/// W213: build one chunk column's data: the interpolation lattices,
+/// the full solidity scan of the interpolated field (0..=LATTICE_TOP
+/// per column), per-column tops + biomes, and a fresh aquifer.
+fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
+    let cs = CHUNK_SIZE as i32;
+    let ox = cx * cs;
+    let oz = cz * cs;
+    let cells = ow.build_cells(ox, oz, LATTICE_TOP);
+    let aquifer = RefCell::new(Aquifer::new(ow, seed, ox, oz));
+    let mut solid = Box::new([[[0u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]);
+    let mut cols = [[McCol { top: 0, biome: Biome::Plains }; CHUNK_SIZE]; CHUNK_SIZE];
+    for lx in 0..CHUNK_SIZE {
+        for lz in 0..CHUNK_SIZE {
+            let wx = ox + lx as i32;
+            let wz = oz + lz as i32;
+            let mut top = 0;
+            for y in 0..=LATTICE_TOP {
+                if ow.density_cells(wx, y, wz, &cells) > 0.0 {
+                    solid[lx][lz][(y >> 6) as usize] |= 1u64 << (y & 63);
+                    top = y;
                 }
             }
-            // Real surface = solid for at least 3 blocks down. A thinner
-            // crust is a near-zero-density artifact; reject it and keep
-            // scanning further down for the true ground.
-            let run = (1..=4).take_while(|&k| ow.density(wx, top - k, wz) > 0.0).count();
-            if run >= 3 {
-                return top;
-            }
-            // Fall through to `yc -= 8`: the next band (below `yc`) can't
-            // contain this crust (`top > yc`), so we make progress and
-            // never re-scan it. W188 hang fix - the old `yc = top - 4`
-            // could move yc UP (top reaches yc+8), re-finding the same
-            // crust forever and freezing fresh-world generation.
-        }
-        yc -= 8;
-    }
-    ow.min_y
-}
-
-/// Median of a 3x3 sample block - discards isolated height spikes (up to
-/// ~2 cells wide) while preserving slopes and cliffs.
-fn median9(mut v: [i32; 9]) -> i32 {
-    v.sort_unstable();
-    v[4]
-}
-
-/// Spike-filtered surface height at a 4-aligned global corner: the median
-/// of `surface_height` over the 3x3 block of +/-4 neighbours.
-///
-/// W197.1: MC evaluates density on a 4-block horizontal cell lattice and
-/// interpolates, so it never renders sub-cell terrain; our per-block
-/// `surface_height` DOES catch high-frequency density spires that stand
-/// alone in the ocean (the user's "underwater pillars" - thin stone
-/// columns poking 100+ blocks through the sea). The 3x3 median reproduces
-/// MC's cell-scale smoothing: a spire narrower than ~2 corner cells reads
-/// high only over a few of the nine samples, so the median discards it,
-/// while terrain wider than a cell keeps its height. Global coords keep
-/// it seamless across chunk borders.
-fn corner_height(ow: &Overworld, gx: i32, gz: i32) -> i32 {
-    let mut v = [0i32; 9];
-    let mut k = 0;
-    for dx in [-4, 0, 4] {
-        for dz in [-4, 0, 4] {
-            v[k] = surface_height(ow, gx + dx, gz + dz);
-            k += 1;
+            cols[lx][lz] = McCol { top, biome: ow.biome_at(wx, wz) };
         }
     }
-    median9(v)
-}
-
-/// 16x16 surface heightmap for chunk column `(cx, cz)`: spike-filtered
-/// height at the 5x5 cell corners (every 4 blocks, MC's horizontal noise
-/// resolution), bilinearly interpolated. A 7x7 raw scan (one ring of
-/// padding) feeds each used corner's 3x3 median without re-sampling. The
-/// shared `lx == 16` / `lz == 16` corners equal the neighbouring chunk's
-/// `0` corners, so heights stay seamless across chunk borders.
-fn heightmap(ow: &Overworld, cx: i32, cz: i32) -> [[i32; CHUNK_SIZE]; CHUNK_SIZE] {
-    let ox = cx * CHUNK_SIZE as i32;
-    let oz = cz * CHUNK_SIZE as i32;
-    // 7x7 raw topmost-solid at local -4,0,4,8,12,16,20.
-    let mut raw = [[0i32; 7]; 7];
-    for (i, rrow) in raw.iter_mut().enumerate() {
-        for (j, r) in rrow.iter_mut().enumerate() {
-            *r = surface_height(ow, ox + (i as i32 - 1) * 4, oz + (j as i32 - 1) * 4);
-        }
-    }
-    // 5x5 spike-filtered corners (3x3 median over the 7x7).
-    let mut corner = [[0i32; 5]; 5];
-    for (ci, crow) in corner.iter_mut().enumerate() {
-        for (cj, c) in crow.iter_mut().enumerate() {
-            let (i, j) = (ci + 1, cj + 1);
-            *c = median9([
-                raw[i - 1][j - 1], raw[i - 1][j], raw[i - 1][j + 1],
-                raw[i][j - 1], raw[i][j], raw[i][j + 1],
-                raw[i + 1][j - 1], raw[i + 1][j], raw[i + 1][j + 1],
-            ]);
-        }
-    }
-    let mut h = [[0i32; CHUNK_SIZE]; CHUNK_SIZE];
-    for (lx, hrow) in h.iter_mut().enumerate() {
-        let ci = lx / 4;
-        let fx = (lx % 4) as f32 / 4.0;
-        for (lz, cell) in hrow.iter_mut().enumerate() {
-            let cj = lz / 4;
-            let fz = (lz % 4) as f32 / 4.0;
-            let a = lerp(corner[ci][cj] as f32, corner[ci + 1][cj] as f32, fx);
-            let b = lerp(corner[ci][cj + 1] as f32, corner[ci + 1][cj + 1] as f32, fx);
-            *cell = lerp(a, b, fz).round() as i32;
-        }
-    }
-    h
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
-/// Interpolated surface height at a single world column `(wx, wz)` - the
-/// SAME spike-filtered bilinear over the same global 4-aligned corners
-/// that [`heightmap`] / `gen_mc` fill the terrain from. Spawn placement
-/// and `column_height` use this (not raw `surface_height`) so the
-/// reported height matches the block actually generated there; a point
-/// sample drifts a few blocks from the interpolated surface, which
-/// spawned the player buried in / under the real terrain (W191).
-fn interp_height(ow: &Overworld, wx: i32, wz: i32) -> i32 {
-    let x0 = wx.div_euclid(4) * 4;
-    let z0 = wz.div_euclid(4) * 4;
-    let fx = (wx - x0) as f32 / 4.0;
-    let fz = (wz - z0) as f32 / 4.0;
-    let h00 = corner_height(ow, x0, z0) as f32;
-    let h10 = corner_height(ow, x0 + 4, z0) as f32;
-    let h01 = corner_height(ow, x0, z0 + 4) as f32;
-    let h11 = corner_height(ow, x0 + 4, z0 + 4) as f32;
-    let a = lerp(h00, h10, fx);
-    let b = lerp(h01, h11, fx);
-    lerp(a, b, fz).round() as i32
-}
-
-/// Per-column `(surface_height, biome)` for chunk `(cx, cz)`: the
-/// interpolated density heightmap plus MC's biome classification of the
-/// real climate field at each column.
-fn column_data(ow: &Overworld, cx: i32, cz: i32) -> ColGrid {
-    let h = heightmap(ow, cx, cz);
-    let ox = cx * CHUNK_SIZE as i32;
-    let oz = cz * CHUNK_SIZE as i32;
-    let mut col = [[(0i32, Biome::Plains); CHUNK_SIZE]; CHUNK_SIZE];
-    for (lx, row) in col.iter_mut().enumerate() {
-        for (lz, cell) in row.iter_mut().enumerate() {
-            let biome = ow.biome_at(ox + lx as i32, oz + lz as i32);
-            // `.max(1)`: keep a solid floor under every column so a
-            // density-empty basin is a seabed, not a void (the Natural
-            // floor invariant).
-            *cell = (h[lx][lz].max(1), biome);
-        }
-    }
-    col
+    McColumnData { cols, solid, cells, aquifer }
 }
 
 /// Cached per-column data for `(cx, cz, seed)`.
-fn column_data_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Box<ColGrid> {
+fn column_data_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Rc<McColumnData> {
     H_CACHE.with(|c| {
         if let Some(col) = c.borrow().get(&(cx, cz, seed)) {
             return col.clone();
         }
-        let col = Box::new(column_data(ow, cx, cz));
+        let col = Rc::new(column_data(ow, cx, cz, seed));
         let mut map = c.borrow_mut();
         // Bound the cache: a streaming player visits new columns
         // constantly, so drop the lot once it grows large rather than
         // tracking LRU - the working set for one column (24 vertical
-        // chunks) is rebuilt cheaply after a flush.
-        if map.len() > 1024 {
+        // chunks) is rebuilt cheaply after a flush. 512 entries x ~40KB
+        // (lattices + bitsets) stays ~20MB per worker thread.
+        if map.len() > 512 {
             map.clear();
         }
         map.insert((cx, cz, seed), col.clone());
@@ -285,24 +187,22 @@ pub(crate) fn mc_full_biome_at(
 }
 
 /// Surface height at world column `(wx, wz)` for the MC profile - used
-/// by spawn placement (`column_height`). Builds/uses the cached
-/// overworld for the ctx seed.
+/// by spawn placement (`column_height`). Reads the SAME cached column
+/// data `gen_mc` fills from, so the reported height matches the
+/// generated block exactly.
 pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
-    let ow = overworld_for(ctx.effective_seed());
-    interp_height(&ow, wx, wz)
+    mc_floor_at(ctx, wx, wz)
 }
 
 /// W201: seabed/surface height at world column `(wx, wz)` from the SAME
 /// cached per-chunk column grid `gen_mc` filled the terrain with - so the
-/// ocean-flora pass sees exactly the floor that was generated (and pays
-/// one cached chunk-grid build instead of a fresh interp_height per
-/// probe; the flora pass probes hundreds of columns per chunk).
+/// ocean-flora pass sees exactly the floor that was generated.
 pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let cs = CHUNK_SIZE as i32;
     let col = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
-    col[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize].0
+    col.cols[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize].top
 }
 
 /// 16x16 "steep slope" flags from the heightmap gradient: a column is
@@ -310,23 +210,24 @@ pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
 /// which is where MC's `steep` surface condition shows stone / gravel
 /// faces instead of grass. Edge columns clamp to in-chunk neighbours (a
 /// 1-block seam inaccuracy, never visible as a hole).
-fn steep_grid(col: &ColGrid) -> [[bool; CHUNK_SIZE]; CHUNK_SIZE] {
+#[allow(clippy::needless_range_loop)] // x/z index BOTH `s` and the +/-1 neighbours
+fn steep_grid(data: &McColumnData) -> [[bool; CHUNK_SIZE]; CHUNK_SIZE] {
     let mut s = [[false; CHUNK_SIZE]; CHUNK_SIZE];
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
-            let h = col[x][z].0;
+            let h = data.cols[x][z].top;
             let mut d = 0;
             if x > 0 {
-                d = d.max((h - col[x - 1][z].0).abs());
+                d = d.max((h - data.cols[x - 1][z].top).abs());
             }
             if x + 1 < CHUNK_SIZE {
-                d = d.max((h - col[x + 1][z].0).abs());
+                d = d.max((h - data.cols[x + 1][z].top).abs());
             }
             if z > 0 {
-                d = d.max((h - col[x][z - 1].0).abs());
+                d = d.max((h - data.cols[x][z - 1].top).abs());
             }
             if z + 1 < CHUNK_SIZE {
-                d = d.max((h - col[x][z + 1].0).abs());
+                d = d.max((h - data.cols[x][z + 1].top).abs());
             }
             s[x][z] = d >= 4;
         }
@@ -341,92 +242,91 @@ fn is_frozen(biome: Biome) -> bool {
     matches!(biome, Biome::Tundra | Biome::SnowyMountain)
 }
 
-/// MC-profile chunk generator: per-column surface height from the real
-/// MC `final_density`, then the proven Natural surface / water / strata
-/// / cave / decoration pipeline below it.
-///
-/// W188: reverted W187's per-voxel 3D solidity. Interpolating MC's
-/// near-zero ocean density at the noise-cell lattice spawned thin
-/// floating solid spires that the surface walk capped (+ grew cactus on)
-/// while the water beneath flowed into the hollow - the user's
-/// "underwater islands" plus a liquid-tick perf collapse. MC's overworld
-/// surface is essentially a heightmap anyway (overhangs are rare); a
-/// faithful 3D pass needs MC's aquifer system, deferred. The terrain
-/// SHAPE still comes from the real density (the spike-filtered topmost
-/// solid per column), so the world keeps its MC profile, and caves come
-/// from the engine carver as before.
+/// W213: MC-profile chunk generator, full 3D. Solidity comes from the
+/// cached per-column scan of the CELL-INTERPOLATED `final_density`
+/// (overhangs + density caves included); open cells route through the
+/// ported MC aquifer (air vs water vs pressure-sealed stone); solid
+/// cells within reach of their run's top get MC's real `surface_rule`.
+/// The legacy hash carvers / ravines / dungeons no longer run here -
+/// the density field IS the cave system.
 pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let origin = World::chunk_world_origin(coord);
-    let col = column_data_cached(&ow, coord[0], coord[2], seed);
+    let data = column_data_cached(&ow, coord[0], coord[2], seed);
 
-    // Steepness per column for the surface rule's `steep` condition,
-    // computed once from the chunk heightmap.
-    let steep = steep_grid(&col);
+    // Steepness per column for the surface rule's `steep` condition.
+    let steep = steep_grid(&data);
     let min_y = ow.min_y;
     let max_y = ow.min_y + ow.height;
+    let mut aquifer = data.aquifer.borrow_mut();
 
     let mut chunk = Chunk::empty();
     chunk.fill_with(|x, y, z| {
-        let wx = origin.x + x as f32;
-        let wz = origin.z + z as f32;
+        let wx = origin.x as i32 + x as i32;
+        let wz = origin.z as i32 + z as i32;
         let wy = origin.y as i32 + y as i32;
-        if let Some(b) = strata::bedrock_floor_block(wx as i32, wy, wz as i32, seed) {
+        if let Some(b) = strata::bedrock_floor_block(wx, wy, wz, seed) {
             return b;
         }
-        let (h, biome) = col[x][z];
-        if wy > h {
-            // Water fills open columns up to sea level; above is sky.
-            if wy <= SEA_LEVEL && h < SEA_LEVEL {
-                return BlockId(36);
-            }
+        if wy > LATTICE_TOP {
             return BlockId::AIR;
         }
-        // Top surface band: paint with MC's real `surface_rule` (grass /
-        // dirt depth / sand+sandstone / gravel-or-sand beaches / podzol /
-        // snow on frozen columns). `stone_depth_above = h - wy` drives the
-        // depth conditions; `water_height` is sea level over a seabed
-        // column (so shallow seabed gets the underwater branch) or absent
-        // over land. Below the band - or wherever the rule yields nothing
-        // - fall back to the proven engine surface/stone fill.
-        if wy >= h - SURFACE_BAND {
-            let sctx = SurfaceCtx {
-                x: wx as i32,
-                y: wy,
-                z: wz as i32,
-                stone_depth_above: h - wy,
-                stone_depth_below: i32::MAX / 2, // heightmap terrain has no ceilings
-                water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
-                surface: h - SURFACE_BAND, // above_preliminary_surface holds across the band
-                surface_depth: SURFACE_DEPTH,
-                steep: steep[x][z],
-                frozen: is_frozen(biome),
-                biome,
-                min_y,
-                max_y,
-            };
-            if let Some(id) = ow.surface_eval(&sctx) {
-                return BlockId(id);
+        let McCol { top: h, biome } = data.cols[x][z];
+        if data.is_solid(x, wy, z) {
+            // Solid rock. The surface band runs from each solid RUN's
+            // top (SurfaceSystem semantics: an air gap - a cave -
+            // resets stone_depth_above, so cave floors near the
+            // surface band get painted too). `water_height` is sea
+            // level over a seabed column; `steep` from the top grid.
+            let depth_above = data.depth_above(x, wy, z, SURFACE_BAND);
+            if depth_above <= SURFACE_BAND {
+                let run_top = wy + depth_above;
+                let sctx = SurfaceCtx {
+                    x: wx,
+                    y: wy,
+                    z: wz,
+                    stone_depth_above: depth_above,
+                    stone_depth_below: i32::MAX / 2,
+                    water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
+                    surface: run_top - SURFACE_BAND,
+                    surface_depth: SURFACE_DEPTH,
+                    steep: steep[x][z],
+                    frozen: is_frozen(biome),
+                    biome,
+                    min_y,
+                    max_y,
+                };
+                if let Some(id) = ow.surface_eval(&sctx) {
+                    return BlockId(id);
+                }
             }
+            return if wy == h {
+                surface_block(biome, h)
+            } else if wy >= h - 3 && depth_above <= 3 {
+                near_surface_block(biome)
+            } else {
+                // W202: PLAIN bulk stone - ores + variety strata come
+                // from the real MC ore veins in `mcgen::features`.
+                strata::bulk_block(wy)
+            };
         }
-        if wy == h {
-            surface_block(biome, h)
-        } else if wy >= h - 3 {
-            near_surface_block(biome)
-        } else {
-            // W202: PLAIN bulk stone/deepslate - no per-block hash ores.
-            // The MC profile's ores AND the variety strata (dirt /
-            // gravel / granite / diorite / andesite / tuff) all come
-            // from the real MC ore veins in `mcgen::features` now;
-            // keeping the legacy per-voxel roll would double-generate.
-            strata::bulk_block(wy)
+        // Open cell: above the aquifer's sampling ceiling the global
+        // rule answers directly (sea below 63, sky above); below it the
+        // aquifer decides air / water / pressure-sealed stone.
+        if wy > aquifer.skip_above_y() {
+            return if wy < SEA_LEVEL { BlockId(36) } else { BlockId::AIR };
+        }
+        let density = ow.density_cells(wx, wy, wz, &data.cells);
+        match aquifer.substance(&ow, wx, wy, wz, density) {
+            Substance::Solid => strata::bulk_block(wy),
+            Substance::Air => BlockId::AIR,
+            Substance::Water => BlockId(36),
+            Substance::Lava => BlockId(37),
         }
     });
-    caves::carve(&mut chunk, coord, ctx);
-    ravines::carve(&mut chunk, coord, ctx);
+    drop(aquifer);
     decor::place_realistic(&mut chunk, coord, ctx);
-    dungeons::place(&mut chunk, coord, ctx);
     chunk
 }
 
@@ -440,98 +340,166 @@ mod tests {
     }
 
     #[test]
-    fn surface_height_in_overworld_range() {
-        // The real MC density must put the surface somewhere sane
-        // (between the deep floor and the scan cap) for a spread of
-        // columns - proof the density actually shapes terrain here.
+    fn column_tops_in_overworld_range_with_relief() {
+        // The interpolated MC density must put the surface somewhere
+        // sane for a spread of chunk columns - proof the field shapes
+        // terrain here - and not all at one height.
         let ow = build_overworld(0);
         let mut seen = std::collections::HashSet::new();
-        for &(x, z) in &[(0, 0), (64, 64), (-128, 96), (500, -500), (37, 941)] {
-            let h = surface_height(&ow, x, z);
-            assert!((ow.min_y..=SCAN_TOP).contains(&h), "surface {h} out of range");
-            seen.insert(h);
+        for &(cx, cz) in &[(0, 0), (4, 4), (-8, 6), (31, -31)] {
+            let data = column_data(&ow, cx, cz, 0);
+            for lx in [0, 8, 15] {
+                for lz in [0, 8, 15] {
+                    let h = data.cols[lx][lz].top;
+                    assert!((0..=LATTICE_TOP).contains(&h), "top {h} out of range");
+                    seen.insert(h);
+                }
+            }
         }
-        // Not every column the same height -> the terrain has relief.
-        assert!(seen.len() > 1, "terrain is flat: {seen:?}");
+        assert!(seen.len() > 3, "terrain is flat: {seen:?}");
     }
 
+    /// W213: the interpolated field is seamless - the boundary plane
+    /// between two neighbouring chunk columns evaluates identically
+    /// from either column's lattice (shared world-space corners).
     #[test]
-    fn surface_height_terminates_over_grid() {
-        // W188 hang guard: surface_height must always return - the spike
-        // filter's rescan once looped forever on ocean crust columns,
-        // freezing fresh-world gen. Sweep a few hundred columns
-        // (including the watery near-origin region); if any hangs, this
-        // test never finishes.
-        let ow = build_overworld(0);
-        for x in (-160..160).step_by(8) {
-            for z in (-160..160).step_by(8) {
-                let h = surface_height(&ow, x, z);
-                assert!((ow.min_y..=SCAN_TOP).contains(&h));
+    fn cell_density_is_seamless_across_chunk_borders() {
+        let ow = build_overworld(7);
+        let west = ow.build_cells(0, 0, LATTICE_TOP);
+        let east = ow.build_cells(16, 0, LATTICE_TOP);
+        for y in [8, 40, 64, 100, 140] {
+            for z in [0, 5, 11, 15] {
+                let a = ow.density_cells(16, y, z, &west);
+                let b = ow.density_cells(16, y, z, &east);
+                assert!(
+                    (a - b).abs() < 1e-9,
+                    "seam at y{y} z{z}: {a} vs {b}"
+                );
             }
         }
     }
 
-    /// Evidence: count ocean "spires" (columns poking well above their
-    /// +/-4 neighbours) with the RAW per-block height vs the spike-filtered
-    /// `corner_height`. The plus-median should cut them to near zero - the
-    /// user's underwater stone pillars. Run with
-    /// `cargo test dump_spire_count -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    /// W213: density-native caves exist - some columns have open cells
+    /// well below their surface.
+    #[test]
+    fn density_field_carves_caves() {
+        let ow = build_overworld(0);
+        let mut cave_cells = 0u32;
+        for &(cx, cz) in &[(0, 0), (3, -2), (-5, 7), (10, 10)] {
+            let data = column_data(&ow, cx, cz, 0);
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    let top = data.cols[lx][lz].top;
+                    for y in 8..(top - 10).max(8) {
+                        if !data.is_solid(lx, y, lz) {
+                            cave_cells += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cave_cells > 50, "no underground open space found: {cave_cells}");
+    }
+
+    /// Evidence dump: openness of the interpolated field + aquifer
+    /// outcomes by height band. Run with
+    /// `cargo test dump_cave_stats -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
     #[test]
     #[ignore]
     #[allow(clippy::print_stdout)]
-    fn dump_spire_count() {
+    fn dump_cave_stats() {
         let ow = build_overworld(0);
-        let (mut raw, mut smoothed, mut total) = (0u32, 0u32, 0u32);
-        let mut max_excess = 0i32;
-        let mut worst = (0, 0, 0, 0);
-        for x in (-520..520).step_by(16) {
-            for z in (-520..520).step_by(16) {
-                total += 1;
-                let rh = surface_height(&ow, x, z);
-                let rn = [
-                    surface_height(&ow, x - 4, z),
-                    surface_height(&ow, x + 4, z),
-                    surface_height(&ow, x, z - 4),
-                    surface_height(&ow, x, z + 4),
-                ];
-                let nmax = *rn.iter().max().unwrap();
-                let excess = rh - nmax; // how far this column pokes above its tallest neighbour
-                if excess > max_excess {
-                    max_excess = excess;
-                    worst = (x, z, rh, nmax);
+        for &(cx, cz) in &[(0, 0), (3, -2), (10, 10)] {
+            let data = column_data(&ow, cx, cz, 0);
+            let mut aq = data.aquifer.borrow_mut();
+            println!("\n== chunk column ({cx},{cz}), skip_above_y={} ==", aq.skip_above_y());
+            for band in [(0, 16), (16, 32), (32, 48), (48, 63), (63, 90), (90, 130)] {
+                let (mut solid, mut air, mut water, mut sealed) = (0u32, 0u32, 0u32, 0u32);
+                for lx in 0..CHUNK_SIZE {
+                    for lz in 0..CHUNK_SIZE {
+                        let wx = cx * 16 + lx as i32;
+                        let wz = cz * 16 + lz as i32;
+                        for y in band.0..band.1 {
+                            if data.is_solid(lx, y, lz) {
+                                solid += 1;
+                                continue;
+                            }
+                            if y > aq.skip_above_y() {
+                                if y < SEA_LEVEL { water += 1 } else { air += 1 }
+                                continue;
+                            }
+                            let d = ow.density_cells(wx, y, wz, &data.cells);
+                            match aq.substance(&ow, wx, y, wz, d) {
+                                Substance::Solid => sealed += 1,
+                                Substance::Air => air += 1,
+                                Substance::Water => water += 1,
+                                Substance::Lava => {}
+                            }
+                        }
+                    }
                 }
-                if excess > 10 {
-                    raw += 1;
-                }
-                let sh = corner_height(&ow, x, z);
-                let sn = [
-                    corner_height(&ow, x - 4, z),
-                    corner_height(&ow, x + 4, z),
-                    corner_height(&ow, x, z - 4),
-                    corner_height(&ow, x, z + 4),
-                ];
-                if sh - *sn.iter().max().unwrap() > 10 {
-                    smoothed += 1;
+                println!(
+                    "  y {:>3}..{:<3} solid {solid:>5} air {air:>5} water {water:>5} sealed {sealed:>4}",
+                    band.0, band.1
+                );
+            }
+            let tops: Vec<i32> = (0..4).map(|i| data.cols[i * 5][i * 5].top).collect();
+            println!("  sample tops: {tops:?}");
+        }
+    }
+
+    /// W213: the aquifer keeps most deep underground open space DRY
+    /// (pre-aquifer, everything below sea level flooded - the W187
+    /// disaster). Count air vs water among sub-sea-level cave cells
+    /// under land columns.
+    #[test]
+    fn aquifer_leaves_dry_caves_below_sea_level() {
+        let c = ctx();
+        let ow = build_overworld(0);
+        // Find LAND chunk columns first (seed 0 near the origin is
+        // ocean); the aquifer claim is about caves under land.
+        let mut land: Vec<(i32, i32)> = Vec::new();
+        'search: for r in 0..60 {
+            for &(cx, cz) in &[(r, r), (-r, r), (r, -r), (-r, -r), (2 * r, 0), (0, 2 * r)] {
+                let data = column_data_cached(&ow, cx, cz, 0);
+                if data.cols[8][8].top > SEA_LEVEL + 8 {
+                    if !land.contains(&(cx, cz)) {
+                        land.push((cx, cz));
+                    }
+                    if land.len() >= 10 {
+                        break 'search;
+                    }
                 }
             }
         }
-        println!("\n== spires over {total} cols (1040x1040): raw {raw}, smoothed {smoothed} ==");
-        println!("   max excess {max_excess} at (x{},z{}) h={} nmax={}", worst.0, worst.1, worst.2, worst.3);
-    }
-
-    #[test]
-    fn heightmap_corners_are_seamless() {
-        // The east neighbour's local x=0 corners are global x=16, the same
-        // corners this chunk's east edge uses. Both go through the global
-        // spike-filtered `corner_height`, so the shared corners (every 4
-        // in z) must match exactly - no seam, even after the median.
-        let ow = build_overworld(7);
-        let east = heightmap(&ow, 1, 0);
-        for cj in 0..4 {
-            let lz = cj * 4;
-            let expected = corner_height(&ow, CHUNK_SIZE as i32, lz as i32);
-            assert_eq!(east[0][lz], expected, "seam corner mismatch at lz={lz}");
+        assert!(!land.is_empty(), "no land chunk columns found in the search area");
+        let (mut dry, mut wet) = (0u32, 0u32);
+        for &(cx, cz) in &land {
+            for cy in 0..4 {
+                let chunk = gen_mc([cx, cy, cz], &c);
+                for lx in 0..CHUNK_SIZE {
+                    for ly in 0..CHUNK_SIZE {
+                        let wy = cy * 16 + ly as i32;
+                        if wy >= SEA_LEVEL {
+                            continue;
+                        }
+                        for lz in 0..CHUNK_SIZE {
+                            match chunk.get(lx, ly, lz).0 {
+                                0 => dry += 1,
+                                36 => wet += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
         }
+        assert!(dry > 0, "no dry underground air below sea level under land");
+        // Aquifers make SOME water bodies, but dry must dominate.
+        assert!(
+            dry > wet,
+            "underground below sea level mostly flooded: dry {dry} vs wet {wet}"
+        );
     }
 
     #[test]
@@ -572,10 +540,11 @@ mod tests {
             Biome::Mountain => "Mtn",
             Biome::SnowyMountain => "Snw",
         };
+        let c = ctx();
         // 1D transect: height + biome every 16 blocks for 1600 blocks.
         println!("\n== MC terrain transect (seed 0, z=0, sea={}) ==", ow.sea_level);
         for x in (0..1600).step_by(32) {
-            let h = surface_height(&ow, x, 0);
+            let h = mc_column_height(&c, x, 0);
             let b = ow.biome_at(x, 0);
             let bar = "#".repeat(((h - 40).max(0) as usize / 2).min(60));
             let wet = if h < ow.sea_level { "~" } else { " " };
@@ -589,7 +558,7 @@ mod tests {
         let mut hist: BTreeMap<&str, u32> = BTreeMap::new();
         for x in (-2000..2000).step_by(40) {
             for z in (-2000..2000).step_by(40) {
-                let h = surface_height(&ow, x, z);
+                let h = mc_column_height(&c, x, z);
                 hmin = hmin.min(h);
                 hmax = hmax.max(h);
                 total += 1;

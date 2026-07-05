@@ -12,11 +12,21 @@
 //! wires the resolvers to the real overworld JSON. [`Df::eval`] then
 //! samples the tree at a world point.
 //!
-//! The cache/interpolate/blend wrappers (`cache_2d`, `cache_once`,
-//! `flat_cache`, `interpolated`, `blend_density`) are VALUE-equivalent
-//! to their inner argument for a single-pass generator (they only add
-//! caching / chunk-edge blending), so they parse to a pass-through.
-//! `blend_alpha` -> 1, `blend_offset` -> 0 (MC's no-blend defaults).
+//! The cache/blend wrappers (`cache_2d`, `cache_once`, `flat_cache`,
+//! `blend_density`) are VALUE-equivalent to their inner argument for a
+//! single-pass generator (they only add caching / chunk-edge blending),
+//! so they parse to a pass-through. `blend_alpha` -> 1, `blend_offset`
+//! -> 0 (MC's no-blend defaults).
+//!
+//! W213: `interpolated` is REAL now - MC evaluates each interpolated
+//! subtree only at noise-cell corners (4 wide x 8 tall for the
+//! overworld) and trilinearly interpolates between them; everything
+//! outside the wrapper runs per block. That cell smoothing is where
+//! MC's terrain character (and the spaghetti cave shapes) comes from.
+//! [`Df::eval`] stays full-resolution (biome channels, tests);
+//! [`Df::eval_cells`] consumes a prebuilt [`CellLattices`] the terrain
+//! stage fills per chunk column. `weird_scaled_sampler` is exact
+//! (QuantizedSpaghettiRarity mappers from the decompiled source).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -120,6 +130,24 @@ impl Spline {
             SplineValue::Spline(s) => s.eval(x, y, z),
         }
     }
+
+    fn walk_mut(&mut self, f: &mut impl FnMut(&mut Df)) {
+        self.coordinate.walk_mut(f);
+        for p in &mut self.points {
+            if let SplineValue::Spline(s) = &mut p.value {
+                s.walk_mut(f);
+            }
+        }
+    }
+
+    fn for_children<'a>(&'a self, f: &mut impl FnMut(&'a Df)) {
+        f(&self.coordinate);
+        for p in &self.points {
+            if let SplineValue::Spline(s) = &p.value {
+                s.for_children(f);
+            }
+        }
+    }
 }
 
 /// The density-function AST. One variant per MC op the overworld uses;
@@ -139,6 +167,13 @@ pub(crate) enum Df {
     HalfNegative(Box<Df>),
     QuarterNegative(Box<Df>),
     Squeeze(Box<Df>),
+    /// W213: 26.x `invert` mapped op (`1.0 / input`).
+    Invert(Box<Df>),
+    /// W213: 26.x `find_top_surface` - scan down from `upper_bound`
+    /// (cell-aligned) in `cell_height` steps for the first
+    /// `density > 0`, else `lower_bound`. This IS the router's
+    /// `preliminary_surface_level`.
+    FindTopSurface { density: Box<Df>, upper: Box<Df>, lower: i32, cell_h: i32 },
     Clamp { input: Box<Df>, min: f64, max: f64 },
     YGradient { from_y: f64, to_y: f64, from_v: f64, to_v: f64 },
     RangeChoice { input: Box<Df>, min_inc: f64, max_exc: f64, when_in: Box<Df>, when_out: Box<Df> },
@@ -153,64 +188,305 @@ pub(crate) enum Df {
     /// still the 3D detail under the splines.
     BlendedNoise(Box<BlendedNoise>),
     Passthrough(Box<Df>),
+    /// W213: MC `interpolated` - the subtree is sampled at noise-cell
+    /// corners and trilinearly interpolated. `id` indexes the node's
+    /// lattice in a [`CellLattices`] (assigned by
+    /// [`Df::assign_interp_ids`] in walk order after parse).
+    Interpolated { inner: Box<Df>, id: usize },
+    /// W213: MC `weird_scaled_sampler`, exact: rarity = mapper(input),
+    /// value = rarity * |noise(pos / rarity)|. Drives the spaghetti
+    /// cave tube thickness.
+    WeirdScaled { input: Box<Df>, noise: Arc<NormalNoise>, type2: bool },
+}
+
+/// W213: per-chunk-column corner lattices for the `interpolated` nodes
+/// of one density function. Corners every 4 blocks horizontally and 8
+/// vertically (the overworld's `size_horizontal=1` / `size_vertical=2`
+/// cell), exactly the resolution MC's `NoiseChunk` interpolates at.
+pub(crate) struct CellLattices {
+    /// Block origin of the lattice (chunk column origin; y always 0).
+    x0: i32,
+    z0: i32,
+    /// Corner Y count (lattice spans `0..=(ny-1)*8`).
+    ny: usize,
+    /// One `[ny][5][5]` corner grid per interpolated-node id.
+    grids: Vec<Vec<[[f64; 5]; 5]>>,
+}
+
+pub(crate) const CELL_W: i32 = 4;
+pub(crate) const CELL_H: i32 = 8;
+
+impl CellLattices {
+    /// Fill the lattices for `root` over the chunk column at block
+    /// origin `(x0, z0)`, corners `y = 0, 8, .., (ny-1)*8`.
+    pub(crate) fn build(root: &Df, x0: i32, z0: i32, ny: usize) -> CellLattices {
+        let mut nodes = Vec::new();
+        root.collect_interp(&mut nodes);
+        let grids = nodes
+            .iter()
+            .map(|inner| {
+                let mut g = vec![[[0.0f64; 5]; 5]; ny];
+                for (j, layer) in g.iter_mut().enumerate() {
+                    let wy = (j as i32 * CELL_H) as f64;
+                    for (i, row) in layer.iter_mut().enumerate() {
+                        let wx = (x0 + i as i32 * CELL_W) as f64;
+                        for (k, c) in row.iter_mut().enumerate() {
+                            let wz = (z0 + k as i32 * CELL_W) as f64;
+                            *c = inner.eval(wx, wy, wz);
+                        }
+                    }
+                }
+                g
+            })
+            .collect();
+        CellLattices { x0, z0, ny, grids }
+    }
+
+    /// Trilinear sample of node `id`'s lattice at block `(x, y, z)`.
+    /// Coordinates clamp to the lattice span (blocks above the top
+    /// corner only occur in the always-air sky band).
+    fn sample(&self, id: usize, x: f64, y: f64, z: f64) -> f64 {
+        let g = &self.grids[id];
+        let fx = ((x - self.x0 as f64) / CELL_W as f64).clamp(0.0, 4.0 - 1e-9);
+        let fz = ((z - self.z0 as f64) / CELL_W as f64).clamp(0.0, 4.0 - 1e-9);
+        let fy = (y / CELL_H as f64).clamp(0.0, (self.ny - 1) as f64 - 1e-9);
+        let (ix, iy, iz) = (fx as usize, fy as usize, fz as usize);
+        let (tx, ty, tz) = (fx - ix as f64, fy - iy as f64, fz - iz as f64);
+        let l = |a: f64, b: f64, t: f64| a + (b - a) * t;
+        let c00 = l(g[iy][ix][iz], g[iy][ix + 1][iz], tx);
+        let c01 = l(g[iy][ix][iz + 1], g[iy][ix + 1][iz + 1], tx);
+        let c10 = l(g[iy + 1][ix][iz], g[iy + 1][ix + 1][iz], tx);
+        let c11 = l(g[iy + 1][ix][iz + 1], g[iy + 1][ix + 1][iz + 1], tx);
+        l(l(c00, c01, tz), l(c10, c11, tz), ty)
+    }
+}
+
+/// `QuantizedSpaghettiRarity.getSphaghettiRarity2D` (source-exact).
+fn rarity_2d(v: f64) -> f64 {
+    if v < -0.75 {
+        0.5
+    } else if v < -0.5 {
+        0.75
+    } else if v < 0.5 {
+        1.0
+    } else if v < 0.75 {
+        2.0
+    } else {
+        3.0
+    }
+}
+
+/// `QuantizedSpaghettiRarity.getSpaghettiRarity3D` (source-exact).
+fn rarity_3d(v: f64) -> f64 {
+    if v < -0.5 {
+        0.75
+    } else if v < 0.0 {
+        1.0
+    } else if v < 0.5 {
+        1.5
+    } else {
+        2.0
+    }
 }
 
 impl Df {
     pub(crate) fn eval(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.eval_impl(x, y, z, None)
+    }
+
+    /// W213: evaluate with the `interpolated` subtrees read from a
+    /// prebuilt per-chunk-column lattice (cell-corner + trilinear,
+    /// MC's `NoiseChunk` semantics) instead of full resolution.
+    pub(crate) fn eval_cells(&self, x: f64, y: f64, z: f64, cells: &CellLattices) -> f64 {
+        self.eval_impl(x, y, z, Some(cells))
+    }
+
+    fn eval_impl(&self, x: f64, y: f64, z: f64, cells: Option<&CellLattices>) -> f64 {
+        let ev = |d: &Df| d.eval_impl(x, y, z, cells);
         match self {
             Df::Const(c) => *c,
             Df::YCoord => y,
-            Df::Add(a, b) => a.eval(x, y, z) + b.eval(x, y, z),
-            Df::Mul(a, b) => a.eval(x, y, z) * b.eval(x, y, z),
-            Df::Min(a, b) => a.eval(x, y, z).min(b.eval(x, y, z)),
-            Df::Max(a, b) => a.eval(x, y, z).max(b.eval(x, y, z)),
-            Df::Abs(a) => a.eval(x, y, z).abs(),
+            Df::Add(a, b) => ev(a) + ev(b),
+            Df::Mul(a, b) => ev(a) * ev(b),
+            Df::Min(a, b) => ev(a).min(ev(b)),
+            Df::Max(a, b) => ev(a).max(ev(b)),
+            Df::Abs(a) => ev(a).abs(),
             Df::Square(a) => {
-                let v = a.eval(x, y, z);
+                let v = ev(a);
                 v * v
             }
             Df::Cube(a) => {
-                let v = a.eval(x, y, z);
+                let v = ev(a);
                 v * v * v
             }
             Df::HalfNegative(a) => {
-                let v = a.eval(x, y, z);
+                let v = ev(a);
                 if v > 0.0 { v } else { v * 0.5 }
             }
             Df::QuarterNegative(a) => {
-                let v = a.eval(x, y, z);
+                let v = ev(a);
                 if v > 0.0 { v } else { v * 0.25 }
             }
             Df::Squeeze(a) => {
                 // MC: c = clamp(v, -1, 1); c/2 - c*c*c/24.
-                let c = a.eval(x, y, z).clamp(-1.0, 1.0);
+                let c = ev(a).clamp(-1.0, 1.0);
                 c / 2.0 - c * c * c / 24.0
             }
-            Df::Clamp { input, min, max } => input.eval(x, y, z).clamp(*min, *max),
+            Df::Invert(a) => 1.0 / ev(a),
+            Df::FindTopSurface { density, upper, lower, cell_h } => {
+                let top = (ev(upper) / *cell_h as f64).floor() as i32 * cell_h;
+                let mut result = *lower;
+                let mut by = top;
+                while by >= *lower {
+                    if density.eval_impl(x, by as f64, z, cells) > 0.0 {
+                        result = by;
+                        break;
+                    }
+                    by -= cell_h;
+                }
+                result as f64
+            }
+            Df::Clamp { input, min, max } => ev(input).clamp(*min, *max),
             Df::YGradient { from_y, to_y, from_v, to_v } => {
                 let t = ((y - from_y) / (to_y - from_y)).clamp(0.0, 1.0);
                 from_v + t * (to_v - from_v)
             }
             Df::RangeChoice { input, min_inc, max_exc, when_in, when_out } => {
-                let v = input.eval(x, y, z);
+                let v = ev(input);
                 if v >= *min_inc && v < *max_exc {
-                    when_in.eval(x, y, z)
+                    ev(when_in)
                 } else {
-                    when_out.eval(x, y, z)
+                    ev(when_out)
                 }
             }
             Df::Noise { noise, xz, y: ys } => noise.value(x * xz, y * ys, z * xz),
             Df::ShiftedNoise { noise, sx, sy, sz, xz, y: ys } => {
-                let ox = sx.eval(x, y, z);
-                let oy = sy.eval(x, y, z);
-                let oz = sz.eval(x, y, z);
+                let ox = ev(sx);
+                let oy = ev(sy);
+                let oz = ev(sz);
                 noise.value(x * xz + ox, y * ys + oy, z * xz + oz)
             }
             Df::ShiftA(n) => n.value(x * 0.25, 0.0, z * 0.25) * 4.0,
             Df::ShiftB(n) => n.value(z * 0.25, x * 0.25, 0.0) * 4.0,
             Df::Spline(s) => s.eval(x, y, z),
             Df::BlendedNoise(b) => b.eval(x, y, z),
-            Df::Passthrough(a) => a.eval(x, y, z),
+            Df::Passthrough(a) => ev(a),
+            Df::Interpolated { inner, id } => match cells {
+                Some(c) => c.sample(*id, x, y, z),
+                None => ev(inner),
+            },
+            Df::WeirdScaled { input, noise, type2 } => {
+                let rarity = if *type2 { rarity_2d(ev(input)) } else { rarity_3d(ev(input)) };
+                rarity * noise.value(x / rarity, y / rarity, z / rarity).abs()
+            }
+        }
+    }
+
+    /// Assign lattice indices to the `interpolated` nodes in a stable
+    /// depth-first walk order. Call once on a freshly parsed root.
+    pub(crate) fn assign_interp_ids(&mut self, next: &mut usize) {
+        self.walk_mut(&mut |d| {
+            if let Df::Interpolated { id, .. } = d {
+                *id = *next;
+                *next += 1;
+            }
+        });
+    }
+
+    /// The `interpolated` nodes' INNER functions, in id order (the same
+    /// walk as [`Df::assign_interp_ids`]).
+    pub(crate) fn collect_interp<'a>(&'a self, out: &mut Vec<&'a Df>) {
+        match self {
+            Df::Interpolated { inner, .. } => {
+                out.push(inner);
+                inner.collect_interp(out);
+            }
+            _ => self.for_children(&mut |c| c.collect_interp(out)),
+        }
+    }
+
+    fn walk_mut(&mut self, f: &mut impl FnMut(&mut Df)) {
+        f(self);
+        match self {
+            Df::Add(a, b) | Df::Mul(a, b) | Df::Min(a, b) | Df::Max(a, b) => {
+                a.walk_mut(f);
+                b.walk_mut(f);
+            }
+            Df::Abs(a)
+            | Df::Square(a)
+            | Df::Cube(a)
+            | Df::HalfNegative(a)
+            | Df::QuarterNegative(a)
+            | Df::Squeeze(a)
+            | Df::Invert(a)
+            | Df::Passthrough(a) => a.walk_mut(f),
+            Df::FindTopSurface { density, upper, .. } => {
+                density.walk_mut(f);
+                upper.walk_mut(f);
+            }
+            Df::Clamp { input, .. } => input.walk_mut(f),
+            Df::RangeChoice { input, when_in, when_out, .. } => {
+                input.walk_mut(f);
+                when_in.walk_mut(f);
+                when_out.walk_mut(f);
+            }
+            Df::ShiftedNoise { sx, sy, sz, .. } => {
+                sx.walk_mut(f);
+                sy.walk_mut(f);
+                sz.walk_mut(f);
+            }
+            Df::Interpolated { inner, .. } => inner.walk_mut(f),
+            Df::WeirdScaled { input, .. } => input.walk_mut(f),
+            Df::Spline(s) => s.walk_mut(f),
+            Df::Const(_)
+            | Df::YCoord
+            | Df::YGradient { .. }
+            | Df::Noise { .. }
+            | Df::ShiftA(_)
+            | Df::ShiftB(_)
+            | Df::BlendedNoise(_) => {}
+        }
+    }
+
+    fn for_children<'a>(&'a self, f: &mut impl FnMut(&'a Df)) {
+        match self {
+            Df::Add(a, b) | Df::Mul(a, b) | Df::Min(a, b) | Df::Max(a, b) => {
+                f(a);
+                f(b);
+            }
+            Df::Abs(a)
+            | Df::Square(a)
+            | Df::Cube(a)
+            | Df::HalfNegative(a)
+            | Df::QuarterNegative(a)
+            | Df::Squeeze(a)
+            | Df::Invert(a)
+            | Df::Passthrough(a) => f(a),
+            Df::FindTopSurface { density, upper, .. } => {
+                f(density);
+                f(upper);
+            }
+            Df::Clamp { input, .. } => f(input),
+            Df::RangeChoice { input, when_in, when_out, .. } => {
+                f(input);
+                f(when_in);
+                f(when_out);
+            }
+            Df::ShiftedNoise { sx, sy, sz, .. } => {
+                f(sx);
+                f(sy);
+                f(sz);
+            }
+            Df::Interpolated { inner, .. } => f(inner),
+            Df::WeirdScaled { input, .. } => f(input),
+            Df::Spline(s) => s.for_children(f),
+            Df::Const(_)
+            | Df::YCoord
+            | Df::YGradient { .. }
+            | Df::Noise { .. }
+            | Df::ShiftA(_)
+            | Df::ShiftB(_)
+            | Df::BlendedNoise(_) => {}
         }
     }
 }
@@ -305,6 +581,13 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
         "half_negative" => Df::HalfNegative(arg()),
         "quarter_negative" => Df::QuarterNegative(arg()),
         "squeeze" => Df::Squeeze(arg()),
+        "invert" => Df::Invert(arg()),
+        "find_top_surface" => Df::FindTopSurface {
+            density: boxed(o.get("density"), df, noises),
+            upper: boxed(o.get("upper_bound"), df, noises),
+            lower: field(o, "lower_bound").map(num).unwrap_or(-64.0) as i32,
+            cell_h: (field(o, "cell_height").map(num).unwrap_or(8.0) as i32).max(1),
+        },
         "clamp" => Df::Clamp {
             input: boxed(o.get("input"), df, noises),
             min: field(o, "min").map(num).unwrap_or(0.0),
@@ -352,18 +635,20 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
             y_factor: field(o, "y_factor").map(num).unwrap_or(160.0),
             smear: field(o, "smear_scale_multiplier").map(num).unwrap_or(8.0),
         })),
-        // Caching / interpolation / blending: value == inner argument
-        // for a single-pass generator.
+        // Caching / blending: value == inner argument for a
+        // single-pass generator.
         "cache_2d" | "cache_once" | "cache_all_in_cell" | "flat_cache"
-        | "interpolated" | "blend_density" => Df::Passthrough(arg()),
+        | "blend_density" => Df::Passthrough(arg()),
+        // W213: real cell interpolation (id assigned post-parse by
+        // `assign_interp_ids`; full-res `eval` ignores it).
+        "interpolated" => Df::Interpolated { inner: arg(), id: usize::MAX },
         "blend_alpha" => Df::Const(1.0),
         "blend_offset" => Df::Const(0.0),
-        // weird_scaled_sampler approximated by its noise (the rarity
-        // remap is a wave-3 refinement); end_islands / unknown -> 0.
-        "weird_scaled_sampler" => Df::Noise {
+        // W213: exact WeirdScaledSampler (rarity-quantized |noise|).
+        "weird_scaled_sampler" => Df::WeirdScaled {
+            input: boxed(o.get("input"), df, noises),
             noise: noise_of(o, "noise", noises),
-            xz: 1.0,
-            y: 1.0,
+            type2: o.get("rarity_value_mapper").and_then(|v| v.as_str()) == Some("type_2"),
         },
         _ => Df::Const(0.0),
     }
