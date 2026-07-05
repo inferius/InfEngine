@@ -15,14 +15,20 @@
 //! - `random_selector` tree pick per try + the `count` weighted_list
 //!   placement modifier (e.g. plains: 0 trees w19 / 1 tree w1 per chunk).
 //!
+//! W209 adds the remaining shapes from source: `FancyTrunkPlacer` +
+//! `FancyFoliagePlacer` (large oaks - sphere-profile branch clusters,
+//! circular discs), `MegaJungleTrunkPlacer` (2x2 giant trunk + spiral
+//! side branches) + `MegaJungleFoliagePlacer`, and the
+//! `FallenTreeFeature` (stump + horizontal log run).
+//!
 //! Honest divergences, consistent with the whole mcgen port: SplitMix64
-//! streams (no seed identity); decorators (bees, leaf litter) are
-//! cosmetic and skipped; `fancy_oak` (FancyTrunkPlacer's branch walk),
-//! `mega_jungle` (giant trunk) and the fallen-tree feature type are NOT
-//! ported yet - a selector entry that resolves to an unsupported
-//! feature falls back to the selector default (and to plain oak if the
-//! default itself is unsupported), logged once. The `would_survive`
-//! sapling filter reduces to "floor is a dirt-family block".
+//! streams (no seed identity); decorators (bees, leaf litter, trunk
+//! vines, attached mushrooms) are cosmetic and skipped; fancy's
+//! free-space pre-checks are skipped (they consume no randomness, so
+//! the stream stays aligned - fancy oaks just never abort); the
+//! `would_survive` sapling filter reduces to "floor is a dirt-family
+//! block". Still unsupported (falls back to the selector default):
+//! dark_oak/bending placers (no engine biome lists them yet).
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord};
 use std::sync::OnceLock;
@@ -136,6 +142,12 @@ enum Trunk {
     Straight,
     /// ForkingTrunkPlacer (acacia).
     Forking,
+    /// FancyTrunkPlacer (large oaks): 0.618 trunk + sphere-shaped
+    /// branch clusters, W209.
+    Fancy,
+    /// MegaJungleTrunkPlacer: 2x2 giant trunk + spiral side branches,
+    /// W209.
+    MegaJungle,
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +157,10 @@ enum Foliage {
     Pine { height: IntProv },
     Acacia,
     Bush { height: i32 },
+    /// FancyFoliagePlacer: circular discs, +1 radius on middle rows.
+    Fancy { height: i32 },
+    /// MegaJungleFoliagePlacer ("jungle_foliage_placer").
+    MegaJungle { height: i32 },
 }
 
 /// One fully-parsed MC tree configured_feature.
@@ -162,11 +178,19 @@ pub(crate) struct TreeDef {
     leaves: u16,
 }
 
-/// A selector entry / default resolves to a tree or "unsupported"
-/// (fancy/mega/fallen - not ported yet).
+/// W209: the fallen-tree feature (stump + a horizontal log run).
+#[derive(Clone, Debug)]
+pub(crate) struct FallenDef {
+    log: u16,
+    log_length: IntProv,
+}
+
+/// A selector entry / default resolves to a tree, a fallen trunk, or
+/// "unsupported" (feature types not ported).
 #[derive(Clone, Debug)]
 enum TreeRef {
     Tree(TreeDef),
+    Fallen(FallenDef),
     Unsupported(&'static str),
 }
 
@@ -193,6 +217,19 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         return TreeRef::Unsupported(name);
     };
     let cj: serde_json::Value = serde_json::from_str(json).expect("tree conf parses");
+    // W209: fallen trees are their own feature type - a stump plus a
+    // horizontal log run (decorators = cosmetics, skipped).
+    if cj["type"].as_str() == Some("minecraft:fallen_tree") {
+        let cfg = &cj["config"];
+        let log_name = cfg["trunk_provider"]["state"]["Name"].as_str().expect("fallen trunk");
+        let Some(log) = block_id_by_name(log_name) else {
+            return TreeRef::Unsupported(name);
+        };
+        return TreeRef::Fallen(FallenDef {
+            log,
+            log_length: IntProv::parse(&cfg["log_length"]),
+        });
+    }
     if cj["type"].as_str() != Some("minecraft:tree") {
         return TreeRef::Unsupported(name);
     }
@@ -201,7 +238,9 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
     let trunk = match tp["type"].as_str() {
         Some("minecraft:straight_trunk_placer") => Trunk::Straight,
         Some("minecraft:forking_trunk_placer") => Trunk::Forking,
-        _ => return TreeRef::Unsupported(name), // fancy / giant / dark_oak...
+        Some("minecraft:fancy_trunk_placer") => Trunk::Fancy,
+        Some("minecraft:mega_jungle_trunk_placer") => Trunk::MegaJungle,
+        _ => return TreeRef::Unsupported(name), // dark_oak / bending / ...
     };
     let fp = &cfg["foliage_placer"];
     let foliage = match fp["type"].as_str() {
@@ -217,6 +256,12 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         Some("minecraft:acacia_foliage_placer") => Foliage::Acacia,
         Some("minecraft:bush_foliage_placer") => Foliage::Bush {
             height: fp["height"].as_i64().unwrap_or(2) as i32,
+        },
+        Some("minecraft:fancy_foliage_placer") => Foliage::Fancy {
+            height: fp["height"].as_i64().expect("fancy height") as i32,
+        },
+        Some("minecraft:jungle_foliage_placer") => Foliage::MegaJungle {
+            height: fp["height"].as_i64().expect("jungle height") as i32,
         },
         _ => return TreeRef::Unsupported(name),
     };
@@ -377,29 +422,30 @@ fn sample_count(dist: &[(u32, u32)], rng: &mut SplitMix64) -> u32 {
     0
 }
 
-/// `random_selector`: first entry whose chance roll hits wins, else the
-/// default. Unsupported picks fall through to the default; an
-/// unsupported default falls back to plain oak (logged once at parse).
-fn select_tree<'a>(bt: &'a BiomeTrees, rng: &mut SplitMix64) -> Option<&'a TreeDef> {
-    for (chance, tref) in &bt.entries {
-        if (rng.next_f64() as f32) < *chance {
-            return match tref {
-                TreeRef::Tree(def) => Some(def),
-                // Unsupported entry (fancy/mega/fallen): MC would place
-                // that feature; we fall back to the DEFAULT tree so the
-                // density stays right even though the shape is the
-                // simpler one.
-                TreeRef::Unsupported(_) => match &bt.default {
-                    TreeRef::Tree(def) => Some(def),
-                    TreeRef::Unsupported(_) => None,
-                },
-            };
-        }
-    }
-    match &bt.default {
-        TreeRef::Tree(def) => Some(def),
+/// What one selector try resolved to.
+enum Pick<'a> {
+    Tree(&'a TreeDef),
+    Fallen(&'a FallenDef),
+}
+
+fn as_pick(tref: &TreeRef) -> Option<Pick<'_>> {
+    match tref {
+        TreeRef::Tree(def) => Some(Pick::Tree(def)),
+        TreeRef::Fallen(def) => Some(Pick::Fallen(def)),
         TreeRef::Unsupported(_) => None,
     }
+}
+
+/// `random_selector`: first entry whose chance roll hits wins, else the
+/// default. An unsupported pick falls through to the default so the
+/// tree density stays right even where a shape isn't ported yet.
+fn select_tree<'a>(bt: &'a BiomeTrees, rng: &mut SplitMix64) -> Option<Pick<'a>> {
+    for (chance, tref) in &bt.entries {
+        if (rng.next_f64() as f32) < *chance {
+            return as_pick(tref).or_else(|| as_pick(&bt.default));
+        }
+    }
+    as_pick(&bt.default)
 }
 
 /// Dirt-family floor check (the `would_survive` oak-sapling predicate
@@ -451,7 +497,9 @@ fn set_log(chunk: &mut Chunk, origin: [i32; 3], wx: i32, wy: i32, wz: i32, id: u
 }
 
 /// FoliagePlacer.placeLeavesRow: a square ring/disk of leaves at
-/// `att + (dx, y, dz)`, with the per-placer corner-skip rule.
+/// `att + (dx, y, dz)`, with the per-placer corner-skip rule. A
+/// double trunk (mega jungle 2x2) widens the scan by +1 and folds the
+/// coordinate via min(|d|, |d-1|) - the shouldSkipLocationSigned rule.
 #[allow(clippy::too_many_arguments)]
 fn place_leaves_row(
     chunk: &mut Chunk,
@@ -461,11 +509,18 @@ fn place_leaves_row(
     att: [i32; 3],
     radius: i32,
     y: i32,
+    double_trunk: bool,
 ) {
-    for dx in -radius..=radius {
-        for dz in -radius..=radius {
-            let (adx, adz) = (dx.abs(), dz.abs());
-            // shouldSkipLocation per placer (signed wrapper passes abs).
+    let ext = if double_trunk { 1 } else { 0 };
+    for dx in -radius..=radius + ext {
+        for dz in -radius..=radius + ext {
+            let (adx, adz) = if double_trunk {
+                (dx.abs().min((dx - 1).abs()), dz.abs().min((dz - 1).abs()))
+            } else {
+                (dx.abs(), dz.abs())
+            };
+            // shouldSkipLocation per placer (signed wrapper passes the
+            // folded values).
             let skip = match &def.foliage {
                 Foliage::Blob { .. } => {
                     adx == radius
@@ -484,6 +539,16 @@ fn place_leaves_row(
                 }
                 Foliage::Bush { .. } => {
                     adx == radius && adz == radius && rng.next_u64().is_multiple_of(2)
+                }
+                // FancyFoliagePlacer: circular disc test on cell centres.
+                Foliage::Fancy { .. } => {
+                    let fx = adx as f32 + 0.5;
+                    let fz = adz as f32 + 0.5;
+                    fx * fx + fz * fz > (radius * radius) as f32
+                }
+                // MegaJungleFoliagePlacer: circular + the dx+dz >= 7 cut.
+                Foliage::MegaJungle { .. } => {
+                    adx + adz >= 7 || adx * adx + adz * adz > radius * radius
                 }
             };
             if !skip {
@@ -508,7 +573,10 @@ fn place_tree(
         + (rng.next_u64() % (def.height_rand_a + 1) as u64) as i32
         + (rng.next_u64() % (def.height_rand_b + 1) as u64) as i32;
     let foliage_height = match &def.foliage {
-        Foliage::Blob { height } | Foliage::Bush { height } => *height,
+        Foliage::Blob { height }
+        | Foliage::Bush { height }
+        | Foliage::Fancy { height }
+        | Foliage::MegaJungle { height } => *height,
         Foliage::Spruce { trunk_height } => {
             (tree_height - trunk_height.sample(rng)).max(4)
         }
@@ -523,14 +591,115 @@ fn place_tree(
     }
     let offset = def.offset.sample(rng);
 
-    // Trunk -> foliage attachments (pos, radius_offset).
-    let mut attachments: Vec<([i32; 3], i32)> = Vec::new();
+    // Trunk -> foliage attachments (pos, radius_offset, double_trunk).
+    let mut attachments: Vec<([i32; 3], i32, bool)> = Vec::new();
     match def.trunk {
         Trunk::Straight => {
             for y in 0..tree_height {
                 set_log(chunk, origin, base[0], base[1] + y, base[2], def.log);
             }
-            attachments.push(([base[0], base[1] + tree_height, base[2]], 0));
+            attachments.push(([base[0], base[1] + tree_height, base[2]], 0, false));
+        }
+        Trunk::Fancy => {
+            // FancyTrunkPlacer (large oak). height = treeHeight + 2;
+            // trunk = 0.618 of it; branch clusters follow the sphere
+            // profile treeShape(). The free-space pre-checks consume no
+            // randomness in MC, so skipping them (chunk-local world)
+            // keeps the stream aligned - fancy oaks just never abort.
+            let height = tree_height + 2;
+            let trunk_height = (height as f64 * 0.618) as i32;
+            let trunk_top = base[1] + trunk_height;
+            // (attachment, branch_base_y)
+            let mut coords: Vec<([i32; 3], i32)> = Vec::new();
+            coords.push(([base[0], base[1] + (height - 5), base[2]], trunk_top));
+            let tree_shape = |y: i32| -> f32 {
+                if (y as f32) < height as f32 * 0.3 {
+                    return -1.0;
+                }
+                let radius = height as f32 / 2.0;
+                let adjacent = radius - y as f32;
+                if adjacent == 0.0 {
+                    return radius * 0.5;
+                }
+                if adjacent.abs() >= radius {
+                    return 0.0;
+                }
+                (radius * radius - adjacent * adjacent).sqrt() * 0.5
+            };
+            let mut rel_y = height - 5;
+            while rel_y >= 0 {
+                let shape = tree_shape(rel_y);
+                if shape >= 0.0 {
+                    // clustersPerY = min(1, floor(1.382 + (h/13)^2)) - the
+                    // vanilla quirk makes this always exactly 1.
+                    let radius = (shape as f64) * (rng.next_f64() + 0.328);
+                    let angle = rng.next_f64() * 2.0 * std::f64::consts::PI;
+                    let cx = (radius * angle.sin() + 0.5).floor() as i32;
+                    let cz = (radius * angle.cos() + 0.5).floor() as i32;
+                    let limb_start = [base[0] + cx, base[1] + rel_y - 1, base[2] + cz];
+                    // branchHeight = start.y - horizontalDist * 0.381,
+                    // clamped to the trunk top.
+                    let dist = ((cx * cx + cz * cz) as f64).sqrt() * 0.381;
+                    let branch_height = limb_start[1] as f64 - dist;
+                    let branch_top = if branch_height > trunk_top as f64 {
+                        trunk_top
+                    } else {
+                        branch_height as i32
+                    };
+                    coords.push(([limb_start[0], limb_start[1], limb_start[2]], branch_top));
+                }
+                rel_y -= 1;
+            }
+            // The vertical trunk.
+            make_limb(chunk, origin, def.log, base, [base[0], base[1] + trunk_height, base[2]]);
+            // Branches from the trunk out to each kept cluster.
+            let trim = |branch_base: i32| branch_base - base[1] >= (height as f32 * 0.2) as i32;
+            for (pos, branch_base) in &coords {
+                let from = [base[0], *branch_base, base[2]];
+                if from != *pos && trim(*branch_base) {
+                    make_limb(chunk, origin, def.log, from, *pos);
+                }
+            }
+            for (pos, branch_base) in coords {
+                if trim(branch_base) {
+                    attachments.push((pos, 0, false));
+                }
+            }
+        }
+        Trunk::MegaJungle => {
+            // GiantTrunkPlacer: a 2x2 column (the +x/+z edge stops one
+            // short of the top)...
+            for y in 0..tree_height {
+                set_log(chunk, origin, base[0], base[1] + y, base[2], def.log);
+                if y < tree_height - 1 {
+                    set_log(chunk, origin, base[0] + 1, base[1] + y, base[2], def.log);
+                    set_log(chunk, origin, base[0] + 1, base[1] + y, base[2] + 1, def.log);
+                    set_log(chunk, origin, base[0], base[1] + y, base[2] + 1, def.log);
+                }
+            }
+            attachments.push(([base[0], base[1] + tree_height, base[2]], 0, true));
+            // ...plus MegaJungleTrunkPlacer's spiralling side branches
+            // down the top half, each with a radiusOffset of -2.
+            let mut branch_h = tree_height - 2 - (rng.next_u64() % 4) as i32;
+            while branch_h > tree_height / 2 {
+                let angle = rng.next_f64() * 2.0 * std::f64::consts::PI;
+                let mut bx = 0;
+                let mut bz = 0;
+                for b in 0..5 {
+                    bx = (1.5 + angle.cos() * b as f64) as i32;
+                    bz = (1.5 + angle.sin() * b as f64) as i32;
+                    set_log(
+                        chunk,
+                        origin,
+                        base[0] + bx,
+                        base[1] + branch_h - 3 + b / 2,
+                        base[2] + bz,
+                        def.log,
+                    );
+                }
+                attachments.push(([base[0] + bx, base[1] + branch_h, base[2] + bz], -2, false));
+                branch_h -= 2 + (rng.next_u64() % 4) as i32;
+            }
         }
         Trunk::Forking => {
             // ForkingTrunkPlacer, line-for-line: a lean near the top +
@@ -552,7 +721,7 @@ fn place_tree(
                 end_y = Some(yy + 1);
             }
             if let Some(ey) = end_y {
-                attachments.push(([tx, ey, tz], 1));
+                attachments.push(([tx, ey, tz], 1, false));
             }
             let (mut tx, mut tz) = (base[0], base[2]);
             let branch_dir = DIRS[(rng.next_u64() % 4) as usize];
@@ -573,20 +742,20 @@ fn place_tree(
                     branch_steps -= 1;
                 }
                 if let Some(ey) = end_y {
-                    attachments.push(([tx, ey, tz], 0));
+                    attachments.push(([tx, ey, tz], 0, false));
                 }
             }
         }
     }
 
     // Foliage per attachment (createFoliage per placer).
-    for (att, rad_off) in attachments {
+    for (att, rad_off, double_trunk) in attachments {
         match &def.foliage {
             Foliage::Blob { .. } => {
                 let mut yo = offset;
                 while yo >= offset - foliage_height {
                     let r = (leaf_radius + rad_off - 1 - yo / 2).max(0);
-                    place_leaves_row(chunk, origin, rng, def, att, r, yo);
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     yo -= 1;
                 }
             }
@@ -596,7 +765,7 @@ fn place_tree(
                 let mut min_r = 0;
                 let mut yo = offset;
                 while yo >= -foliage_height {
-                    place_leaves_row(chunk, origin, rng, def, att, r, yo);
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     if r >= max_r {
                         r = min_r;
                         min_r = 1;
@@ -611,7 +780,7 @@ fn place_tree(
                 let mut r = 0;
                 let mut yo = offset;
                 while yo >= offset - foliage_height {
-                    place_leaves_row(chunk, origin, rng, def, att, r, yo);
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     if r >= 1 && yo == offset - foliage_height + 1 {
                         r -= 1;
                     } else if r < leaf_radius + rad_off {
@@ -622,19 +791,111 @@ fn place_tree(
             }
             Foliage::Acacia => {
                 let ap = [att[0], att[1] + offset, att[2]];
-                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius + rad_off, -1 - foliage_height);
-                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius - 1, -foliage_height);
-                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius + rad_off - 1, 0);
+                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius + rad_off, -1 - foliage_height, double_trunk);
+                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius - 1, -foliage_height, double_trunk);
+                place_leaves_row(chunk, origin, rng, def, ap, leaf_radius + rad_off - 1, 0, double_trunk);
             }
             Foliage::Bush { .. } => {
                 let mut yo = offset;
                 while yo >= offset - foliage_height {
                     let r = leaf_radius + rad_off - 1 - yo;
-                    place_leaves_row(chunk, origin, rng, def, att, r, yo);
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
+                    yo -= 1;
+                }
+            }
+            Foliage::Fancy { .. } => {
+                // FancyFoliagePlacer: +1 radius on the middle rows.
+                let mut yo = offset;
+                while yo >= offset - foliage_height {
+                    let r = leaf_radius
+                        + if yo != offset && yo != offset - foliage_height { 1 } else { 0 };
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
+                    yo -= 1;
+                }
+            }
+            Foliage::MegaJungle { .. } => {
+                // MegaJungleFoliagePlacer: the double-trunk crown uses
+                // the full foliage height; side branches 1 + rand(2).
+                let leaf_height = if double_trunk {
+                    foliage_height
+                } else {
+                    1 + (rng.next_u64() % 2) as i32
+                };
+                let mut yo = offset;
+                while yo >= offset - leaf_height {
+                    let r = leaf_radius + rad_off + 1 - yo;
+                    place_leaves_row(chunk, origin, rng, def, att, r, yo, double_trunk);
                     yo -= 1;
                 }
             }
         }
+    }
+}
+
+/// FancyTrunkPlacer.makeLimb (doPlace variant): logs along the max-axis
+/// stepped line from `from` to `to` inclusive.
+fn make_limb(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    log: u16,
+    from: [i32; 3],
+    to: [i32; 3],
+) {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let steps = d[0].abs().max(d[1].abs()).max(d[2].abs());
+    if steps == 0 {
+        set_log(chunk, origin, from[0], from[1], from[2], log);
+        return;
+    }
+    let (fx, fy, fz) = (
+        d[0] as f32 / steps as f32,
+        d[1] as f32 / steps as f32,
+        d[2] as f32 / steps as f32,
+    );
+    for i in 0..=steps {
+        set_log(
+            chunk,
+            origin,
+            from[0] + (0.5 + i as f32 * fx).floor() as i32,
+            from[1] + (0.5 + i as f32 * fy).floor() as i32,
+            from[2] + (0.5 + i as f32 * fz).floor() as i32,
+            log,
+        );
+    }
+}
+
+/// FallenTreeFeature: a stump at the origin plus a horizontal log run
+/// a couple of blocks away (decorators skipped). The ground-follow and
+/// full-run validity checks reduce to "each segment sits on/near the
+/// floor at the START height" - MC aborts on uneven ground; we do too
+/// (past a 1-block tolerance).
+fn place_fallen(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    ctx: &WorldgenCtx,
+    rng: &mut SplitMix64,
+    def: &FallenDef,
+    base: [i32; 3],
+) {
+    // Stump.
+    set_log(chunk, origin, base[0], base[1], base[2], def.log);
+    const DIRS: [[i32; 2]; 4] = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+    let dir = DIRS[(rng.next_u64() % 4) as usize];
+    let log_length = def.log_length.sample(rng) - 2;
+    let gap = 2 + (rng.next_u64() % 2) as i32;
+    let sx = base[0] + dir[0] * gap;
+    let sz = base[2] + dir[1] * gap;
+    let sy = mc_floor_at(ctx, sx, sz) + 1;
+    // Reject a run over uneven ground (MC's gapInGround > 2 abort,
+    // tightened to a straight-line fit).
+    for i in 0..log_length {
+        let (px, pz) = (sx + dir[0] * i, sz + dir[1] * i);
+        if (mc_floor_at(ctx, px, pz) + 1 - sy).abs() > 1 {
+            return;
+        }
+    }
+    for i in 0..log_length {
+        set_log(chunk, origin, sx + dir[0] * i, sy, sz + dir[1] * i, def.log);
     }
 }
 
@@ -665,7 +926,7 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 let rz = (rng.next_u64() % 16) as i32;
                 let wx = scx * cs + rx;
                 let wz = scz * cs + rz;
-                let Some(def) = select_tree(bt, &mut rng) else {
+                let Some(pick) = select_tree(bt, &mut rng) else {
                     continue;
                 };
                 let floor = mc_floor_at(ctx, wx, wz);
@@ -686,7 +947,14 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 {
                     continue;
                 }
-                place_tree(chunk, origin, &mut rng, def, [wx, floor + 1, wz]);
+                match pick {
+                    Pick::Tree(def) => {
+                        place_tree(chunk, origin, &mut rng, def, [wx, floor + 1, wz]);
+                    }
+                    Pick::Fallen(def) => {
+                        place_fallen(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
+                    }
+                }
             }
         }
     }
@@ -726,14 +994,26 @@ mod tests {
             ("spruce", "spruce_log"),
             ("acacia", "acacia_log"),
             ("jungle_tree", "jungle_log"),
+            // W209: the previously-unsupported shapes must parse now.
+            ("fancy_oak", "oak_log"),
+            ("fancy_oak_bees_005", "oak_log"),
+            ("mega_jungle_tree", "jungle_log"),
         ] {
             match parse_tree_conf(TREE_CONFIGURED.iter().find(|(n, _)| *n == name).unwrap().0) {
                 TreeRef::Tree(d) => {
                     assert_eq!(Some(d.log), block_id_by_name(want_log), "{name} log id");
                     assert!(d.leaves != 0, "{name} leaves id");
                 }
-                TreeRef::Unsupported(_) => panic!("{name} should parse"),
+                _ => panic!("{name} should parse as a tree"),
             }
+        }
+        // W209: fallen trees parse as their own feature kind.
+        match parse_tree_conf("fallen_oak_tree") {
+            TreeRef::Fallen(f) => {
+                assert_eq!(Some(f.log), block_id_by_name("oak_log"));
+                assert_eq!((f.log_length.min, f.log_length.max), (4, 7));
+            }
+            _ => panic!("fallen_oak_tree should parse as Fallen"),
         }
     }
 
