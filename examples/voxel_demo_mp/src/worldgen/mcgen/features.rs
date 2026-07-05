@@ -792,6 +792,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     }
     let origin_v = World::chunk_world_origin(coord);
     let origin = [origin_v.x as i32, origin_v.y as i32, origin_v.z as i32];
+    // W220: lakes (step 1) - lava pools, surface + underground.
+    super::misc_features::place_lava_lakes(chunk, coord, ctx, origin);
     // W219: local_modifications (step 2) - old-growth taiga boulders.
     super::misc_features::place_forest_rocks(chunk, coord, ctx, origin);
     // W202: ore veins (underground_ores, step 6) before vegetal

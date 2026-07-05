@@ -317,6 +317,197 @@ pub(crate) fn place_forest_rocks(
     }
 }
 
+const SALT_LAKE: u64 = 0x1A7E_0000;
+
+/// W220: `LakeFeature` (lava lakes). The lake occupies a 16x8x16 box;
+/// 4-7 random ellipsoid "spots" union into the body; the box border is
+/// validated (no liquids beside the upper half, solid ground beside
+/// the lower half), then the body fills (lava below the y+4 waterline,
+/// air above) and a stone barrier wraps adjacent solid cells (always
+/// below the waterline, 1-in-2 above).
+///
+/// Cross-chunk determinism: every abort / barrier decision reads the
+/// PRE-DECORATION solidity from the cached column bitsets (
+/// `terrain::column_is_solid`) - replay-invariant, so all chunks the
+/// box touches agree; the writes themselves stay chunk-local and
+/// respect the live chunk (bedrock guard). Honest divergences: the
+/// border "liquid" test is open-below-sea (aquifer cave lakes are not
+/// seen), and carver tunnels are invisible to the abort (a lake next
+/// to a fresh tunnel may spill - the liquid sim handles it, as MC's
+/// scheduled ticks do).
+pub(crate) fn place_lava_lakes(
+    chunk: &mut Chunk,
+    coord: ChunkCoord,
+    ctx: &WorldgenCtx,
+    origin: [i32; 3],
+) {
+    let cs = CHUNK_SIZE as i32;
+    let seed = ctx.effective_seed();
+    let solid = |x: i32, y: i32, z: i32| super::terrain::column_is_solid(ctx, x, y, z);
+    let liquidish = |x: i32, y: i32, z: i32| {
+        !solid(x, y, z) && y < crate::worldgen::climate::SEA_LEVEL
+    };
+    for scx in (coord[0] - 1)..=(coord[0] + 1) {
+        for scz in (coord[2] - 1)..=(coord[2] + 1) {
+            // (salt, rarity, underground?)
+            for (k, chance, underground) in [(0u64, 200u64, false), (1, 9, true)] {
+                let mut rng =
+                    SplitMix64::new(stream_seed(seed, scx, scz, SALT_LAKE ^ (k << 40)));
+                // rarity_filter.
+                if !rng.next_u64().is_multiple_of(chance) {
+                    continue;
+                }
+                let px = scx * cs + next_int(&mut rng, 16);
+                let pz = scz * cs + next_int(&mut rng, 16);
+                let floor = mc_floor_at(ctx, px, pz);
+                let py = if underground {
+                    // uniform 1..=255, environment_scan down (max 32) to
+                    // solid, then OCEAN_FLOOR-relative threshold <= -5.
+                    let start = next_between(&mut rng, 1, 255);
+                    let mut y = start;
+                    let mut found = false;
+                    for _ in 0..=32 {
+                        if solid(px, y, pz) {
+                            found = true;
+                            break;
+                        }
+                        y -= 1;
+                        if y < 1 {
+                            break;
+                        }
+                    }
+                    if !found || y > floor - 5 {
+                        continue;
+                    }
+                    y
+                } else {
+                    floor + 1
+                };
+                if py <= 4 {
+                    continue; // level.getMinY() + 4 guard
+                }
+                lava_lake(chunk, origin, &mut rng, [px - 8, py - 4, pz - 8], &solid, &liquidish);
+            }
+        }
+    }
+}
+
+/// One lake body at box origin `base` (16x8x16). Rolls, checks and
+/// barrier decisions run in MC's exact scan order so every chunk's
+/// replay agrees.
+fn lava_lake(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    rng: &mut SplitMix64,
+    base: [i32; 3],
+    solid: &dyn Fn(i32, i32, i32) -> bool,
+    liquidish: &dyn Fn(i32, i32, i32) -> bool,
+) {
+    let cs = CHUNK_SIZE as i32;
+    let mut grid = [false; 2048];
+    let idx = |x: i32, z: i32, y: i32| ((x * 16 + z) * 8 + y) as usize;
+    let spots = next_int(rng, 4) + 4;
+    for _ in 0..spots {
+        let xr = rng.next_f64() * 6.0 + 3.0;
+        let yr = rng.next_f64() * 4.0 + 2.0;
+        let zr = rng.next_f64() * 6.0 + 3.0;
+        let xp = rng.next_f64() * (16.0 - xr - 2.0) + 1.0 + xr / 2.0;
+        let yp = rng.next_f64() * (8.0 - yr - 4.0) + 2.0 + yr / 2.0;
+        let zp = rng.next_f64() * (16.0 - zr - 2.0) + 1.0 + zr / 2.0;
+        for xx in 1..15 {
+            for zz in 1..15 {
+                for yy in 1..7 {
+                    let xd = (xx as f64 - xp) / (xr / 2.0);
+                    let yd = (yy as f64 - yp) / (yr / 2.0);
+                    let zd = (zz as f64 - zp) / (zr / 2.0);
+                    if xd * xd + yd * yd + zd * zd < 1.0 {
+                        grid[idx(xx, zz, yy)] = true;
+                    }
+                }
+            }
+        }
+    }
+    let borders = |grid: &[bool; 2048], xx: i32, zz: i32, yy: i32| -> bool {
+        !grid[idx(xx, zz, yy)]
+            && ((xx < 15 && grid[idx(xx + 1, zz, yy)])
+                || (xx > 0 && grid[idx(xx - 1, zz, yy)])
+                || (zz < 15 && grid[idx(xx, zz + 1, yy)])
+                || (zz > 0 && grid[idx(xx, zz - 1, yy)])
+                || (yy < 7 && grid[idx(xx, zz, yy + 1)])
+                || (yy > 0 && grid[idx(xx, zz, yy - 1)]))
+    };
+    // Border validation (replay-invariant world view).
+    for xx in 0..16 {
+        for zz in 0..16 {
+            for yy in 0..8 {
+                if !borders(&grid, xx, zz, yy) {
+                    continue;
+                }
+                let (wx, wy, wz) = (base[0] + xx, base[1] + yy, base[2] + zz);
+                if yy >= 4 && liquidish(wx, wy, wz) {
+                    return;
+                }
+                if yy < 4 && !solid(wx, wy, wz) {
+                    return;
+                }
+            }
+        }
+    }
+    // Fill: lava below the waterline (yy < 4), air above. Writes are
+    // chunk-local; bedrock stays.
+    let bedrock_guard = |chunk: &Chunk, lx: i32, ly: i32, lz: i32| {
+        let id = chunk.get(lx as usize, ly as usize, lz as usize).0;
+        crate::block::block_type(id).is_some_and(|bt| bt.name == "bedrock")
+    };
+    for xx in 0..16 {
+        for zz in 0..16 {
+            for yy in 0..8 {
+                if !grid[idx(xx, zz, yy)] {
+                    continue;
+                }
+                let (wx, wy, wz) = (base[0] + xx, base[1] + yy, base[2] + zz);
+                let (lx, ly, lz) = (wx - origin[0], wy - origin[1], wz - origin[2]);
+                if !(0..cs).contains(&lx) || !(0..cs).contains(&ly) || !(0..cs).contains(&lz) {
+                    continue;
+                }
+                if bedrock_guard(chunk, lx, ly, lz) {
+                    continue;
+                }
+                let state = if yy >= 4 { BlockId::AIR } else { BlockId(37) };
+                chunk.set(lx as usize, ly as usize, lz as usize, state);
+            }
+        }
+    }
+    // Stone barrier around the body: solid neighbours become stone
+    // (always below the waterline, 1-in-2 above - the roll burns in
+    // scan order whether or not the cell lands in this chunk).
+    for xx in 0..16 {
+        for zz in 0..16 {
+            for yy in 0..8 {
+                if !borders(&grid, xx, zz, yy) {
+                    continue;
+                }
+                let keep_roll = yy >= 4 && next_int(rng, 2) == 0;
+                if keep_roll {
+                    continue;
+                }
+                let (wx, wy, wz) = (base[0] + xx, base[1] + yy, base[2] + zz);
+                if !solid(wx, wy, wz) {
+                    continue;
+                }
+                let (lx, ly, lz) = (wx - origin[0], wy - origin[1], wz - origin[2]);
+                if !(0..cs).contains(&lx) || !(0..cs).contains(&ly) || !(0..cs).contains(&lz) {
+                    continue;
+                }
+                if bedrock_guard(chunk, lx, ly, lz) {
+                    continue;
+                }
+                chunk.set(lx as usize, ly as usize, lz as usize, BlockId(1));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

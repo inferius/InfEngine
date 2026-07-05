@@ -210,6 +210,18 @@ pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     col.cols[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize].top
 }
 
+/// W220: PRE-DECORATION solidity of the interpolated field at any world
+/// cell, from the cached column bitsets. Replay-invariant (every chunk
+/// that consults a shared cell agrees) - the lava-lake border checks
+/// key on this.
+pub(crate) fn column_is_solid(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> bool {
+    let seed = ctx.effective_seed();
+    let ow = overworld_for(seed);
+    let cs = CHUNK_SIZE as i32;
+    let col = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
+    col.is_solid(wx.rem_euclid(cs) as usize, wy, wz.rem_euclid(cs) as usize)
+}
+
 /// 16x16 "steep slope" flags from the heightmap gradient: a column is
 /// steep when an orthogonal neighbour's surface differs by >= 4 blocks,
 /// which is where MC's `steep` surface condition shows stone / gravel
