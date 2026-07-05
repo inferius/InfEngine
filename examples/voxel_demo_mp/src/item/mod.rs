@@ -2430,6 +2430,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 762, name: "sweet_berry_bush", display: Some("Sweet Berry Bush"), places: Some(762), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 763, name: "brown_mushroom", display: Some("Brown Mushroom"), places: Some(763), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 764, name: "red_mushroom", display: Some("Red Mushroom"), places: Some(764), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W219 - clay (disk_clay river/lake floors).
+    ItemType { id: 765, name: "clay", display: Some("Clay"), places: Some(765), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

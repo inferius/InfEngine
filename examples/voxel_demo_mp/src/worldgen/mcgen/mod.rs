@@ -35,6 +35,7 @@ pub(crate) mod colors;
 pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod features;
+pub(crate) mod misc_features;
 pub(crate) mod noise;
 pub(crate) mod ore_vein;
 pub(crate) mod overworld;

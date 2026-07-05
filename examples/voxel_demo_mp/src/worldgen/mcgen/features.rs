@@ -98,6 +98,8 @@ const ORE_PLACED: &[(&str, &str)] = &[
     ("ore_lapis", include_str!("data/feature/placed/ore_lapis.json")),
     ("ore_lapis_buried", include_str!("data/feature/placed/ore_lapis_buried.json")),
     ("ore_copper", include_str!("data/feature/placed/ore_copper.json")),
+    // W219: windswept-hills-only (the biome step gate below).
+    ("ore_emerald", include_str!("data/feature/placed/ore_emerald.json")),
 ];
 
 /// The configured ore features the placed set references.
@@ -121,6 +123,7 @@ const ORE_CONFIGURED: &[(&str, &str)] = &[
     ("ore_lapis_buried", include_str!("data/feature/configured/ore_lapis_buried.json")),
     ("ore_redstone", include_str!("data/feature/configured/ore_redstone.json")),
     ("ore_tuff", include_str!("data/feature/configured/ore_tuff.json")),
+    ("ore_emerald", include_str!("data/feature/configured/ore_emerald.json")),
 ];
 
 /// The MC block tags the ore targets replace (extracted from
@@ -750,6 +753,20 @@ fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [
     for (idx, rule) in ore_rules().iter().enumerate() {
         for scx in (coord[0] - 1)..=(coord[0] + 1) {
             for scz in (coord[2] - 1)..=(coord[2] + 1) {
+                // W219: emerald is the one biome-gated overworld ore
+                // (only windswept_hills lists it in step 6).
+                if rule.name == "ore_emerald"
+                    && !matches!(
+                        super::terrain::mc_full_biome_at(
+                            ctx,
+                            scx * CHUNK_SIZE as i32 + 8,
+                            scz * CHUNK_SIZE as i32 + 8,
+                        ),
+                        super::biome::McBiome::WindsweptHills
+                    )
+                {
+                    continue;
+                }
                 let mut rng =
                     SplitMix64::new(stream_seed(seed, scx, scz, ore_salt(idx)));
                 if let Some(r) = rule.rarity {
@@ -775,10 +792,17 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     }
     let origin_v = World::chunk_world_origin(coord);
     let origin = [origin_v.x as i32, origin_v.y as i32, origin_v.z as i32];
-    // W202: ore veins first (MC's underground_ores step runs before
-    // vegetal decoration). Ores run at EVERY height (coal/iron reach
-    // the mountain tops); flora is gated below sea level.
+    // W219: local_modifications (step 2) - old-growth taiga boulders.
+    super::misc_features::place_forest_rocks(chunk, coord, ctx, origin);
+    // W202: ore veins (underground_ores, step 6) before vegetal
+    // decoration. Ores run at EVERY height (coal/iron reach the
+    // mountain tops); flora is gated below sea level.
     place_ores(chunk, coord, ctx, origin);
+    // W219: the floor disks share step 6 (they run after the ore
+    // entries in every biome list).
+    super::misc_features::place_disks(chunk, coord, ctx, origin);
+    // W219: fluid springs (step 8) before the vegetal step.
+    super::misc_features::place_springs(chunk, coord, ctx, origin);
 
     // W208: MC trees (vegetal step) - before the underwater plants,
     // matching the biome feature-list order.
@@ -951,8 +975,13 @@ mod tests {
     #[test]
     fn ore_rules_parse_the_embedded_mc_json() {
         let rules = ore_rules();
-        assert_eq!(rules.len(), 25, "one rule per embedded ore placed_feature");
+        assert_eq!(rules.len(), 26, "one rule per embedded ore placed_feature");
         let by_name = |n: &str| rules.iter().find(|r| r.name == n).unwrap();
+        // W219: emerald parses (100 tries, trapezoid) - the biome gate
+        // lives in place_ores, not the rule.
+        let emerald = by_name("ore_emerald");
+        assert!(matches!(emerald.count, CountProvider::Fixed(100)));
+        assert_eq!(emerald.size, 3);
         // Pins from the 26.1.2 data: prove the values come from the
         // JSON, not a hardcode.
         let coal = by_name("ore_coal_upper");

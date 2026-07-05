@@ -3103,4 +3103,11 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType { id: 762, name: "sweet_berry_bush", color: [0.28, 0.50, 0.30], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["sweet_berry_bush_stage3.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["sweet_berry_bush_stage3.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["sweet_berry_bush_stage3.png"], keep_alpha: true } },
     BlockType { id: 763, name: "brown_mushroom", color: [0.58, 0.44, 0.32], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["brown_mushroom.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["brown_mushroom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["brown_mushroom.png"], keep_alpha: true } },
     BlockType { id: 764, name: "red_mushroom", color: [0.78, 0.20, 0.18], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["red_mushroom.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["red_mushroom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["red_mushroom.png"], keep_alpha: true } },
+    // W219 - clay (the river/lake-floor disk_clay feature).
+    BlockType {
+        id: 765, name: "clay", color: [0.63, 0.65, 0.70], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["clay.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["clay.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["clay.png"], keep_alpha: false },
+    },
 ];
