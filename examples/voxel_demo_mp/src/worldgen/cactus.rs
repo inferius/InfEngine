@@ -101,6 +101,11 @@ pub(crate) fn place_realistic_from_coord(
     ctx: &WorldgenCtx,
 ) {
     use super::chunk::column_height;
+    // W218: Mc-profile cactus comes from patch_cactus_desert
+    // (mcgen::vegetation) with the real CactusBlock survival rules.
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return;
+    }
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let origin_x = origin.x as i32;

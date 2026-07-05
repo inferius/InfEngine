@@ -70,6 +70,12 @@ fn stack(chunk: &mut Chunk, x: i32, air_y: i32, z: i32, cs: i32, count: i32, blo
 }
 
 pub(crate) fn place_realistic_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
+    // W218: the Mc profile grows sugar cane / dead bush / melons via
+    // the real MC placed features (mcgen::vegetation); this legacy
+    // pass only serves the older profiles.
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return;
+    }
     let seed = ctx.effective_seed();
     let origin = World::chunk_world_origin(coord);
     let ox = origin.x as i32;

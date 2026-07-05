@@ -74,6 +74,17 @@ const VEG_PLACED: &[(&str, &str)] = &[
     ("patch_berry_rare", include_str!("data/feature/placed/patch_berry_rare.json")),
     ("brown_mushroom_taiga", include_str!("data/feature/placed/brown_mushroom_taiga.json")),
     ("red_mushroom_taiga", include_str!("data/feature/placed/red_mushroom_taiga.json")),
+    // W218: sugar cane / cactus / dead bush / pumpkin / melon retire
+    // the legacy biome_features + cactus passes for the Mc profile.
+    ("patch_sugar_cane", include_str!("data/feature/placed/patch_sugar_cane.json")),
+    ("patch_sugar_cane_desert", include_str!("data/feature/placed/patch_sugar_cane_desert.json")),
+    ("patch_sugar_cane_swamp", include_str!("data/feature/placed/patch_sugar_cane_swamp.json")),
+    ("patch_cactus_desert", include_str!("data/feature/placed/patch_cactus_desert.json")),
+    ("patch_dead_bush", include_str!("data/feature/placed/patch_dead_bush.json")),
+    ("patch_dead_bush_2", include_str!("data/feature/placed/patch_dead_bush_2.json")),
+    ("patch_pumpkin", include_str!("data/feature/placed/patch_pumpkin.json")),
+    ("patch_melon", include_str!("data/feature/placed/patch_melon.json")),
+    ("patch_melon_sparse", include_str!("data/feature/placed/patch_melon_sparse.json")),
 ];
 
 const VEG_CONFIGURED: &[(&str, &str)] = &[
@@ -89,15 +100,43 @@ const VEG_CONFIGURED: &[(&str, &str)] = &[
     ("brown_mushroom", include_str!("data/feature/configured/brown_mushroom.json")),
     ("red_mushroom", include_str!("data/feature/configured/red_mushroom.json")),
     ("flower_flower_forest", include_str!("data/feature/configured/flower_flower_forest.json")),
+    ("sugar_cane", include_str!("data/feature/configured/sugar_cane.json")),
+    ("cactus", include_str!("data/feature/configured/cactus.json")),
+    ("dead_bush", include_str!("data/feature/configured/dead_bush.json")),
+    ("pumpkin", include_str!("data/feature/configured/pumpkin.json")),
+    ("melon", include_str!("data/feature/configured/melon.json")),
 ];
 
 const BIOME_TEMPERATURES: &str = include_str!("data/feature/biome_temperatures.json");
 
-/// A resolved plant: single block or an MC half=lower/upper pair.
+/// A resolved plant: single block, an MC half=lower/upper pair, or a
+/// W218 `block_column` (sugar cane / cactus - biased-to-bottom height).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Plant {
     Single(u16),
     Double(u16, u16),
+    Column { id: u16, min_h: i32, max_h: i32 },
+}
+
+/// W218: what the base cell's floor must be - the engine stand-in for
+/// each block's `canSurvive` (MC's simple_block / block_column features
+/// survival-check every placement).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FloorRule {
+    /// The W210 default: any dirt-family floor (grass / flowers /
+    /// mushrooms).
+    DirtFamily,
+    /// `matching_blocks grass_block (0,-1,0)` predicate (berries,
+    /// pumpkin, melon).
+    GrassBlock,
+    /// SugarCaneBlock.canSurvive: dirt/sand-family floor with water
+    /// horizontally adjacent to the FLOOR cell.
+    SugarCane,
+    /// CactusBlock.canSurvive: sand-family floor + no solid horizontal
+    /// neighbour at the base cell.
+    Cactus,
+    /// DeadBushBlock.mayPlaceOn: sand / red sand / dirt family.
+    DeadBush,
 }
 
 /// MC block-state name -> engine plant, folding the two-block plants
@@ -266,13 +305,37 @@ pub(crate) struct PatchDef {
     pub(crate) name: &'static str,
     steps: Vec<Step>,
     provider: Provider,
-    /// block_predicate: target must be air (always) + optionally a
-    /// grass_block floor (berry bushes).
-    needs_grass_floor: bool,
+    /// W218: the base cell's floor requirement (per-block canSurvive).
+    floor: FloorRule,
 }
 
 fn lookup(table: &[(&'static str, &'static str)], name: &str) -> Option<&'static str> {
     table.iter().find(|(n, _)| *n == name).map(|(_, j)| *j)
+}
+
+/// W218: parse a `block_column` configured feature (sugar cane /
+/// cactus): the FIRST layer's simple state + biased_to_bottom height.
+/// Extra layers whose block the engine lacks (cactus_flower) drop out.
+fn parse_block_column(cj: &serde_json::Value) -> Option<(Provider, &'static str)> {
+    let layer = cj["config"]["layers"].as_array()?.first()?;
+    let state = layer["provider"]["state"]["Name"].as_str()?;
+    let stem = state.strip_prefix("minecraft:").unwrap_or(state);
+    let id = block_id_by_name(stem)?;
+    let h = &layer["height"];
+    let (min_h, max_h) = if h["type"].as_str() == Some("minecraft:biased_to_bottom") {
+        (
+            h["min_inclusive"].as_i64().unwrap_or(1) as i32,
+            h["max_inclusive"].as_i64().unwrap_or(1) as i32,
+        )
+    } else {
+        (1, 1)
+    };
+    let survive = match stem {
+        "sugar_cane" => "sugar_cane",
+        "cactus" => "cactus",
+        _ => "",
+    };
+    Some((Provider::Simple(Plant::Column { id, min_h, max_h }), survive))
 }
 
 fn parse_patch(name: &'static str) -> Option<PatchDef> {
@@ -281,10 +344,16 @@ fn parse_patch(name: &'static str) -> Option<PatchDef> {
     let conf_name = pj["feature"].as_str()?.trim_start_matches("minecraft:");
     let cj: serde_json::Value =
         serde_json::from_str(lookup(VEG_CONFIGURED, conf_name)?).expect("veg conf parses");
-    if cj["type"].as_str() != Some("minecraft:simple_block") {
-        return None;
+    let (provider, mut survive) = match cj["type"].as_str() {
+        Some("minecraft:simple_block") => (Provider::parse(&cj["config"]["to_place"])?, ""),
+        Some("minecraft:block_column") => parse_block_column(&cj)?,
+        _ => return None,
+    };
+    // simple_block canSurvive: dead_bush has sand-family placement
+    // rules of its own (no would_survive in the placed pipeline).
+    if conf_name == "dead_bush" {
+        survive = "dead_bush";
     }
-    let provider = Provider::parse(&cj["config"]["to_place"])?;
     let mut steps = Vec::new();
     let mut needs_grass_floor = false;
     let trap = |v: &serde_json::Value| -> (i32, i32) {
@@ -313,17 +382,32 @@ fn parse_patch(name: &'static str) -> Option<PatchDef> {
                 y: trap(&m["y_spread"]),
             }),
             Some("minecraft:block_predicate_filter") => {
-                // air is implicit in the placer; the berry variant also
-                // demands a grass_block floor.
+                // air is implicit in the placer; grass_block floors
+                // (berries/pumpkin/melon) + would_survive states
+                // (sugar cane / cactus) map onto FloorRule.
                 let s = m["predicate"].to_string();
                 if s.contains("grass_block") {
                     needs_grass_floor = true;
+                }
+                if s.contains("would_survive") {
+                    if s.contains("sugar_cane") {
+                        survive = "sugar_cane";
+                    } else if s.contains("cactus") {
+                        survive = "cactus";
+                    }
                 }
             }
             _ => {} // biome: implicit (we drive from the biome's list)
         }
     }
-    Some(PatchDef { name, steps, provider, needs_grass_floor })
+    let floor = match survive {
+        "sugar_cane" => FloorRule::SugarCane,
+        "cactus" => FloorRule::Cactus,
+        "dead_bush" => FloorRule::DeadBush,
+        _ if needs_grass_floor => FloorRule::GrassBlock,
+        _ => FloorRule::DirtFamily,
+    };
+    Some(PatchDef { name, steps, provider, floor })
 }
 
 pub(crate) fn patch(name: &'static str) -> Option<&'static PatchDef> {
@@ -345,51 +429,71 @@ pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
         B::Plains | B::SunflowerPlains => &[
             "patch_tall_grass_2", "flower_plains", "patch_grass_plain",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::Forest | B::BirchForest | B::OldGrowthBirchForest | B::DarkForest => &[
             "flower_default", "patch_grass_forest",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::FlowerForest => &[
             "flower_flower_forest", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::Taiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga_2",
             "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_common",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::SnowyTaiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga_2",
             "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_rare",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => &[
             "patch_large_fern", "flower_default", "patch_grass_taiga",
-            "brown_mushroom_normal", "red_mushroom_normal", "patch_berry_common",
+            "patch_dead_bush", "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_berry_common", "patch_pumpkin", "patch_sugar_cane",
         ],
-        B::Jungle | B::SparseJungle | B::BambooJungle => &[
+        B::Jungle | B::BambooJungle => &[
             "flower_warm", "patch_grass_jungle",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_melon",
+        ],
+        B::SparseJungle => &[
+            "flower_warm", "patch_grass_jungle",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_melon_sparse",
         ],
         B::Savanna => &[
             "patch_tall_grass", "flower_warm", "patch_grass_savanna",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
         B::Swamp => &[
-            "flower_swamp", "patch_grass_normal",
+            "flower_swamp", "patch_grass_normal", "patch_dead_bush",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_sugar_cane_swamp", "patch_pumpkin",
         ],
         // mangrove_swamp lists no flowers or mushrooms; its grass is the
-        // plain patch (trees_mangrove / waterlily / dead bush unhosted).
-        B::MangroveSwamp => &["patch_grass_normal"],
+        // plain patch (trees_mangrove / waterlily unhosted).
+        B::MangroveSwamp => &["patch_grass_normal", "patch_dead_bush"],
+        B::Desert => &[
+            "flower_default", "patch_grass_badlands", "patch_dead_bush_2",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_sugar_cane_desert", "patch_pumpkin", "patch_cactus_desert",
+        ],
         // The addDefaultFlowers + badlands-grass set shared by the
-        // plain cold / dry / shore biomes.
-        B::SnowyPlains | B::IceSpikes | B::WindsweptHills | B::Desert
+        // plain cold / shore biomes.
+        B::SnowyPlains | B::IceSpikes | B::WindsweptHills
         | B::Beach | B::SnowyBeach | B::River | B::FrozenRiver => &[
             "flower_default", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane",
         ],
-        // snowy_slopes has no grass/flower/mushroom vegetal entries.
-        B::SnowySlopes => &[],
+        // snowy_slopes: pumpkins are its only hosted vegetal entry.
+        B::SnowySlopes => &["patch_pumpkin"],
         B::Ocean | B::DeepOcean | B::ColdOcean | B::DeepColdOcean
         | B::FrozenOcean | B::DeepFrozenOcean | B::LukewarmOcean
         | B::DeepLukewarmOcean | B::WarmOcean => &[],
@@ -474,8 +578,13 @@ fn dirt_floor(id: u16) -> bool {
     })
 }
 
+/// W218: sand-family floors (cactus / dead bush / sugar cane accept).
+fn sand_floor(id: u16) -> bool {
+    crate::block::block_type(id).is_some_and(|bt| matches!(bt.name, "sand" | "red_sand"))
+}
+
 /// Write one plant at `pos` (base cell) if the target(s) are air and
-/// the floor supports it. Chunk-local writes only.
+/// the floor supports it per `floor`. Chunk-local writes only.
 #[allow(clippy::too_many_arguments)]
 fn place_plant(
     chunk: &mut Chunk,
@@ -485,7 +594,8 @@ fn place_plant(
     wx: i32,
     wy: i32,
     wz: i32,
-    needs_grass_floor: bool,
+    floor: FloorRule,
+    rng: &mut SplitMix64,
 ) {
     let cs = CHUNK_SIZE as i32;
     let (lx, ly, lz) = (wx - origin[0], wy - origin[1], wz - origin[2]);
@@ -493,12 +603,61 @@ fn place_plant(
         return;
     }
     // Floor check: prefer the in-chunk cell; at the vertical seam fall
-    // back to "the terrain floor is directly below" via the heightmap.
+    // back to "the terrain floor is directly below" via the heightmap
+    // (dirt-family rule only - the specialised rules need real cells).
     let floor_ok = if (1..cs).contains(&ly) {
         let below = chunk.get(lx as usize, (ly - 1) as usize, lz as usize).0;
-        if needs_grass_floor { below == 3 } else { dirt_floor(below) }
+        match floor {
+            FloorRule::DirtFamily => dirt_floor(below),
+            FloorRule::GrassBlock => below == 3,
+            FloorRule::DeadBush => sand_floor(below) || dirt_floor(below),
+            FloorRule::SugarCane => {
+                // Dirt/sand-family floor + water horizontally adjacent
+                // to the FLOOR cell (SugarCaneBlock.canSurvive).
+                // Chunk-local neighbour reads - an off-chunk water
+                // neighbour is missed (border canes thin out; honest).
+                (dirt_floor(below) || sand_floor(below)) && {
+                    let fy = (ly - 1) as usize;
+                    let mut wet = false;
+                    for (dx, dz) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                        let (nx, nz) = (lx + dx, lz + dz);
+                        if (0..cs).contains(&nx)
+                            && (0..cs).contains(&nz)
+                            && crate::block::block_is_watery(
+                                chunk.get(nx as usize, fy, nz as usize).0,
+                            )
+                        {
+                            wet = true;
+                            break;
+                        }
+                    }
+                    wet
+                }
+            }
+            FloorRule::Cactus => {
+                // Sand floor + no solid horizontal neighbour at the
+                // base cell (CactusBlock.canSurvive).
+                sand_floor(below) && {
+                    let mut clear = true;
+                    for (dx, dz) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                        let (nx, nz) = (lx + dx, lz + dz);
+                        if (0..cs).contains(&nx) && (0..cs).contains(&nz) {
+                            let n = chunk.get(nx as usize, ly as usize, nz as usize).0;
+                            if n != 0
+                                && !crate::block::block_is_aabb_passable(BlockId(n))
+                                && !crate::block::block_is_watery(n)
+                            {
+                                clear = false;
+                                break;
+                            }
+                        }
+                    }
+                    clear
+                }
+            }
+        }
     } else {
-        mc_floor_at(ctx, wx, wz) == wy - 1 && !needs_grass_floor
+        mc_floor_at(ctx, wx, wz) == wy - 1 && floor == FloorRule::DirtFamily
     };
     if !floor_ok {
         return;
@@ -524,6 +683,17 @@ fn place_plant(
         Plant::Double(bottom, top) => {
             if set_if_air(wy, bottom) {
                 set_if_air(wy + 1, top);
+            }
+        }
+        Plant::Column { id, min_h, max_h } => {
+            // BiasedToBottomInt.sample: min + rnd(rnd(max - min + 1) + 1).
+            let span = (max_h - min_h + 1).max(1) as u64;
+            let outer = (rng.next_u64() % span) as i32 + 1;
+            let h = min_h + (rng.next_u64() % outer as u64) as i32;
+            for i in 0..h {
+                if !set_if_air(wy + i, id) {
+                    break;
+                }
             }
         }
     }
@@ -600,7 +770,7 @@ fn run_patch(
     }
     for p in positions {
         let plant = def.provider.pick(rng, p[0], p[1], p[2]);
-        place_plant(chunk, origin, ctx, plant, p[0], p[1], p[2], def.needs_grass_floor);
+        place_plant(chunk, origin, ctx, plant, p[0], p[1], p[2], def.floor, rng);
     }
 }
 
@@ -712,7 +882,25 @@ mod tests {
         let tall = patch("patch_tall_grass_2").expect("tall grass parses");
         assert!(matches!(tall.provider, Provider::Simple(Plant::Double(758, 759))));
         let berry = patch("patch_berry_common").expect("berry parses");
-        assert!(berry.needs_grass_floor);
+        assert_eq!(berry.floor, FloorRule::GrassBlock);
+        // W218: block_column features + the survival floor rules.
+        let cane = patch("patch_sugar_cane").expect("sugar cane parses");
+        assert_eq!(cane.floor, FloorRule::SugarCane);
+        assert!(matches!(
+            cane.provider,
+            Provider::Simple(Plant::Column { min_h: 2, max_h: 4, .. })
+        ));
+        let cactus = patch("patch_cactus_desert").expect("cactus parses");
+        assert_eq!(cactus.floor, FloorRule::Cactus);
+        assert!(matches!(
+            cactus.provider,
+            Provider::Simple(Plant::Column { min_h: 1, max_h: 3, .. })
+        ));
+        let bush = patch("patch_dead_bush_2").expect("dead bush parses");
+        assert_eq!(bush.floor, FloorRule::DeadBush);
+        let pumpkin = patch("patch_pumpkin").expect("pumpkin parses");
+        assert_eq!(pumpkin.floor, FloorRule::GrassBlock);
+        assert!(pumpkin.steps.iter().any(|s| matches!(s, Step::Rarity(300))));
         // W211: flower_forest's noise_provider - all 11 flowers resolve
         // and the noise scale is the JSON's 1/48, not a global constant.
         let ff = patch("flower_flower_forest").expect("flower forest parses");
