@@ -187,10 +187,37 @@ impl WorkerPool {
                                                                 lz as usize,
                                                             )
                                                             .is_air();
+                                                    // W221: SIDEWAYS air is an unstable
+                                                    // boundary from generation - the
+                                                    // aquifer's dry pockets and carver
+                                                    // tunnels cut into water bodies. MC
+                                                    // floods those via its scheduled
+                                                    // post-processing fluid ticks
+                                                    // (shouldScheduleFluidUpdate); we
+                                                    // schedule the same cells here. Air
+                                                    // ABOVE only stays a stable surface
+                                                    // (never scheduled), so oceans and
+                                                    // lakes stay quiet as before.
+                                                    let side_air = !below_air
+                                                        && [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                                                            .into_iter()
+                                                            .any(|(dx, dz)| {
+                                                                let nx = lx + dx;
+                                                                let nz = lz + dz;
+                                                                (0..cs).contains(&nx)
+                                                                    && (0..cs).contains(&nz)
+                                                                    && chunk
+                                                                        .get(
+                                                                            nx as usize,
+                                                                            ly as usize,
+                                                                            nz as usize,
+                                                                        )
+                                                                        .is_air()
+                                                            });
                                                     side_effects.push(
                                                         ChunkSideEffect::Liquid {
                                                             pos: wv,
-                                                            tick_offset: if below_air {
+                                                            tick_offset: if below_air || side_air {
                                                                 lq.tick_period.max(1) as u64
                                                             } else {
                                                                 0

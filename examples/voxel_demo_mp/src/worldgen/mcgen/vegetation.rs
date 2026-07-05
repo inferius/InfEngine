@@ -554,6 +554,12 @@ fn cold_enough_to_snow(mc: McBiome, wx: i32, wy: i32, wz: i32) -> bool {
     height_adjusted_temperature(mc, wx, wy, wz) < 0.15
 }
 
+/// W221: the surface rule's `temperature` condition - the same real
+/// coldEnoughToSnow model, exported for the terrain fill.
+pub(crate) fn cold_enough_to_snow_at(mc: McBiome, wx: i32, wy: i32, wz: i32) -> bool {
+    cold_enough_to_snow(mc, wx, wy, wz)
+}
+
 /// Is `id` a solid-ish floor a snow layer may rest on (MC: sturdy top
 /// face - excludes air, liquids and the passable plants).
 fn snow_supporting(id: u16) -> bool {

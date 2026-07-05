@@ -827,6 +827,11 @@ pub(crate) struct Voxel {
     /// (`render::sky::water_vision_mult`). +20/s underwater, -200/s
     /// surfaced, exactly LocalPlayer.waterVisionTime.
     pub(crate) water_vision_time: f32,
+    /// W221: smoothed sky exposure at the camera (sky light / 15,
+    /// eased over ~0.3s). Darkens the distance fog + clear colour
+    /// underground - MC's caves fade to darkness, not to a glowing
+    /// sky-coloured haze.
+    pub(crate) cave_dark: f32,
     /// W204: every mob's position at the START of the last 20 Hz tick.
     /// The renderer lerps prev -> current by `mob_tick_accum /
     /// MOB_TICK_DT` so mobs glide between ticks instead of stepping

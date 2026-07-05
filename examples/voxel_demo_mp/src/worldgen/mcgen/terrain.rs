@@ -29,6 +29,7 @@ use super::aquifer::{Aquifer, Substance};
 use super::density::CellLattices;
 use super::overworld::{Overworld, build_overworld};
 use super::surface_rule::SurfaceCtx;
+use super::biome::McBiome;
 use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
 use crate::worldgen::{WorldgenCtx, decor, strata};
@@ -52,7 +53,9 @@ pub(crate) struct McCol {
     /// Topmost solid world-Y of the interpolated field (0 = fully open
     /// basin; the bedrock floor still seals the world bottom).
     pub(crate) top: i32,
-    pub(crate) biome: Biome,
+    /// W221: the REAL MC biome - surface rules match its name, the
+    /// legacy fallbacks collapse it via `to_engine()`.
+    pub(crate) mc: McBiome,
     /// W217: the noise-driven soft-layer thickness
     /// (`SurfaceSystem.getSurfaceDepth`), feeding the surface rule's
     /// depth conditions.
@@ -130,7 +133,7 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
     let aquifer = RefCell::new(Aquifer::new(ow, seed, ox, oz));
     let mut solid = Box::new([[[0u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]);
     let mut cols =
-        [[McCol { top: 0, biome: Biome::Plains, surface_depth: 3 }; CHUNK_SIZE]; CHUNK_SIZE];
+        [[McCol { top: 0, mc: McBiome::Plains, surface_depth: 3 }; CHUNK_SIZE]; CHUNK_SIZE];
     for lx in 0..CHUNK_SIZE {
         for lz in 0..CHUNK_SIZE {
             let wx = ox + lx as i32;
@@ -144,7 +147,7 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
             }
             cols[lx][lz] = McCol {
                 top,
-                biome: ow.biome_at(wx, wz),
+                mc: ow.mc_biome_at(wx, wz),
                 surface_depth: ow.surface_depth(wx, wz, seed),
             };
         }
@@ -252,12 +255,6 @@ fn steep_grid(data: &McColumnData) -> [[bool; CHUNK_SIZE]; CHUNK_SIZE] {
     s
 }
 
-/// Cold columns paint MC's frozen surface (snow / ice) via the
-/// `temperature` surface condition. The engine's two snowy biomes stand
-/// in for MC's frozen-temperature columns.
-fn is_frozen(biome: Biome) -> bool {
-    matches!(biome, Biome::Tundra | Biome::SnowyMountain)
-}
 
 /// W213: MC-profile chunk generator, full 3D. Solidity comes from the
 /// cached per-column scan of the CELL-INTERPOLATED `final_density`
@@ -289,7 +286,7 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         if wy > LATTICE_TOP {
             return BlockId::AIR;
         }
-        let McCol { top: h, biome, surface_depth } = data.cols[x][z];
+        let McCol { top: h, mc, surface_depth } = data.cols[x][z];
         if data.is_solid(x, wy, z) {
             // Solid rock. The surface band runs from each solid RUN's
             // top (SurfaceSystem semantics: an air gap - a cave -
@@ -309,8 +306,9 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
                     surface: run_top - SURFACE_BAND,
                     surface_depth,
                     steep: steep[x][z],
-                    frozen: is_frozen(biome),
-                    biome,
+                    // W221: the real per-cell coldEnoughToSnow model.
+                    frozen: super::vegetation::cold_enough_to_snow_at(mc, wx, wy, wz),
+                    mc_name: mc.name(),
                     min_y,
                     max_y,
                 };
@@ -318,6 +316,7 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
                     return BlockId(id);
                 }
             }
+            let biome = mc.to_engine();
             return if wy == h {
                 surface_block(biome, h)
             } else if wy >= h - 3 && depth_above <= 3 {
@@ -426,6 +425,82 @@ mod tests {
             }
         }
         assert!(cave_cells > 50, "no underground open space found: {cave_cells}");
+    }
+
+    /// W221 bug probe: measure the four in-game symptoms across a wide
+    /// area. Run with
+    /// `cargo test dump_w221_bug_probe -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_w221_bug_probe() {
+        let ow = build_overworld(0);
+        let mut holes = 0u32; // surface_depth <= 0 (exposed stone risk)
+        let mut cols = 0u32;
+        let mut dry_bed = 0u32; // depression below sea with AIR above the floor
+        let mut wet_bed = 0u32;
+        let mut snow_on_hot = 0u32; // snow/ice on temp-band>=3 columns
+        let mut depth_hist = [0u32; 9];
+        for ccx in -24..24 {
+            for ccz in -24..24 {
+                let data = column_data_cached(&ow, ccx, ccz, 0);
+                let mut aq = data.aquifer.borrow_mut();
+                for lx in (0..CHUNK_SIZE).step_by(4) {
+                    for lz in (0..CHUNK_SIZE).step_by(4) {
+                        let wx = ccx * 16 + lx as i32;
+                        let wz = ccz * 16 + lz as i32;
+                        cols += 1;
+                        let McCol { top, surface_depth, .. } = data.cols[lx][lz];
+                        depth_hist[surface_depth.clamp(0, 8) as usize] += 1;
+                        if surface_depth <= 0 {
+                            holes += 1;
+                        }
+                        // Depressions below sea level: what does the cell
+                        // just above the floor become?
+                        if top < SEA_LEVEL - 1 && top > 20 {
+                            let y = top + 1;
+                            let d = ow.density_cells(wx, y, wz, &data.cells);
+                            let sub = if y > aq.skip_above_y() {
+                                if y < SEA_LEVEL { Substance::Water } else { Substance::Air }
+                            } else {
+                                aq.substance(&ow, wx, y, wz, d)
+                            };
+                            match sub {
+                                Substance::Air => {
+                                    dry_bed += 1;
+                                    if dry_bed <= 6 {
+                                        let prelim = ow.preliminary_surface(wx, wz);
+                                        let flood = ow.floodedness(wx, y, wz);
+                                        println!(
+                                            "DRY bed at ({wx},{y},{wz}): top {top}, prelim {prelim}, skip {}, floodedness {flood:.3}",
+                                            aq.skip_above_y()
+                                        );
+                                    }
+                                }
+                                Substance::Water => wet_bed += 1,
+                                _ => {}
+                            }
+                        }
+                        // Hot biome (temp band 3-4) with frozen surface?
+                        let mc = ow.mc_biome_at(wx, wz);
+                        let name = mc.name();
+                        if (name == "desert" || name == "savanna")
+                            && crate::worldgen::mcgen::vegetation::height_adjusted_temperature(
+                                mc, wx, top, wz,
+                            ) < 0.15
+                        {
+                            snow_on_hot += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("\n== W221 probe over {cols} columns ==");
+        println!("surface_depth hist (0..8+): {depth_hist:?}");
+        println!("holes (depth<=0): {holes} ({:.1}%)", 100.0 * holes as f32 / cols as f32);
+        println!("sub-sea depressions: wet {wet_bed}, DRY {dry_bed} ({:.1}% dry)",
+            100.0 * dry_bed as f32 / (dry_bed + wet_bed).max(1) as f32);
+        println!("hot-biome frozen columns: {snow_on_hot}");
     }
 
     /// Evidence dump: openness of the interpolated field + aquifer

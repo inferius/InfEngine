@@ -22,7 +22,6 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::noise::NormalNoise;
-use crate::worldgen::biome::Biome;
 
 /// Engine block ids the surface rules place. `grass_block` is the
 /// engine's "grass" (3); `snow_block` is the full opaque cube added in
@@ -85,52 +84,15 @@ fn block_id(name: &str) -> u16 {
     }
 }
 
-/// Map an MC biome name (used in `biome` conditions) to the engine biome
-/// it collapses to, so a condition's biome list can be matched against a
-/// column's engine biome. `None` = no faithful engine equivalent, so the
-/// rule won't fire (the column falls through to a more generic branch).
-///
-/// CRITICAL: only map an MC biome here when we WANT its special surface
-/// on the chosen engine biome. A SPECIAL biome whose unique surface would
-/// bleed onto a generic engine biome (mushroom mycelium, badlands
-/// terracotta, ice-spike packed ice) MUST stay `None` - otherwise its
-/// rule, sitting early in the first-match sequence, hijacks every column
-/// that collapsed to the same engine biome (the mycelium-on-all-plains
-/// bug). Snow on cold biomes comes from the global `temperature`
-/// condition (see [`SurfaceCtx::frozen`]), NOT from a biome list, so the
-/// snowy biomes don't need mapping for snow.
-fn mc_biome_to_engine(name: &str) -> Option<Biome> {
-    use Biome::*;
-    Some(match name.strip_prefix("minecraft:").unwrap_or(name) {
-        // Desert -> sand + sandstone strata.
-        "desert" => Desert,
-        // Beach / snowy beach -> sandy shore (snow added by temperature).
-        "beach" | "snowy_beach" => Beach,
-        // Swamp + mangrove -> the surface_swamp water/mud rule.
-        "swamp" | "mangrove_swamp" => Swamp,
-        // Windswept + stony peaks -> stone/gravel faces via surface noise.
-        "windswept_hills" | "windswept_gravelly_hills" | "windswept_forest" | "stony_peaks" => {
-            Mountain
-        }
-        // Snowy peaks / grove -> SnowyMountain (snow via temperature too).
-        "frozen_peaks" | "jagged_peaks" | "snowy_slopes" | "grove" => SnowyMountain,
-        // Snowy plains family -> Tundra.
-        "snowy_plains" | "snowy_taiga" => Tundra,
-        // Old-growth taiga -> podzol / coarse-dirt surface.
-        "taiga" | "old_growth_pine_taiga" | "old_growth_spruce_taiga" => Taiga,
-        // Temperate defaults (these use MC's GLOBAL grass default; mapped
-        // only so an explicit biome rule, if any, still matches).
-        "jungle" | "bamboo_jungle" | "sparse_jungle" => Jungle,
-        "savanna" | "savanna_plateau" | "windswept_savanna" => Savanna,
-        "forest" | "flower_forest" | "birch_forest" | "dark_forest" => Forest,
-        "plains" | "sunflower_plains" | "meadow" => Plains,
-        // No faithful engine analog -> DON'T fire their special surface:
-        // badlands (terracotta), mushroom_fields (mycelium), ice_spikes
-        // (packed ice), oceans (seabed handled by the default underwater
-        // branch), caves, the_void, etc.
-        _ => return None,
-    })
-}
+// W221: biome conditions match the REAL MC biome name carried by the
+// column (`SurfaceCtx::mc_name`, from `McBiome::name()`), NOT the lossy
+// engine collapse. The pre-W211 collapse mapping made every rule of a
+// SPECIAL biome fire on every column sharing its engine bucket - the
+// user-visible "gravel plains" (windswept_gravelly_hills hijacking all
+// Mountain columns) and "snow on desert beaches" (snowy_beach hijacking
+// every Beach). With name matching, rules for biomes the classifier
+// never emits (badlands, mushroom_fields, stony_shore...) simply never
+// fire, exactly like MC with those regions absent.
 
 /// A vertical anchor (`{above_bottom|absolute|below_top: N}`), resolved
 /// against the world's `min_y` / top.
@@ -164,7 +126,9 @@ impl VAnchor {
 
 /// A surface-rule condition (the `if_true` of a `condition` node).
 enum Cond {
-    Biome(Vec<Biome>),
+    /// `biome_is` - MC registry name stems, matched against the
+    /// column's real [`SurfaceCtx::mc_name`].
+    Biome(Vec<String>),
     NoiseThreshold { noise: Arc<NormalNoise>, min: f64, max: f64 },
     StoneDepth { offset: i32, ceiling: bool, add_surface_depth: bool, secondary: i32 },
     Water { offset: i32, mult: i32, add_stone_depth: bool },
@@ -209,9 +173,11 @@ pub(crate) struct SurfaceCtx {
     pub surface_depth: i32,
     /// True where the terrain is steep (used for gravel/stone faces).
     pub steep: bool,
-    /// True in cold columns (temperature condition / ice).
+    /// True where this CELL is cold enough to snow (the `temperature`
+    /// condition - the real height-adjusted model, W221).
     pub frozen: bool,
-    pub biome: Biome,
+    /// The column's MC biome registry name (`McBiome::name()`).
+    pub mc_name: &'static str,
     pub min_y: i32,
     pub max_y: i32,
 }
@@ -277,7 +243,7 @@ fn parse_cond(v: &Value, nr: &dyn Fn(&str) -> Option<Arc<NormalNoise>>) -> Cond 
                 .map(|a| {
                     a.iter()
                         .filter_map(Value::as_str)
-                        .filter_map(mc_biome_to_engine)
+                        .map(|s| s.strip_prefix("minecraft:").unwrap_or(s).to_string())
                         .collect()
                 })
                 .unwrap_or_default();
@@ -356,7 +322,7 @@ fn eval_rule(rule: &Rule, ctx: &SurfaceCtx) -> Option<u16> {
 
 fn eval_cond(cond: &Cond, ctx: &SurfaceCtx) -> bool {
     match cond {
-        Cond::Biome(list) => list.contains(&ctx.biome),
+        Cond::Biome(list) => list.iter().any(|n| n == ctx.mc_name),
         Cond::NoiseThreshold { noise, min, max } => {
             // MC samples surface noises at (x, 0, z) (xz-only).
             let n = noise.value(ctx.x as f64, 0.0, ctx.z as f64);
@@ -425,19 +391,19 @@ mod tests {
         s["surface_rule"].clone()
     }
 
-    fn ctx(y: i32, biome: Biome) -> SurfaceCtx {
+    fn ctx(y: i32, mc_name: &'static str) -> SurfaceCtx {
         SurfaceCtx {
             x: 0,
             y,
             z: 0,
             stone_depth_above: 0,
-            stone_depth_below: 0,
+            stone_depth_below: i32::MAX / 2, // the fill's no-ceiling default
             water_height: 63,
             surface: 70,
             surface_depth: 3,
             steep: false,
             frozen: false,
-            biome,
+            mc_name,
             min_y: -64,
             max_y: 320,
         }
@@ -451,7 +417,7 @@ mod tests {
         let sr = SurfaceRules::parse(&rules_json(), &nr);
         // A grassy land surface (top solid, above water, above
         // preliminary surface) should resolve to grass_block.
-        let mut c = ctx(70, Biome::Plains);
+        let mut c = ctx(70, "plains");
         c.surface = 70;
         let got = sr.eval(&c);
         assert_eq!(got, Some(ids::GRASS_BLOCK), "plains surface should be grass, got {got:?}");
@@ -459,19 +425,41 @@ mod tests {
 
     #[test]
     fn snowy_mountain_surface_is_snow() {
-        // The snowy peaks (frozen_peaks / snowy_slopes / jagged_peaks /
-        // grove all collapse to SnowyMountain) must paint a snow_block
-        // surface, not green grass - the user's "cold biomes are green"
-        // complaint. With no noise resolver the powder_snow branch is
-        // skipped, so the snow_block default wins.
+        // Snowy slopes must paint a snow_block surface, not green grass
+        // - the user's "cold biomes are green" complaint. With no noise
+        // resolver the powder_snow branch is skipped, so the snow_block
+        // default wins. The frozen flag models coldEnoughToSnow there.
         let nr = |_: &str| None;
         let sr = SurfaceRules::parse(&rules_json(), &nr);
-        let c = ctx(80, Biome::SnowyMountain);
+        let mut c = ctx(80, "snowy_slopes");
+        c.frozen = true;
         assert_eq!(
             sr.eval(&c),
             Some(ids::SNOW_BLOCK),
-            "snowy mountain surface should be a snow block"
+            "snowy slopes surface should be a snow block"
         );
+    }
+
+    /// W221: the anti-bleed guarantee that replaced the collapse map. A
+    /// plain Beach column must NOT take the snowy_beach snow surface,
+    /// and a windswept_hills column must NOT take the gravelly variant
+    /// (the user's gravel plains / snowy desert coast screenshots).
+    #[test]
+    fn special_biome_rules_do_not_bleed() {
+        let nr = |_: &str| None;
+        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let mut beach = ctx(64, "beach");
+        beach.water_height = i32::MIN;
+        beach.surface = 64;
+        let got = sr.eval(&beach);
+        assert_ne!(got, Some(ids::SNOW_BLOCK), "warm beach must not take snowy_beach snow");
+        assert_eq!(got, Some(ids::SAND), "beach surface is sand, got {got:?}");
+        let mut hills = ctx(90, "windswept_hills");
+        hills.water_height = i32::MIN;
+        hills.surface = 90;
+        // With no noise resolver the windswept noise branches skip; the
+        // point is the GRAVELLY variant's rule can't fire by name.
+        assert_ne!(sr.eval(&hills), Some(ids::GRAVEL));
     }
 
     #[test]
@@ -480,21 +468,14 @@ mod tests {
         let sr = SurfaceRules::parse(&rules_json(), &nr);
         // The first rule is the bedrock floor (vertical_gradient near
         // min_y). At the very bottom it should always be bedrock.
-        let c = ctx(-64, Biome::Plains);
+        let c = ctx(-64, "plains");
         assert_eq!(sr.eval(&c), Some(ids::BEDROCK));
     }
 
     #[test]
-    fn block_and_biome_maps_resolve() {
+    fn block_map_resolves() {
         assert_eq!(block_id("minecraft:grass_block"), ids::GRASS_BLOCK);
         assert_eq!(block_id("minecraft:gravel"), ids::GRAVEL);
         assert_eq!(block_id("minecraft:red_sandstone"), ids::RED_SANDSTONE);
-        assert_eq!(mc_biome_to_engine("minecraft:desert"), Some(Biome::Desert));
-        assert_eq!(mc_biome_to_engine("minecraft:frozen_peaks"), Some(Biome::SnowyMountain));
-        // Special biomes with no faithful engine analog must NOT map, or
-        // their unique surface hijacks a generic engine biome.
-        assert_eq!(mc_biome_to_engine("minecraft:mushroom_fields"), None);
-        assert_eq!(mc_biome_to_engine("minecraft:badlands"), None);
-        assert_eq!(mc_biome_to_engine("minecraft:warm_ocean"), None);
     }
 }

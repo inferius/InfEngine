@@ -1547,6 +1547,32 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             vx.water_vision_time = (vx.water_vision_time - dt * 200.0).max(0.0);
         }
+        // W221: sky exposure at the camera - underground the distance
+        // fog + clear colour fade toward darkness instead of glowing
+        // sky-blue (the user's "light shining from the fog in caves").
+        // Eased so cave entrances don't pop.
+        {
+            let p = [eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32];
+            let cs = infengine_voxel::CHUNK_SIZE as i32;
+            let cc = [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)];
+            let sky = vx
+                .lighting
+                .grids
+                .get(&cc)
+                .map(|g| {
+                    g.get_sky([
+                        p[0].rem_euclid(cs) as u32,
+                        p[1].rem_euclid(cs) as u32,
+                        p[2].rem_euclid(cs) as u32,
+                    ])
+                })
+                .unwrap_or(15);
+            // Floor 0.04: pitch-black fog reads as a render hole; MC's
+            // cave horizon keeps a whisper of tint.
+            let target = (sky as f32 / 15.0).max(0.04);
+            let ease = (dt * 3.0).min(1.0);
+            vx.cave_dark += (target - vx.cave_dark) * ease;
+        }
         let water_vision =
             crate::render::sky::water_vision_mult(vx.water_vision_time);
         // W212: the biome's water_fog_color at the camera - only worth
@@ -1575,6 +1601,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             underwater,
             water_vision,
             water_fog,
+            vx.cave_dark,
             in_nether,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());

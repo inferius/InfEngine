@@ -39,6 +39,10 @@ pub(crate) fn apply_tint_and_fog(
     // W212: the biome's water_fog_color at the camera (Mc profile);
     // None = MC's default 0x050533. Ignored unless `underwater`.
     water_fog: Option<[f32; 3]>,
+    // W221: smoothed sky exposure at the camera (0.04..1). Scales the
+    // fog + clear colour so caves fade to darkness, not to a glowing
+    // sky-coloured haze.
+    sky_exposure: f32,
     // W155: nether mode - the dim is roofed, so the "sky" is a red
     // haze with shorter fog instead of the blue distance band.
     in_nether: bool,
@@ -93,16 +97,23 @@ pub(crate) fn apply_tint_and_fog(
         // W212: the fog colour is the biome's WATER_FOG_COLOR attribute
         // (warm-ocean teal, swamp brown-green); the default 0x050533
         // covers non-Mc profiles.
-        let murk = water_fog.unwrap_or([
+        let mut murk = water_fog.unwrap_or([
             0x05 as f32 / 255.0,
             0x05 as f32 / 255.0,
             0x33 as f32 / 255.0,
         ]);
+        // W221: submerged in a dark cave lake the murk darkens too.
+        for c in &mut murk {
+            *c *= sky_exposure;
+        }
         renderer.set_clear_color(murk[0] as f64, murk[1] as f64, murk[2] as f64, 1.0);
         renderer.set_fog(-8.0, 96.0 * water_vision.clamp(0.25, 1.0), murk);
         return sky;
     }
-    renderer.set_clear_color(sky[0] as f64, sky[1] as f64, sky[2] as f64, 1.0);
+    // W221: underground the horizon is darkness, not glowing sky - the
+    // fog + clear colour scale with the camera's sky exposure.
+    let dark = [sky[0] * sky_exposure, sky[1] * sky_exposure, sky[2] * sky_exposure];
+    renderer.set_clear_color(dark[0] as f64, dark[1] as f64, dark[2] as f64, 1.0);
     // W30.5: distance fog. Start fading 2 chunks before the view edge,
     // reach full sky colour 0.5 chunks before the load boundary. Hides
     // the hard pop-clip at view_distance edges.
@@ -110,7 +121,7 @@ pub(crate) fn apply_tint_and_fog(
     let vd = view_distance_chunks as f32;
     let fog_start = (vd - 2.0).max(0.0) * cs;
     let fog_end = vd * cs * 0.95;
-    renderer.set_fog(fog_start, fog_end, [sky[0], sky[1], sky[2]]);
+    renderer.set_fog(fog_start, fog_end, dark);
     sky
 }
 

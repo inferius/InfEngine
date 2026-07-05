@@ -318,6 +318,7 @@ impl Voxel {
             liquid_tick_accum: 0.0,
             mob_tick_accum: 0.0,
             water_vision_time: 0.0,
+            cave_dark: 1.0,
             mob_prev_pos: HashMap::new(),
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
