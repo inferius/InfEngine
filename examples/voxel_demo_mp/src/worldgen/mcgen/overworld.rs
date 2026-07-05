@@ -185,7 +185,10 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
 
     let nr = &settings["noise_router"];
     let noise_res_ref = &noise_res as &NoiseResolver<'_>;
-    let p = |key: &str| parse(&nr[key], &df_res, noise_res_ref);
+    // W216: old_blended_noise's legacy octave stacks seed off the world
+    // seed like every other channel.
+    let blended_seed = noise_seed(seed, "old_blended_noise");
+    let p = |key: &str| parse(&nr[key], &df_res, noise_res_ref, blended_seed);
     let mut final_density = p("final_density");
     // W213: number the `interpolated` subtrees so the terrain stage can
     // build one corner lattice per node and sample with MC's cell
@@ -290,7 +293,7 @@ mod tests {
             "overworld/sloped_cheese",
         ] {
             let v = df_res(name).expect("df json");
-            let d = parse(&v, &df_res, noise_ref);
+            let d = parse(&v, &df_res, noise_ref, 12345);
             let samples: Vec<f64> = [(0, 30, 0), (100, 20, -50), (-200, 40, 300), (37, 25, 941)]
                 .iter()
                 .map(|&(x, y, z)| d.eval(x as f64, y as f64, z as f64))

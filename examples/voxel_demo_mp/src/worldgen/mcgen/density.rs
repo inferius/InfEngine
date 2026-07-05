@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::noise::{NoiseParams, NormalNoise};
+use super::noise::{ImprovedNoise, NoiseParams, NormalNoise, SplitMix64};
 
 /// Resolves a density-function name (e.g. `"minecraft:overworld/depth"`)
 /// to its JSON definition. The terrain stage backs this with the
@@ -494,34 +494,99 @@ impl Df {
     }
 }
 
-/// MC `BlendedNoise` (old_blended_noise): three Perlin stacks
-/// (min-limit, max-limit, main) combined into the 3D base terrain
-/// detail. Ported faithfully from `BlendedNoise.compute`.
+/// W216: MC `BlendedNoise` (old_blended_noise), ported EXACTLY from the
+/// decompiled `BlendedNoise.compute`: three legacy Perlin stacks - two
+/// 16-octave limit noises and an 8-octave main noise - where octave `i`
+/// samples at frequency `2^-i` (coarser octaves get LARGER weight via
+/// the `/pow`), coordinates wrap at +-16.7M for double precision, every
+/// octave uses the Y-SMEARED 5-arg noise (`smear_scale_multiplier`),
+/// and the main noise picks the blend factor between the two limits
+/// (`clampedLerp(main/10/2+0.5, min/512, max/512) / 128`). The is_max /
+/// is_min shortcuts skip whole stacks exactly like MC.
 pub(crate) struct BlendedNoise {
-    min_limit: Arc<NormalNoise>,
-    max_limit: Arc<NormalNoise>,
-    main: Arc<NormalNoise>,
-    xz_scale: f64,
-    y_scale: f64,
+    min_limit: Vec<ImprovedNoise>,
+    max_limit: Vec<ImprovedNoise>,
+    main: Vec<ImprovedNoise>,
+    xz_multiplier: f64,
+    y_multiplier: f64,
     xz_factor: f64,
     y_factor: f64,
     smear: f64,
 }
 
+/// `PerlinNoise.wrap` - keep octave inputs within +-16.7M so the
+/// double mantissa keeps sub-block precision far from spawn.
+fn wrap(v: f64) -> f64 {
+    v - (v / 3.3554432e7 + 0.5).floor() * 3.3554432e7
+}
+
 impl BlendedNoise {
+    fn new(seed: u64, xz_scale: f64, y_scale: f64, xz_factor: f64, y_factor: f64, smear: f64) -> Self {
+        let mut rng = SplitMix64::new(seed);
+        let stack = |rng: &mut SplitMix64, n: usize| -> Vec<ImprovedNoise> {
+            (0..n).map(|_| ImprovedNoise::new(rng)).collect()
+        };
+        BlendedNoise {
+            min_limit: stack(&mut rng, 16),
+            max_limit: stack(&mut rng, 16),
+            main: stack(&mut rng, 8),
+            xz_multiplier: 684.412 * xz_scale,
+            y_multiplier: 684.412 * y_scale,
+            xz_factor,
+            y_factor,
+            smear,
+        }
+    }
+
     fn eval(&self, x: f64, y: f64, z: f64) -> f64 {
-        // MC scales the input by a fixed 684.412 * the per-axis scale.
-        let xz = 684.412 * self.xz_scale;
-        let ys = 684.412 * self.y_scale;
-        let mx = xz / self.xz_factor;
-        let my = ys / self.y_factor;
-        let main = self.main.value(x * mx, y * my, z * mx);
-        // Blend factor in [0,1] from the main noise (smeared).
-        let t = ((main / 10.0 + 1.0) / 2.0).clamp(0.0, 1.0);
-        let lo = self.min_limit.value(x * xz, y * ys, z * xz) / 512.0;
-        let hi = self.max_limit.value(x * xz, y * ys, z * xz) / 512.0;
-        let _ = self.smear;
-        (lo + (hi - lo) * t) / 128.0
+        let limit_x = x * self.xz_multiplier;
+        let limit_y = y * self.y_multiplier;
+        let limit_z = z * self.xz_multiplier;
+        let main_x = limit_x / self.xz_factor;
+        let main_y = limit_y / self.y_factor;
+        let main_z = limit_z / self.xz_factor;
+        let limit_smear = self.y_multiplier * self.smear;
+        let main_smear = limit_smear / self.y_factor;
+        let mut main_v = 0.0;
+        let mut pow = 1.0;
+        for n in &self.main {
+            main_v += n.noise_smeared(
+                wrap(main_x * pow),
+                wrap(main_y * pow),
+                wrap(main_z * pow),
+                main_smear * pow,
+                main_y * pow,
+            ) / pow;
+            pow /= 2.0;
+        }
+        let factor = (main_v / 10.0 + 1.0) / 2.0;
+        let is_max = factor >= 1.0;
+        let is_min = factor <= 0.0;
+        let mut lo = 0.0;
+        let mut hi = 0.0;
+        pow = 1.0;
+        for i in 0..16 {
+            let wx = wrap(limit_x * pow);
+            let wy = wrap(limit_y * pow);
+            let wz = wrap(limit_z * pow);
+            let ys = limit_smear * pow;
+            if !is_max {
+                lo += self.min_limit[i].noise_smeared(wx, wy, wz, ys, limit_y * pow) / pow;
+            }
+            if !is_min {
+                hi += self.max_limit[i].noise_smeared(wx, wy, wz, ys, limit_y * pow) / pow;
+            }
+            pow /= 2.0;
+        }
+        // Mth.clampedLerp(factor, min, max).
+        let blended = if factor < 0.0 {
+            lo / 512.0
+        } else if factor > 1.0 {
+            hi / 512.0
+        } else {
+            lo / 512.0 + factor * (hi / 512.0 - lo / 512.0)
+        };
+        blended / 128.0
     }
 }
 
@@ -540,22 +605,23 @@ fn field<'a>(o: &'a Value, k: &str) -> Option<&'a Value> {
 /// Parse a JSON value into a [`Df`]. A bare number is a constant; a
 /// bare string is a density-function reference (resolved + parsed);
 /// an object dispatches on `"type"`. `df` resolves named functions,
-/// `noises` resolves named noises.
-pub(crate) fn parse(v: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
+/// `noises` resolves named noises, `blended_seed` seeds
+/// `old_blended_noise`'s legacy octave stacks (world-seed derived).
+pub(crate) fn parse(v: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended_seed: u64) -> Df {
     match v {
         Value::Number(n) => Df::Const(n.as_f64().unwrap_or(0.0)),
         Value::String(s) => match df(s) {
-            Some(inner) => parse(&inner, df, noises),
+            Some(inner) => parse(&inner, df, noises, blended_seed),
             None => Df::Const(0.0),
         },
-        Value::Object(_) => parse_obj(v, df, noises),
+        Value::Object(_) => parse_obj(v, df, noises, blended_seed),
         _ => Df::Const(0.0),
     }
 }
 
-fn boxed(v: Option<&Value>, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Box<Df> {
+fn boxed(v: Option<&Value>, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended_seed: u64) -> Box<Df> {
     Box::new(match v {
-        Some(val) => parse(val, df, noises),
+        Some(val) => parse(val, df, noises, blended_seed),
         None => Df::Const(0.0),
     })
 }
@@ -567,12 +633,12 @@ fn noise_of(o: &Value, key: &str, noises: &NoiseResolver<'_>) -> Arc<NormalNoise
     })
 }
 
-fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
+fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended_seed: u64) -> Df {
     let ty = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let ty = ty.strip_prefix("minecraft:").unwrap_or(ty);
-    let a1 = || boxed(o.get("argument1"), df, noises);
-    let a2 = || boxed(o.get("argument2"), df, noises);
-    let arg = || boxed(o.get("argument"), df, noises);
+    let a1 = || boxed(o.get("argument1"), df, noises, blended_seed);
+    let a2 = || boxed(o.get("argument2"), df, noises, blended_seed);
+    let arg = || boxed(o.get("argument"), df, noises, blended_seed);
     match ty {
         "add" => Df::Add(a1(), a2()),
         "mul" => Df::Mul(a1(), a2()),
@@ -586,13 +652,13 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
         "squeeze" => Df::Squeeze(arg()),
         "invert" => Df::Invert(arg()),
         "find_top_surface" => Df::FindTopSurface {
-            density: boxed(o.get("density"), df, noises),
-            upper: boxed(o.get("upper_bound"), df, noises),
+            density: boxed(o.get("density"), df, noises, blended_seed),
+            upper: boxed(o.get("upper_bound"), df, noises, blended_seed),
             lower: field(o, "lower_bound").map(num).unwrap_or(-64.0) as i32,
             cell_h: (field(o, "cell_height").map(num).unwrap_or(8.0) as i32).max(1),
         },
         "clamp" => Df::Clamp {
-            input: boxed(o.get("input"), df, noises),
+            input: boxed(o.get("input"), df, noises, blended_seed),
             min: field(o, "min").map(num).unwrap_or(0.0),
             max: field(o, "max").map(num).unwrap_or(0.0),
         },
@@ -603,11 +669,11 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
             to_v: field(o, "to_value").map(num).unwrap_or(0.0),
         },
         "range_choice" => Df::RangeChoice {
-            input: boxed(o.get("input"), df, noises),
+            input: boxed(o.get("input"), df, noises, blended_seed),
             min_inc: field(o, "min_inclusive").map(num).unwrap_or(0.0),
             max_exc: field(o, "max_exclusive").map(num).unwrap_or(0.0),
-            when_in: boxed(o.get("when_in_range"), df, noises),
-            when_out: boxed(o.get("when_out_of_range"), df, noises),
+            when_in: boxed(o.get("when_in_range"), df, noises, blended_seed),
+            when_out: boxed(o.get("when_out_of_range"), df, noises, blended_seed),
         },
         "noise" => Df::Noise {
             noise: noise_of(o, "noise", noises),
@@ -616,28 +682,25 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
         },
         "shifted_noise" => Df::ShiftedNoise {
             noise: noise_of(o, "noise", noises),
-            sx: boxed(o.get("shift_x"), df, noises),
-            sy: boxed(o.get("shift_y"), df, noises),
-            sz: boxed(o.get("shift_z"), df, noises),
+            sx: boxed(o.get("shift_x"), df, noises, blended_seed),
+            sy: boxed(o.get("shift_y"), df, noises, blended_seed),
+            sz: boxed(o.get("shift_z"), df, noises, blended_seed),
             xz: field(o, "xz_scale").map(num).unwrap_or(1.0),
             y: field(o, "y_scale").map(num).unwrap_or(1.0),
         },
         "shift_a" => Df::ShiftA(noise_of(o, "argument", noises)),
         "shift_b" => Df::ShiftB(noise_of(o, "argument", noises)),
-        "spline" => parse_spline(o, df, noises),
-        "old_blended_noise" => Df::BlendedNoise(Box::new(BlendedNoise {
-            // The 3D base noise uses three fixed-config Perlin stacks.
-            // We seed them off the registry's "minecraft:terrain" entry
-            // if present, else a default broadband stack.
-            min_limit: noise_or_default(noises, "minecraft:terrain", 0x10),
-            max_limit: noise_or_default(noises, "minecraft:terrain", 0x20),
-            main: noise_or_default(noises, "minecraft:terrain", 0x30),
-            xz_scale: field(o, "xz_scale").map(num).unwrap_or(1.0),
-            y_scale: field(o, "y_scale").map(num).unwrap_or(1.0),
-            xz_factor: field(o, "xz_factor").map(num).unwrap_or(80.0),
-            y_factor: field(o, "y_factor").map(num).unwrap_or(160.0),
-            smear: field(o, "smear_scale_multiplier").map(num).unwrap_or(8.0),
-        })),
+        "spline" => parse_spline(o, df, noises, blended_seed),
+        // W216: the exact legacy blended noise, seeded from the world
+        // seed (the scales come from base_3d_noise.json).
+        "old_blended_noise" => Df::BlendedNoise(Box::new(BlendedNoise::new(
+            blended_seed,
+            field(o, "xz_scale").map(num).unwrap_or(0.25),
+            field(o, "y_scale").map(num).unwrap_or(0.125),
+            field(o, "xz_factor").map(num).unwrap_or(80.0),
+            field(o, "y_factor").map(num).unwrap_or(160.0),
+            field(o, "smear_scale_multiplier").map(num).unwrap_or(8.0),
+        ))),
         // Caching / blending: value == inner argument for a
         // single-pass generator.
         "cache_2d" | "cache_once" | "cache_all_in_cell" | "flat_cache"
@@ -649,7 +712,7 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
         "blend_offset" => Df::Const(0.0),
         // W213: exact WeirdScaledSampler (rarity-quantized |noise|).
         "weird_scaled_sampler" => Df::WeirdScaled {
-            input: boxed(o.get("input"), df, noises),
+            input: boxed(o.get("input"), df, noises, blended_seed),
             noise: noise_of(o, "noise", noises),
             type2: o.get("rarity_value_mapper").and_then(|v| v.as_str()) == Some("type_2"),
         },
@@ -657,25 +720,20 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
     }
 }
 
-fn noise_or_default(noises: &NoiseResolver<'_>, name: &str, salt: u64) -> Arc<NormalNoise> {
-    match noises(name) {
-        Some(n) => n,
-        None => Arc::new(NormalNoise::new(
-            salt,
-            &NoiseParams { first_octave: -15, amplitudes: vec![1.0; 16] },
-        )),
-    }
-}
-
-fn parse_spline(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Df {
+fn parse_spline(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended_seed: u64) -> Df {
     // A spline node is either {type:spline, spline:{coordinate, points}}
     // or the inner spline object directly.
     let s = o.get("spline").unwrap_or(o);
-    Df::Spline(parse_spline_inner(s, df, noises))
+    Df::Spline(parse_spline_inner(s, df, noises, blended_seed))
 }
 
-fn parse_spline_inner(s: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>) -> Spline {
-    let coordinate = boxed(s.get("coordinate"), df, noises);
+fn parse_spline_inner(
+    s: &Value,
+    df: &DfResolver<'_>,
+    noises: &NoiseResolver<'_>,
+    blended_seed: u64,
+) -> Spline {
+    let coordinate = boxed(s.get("coordinate"), df, noises, blended_seed);
     let mut points = Vec::new();
     if let Some(arr) = s.get("points").and_then(|v| v.as_array()) {
         for p in arr {
@@ -686,7 +744,7 @@ fn parse_spline_inner(s: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>
                 Some(v @ Value::Object(_)) => {
                     // Nested spline (its own coordinate + points).
                     let inner = v.get("spline").unwrap_or(v);
-                    SplineValue::Spline(Box::new(parse_spline_inner(inner, df, noises)))
+                    SplineValue::Spline(Box::new(parse_spline_inner(inner, df, noises, blended_seed)))
                 }
                 _ => SplineValue::Const(0.0),
             };
@@ -710,7 +768,7 @@ mod tests {
 
     fn parse_str(j: &str) -> Df {
         let v: Value = serde_json::from_str(j).unwrap();
-        parse(&v, &no_df, &no_noise)
+        parse(&v, &no_df, &no_noise, 0)
     }
 
     #[test]
@@ -783,11 +841,11 @@ mod tests {
             }
         }
         let v: Value = serde_json::json!("minecraft:overworld/depth");
-        let d = parse(&v, &resolver, &no_noise);
+        let d = parse(&v, &resolver, &no_noise, 0);
         assert_eq!(d.eval(0., 0., 0.), 0.5);
         // Unknown ref -> Const(0), never panics.
         let u: Value = serde_json::json!("minecraft:nope");
-        assert_eq!(parse(&u, &resolver, &no_noise).eval(0., 0., 0.), 0.0);
+        assert_eq!(parse(&u, &resolver, &no_noise, 0).eval(0., 0., 0.), 0.0);
     }
 
     #[test]

@@ -117,6 +117,15 @@ impl ImprovedNoise {
 
     /// Improved-Perlin value at `(x, y, z)`, output in ~[-1, 1].
     pub(crate) fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.noise_smeared(x, y, z, 0.0, 0.0)
+    }
+
+    /// W216: MC's 5-arg `ImprovedNoise.noise` - the Y coordinate fed to
+    /// the GRADIENTS is quantized down by `y_scale` (capped at
+    /// `y_fudge`), which vertically smears the noise; the fade weight
+    /// keeps the raw Y. This is what gives `old_blended_noise` its
+    /// terraced terrain body (smear_scale_multiplier).
+    pub(crate) fn noise_smeared(&self, x: f64, y: f64, z: f64, y_scale: f64, y_fudge: f64) -> f64 {
         let fx = x + self.xo;
         let fy = y + self.yo;
         let fz = z + self.zo;
@@ -124,10 +133,16 @@ impl ImprovedNoise {
         let yi = fy.floor() as i32;
         let zi = fz.floor() as i32;
         let xf = fx - xi as f64;
-        let yf = fy - yi as f64;
+        let y_raw = fy - yi as f64;
         let zf = fz - zi as f64;
+        let yf = if y_scale != 0.0 {
+            let limit = if y_fudge >= 0.0 && y_fudge < y_raw { y_fudge } else { y_raw };
+            y_raw - ((limit / y_scale + 1.0e-7).floor() * y_scale)
+        } else {
+            y_raw
+        };
         let u = fade(xf);
-        let v = fade(yf);
+        let v = fade(y_raw);
         let w = fade(zf);
         // Hash the 8 cube corners through the permutation.
         let a = self.p(xi) as i32 + yi;
