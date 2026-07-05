@@ -1,0 +1,142 @@
+{
+ "bamboo_jungle": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "beach": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "birch_forest": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "cold_ocean": {
+  "water": 4020182,
+  "fog": 329011
+ },
+ "dark_forest": {
+  "water": 4159204,
+  "fog": 5597568
+ },
+ "deep_cold_ocean": {
+  "water": 4020182,
+  "fog": 329011
+ },
+ "deep_frozen_ocean": {
+  "water": 3750089,
+  "fog": 329011
+ },
+ "deep_lukewarm_ocean": {
+  "water": 4566514,
+  "fog": 267827
+ },
+ "deep_ocean": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "desert": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "flower_forest": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "forest": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "frozen_ocean": {
+  "water": 3750089,
+  "fog": 329011
+ },
+ "frozen_river": {
+  "water": 3750089,
+  "fog": 329011
+ },
+ "ice_spikes": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "jungle": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "lukewarm_ocean": {
+  "water": 4566514,
+  "fog": 267827
+ },
+ "mangrove_swamp": {
+  "water": 3832426,
+  "fog": 5077600
+ },
+ "ocean": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "old_growth_birch_forest": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "old_growth_pine_taiga": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "old_growth_spruce_taiga": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "plains": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "river": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "savanna": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "snowy_beach": {
+  "water": 4020182,
+  "fog": 329011
+ },
+ "snowy_plains": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "snowy_slopes": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "snowy_taiga": {
+  "water": 4020182,
+  "fog": 329011
+ },
+ "sparse_jungle": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "sunflower_plains": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "swamp": {
+  "water": 6388580,
+  "fog": 2302743
+ },
+ "taiga": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "warm_ocean": {
+  "water": 4445678,
+  "fog": 270131
+ },
+ "windswept_hills": {
+  "water": 4159204,
+  "fog": 329011
+ }
+}

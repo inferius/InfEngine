@@ -36,6 +36,9 @@ pub(crate) fn apply_tint_and_fog(
     // visibility grows the longer the eye stays submerged (see
     // `water_vision_mult`). Ignored unless `underwater`.
     water_vision: f32,
+    // W212: the biome's water_fog_color at the camera (Mc profile);
+    // None = MC's default 0x050533. Ignored unless `underwater`.
+    water_fog: Option<[f32; 3]>,
     // W155: nether mode - the dim is roofed, so the "sky" is a red
     // haze with shorter fog instead of the blue distance band.
     in_nether: bool,
@@ -86,14 +89,15 @@ pub(crate) fn apply_tint_and_fog(
         // (EnvironmentAttributes + WaterFogEnvironment): start -8,
         // end 96 * waterVision. The old hardcoded 0.5..22 band capped
         // underwater visibility at ~1.4 chunks regardless of the view
-        // distance - a quarter of MC's fully-adjusted 96. The fog
-        // colour is MC's default water_fog_color 0x050533 (the biome
-        // attribute; per-biome values are a later data pass).
-        let murk = [
+        // distance - a quarter of MC's fully-adjusted 96.
+        // W212: the fog colour is the biome's WATER_FOG_COLOR attribute
+        // (warm-ocean teal, swamp brown-green); the default 0x050533
+        // covers non-Mc profiles.
+        let murk = water_fog.unwrap_or([
             0x05 as f32 / 255.0,
             0x05 as f32 / 255.0,
             0x33 as f32 / 255.0,
-        ];
+        ]);
         renderer.set_clear_color(murk[0] as f64, murk[1] as f64, murk[2] as f64, 1.0);
         renderer.set_fog(-8.0, 96.0 * water_vision.clamp(0.25, 1.0), murk);
         return sky;

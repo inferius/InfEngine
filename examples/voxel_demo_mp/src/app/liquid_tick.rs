@@ -463,9 +463,23 @@ impl Voxel {
                     }
                 }
             }
+            // W212: the water tint is the chunk's MC biome water colour
+            // (sampled once per rebuild at the chunk centre - warm ocean
+            // turquoise, swamp murk, frozen ocean steel-blue). Non-Mc
+            // profiles keep the BLOCK_TYPES water blue. Lava's texture
+            // is fully coloured, so it always tints white (W200).
+            let ctx = self.current_worldgen_ctx();
+            let water_tint = if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+                let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(&ctx, bx + 8, bz + 8);
+                crate::worldgen::mcgen::colors::water_color(mc)
+            } else {
+                crate::block::block_type(crate::block::WATER_ID)
+                    .map(|bt| bt.color)
+                    .unwrap_or([1.0, 1.0, 1.0])
+            };
             let renderer = self.renderer.as_mut().expect("renderer ready");
             if let Some(old) = self.liquid_mesh_handles.remove(&cc) {
-                for (_, h) in old {
+                for (_, h, _) in old {
                     renderer.remove_mesh(h);
                 }
             }
@@ -487,7 +501,14 @@ impl Voxel {
                 if liquid_id == crate::block::WATER_ID {
                     renderer.set_mesh_transparent(h, true);
                 }
-                handles.push((liquid_id, h));
+                let tint = match liquid_id {
+                    crate::block::WATER_ID => water_tint,
+                    crate::block::LAVA_ID => [1.0, 1.0, 1.0],
+                    other => crate::block::block_type(other)
+                        .map(|bt| bt.color)
+                        .unwrap_or([1.0, 1.0, 1.0]),
+                };
+                handles.push((liquid_id, h, tint));
             }
             if handles.is_empty() {
                 self.liquid_mesh_handles.remove(&cc);

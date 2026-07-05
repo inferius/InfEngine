@@ -440,7 +440,7 @@ fn rescan_chunk_radius(
         }
         // W111: drop this chunk's per-chunk liquid mesh + signature.
         if let Some(kinds) = vx.liquid_mesh_handles.remove(cc) {
-            for (_id, h) in kinds {
+            for (_id, h, _tint) in kinds {
                 renderer.remove_mesh(h);
             }
         }

@@ -27,7 +27,7 @@ pub(crate) fn draw(
     snow_positions: &std::collections::HashMap<[i32; 3], u8>,
     portal_positions: &std::collections::HashSet<[i32; 3]>,
     fires: &std::collections::HashMap<[i32; 3], u8>,
-    liquid_mesh_handles: &std::collections::HashMap<[i32; 3], Vec<(u16, infengine_render::MeshHandle)>>,
+    liquid_mesh_handles: &crate::app::LiquidMeshes,
     day_time: f32,
     // W153: textured fire + portal cell meshes (None = legacy tint).
     effects: &crate::render::effect_meshes::EffectMeshes,
@@ -242,10 +242,10 @@ pub(crate) fn draw(
         // a single table flip rather than another draw call here.
         // W111: per-chunk liquid meshes - flatten every chunk's Vec of
         // per-kind meshes into a single draw pass.
-        for (liquid_id, handle) in liquid_mesh_handles.values().flatten() {
-            let Some(bt) = block_type(*liquid_id) else {
+        for (liquid_id, handle, tint3) in liquid_mesh_handles.values().flatten() {
+            if block_type(*liquid_id).is_none() {
                 continue;
-            };
+            }
             // W108: water is translucent again (alpha 0.65). It now routes
             // through the alpha-blend transparent pipeline (cull_mode=None)
             // and is drawn AFTER the opaque chunk terrain (see render()
@@ -271,18 +271,17 @@ pub(crate) fn draw(
             // MC's water_still / lava_still textures (bound to the block
             // atlas at mesh build). The draw tint follows MC's rules:
             // water_still is a GRAYSCALE texture tinted by the biome
-            // water colour -> tint with the BLOCK_TYPES water blue;
-            // lava_still is a fully COLOURED texture -> tint white (the
-            // orange registry colour would double-saturate it).
+            // water colour; lava_still is a fully COLOURED texture ->
+            // tint white (the orange registry colour would
+            // double-saturate it).
+            // W212: the tint is computed AT MESH BUILD and stored with
+            // the handle - water carries its chunk's MC biome water
+            // colour (warm ocean turquoise, swamp murk), lava white.
             // draw_mesh_water routes through the material.w >= 0.5
             // marker, which now only drives the depth-based alpha
             // (W199) - sampling is the same animated-tile path as
             // chunk meshes.
-            let tint = if *liquid_id == LAVA_ID {
-                [1.0, 1.0, 1.0, alpha]
-            } else {
-                [bt.color[0], bt.color[1], bt.color[2], alpha]
-            };
+            let tint = [tint3[0], tint3[1], tint3[2], alpha];
             if *liquid_id == WATER_ID || *liquid_id == LAVA_ID {
                 renderer.draw_mesh_water(
                     *handle,

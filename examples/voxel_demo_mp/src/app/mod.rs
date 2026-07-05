@@ -29,6 +29,12 @@ mod tick_glue;
 mod ui_glue;
 mod world_init;
 
+/// W212: per-chunk liquid meshes - `(liquid id, mesh, draw tint)` per
+/// liquid kind present in the chunk. Shared by the build (liquid_tick),
+/// draw (render::decor) and teardown (stream / dim reset) sites.
+pub(crate) type LiquidMeshes =
+    HashMap<ChunkCoord, Vec<(u16, MeshHandle, [f32; 3])>>;
+
 pub(crate) struct Voxel {
     pub(crate) state: AppState,
     pub(crate) settings: Settings,
@@ -937,7 +943,11 @@ pub(crate) struct Voxel {
     /// kind in that chunk). Replaces the single whole-world mesh so only
     /// chunks whose liquid changed get rebuilt - no whole-world churn, no
     /// throttle, scales to oceans.
-    pub(crate) liquid_mesh_handles: HashMap<ChunkCoord, Vec<(u16, MeshHandle)>>,
+    /// W212: each entry carries its draw tint, computed at build time -
+    /// water gets the chunk's MC biome water colour (warm ocean
+    /// turquoise, swamp murk), lava stays white (its texture is fully
+    /// coloured).
+    pub(crate) liquid_mesh_handles: LiquidMeshes,
     pub(crate) liquid_mesh_dirty: bool,
     /// W111: last-meshed signature per chunk (commutative fold over the
     /// chunk's liquid cell positions + levels). The diff re-meshes only

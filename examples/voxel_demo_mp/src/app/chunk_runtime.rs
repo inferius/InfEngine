@@ -23,7 +23,7 @@ impl Voxel {
                 }
             }
             for (_cc, kinds) in self.liquid_mesh_handles.drain() {
-                for (_id, h) in kinds {
+                for (_id, h, _tint) in kinds {
                     renderer.remove_mesh(h);
                 }
             }

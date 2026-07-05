@@ -1455,6 +1455,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // held-item swing-gate needs it, and `any_panel_open()` borrows
         // all of `vx` so it can't run while `renderer` is held).
         let any_panel_open = vx.any_panel_open();
+        // W212: snapshot the worldgen ctx too (`current_worldgen_ctx`
+        // borrows all of `vx`) - the underwater fog biome sample below
+        // runs while `ui` + `renderer` are held.
+        let worldgen_ctx = vx.current_worldgen_ctx();
         let ui = vx.ui.as_mut();
         let Some(renderer) = vx.renderer.as_mut() else {
             return;
@@ -1545,6 +1549,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         }
         let water_vision =
             crate::render::sky::water_vision_mult(vx.water_vision_time);
+        // W212: the biome's water_fog_color at the camera - only worth
+        // the climate sample when actually submerged in an Mc world.
+        let water_fog = if underwater {
+            matches!(worldgen_ctx.profile, crate::worldgen::WorldGen::Mc).then(|| {
+                let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(
+                    &worldgen_ctx,
+                    eye.x.floor() as i32,
+                    eye.z.floor() as i32,
+                );
+                crate::worldgen::mcgen::colors::water_fog_color(mc)
+            })
+        } else {
+            None
+        };
         // W155: the nether is roofed - no sky, no sun, red haze.
         let in_nether = vx.current_dim == crate::dim::NETHER;
         let _sky = crate::render::sky::apply_tint_and_fog(
@@ -1556,6 +1574,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.settings.view_distance,
             underwater,
             water_vision,
+            water_fog,
             in_nether,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());

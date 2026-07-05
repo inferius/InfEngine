@@ -29,6 +29,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod biome;
+pub(crate) mod colors;
 pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod features;
