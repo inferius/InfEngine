@@ -13,7 +13,12 @@
 //! State providers ported from source: simple_state_provider,
 //! weighted_state_provider, noise_threshold_provider
 //! (NoiseThresholdProvider.getState: below threshold -> random low
-//! state; else high_chance -> random high state, else default).
+//! state; else high_chance -> random high state, else default) and
+//! noise_provider (NoiseProvider.getRandomState: clamp((1+noise)/2)
+//! indexes the states list - the flower-forest flower bands). Both
+//! noise providers sample their OWN NormalNoise built from the JSON's
+//! seed + scale at the full 3D position, exactly
+//! NoiseBasedStateProvider.getNoiseValue.
 //!
 //! freeze_top_layer is SnowAndFreezeFeature: per column, ice on
 //! exposed water + a snow layer on the exposed top when
@@ -32,15 +37,15 @@
 //! ends exactly at a chunk-Y seam can miss (chunk-local scan).
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::worldgen::WorldgenCtx;
-use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::SEA_LEVEL;
 
+use super::biome::McBiome;
 use super::features::{block_id_by_name, stream_seed};
 use super::noise::{NoiseParams, NormalNoise, SplitMix64};
-use super::terrain::mc_floor_at;
+use super::terrain::{mc_floor_at, mc_full_biome_at};
 
 const SALT_VEGETATION: u64 = 0x0F10_7A00;
 const SALT_FREEZE: u64 = 0x1CE5_0000;
@@ -63,6 +68,12 @@ const VEG_PLACED: &[(&str, &str)] = &[
     ("patch_grass_badlands", include_str!("data/feature/placed/patch_grass_badlands.json")),
     ("brown_mushroom_normal", include_str!("data/feature/placed/brown_mushroom_normal.json")),
     ("red_mushroom_normal", include_str!("data/feature/placed/red_mushroom_normal.json")),
+    // W211: the real MC biomes' variant patches.
+    ("flower_flower_forest", include_str!("data/feature/placed/flower_flower_forest.json")),
+    ("patch_grass_taiga", include_str!("data/feature/placed/patch_grass_taiga.json")),
+    ("patch_berry_rare", include_str!("data/feature/placed/patch_berry_rare.json")),
+    ("brown_mushroom_taiga", include_str!("data/feature/placed/brown_mushroom_taiga.json")),
+    ("red_mushroom_taiga", include_str!("data/feature/placed/red_mushroom_taiga.json")),
 ];
 
 const VEG_CONFIGURED: &[(&str, &str)] = &[
@@ -77,6 +88,7 @@ const VEG_CONFIGURED: &[(&str, &str)] = &[
     ("flower_swamp", include_str!("data/feature/configured/flower_swamp.json")),
     ("brown_mushroom", include_str!("data/feature/configured/brown_mushroom.json")),
     ("red_mushroom", include_str!("data/feature/configured/red_mushroom.json")),
+    ("flower_flower_forest", include_str!("data/feature/configured/flower_flower_forest.json")),
 ];
 
 const BIOME_TEMPERATURES: &str = include_str!("data/feature/biome_temperatures.json");
@@ -105,8 +117,35 @@ fn plant_for(name: &str) -> Option<Plant> {
     }
 }
 
+/// The provider's own noise field: NoiseBasedStateProvider builds a
+/// NormalNoise from the JSON's `seed` (world-independent) + `noise`
+/// params and samples it at `pos * scale` in full 3D.
+#[derive(Clone)]
+struct ProviderNoise {
+    noise: Arc<NormalNoise>,
+    scale: f64,
+}
+
+impl ProviderNoise {
+    fn parse(v: &serde_json::Value) -> Option<ProviderNoise> {
+        let params: NoiseParams = serde_json::from_value(v["noise"].clone()).ok()?;
+        Some(ProviderNoise {
+            noise: Arc::new(NormalNoise::new(v["seed"].as_i64()? as u64, &params)),
+            scale: v["scale"].as_f64()?,
+        })
+    }
+
+    fn value(&self, wx: i32, wy: i32, wz: i32) -> f64 {
+        self.noise.value(
+            wx as f64 * self.scale,
+            wy as f64 * self.scale,
+            wz as f64 * self.scale,
+        )
+    }
+}
+
 /// The block-state provider of a `simple_block` feature.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum Provider {
     Simple(Plant),
     Weighted(Vec<(u32, Plant)>),
@@ -118,7 +157,11 @@ enum Provider {
         default: Plant,
         low: Vec<Plant>,
         high: Vec<Plant>,
+        noise: ProviderNoise,
     },
+    /// NoiseProvider (flower_flower_forest): clamp((1+noise)/2, 0,
+    /// 0.9999) * len indexes the states list - contiguous flower bands.
+    Noise { states: Vec<Plant>, noise: ProviderNoise },
 }
 
 impl Provider {
@@ -154,13 +197,25 @@ impl Provider {
                     default: plant_for(v["default_state"]["Name"].as_str()?)?,
                     low: collect("low_states"),
                     high: collect("high_states"),
+                    noise: ProviderNoise::parse(v)?,
                 })
+            }
+            Some("minecraft:noise_provider") => {
+                // Strict: every state must resolve, or the noise->index
+                // mapping would shift against MC's.
+                let mut states = Vec::new();
+                for s in v["states"].as_array()? {
+                    states.push(plant_for(s["Name"].as_str()?)?);
+                }
+                (!states.is_empty())
+                    .then(|| ProviderNoise::parse(v).map(|noise| Provider::Noise { states, noise }))
+                    .flatten()
             }
             _ => None,
         }
     }
 
-    fn pick(&self, rng: &mut SplitMix64, wx: i32, wz: i32) -> Plant {
+    fn pick(&self, rng: &mut SplitMix64, wx: i32, wy: i32, wz: i32) -> Plant {
         match self {
             Provider::Simple(p) => *p,
             Provider::Weighted(entries) => {
@@ -174,11 +229,8 @@ impl Provider {
                 }
                 entries[0].1
             }
-            Provider::NoiseThreshold { threshold, high_chance, default, low, high } => {
-                // NoiseThresholdProvider samples its own noise; the
-                // vanilla flower fields use the shared biome-info
-                // spectrum, which we reuse (same scale class).
-                let n = biome_info_noise().value(wx as f64 / 200.0, 0.0, wz as f64 / 200.0);
+            Provider::NoiseThreshold { threshold, high_chance, default, low, high, noise } => {
+                let n = noise.value(wx, wy, wz);
                 if n < *threshold && !low.is_empty() {
                     low[(rng.next_u64() % low.len() as u64) as usize]
                 } else if rng.next_f64() < *high_chance && !high.is_empty() {
@@ -186,6 +238,11 @@ impl Provider {
                 } else {
                     *default
                 }
+            }
+            Provider::Noise { states, noise } => {
+                let n = noise.value(wx, wy, wz);
+                let t = ((1.0 + n) / 2.0).clamp(0.0, 0.9999);
+                states[(t * states.len() as f64) as usize]
             }
         }
     }
@@ -277,39 +334,65 @@ pub(crate) fn patch(name: &'static str) -> Option<&'static PatchDef> {
         .find(|p| p.name == name)
 }
 
-/// The vegetal patch list per engine biome (from the biome JSONs'
-/// vegetal step; mushrooms are in every overworld list).
-pub(crate) fn patches_for(biome: Biome) -> &'static [&'static str] {
-    match biome {
-        Biome::Plains => &[
+/// W211: the vegetal patch list per REAL MC biome, straight from the
+/// biome JSONs' vegetal_decoration step (restricted to the patches the
+/// engine has blocks for; unported entries - sunflowers, forest_flowers
+/// doubles, dead bushes, waterlily, bamboo, old-growth mushrooms - are
+/// honest gaps, not substitutions).
+pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
+    use McBiome as B;
+    match mc {
+        B::Plains | B::SunflowerPlains => &[
             "patch_tall_grass_2", "flower_plains", "patch_grass_plain",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Forest => &[
+        B::Forest | B::BirchForest | B::OldGrowthBirchForest | B::DarkForest => &[
             "flower_default", "patch_grass_forest",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Taiga => &[
-            "patch_large_fern", "flower_default", "patch_grass_taiga_2",
-            "patch_berry_common", "brown_mushroom_normal", "red_mushroom_normal",
+        B::FlowerForest => &[
+            "flower_flower_forest", "patch_grass_badlands",
+            "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Jungle => &[
+        B::Taiga => &[
+            "patch_large_fern", "flower_default", "patch_grass_taiga_2",
+            "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_common",
+        ],
+        B::SnowyTaiga => &[
+            "patch_large_fern", "flower_default", "patch_grass_taiga_2",
+            "brown_mushroom_taiga", "red_mushroom_taiga", "patch_berry_rare",
+        ],
+        B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => &[
+            "patch_large_fern", "flower_default", "patch_grass_taiga",
+            "brown_mushroom_normal", "red_mushroom_normal", "patch_berry_common",
+        ],
+        B::Jungle | B::SparseJungle | B::BambooJungle => &[
             "flower_warm", "patch_grass_jungle",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Savanna => &[
+        B::Savanna => &[
             "patch_tall_grass", "flower_warm", "patch_grass_savanna",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Swamp => &[
+        B::Swamp => &[
             "flower_swamp", "patch_grass_normal",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
-        Biome::Tundra | Biome::SnowyMountain | Biome::Mountain | Biome::Beach
-        | Biome::Desert => &[
+        // mangrove_swamp lists no flowers or mushrooms; its grass is the
+        // plain patch (trees_mangrove / waterlily / dead bush unhosted).
+        B::MangroveSwamp => &["patch_grass_normal"],
+        // The addDefaultFlowers + badlands-grass set shared by the
+        // plain cold / dry / shore biomes.
+        B::SnowyPlains | B::IceSpikes | B::WindsweptHills | B::Desert
+        | B::Beach | B::SnowyBeach | B::River | B::FrozenRiver => &[
             "flower_default", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
         ],
+        // snowy_slopes has no grass/flower/mushroom vegetal entries.
+        B::SnowySlopes => &[],
+        B::Ocean | B::DeepOcean | B::ColdOcean | B::DeepColdOcean
+        | B::FrozenOcean | B::DeepFrozenOcean | B::LukewarmOcean
+        | B::DeepLukewarmOcean | B::WarmOcean => &[],
     }
 }
 
@@ -332,8 +415,9 @@ fn temperature_noise() -> &'static NormalNoise {
     })
 }
 
-/// Base biome temperature from the extracted biome JSONs.
-pub(crate) fn base_temperature(biome: Biome) -> f32 {
+/// Base biome temperature from the extracted biome JSONs, keyed by the
+/// MC registry name (W211: every [`McBiome`] has its own row).
+pub(crate) fn base_temperature(mc: McBiome) -> f32 {
     static TEMPS: OnceLock<std::collections::HashMap<String, f32>> = OnceLock::new();
     let temps = TEMPS.get_or_init(|| {
         let v: serde_json::Value =
@@ -344,27 +428,14 @@ pub(crate) fn base_temperature(biome: Biome) -> f32 {
             .map(|(k, t)| (k.clone(), t.as_f64().expect("temp") as f32))
             .collect()
     });
-    let key = match biome {
-        Biome::Plains => "plains",
-        Biome::Forest => "forest",
-        Biome::Taiga => "taiga",
-        Biome::Tundra => "snowy_plains",
-        Biome::SnowyMountain => "snowy_slopes",
-        Biome::Mountain => "windswept_hills",
-        Biome::Jungle => "jungle",
-        Biome::Savanna => "savanna",
-        Biome::Swamp => "swamp",
-        Biome::Desert => "desert",
-        Biome::Beach => "beach",
-    };
-    temps[key]
+    temps[mc.name()]
 }
 
 /// `Biome.getHeightAdjustedTemperature`, ported exactly: above
 /// seaLevel+17 the temperature falls with altitude plus a small noise
 /// wobble; snow forms below 0.15.
-pub(crate) fn height_adjusted_temperature(biome: Biome, wx: i32, wy: i32, wz: i32) -> f32 {
-    let base = base_temperature(biome);
+pub(crate) fn height_adjusted_temperature(mc: McBiome, wx: i32, wy: i32, wz: i32) -> f32 {
+    let base = base_temperature(mc);
     let snow_level = SEA_LEVEL + 17;
     if wy > snow_level {
         let wobble =
@@ -375,8 +446,8 @@ pub(crate) fn height_adjusted_temperature(biome: Biome, wx: i32, wy: i32, wz: i3
     }
 }
 
-fn cold_enough_to_snow(biome: Biome, wx: i32, wy: i32, wz: i32) -> bool {
-    height_adjusted_temperature(biome, wx, wy, wz) < 0.15
+fn cold_enough_to_snow(mc: McBiome, wx: i32, wy: i32, wz: i32) -> bool {
+    height_adjusted_temperature(mc, wx, wy, wz) < 0.15
 }
 
 /// Is `id` a solid-ish floor a snow layer may rest on (MC: sturdy top
@@ -528,7 +599,7 @@ fn run_patch(
         }
     }
     for p in positions {
-        let plant = def.provider.pick(rng, p[0], p[2]);
+        let plant = def.provider.pick(rng, p[0], p[1], p[2]);
         place_plant(chunk, origin, ctx, plant, p[0], p[1], p[2], def.needs_grass_floor);
     }
 }
@@ -545,13 +616,9 @@ pub(crate) fn place_vegetation(
     let cs = CHUNK_SIZE as i32;
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
-            let biome = crate::worldgen::realistic_biome_at(
-                ctx,
-                (scx * cs + 8) as f32 + 0.5,
-                (scz * cs + 8) as f32 + 0.5,
-            );
+            let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
             let mut rng = SplitMix64::new(stream_seed(ctx.effective_seed(), scx, scz, SALT_VEGETATION));
-            for name in patches_for(biome) {
+            for name in patches_for(mc) {
                 let Some(def) = patch(name) else { continue };
                 run_patch(chunk, origin, ctx, def, &mut rng, scx, scz);
             }
@@ -582,7 +649,7 @@ pub(crate) fn place_freeze_top_layer(
         for lz in 0..cs {
             let wx = origin[0] + lx;
             let wz = origin[2] + lz;
-            let biome = crate::worldgen::realistic_biome_at(ctx, wx as f32 + 0.5, wz as f32 + 0.5);
+            let mc = mc_full_biome_at(ctx, wx, wz);
             // Ice: the sea-surface cell freezes when cold (MC
             // shouldFreeze on the water below the motion-blocking top).
             let sea_ly = SEA_LEVEL - origin[1];
@@ -590,7 +657,7 @@ pub(crate) fn place_freeze_top_layer(
                 && chunk.get(lx as usize, sea_ly as usize, lz as usize).0 == crate::block::WATER_ID
                 && (sea_ly + 1 >= cs
                     || chunk.get(lx as usize, (sea_ly + 1) as usize, lz as usize).is_air())
-                && cold_enough_to_snow(biome, wx, SEA_LEVEL, wz)
+                && cold_enough_to_snow(mc, wx, SEA_LEVEL, wz)
             {
                 chunk.set(lx as usize, sea_ly as usize, lz as usize, BlockId(ICE));
                 continue;
@@ -611,7 +678,7 @@ pub(crate) fn place_freeze_top_layer(
             let below = chunk.get(lx as usize, top_ly as usize, lz as usize).0;
             let wy = origin[1] + snow_ly;
             if snow_supporting(below)
-                && cold_enough_to_snow(biome, wx, wy, wz)
+                && cold_enough_to_snow(mc, wx, wy, wz)
                 && chunk.get(lx as usize, snow_ly as usize, lz as usize).is_air()
             {
                 chunk.set(lx as usize, snow_ly as usize, lz as usize, BlockId(SNOW_LAYER));
@@ -646,19 +713,49 @@ mod tests {
         assert!(matches!(tall.provider, Provider::Simple(Plant::Double(758, 759))));
         let berry = patch("patch_berry_common").expect("berry parses");
         assert!(berry.needs_grass_floor);
+        // W211: flower_forest's noise_provider - all 11 flowers resolve
+        // and the noise scale is the JSON's 1/48, not a global constant.
+        let ff = patch("flower_flower_forest").expect("flower forest parses");
+        match &ff.provider {
+            Provider::Noise { states, noise } => {
+                assert_eq!(states.len(), 11);
+                assert!((noise.scale - 0.020833334).abs() < 1e-9);
+            }
+            _ => panic!("flower_flower_forest should parse as noise_provider"),
+        }
+        // flower_plain's threshold provider carries its own 0.005 scale.
+        match &flowers.provider {
+            Provider::NoiseThreshold { noise, .. } => {
+                assert!((noise.scale - 0.005).abs() < 1e-9);
+            }
+            _ => panic!("flower_plains should parse as noise_threshold_provider"),
+        }
     }
 
     #[test]
     fn temperature_model_matches_mc_shape() {
         // Base temps come straight from the biome JSONs.
-        assert!((base_temperature(Biome::Plains) - 0.8).abs() < 1e-6);
-        assert!((base_temperature(Biome::Tundra) - 0.0).abs() < 1e-6);
-        // At sea level: plains never snow, tundra always does.
-        assert!(!cold_enough_to_snow(Biome::Plains, 0, SEA_LEVEL, 0));
-        assert!(cold_enough_to_snow(Biome::Tundra, 0, SEA_LEVEL, 0));
+        assert!((base_temperature(McBiome::Plains) - 0.8).abs() < 1e-6);
+        assert!((base_temperature(McBiome::SnowyPlains) - 0.0).abs() < 1e-6);
+        // At sea level: plains never snow, snowy plains always do.
+        assert!(!cold_enough_to_snow(McBiome::Plains, 0, SEA_LEVEL, 0));
+        assert!(cold_enough_to_snow(McBiome::SnowyPlains, 0, SEA_LEVEL, 0));
         // Windswept hills (0.2): warm at sea level, snowy high up.
-        assert!(!cold_enough_to_snow(Biome::Mountain, 0, SEA_LEVEL, 0));
-        assert!(cold_enough_to_snow(Biome::Mountain, 0, SEA_LEVEL + 130, 0));
+        assert!(!cold_enough_to_snow(McBiome::WindsweptHills, 0, SEA_LEVEL, 0));
+        assert!(cold_enough_to_snow(McBiome::WindsweptHills, 0, SEA_LEVEL + 130, 0));
+    }
+
+    /// W211: every McBiome must have a temperature row + a patch list
+    /// whose entries all parse (typo in either table = panic here, not
+    /// silence in a world).
+    #[test]
+    fn all_mc_biomes_have_temps_and_valid_patch_lists() {
+        for mc in McBiome::ALL {
+            let _ = base_temperature(mc);
+            for name in patches_for(mc) {
+                assert!(patch(name).is_some(), "{}: patch {name} must parse", mc.name());
+            }
+        }
     }
 
     /// Evidence: grass tufts actually appear on plains-ish land chunks.

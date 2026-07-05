@@ -46,10 +46,28 @@ use crate::worldgen::climate::SEA_LEVEL;
 use super::noise::{NoiseParams, NormalNoise, SplitMix64};
 use super::terrain::mc_floor_at;
 
-const SEAGRASS_PLACED: &str = include_str!("data/feature/placed/seagrass_normal.json");
-const SEAGRASS_CONFIGURED: &str = include_str!("data/feature/configured/seagrass_short.json");
-const KELP_PLACED: &str = include_str!("data/feature/placed/kelp_cold.json");
-const KELP_CONFIGURED: &str = include_str!("data/feature/configured/kelp.json");
+/// W211: every aquatic-flora placed_feature the ocean-variant /
+/// river biomes list (frozen oceans list none).
+const FLORA_PLACED: &[(&str, &str)] = &[
+    ("seagrass_normal", include_str!("data/feature/placed/seagrass_normal.json")),
+    ("seagrass_cold", include_str!("data/feature/placed/seagrass_cold.json")),
+    ("seagrass_deep", include_str!("data/feature/placed/seagrass_deep.json")),
+    ("seagrass_deep_cold", include_str!("data/feature/placed/seagrass_deep_cold.json")),
+    ("seagrass_warm", include_str!("data/feature/placed/seagrass_warm.json")),
+    ("seagrass_deep_warm", include_str!("data/feature/placed/seagrass_deep_warm.json")),
+    ("seagrass_river", include_str!("data/feature/placed/seagrass_river.json")),
+    ("kelp_cold", include_str!("data/feature/placed/kelp_cold.json")),
+    ("kelp_warm", include_str!("data/feature/placed/kelp_warm.json")),
+    ("seagrass_swamp", include_str!("data/feature/placed/seagrass_swamp.json")),
+];
+
+const FLORA_CONFIGURED: &[(&str, &str)] = &[
+    ("seagrass_short", include_str!("data/feature/configured/seagrass_short.json")),
+    ("seagrass_slightly_less_short", include_str!("data/feature/configured/seagrass_slightly_less_short.json")),
+    ("seagrass_mid", include_str!("data/feature/configured/seagrass_mid.json")),
+    ("seagrass_tall", include_str!("data/feature/configured/seagrass_tall.json")),
+    ("kelp", include_str!("data/feature/configured/kelp.json")),
+];
 
 /// W202: every `ore_*` placed_feature the overworld biomes list in their
 /// underground_ores step (the set is identical across biomes; extracted
@@ -114,82 +132,99 @@ const TAG_DEEPSLATE_ORE_REPLACEABLES: &str =
 const TAG_BASE_STONE_OVERWORLD: &str =
     include_str!("data/feature/tags/base_stone_overworld.json");
 
-/// Per-feature random-stream salts (arbitrary, fixed).
-const SALT_SEAGRASS: u64 = 0x5EA6_7A55;
-const SALT_KELP: u64 = 0x0CE1_F00D;
+/// Per-feature random-stream salt (arbitrary, fixed); each flora rule
+/// folds its list index in so the streams stay independent.
+const SALT_FLORA: u64 = 0x5EA6_7A55;
 
-/// Parsed rules for the ocean-flora placed features.
-pub(crate) struct OceanFloraRules {
-    /// seagrass_normal: tries per chunk (the `count` modifier).
-    pub(crate) seagrass_tries: u32,
-    /// seagrass_short config: probability of the tall two-block variant.
-    pub(crate) seagrass_tall_probability: f64,
-    /// kelp_cold noise_based_count parameters.
-    pub(crate) kelp_noise_factor: f64,
-    pub(crate) kelp_noise_offset: f64,
-    pub(crate) kelp_noise_to_count_ratio: f64,
+/// How many tries a flora placed_feature runs per chunk.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FloraCount {
+    Fixed(u32),
+    /// noise_based_count (the patchy kelp forests).
+    NoiseBased { factor: f64, offset: f64, ratio: f64 },
 }
 
-fn parse_rules() -> OceanFloraRules {
-    let seagrass_placed: serde_json::Value =
-        serde_json::from_str(SEAGRASS_PLACED).expect("seagrass_normal.json parses");
-    let seagrass_conf: serde_json::Value =
-        serde_json::from_str(SEAGRASS_CONFIGURED).expect("seagrass_short.json parses");
-    let kelp_placed: serde_json::Value =
-        serde_json::from_str(KELP_PLACED).expect("kelp_cold.json parses");
-    let kelp_conf: serde_json::Value =
-        serde_json::from_str(KELP_CONFIGURED).expect("kelp.json parses");
+/// What one try places.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FloraKind {
+    /// SeagrassFeature with the tall-variant probability.
+    Seagrass { tall_probability: f64 },
+    /// KelpFeature (a kelp_plant column topped by kelp).
+    Kelp,
+}
 
-    // Sanity: the placed features reference the configured features we
-    // embedded (a version bump that rewires them should fail loudly).
-    assert_eq!(
-        seagrass_placed["feature"].as_str(),
-        Some("minecraft:seagrass_short"),
-        "seagrass_normal placed_feature rewired"
-    );
-    assert_eq!(
-        kelp_placed["feature"].as_str(),
-        Some("minecraft:kelp"),
-        "kelp_cold placed_feature rewired"
-    );
-    assert_eq!(kelp_conf["type"].as_str(), Some("minecraft:kelp"));
-    assert_eq!(seagrass_conf["type"].as_str(), Some("minecraft:seagrass"));
+/// One parsed aquatic-flora placed_feature.
+pub(crate) struct FloraRule {
+    pub(crate) name: &'static str,
+    pub(crate) count: FloraCount,
+    pub(crate) kind: FloraKind,
+}
 
-    let find = |placed: &serde_json::Value, ty: &str| -> Option<serde_json::Value> {
-        placed["placement"]
-            .as_array()?
-            .iter()
-            .find(|m| m["type"].as_str() == Some(ty))
-            .cloned()
+fn parse_flora(name: &'static str, json: &str) -> FloraRule {
+    let placed: serde_json::Value = serde_json::from_str(json).expect("flora placed parses");
+    let conf_name = placed["feature"].as_str().expect("feature ref");
+    let conf_name = conf_name.strip_prefix("minecraft:").unwrap_or(conf_name);
+    let conf_json = FLORA_CONFIGURED
+        .iter()
+        .find(|(n, _)| *n == conf_name)
+        .unwrap_or_else(|| panic!("{name}: configured {conf_name} not embedded"))
+        .1;
+    let conf: serde_json::Value = serde_json::from_str(conf_json).expect("flora conf parses");
+    let kind = match conf["type"].as_str() {
+        Some("minecraft:seagrass") => FloraKind::Seagrass {
+            tall_probability: conf["config"]["probability"].as_f64().expect("probability"),
+        },
+        Some("minecraft:kelp") => FloraKind::Kelp,
+        other => panic!("{name}: unsupported flora feature {other:?}"),
     };
-
-    let seagrass_tries = find(&seagrass_placed, "minecraft:count")
-        .and_then(|m| m["count"].as_u64())
-        .expect("seagrass_normal has a count modifier") as u32;
-    let seagrass_tall_probability = seagrass_conf["config"]["probability"]
-        .as_f64()
-        .expect("seagrass probability");
-
-    let nbc = find(&kelp_placed, "minecraft:noise_based_count")
-        .expect("kelp_cold has noise_based_count");
-    let kelp_noise_factor = nbc["noise_factor"].as_f64().expect("noise_factor");
-    let kelp_noise_offset = nbc["noise_offset"].as_f64().unwrap_or(0.0);
-    let kelp_noise_to_count_ratio = nbc["noise_to_count_ratio"]
-        .as_f64()
-        .expect("noise_to_count_ratio");
-
-    OceanFloraRules {
-        seagrass_tries,
-        seagrass_tall_probability,
-        kelp_noise_factor,
-        kelp_noise_offset,
-        kelp_noise_to_count_ratio,
+    let mut count = FloraCount::Fixed(1);
+    for m in placed["placement"].as_array().expect("placement") {
+        match m["type"].as_str() {
+            Some("minecraft:count") => {
+                count = FloraCount::Fixed(m["count"].as_u64().expect("count") as u32);
+            }
+            Some("minecraft:noise_based_count") => {
+                count = FloraCount::NoiseBased {
+                    factor: m["noise_factor"].as_f64().expect("noise_factor"),
+                    offset: m["noise_offset"].as_f64().unwrap_or(0.0),
+                    ratio: m["noise_to_count_ratio"].as_f64().expect("ratio"),
+                };
+            }
+            _ => {}
+        }
     }
+    FloraRule { name, count, kind }
 }
 
-pub(crate) fn ocean_flora_rules() -> &'static OceanFloraRules {
-    static RULES: OnceLock<OceanFloraRules> = OnceLock::new();
-    RULES.get_or_init(parse_rules)
+pub(crate) fn flora_rule(name: &'static str) -> &'static FloraRule {
+    static RULES: OnceLock<Vec<FloraRule>> = OnceLock::new();
+    RULES
+        .get_or_init(|| FLORA_PLACED.iter().map(|(n, j)| parse_flora(n, j)).collect())
+        .iter()
+        .find(|r| r.name == name)
+        .expect("known flora rule")
+}
+
+/// The aquatic-flora list per MC biome (from the biome JSONs' vegetal
+/// step; frozen oceans list none, warm ocean's sea_pickle waits for its
+/// block).
+pub(crate) fn flora_for(mc: super::biome::McBiome) -> &'static [&'static str] {
+    use super::biome::McBiome as B;
+    match mc {
+        B::Ocean => &["seagrass_normal", "kelp_cold"],
+        B::DeepOcean => &["seagrass_deep", "kelp_cold"],
+        B::ColdOcean => &["seagrass_cold", "kelp_cold"],
+        B::DeepColdOcean => &["seagrass_deep_cold", "kelp_cold"],
+        B::LukewarmOcean => &["seagrass_warm", "kelp_warm"],
+        B::DeepLukewarmOcean => &["seagrass_deep_warm", "kelp_warm"],
+        B::WarmOcean => &["seagrass_warm"],
+        B::River => &["seagrass_river"],
+        B::FrozenOcean | B::DeepFrozenOcean | B::FrozenRiver => &[],
+        // The swamps list their own seagrass (count 64 of the 0.6-tall
+        // mid variant) for their pools.
+        B::Swamp | B::MangroveSwamp => &["seagrass_swamp"],
+        _ => &[],
+    }
 }
 
 /// MC's `Biome.BIOME_INFO_NOISE` stand-in for `noise_based_count`
@@ -203,16 +238,17 @@ fn biome_info_noise() -> &'static NormalNoise {
     })
 }
 
+/// Tries per chunk for a flora rule. Fixed count, or
 /// `NoiseBasedCountPlacement.getCount`: ceil((noise(x/f, z/f) + offset)
 /// * ratio), clamped at 0. `(wx, wz)` is the chunk origin.
-fn kelp_count(rules: &OceanFloraRules, wx: i32, wz: i32) -> u32 {
-    let n = biome_info_noise().value(
-        wx as f64 / rules.kelp_noise_factor,
-        0.0,
-        wz as f64 / rules.kelp_noise_factor,
-    );
-    let count = ((n + rules.kelp_noise_offset) * rules.kelp_noise_to_count_ratio).ceil();
-    count.max(0.0) as u32
+fn flora_count(rule: &FloraRule, wx: i32, wz: i32) -> u32 {
+    match rule.count {
+        FloraCount::Fixed(n) => n,
+        FloraCount::NoiseBased { factor, offset, ratio } => {
+            let n = biome_info_noise().value(wx as f64 / factor, 0.0, wz as f64 / factor);
+            ((n + offset) * ratio).ceil().max(0.0) as u32
+        }
+    }
 }
 
 /// Mixed per-(source chunk column, feature) stream seed.
@@ -254,7 +290,7 @@ fn seagrass_try(
     chunk: &mut Chunk,
     origin: [i32; 3],
     ctx: &WorldgenCtx,
-    rules: &OceanFloraRules,
+    tall_probability: f64,
     rng: &mut SplitMix64,
     scx: i32,
     scz: i32,
@@ -266,7 +302,7 @@ fn seagrass_try(
     // SeagrassFeature's own +/-8 scatter (two nextInt(8) rolls per axis).
     let ox = (rng.next_u64() % 8) as i32 - (rng.next_u64() % 8) as i32;
     let oz = (rng.next_u64() % 8) as i32 - (rng.next_u64() % 8) as i32;
-    let tall = rng.next_f64() < rules.seagrass_tall_probability;
+    let tall = rng.next_f64() < tall_probability;
     let wx = scx * cs + rx + ox;
     let wz = scz * cs + rz + oz;
     let floor = mc_floor_at(ctx, wx, wz);
@@ -753,29 +789,45 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::vegetation::place_vegetation(chunk, coord, ctx, origin);
     super::vegetation::place_freeze_top_layer(chunk, coord, ctx, origin);
 
-    // Whole chunk above sea level -> no ocean flora can place.
+    // Whole chunk above sea level -> no aquatic flora can place.
     if origin[1] > SEA_LEVEL {
         return;
     }
-    let rules = ocean_flora_rules();
     let seed = ctx.effective_seed();
+    let cs = CHUNK_SIZE as i32;
 
-    // Seagrass scatters +/-8 out of its source chunk, so replay the 3x3
-    // source-chunk neighbourhood and keep what lands here.
+    // W211: the flora set is the REAL MC biome's list (ocean variants,
+    // rivers). Seagrass scatters +/-8 out of its source chunk, so the
+    // 3x3 source-chunk neighbourhood replays; kelp stays in_square.
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
-            let mut rng = SplitMix64::new(stream_seed(seed, scx, scz, SALT_SEAGRASS));
-            for _ in 0..rules.seagrass_tries {
-                seagrass_try(chunk, origin, ctx, rules, &mut rng, scx, scz);
+            let mc = super::terrain::mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+            for (idx, name) in flora_for(mc).iter().enumerate() {
+                let rule = flora_rule(name);
+                let salt = SALT_FLORA ^ ((idx as u64) << 40);
+                let mut rng = SplitMix64::new(stream_seed(seed, scx, scz, salt));
+                let count = flora_count(rule, scx * cs, scz * cs);
+                match rule.kind {
+                    FloraKind::Seagrass { tall_probability } => {
+                        for _ in 0..count {
+                            seagrass_try(
+                                chunk, origin, ctx, tall_probability, &mut rng, scx, scz,
+                            );
+                        }
+                    }
+                    FloraKind::Kelp => {
+                        // Kelp writes only inside its source chunk; skip
+                        // the neighbour replays entirely (their streams
+                        // are independent, so skipping burns no rolls).
+                        if scx == coord[0] && scz == coord[2] {
+                            for _ in 0..count {
+                                kelp_try(chunk, origin, ctx, &mut rng, scx, scz);
+                            }
+                        }
+                    }
+                }
             }
         }
-    }
-    // Kelp stays inside its source chunk (in_square only), so only this
-    // column's stream can write here.
-    let count = kelp_count(rules, origin[0], origin[2]);
-    let mut rng = SplitMix64::new(stream_seed(seed, coord[0], coord[2], SALT_KELP));
-    for _ in 0..count {
-        kelp_try(chunk, origin, ctx, &mut rng, coord[0], coord[2]);
     }
 }
 
@@ -790,24 +842,37 @@ mod tests {
 
     #[test]
     fn rules_parse_the_embedded_mc_json() {
-        let r = ocean_flora_rules();
         // The MC data values (26.1.2 jar): count 48, probability 0.3,
         // noise_based_count(80, 0, 120). If a future data refresh
         // changes them, the parser must track the JSON - these pins
         // prove we read the file, not a hardcode.
-        assert_eq!(r.seagrass_tries, 48);
-        assert!((r.seagrass_tall_probability - 0.3).abs() < 1e-9);
-        assert!((r.kelp_noise_factor - 80.0).abs() < 1e-9);
-        assert!((r.kelp_noise_to_count_ratio - 120.0).abs() < 1e-9);
+        let normal = flora_rule("seagrass_normal");
+        assert!(matches!(normal.count, FloraCount::Fixed(48)));
+        assert!(
+            matches!(normal.kind, FloraKind::Seagrass { tall_probability } if (tall_probability - 0.3).abs() < 1e-9)
+        );
+        let kelp = flora_rule("kelp_cold");
+        assert!(matches!(
+            kelp.count,
+            FloraCount::NoiseBased { factor, ratio, .. }
+                if (factor - 80.0).abs() < 1e-9 && (ratio - 120.0).abs() < 1e-9
+        ));
+        // W211: the ocean variants parse too (deep = tall seagrass 0.8).
+        let deep = flora_rule("seagrass_deep");
+        assert!(
+            matches!(deep.kind, FloraKind::Seagrass { tall_probability } if tall_probability > 0.5)
+        );
+        assert!(matches!(flora_rule("kelp_warm").kind, FloraKind::Kelp));
+        assert!(matches!(flora_rule("seagrass_river").kind, FloraKind::Seagrass { .. }));
     }
 
     #[test]
     fn kelp_count_is_bounded_and_varies() {
-        let r = ocean_flora_rules();
+        let r = flora_rule("kelp_cold");
         let mut seen = std::collections::HashSet::new();
         for cx in 0..64 {
-            let c = kelp_count(r, cx * 16, -cx * 32);
-            assert!(c <= (r.kelp_noise_to_count_ratio * 1.5) as u32);
+            let c = flora_count(r, cx * 16, -cx * 32);
+            assert!(c <= 180);
             seen.insert(c);
         }
         assert!(seen.len() > 3, "noise count is constant: {seen:?}");

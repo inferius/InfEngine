@@ -34,7 +34,6 @@ use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord};
 use std::sync::OnceLock;
 
 use crate::worldgen::WorldgenCtx;
-use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::SEA_LEVEL;
 
 use super::features::{block_id_by_name, stream_seed};
@@ -63,8 +62,12 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("oak_checked", include_str!("data/feature/placed/oak_checked.json")),
     ("pine_checked", include_str!("data/feature/placed/pine_checked.json")),
     ("spruce_checked", include_str!("data/feature/placed/spruce_checked.json")),
+    ("birch_bees_002", include_str!("data/feature/placed/birch_bees_002.json")),
+    ("fancy_oak_bees_002", include_str!("data/feature/placed/fancy_oak_bees_002.json")),
+    ("oak_bees_002", include_str!("data/feature/placed/oak_bees_002.json")),
     ("trees_birch", include_str!("data/feature/placed/trees_birch.json")),
     ("trees_birch_and_oak_leaf_litter", include_str!("data/feature/placed/trees_birch_and_oak_leaf_litter.json")),
+    ("trees_flower_forest", include_str!("data/feature/placed/trees_flower_forest.json")),
     ("trees_jungle", include_str!("data/feature/placed/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/placed/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/placed/trees_savanna.json")),
@@ -94,8 +97,12 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("pine", include_str!("data/feature/configured/pine.json")),
     ("spruce", include_str!("data/feature/configured/spruce.json")),
     ("swamp_oak", include_str!("data/feature/configured/swamp_oak.json")),
+    ("birch_bees_002", include_str!("data/feature/configured/birch_bees_002.json")),
+    ("fancy_oak_bees_002", include_str!("data/feature/configured/fancy_oak_bees_002.json")),
+    ("oak_bees_002", include_str!("data/feature/configured/oak_bees_002.json")),
     ("trees_birch", include_str!("data/feature/configured/trees_birch.json")),
     ("trees_birch_and_oak_leaf_litter", include_str!("data/feature/configured/trees_birch_and_oak_leaf_litter.json")),
+    ("trees_flower_forest", include_str!("data/feature/configured/trees_flower_forest.json")),
     ("trees_jungle", include_str!("data/feature/configured/trees_jungle.json")),
     ("trees_plains", include_str!("data/feature/configured/trees_plains.json")),
     ("trees_savanna", include_str!("data/feature/configured/trees_savanna.json")),
@@ -382,6 +389,7 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "trees_savanna",
             "trees_swamp",
             "trees_birch",
+            "trees_flower_forest",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -390,19 +398,41 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
     all.iter().find(|b| b.name == root).expect("known tree root")
 }
 
-/// The vegetal tree root for an engine biome (the 66->11 collapse
-/// picks the closest MC biome's list).
-pub(crate) fn tree_root_for(biome: Biome) -> Option<&'static str> {
-    match biome {
-        Biome::Plains => Some("trees_plains"),
-        Biome::Forest => Some("trees_birch_and_oak_leaf_litter"),
-        Biome::Taiga => Some("trees_taiga"),
-        Biome::Tundra | Biome::SnowyMountain => Some("trees_snowy"),
-        Biome::Mountain => Some("trees_windswept_hills"),
-        Biome::Jungle => Some("trees_jungle"),
-        Biome::Savanna => Some("trees_savanna"),
-        Biome::Swamp => Some("trees_swamp"),
-        Biome::Desert | Biome::Beach => None,
+/// W211: the vegetal tree root per REAL MC biome. Honest fallbacks
+/// where the exact list needs unported content: dark forest (dark_oak
+/// placer) uses the plain forest list, old-growth taigas (mega spruce)
+/// the taiga list, bamboo/sparse jungle the jungle list.
+pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Option<&'static str> {
+    use crate::worldgen::mcgen::biome::McBiome as B;
+    match mc {
+        B::Plains | B::SunflowerPlains => Some("trees_plains"),
+        B::Forest | B::DarkForest => Some("trees_birch_and_oak_leaf_litter"),
+        B::FlowerForest => Some("trees_flower_forest"),
+        B::BirchForest | B::OldGrowthBirchForest => Some("trees_birch"),
+        B::Taiga | B::SnowyTaiga | B::OldGrowthSpruceTaiga | B::OldGrowthPineTaiga => {
+            Some("trees_taiga")
+        }
+        B::SnowyPlains | B::IceSpikes | B::SnowySlopes => Some("trees_snowy"),
+        B::WindsweptHills => Some("trees_windswept_hills"),
+        B::Jungle | B::SparseJungle | B::BambooJungle => Some("trees_jungle"),
+        B::Savanna => Some("trees_savanna"),
+        // Mangrove swamp: swamp oaks stand in until the mangrove placer
+        // + roots/propagule blocks exist.
+        B::Swamp | B::MangroveSwamp => Some("trees_swamp"),
+        B::Desert
+        | B::Beach
+        | B::SnowyBeach
+        | B::River
+        | B::FrozenRiver
+        | B::Ocean
+        | B::DeepOcean
+        | B::ColdOcean
+        | B::DeepColdOcean
+        | B::FrozenOcean
+        | B::DeepFrozenOcean
+        | B::LukewarmOcean
+        | B::DeepLukewarmOcean
+        | B::WarmOcean => None,
     }
 }
 
@@ -914,8 +944,8 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
             // stream fixed-shape per column).
             let bx = scx * cs + 8;
             let bz = scz * cs + 8;
-            let biome = crate::worldgen::realistic_biome_at(ctx, bx as f32 + 0.5, bz as f32 + 0.5);
-            let Some(root) = tree_root_for(biome) else {
+            let mc = super::terrain::mc_full_biome_at(ctx, bx, bz);
+            let Some(root) = tree_root_for(mc) else {
                 continue;
             };
             let bt = biome_trees(root);
@@ -1031,8 +1061,8 @@ mod tests {
                 if floor < SEA_LEVEL {
                     continue;
                 }
-                let biome = crate::worldgen::realistic_biome_at(&c, wx as f32, wz as f32);
-                if tree_root_for(biome).is_none() {
+                let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(&c, wx, wz);
+                if tree_root_for(mc).is_none() {
                     continue;
                 }
                 // The vertical chunk holding the surface + canopy.

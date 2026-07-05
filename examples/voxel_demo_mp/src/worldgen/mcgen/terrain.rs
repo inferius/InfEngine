@@ -273,6 +273,17 @@ pub(crate) fn mc_biome_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> Biome {
     overworld_for(ctx.effective_seed()).biome_at(wx, wz)
 }
 
+/// W211: the REAL MC biome at world column `(wx, wz)` (ocean variants,
+/// rivers, birch/dark/flower forests...). The feature passes key their
+/// content tables on this; the engine palette is derived at the edges.
+pub(crate) fn mc_full_biome_at(
+    ctx: &WorldgenCtx,
+    wx: i32,
+    wz: i32,
+) -> super::biome::McBiome {
+    overworld_for(ctx.effective_seed()).mc_biome_at(wx, wz)
+}
+
 /// Surface height at world column `(wx, wz)` for the MC profile - used
 /// by spawn placement (`column_height`). Builds/uses the cached
 /// overworld for the ctx seed.

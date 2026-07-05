@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::biome::{mc_biome, peaks_valleys};
+use super::biome::{McBiome, mc_biome_full};
 use super::data;
 use super::density::{Df, NoiseResolver, parse};
 use super::noise::{NoiseParams, NormalNoise};
@@ -49,17 +49,25 @@ impl Overworld {
         self.final_density.eval(x as f64, y as f64, z as f64)
     }
 
-    /// Engine biome at world column `(x, z)`, from MC's real climate
-    /// field. The temperature / vegetation channels are xz-only and
-    /// continents / erosion / ridges are 2D, so `y` doesn't matter.
+    /// Engine biome at world column `(x, z)` - the full classification
+    /// collapsed to the legacy 11-biome palette.
     pub(crate) fn biome_at(&self, x: i32, z: i32) -> Biome {
+        self.mc_biome_at(x, z).to_engine()
+    }
+
+    /// W211: the REAL MC biome at world column `(x, z)` - the full
+    /// OverworldBiomeBuilder classification (ocean variants, rivers,
+    /// birch/dark/flower forests, ...) before the engine collapse. The
+    /// temperature / vegetation channels are xz-only and continents /
+    /// erosion / ridges are 2D, so `y` doesn't matter.
+    pub(crate) fn mc_biome_at(&self, x: i32, z: i32) -> McBiome {
         let (fx, fz) = (x as f64, z as f64);
         let t = self.temperature.eval(fx, 0.0, fz);
         let v = self.vegetation.eval(fx, 0.0, fz);
         let c = self.continents.eval(fx, 0.0, fz);
         let e = self.erosion.eval(fx, 0.0, fz);
         let w = self.ridges.eval(fx, 0.0, fz);
-        mc_biome(t, v, c, e, peaks_valleys(w))
+        mc_biome_full(t, v, c, e, w)
     }
 
     /// MC surface block for a column cell, or `None` to leave whatever
