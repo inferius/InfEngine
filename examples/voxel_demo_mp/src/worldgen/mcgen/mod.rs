@@ -35,6 +35,7 @@ pub(crate) mod biome;
 pub(crate) mod carver;
 pub(crate) mod cave_features;
 pub(crate) mod colors;
+pub(crate) mod coral;
 pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod features;

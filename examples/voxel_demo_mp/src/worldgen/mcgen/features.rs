@@ -878,6 +878,9 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::trees::place_trees(chunk, coord, ctx, origin);
     // W223: bamboo stands + sea pickles share the vegetal step.
     super::bamboo::place_bamboo(chunk, coord, ctx, origin);
+    // W228: warm-ocean coral BEFORE the pickles + seagrass, matching
+    // the warm_ocean.json vegetal order.
+    super::coral::place_corals(chunk, coord, ctx, origin);
     super::aquatic_features::place_sea_pickles(chunk, coord, ctx, origin);
     // W224: jungle vines (after the trees so canopies host them).
     super::vines::place_vines(chunk, coord, ctx, origin);
@@ -1065,6 +1068,10 @@ mod tests {
     #[test]
     fn no_floating_ocean_plants() {
         let pickle = block_id_by_name("sea_pickle").unwrap();
+        // W228: coral plants are top decorations (solid below); the
+        // FANS stay out - wall fans legitimately hang off a block's
+        // side with water underneath.
+        let coral_plant = |id: u16| (782..=786).contains(&id);
         let plant = |id: u16| {
             id == SEAGRASS_ID
                 || id == TALL_SEAGRASS_BOTTOM_ID
@@ -1072,6 +1079,7 @@ mod tests {
                 || id == KELP_ID
                 || id == KELP_PLANT_ID
                 || id == pickle
+                || coral_plant(id)
         };
         let c = WorldgenCtx {
             base_seed: 3592732596,

@@ -392,6 +392,18 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         }
         x if x == crate::block::KELP_ID => Some("block/cross/kelp"),
         x if x == crate::block::KELP_PLANT_ID => Some("block/cross/kelp_plant"),
+        // W228: coral plants + fans (F_SWIM waterlogged like the
+        // seagrass family; the cross stands in for MC's fan plate).
+        782 => Some("block/cross/tube_coral"),
+        783 => Some("block/cross/brain_coral"),
+        784 => Some("block/cross/bubble_coral"),
+        785 => Some("block/cross/fire_coral"),
+        786 => Some("block/cross/horn_coral"),
+        787 => Some("block/cross/tube_coral_fan"),
+        788 => Some("block/cross/brain_coral_fan"),
+        789 => Some("block/cross/bubble_coral_fan"),
+        790 => Some("block/cross/fire_coral_fan"),
+        791 => Some("block/cross/horn_coral_fan"),
         // W12.2 - slab / fence / door / stairs / pane / bars / wall.
         x if x == OAK_SLAB_ID
             || x == STONE_SLAB_ID

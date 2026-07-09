@@ -116,10 +116,12 @@ pub(crate) fn block_is_transparent_render(b: BlockId) -> bool {
 /// the water renders an air-pocket box around every plant.
 pub(crate) fn block_is_waterlogged(id: u16) -> bool {
     // W223: sea pickles (774) are always-waterlogged like kelp.
+    // W228: coral plants (782-786) + fans (787-791); the solid coral
+    // BLOCKS (777-781) are not.
     matches!(
         id,
         SEAGRASS_ID | TALL_SEAGRASS_BOTTOM_ID | TALL_SEAGRASS_TOP_ID
-            | KELP_ID | KELP_PLANT_ID | 774
+            | KELP_ID | KELP_PLANT_ID | 774 | 782..=791
     )
 }
 

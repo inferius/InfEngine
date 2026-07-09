@@ -2445,6 +2445,22 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 775, name: "vine", display: Some("Vines"), places: Some(775), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W227 - cherry grove petals.
     ItemType { id: 776, name: "pink_petals", display: Some("Pink Petals"), places: Some(776), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W228 - the coral family.
+    ItemType { id: 777, name: "tube_coral_block", display: Some("Tube Coral Block"), places: Some(777), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 778, name: "brain_coral_block", display: Some("Brain Coral Block"), places: Some(778), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 779, name: "bubble_coral_block", display: Some("Bubble Coral Block"), places: Some(779), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 780, name: "fire_coral_block", display: Some("Fire Coral Block"), places: Some(780), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 781, name: "horn_coral_block", display: Some("Horn Coral Block"), places: Some(781), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 782, name: "tube_coral", display: Some("Tube Coral"), places: Some(782), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 783, name: "brain_coral", display: Some("Brain Coral"), places: Some(783), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 784, name: "bubble_coral", display: Some("Bubble Coral"), places: Some(784), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 785, name: "fire_coral", display: Some("Fire Coral"), places: Some(785), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 786, name: "horn_coral", display: Some("Horn Coral"), places: Some(786), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 787, name: "tube_coral_fan", display: Some("Tube Coral Fan"), places: Some(787), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 788, name: "brain_coral_fan", display: Some("Brain Coral Fan"), places: Some(788), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 789, name: "bubble_coral_fan", display: Some("Bubble Coral Fan"), places: Some(789), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 790, name: "fire_coral_fan", display: Some("Fire Coral Fan"), places: Some(790), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 791, name: "horn_coral_fan", display: Some("Horn Coral Fan"), places: Some(791), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
