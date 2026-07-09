@@ -102,6 +102,8 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("pine_on_snow", include_str!("data/feature/placed/pine_on_snow.json")),
     ("super_birch_bees", include_str!("data/feature/placed/super_birch_bees.json")),
     ("fancy_oak_bees", include_str!("data/feature/placed/fancy_oak_bees.json")),
+    // W227.2.
+    ("trees_cherry", include_str!("data/feature/placed/trees_cherry.json")),
 ];
 
 const TREE_CONFIGURED: &[(&str, &str)] = &[
@@ -159,6 +161,8 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("trees_grove", include_str!("data/feature/configured/trees_grove.json")),
     ("super_birch_bees", include_str!("data/feature/configured/super_birch_bees.json")),
     ("fancy_oak_bees", include_str!("data/feature/configured/fancy_oak_bees.json")),
+    // W227.2.
+    ("cherry_bees_005", include_str!("data/feature/configured/cherry_bees_005.json")),
 ];
 
 /// MC IntProvider: constant or uniform.
@@ -182,6 +186,12 @@ impl IntProv {
                 let n = v["value"].as_i64().expect("value") as i32;
                 IntProv { min: n, max: n }
             }
+            // W227.2: UniformInt.MAP_CODEC inlines without a "type"
+            // (cherry branch_start_offset_from_top).
+            None if v["min_inclusive"].is_i64() && v["max_inclusive"].is_i64() => IntProv {
+                min: v["min_inclusive"].as_i64().unwrap() as i32,
+                max: v["max_inclusive"].as_i64().unwrap() as i32,
+            },
             other => panic!("unsupported IntProvider {other:?}"),
         }
     }
@@ -211,6 +221,15 @@ enum Trunk {
     /// W224: DarkOakTrunkPlacer - a leaning 2x2 column with short
     /// corner branches under the crown.
     DarkOak,
+    /// W227.2: CherryTrunkPlacer - a straight trunk that ends in 1-3
+    /// branches (two opposite side branches + an optional middle top),
+    /// each walking to its end point by manhattan-distance chance.
+    Cherry {
+        branch_count: IntProv,
+        branch_horizontal: IntProv,
+        branch_start: IntProv,
+        branch_end: IntProv,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -231,6 +250,15 @@ enum Foliage {
     /// W224: DarkOakFoliagePlacer - the wide flat canopy (rows -1..=2
     /// with the corner trims from source).
     DarkOak,
+    /// W227.2: CherryFoliagePlacer - the wide pink crown with corner
+    /// holes and hanging leaves under the two bottom rows.
+    Cherry {
+        height: IntProv,
+        wide_bottom_hole: f32,
+        corner_hole: f32,
+        hanging: f32,
+        hanging_ext: f32,
+    },
 }
 
 /// One fully-parsed MC tree configured_feature.
@@ -312,6 +340,38 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         Some("minecraft:mega_jungle_trunk_placer") => Trunk::MegaJungle,
         Some("minecraft:giant_trunk_placer") => Trunk::Giant,
         Some("minecraft:dark_oak_trunk_placer") => Trunk::DarkOak,
+        Some("minecraft:cherry_trunk_placer") => Trunk::Cherry {
+            // branch_count is a weighted_list of {1,2,3} with EQUAL
+            // weights in the jar data - identical to a uniform pick,
+            // which IntProv models; unequal weights would need a
+            // weighted provider (fail loudly via the range assert).
+            branch_count: {
+                let c = &tp["branch_count"];
+                if c["type"].as_str() == Some("minecraft:weighted_list") {
+                    let rows: Vec<(u64, i64)> = c["distribution"]
+                        .as_array()
+                        .expect("branch_count distribution")
+                        .iter()
+                        .map(|e| {
+                            (e["weight"].as_u64().expect("weight"), e["data"].as_i64().expect("data"))
+                        })
+                        .collect();
+                    assert!(
+                        rows.windows(2).all(|w| w[0].0 == w[1].0),
+                        "cherry branch_count weights must be uniform"
+                    );
+                    IntProv {
+                        min: rows.iter().map(|(_, d)| *d).min().unwrap() as i32,
+                        max: rows.iter().map(|(_, d)| *d).max().unwrap() as i32,
+                    }
+                } else {
+                    IntProv::parse(c)
+                }
+            },
+            branch_horizontal: IntProv::parse(&tp["branch_horizontal_length"]),
+            branch_start: IntProv::parse(&tp["branch_start_offset_from_top"]),
+            branch_end: IntProv::parse(&tp["branch_end_offset_from_top"]),
+        },
         _ => return TreeRef::Unsupported(name), // bending / upwards_branching / ...
     };
     let fp = &cfg["foliage_placer"];
@@ -339,6 +399,13 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
             crown: IntProv::parse(&fp["crown_height"]),
         },
         Some("minecraft:dark_oak_foliage_placer") => Foliage::DarkOak,
+        Some("minecraft:cherry_foliage_placer") => Foliage::Cherry {
+            height: IntProv::parse(&fp["height"]),
+            wide_bottom_hole: fp["wide_bottom_layer_hole_chance"].as_f64().expect("hole") as f32,
+            corner_hole: fp["corner_hole_chance"].as_f64().expect("corner") as f32,
+            hanging: fp["hanging_leaves_chance"].as_f64().expect("hanging") as f32,
+            hanging_ext: fp["hanging_leaves_extension_chance"].as_f64().expect("ext") as f32,
+        },
         _ => return TreeRef::Unsupported(name),
     };
     let log_name = cfg["trunk_provider"]["state"]["Name"].as_str().expect("trunk block");
@@ -471,6 +538,7 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "trees_grove",
             "trees_windswept_forest",
             "trees_windswept_savanna",
+            "trees_cherry",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -510,15 +578,15 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         B::Swamp | B::MangroveSwamp => Some("trees_swamp"),
         // W227: the high/peaks slice biomes. Pale garden hosts the
         // dark-forest canopy (pale oaks share the dark-oak placer
-        // shape; only the blocks are missing). Cherry grove waits for
-        // the cherry trunk/foliage placers (W227.2).
+        // shape; only the blocks are missing).
         B::Meadow => Some("trees_meadow"),
         B::WoodedBadlands => Some("trees_badlands"),
         B::Grove => Some("trees_grove"),
         B::WindsweptForest => Some("trees_windswept_forest"),
         B::WindsweptSavanna => Some("trees_windswept_savanna"),
         B::PaleGarden => Some("dark_forest_vegetation"),
-        B::CherryGrove => None,
+        // W227.2: the real cherry placers.
+        B::CherryGrove => Some("trees_cherry"),
         // W222: trees_water - the rare bank/island oaks the ocean +
         // river biomes list (surface_water_depth 0 keeps them on land).
         B::River
@@ -690,14 +758,172 @@ fn place_leaves_row(
                 Foliage::MegaJungle { .. } | Foliage::MegaPine { .. } => {
                     adx + adz >= 7 || adx * adx + adz * adz > radius * radius
                 }
-                // DarkOak places its rows inline (signed trims) and
-                // never routes through this helper.
-                Foliage::DarkOak => false,
+                // DarkOak + Cherry place their rows inline and never
+                // route through this helper.
+                Foliage::DarkOak | Foliage::Cherry { .. } => false,
             };
             if !skip {
                 set_leaf(chunk, origin, att[0] + dx, att[1] + y, att[2] + dz, def.leaves);
             }
         }
+    }
+}
+
+/// W227.2 `CherryFoliagePlacer.shouldSkipLocation` (abs-folded coords):
+/// bottom-row edge holes, then corner holes (widened past 2r-2 on wide
+/// layers). Short-circuit order preserved - rolls fire exactly when
+/// MC's do (geometry-gated, chunk-independent).
+fn cherry_skip(
+    rng: &mut SplitMix64,
+    adx: i32,
+    y: i32,
+    adz: i32,
+    r: i32,
+    wide_bottom_hole: f32,
+    corner_hole: f32,
+) -> bool {
+    if y == -1 && (adx == r || adz == r) && rng.next_f64() < wide_bottom_hole as f64 {
+        return true;
+    }
+    let corner = adx == r && adz == r;
+    if r > 2 {
+        corner || (adx + adz > 2 * r - 2 && rng.next_f64() < corner_hole as f64)
+    } else {
+        corner && rng.next_f64() < corner_hole as f64
+    }
+}
+
+/// One cherry leaves row, tracking written cells - the stand-in for
+/// MC's `FoliageSetter.isSet` (feature-local, chunk-independent, so
+/// every replay decides the hanging pass identically).
+#[allow(clippy::too_many_arguments)]
+fn cherry_row(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    rng: &mut SplitMix64,
+    def: &TreeDef,
+    att: [i32; 3],
+    r: i32,
+    y: i32,
+    wide_bottom_hole: f32,
+    corner_hole: f32,
+    written: &mut std::collections::HashSet<(i32, i32, i32)>,
+) {
+    if r < 0 {
+        return;
+    }
+    for dx in -r..=r {
+        for dz in -r..=r {
+            if !cherry_skip(rng, dx.abs(), y, dz.abs(), r, wide_bottom_hole, corner_hole) {
+                let (x, yy, z) = (att[0] + dx, att[1] + y, att[2] + dz);
+                written.insert((x, yy, z));
+                set_leaf(chunk, origin, x, yy, z, def.leaves);
+            }
+        }
+    }
+}
+
+/// `FoliagePlacer.placeLeavesRowWithHangingLeavesBelow` for the cherry
+/// crown: the row itself, then hanging leaves under the row's edge
+/// cells (chance-gated, manhattan-limited from the attachment log),
+/// with a second chance-gated extension one deeper.
+#[allow(clippy::too_many_arguments)]
+fn cherry_hanging_row(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    rng: &mut SplitMix64,
+    def: &TreeDef,
+    att: [i32; 3],
+    r: i32,
+    y: i32,
+    wide_bottom_hole: f32,
+    corner_hole: f32,
+    hanging: f32,
+    hanging_ext: f32,
+    written: &mut std::collections::HashSet<(i32, i32, i32)>,
+) {
+    cherry_row(chunk, origin, rng, def, att, r, y, wide_bottom_hole, corner_hole, written);
+    if r < 0 {
+        return;
+    }
+    let log_pos = [att[0], att[1] - 1, att[2]];
+    let manhattan = |p: [i32; 3]| {
+        (p[0] - log_pos[0]).abs() + (p[1] - log_pos[1]).abs() + (p[2] - log_pos[2]).abs()
+    };
+    // Plane.HORIZONTAL order (N, E, S, W); the edge normal is the
+    // clockwise direction of the walk direction.
+    const ALONG: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const TO_EDGE: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    for e in 0..4 {
+        let along = ALONG[e];
+        let to_edge = TO_EDGE[e];
+        let mut pos = [
+            att[0] + to_edge[0] * r - along[0] * r,
+            att[1] + y - 1,
+            att[2] + to_edge[1] * r - along[1] * r,
+        ];
+        let mut o = -r;
+        while o < r {
+            let above_set = written.contains(&(pos[0], pos[1] + 1, pos[2]));
+            if above_set && manhattan(pos) < 7 && rng.next_f64() < hanging as f64 {
+                written.insert((pos[0], pos[1], pos[2]));
+                set_leaf(chunk, origin, pos[0], pos[1], pos[2], def.leaves);
+                let below = [pos[0], pos[1] - 1, pos[2]];
+                if manhattan(below) < 7 && rng.next_f64() < hanging_ext as f64 {
+                    written.insert((below[0], below[1], below[2]));
+                    set_leaf(chunk, origin, below[0], below[1], below[2], def.leaves);
+                }
+            }
+            o += 1;
+            pos[0] += along[0];
+            pos[2] += along[1];
+        }
+    }
+}
+
+/// W227.2 `CherryTrunkPlacer.generateBranch`: two horizontal steps out
+/// of the trunk (one when the branch ends the tree), then a walk to the
+/// end point choosing vertical-vs-horizontal by manhattan-distance
+/// ratio. Returns the branch-end foliage attachment.
+#[allow(clippy::too_many_arguments)]
+fn cherry_branch(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    rng: &mut SplitMix64,
+    def: &TreeDef,
+    base: [i32; 3],
+    tree_height: i32,
+    dir: [i32; 2],
+    offset_from_origin: i32,
+    middle_continues_up: bool,
+    branch_horizontal: IntProv,
+    branch_end: IntProv,
+) -> ([i32; 3], i32, bool) {
+    let mut log = [base[0], base[1] + offset_from_origin, base[2]];
+    let end_off = tree_height - 1 + branch_end.sample(rng);
+    let extend = middle_continues_up || end_off < offset_from_origin;
+    let dist = branch_horizontal.sample(rng) + if extend { 1 } else { 0 };
+    let end = [base[0] + dir[0] * dist, base[1] + end_off, base[2] + dir[1] * dist];
+    let steps = if extend { 2 } else { 1 };
+    for _ in 0..steps {
+        log[0] += dir[0];
+        log[2] += dir[1];
+        set_log(chunk, origin, log[0], log[1], log[2], def.log);
+    }
+    let vdir = if end[1] > log[1] { 1 } else { -1 };
+    loop {
+        let d = (end[0] - log[0]).abs() + (end[1] - log[1]).abs() + (end[2] - log[2]).abs();
+        if d == 0 {
+            return ([end[0], end[1] + 1, end[2]], 0, false);
+        }
+        let chance = (end[1] - log[1]).abs() as f64 / d as f64;
+        if rng.next_f64() < chance {
+            log[1] += vdir;
+        } else {
+            log[0] += dir[0];
+            log[2] += dir[1];
+        }
+        set_log(chunk, origin, log[0], log[1], log[2], def.log);
     }
 }
 
@@ -727,6 +953,7 @@ fn place_tree(
         Foliage::MegaPine { crown } => crown.sample(rng),
         Foliage::DarkOak => 4,
         Foliage::Acacia => 0,
+        Foliage::Cherry { height, .. } => height.sample(rng),
     };
     let trunk_height = tree_height - foliage_height;
     let mut leaf_radius = def.radius.sample(rng);
@@ -897,6 +1124,64 @@ fn place_tree(
                     }
                     attachments.push(([base[0] + ox, ey, base[2] + oz], 0, false));
                 }
+            }
+        }
+        Trunk::Cherry { branch_count, branch_horizontal, branch_start, branch_end } => {
+            // CherryTrunkPlacer.placeTrunk, line-for-line (the
+            // below-trunk dirt provider is skipped like every other
+            // placer's). Branch starts hang off the top; the second
+            // start samples one shorter and shifts up past the first.
+            let first = (tree_height - 1 + branch_start.sample(rng)).max(0);
+            let second_prov = IntProv { min: branch_start.min, max: branch_start.max - 1 };
+            let mut second = (tree_height - 1 + second_prov.sample(rng)).max(0);
+            if second >= first {
+                second += 1;
+            }
+            let count = branch_count.sample(rng);
+            let middle = count == 3;
+            let both = count >= 2;
+            let trunk_h = if middle {
+                tree_height
+            } else if both {
+                first.max(second) + 1
+            } else {
+                first + 1
+            };
+            for y in 0..trunk_h {
+                set_log(chunk, origin, base[0], base[1] + y, base[2], def.log);
+            }
+            if middle {
+                attachments.push(([base[0], base[1] + trunk_h, base[2]], 0, false));
+            }
+            const DIRS: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+            let dir = DIRS[(rng.next_u64() % 4) as usize];
+            attachments.push(cherry_branch(
+                chunk,
+                origin,
+                rng,
+                def,
+                base,
+                tree_height,
+                dir,
+                first,
+                first < trunk_h - 1,
+                branch_horizontal,
+                branch_end,
+            ));
+            if both {
+                attachments.push(cherry_branch(
+                    chunk,
+                    origin,
+                    rng,
+                    def,
+                    base,
+                    tree_height,
+                    [-dir[0], -dir[1]],
+                    second,
+                    second < trunk_h - 1,
+                    branch_horizontal,
+                    branch_end,
+                ));
             }
         }
         Trunk::Forking => {
@@ -1076,6 +1361,29 @@ fn place_tree(
                         }
                     }
                 }
+            }
+            Foliage::Cherry { wide_bottom_hole, corner_hole, hanging, hanging_ext, .. } => {
+                // W227.2 CherryFoliagePlacer.createFoliage: two
+                // shrinking top rows, the full-radius body, then the
+                // two bottom rows growing hanging leaves below their
+                // edges. `written` stands in for MC's FoliageSetter
+                // set-tracking (feature-local, replay-consistent).
+                let (wb, ch, hg, he) = (*wide_bottom_hole, *corner_hole, *hanging, *hanging_ext);
+                let ap = [att[0], att[1] + offset, att[2]];
+                let cr = leaf_radius + rad_off - 1;
+                let mut written: std::collections::HashSet<(i32, i32, i32)> =
+                    std::collections::HashSet::new();
+                cherry_row(chunk, origin, rng, def, ap, cr - 2, foliage_height - 3, wb, ch, &mut written);
+                cherry_row(chunk, origin, rng, def, ap, cr - 1, foliage_height - 4, wb, ch, &mut written);
+                let mut y = foliage_height - 5;
+                while y >= 0 {
+                    cherry_row(chunk, origin, rng, def, ap, cr, y, wb, ch, &mut written);
+                    y -= 1;
+                }
+                cherry_hanging_row(chunk, origin, rng, def, ap, cr, -1, wb, ch, hg, he, &mut written);
+                cherry_hanging_row(
+                    chunk, origin, rng, def, ap, cr - 1, -2, wb, ch, hg, he, &mut written,
+                );
             }
             Foliage::MegaPine { .. } => {
                 // W222: MegaPineFoliagePlacer, ascending rows: radius
@@ -1305,6 +1613,45 @@ mod tests {
             }
             _ => panic!("fallen_oak_tree should parse as Fallen"),
         }
+    }
+
+    /// W227.2: the cherry placers parse from the jar data and place a
+    /// branching trunk with a leafy crown.
+    #[test]
+    fn cherry_tree_parses_and_places() {
+        let TreeRef::Tree(d) = parse_tree_conf("cherry_bees_005") else {
+            panic!("cherry_bees_005 should parse as a tree");
+        };
+        assert_eq!(Some(d.log), block_id_by_name("cherry_log"));
+        assert_eq!(Some(d.leaves), block_id_by_name("cherry_leaves"));
+        assert!(matches!(d.trunk, Trunk::Cherry { .. }));
+        assert!(
+            matches!(d.foliage, Foliage::Cherry { hanging, .. } if (hanging - 1.0 / 6.0).abs() < 1e-6)
+        );
+        let mut chunk = Chunk::empty();
+        let mut rng = SplitMix64::new(7);
+        place_tree(&mut chunk, [0, 0, 0], &mut rng, &d, [8, 1, 8]);
+        let mut logs = 0u32;
+        let mut off_axis_logs = 0u32;
+        let mut leaves = 0u32;
+        for x in 0..16 {
+            for y in 0..16 {
+                for z in 0..16 {
+                    let id = chunk.get(x, y, z).0;
+                    if Some(id) == block_id_by_name("cherry_log") {
+                        logs += 1;
+                        if (x, z) != (8, 8) {
+                            off_axis_logs += 1;
+                        }
+                    } else if Some(id) == block_id_by_name("cherry_leaves") {
+                        leaves += 1;
+                    }
+                }
+            }
+        }
+        assert!(logs >= 8, "cherry trunk + branches expected, got {logs} logs");
+        assert!(off_axis_logs > 0, "cherry must grow side branches");
+        assert!(leaves > 30, "cherry crown expected, got {leaves} leaves");
     }
 
     /// Evidence: land chunks in tree biomes actually grow logs + leaves.
