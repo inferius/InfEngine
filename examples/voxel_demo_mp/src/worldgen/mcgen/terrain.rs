@@ -65,9 +65,20 @@ pub(crate) struct McCol {
 /// W213: everything the ~24 vertical chunks of one chunk column share:
 /// per-column tops + biomes, the 256-bit per-column solidity bitsets,
 /// the interpolation lattices and the (lazily filling) aquifer.
+///
+/// W226.1: solidity exists in TWO stages, matching MC's generation
+/// order (surface -> carvers -> features). `solid`/`cols[].top` are the
+/// PRE-carve fill the surface rules painted; `solid_pc`/`floor` are the
+/// POST-carve state the feature stage anchors to (MC updates heightmaps
+/// on every carver setBlock - anchoring features to the fill made
+/// seagrass float over carver-cut seabeds).
 pub(crate) struct McColumnData {
     cols: [[McCol; CHUNK_SIZE]; CHUNK_SIZE],
     solid: Box<[[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    /// Post-carve solidity (the carver dry-run mask).
+    solid_pc: Box<[[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    /// Post-carve topmost-solid per column (OCEAN_FLOOR heightmap).
+    floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
     cells: CellLattices,
     aquifer: RefCell<Aquifer>,
 }
@@ -78,6 +89,14 @@ impl McColumnData {
             return false;
         }
         (self.solid[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
+    }
+
+    /// Post-carve solidity (feature-stage view).
+    fn is_solid_pc(&self, lx: usize, y: i32, lz: usize) -> bool {
+        if !(0..256).contains(&y) {
+            return false;
+        }
+        (self.solid_pc[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
     }
 
     /// Solid cells between `y` and the top of its contiguous solid run
@@ -130,7 +149,7 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
     let ox = cx * cs;
     let oz = cz * cs;
     let cells = ow.build_cells(ox, oz, LATTICE_TOP);
-    let aquifer = RefCell::new(Aquifer::new(ow, seed, ox, oz));
+    let mut aquifer = Aquifer::new(ow, seed, ox, oz);
     let mut solid = Box::new([[[0u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]);
     let mut cols =
         [[McCol { top: 0, mc: McBiome::Plains, surface_depth: 3 }; CHUNK_SIZE]; CHUNK_SIZE];
@@ -152,7 +171,29 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
             };
         }
     }
-    McColumnData { cols, solid, cells, aquifer }
+    // W226.1: replay the carvers against a copy of the bitset so the
+    // feature stage (mc_floor_at / column_is_solid) sees the carved
+    // terrain. Same walks + rng as the per-slice chunk carve.
+    let mut solid_pc = solid.clone();
+    super::carver::carve_mask(&mut solid_pc, cx, cz, seed, ow, &mut aquifer);
+    let mut floor = [[0i32; CHUNK_SIZE]; CHUNK_SIZE];
+    for lx in 0..CHUNK_SIZE {
+        for lz in 0..CHUNK_SIZE {
+            floor[lx][lz] = top_set_bit(&solid_pc[lx][lz]);
+        }
+    }
+    McColumnData { cols, solid, solid_pc, floor, cells, aquifer: RefCell::new(aquifer) }
+}
+
+/// Highest set bit of a 256-bit column bitset (0 when empty, matching
+/// the pre-carve `top` fallback).
+fn top_set_bit(bits: &[u64; 4]) -> i32 {
+    for w in (0..4).rev() {
+        if bits[w] != 0 {
+            return w as i32 * 64 + 63 - bits[w].leading_zeros() as i32;
+        }
+    }
+    0
 }
 
 /// Cached per-column data for `(cx, cz, seed)`.
@@ -204,25 +245,27 @@ pub(crate) fn mc_column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
 
 /// W201: seabed/surface height at world column `(wx, wz)` from the SAME
 /// cached per-chunk column grid `gen_mc` filled the terrain with - so the
-/// ocean-flora pass sees exactly the floor that was generated.
+/// ocean-flora pass sees exactly the floor that was generated. W226.1:
+/// POST-carve (MC's live heightmaps track carver setBlocks; features
+/// must anchor to the carved seabed, not the fill).
 pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let cs = CHUNK_SIZE as i32;
     let col = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
-    col.cols[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize].top
+    col.floor[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize]
 }
 
-/// W220: PRE-DECORATION solidity of the interpolated field at any world
-/// cell, from the cached column bitsets. Replay-invariant (every chunk
-/// that consults a shared cell agrees) - the lava-lake border checks
-/// key on this.
+/// W220: PRE-DECORATION solidity at any world cell, from the cached
+/// column bitsets. Replay-invariant (every chunk that consults a shared
+/// cell agrees) - the lava-lake border checks key on this. W226.1:
+/// post-carve, matching what the feature stage finds in real chunks.
 pub(crate) fn column_is_solid(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> bool {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let cs = CHUNK_SIZE as i32;
     let col = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
-    col.is_solid(wx.rem_euclid(cs) as usize, wy, wz.rem_euclid(cs) as usize)
+    col.is_solid_pc(wx.rem_euclid(cs) as usize, wy, wz.rem_euclid(cs) as usize)
 }
 
 /// 16x16 "steep slope" flags from the heightmap gradient: a column is

@@ -289,8 +289,30 @@ fn set_if_water(
     }
 }
 
+/// Is the chunk cell for world `(wx, wy, wz)` water? Cells outside
+/// this chunk (or vertical slice) count as water - sub-sea fill IS
+/// water, and every slice replays the same walk, so the owning slice
+/// applies the real check to its own cells. (W226.1 honest edge: a
+/// feature-placed obstacle in a NEIGHBOURING slice is invisible here,
+/// so a pair/stalk crossing a slice border can straddle it - cosmetic,
+/// since every write still goes through `set_if_water`.)
+fn water_or_off_slice(chunk: &Chunk, origin: [i32; 3], wx: i32, wy: i32, wz: i32) -> bool {
+    let cs = CHUNK_SIZE as i32;
+    let lx = wx - origin[0];
+    let ly = wy - origin[1];
+    let lz = wz - origin[2];
+    if !(0..cs).contains(&lx) || !(0..cs).contains(&ly) || !(0..cs).contains(&lz) {
+        return true;
+    }
+    chunk.get(lx as usize, ly as usize, lz as usize).0 == WATER_ID
+}
+
 /// One seagrass try from source chunk `(scx, scz)` - MC's
 /// SeagrassFeature: +/-8 scatter, OCEAN_FLOOR heightmap, tall roll.
+/// W226.1: the tall pair places atomically - MC writes both halves
+/// only when the base cell is water (a blocked base places NOTHING),
+/// emulated slice-independently via the `occupied` column tracker.
+#[allow(clippy::too_many_arguments)]
 fn seagrass_try(
     chunk: &mut Chunk,
     origin: [i32; 3],
@@ -299,6 +321,7 @@ fn seagrass_try(
     rng: &mut SplitMix64,
     scx: i32,
     scz: i32,
+    occupied: &mut std::collections::HashSet<(i32, i32)>,
 ) {
     let cs = CHUNK_SIZE as i32;
     // in_square: uniform 0..16 inside the source chunk.
@@ -314,8 +337,19 @@ fn seagrass_try(
     if floor >= SEA_LEVEL {
         return; // not ocean floor (the `biome` modifier at our resolution)
     }
+    // MC: an occupied grassPos skips the whole try. The tracker stands
+    // in for the cell read so every vertical slice decides identically
+    // (a pair's base cell is invisible across a slice border).
+    if !occupied.insert((wx, wz)) {
+        return;
+    }
     let base = floor + 1;
-    if tall && base < SEA_LEVEL {
+    if tall {
+        // The upper half must land in water too - at the surface
+        // (base + 1 == SEA_LEVEL is air) MC places nothing.
+        if base + 1 >= SEA_LEVEL {
+            return;
+        }
         set_if_water(chunk, origin, wx, base, wz, TALL_SEAGRASS_BOTTOM_ID);
         set_if_water(chunk, origin, wx, base + 1, wz, TALL_SEAGRASS_TOP_ID);
     } else {
@@ -323,8 +357,12 @@ fn seagrass_try(
     }
 }
 
-/// One kelp try (KelpFeature): column of kelp_plant topped by kelp,
-/// height 1 + rand(10), never above sea level.
+/// One kelp try - MC's KelpFeature: walk up from the OCEAN_FLOOR
+/// heightmap cell writing kelp_plant while both the cell and the cell
+/// above are water; the first obstacle ends the stalk by replacing its
+/// last kelp_plant with the kelp tip (W226.1 - the old port skipped
+/// obstacles and kept writing above them, leaving floating segments).
+#[allow(clippy::too_many_arguments)]
 fn kelp_try(
     chunk: &mut Chunk,
     origin: [i32; 3],
@@ -332,27 +370,45 @@ fn kelp_try(
     rng: &mut SplitMix64,
     scx: i32,
     scz: i32,
+    occupied: &mut std::collections::HashSet<(i32, i32)>,
 ) {
     let cs = CHUNK_SIZE as i32;
     let rx = (rng.next_u64() % 16) as i32;
     let rz = (rng.next_u64() % 16) as i32;
-    let len = 1 + (rng.next_u64() % 10) as i32;
+    let height = 1 + (rng.next_u64() % 10) as i32;
     let wx = scx * cs + rx;
     let wz = scz * cs + rz;
     let floor = mc_floor_at(ctx, wx, wz);
     if floor >= SEA_LEVEL {
         return;
     }
-    // Clamp the stalk under the surface (MC kelp stops at the top
-    // water cell).
-    let eff = len.min(SEA_LEVEL - floor);
-    if eff < 1 {
+    // Column already claimed by an earlier aquatic plant (MC: the base
+    // cell wouldn't be water) - slice-independent, see seagrass_try.
+    if !occupied.insert((wx, wz)) {
         return;
     }
-    for j in 0..eff {
-        let wy = floor + 1 + j;
-        let id = if j == eff - 1 { KELP_ID } else { KELP_PLANT_ID };
-        set_if_water(chunk, origin, wx, wy, wz, id);
+    for (wy, h) in (floor + 1..).zip(0..=height) {
+        // MC: current AND above must be water (above sea level is air).
+        let cur_water = wy < SEA_LEVEL && water_or_off_slice(chunk, origin, wx, wy, wz);
+        let above_water =
+            wy + 1 < SEA_LEVEL && water_or_off_slice(chunk, origin, wx, wy + 1, wz);
+        if cur_water && above_water {
+            let id = if h == height { KELP_ID } else { KELP_PLANT_ID };
+            set_if_water(chunk, origin, wx, wy, wz, id);
+        } else {
+            if h > 0 {
+                // End the stalk: its last kelp_plant becomes the tip.
+                let (lx, ly, lz) = (wx - origin[0], wy - 1 - origin[1], wz - origin[2]);
+                if (0..cs).contains(&lx)
+                    && (0..cs).contains(&ly)
+                    && (0..cs).contains(&lz)
+                    && chunk.get(lx as usize, ly as usize, lz as usize).0 == KELP_PLANT_ID
+                {
+                    chunk.set(lx as usize, ly as usize, lz as usize, BlockId(KELP_ID));
+                }
+            }
+            return;
+        }
     }
 }
 
@@ -841,6 +897,13 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W211: the flora set is the REAL MC biome's list (ocean variants,
     // rivers). Seagrass scatters +/-8 out of its source chunk, so the
     // 3x3 source-chunk neighbourhood replays; kelp stays in_square.
+    //
+    // W226.1: `occupied` = one aquatic plant per column, decided purely
+    // stream-side. Every vertical slice replays the same streams in the
+    // same order, so the tracker reaches identical decisions everywhere
+    // - unlike a chunk-cell read, which can't see a pair's base cell
+    // across a slice border (the source of orphaned tall-seagrass tops).
+    let mut occupied: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
             let mc = super::terrain::mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
@@ -853,7 +916,14 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
                     FloraKind::Seagrass { tall_probability } => {
                         for _ in 0..count {
                             seagrass_try(
-                                chunk, origin, ctx, tall_probability, &mut rng, scx, scz,
+                                chunk,
+                                origin,
+                                ctx,
+                                tall_probability,
+                                &mut rng,
+                                scx,
+                                scz,
+                                &mut occupied,
                             );
                         }
                     }
@@ -863,7 +933,7 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
                         // are independent, so skipping burns no rolls).
                         if scx == coord[0] && scz == coord[2] {
                             for _ in 0..count {
-                                kelp_try(chunk, origin, ctx, &mut rng, scx, scz);
+                                kelp_try(chunk, origin, ctx, &mut rng, scx, scz, &mut occupied);
                             }
                         }
                     }
@@ -985,6 +1055,100 @@ mod tests {
         }
         panic!(
             "no flora in {ocean_chunks} ocean chunks: seagrass={seagrass} kelp={kelp}"
+        );
+    }
+
+    /// W226.1 regression (user report, repro seed 3592732596): aquatic
+    /// plants must not float in the water column - seagrass/pickles
+    /// need a solid floor cell below, kelp columns must be anchored
+    /// (solid or continuing kelp_plant below).
+    #[test]
+    fn no_floating_ocean_plants() {
+        let pickle = block_id_by_name("sea_pickle").unwrap();
+        let plant = |id: u16| {
+            id == SEAGRASS_ID
+                || id == TALL_SEAGRASS_BOTTOM_ID
+                || id == TALL_SEAGRASS_TOP_ID
+                || id == KELP_ID
+                || id == KELP_PLANT_ID
+                || id == pickle
+        };
+        let c = WorldgenCtx {
+            base_seed: 3592732596,
+            dim: String::new(),
+            profile: WorldGen::Mc,
+        };
+        let mut floating: Vec<String> = Vec::new();
+        for cx in -8..8 {
+            for cz in -8..8 {
+                let centre_floor = mc_floor_at(&c, cx * 16 + 8, cz * 16 + 8);
+                if centre_floor >= SEA_LEVEL - 2 {
+                    continue;
+                }
+                // Column stack spanning seabed-2 .. sea surface.
+                let cy_lo = (centre_floor - 2).div_euclid(16).max(0);
+                let cy_hi = SEA_LEVEL.div_euclid(16);
+                let slices: Vec<Chunk> = (cy_lo..=cy_hi)
+                    .map(|cy| generate_chunk_at_ctx([cx, cy, cz], &c))
+                    .collect();
+                let get = |x: usize, wy: i32, z: usize| -> u16 {
+                    let idx = wy.div_euclid(16) - cy_lo;
+                    if idx < 0 || idx as usize >= slices.len() {
+                        return u16::MAX; // outside the stack: don't judge
+                    }
+                    slices[idx as usize].get(x, wy.rem_euclid(16) as usize, z).0
+                };
+                for x in 0..16usize {
+                    for z in 0..16usize {
+                        for wy in (cy_lo * 16 + 1)..((cy_hi + 1) * 16) {
+                            let id = get(x, wy, z);
+                            if !plant(id) {
+                                continue;
+                            }
+                            let below = get(x, wy - 1, z);
+                            if below == u16::MAX {
+                                continue;
+                            }
+                            let ok = match id {
+                                i if i == TALL_SEAGRASS_TOP_ID => below == TALL_SEAGRASS_BOTTOM_ID,
+                                i if i == KELP_ID || i == KELP_PLANT_ID => {
+                                    below == KELP_PLANT_ID
+                                        || (below != 0 && below != WATER_ID && !plant(below))
+                                }
+                                // seagrass / tall bottom / pickle: solid floor.
+                                _ => below != 0 && below != WATER_ID && !plant(below),
+                            };
+                            if !ok && floating.len() < 40 {
+                                floating.push(format!(
+                                    "id {id} at ({},{wy},{}) over below-id {below}",
+                                    cx * 16 + x as i32,
+                                    cz * 16 + z as i32,
+                                ));
+                            }
+                            // Pair integrity: a bottom half must carry
+                            // its top half above it.
+                            if id == TALL_SEAGRASS_BOTTOM_ID {
+                                let above = get(x, wy + 1, z);
+                                if above != u16::MAX
+                                    && above != TALL_SEAGRASS_TOP_ID
+                                    && floating.len() < 40
+                                {
+                                    floating.push(format!(
+                                        "orphan tall-bottom at ({},{wy},{}) under above-id {above}",
+                                        cx * 16 + x as i32,
+                                        cz * 16 + z as i32,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            floating.is_empty(),
+            "floating aquatic plants found:\n{}",
+            floating.join("\n")
         );
     }
 

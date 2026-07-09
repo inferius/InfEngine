@@ -115,14 +115,29 @@ fn carvable(id: u16) -> bool {
     .contains(&id)
 }
 
+/// Where a carve pass writes: the real chunk slice (world gen), or the
+/// column solidity bitset (W226.1 dry-run - the post-carve heightmap
+/// the feature stage reads; MC updates its heightmaps on every carver
+/// `setBlock`, so features anchor to the carved floor, not the fill).
+pub(crate) enum CarveSink<'a> {
+    Chunk {
+        chunk: &'a mut Chunk,
+        /// Target chunk world origin.
+        origin: [i32; 3],
+    },
+    Mask {
+        solid: &'a mut [[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE],
+        seed: u32,
+    },
+}
+
 /// Everything one carve pass needs; threads through the tunnel
 /// recursion instead of MC's 15-argument methods.
 struct CarveCtx<'a> {
     ow: &'a Overworld,
     aquifer: &'a mut Aquifer,
-    chunk: &'a mut Chunk,
-    /// Target chunk world origin + its column coords.
-    origin: [i32; 3],
+    sink: CarveSink<'a>,
+    /// Target chunk column coords.
     ccx: i32,
     ccz: i32,
 }
@@ -162,11 +177,14 @@ fn carve_ellipsoid(
     }
     let min_wy = ((y - vr).floor() as i32 - 1).max(MIN_GEN_Y + 1);
     let max_wy = ((y + vr).floor() as i32 + 1).min(TOP_PROTECT);
-    // Outside this vertical chunk entirely - the vertical neighbours'
-    // replays own those cells.
-    let cs = CHUNK_SIZE as i32;
-    if max_wy < cc.origin[1] || min_wy > cc.origin[1] + cs - 1 {
-        return;
+    // Chunk sink: outside this vertical chunk entirely - the vertical
+    // neighbours' replays own those cells. (The mask sink spans the
+    // whole column.)
+    if let CarveSink::Chunk { origin, .. } = &cc.sink {
+        let cs = CHUNK_SIZE as i32;
+        if max_wy < origin[1] || min_wy > origin[1] + cs - 1 {
+            return;
+        }
     }
     let min_lx = (((x - hr).floor() as i32) - cc.ccx * 16 - 1).max(0);
     let max_lx = (((x + hr).floor() as i32) - cc.ccx * 16).min(15);
@@ -194,36 +212,64 @@ fn carve_ellipsoid(
 }
 
 /// `WorldCarver.carveBlock`: replaceable check, aquifer substance,
-/// grass-floor repair.
+/// grass-floor repair (chunk sink) / solidity-bit clear (mask sink).
 fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_grass: &mut bool) {
     let [lx, wy, lz] = local;
-    let ly = wy - cc.origin[1];
-    if !(0..CHUNK_SIZE as i32).contains(&ly) {
-        return;
-    }
-    let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
-    let cur = cc.chunk.get(ux, uy, uz).0;
-    if cur == 3 || block_id_by_name("mycelium") == Some(cur) {
-        *has_grass = true;
-    }
-    if !carvable(cur) {
-        return;
-    }
-    // getCarveState: lava_level (-56) is below the engine band; the
-    // aquifer (with density 0) decides the rest. Solid = the barrier
-    // pressure keeps the block.
     let [wx, wz] = world_xz;
-    let new = match cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0) {
-        Substance::Solid => return,
-        Substance::Air => BlockId::AIR,
-        Substance::Water => BlockId(36),
-        Substance::Lava => BlockId(37),
-    };
-    cc.chunk.set(ux, uy, uz, new);
-    // Grass repair: carving through a grass column repaints the new
-    // dirt floor (MC's hasGrass + topMaterial). Dry floors only.
-    if *has_grass && uy > 0 && new == BlockId::AIR && cc.chunk.get(ux, uy - 1, uz).0 == 2 {
-        cc.chunk.set(ux, uy - 1, uz, BlockId(3));
+    match &mut cc.sink {
+        CarveSink::Chunk { chunk, origin } => {
+            let ly = wy - origin[1];
+            if !(0..CHUNK_SIZE as i32).contains(&ly) {
+                return;
+            }
+            let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
+            let cur = chunk.get(ux, uy, uz).0;
+            if cur == 3 || block_id_by_name("mycelium") == Some(cur) {
+                *has_grass = true;
+            }
+            if !carvable(cur) {
+                return;
+            }
+            // getCarveState: lava_level (-56) is below the engine band;
+            // the aquifer (with density 0) decides the rest. Solid =
+            // the barrier pressure keeps the block.
+            let new = match cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0) {
+                Substance::Solid => return,
+                Substance::Air => BlockId::AIR,
+                Substance::Water => BlockId(36),
+                Substance::Lava => BlockId(37),
+            };
+            chunk.set(ux, uy, uz, new);
+            // Grass repair: carving through a grass column repaints the
+            // new dirt floor (MC's hasGrass + topMaterial). Dry only.
+            if *has_grass && uy > 0 && new == BlockId::AIR && chunk.get(ux, uy - 1, uz).0 == 2 {
+                chunk.set(ux, uy - 1, uz, BlockId(3));
+            }
+        }
+        CarveSink::Mask { solid, seed } => {
+            // Only solid fill cells matter for the heightmap; a carved
+            // open/water cell stays non-solid. The fill's solid cells
+            // are all carvable (stone family / ores / surface blocks)
+            // except bedrock - honest edge: rare non-replaceables the
+            // surface can emit (ice) and raw-ore vein cells stay solid
+            // in the real chunk, so the mask floor may sit a block low
+            // there (plants just fail their water check - no floaters).
+            if !(0..256).contains(&wy) {
+                return;
+            }
+            let (ux, uz) = (lx as usize, lz as usize);
+            let (w, b) = ((wy >> 6) as usize, wy & 63);
+            if (solid[ux][uz][w] >> b) & 1 == 0 {
+                return;
+            }
+            if crate::worldgen::strata::bedrock_floor_block(wx, wy, wz, *seed).is_some() {
+                return;
+            }
+            if matches!(cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0), Substance::Solid) {
+                return;
+            }
+            solid[ux][uz][w] &= !(1u64 << b);
+        }
     }
 }
 
@@ -437,9 +483,38 @@ pub(crate) fn carve_mc(
     origin: [i32; 3],
 ) {
     let seed = ctx.effective_seed();
-    let mut cc = CarveCtx { ow, aquifer, chunk, origin, ccx: coord[0], ccz: coord[2] };
-    for scx in (coord[0] - SOURCE_RANGE)..=(coord[0] + SOURCE_RANGE) {
-        for scz in (coord[2] - SOURCE_RANGE)..=(coord[2] + SOURCE_RANGE) {
+    let cc = CarveCtx {
+        ow,
+        aquifer,
+        sink: CarveSink::Chunk { chunk, origin },
+        ccx: coord[0],
+        ccz: coord[2],
+    };
+    run_carvers(cc, seed);
+}
+
+/// W226.1 entry: dry-run the SAME carver walks (identical rng streams)
+/// against the column's fill solidity bitset, clearing every bit the
+/// real carve opens. `mc_floor_at` / `column_is_solid` read the result,
+/// so the feature stage anchors to post-carve terrain like MC's live
+/// heightmaps - the fix for seagrass floating over carver-cut seabeds.
+pub(crate) fn carve_mask(
+    solid: &mut [[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE],
+    cx: i32,
+    cz: i32,
+    seed: u32,
+    ow: &Overworld,
+    aquifer: &mut Aquifer,
+) {
+    let cc = CarveCtx { ow, aquifer, sink: CarveSink::Mask { solid, seed }, ccx: cx, ccz: cz };
+    run_carvers(cc, seed);
+}
+
+/// The shared +-8 source-chunk replay; both sinks consume identical
+/// rng rolls (the walks never read what they carve).
+fn run_carvers(mut cc: CarveCtx<'_>, seed: u32) {
+    for scx in (cc.ccx - SOURCE_RANGE)..=(cc.ccx + SOURCE_RANGE) {
+        for scz in (cc.ccz - SOURCE_RANGE)..=(cc.ccz + SOURCE_RANGE) {
             // Carver order matches the biome JSON list.
             let mut r0 = SplitMix64::new(stream_seed(seed, scx, scz, SALT_CARVER));
             if next_f32(&mut r0) <= CAVE_PROBABILITY {
