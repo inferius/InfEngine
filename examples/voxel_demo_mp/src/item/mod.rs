@@ -2443,6 +2443,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 773, name: "infested_stone", display: Some("Infested Stone"), places: Some(773), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 774, name: "sea_pickle", display: Some("Sea Pickle"), places: Some(774), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 775, name: "vine", display: Some("Vines"), places: Some(775), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W227 - cherry grove petals.
+    ItemType { id: 776, name: "pink_petals", display: Some("Pink Petals"), places: Some(776), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

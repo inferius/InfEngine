@@ -1,4 +1,8 @@
 {
+ "badlands": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "bamboo_jungle": {
   "water": 4159204,
   "fog": 329011
@@ -9,6 +13,10 @@
  },
  "birch_forest": {
   "water": 4159204,
+  "fog": 329011
+ },
+ "cherry_grove": {
+  "water": 6141935,
   "fog": 329011
  },
  "cold_ocean": {
@@ -39,6 +47,10 @@
   "water": 4159204,
   "fog": 329011
  },
+ "eroded_badlands": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "flower_forest": {
   "water": 4159204,
   "fog": 329011
@@ -51,11 +63,23 @@
   "water": 3750089,
   "fog": 329011
  },
+ "frozen_peaks": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "frozen_river": {
   "water": 3750089,
   "fog": 329011
  },
+ "grove": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "ice_spikes": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "jagged_peaks": {
   "water": 4159204,
   "fog": 329011
  },
@@ -70,6 +94,14 @@
  "mangrove_swamp": {
   "water": 3832426,
   "fog": 5077600
+ },
+ "meadow": {
+  "water": 937679,
+  "fog": 329011
+ },
+ "mushroom_fields": {
+  "water": 4159204,
+  "fog": 329011
  },
  "ocean": {
   "water": 4159204,
@@ -87,6 +119,10 @@
   "water": 4159204,
   "fog": 329011
  },
+ "pale_garden": {
+  "water": 7768221,
+  "fog": 329011
+ },
  "plains": {
   "water": 4159204,
   "fog": 329011
@@ -96,6 +132,10 @@
   "fog": 329011
  },
  "savanna": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "savanna_plateau": {
   "water": 4159204,
   "fog": 329011
  },
@@ -119,6 +159,14 @@
   "water": 4159204,
   "fog": 329011
  },
+ "stony_peaks": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "stony_shore": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "sunflower_plains": {
   "water": 4159204,
   "fog": 329011
@@ -135,7 +183,23 @@
   "water": 4445678,
   "fog": 270131
  },
+ "windswept_forest": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "windswept_gravelly_hills": {
+  "water": 4159204,
+  "fog": 329011
+ },
  "windswept_hills": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "windswept_savanna": {
+  "water": 4159204,
+  "fog": 329011
+ },
+ "wooded_badlands": {
   "water": 4159204,
   "fog": 329011
  }

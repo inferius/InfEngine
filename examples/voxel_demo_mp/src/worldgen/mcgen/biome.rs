@@ -7,13 +7,19 @@
 //! sampling MC's real climate noise FIELD (see `Overworld::biome_at`)
 //! and classifying it with MC's actual parameter band cutoffs.
 //!
-//! Honest scope: the climate field is faithful (the same continentalness
-//! / erosion / temperature / vegetation / weirdness noises MC uses, with
-//! the same domain warp), so biome REGIONS land where MC would put them.
-//! The mapping then collapses MC's 66 biomes onto the engine's 11-biome
-//! palette - that collapse is lossy, but the placement logic and region
-//! shapes are MC's. Depth is omitted (it separates surface vs cave
-//! biomes; the engine only needs the surface set).
+//! W227: the FULL inland slice decomposition from the source -
+//! `addValleys` / `addLowSlice` / `addMidSlice` / `addHighSlice` /
+//! `addPeaks` keyed on the peaks-and-valleys fold of weirdness, with
+//! the PLATEAU / SHATTERED tables and the pick helpers (peak / slope /
+//! badlands / windswept-savanna / stony-shore / beach). The source adds
+//! non-overlapping hypercubes per slice, so a direct decision tree over
+//! the band indices is equivalent to MC's nearest-point lookup.
+//!
+//! Honest scope: the climate field is faithful (the same noises with
+//! the same domain warp), so biome REGIONS land where MC would put
+//! them. Depth is omitted (no cave biomes). Unhosted content gaps:
+//! pale_garden (no pale-oak blocks - hosts dark-forest-adjacent
+//! content), mushroom_fields (no huge-mushroom blocks yet).
 
 use crate::worldgen::biome::Biome;
 
@@ -47,6 +53,19 @@ fn hum_level(v: f64) -> u8 {
     }
 }
 
+/// Erosion band, 0..6. MC `Climate` erosion parameter cutoffs.
+fn erosion_level(e: f64) -> u8 {
+    match e {
+        x if x < -0.78 => 0,
+        x if x < -0.375 => 1,
+        x if x < -0.2225 => 2,
+        x if x < 0.05 => 3,
+        x if x < 0.45 => 4,
+        x if x < 0.55 => 5,
+        _ => 6,
+    }
+}
+
 /// W211: the REAL MC biome, carried through mcgen instead of collapsing
 /// to the engine's 11 immediately. Only the variants the 5-channel
 /// climate sample can distinguish (no depth channel -> no cave biomes).
@@ -69,6 +88,8 @@ pub(crate) enum McBiome {
     // Coast.
     Beach,
     SnowyBeach,
+    /// W227: the erosion-0..2 low/mid-slice coast.
+    StonyShore,
     // MIDDLE_BIOMES (+ the weirdness variants we can host).
     SnowyPlains,
     IceSpikes,
@@ -92,14 +113,34 @@ pub(crate) enum McBiome {
     /// The hot erosion-6 wetland (temperatures 3-4). Hosted with swamp
     /// content until mangrove blocks + the mangrove placer exist.
     MangroveSwamp,
-    // Mountain ridges (the slice the current classifier resolves).
-    SnowySlopes,
+    // W227: PLATEAU_BIOMES rows.
+    Meadow,
+    CherryGrove,
+    /// No pale-oak blocks yet - hosted with dark-forest-like content.
+    PaleGarden,
+    SavannaPlateau,
+    Badlands,
+    WoodedBadlands,
+    ErodedBadlands,
+    // W227: SHATTERED_BIOMES rows + the windswept savanna pick.
+    WindsweptGravellyHills,
     WindsweptHills,
+    WindsweptForest,
+    WindsweptSavanna,
+    // W227: peak / slope picks.
+    JaggedPeaks,
+    FrozenPeaks,
+    StonyPeaks,
+    SnowySlopes,
+    Grove,
+    /// W227: continentalness < -1.05 island. No huge-mushroom blocks
+    /// yet - mycelium surface + normal mushroom patches only.
+    MushroomFields,
 }
 
 impl McBiome {
     /// Every variant, for table-coverage tests.
-    pub(crate) const ALL: [McBiome; 35] = [
+    pub(crate) const ALL: [McBiome; 51] = [
         McBiome::DeepFrozenOcean,
         McBiome::DeepColdOcean,
         McBiome::DeepOcean,
@@ -113,6 +154,7 @@ impl McBiome {
         McBiome::FrozenRiver,
         McBiome::Beach,
         McBiome::SnowyBeach,
+        McBiome::StonyShore,
         McBiome::SnowyPlains,
         McBiome::IceSpikes,
         McBiome::SnowyTaiga,
@@ -133,12 +175,28 @@ impl McBiome {
         McBiome::Desert,
         McBiome::Swamp,
         McBiome::MangroveSwamp,
-        McBiome::SnowySlopes,
+        McBiome::Meadow,
+        McBiome::CherryGrove,
+        McBiome::PaleGarden,
+        McBiome::SavannaPlateau,
+        McBiome::Badlands,
+        McBiome::WoodedBadlands,
+        McBiome::ErodedBadlands,
+        McBiome::WindsweptGravellyHills,
         McBiome::WindsweptHills,
+        McBiome::WindsweptForest,
+        McBiome::WindsweptSavanna,
+        McBiome::JaggedPeaks,
+        McBiome::FrozenPeaks,
+        McBiome::StonyPeaks,
+        McBiome::SnowySlopes,
+        McBiome::Grove,
+        McBiome::MushroomFields,
     ];
 
     /// The biome's MC registry name (biome JSON stem) - keys the
-    /// temperature table, water colours, and diagnostics.
+    /// temperature table, water colours, surface-rule biome conditions
+    /// and diagnostics.
     pub(crate) fn name(self) -> &'static str {
         match self {
             McBiome::DeepFrozenOcean => "deep_frozen_ocean",
@@ -154,6 +212,7 @@ impl McBiome {
             McBiome::FrozenRiver => "frozen_river",
             McBiome::Beach => "beach",
             McBiome::SnowyBeach => "snowy_beach",
+            McBiome::StonyShore => "stony_shore",
             McBiome::SnowyPlains => "snowy_plains",
             McBiome::IceSpikes => "ice_spikes",
             McBiome::SnowyTaiga => "snowy_taiga",
@@ -174,13 +233,28 @@ impl McBiome {
             McBiome::Desert => "desert",
             McBiome::Swamp => "swamp",
             McBiome::MangroveSwamp => "mangrove_swamp",
-            McBiome::SnowySlopes => "snowy_slopes",
+            McBiome::Meadow => "meadow",
+            McBiome::CherryGrove => "cherry_grove",
+            McBiome::PaleGarden => "pale_garden",
+            McBiome::SavannaPlateau => "savanna_plateau",
+            McBiome::Badlands => "badlands",
+            McBiome::WoodedBadlands => "wooded_badlands",
+            McBiome::ErodedBadlands => "eroded_badlands",
+            McBiome::WindsweptGravellyHills => "windswept_gravelly_hills",
             McBiome::WindsweptHills => "windswept_hills",
+            McBiome::WindsweptForest => "windswept_forest",
+            McBiome::WindsweptSavanna => "windswept_savanna",
+            McBiome::JaggedPeaks => "jagged_peaks",
+            McBiome::FrozenPeaks => "frozen_peaks",
+            McBiome::StonyPeaks => "stony_peaks",
+            McBiome::SnowySlopes => "snowy_slopes",
+            McBiome::Grove => "grove",
+            McBiome::MushroomFields => "mushroom_fields",
         }
     }
 
     /// Collapse to the engine's 11-biome palette (HUD label, mob spawn
-    /// pools, the legacy decor passes, surface-rule conditions).
+    /// pools, the legacy decor passes, surface-rule fallbacks).
     pub(crate) fn to_engine(self) -> Biome {
         match self {
             McBiome::DeepFrozenOcean
@@ -195,24 +269,41 @@ impl McBiome {
             | McBiome::River
             | McBiome::FrozenRiver
             | McBiome::Beach
-            | McBiome::SnowyBeach => Biome::Beach,
+            | McBiome::SnowyBeach
+            | McBiome::StonyShore => Biome::Beach,
             McBiome::SnowyPlains | McBiome::IceSpikes => Biome::Tundra,
             McBiome::SnowyTaiga
             | McBiome::Taiga
             | McBiome::OldGrowthSpruceTaiga
             | McBiome::OldGrowthPineTaiga => Biome::Taiga,
-            McBiome::Plains | McBiome::SunflowerPlains => Biome::Plains,
+            McBiome::Plains
+            | McBiome::SunflowerPlains
+            | McBiome::Meadow
+            | McBiome::MushroomFields => Biome::Plains,
             McBiome::Forest
             | McBiome::FlowerForest
             | McBiome::BirchForest
             | McBiome::OldGrowthBirchForest
-            | McBiome::DarkForest => Biome::Forest,
-            McBiome::Savanna => Biome::Savanna,
+            | McBiome::DarkForest
+            | McBiome::CherryGrove
+            | McBiome::PaleGarden => Biome::Forest,
+            McBiome::Savanna | McBiome::SavannaPlateau | McBiome::WindsweptSavanna => {
+                Biome::Savanna
+            }
             McBiome::Jungle | McBiome::SparseJungle | McBiome::BambooJungle => Biome::Jungle,
-            McBiome::Desert => Biome::Desert,
+            McBiome::Desert
+            | McBiome::Badlands
+            | McBiome::WoodedBadlands
+            | McBiome::ErodedBadlands => Biome::Desert,
             McBiome::Swamp | McBiome::MangroveSwamp => Biome::Swamp,
-            McBiome::SnowySlopes => Biome::SnowyMountain,
-            McBiome::WindsweptHills => Biome::Mountain,
+            McBiome::SnowySlopes
+            | McBiome::Grove
+            | McBiome::JaggedPeaks
+            | McBiome::FrozenPeaks => Biome::SnowyMountain,
+            McBiome::WindsweptHills
+            | McBiome::WindsweptGravellyHills
+            | McBiome::WindsweptForest
+            | McBiome::StonyPeaks => Biome::Mountain,
         }
     }
 }
@@ -254,27 +345,345 @@ const MIDDLE_BIOMES_VARIANT: [[Option<McBiome>; 5]; 5] = [
     [None, None, None, None, None],
 ];
 
-/// MIDDLE_BIOMES with the weirdness>0 variant overlay - MC's
-/// `pickMiddleBiome`.
-fn middle_biome(temp: usize, hum: usize, weirdness: f64) -> McBiome {
-    if weirdness > 0.0
-        && let Some(variant) = MIDDLE_BIOMES_VARIANT[temp][hum]
-    {
+/// W227 OverworldBiomeBuilder.PLATEAU_BIOMES: [temperature][humidity].
+const PLATEAU_BIOMES: [[McBiome; 5]; 5] = [
+    [McBiome::SnowyPlains, McBiome::SnowyPlains, McBiome::SnowyPlains, McBiome::SnowyTaiga, McBiome::SnowyTaiga],
+    [McBiome::Meadow, McBiome::Meadow, McBiome::Forest, McBiome::Taiga, McBiome::OldGrowthSpruceTaiga],
+    [McBiome::Meadow, McBiome::Meadow, McBiome::Meadow, McBiome::Meadow, McBiome::PaleGarden],
+    [McBiome::SavannaPlateau, McBiome::SavannaPlateau, McBiome::Forest, McBiome::Forest, McBiome::Jungle],
+    [McBiome::Badlands, McBiome::Badlands, McBiome::Badlands, McBiome::WoodedBadlands, McBiome::WoodedBadlands],
+];
+
+/// W227 OverworldBiomeBuilder.PLATEAU_BIOMES_VARIANT (weirdness > 0).
+const PLATEAU_BIOMES_VARIANT: [[Option<McBiome>; 5]; 5] = [
+    [Some(McBiome::IceSpikes), None, None, None, None],
+    [Some(McBiome::CherryGrove), None, Some(McBiome::Meadow), Some(McBiome::Meadow), Some(McBiome::OldGrowthPineTaiga)],
+    [Some(McBiome::CherryGrove), Some(McBiome::CherryGrove), Some(McBiome::Forest), Some(McBiome::BirchForest), None],
+    [None, None, None, None, None],
+    [Some(McBiome::ErodedBadlands), Some(McBiome::ErodedBadlands), None, None, None],
+];
+
+/// W227 OverworldBiomeBuilder.SHATTERED_BIOMES (erosion-5 windswept
+/// band), None = fall through to the middle biome.
+const SHATTERED_BIOMES: [[Option<McBiome>; 5]; 5] = [
+    [Some(McBiome::WindsweptGravellyHills), Some(McBiome::WindsweptGravellyHills), Some(McBiome::WindsweptHills), Some(McBiome::WindsweptForest), Some(McBiome::WindsweptForest)],
+    [Some(McBiome::WindsweptGravellyHills), Some(McBiome::WindsweptGravellyHills), Some(McBiome::WindsweptHills), Some(McBiome::WindsweptForest), Some(McBiome::WindsweptForest)],
+    [Some(McBiome::WindsweptHills), Some(McBiome::WindsweptHills), Some(McBiome::WindsweptHills), Some(McBiome::WindsweptForest), Some(McBiome::WindsweptForest)],
+    [None, None, None, None, None],
+    [None, None, None, None, None],
+];
+
+// ------------------------------------------------------------------
+// The pick helpers, 1:1 with the source. `wpos` = MC's
+// `weirdness.max() >= 0` for the slice span the point falls into
+// (variant tables apply on the positive-weirdness side).
+// ------------------------------------------------------------------
+
+/// MC `pickMiddleBiome`.
+fn middle_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if wpos && let Some(variant) = MIDDLE_BIOMES_VARIANT[temp][hum] {
         return variant;
     }
     MIDDLE_BIOMES[temp][hum]
 }
 
-/// W211: classify an MC climate point into the REAL MC biome, following
-/// `OverworldBiomeBuilder`: continentalness gates (deep ocean / ocean /
-/// coast), the valleys slice (`addValleys` - rivers, but erosion-6
-/// inland valleys are the swamps and erosion-0/1 deep-inland valleys
-/// are middle biomes), the mountain ridge slice, the erosion-6 wetland
-/// band (swamp / mangrove swamp by temperature, exactly the source's
-/// spans), then MIDDLE_BIOMES[temp][humidity] with the weirdness
-/// variants. Unhosted in this slice pass: stony_shore on erosion-0/1
-/// coast valleys, the badlands rows (collapse to desert), the
-/// plateau/peak sub-biomes.
+/// MC `pickBadlandsBiome`.
+fn badlands_biome(hum: usize, wpos: bool) -> McBiome {
+    if hum < 2 {
+        if wpos { McBiome::ErodedBadlands } else { McBiome::Badlands }
+    } else if hum < 3 {
+        McBiome::Badlands
+    } else {
+        McBiome::WoodedBadlands
+    }
+}
+
+/// MC `pickMiddleBiomeOrBadlandsIfHot`.
+fn middle_or_badlands_if_hot(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if temp == 4 { badlands_biome(hum, wpos) } else { middle_biome(temp, hum, wpos) }
+}
+
+/// MC `pickPlateauBiome`.
+fn plateau_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if wpos && let Some(variant) = PLATEAU_BIOMES_VARIANT[temp][hum] {
+        return variant;
+    }
+    PLATEAU_BIOMES[temp][hum]
+}
+
+/// MC `pickSlopeBiome`.
+fn slope_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if temp >= 3 {
+        plateau_biome(temp, hum, wpos)
+    } else if hum <= 1 {
+        McBiome::SnowySlopes
+    } else {
+        McBiome::Grove
+    }
+}
+
+/// MC `pickMiddleBiomeOrBadlandsIfHotOrSlopeIfCold`.
+fn middle_or_badlands_if_hot_or_slope_if_cold(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if temp == 0 {
+        slope_biome(temp, hum, wpos)
+    } else {
+        middle_or_badlands_if_hot(temp, hum, wpos)
+    }
+}
+
+/// MC `pickPeakBiome`.
+fn peak_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    if temp <= 2 {
+        if wpos { McBiome::FrozenPeaks } else { McBiome::JaggedPeaks }
+    } else if temp == 3 {
+        McBiome::StonyPeaks
+    } else {
+        badlands_biome(hum, wpos)
+    }
+}
+
+/// MC `pickShatteredBiome`.
+fn shattered_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    SHATTERED_BIOMES[temp][hum].unwrap_or_else(|| middle_biome(temp, hum, wpos))
+}
+
+/// MC `maybePickWindsweptSavannaBiome`.
+fn maybe_windswept_savanna(temp: usize, hum: usize, wpos: bool, under: McBiome) -> McBiome {
+    if temp > 1 && hum < 4 && wpos { McBiome::WindsweptSavanna } else { under }
+}
+
+/// MC `pickBeachBiome`.
+fn beach_biome(temp: usize) -> McBiome {
+    match temp {
+        0 => McBiome::SnowyBeach,
+        4 => McBiome::Desert,
+        _ => McBiome::Beach,
+    }
+}
+
+/// MC `pickShatteredCoastBiome`.
+fn shattered_coast_biome(temp: usize, hum: usize, wpos: bool) -> McBiome {
+    let under = if wpos { middle_biome(temp, hum, wpos) } else { beach_biome(temp) };
+    maybe_windswept_savanna(temp, hum, wpos, under)
+}
+
+// ------------------------------------------------------------------
+// The inland slices. Continentalness bands past the coast check:
+// coast [-0.19,-0.11), near [-0.11,0.03), mid [0.03,0.3), far [0.3,..].
+// ------------------------------------------------------------------
+
+/// MC `addValleys` (the single [-0.05, 0.05] weirdness span - its max
+/// is >= 0, so the variant side of every pick applies).
+fn valleys(temp: usize, hum: usize, c: f64, er: u8) -> McBiome {
+    let river = if temp == 0 { McBiome::FrozenRiver } else { McBiome::River };
+    match er {
+        0 | 1 => {
+            if c < 0.03 {
+                river
+            } else {
+                // Mid/far-inland valley floors rise into middle biomes
+                // (badlands in the hot row).
+                middle_or_badlands_if_hot(temp, hum, true)
+            }
+        }
+        2..=5 => river,
+        _ => {
+            // Erosion 6: rivers survive only on the coast band; inland
+            // the valley floor IS the wetland (frozen row stays river).
+            if c < -0.11 {
+                river
+            } else {
+                match temp {
+                    0 => McBiome::FrozenRiver,
+                    1 | 2 => McBiome::Swamp,
+                    _ => McBiome::MangroveSwamp,
+                }
+            }
+        }
+    }
+}
+
+/// MC `addLowSlice`.
+fn low_slice(temp: usize, hum: usize, c: f64, er: u8, wpos: bool) -> McBiome {
+    if c < -0.11 {
+        // Coast column.
+        return match er {
+            0..=2 => McBiome::StonyShore,
+            3 | 4 => beach_biome(temp),
+            5 => shattered_coast_biome(temp, hum, wpos),
+            _ => beach_biome(temp),
+        };
+    }
+    if er == 6 {
+        return match temp {
+            0 => middle_biome(temp, hum, wpos),
+            1 | 2 => McBiome::Swamp,
+            _ => McBiome::MangroveSwamp,
+        };
+    }
+    if c < 0.03 {
+        // Near inland.
+        match er {
+            0 | 1 => middle_or_badlands_if_hot(temp, hum, wpos),
+            2..=4 => middle_biome(temp, hum, wpos),
+            _ => maybe_windswept_savanna(temp, hum, wpos, middle_biome(temp, hum, wpos)),
+        }
+    } else {
+        // Mid + far inland.
+        match er {
+            0 | 1 => middle_or_badlands_if_hot_or_slope_if_cold(temp, hum, wpos),
+            2 | 3 => middle_or_badlands_if_hot(temp, hum, wpos),
+            _ => middle_biome(temp, hum, wpos),
+        }
+    }
+}
+
+/// MC `addMidSlice`.
+fn mid_slice(temp: usize, hum: usize, c: f64, er: u8, wpos: bool) -> McBiome {
+    if c < -0.11 {
+        // Coast column.
+        return match er {
+            0..=2 => McBiome::StonyShore,
+            3 => middle_biome(temp, hum, wpos),
+            4 => {
+                if wpos { middle_biome(temp, hum, wpos) } else { beach_biome(temp) }
+            }
+            5 => shattered_coast_biome(temp, hum, wpos),
+            _ => {
+                if wpos { middle_biome(temp, hum, wpos) } else { beach_biome(temp) }
+            }
+        };
+    }
+    if er == 6 {
+        return match temp {
+            0 => middle_biome(temp, hum, wpos),
+            1 | 2 => McBiome::Swamp,
+            _ => McBiome::MangroveSwamp,
+        };
+    }
+    if c < 0.03 {
+        // Near inland.
+        match er {
+            0 => slope_biome(temp, hum, wpos),
+            1 => middle_or_badlands_if_hot_or_slope_if_cold(temp, hum, wpos),
+            2..=4 => middle_biome(temp, hum, wpos),
+            _ => maybe_windswept_savanna(temp, hum, wpos, middle_biome(temp, hum, wpos)),
+        }
+    } else if c < 0.3 {
+        // Mid inland.
+        match er {
+            0 => slope_biome(temp, hum, wpos),
+            1 => middle_or_badlands_if_hot_or_slope_if_cold(temp, hum, wpos),
+            2 | 3 => middle_or_badlands_if_hot(temp, hum, wpos),
+            4 => middle_biome(temp, hum, wpos),
+            _ => shattered_biome(temp, hum, wpos),
+        }
+    } else {
+        // Far inland.
+        match er {
+            0 => slope_biome(temp, hum, wpos),
+            1 => {
+                if temp == 0 {
+                    slope_biome(temp, hum, wpos)
+                } else {
+                    plateau_biome(temp, hum, wpos)
+                }
+            }
+            2 => plateau_biome(temp, hum, wpos),
+            3 => middle_or_badlands_if_hot(temp, hum, wpos),
+            4 => middle_biome(temp, hum, wpos),
+            _ => shattered_biome(temp, hum, wpos),
+        }
+    }
+}
+
+/// MC `addHighSlice`.
+fn high_slice(temp: usize, hum: usize, c: f64, er: u8, wpos: bool) -> McBiome {
+    if c < -0.11 {
+        // Coast column: middle everywhere except the shattered band.
+        return match er {
+            5 => maybe_windswept_savanna(temp, hum, wpos, middle_biome(temp, hum, wpos)),
+            _ => middle_biome(temp, hum, wpos),
+        };
+    }
+    if c < 0.03 {
+        // Near inland.
+        match er {
+            0 => slope_biome(temp, hum, wpos),
+            1 => middle_or_badlands_if_hot_or_slope_if_cold(temp, hum, wpos),
+            2..=4 => middle_biome(temp, hum, wpos),
+            5 => maybe_windswept_savanna(temp, hum, wpos, middle_biome(temp, hum, wpos)),
+            _ => middle_biome(temp, hum, wpos),
+        }
+    } else if c < 0.3 {
+        // Mid inland.
+        match er {
+            0 => peak_biome(temp, hum, wpos),
+            1 => slope_biome(temp, hum, wpos),
+            2 => plateau_biome(temp, hum, wpos),
+            3 => middle_or_badlands_if_hot(temp, hum, wpos),
+            4 => middle_biome(temp, hum, wpos),
+            5 => shattered_biome(temp, hum, wpos),
+            _ => middle_biome(temp, hum, wpos),
+        }
+    } else {
+        // Far inland.
+        match er {
+            0 => peak_biome(temp, hum, wpos),
+            1 => slope_biome(temp, hum, wpos),
+            2 | 3 => plateau_biome(temp, hum, wpos),
+            4 => middle_biome(temp, hum, wpos),
+            5 => shattered_biome(temp, hum, wpos),
+            _ => middle_biome(temp, hum, wpos),
+        }
+    }
+}
+
+/// MC `addPeaks`.
+fn peaks(temp: usize, hum: usize, c: f64, er: u8, wpos: bool) -> McBiome {
+    match er {
+        0 => peak_biome(temp, hum, wpos),
+        1 => {
+            if c < 0.03 {
+                middle_or_badlands_if_hot_or_slope_if_cold(temp, hum, wpos)
+            } else {
+                peak_biome(temp, hum, wpos)
+            }
+        }
+        2 => {
+            if c < 0.03 {
+                middle_biome(temp, hum, wpos)
+            } else {
+                plateau_biome(temp, hum, wpos)
+            }
+        }
+        3 => {
+            if c < 0.03 {
+                middle_biome(temp, hum, wpos)
+            } else if c < 0.3 {
+                middle_or_badlands_if_hot(temp, hum, wpos)
+            } else {
+                plateau_biome(temp, hum, wpos)
+            }
+        }
+        4 => middle_biome(temp, hum, wpos),
+        5 => {
+            if c < 0.03 {
+                maybe_windswept_savanna(temp, hum, wpos, shattered_biome(temp, hum, wpos))
+            } else {
+                shattered_biome(temp, hum, wpos)
+            }
+        }
+        _ => middle_biome(temp, hum, wpos),
+    }
+}
+
+/// W211/W227: classify an MC climate point into the REAL MC biome,
+/// following `OverworldBiomeBuilder`: the off-coast continentalness
+/// gates (mushroom fields / deep ocean / ocean), then the weirdness
+/// slice (valley / low / mid / high / peak via the peaks-and-valleys
+/// fold, the exact `getDebugStringForPeaksAndValleys` cutoffs) and the
+/// slice's per-(continentalness x erosion) rules.
 pub(crate) fn mc_biome_full(
     temperature: f64,
     vegetation: f64,
@@ -285,51 +694,34 @@ pub(crate) fn mc_biome_full(
     let pv = peaks_valleys(weirdness);
     let temp = temp_level(temperature) as usize;
     let hum = hum_level(vegetation) as usize;
-    // Ocean bands (OverworldBiomeBuilder: deepOcean (-1.05,-0.455),
-    // ocean (-0.455,-0.19)).
+    let er = erosion_level(erosion);
+    // Off-coast bands (OverworldBiomeBuilder: mushroom (-1.2,-1.05),
+    // deepOcean (-1.05,-0.455), ocean (-0.455,-0.19)).
+    if continentalness < -1.05 {
+        return McBiome::MushroomFields;
+    }
     if continentalness < -0.455 {
         return OCEANS[0][temp];
     }
     if continentalness < -0.19 {
         return OCEANS[1][temp];
     }
-    // Valleys slice (pv < -0.85), ported from `addValleys`.
+    // The variant side: MC keys picks on the slice span's max >= 0; for
+    // a point that is simply its weirdness sign (the valley slice spans
+    // zero and always picks variants).
+    let wpos = weirdness >= 0.0;
+    // Slice cutoffs = peaks_valleys(0.05 / 0.26666668 / 0.4 / 0.56666666).
     if pv < -0.85 {
-        let river = if temp == 0 { McBiome::FrozenRiver } else { McBiome::River };
-        if erosion > 0.55 {
-            // Erosion 6: rivers survive only on the coast band; from
-            // near-inland on the valley floor IS the wetland.
-            if continentalness < -0.11 {
-                return river;
-            }
-            return match temp {
-                0 => McBiome::FrozenRiver,
-                1 | 2 => McBiome::Swamp,
-                _ => McBiome::MangroveSwamp,
-            };
-        }
-        if erosion < -0.375 && continentalness >= 0.03 {
-            // Erosion 0-1 deep inland: the valley floor rises into
-            // middle biomes (badlands-if-hot collapses onto desert).
-            return middle_biome(temp, hum, weirdness);
-        }
-        return river;
+        valleys(temp, hum, continentalness, er)
+    } else if pv < -0.2 {
+        low_slice(temp, hum, continentalness, er, wpos)
+    } else if pv < 0.2 {
+        mid_slice(temp, hum, continentalness, er, wpos)
+    } else if pv < 0.7 {
+        high_slice(temp, hum, continentalness, er, wpos)
+    } else {
+        peaks(temp, hum, continentalness, er, wpos)
     }
-    // Coast.
-    if continentalness < -0.11 {
-        return if temp == 0 { McBiome::SnowyBeach } else { McBiome::Beach };
-    }
-    // Mountain ridges: high peaks-and-valleys with low erosion.
-    if pv > 0.55 && erosion < 0.05 {
-        return if temp <= 1 { McBiome::SnowySlopes } else { McBiome::WindsweptHills };
-    }
-    // The erosion-6 wetland band (low + mid slices, pv < 0.2): swamp for
-    // temperatures 1-2, mangrove swamp for 3-4 (the exact source spans;
-    // temperature 0 falls through to the snowy middle row).
-    if erosion > 0.55 && pv < 0.2 && (1..=4).contains(&temp) {
-        return if temp <= 2 { McBiome::Swamp } else { McBiome::MangroveSwamp };
-    }
-    middle_biome(temp, hum, weirdness)
 }
 
 /// Engine-palette classification (the pre-W211 entry point): the full
@@ -388,7 +780,9 @@ mod tests {
 
     #[test]
     fn mountain_on_jagged_peak() {
-        // High PV + low erosion + warm -> Mountain; cold -> SnowyMountain.
+        // Peak slice, far inland, erosion 1: warm band 3 -> stony peaks
+        // (Mountain); frozen -> frozen peaks (SnowyMountain; the legacy
+        // pv fold recovers a positive weirdness).
         assert_eq!(mc_biome(0.3, 0.0, 0.4, -0.5, 0.9), Biome::Mountain);
         assert_eq!(mc_biome(-0.5, 0.0, 0.4, -0.5, 0.9), Biome::SnowyMountain);
     }
@@ -420,13 +814,58 @@ mod tests {
         assert_eq!(mc_biome_full(0.0, 0.0, -0.15, 0.7, 0.0), B::River);
         // Erosion-0/1 deep-inland valleys rise into middle biomes.
         assert_eq!(mc_biome_full(0.0, 0.0, 0.5, -0.5, 0.0), B::Forest);
-        // Forest variants: MIDDLE_BIOMES[2][0] + the weirdness overlay.
-        assert_eq!(mc_biome_full(0.0, -0.5, 0.4, 0.3, -0.3), B::FlowerForest);
-        assert_eq!(mc_biome_full(0.0, -0.5, 0.4, 0.3, 0.3), B::SunflowerPlains);
-        assert_eq!(mc_biome_full(0.0, 0.25, 0.4, 0.3, -0.3), B::BirchForest);
-        assert_eq!(mc_biome_full(0.0, 0.25, 0.4, 0.3, 0.3), B::OldGrowthBirchForest);
-        // Coast.
-        assert_eq!(mc_biome_full(0.0, 0.0, -0.15, 0.0, -0.3), B::Beach);
-        assert_eq!(mc_biome_full(-0.6, 0.0, -0.15, 0.0, -0.3), B::SnowyBeach);
+        // Forest variants: MIDDLE_BIOMES[2][0] + the weirdness overlay
+        // (low slice, near inland, erosion 4).
+        assert_eq!(mc_biome_full(0.0, -0.5, 0.0, 0.3, -0.3), B::FlowerForest);
+        assert_eq!(mc_biome_full(0.0, -0.5, 0.0, 0.3, 0.3), B::SunflowerPlains);
+        assert_eq!(mc_biome_full(0.0, 0.25, 0.0, 0.3, -0.3), B::BirchForest);
+        assert_eq!(mc_biome_full(0.0, 0.25, 0.0, 0.3, 0.3), B::OldGrowthBirchForest);
+        // Coast: the LOW slice (pv -0.55 at |w| 0.15) keeps beaches on
+        // erosion 3-4.
+        assert_eq!(mc_biome_full(0.0, 0.0, -0.15, 0.0, -0.15), B::Beach);
+        assert_eq!(mc_biome_full(-0.6, 0.0, -0.15, 0.0, -0.15), B::SnowyBeach);
+    }
+
+    /// W227: pins for the new slice decomposition - peaks, slopes,
+    /// plateaus, shattered, badlands, stony shore, mushroom fields.
+    #[test]
+    fn w227_slice_pins() {
+        use McBiome as B;
+        // |w|=0.6667 folds to pv 1.0 = the peak slice; far inland e0.
+        assert_eq!(mc_biome_full(0.0, 0.0, 0.5, -0.9, -0.6667), B::JaggedPeaks);
+        // Positive-weirdness side of the same point freezes the peak.
+        assert_eq!(mc_biome_full(0.0, 0.0, 0.5, -0.9, 0.6667), B::FrozenPeaks);
+        // Warm band 3 peaks are stony, hot band 4 peaks are badlands
+        // (arid rows erode on the positive-weirdness side, humid rows
+        // are wooded - pickBadlandsBiome).
+        assert_eq!(mc_biome_full(0.4, 0.0, 0.5, -0.9, -0.6667), B::StonyPeaks);
+        assert_eq!(mc_biome_full(0.8, 0.0, 0.5, -0.9, -0.6667), B::Badlands);
+        assert_eq!(mc_biome_full(0.8, -0.5, 0.5, -0.9, 0.6667), B::ErodedBadlands);
+        assert_eq!(mc_biome_full(0.8, 0.5, 0.5, -0.9, -0.6667), B::WoodedBadlands);
+        // High slice (|w|=0.5 -> pv 0.5): near-inland e0 = the slope
+        // band; dry cold -> snowy slopes, wetter cold -> grove.
+        assert_eq!(mc_biome_full(-0.6, -0.5, 0.0, -0.9, -0.5), B::SnowySlopes);
+        assert_eq!(mc_biome_full(-0.6, 0.5, 0.0, -0.9, -0.5), B::Grove);
+        // High slice far-inland e2 = plateau: temperate -> meadow,
+        // its positive-weirdness variant -> cherry grove; hot ->
+        // badlands plateau row; savanna row -> savanna plateau.
+        assert_eq!(mc_biome_full(0.0, -0.2, 0.5, -0.3, -0.5), B::Meadow);
+        assert_eq!(mc_biome_full(0.0, -0.2, 0.5, -0.3, 0.5), B::CherryGrove);
+        assert_eq!(mc_biome_full(0.3, -0.5, 0.5, -0.3, -0.5), B::SavannaPlateau);
+        assert_eq!(mc_biome_full(0.1, 0.5, 0.5, -0.3, -0.5), B::PaleGarden);
+        // Mid slice, mid-inland e5 = the shattered band.
+        assert_eq!(mc_biome_full(-0.6, -0.5, 0.2, 0.5, -0.35), B::WindsweptGravellyHills);
+        assert_eq!(mc_biome_full(0.0, 0.0, 0.2, 0.5, -0.35), B::WindsweptHills);
+        assert_eq!(mc_biome_full(0.0, 0.5, 0.2, 0.5, -0.35), B::WindsweptForest);
+        // Windswept savanna: warm + not-humid + positive weirdness on
+        // the near-inland shattered band.
+        assert_eq!(mc_biome_full(0.4, 0.0, 0.0, 0.5, 0.35), B::WindsweptSavanna);
+        // Stony shore: low/mid-slice coast with low erosion.
+        assert_eq!(mc_biome_full(0.0, 0.0, -0.15, -0.9, -0.15), B::StonyShore);
+        // Mushroom fields island far off-coast.
+        assert_eq!(mc_biome_full(0.0, 0.0, -1.1, 0.0, 0.0), B::MushroomFields);
+        // Mid slice far-inland e1 cold -> slope, else plateau.
+        assert_eq!(mc_biome_full(-0.6, -0.5, 0.5, -0.5, -0.35), B::SnowySlopes);
+        assert_eq!(mc_biome_full(0.0, -0.2, 0.5, -0.5, -0.35), B::Meadow);
     }
 }

@@ -3133,4 +3133,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // Waterlogged like kelp (W203 semantics via the watery list).
     BlockType { id: 774, name: "sea_pickle", color: [0.55, 0.65, 0.35], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE | F_SWIM, top: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["sea_pickle.png"], keep_alpha: true } },
     BlockType { id: 775, name: "vine", color: [0.25, 0.45, 0.18], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["vine.png"], keep_alpha: true } },
+    // W227: cherry-grove ground petals (flower_cherry patches) on the
+    // W165 carpet flat-plate model like leaf_litter / lily_pad.
+    BlockType { id: 776, name: "pink_petals", color: [0.94, 0.72, 0.83], transparent: true, flags: F_DEDICATED_RENDER | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["pink_petals.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["pink_petals.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["pink_petals.png"], keep_alpha: true } },
 ];

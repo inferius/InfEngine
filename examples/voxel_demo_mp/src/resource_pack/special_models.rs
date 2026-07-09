@@ -344,11 +344,13 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     // W165: any carpet colour (incl. moss carpet) renders as a thin
     // 1px layer. Matched by name so id gaps don't matter.
     // W223: lily pads + leaf litter reuse the same flat-plate build.
+    // W227: cherry pink petals too.
     if crate::block::block_type(id).is_some_and(|b| {
         b.name == "carpet"
             || b.name.ends_with("_carpet")
             || b.name == "lily_pad"
             || b.name == "leaf_litter"
+            || b.name == "pink_petals"
     }) {
         return Some("block/carpet");
     }

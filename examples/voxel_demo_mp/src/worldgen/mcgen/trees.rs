@@ -92,6 +92,16 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("trees_swamp", include_str!("data/feature/placed/trees_swamp.json")),
     ("trees_taiga", include_str!("data/feature/placed/trees_taiga.json")),
     ("trees_windswept_hills", include_str!("data/feature/placed/trees_windswept_hills.json")),
+    // W227: the high/peaks slice biomes' tree roots.
+    ("trees_meadow", include_str!("data/feature/placed/trees_meadow.json")),
+    ("trees_badlands", include_str!("data/feature/placed/trees_badlands.json")),
+    ("trees_grove", include_str!("data/feature/placed/trees_grove.json")),
+    ("trees_windswept_forest", include_str!("data/feature/placed/trees_windswept_forest.json")),
+    ("trees_windswept_savanna", include_str!("data/feature/placed/trees_windswept_savanna.json")),
+    ("spruce_on_snow", include_str!("data/feature/placed/spruce_on_snow.json")),
+    ("pine_on_snow", include_str!("data/feature/placed/pine_on_snow.json")),
+    ("super_birch_bees", include_str!("data/feature/placed/super_birch_bees.json")),
+    ("fancy_oak_bees", include_str!("data/feature/placed/fancy_oak_bees.json")),
 ];
 
 const TREE_CONFIGURED: &[(&str, &str)] = &[
@@ -143,6 +153,12 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("trees_snowy", include_str!("data/feature/configured/trees_snowy.json")),
     ("trees_taiga", include_str!("data/feature/configured/trees_taiga.json")),
     ("trees_windswept_hills", include_str!("data/feature/configured/trees_windswept_hills.json")),
+    // W227.
+    ("meadow_trees", include_str!("data/feature/configured/meadow_trees.json")),
+    ("trees_badlands", include_str!("data/feature/configured/trees_badlands.json")),
+    ("trees_grove", include_str!("data/feature/configured/trees_grove.json")),
+    ("super_birch_bees", include_str!("data/feature/configured/super_birch_bees.json")),
+    ("fancy_oak_bees", include_str!("data/feature/configured/fancy_oak_bees.json")),
 ];
 
 /// MC IntProvider: constant or uniform.
@@ -449,6 +465,12 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "trees_sparse_jungle",
             "trees_water",
             "dark_forest_vegetation",
+            // W227.
+            "trees_meadow",
+            "trees_badlands",
+            "trees_grove",
+            "trees_windswept_forest",
+            "trees_windswept_savanna",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -478,14 +500,25 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         B::OldGrowthSpruceTaiga => Some("trees_old_growth_spruce_taiga"),
         B::OldGrowthPineTaiga => Some("trees_old_growth_pine_taiga"),
         B::SnowyPlains | B::IceSpikes | B::SnowySlopes => Some("trees_snowy"),
-        B::WindsweptHills => Some("trees_windswept_hills"),
+        B::WindsweptHills | B::WindsweptGravellyHills => Some("trees_windswept_hills"),
         B::Jungle | B::BambooJungle => Some("trees_jungle"),
         // W222: the real sparse-jungle list (bushes + fancy oaks).
         B::SparseJungle => Some("trees_sparse_jungle"),
-        B::Savanna => Some("trees_savanna"),
+        B::Savanna | B::SavannaPlateau => Some("trees_savanna"),
         // Mangrove swamp: swamp oaks stand in until the mangrove placer
         // + roots/propagule blocks exist.
         B::Swamp | B::MangroveSwamp => Some("trees_swamp"),
+        // W227: the high/peaks slice biomes. Pale garden hosts the
+        // dark-forest canopy (pale oaks share the dark-oak placer
+        // shape; only the blocks are missing). Cherry grove waits for
+        // the cherry trunk/foliage placers (W227.2).
+        B::Meadow => Some("trees_meadow"),
+        B::WoodedBadlands => Some("trees_badlands"),
+        B::Grove => Some("trees_grove"),
+        B::WindsweptForest => Some("trees_windswept_forest"),
+        B::WindsweptSavanna => Some("trees_windswept_savanna"),
+        B::PaleGarden => Some("dark_forest_vegetation"),
+        B::CherryGrove => None,
         // W222: trees_water - the rare bank/island oaks the ocean +
         // river biomes list (surface_water_depth 0 keeps them on land).
         B::River
@@ -499,7 +532,16 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         | B::LukewarmOcean
         | B::DeepLukewarmOcean
         | B::WarmOcean => Some("trees_water"),
-        B::Desert | B::Beach | B::SnowyBeach => None,
+        B::Desert
+        | B::Beach
+        | B::SnowyBeach
+        | B::StonyShore
+        | B::Badlands
+        | B::ErodedBadlands
+        | B::JaggedPeaks
+        | B::FrozenPeaks
+        | B::StonyPeaks
+        | B::MushroomFields => None,
     }
 }
 
@@ -1177,13 +1219,23 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 // from the surface rule the fill used - cheap proxy:
                 // check the chunk cell when local, else accept (the
                 // biome + height already filtered deserts/beaches).
+                // W227 grove: spruce/pine_on_snow carry a
+                // block_predicate_filter for a SNOW floor instead
+                // (grove surfaces are snow_block).
                 let (flx, fly, flz) = (wx - origin[0], floor - origin[1], wz - origin[2]);
                 if (0..cs).contains(&flx)
                     && (0..cs).contains(&fly)
                     && (0..cs).contains(&flz)
-                    && !floor_supports_tree(chunk.get(flx as usize, fly as usize, flz as usize).0)
                 {
-                    continue;
+                    let cell = chunk.get(flx as usize, fly as usize, flz as usize).0;
+                    let floor_ok = if bt.name == "trees_grove" {
+                        crate::block::block_type(cell).is_some_and(|b| b.name == "snow_block")
+                    } else {
+                        floor_supports_tree(cell)
+                    };
+                    if !floor_ok {
+                        continue;
+                    }
                 }
                 match pick {
                     Pick::Tree(def) => {

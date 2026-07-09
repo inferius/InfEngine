@@ -720,6 +720,18 @@ mod tests {
         for (b, n) in &hist {
             println!("  {b}: {:.1}%", 100.0 * *n as f32 / total as f32);
         }
+        // W227: the same area histogrammed by REAL MC biome (the full
+        // classifier), so new slice biomes are visible pre-collapse.
+        let mut full: BTreeMap<&str, u32> = BTreeMap::new();
+        for x in (-2000..2000).step_by(40) {
+            for z in (-2000..2000).step_by(40) {
+                *full.entry(ow.mc_biome_at(x, z).name()).or_default() += 1;
+            }
+        }
+        println!("\n== full MC biomes ==");
+        for (b, n) in &full {
+            println!("  {b}: {:.2}%", 100.0 * *n as f32 / total as f32);
+        }
     }
 
     /// Evidence dump: what surface blocks does `gen_mc` actually place?

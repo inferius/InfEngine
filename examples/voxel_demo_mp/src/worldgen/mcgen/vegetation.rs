@@ -101,6 +101,15 @@ const VEG_PLACED: &[(&str, &str)] = &[
     ("patch_firefly_bush_near_water", include_str!("data/feature/placed/patch_firefly_bush_near_water.json")),
     ("patch_firefly_bush_near_water_swamp", include_str!("data/feature/placed/patch_firefly_bush_near_water_swamp.json")),
     ("patch_firefly_bush_swamp", include_str!("data/feature/placed/patch_firefly_bush_swamp.json")),
+    // W227: the high/peaks slice biomes' patches.
+    ("patch_grass_meadow", include_str!("data/feature/placed/patch_grass_meadow.json")),
+    ("flower_meadow", include_str!("data/feature/placed/flower_meadow.json")),
+    ("wildflowers_meadow", include_str!("data/feature/placed/wildflowers_meadow.json")),
+    ("patch_dry_grass_badlands", include_str!("data/feature/placed/patch_dry_grass_badlands.json")),
+    ("patch_dead_bush_badlands", include_str!("data/feature/placed/patch_dead_bush_badlands.json")),
+    ("patch_sugar_cane_badlands", include_str!("data/feature/placed/patch_sugar_cane_badlands.json")),
+    ("patch_cactus_decorated", include_str!("data/feature/placed/patch_cactus_decorated.json")),
+    ("flower_cherry", include_str!("data/feature/placed/flower_cherry.json")),
 ];
 
 const VEG_CONFIGURED: &[(&str, &str)] = &[
@@ -129,6 +138,9 @@ const VEG_CONFIGURED: &[(&str, &str)] = &[
     ("dry_grass", include_str!("data/feature/configured/dry_grass.json")),
     ("waterlily", include_str!("data/feature/configured/waterlily.json")),
     ("firefly_bush", include_str!("data/feature/configured/firefly_bush.json")),
+    // W227.
+    ("flower_meadow", include_str!("data/feature/configured/flower_meadow.json")),
+    ("flower_cherry", include_str!("data/feature/configured/flower_cherry.json")),
 ];
 
 const BIOME_TEMPERATURES: &str = include_str!("data/feature/biome_temperatures.json");
@@ -227,6 +239,16 @@ enum Provider {
     /// NoiseProvider (flower_flower_forest): clamp((1+noise)/2, 0,
     /// 0.9999) * len indexes the states list - contiguous flower bands.
     Noise { states: Vec<Plant>, noise: ProviderNoise },
+    /// W227 DualNoiseProvider (flower_meadow): a SLOW noise picks how
+    /// many species this area carries (`variety`) and which ones (via
+    /// offset samples), then the fast noise picks within that local
+    /// species set - MC's meadow flower drifts.
+    DualNoise {
+        states: Vec<Plant>,
+        noise: ProviderNoise,
+        slow: ProviderNoise,
+        variety: (i32, i32),
+    },
 }
 
 impl Provider {
@@ -276,6 +298,27 @@ impl Provider {
                     .then(|| ProviderNoise::parse(v).map(|noise| Provider::Noise { states, noise }))
                     .flatten()
             }
+            Some("minecraft:dual_noise_provider") => {
+                let mut states = Vec::new();
+                for s in v["states"].as_array()? {
+                    states.push(plant_for(s["Name"].as_str()?)?);
+                }
+                if states.is_empty() {
+                    return None;
+                }
+                let slow_params: NoiseParams =
+                    serde_json::from_value(v["slow_noise"].clone()).ok()?;
+                let variety = v["variety"].as_array()?;
+                Some(Provider::DualNoise {
+                    states,
+                    noise: ProviderNoise::parse(v)?,
+                    slow: ProviderNoise {
+                        noise: Arc::new(NormalNoise::new(v["seed"].as_i64()? as u64, &slow_params)),
+                        scale: v["slow_scale"].as_f64()?,
+                    },
+                    variety: (variety[0].as_i64()? as i32, variety[1].as_i64()? as i32),
+                })
+            }
             _ => None,
         }
     }
@@ -308,6 +351,30 @@ impl Provider {
                 let n = noise.value(wx, wy, wz);
                 let t = ((1.0 + n) / 2.0).clamp(0.0, 0.9999);
                 states[(t * states.len() as f64) as usize]
+            }
+            Provider::DualNoise { states, noise, slow, variety } => {
+                // DualNoiseProvider.getState, exactly: the slow noise
+                // maps [-1,1] onto [min, max+1] species for this area,
+                // each picked by slow-noise samples at MC's fixed
+                // offsets, then the fast noise indexes that local set.
+                let by_noise = |list: &[Plant], v: f64| -> Plant {
+                    let t = ((1.0 + v) / 2.0).clamp(0.0, 0.9999);
+                    list[(t * list.len() as f64) as usize]
+                };
+                let vn = slow.value(wx, wy, wz);
+                let (vmin, vmax) = *variety;
+                let local = (vmin as f64
+                    + (vn + 1.0) / 2.0 * ((vmax + 1 - vmin) as f64))
+                    .clamp(vmin as f64, (vmax + 1) as f64) as i32;
+                let mut possible = Vec::with_capacity(local.max(1) as usize);
+                for i in 0..local {
+                    let v = slow.value(wx + i * 54545, wy, wz + i * 34234);
+                    possible.push(by_noise(states, v));
+                }
+                if possible.is_empty() {
+                    return by_noise(states, noise.value(wx, wy, wz));
+                }
+                by_noise(&possible, noise.value(wx, wy, wz))
             }
         }
     }
@@ -613,6 +680,56 @@ pub(crate) fn patches_for(mc: McBiome) -> &'static [&'static str] {
             "flower_default", "patch_grass_badlands",
             "brown_mushroom_normal", "red_mushroom_normal",
             "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        // W227: the high/peaks slice biomes, per their biome JSONs.
+        B::Meadow => &[
+            "patch_tall_grass_2", "patch_grass_meadow", "flower_meadow",
+            "wildflowers_meadow",
+        ],
+        B::CherryGrove => &[
+            "patch_tall_grass_2", "patch_grass_plain", "flower_cherry",
+        ],
+        // pale_garden: the pale-oak vegetation/moss/flower features wait
+        // for their blocks; the hosted rest matches its JSON.
+        B::PaleGarden => &[
+            "patch_grass_forest", "patch_pumpkin", "patch_sugar_cane",
+            "patch_firefly_bush_near_water",
+        ],
+        B::SavannaPlateau => &[
+            "patch_tall_grass", "flower_warm", "patch_grass_savanna",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        B::Badlands | B::WoodedBadlands | B::ErodedBadlands => &[
+            "patch_grass_badlands", "patch_dry_grass_badlands",
+            "patch_dead_bush_badlands", "brown_mushroom_normal",
+            "red_mushroom_normal", "patch_sugar_cane_badlands",
+            "patch_pumpkin", "patch_cactus_decorated",
+            "patch_firefly_bush_near_water",
+        ],
+        B::WindsweptGravellyHills | B::WindsweptForest => &[
+            "patch_bush", "flower_default", "patch_grass_badlands",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        B::WindsweptSavanna => &[
+            "flower_default", "patch_grass_normal",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        // Bare stone peaks list only glow lichen in MC.
+        B::JaggedPeaks | B::FrozenPeaks | B::StonyPeaks => &[],
+        B::Grove => &["patch_pumpkin"],
+        B::StonyShore => &[
+            "flower_default", "patch_grass_badlands",
+            "brown_mushroom_normal", "red_mushroom_normal",
+            "patch_pumpkin", "patch_sugar_cane", "patch_firefly_bush_near_water",
+        ],
+        // mushroom_fields: the huge-mushroom island vegetation waits for
+        // the mushroom_block/stem blocks; taiga-rate mushrooms hosted.
+        B::MushroomFields => &[
+            "brown_mushroom_taiga", "red_mushroom_taiga",
+            "patch_sugar_cane", "patch_firefly_bush_near_water",
         ],
     }
 }
