@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::noise::NormalNoise;
+use super::noise::{NoiseParams, NormalNoise, SplitMix64};
 
 /// Engine block ids the surface rules place. `grass_block` is the
 /// engine's "grass" (3); `snow_block` is the full opaque cube added in
@@ -148,8 +148,8 @@ enum Rule {
     Sequence(Vec<Rule>),
     Condition(Cond, Box<Rule>),
     Block(u16),
-    /// Badlands terracotta banding - engine has no badlands; approximate
-    /// with a plain terracotta surface so the rule still yields a block.
+    /// Badlands terracotta banding (W227.3: the real 192-layer clay
+    /// strata via [`ClayBands`]).
     Bandlands,
     /// Unrecognised - yields nothing.
     Nop,
@@ -182,22 +182,115 @@ pub(crate) struct SurfaceCtx {
     pub max_y: i32,
 }
 
+/// W227.3: the badlands terracotta banding - `SurfaceSystem`'s
+/// 192-layer clay_bands strata (generateBands/makeBands exactly:
+/// scattered orange, 6-15 bands each of yellow/brown/red, 9-15 white
+/// bands with 50% light-gray fringes) plus the `clay_bands_offset`
+/// noise that shifts the strata per column (`getBand`). SplitMix64
+/// world-seed streams stand in for MC's `fromHashOf` (rules parity,
+/// not seed identity - the whole port's convention).
+pub(crate) struct ClayBands {
+    bands: [u16; 192],
+    offset: NormalNoise,
+}
+
+const CLAY_BANDS_OFFSET_JSON: &str = include_str!("data/noise/clay_bands_offset.json");
+const SALT_CLAY_BANDS: u64 = 0xC1A7_BA2D_0000_0000;
+
+impl ClayBands {
+    fn new(seed: u32) -> ClayBands {
+        let by_name = |n: &str| {
+            crate::worldgen::mcgen::features::block_id_by_name(n).unwrap_or(ids::TERRACOTTA)
+        };
+        let (yellow, brown, red, light_gray) = (
+            by_name("yellow_terracotta"),
+            by_name("brown_terracotta"),
+            by_name("red_terracotta"),
+            by_name("light_gray_terracotta"),
+        );
+        let mut r = SplitMix64::new(seed as u64 ^ SALT_CLAY_BANDS);
+        let mut next_int = |n: i32| -> i32 { (r.next_u64() % n.max(1) as u64) as i32 };
+        let mut bands = [ids::TERRACOTTA; 192];
+        // Scattered single orange layers (the base for loop's i++ folds
+        // into the extra += 1).
+        let mut i = 0usize;
+        loop {
+            i += next_int(5) as usize + 1;
+            if i >= 192 {
+                break;
+            }
+            bands[i] = ids::ORANGE_TERRACOTTA;
+            i += 1;
+            if i >= 192 {
+                break;
+            }
+        }
+        // makeBands: 6-15 runs of width base+rand(3) at random starts.
+        for (base, id) in [(1, yellow), (2, brown), (1, red)] {
+            let count = 6 + next_int(10);
+            for _ in 0..count {
+                let width = base + next_int(3);
+                let start = next_int(192) as usize;
+                for p in 0..width as usize {
+                    if start + p >= 192 {
+                        break;
+                    }
+                    bands[start + p] = id;
+                }
+            }
+        }
+        // White bands with 50% light-gray fringes, stepped 4..=19.
+        let white_count = 9 + next_int(7);
+        let mut placed = 0;
+        let mut start = 0usize;
+        while placed < white_count && start < 192 {
+            bands[start] = ids::WHITE_TERRACOTTA;
+            if start >= 2 && next_int(2) == 0 {
+                bands[start - 1] = light_gray;
+            }
+            if start + 1 < 192 && next_int(2) == 0 {
+                bands[start + 1] = light_gray;
+            }
+            placed += 1;
+            start += next_int(16) as usize + 4;
+        }
+        let params: NoiseParams =
+            serde_json::from_str(CLAY_BANDS_OFFSET_JSON).expect("clay_bands_offset params");
+        ClayBands {
+            bands,
+            offset: NormalNoise::new(seed as u64 ^ SALT_CLAY_BANDS ^ 1, &params),
+        }
+    }
+
+    /// `SurfaceSystem.getBand`.
+    fn get(&self, x: i32, y: i32, z: i32) -> u16 {
+        let off = (self.offset.value(x as f64, 0.0, z as f64) * 4.0).round() as i32;
+        self.bands[(y + off).rem_euclid(192) as usize]
+    }
+}
+
 /// The parsed overworld surface rule + its referenced noises.
 pub(crate) struct SurfaceRules {
     root: Rule,
+    clay: ClayBands,
 }
 
 impl SurfaceRules {
     /// Parse the `surface_rule` value, resolving `noise_threshold`
-    /// noises through `noise_res` (name -> seeded NormalNoise).
-    pub(crate) fn parse(v: &Value, noise_res: &dyn Fn(&str) -> Option<Arc<NormalNoise>>) -> Self {
-        SurfaceRules { root: parse_rule(v, noise_res) }
+    /// noises through `noise_res` (name -> seeded NormalNoise); `seed`
+    /// builds the badlands clay bands.
+    pub(crate) fn parse(
+        v: &Value,
+        noise_res: &dyn Fn(&str) -> Option<Arc<NormalNoise>>,
+        seed: u32,
+    ) -> Self {
+        SurfaceRules { root: parse_rule(v, noise_res), clay: ClayBands::new(seed) }
     }
 
     /// First matching block id for the column/cell, or `None` to leave
     /// whatever the terrain stage put there.
     pub(crate) fn eval(&self, ctx: &SurfaceCtx) -> Option<u16> {
-        eval_rule(&self.root, ctx)
+        eval_rule(&self.root, ctx, &self.clay)
     }
 }
 
@@ -304,18 +397,19 @@ fn fnv(s: &str) -> u64 {
     h
 }
 
-fn eval_rule(rule: &Rule, ctx: &SurfaceCtx) -> Option<u16> {
+fn eval_rule(rule: &Rule, ctx: &SurfaceCtx, clay: &ClayBands) -> Option<u16> {
     match rule {
-        Rule::Sequence(rules) => rules.iter().find_map(|r| eval_rule(r, ctx)),
+        Rule::Sequence(rules) => rules.iter().find_map(|r| eval_rule(r, ctx, clay)),
         Rule::Condition(cond, then) => {
             if eval_cond(cond, ctx) {
-                eval_rule(then, ctx)
+                eval_rule(then, ctx, clay)
             } else {
                 None
             }
         }
         Rule::Block(id) => Some(*id),
-        Rule::Bandlands => Some(ids::TERRACOTTA),
+        // W227.3: the real terracotta strata.
+        Rule::Bandlands => Some(clay.get(ctx.x, ctx.y, ctx.z)),
         Rule::Nop => None,
     }
 }
@@ -414,7 +508,7 @@ mod tests {
         // No noise resolver in this test (noise_threshold -> Never), but
         // the tree must parse without panicking and be evaluable.
         let nr = |_: &str| None;
-        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let sr = SurfaceRules::parse(&rules_json(), &nr, 0);
         // A grassy land surface (top solid, above water, above
         // preliminary surface) should resolve to grass_block.
         let mut c = ctx(70, "plains");
@@ -430,7 +524,7 @@ mod tests {
         // resolver the powder_snow branch is skipped, so the snow_block
         // default wins. The frozen flag models coldEnoughToSnow there.
         let nr = |_: &str| None;
-        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let sr = SurfaceRules::parse(&rules_json(), &nr, 0);
         let mut c = ctx(80, "snowy_slopes");
         c.frozen = true;
         assert_eq!(
@@ -447,7 +541,7 @@ mod tests {
     #[test]
     fn special_biome_rules_do_not_bleed() {
         let nr = |_: &str| None;
-        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let sr = SurfaceRules::parse(&rules_json(), &nr, 0);
         let mut beach = ctx(64, "beach");
         beach.water_height = i32::MIN;
         beach.surface = 64;
@@ -465,7 +559,7 @@ mod tests {
     #[test]
     fn bedrock_at_world_floor() {
         let nr = |_: &str| None;
-        let sr = SurfaceRules::parse(&rules_json(), &nr);
+        let sr = SurfaceRules::parse(&rules_json(), &nr, 0);
         // The first rule is the bedrock floor (vertical_gradient near
         // min_y). At the very bottom it should always be bedrock.
         let c = ctx(-64, "plains");
@@ -477,5 +571,35 @@ mod tests {
         assert_eq!(block_id("minecraft:grass_block"), ids::GRASS_BLOCK);
         assert_eq!(block_id("minecraft:gravel"), ids::GRAVEL);
         assert_eq!(block_id("minecraft:red_sandstone"), ids::RED_SANDSTONE);
+    }
+
+    /// W227.3: the badlands clay bands carry real strata - several
+    /// terracotta colours, deterministic per seed, column-shifted by
+    /// the offset noise.
+    #[test]
+    fn clay_bands_have_strata() {
+        let a = ClayBands::new(42);
+        let b = ClayBands::new(42);
+        let mut colours = std::collections::HashSet::new();
+        for y in 0..192 {
+            assert_eq!(a.get(10, y, -7), b.get(10, y, -7), "bands must be deterministic");
+            colours.insert(a.get(10, y, -7));
+        }
+        assert!(
+            colours.len() >= 4,
+            "expected several terracotta colours in the strata, got {colours:?}"
+        );
+        // The offset noise must actually shift bands across the world:
+        // sample many far-apart columns; at least two distinct integer
+        // offsets must appear (a single column pair can tie by chance).
+        let mut offsets = std::collections::HashSet::new();
+        for i in 0..32 {
+            let (x, z) = (i * 1731 - 20000, i * -2917 + 9000);
+            offsets.insert((a.offset.value(x as f64, 0.0, z as f64) * 4.0).round() as i32);
+        }
+        assert!(
+            offsets.len() >= 2,
+            "clay_bands_offset must shift the strata per column, got {offsets:?}"
+        );
     }
 }

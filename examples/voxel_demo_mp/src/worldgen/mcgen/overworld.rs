@@ -232,8 +232,9 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
     vein_ridged.assign_interp_ids(&mut next_id);
     vein_gap.assign_interp_ids(&mut next_id);
     // The surface rule reuses the same seeded-noise resolver (it samples
-    // the `surface` / `surface_swamp` / `gravel` / ... noises).
-    let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res);
+    // the `surface` / `surface_swamp` / `gravel` / ... noises); the seed
+    // also builds the badlands clay bands (W227.3).
+    let surface = SurfaceRules::parse(&settings["surface_rule"], &noise_res, seed);
     // W217: the surface-depth noise is the SAME seeded "surface" noise.
     let surface_noise = noise_res("surface").expect("surface noise params embedded");
 
