@@ -877,6 +877,65 @@ mod tests {
         );
     }
 
+    /// W226.2 diagnostic (run with --ignored): quad counts of the
+    /// runtime mesher over real terrain chunks - the greedy-vs-unit
+    /// cost ledger for the perf epic (constant light = maximum merge,
+    /// so the greedy number is its best case).
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_mesh_quad_counts() {
+        let c = WorldgenCtx {
+            base_seed: 3592732596,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let mut quads_special = 0usize;
+        let mut quads_greedy = 0usize;
+        let mut chunks = 0usize;
+        for ccx in -4..4 {
+            for ccz in -4..4 {
+                let h = mc_floor_at(&c, ccx * 16 + 8, ccz * 16 + 8);
+                let cy = h.div_euclid(16);
+                let coord = [ccx, cy, ccz];
+                let chunk = crate::worldgen::generate_chunk_at_ctx(coord, &c);
+                chunks += 1;
+                let opaque = |b: infengine_voxel::BlockId| {
+                    crate::block::block_type(b.0).is_some_and(|bt| !bt.transparent)
+                };
+                let occ = |p: [i32; 3]| {
+                    (0..16).contains(&p[0])
+                        && (0..16).contains(&p[1])
+                        && (0..16).contains(&p[2])
+                        && opaque(chunk.get(p[0] as usize, p[1] as usize, p[2] as usize))
+                };
+                let subs = infengine_voxel::chunk_mesh_greedy_with_special(
+                    &chunk,
+                    glam::Vec3::ZERO,
+                    |_, _| [0.25f32, 0.25, 0.75, 0.75],
+                    opaque,
+                    |_, _| [0.0f32, 1.0f32],
+                    |_, _| 0u32,
+                    occ,
+                    |_, _, _, _| false,
+                );
+                quads_special += subs.iter().map(|s| s.vertices.len() / 4).sum::<usize>();
+                let greedy = infengine_voxel::chunk_mesh_greedy(
+                    &chunk,
+                    glam::Vec3::ZERO,
+                    |_, _| [0.25f32, 0.25, 0.75, 0.75],
+                    opaque,
+                    |_, _| [0.0f32, 1.0f32],
+                    |_, _| 0u32,
+                );
+                quads_greedy += greedy.iter().map(|s| s.vertices.len() / 4).sum::<usize>();
+            }
+        }
+        println!(
+            "\n== mesh quads over {chunks} surface chunks (seed 3592732596): runtime mesher {quads_special}, greedy(no-special) {quads_greedy} =="
+        );
+    }
+
     #[test]
     fn gen_mc_produces_solid_and_open() {
         // The 3D density gen must produce a real mix of solid terrain and

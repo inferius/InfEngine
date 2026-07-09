@@ -863,29 +863,26 @@ where
                 }
             }
 
-            let mut done = vec![false; cs * cs];
             for u0 in 0..cs {
                 for v0 in 0..cs {
                     let idx0 = u0 * cs + v0;
-                    if done[idx0] || mask[idx0].is_none() { continue; }
+                    if mask[idx0].is_none() { continue; }
                     let key = mask[idx0].clone().unwrap();
                     let block = BlockId(key.block);
 
-                    let mut v1 = v0 + 1;
-                    while v1 < cs {
-                        let idx = u0 * cs + v1;
-                        if done[idx] || mask[idx].as_ref() != Some(&key) { break; }
-                        v1 += 1;
-                    }
-                    let mut u1 = u0 + 1;
-                    'u_exp: while u1 < cs {
-                        for v in v0..v1 {
-                            let idx = u1 * cs + v;
-                            if done[idx] || mask[idx].as_ref() != Some(&key) { break 'u_exp; }
-                        }
-                        u1 += 1;
-                    }
-                    for u in u0..u1 { for v in v0..v1 { done[u * cs + v] = true; } }
+                    // W226.2: NO greedy expansion - unit quads only.
+                    // Merging produced quads of different sizes sharing
+                    // partial edges (W122 splits runs at smooth-light
+                    // steps); a vertex mid-edge of a neighbouring quad
+                    // (T-junction) rasterizes with subpixel pinholes -
+                    // the dotted see-through lines on tree trunks. MC
+                    // itself emits per-face unit quads: bitwise-equal
+                    // shared corners make the surface watertight by
+                    // construction. Re-enabling merging requires a
+                    // T-junction-free design (weld neighbour vertices
+                    // into long edges) - tracked in the perf plan.
+                    let u1 = u0 + 1;
+                    let v1 = v0 + 1;
 
                     let w = (u1 - u0) as f32;
                     let h = (v1 - v0) as f32;
@@ -2093,5 +2090,68 @@ mod tests {
             naive_top_verts, 256,
             "naive should produce 256 top quads, got {naive_top_verts}"
         );
+    }
+
+    /// W226.2: the runtime mesher (`chunk_mesh_greedy_with_special`)
+    /// must be watertight: no emitted vertex may lie strictly inside an
+    /// axis-aligned edge of another quad. Such T-junctions rasterize
+    /// with subpixel pinholes - the user-reported dotted see-through
+    /// lines across dark-oak trunks at light-step heights (W122 splits
+    /// merged quads at smooth-light steps, so quads of different sizes
+    /// shared partial edges).
+    #[test]
+    fn runtime_mesher_emits_no_t_junctions() {
+        let cs = CHUNK_SIZE;
+        let mut chunk = Chunk::empty();
+        for x in 0..cs {
+            for z in 0..cs {
+                chunk.set(x, 0, z, BlockId(1));
+            }
+        }
+        // A light field with a step confined to one corner: under
+        // greedy merging this yields an L-shaped layout of small quads
+        // beside big ones - partial shared edges = T-junctions.
+        let light = |c: [i32; 3], _n: [i8; 3]| -> [f32; 2] {
+            if c[0] <= 1 && c[2] <= 1 { [0.0, 0.2] } else { [0.0, 1.0] }
+        };
+        let subs = chunk_mesh_greedy_with_special(
+            &chunk,
+            Vec3::ZERO,
+            |_, _| [0.25f32, 0.25f32, 0.75f32, 0.75f32],
+            |_| true,
+            light,
+            |_, _| 0u32,
+            |_| false,
+            |_, _, _, _| false,
+        );
+        // Gather every quad's outline edges + every vertex. Positions
+        // sit on the integer voxel grid, so comparisons are exact.
+        let mut edges: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        let mut verts: Vec<[f32; 3]> = Vec::new();
+        for s in &subs {
+            for q in s.vertices.chunks(4) {
+                let p: Vec<[f32; 3]> = q.iter().map(|v| v.position).collect();
+                verts.extend(p.iter().copied());
+                for i in 0..4 {
+                    edges.push((p[i], p[(i + 1) % 4]));
+                }
+            }
+        }
+        // A vertex strictly inside an axis-aligned edge = T-junction.
+        let mut bad = 0usize;
+        for v in &verts {
+            for (a, b) in &edges {
+                let axis = (0..3).find(|&k| a[k] != b[k]);
+                let Some(axis) = axis else { continue };
+                if (0..3).any(|k| k != axis && (a[k] != b[k] || v[k] != a[k])) {
+                    continue;
+                }
+                let (lo, hi) = if a[axis] < b[axis] { (a[axis], b[axis]) } else { (b[axis], a[axis]) };
+                if v[axis] > lo && v[axis] < hi {
+                    bad += 1;
+                }
+            }
+        }
+        assert_eq!(bad, 0, "mesh has {bad} T-junction vertex-on-edge incidences");
     }
 }
