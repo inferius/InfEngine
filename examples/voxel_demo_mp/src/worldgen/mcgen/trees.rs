@@ -104,6 +104,10 @@ const TREE_PLACED: &[(&str, &str)] = &[
     ("fancy_oak_bees", include_str!("data/feature/placed/fancy_oak_bees.json")),
     // W227.2.
     ("trees_cherry", include_str!("data/feature/placed/trees_cherry.json")),
+    // W229.
+    ("trees_mangrove", include_str!("data/feature/placed/trees_mangrove.json")),
+    ("mangrove_checked", include_str!("data/feature/placed/mangrove_checked.json")),
+    ("tall_mangrove_checked", include_str!("data/feature/placed/tall_mangrove_checked.json")),
 ];
 
 const TREE_CONFIGURED: &[(&str, &str)] = &[
@@ -163,6 +167,10 @@ const TREE_CONFIGURED: &[(&str, &str)] = &[
     ("fancy_oak_bees", include_str!("data/feature/configured/fancy_oak_bees.json")),
     // W227.2.
     ("cherry_bees_005", include_str!("data/feature/configured/cherry_bees_005.json")),
+    // W229.
+    ("mangrove_vegetation", include_str!("data/feature/configured/mangrove_vegetation.json")),
+    ("mangrove", include_str!("data/feature/configured/mangrove.json")),
+    ("tall_mangrove", include_str!("data/feature/configured/tall_mangrove.json")),
 ];
 
 /// MC IntProvider: constant or uniform.
@@ -230,6 +238,14 @@ enum Trunk {
         branch_start: IntProv,
         branch_end: IntProv,
     },
+    /// W229: UpwardsBranchingTrunkPlacer (mangrove) - a straight trunk
+    /// where each log may sprout an upward-stepping side branch, every
+    /// branch log carrying its own foliage attachment.
+    UpwardsBranching {
+        extra_steps: IntProv,
+        branch_prob: f32,
+        extra_len: IntProv,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -259,6 +275,23 @@ enum Foliage {
         hanging: f32,
         hanging_ext: f32,
     },
+    /// W229: RandomSpreadFoliagePlacer (mangrove) - N random offsets
+    /// in a radius x height box around each attachment.
+    RandomSpread { foliage_height: IntProv, attempts: i32 },
+}
+
+/// W229: MangroveRootPlacer's config - the trunk stilt offset + the
+/// root walk limits and blocks.
+#[derive(Clone, Debug)]
+pub(crate) struct RootDef {
+    trunk_offset_y: IntProv,
+    root: u16,
+    muddy: u16,
+    moss: u16,
+    moss_chance: f32,
+    max_length: i32,
+    max_width: i32,
+    skew: f32,
 }
 
 /// One fully-parsed MC tree configured_feature.
@@ -274,6 +307,8 @@ pub(crate) struct TreeDef {
     offset: IntProv,
     log: u16,
     leaves: u16,
+    /// W229: mangrove stilt roots (None for every other tree).
+    root: Option<RootDef>,
 }
 
 /// W209: the fallen-tree feature (stump + a horizontal log run).
@@ -372,7 +407,12 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
             branch_start: IntProv::parse(&tp["branch_start_offset_from_top"]),
             branch_end: IntProv::parse(&tp["branch_end_offset_from_top"]),
         },
-        _ => return TreeRef::Unsupported(name), // bending / upwards_branching / ...
+        Some("minecraft:upwards_branching_trunk_placer") => Trunk::UpwardsBranching {
+            extra_steps: IntProv::parse(&tp["extra_branch_steps"]),
+            branch_prob: tp["place_branch_per_log_probability"].as_f64().expect("prob") as f32,
+            extra_len: IntProv::parse(&tp["extra_branch_length"]),
+        },
+        _ => return TreeRef::Unsupported(name), // bending / ...
     };
     let fp = &cfg["foliage_placer"];
     let foliage = match fp["type"].as_str() {
@@ -406,8 +446,31 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
             hanging: fp["hanging_leaves_chance"].as_f64().expect("hanging") as f32,
             hanging_ext: fp["hanging_leaves_extension_chance"].as_f64().expect("ext") as f32,
         },
+        Some("minecraft:random_spread_foliage_placer") => Foliage::RandomSpread {
+            foliage_height: IntProv::parse(&fp["foliage_height"]),
+            attempts: fp["leaf_placement_attempts"].as_i64().expect("attempts") as i32,
+        },
         _ => return TreeRef::Unsupported(name),
     };
+    // W229: the mangrove root placer (stilt roots).
+    let root = cfg.get("root_placer").and_then(|rp| {
+        if rp["type"].as_str() != Some("minecraft:mangrove_root_placer") {
+            return None;
+        }
+        let mrp = &rp["mangrove_root_placement"];
+        Some(RootDef {
+            trunk_offset_y: IntProv::parse(&rp["trunk_offset_y"]),
+            root: block_id_by_name("mangrove_roots")?,
+            muddy: block_id_by_name("muddy_mangrove_roots")?,
+            moss: block_id_by_name("moss_carpet")?,
+            moss_chance: rp["above_root_placement"]["above_root_placement_chance"]
+                .as_f64()
+                .unwrap_or(0.5) as f32,
+            max_length: mrp["max_root_length"].as_i64().unwrap_or(15) as i32,
+            max_width: mrp["max_root_width"].as_i64().unwrap_or(8) as i32,
+            skew: mrp["random_skew_chance"].as_f64().unwrap_or(0.2) as f32,
+        })
+    });
     let log_name = cfg["trunk_provider"]["state"]["Name"].as_str().expect("trunk block");
     let leaves_name = cfg["foliage_provider"]["state"]["Name"].as_str().expect("foliage block");
     let (Some(log), Some(leaves)) =
@@ -427,6 +490,7 @@ fn parse_tree_conf(name: &'static str) -> TreeRef {
         offset: IntProv::parse(&fp["offset"]),
         log,
         leaves,
+        root,
     })
 }
 
@@ -539,6 +603,8 @@ pub(crate) fn biome_trees(root: &'static str) -> &'static BiomeTrees {
             "trees_windswept_forest",
             "trees_windswept_savanna",
             "trees_cherry",
+            // W229.
+            "trees_mangrove",
         ]
         .into_iter()
         .map(parse_biome_trees)
@@ -573,9 +639,10 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         // W222: the real sparse-jungle list (bushes + fancy oaks).
         B::SparseJungle => Some("trees_sparse_jungle"),
         B::Savanna | B::SavannaPlateau => Some("trees_savanna"),
-        // Mangrove swamp: swamp oaks stand in until the mangrove placer
-        // + roots/propagule blocks exist.
-        B::Swamp | B::MangroveSwamp => Some("trees_swamp"),
+        B::Swamp => Some("trees_swamp"),
+        // W229: the real mangroves (UpwardsBranchingTrunkPlacer +
+        // MangroveRootPlacer + RandomSpread foliage).
+        B::MangroveSwamp => Some("trees_mangrove"),
         // W227: the high/peaks slice biomes. Pale garden hosts the
         // dark-forest canopy (pale oaks share the dark-oak placer
         // shape; only the blocks are missing).
@@ -758,9 +825,9 @@ fn place_leaves_row(
                 Foliage::MegaJungle { .. } | Foliage::MegaPine { .. } => {
                     adx + adz >= 7 || adx * adx + adz * adz > radius * radius
                 }
-                // DarkOak + Cherry place their rows inline and never
-                // route through this helper.
-                Foliage::DarkOak | Foliage::Cherry { .. } => false,
+                // DarkOak / Cherry / RandomSpread place inline and
+                // never route through this helper.
+                Foliage::DarkOak | Foliage::Cherry { .. } | Foliage::RandomSpread { .. } => false,
             };
             if !skip {
                 set_leaf(chunk, origin, att[0] + dx, att[1] + y, att[2] + dz, def.leaves);
@@ -927,6 +994,127 @@ fn cherry_branch(
     }
 }
 
+/// W229 `MangroveRootPlacer.placeRoots`: raise the trunk onto stilts
+/// (trunk_offset_y), walk the four horizontal root arms down/outward
+/// (`simulateRoots` / `potentialRootPositions` exactly), then write
+/// roots (muddy inside the ground band) + the 50% moss carpets. All
+/// DECISIONS use replay-invariant data (the shared post-carve floor +
+/// this feature's own root set standing in for MC's world reads);
+/// writes guard on the actual cell. Returns the trunk origin.
+fn place_mangrove_roots(
+    chunk: &mut Chunk,
+    origin: [i32; 3],
+    ctx: &WorldgenCtx,
+    rng: &mut SplitMix64,
+    root: &RootDef,
+    base: [i32; 3],
+) -> [i32; 3] {
+    use std::collections::HashSet;
+    const DIRS: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    let trunk_origin = [base[0], base[1] + root.trunk_offset_y.sample(rng), base[2]];
+    // canPlaceRoot, replay-invariant: at most one block into the ground
+    // (the mangrove mud band; MC grows through mud/roots/moss only) and
+    // never above the world.
+    let can_place = |p: [i32; 3]| -> bool {
+        (1..255).contains(&p[1]) && p[1] >= mc_floor_at(ctx, p[0], p[2]) - 1
+    };
+    #[allow(clippy::too_many_arguments)]
+    fn simulate(
+        rng: &mut SplitMix64,
+        can_place: &dyn Fn([i32; 3]) -> bool,
+        pos: [i32; 3],
+        dir: [i32; 2],
+        root_origin: [i32; 3],
+        out: &mut Vec<[i32; 3]>,
+        layer: i32,
+        cfg: &RootDef,
+    ) -> bool {
+        if layer == cfg.max_length || out.len() > cfg.max_length as usize {
+            return false;
+        }
+        // potentialRootPositions.
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let next_to = [pos[0] + dir[0], pos[1], pos[2] + dir[1]];
+        let width = (pos[0] - root_origin[0]).abs()
+            + (pos[1] - root_origin[1]).abs()
+            + (pos[2] - root_origin[2]).abs();
+        let candidates: Vec<[i32; 3]> = if width > cfg.max_width - 3 && width <= cfg.max_width {
+            if rng.next_f64() < cfg.skew as f64 {
+                vec![below, [next_to[0], next_to[1] - 1, next_to[2]]]
+            } else {
+                vec![below]
+            }
+        } else if width > cfg.max_width {
+            vec![below]
+        } else {
+            // Inside the width band: the skew roll fires first, then
+            // the 50/50 sideways pick only when it misses (the
+            // source's else-chain).
+            let skewed = rng.next_f64() < cfg.skew as f64;
+            let sideways = !skewed && rng.next_u64().is_multiple_of(2);
+            if sideways { vec![next_to] } else { vec![below] }
+        };
+        for p in candidates {
+            if can_place(p) {
+                out.push(p);
+                if !simulate(rng, can_place, p, dir, root_origin, out, layer + 1, cfg) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    let mut roots: Vec<[i32; 3]> = vec![[trunk_origin[0], trunk_origin[1] - 1, trunk_origin[2]]];
+    for dir in DIRS {
+        let start = [trunk_origin[0] + dir[0], trunk_origin[1], trunk_origin[2] + dir[1]];
+        let mut in_dir = Vec::new();
+        simulate(rng, &can_place, start, dir, trunk_origin, &mut in_dir, 0, root);
+        roots.extend(in_dir);
+        roots.push(start);
+    }
+    // placeRoot per position: muddy roots inside the ground band (no
+    // above roll, like the source's muddy branch); stilt roots roll the
+    // 50% moss carpet gated on a virtual-air cell above.
+    let root_set: HashSet<[i32; 3]> = roots.iter().copied().collect();
+    let mud_id = block_id_by_name("mud");
+    let cs = CHUNK_SIZE as i32;
+    let mut write = |p: [i32; 3], id: u16, replace_ground: bool| {
+        let (lx, ly, lz) = (p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]);
+        if !(0..cs).contains(&lx) || !(0..cs).contains(&ly) || !(0..cs).contains(&lz) {
+            return;
+        }
+        let cur = chunk.get(lx as usize, ly as usize, lz as usize).0;
+        let writable = cur == 0
+            || cur == 36
+            || (replace_ground && Some(cur) == mud_id)
+            || crate::block::block_type(cur)
+                .is_some_and(|bt| bt.flags & crate::block::F_REPLACEABLE != 0);
+        if writable {
+            chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+        }
+    };
+    for p in roots.iter() {
+        let in_ground = p[1] <= mc_floor_at(ctx, p[0], p[2]);
+        if in_ground {
+            write(*p, root.muddy, true);
+        } else {
+            write(*p, root.root, false);
+            // Above-root placement: the roll fires like the source
+            // (before the emptiness test), the write needs virtual air
+            // (above sea level, open, not another root).
+            let above = [p[0], p[1] + 1, p[2]];
+            if rng.next_f64() < root.moss_chance as f64
+                && above[1] >= SEA_LEVEL
+                && !super::terrain::column_is_solid(ctx, above[0], above[1], above[2])
+                && !root_set.contains(&above)
+            {
+                write(above, root.moss, false);
+            }
+        }
+    }
+    trunk_origin
+}
+
 /// Place one tree with base (trunk bottom) at `base`. Ported from
 /// TreeFeature.doPlace + the trunk/foliage placers named in the module
 /// docs. Writes only cells inside `chunk` (the 3x3 source replay covers
@@ -934,10 +1122,16 @@ fn cherry_branch(
 fn place_tree(
     chunk: &mut Chunk,
     origin: [i32; 3],
+    ctx: &WorldgenCtx,
     rng: &mut SplitMix64,
     def: &TreeDef,
     base: [i32; 3],
 ) {
+    // W229: mangrove stilt roots first - the trunk grows from their top.
+    let base = match &def.root {
+        Some(root) => place_mangrove_roots(chunk, origin, ctx, rng, root, base),
+        None => base,
+    };
     let tree_height = def.base_height
         + (rng.next_u64() % (def.height_rand_a + 1) as u64) as i32
         + (rng.next_u64() % (def.height_rand_b + 1) as u64) as i32;
@@ -954,6 +1148,7 @@ fn place_tree(
         Foliage::DarkOak => 4,
         Foliage::Acacia => 0,
         Foliage::Cherry { height, .. } => height.sample(rng),
+        Foliage::RandomSpread { foliage_height, .. } => foliage_height.sample(rng),
     };
     let trunk_height = tree_height - foliage_height;
     let mut leaf_radius = def.radius.sample(rng);
@@ -1184,6 +1379,48 @@ fn place_tree(
                 ));
             }
         }
+        Trunk::UpwardsBranching { extra_steps, branch_prob, extra_len } => {
+            // W229 UpwardsBranchingTrunkPlacer.placeTrunk: every trunk
+            // log below the top may sprout an upward-stepping branch;
+            // each branch log carries a foliage attachment, plus the
+            // two extra crown attachments when the branch ran. placeLog
+            // is treated as always-true (the port's convention - the
+            // free-space checks consume no randomness).
+            const DIRS: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+            for h in 0..tree_height {
+                let y = base[1] + h;
+                set_log(chunk, origin, base[0], y, base[2], def.log);
+                if h < tree_height - 1 && rng.next_f64() < branch_prob as f64 {
+                    let dir = DIRS[(rng.next_u64() % 4) as usize];
+                    let len = extra_len.sample(rng);
+                    let start = (len - extra_len.sample(rng) - 1).max(0);
+                    let steps = extra_steps.sample(rng);
+                    let (mut lx, mut lz) = (base[0], base[2]);
+                    let mut along = y + start;
+                    let mut idx = start;
+                    let mut s = steps;
+                    while idx < tree_height && s > 0 {
+                        if idx >= 1 {
+                            let ph = y + idx;
+                            lx += dir[0];
+                            lz += dir[1];
+                            set_log(chunk, origin, lx, ph, lz, def.log);
+                            along = ph + 1;
+                            attachments.push(([lx, ph, lz], 0, false));
+                        }
+                        idx += 1;
+                        s -= 1;
+                    }
+                    if along - y > 1 {
+                        attachments.push(([lx, along, lz], 0, false));
+                        attachments.push(([lx, along - 2, lz], 0, false));
+                    }
+                }
+                if h == tree_height - 1 {
+                    attachments.push(([base[0], y + 1, base[2]], 0, false));
+                }
+            }
+        }
         Trunk::Forking => {
             // ForkingTrunkPlacer, line-for-line: a lean near the top +
             // an optional second branch.
@@ -1362,6 +1599,21 @@ fn place_tree(
                     }
                 }
             }
+            Foliage::RandomSpread { attempts, .. } => {
+                // W229 RandomSpreadFoliagePlacer.createFoliage: N
+                // random offsets in the radius/height box per
+                // attachment (offsets sampled even when they land
+                // outside this chunk - stream stays aligned).
+                let r = (leaf_radius + rad_off).max(1);
+                let fh = foliage_height.max(1);
+                let ni = |rng: &mut SplitMix64, n: i32| (rng.next_u64() % n.max(1) as u64) as i32;
+                for _ in 0..*attempts {
+                    let dx = ni(rng, r) - ni(rng, r);
+                    let dy = ni(rng, fh) - ni(rng, fh);
+                    let dz = ni(rng, r) - ni(rng, r);
+                    set_leaf(chunk, origin, att[0] + dx, att[1] + offset + dy, att[2] + dz, def.leaves);
+                }
+            }
             Foliage::Cherry { wide_bottom_hole, corner_hole, hanging, hanging_ext, .. } => {
                 // W227.2 CherryFoliagePlacer.createFoliage: two
                 // shrinking top rows, the full-radius body, then the
@@ -1518,8 +1770,11 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                     continue;
                 };
                 let floor = mc_floor_at(ctx, wx, wz);
-                // surface_water_depth_filter(max 0): dry land only.
-                if floor < SEA_LEVEL {
+                // surface_water_depth_filter: max 0 (dry land) for
+                // every root except mangrove's max 5 (W229 -
+                // trees_mangrove wades into the swamp shallows).
+                let max_water_depth = if bt.name == "trees_mangrove" { 5 } else { 0 };
+                if floor < SEA_LEVEL - max_water_depth {
                     continue;
                 }
                 // would_survive(oak_sapling): dirt-family floor. The
@@ -1547,7 +1802,7 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 }
                 match pick {
                     Pick::Tree(def) => {
-                        place_tree(chunk, origin, &mut rng, def, [wx, floor + 1, wz]);
+                        place_tree(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
                     }
                     Pick::Fallen(def) => {
                         place_fallen(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
@@ -1615,6 +1870,74 @@ mod tests {
         }
     }
 
+    /// W229: the mangrove placers parse (upwards-branching trunk, the
+    /// root placer, random-spread foliage) and mangrove swamps grow
+    /// real mangroves with stilt roots.
+    #[test]
+    fn mangrove_parses_and_swamps_grow_mangroves() {
+        for name in ["mangrove", "tall_mangrove"] {
+            let TreeRef::Tree(d) =
+                parse_tree_conf(TREE_CONFIGURED.iter().find(|(n, _)| *n == name).unwrap().0)
+            else {
+                panic!("{name} should parse as a tree");
+            };
+            assert_eq!(Some(d.log), block_id_by_name("mangrove_log"), "{name} log");
+            assert!(matches!(d.trunk, Trunk::UpwardsBranching { .. }), "{name} trunk");
+            assert!(
+                matches!(d.foliage, Foliage::RandomSpread { attempts: 70, .. }),
+                "{name} foliage"
+            );
+            let root = d.root.as_ref().expect("mangrove root placer parses");
+            assert_eq!((root.max_length, root.max_width), (15, 8));
+            assert_eq!(Some(root.muddy), block_id_by_name("muddy_mangrove_roots"));
+        }
+        // Evidence: a mangrove-swamp chunk grows logs + roots.
+        let c = ctx();
+        let (log, roots, muddy) = (
+            block_id_by_name("mangrove_log").unwrap(),
+            block_id_by_name("mangrove_roots").unwrap(),
+            block_id_by_name("muddy_mangrove_roots").unwrap(),
+        );
+        let mut seen_logs = 0u32;
+        let mut seen_roots = 0u32;
+        let mut swamp_chunks = 0u32;
+        // Mangrove swamps are hot erosion-6 valleys - sparse near the
+        // origin on this seed, so sweep wide (biome sampling is cheap;
+        // chunks generate only on a hit, and the test exits early).
+        for cx in -150..150 {
+            for cz in -150..150 {
+                let (wx, wz) = (cx * 16 + 8, cz * 16 + 8);
+                if crate::worldgen::mcgen::terrain::mc_full_biome_at(&c, wx, wz)
+                    != crate::worldgen::mcgen::biome::McBiome::MangroveSwamp
+                {
+                    continue;
+                }
+                swamp_chunks += 1;
+                let floor = mc_floor_at(&c, wx, wz);
+                let cy = (floor + 4).div_euclid(16);
+                let chunk = generate_chunk_at_ctx([cx, cy, cz], &c);
+                for x in 0..16 {
+                    for y in 0..16 {
+                        for z in 0..16 {
+                            let id = chunk.get(x, y, z).0;
+                            if id == log {
+                                seen_logs += 1;
+                            } else if id == roots || id == muddy {
+                                seen_roots += 1;
+                            }
+                        }
+                    }
+                }
+                if seen_logs > 0 && seen_roots > 0 {
+                    return;
+                }
+            }
+        }
+        panic!(
+            "no mangroves found: {swamp_chunks} swamp chunks, logs={seen_logs} roots={seen_roots}"
+        );
+    }
+
     /// W227.2: the cherry placers parse from the jar data and place a
     /// branching trunk with a leafy crown.
     #[test]
@@ -1630,7 +1953,7 @@ mod tests {
         );
         let mut chunk = Chunk::empty();
         let mut rng = SplitMix64::new(7);
-        place_tree(&mut chunk, [0, 0, 0], &mut rng, &d, [8, 1, 8]);
+        place_tree(&mut chunk, [0, 0, 0], &ctx(), &mut rng, &d, [8, 1, 8]);
         let mut logs = 0u32;
         let mut off_axis_logs = 0u32;
         let mut leaves = 0u32;

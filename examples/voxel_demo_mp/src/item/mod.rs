@@ -2461,6 +2461,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 789, name: "bubble_coral_fan", display: Some("Bubble Coral Fan"), places: Some(789), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 790, name: "fire_coral_fan", display: Some("Fire Coral Fan"), places: Some(790), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 791, name: "horn_coral_fan", display: Some("Horn Coral Fan"), places: Some(791), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W229 - mangrove.
+    ItemType { id: 792, name: "muddy_mangrove_roots", display: Some("Muddy Mangrove Roots"), places: Some(792), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
