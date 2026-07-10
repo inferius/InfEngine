@@ -239,23 +239,26 @@ pub(crate) fn cmd_biome(
     // knows the active dim's profile + effective seed.
     let ctx = voxel.current_worldgen_ctx();
     let seed = ctx.effective_seed();
-    let biome = match ctx.profile {
+    let label = match ctx.profile {
+        // W230: Mc worlds answer with the REAL McBiome registry stem
+        // (all 51 variants) instead of the legacy 3-biome collapse.
+        WorldGen::Mc => crate::worldgen::mcgen::terrain::mc_full_biome_at(
+            &ctx,
+            px.floor() as i32,
+            pz.floor() as i32,
+        )
+        .name(),
         WorldGen::Realistic => {
             // Pull the biome from the climate map for the
             // realistic generator. Re-uses the same lookup that
             // gen_realistic uses so the answer matches what the
             // player is standing on.
             let climate = crate::worldgen::climate::climate_at(px, pz, seed);
-            crate::worldgen::biome_table::biome_from_climate(climate)
+            crate::worldgen::biome_table::biome_from_climate(climate).label()
         }
-        _ => biome_at(px, pz, seed),
+        _ => biome_at(px, pz, seed).label(),
     };
-    lines.push(format!(
-        "Biome: {} at ({:.0}, {:.0})",
-        biome.label(),
-        px,
-        pz
-    ));
+    lines.push(format!("Biome: {label} at ({px:.0}, {pz:.0})"));
     true
 }
 

@@ -55,19 +55,29 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         };
         // W5.1: ctx-driven seed lookup so the HUD label tracks the
         // active dim's effective seed without a global atomic.
-        let biome_seed = vx.current_worldgen_ctx().effective_seed();
-        let biome_at_player = biome_at(vx.player_pos.x, vx.player_pos.z, biome_seed);
+        let biome_ctx = vx.current_worldgen_ctx();
+        let biome_seed = biome_ctx.effective_seed();
         let spawn_xz: (f32, f32) = match vx.spawn_pos {
             Some(p) => (p[0], p[2]),
             None => (0.0, 0.0),
         };
-        // `biome_at` only returns Plains/Mountain/Desert under the
-        // Classic + Amplified generators (which are the only path
-        // that reaches this HUD-overlay block today). The extended
-        // biomes the Realistic generator produces still fall back
-        // to a label via `Biome::label()` so future climate-driven
-        // HUD work doesn't have to thread a second enum.
-        let biome_name = biome_at_player.label();
+        // W230: the Mc profile reads the real climate field (all 51
+        // McBiome variants, registry-stem names like MC's F3 line).
+        // `biome_at` is the legacy 3-biome classifier - on Mc worlds
+        // it answered "Plains" while the player stood in badlands.
+        let biome_name = if matches!(
+            biome_ctx.profile,
+            crate::worldgen::WorldGen::Mc
+        ) {
+            crate::worldgen::mcgen::terrain::mc_full_biome_at(
+                &biome_ctx,
+                vx.player_pos.x.floor() as i32,
+                vx.player_pos.z.floor() as i32,
+            )
+            .name()
+        } else {
+            biome_at(vx.player_pos.x, vx.player_pos.z, biome_seed).label()
+        };
         // Snapshot recent chat lines (newest last) along with their
         // age so the renderer can fade older entries.
         let chat_now = std::time::Instant::now();
@@ -375,7 +385,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // repeatedly while the picker is open. Done BEFORE the
         // `&mut vx.X` capture forest so the helper has a clean
         // &mut vx to work with.
-        vx.refresh_menu_caches();
+        //
+        // W230: only while a menu screen can actually SHOW those
+        // lists. This used to run in every state, so during
+        // gameplay each 500 ms staleness rollover re-scanned the
+        // saves dir + parsed every slot's meta.json/world.json on
+        // the main thread = a periodic ~18 ms world-tick spike.
+        if matches!(
+            vx.state,
+            AppState::MainMenu
+                | AppState::DirectConnect
+                | AppState::ServerBrowser
+                | AppState::HostSetup
+        ) {
+            vx.refresh_menu_caches();
+        }
         vx.sync_menu_options();
         // W5.1: snapshot the active dim's effective seed BEFORE the
         // `&mut vx.settings` capture so the immutable borrow on

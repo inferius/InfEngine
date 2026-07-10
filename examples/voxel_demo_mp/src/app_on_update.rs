@@ -606,9 +606,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             // stream. Runs after update_play (which zeroed the walk
             // velocity while riding) and before the targeting ray
             // below so the camera follows the fresh cart pose.
+            let _t = std::time::Instant::now();
             crate::minecart::tick_all(vx, dt);
             // W140: arrow ballistics + hits + host snapshot stream.
             crate::projectile::tick_arrows(vx, dt);
+            let _ms = _t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 3.0 {
+                tracing::warn!(ms = _ms, phase = "minecart+arrows", "W230: slow world-tick phase");
+            }
         } else {
             // Paused / in a menu screen: drop captured mouse motion
             // so the camera doesn't lurch when play resumes.
@@ -624,6 +629,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         let _ui_t = std::time::Instant::now();
         vx.render_ui(window);
         crate::perf::store(&crate::perf::UI_MS, _ui_t.elapsed().as_secs_f32() * 1000.0);
+        {
+            let _ms = _ui_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 3.0 {
+                tracing::warn!(ms = _ms, phase = "render_ui", "W230: slow world-tick phase");
+            }
+        }
+        // W230: everything from here to tick_net (hotkeys, targeting,
+        // place/break input) shares one coarse probe.
+        let _wt_input_tail_t = std::time::Instant::now();
 
         let forward = Vec3::new(
             vx.player_yaw.cos() * vx.player_pitch.cos(),
@@ -1062,11 +1076,24 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 );
             }
         }
+        {
+            let _ms = _wt_input_tail_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 3.0 {
+                tracing::warn!(ms = _ms, phase = "input_tail", "W230: slow world-tick phase");
+            }
+        }
         // Net tick: poll + apply + broadcast / send. Always runs
         // so a CLI-started server can accept connects even before
         // a player picks a world; the heavier world simulation
         // gates on `world_loaded` below.
-        vx.tick_net();
+        {
+            let _t = std::time::Instant::now();
+            vx.tick_net();
+            let _ms = _t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 3.0 {
+                tracing::warn!(ms = _ms, phase = "net", "W230: slow world-tick phase");
+            }
+        }
         // W8.1: every tick below this point touches the world -
         // chunks, mobs, liquids, lighting, day clock. Skip them
         // entirely while the menu is up so the bootstrap stage
@@ -1242,38 +1269,53 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             }
             return;
         }
+        // W230: name the slow sub-phase of the world-tick block. The
+        // W198.16 hitch line blamed "world_tick 30ms" without saying
+        // WHICH tick - any phase over the threshold logs itself.
+        macro_rules! wt_slow {
+            ($label:literal, $body:expr) => {{
+                let _t = std::time::Instant::now();
+                let r = $body;
+                let _ms = _t.elapsed().as_secs_f32() * 1000.0;
+                if _ms > 3.0 {
+                    tracing::warn!(ms = _ms, phase = $label, "W230: slow world-tick phase");
+                }
+                r
+            }};
+        }
         // Authoritative side simulates wandering mobs. The render
         // path reads `vx.remote_mobs` which gets populated by
         // both `tick_mobs` (server) and `vx.mob` (client).
         let _t = std::time::Instant::now();
-        vx.tick_mobs(dt);
+        wt_slow!("mobs", vx.tick_mobs(dt));
         DIAG_MOBS_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // Generic liquid physics: drive each registered liquid
         // (water, lava, ...) at its own MC-style cadence. Per
         // liquid the host runs fall -> spread -> optional source
         // merge -> decay. Clients skip and rely on `vx.edit`.
         let _t = std::time::Instant::now();
-        vx.tick_liquids(dt);
+        wt_slow!("liquids", vx.tick_liquids(dt));
         DIAG_LIQUIDS_US.fetch_add(_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // W64: gravity for sand / concrete_powder / gravel. Host
         // drops each queued unsupported falling cell one voxel per
         // tick; clients apply the resulting `vx.edit` traffic.
-        crate::world::falling::tick(vx);
+        wt_slow!("falling", crate::world::falling::tick(vx));
         // W65: MC-style random block ticks (grass spread; later
         // sapling growth, leaf decay, crops). Host-only sample over
         // chunks near the player; clients get the `vx.edit` stream.
-        crate::world::random_tick::tick(vx);
+        wt_slow!("random_tick", crate::world::random_tick::tick(vx));
         // Step every floating drop entity: gravity, bob,
         // pickup-on-touch, despawn after lifetime. Host runs
         // the full sim; clients also tick locally for smooth
         // motion between server snapshots.
-        vx.tick_drops(dt);
+        wt_slow!("drops", vx.tick_drops(dt));
         // Live furnace cook step. Walks every furnace + advances
         // fuel + cook progress by `dt_ms` (the frame delta in
         // milliseconds). The offline catch-up path in
         // `world_save::timers::catch_up_furnace` handles the
         // window between save and reload.
         let dt_ms = (dt * 1000.0).round().max(0.0) as u32;
+        let _wt_furnace_t = std::time::Instant::now();
         block::furnace::furnace_tick(
             &mut vx.furnaces,
             &mut vx.furnace_runtimes,
@@ -1320,17 +1362,23 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 }
             }
         }
+        {
+            let _ms = _wt_furnace_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 3.0 {
+                tracing::warn!(ms = _ms, phase = "furnace+hopper", "W230: slow world-tick phase");
+            }
+        }
         // Q.4c: fire random-tick. Runs server-side; clients pick
         // up the resulting `vx.edit` traffic. Cheap when
         // `vx.fires` is empty (early return).
-        vx.fire_tick();
+        wt_slow!("fire", vx.fire_tick());
         // Q.4d: lava-source-block fire emission (MC's
         // LavaFluid.randomTick). Walks every lava source cell
         // once per net tick; each gates 1/LAVA_IGNITE_RATE_DENOM
         // and rolls the two-branch ignite algorithm.
-        vx.tick_lava_fire_emit();
+        wt_slow!("lava_emit", vx.tick_lava_fire_emit());
         // Phase F.6: portal-overlap counter + cross-dim teleport.
-        vx.tick_player_portal();
+        wt_slow!("portal", vx.tick_player_portal());
         // Auto-close the chest UI when the player walks more than
         // ~5 blocks from the open chest. Matches MC's "stay close
         // to the container" rule. Done here (per-frame) so the
@@ -1362,16 +1410,16 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // Mob audio runs on every peer (host + each client): step
         // sting per moving sheep, occasional baa, both
         // distance-attenuated through `sfx_at`.
-        vx.tick_mob_audio(dt);
+        wt_slow!("mob_audio", vx.tick_mob_audio(dt));
         // W9.5: emit ambient flame + smoke particles from every
         // torch / fire / lava source within visible range of the
         // player. Capped at AMBIENT_PARTICLE_CAP_PER_TICK so a
         // forest of torches doesn't blow the global particle
         // budget. Runs every frame; the per-source accumulator
         // takes care of the 5 Hz target rate.
-        vx.tick_ambient_particles(dt);
+        wt_slow!("ambient_particles", vx.tick_ambient_particles(dt));
         // Tick particles regardless of net role.
-        vx.particles.tick(dt);
+        wt_slow!("particles", vx.particles.tick(dt));
         // W198.9: cumulative after the per-frame world-tick block (mobs/
         // liquids/drops/fire/ambient/particles). CHK_WORLD - CHK_HEAD is the
         // tick cost; CHK_MID - CHK_WORLD is the camera/sky/lighting-tick

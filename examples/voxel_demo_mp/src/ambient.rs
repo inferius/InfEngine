@@ -150,24 +150,24 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
             }
             spawned += 1;
         }
-        // Lava source cells. Use the liquid level table - source
-        // cells are level=0 in lava. This is the same scan the
-        // fire-emit tick uses but only at half the cap so torches
-        // / fires aren't crowded out.
-        for (pos, b) in vx
-            .world
-            .iter_chunks()
-            .flat_map(|(coord, chunk)| {
-                lava_sources_in_chunk(*coord, chunk)
-            })
-        {
+        // Lava cells. W230: this used to WALK EVERY LOADED CHUNK and
+        // full-scan its 4096 cells per frame - ~26M reads at view
+        // distance 12 = the user's 15 FPS (the 7th "per-frame
+        // O(all-of-world)" bug; see the perf-plan memory). Iterate the
+        // maintained `lava_positions` subset (W198.10) instead,
+        // distance-culled first; re-validate against the world since
+        // the subset can lag an edit by a frame.
+        let lava_nearby: Vec<[i32; 3]> = vx
+            .lava_positions
+            .iter()
+            .filter(|p| within_radius(player, p, VISIBLE_RADIUS))
+            .copied()
+            .collect();
+        for pos in lava_nearby {
             if spawned >= AMBIENT_PARTICLE_CAP_PER_TICK {
                 break;
             }
-            if b != LAVA_ID {
-                continue;
-            }
-            if !within_radius(player, &pos, VISIBLE_RADIUS) {
+            if vx.world.get(pos).0 != LAVA_ID {
                 continue;
             }
             // Lava emits less frequently (matches MC's "bubble"
@@ -293,7 +293,6 @@ fn tick_underwater_bubbles(vx: &mut crate::Voxel, dt: f32, seed: &mut u32) {
 // ===========================================================================
 
 use crate::{SOUL_TORCH_ID, SOUL_WALL_TORCH_ID};
-use infengine_voxel::{CHUNK_SIZE, Chunk, ChunkCoord};
 
 /// W38.2: Per-emitter flame colour. MC torch variants each have a
 /// distinct flame hue:
@@ -616,36 +615,9 @@ pub(crate) fn emit_textured_lava(
     });
 }
 
-/// Walk a chunk's voxels + emit every lava source cell. Used by
-/// `tick_ambient_particles`. Returns absolute world coords paired
-/// with the block id so the caller can filter without re-fetching.
-pub(crate) fn lava_sources_in_chunk(
-    coord: ChunkCoord,
-    chunk: &Chunk,
-) -> Vec<([i32; 3], u16)> {
-    let mut out = Vec::new();
-    let base_x = coord[0] * CHUNK_SIZE as i32;
-    let base_y = coord[1] * CHUNK_SIZE as i32;
-    let base_z = coord[2] * CHUNK_SIZE as i32;
-    for lz in 0..CHUNK_SIZE {
-        for ly in 0..CHUNK_SIZE {
-            for lx in 0..CHUNK_SIZE {
-                let b = chunk.get(lx, ly, lz);
-                if b.0 == LAVA_ID {
-                    out.push((
-                        [
-                            base_x + lx as i32,
-                            base_y + ly as i32,
-                            base_z + lz as i32,
-                        ],
-                        b.0,
-                    ));
-                }
-            }
-        }
-    }
-    out
-}
+// W230: `lava_sources_in_chunk` (a full 4096-cell chunk scan) was
+// removed - the ambient pass reads the maintained `lava_positions`
+// subset instead of walking every loaded chunk per frame.
 
 // ===========================================================================
 // W47.7: break + place particle bursts, relocated from main.rs.
