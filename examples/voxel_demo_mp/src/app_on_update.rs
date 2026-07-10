@@ -1303,7 +1303,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W65: MC-style random block ticks (grass spread; later
         // sapling growth, leaf decay, crops). Host-only sample over
         // chunks near the player; clients get the `vx.edit` stream.
-        wt_slow!("random_tick", crate::world::random_tick::tick(vx));
+        wt_slow!("random_tick", crate::world::random_tick::tick(vx, dt));
         // Step every floating drop entity: gravity, bob,
         // pickup-on-touch, despawn after lifetime. Host runs
         // the full sim; clients also tick locally for smooth
@@ -1841,39 +1841,19 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 continue;
             }
             for (block, handle) in subs {
-                if let Some(def) = registry.get(*block) {
-                    // Liquid voxels arrive here only when their
-                    // dedicated slope path is disabled (test paths or
-                    // unflagged builds). Generic alpha gate so any
-                    // F_TRANSPARENT_RENDER block reads correctly.
-                    let alpha = if block_is_transparent_render(*block) {
-                        0.65
-                    } else {
-                        1.0
-                    };
-                    // W46.19: vx-illuminated blocks (torch / lava /
-                    // glowstone / lit redstone / fire) need an emissive
-                    // boost so their texture pixels stay visible even
-                    // when the cell is dark. light_emission_for_id
-                    // returns the MC emission level (0..15); normalise
-                    // and scale so a torch (14) reads as a strong glow
-                    // and glowstone (15) reads as full HDR boost.
-                    let emission_level =
-                        crate::block::light_emission::light_emission_for_id(block.0);
-                    let emissive = if emission_level > 0 {
-                        // 0.85 base + level/15 scaling; torch=14 -> ~1.64,
-                        // glowstone=15 -> ~1.85. Caps in shader at 4.
-                        0.85 + (emission_level as f32 / 15.0) * 0.85
-                    } else {
-                        0.0
-                    };
+                // W232: colour / alpha / PBR / emissive are constant
+                // per block id - read the precomputed table instead
+                // of a registry + emission lookup per submesh per
+                // frame (this loop runs tens of thousands of times a
+                // frame at VD 12; see render::draw_params).
+                if let Some(p) = crate::render::draw_params::for_block(block.0) {
                     renderer.queue_chunk_draw_emissive(
                         *handle,
                         model,
-                        [def.color[0], def.color[1], def.color[2], alpha],
-                        def.metallic,
-                        def.roughness,
-                        emissive,
+                        p.color,
+                        p.metallic,
+                        p.roughness,
+                        p.emissive,
                     );
                 }
             }

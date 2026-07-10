@@ -32,6 +32,14 @@ pub struct Sound {
     data: StaticSoundData,
 }
 
+/// W232: decode an audio file into a playable [`Sound`] without an
+/// [`AudioSystem`]. Decoding is device-independent, so this can run
+/// on a background thread; only playback needs the audio manager.
+pub fn decode_sound(path: impl AsRef<Path>) -> Result<Sound, AudioError> {
+    let data = StaticSoundData::from_file(path)?;
+    Ok(Sound { data })
+}
+
 /// High-level audio system. Wraps a `kira` `AudioManager`.
 pub struct AudioSystem {
     manager: AudioManager<DefaultBackend>,
@@ -90,8 +98,7 @@ impl AudioSystem {
     /// kira features support). The resulting handle can be played as
     /// many times as needed.
     pub fn load_sound(&self, path: impl AsRef<Path>) -> Result<Sound, AudioError> {
-        let data = StaticSoundData::from_file(path)?;
-        Ok(Sound { data })
+        decode_sound(path)
     }
 
     /// Play a previously loaded `Sound` once at default volume.
@@ -241,6 +248,19 @@ impl AudioBank {
         Self {
             variants: HashMap::new(),
         }
+    }
+
+    /// W232: attach pre-decoded sounds as the variants of `key`,
+    /// replacing any previous set. Pairs with [`decode_sound`] so a
+    /// caller can decode on a background thread (a full music track
+    /// takes hundreds of ms - a synchronous decode inside a frame is
+    /// a visible hitch) and hand the result over on the main thread.
+    pub fn insert_variants(&mut self, key: &str, sounds: Vec<Sound>) -> usize {
+        let n = sounds.len();
+        if n > 0 {
+            self.variants.insert(key.to_string(), sounds);
+        }
+        n
     }
 
     /// Load every file in `paths` as a variant of `key`. Files

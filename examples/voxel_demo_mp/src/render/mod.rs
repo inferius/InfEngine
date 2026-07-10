@@ -27,3 +27,5 @@ pub mod projectiles;
 pub mod effect_meshes;
 // W157 - first-person held-item viewmodel.
 pub mod held_item;
+// W232 - precomputed per-block draw params for the chunk draw queue.
+pub mod draw_params;

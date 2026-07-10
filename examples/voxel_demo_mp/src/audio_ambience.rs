@@ -87,6 +87,29 @@ pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
         vx.music_in = MUSIC_MIN + rand01(vx.net_tick, 0x0D15_EA5E) * MUSIC_SPAN;
         play_next_music_track(vx);
     }
+    // W232: drain a finished background decode. Bank insert + play
+    // are cheap; the expensive OGG decode already happened on the
+    // worker thread (it used to run HERE - a ~300 ms frame hitch
+    // every time the music timer rolled over).
+    if let Some(rx) = &vx.music_decode_rx {
+        match rx.try_recv() {
+            Ok(Some(sound)) => {
+                vx.music_decode_rx = None;
+                if let Some(audio) = vx.audio.as_mut() {
+                    vx.audio_bank.insert_variants("music", vec![sound]);
+                    vx.audio_bank.play(audio, "music", 0, MUSIC_GAIN);
+                    tracing::info!("background music track started");
+                }
+            }
+            // Decode failed (logged by the worker) - clear the gate
+            // so the next timer rollover can try another track.
+            Ok(None) => vx.music_decode_rx = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                vx.music_decode_rx = None;
+            }
+        }
+    }
 }
 
 /// Sky-light nibble at a world voxel (15 = full sky). Missing
@@ -124,6 +147,12 @@ fn rand01(tick: u64, salt: u32) -> f32 {
 /// (replacing the previous track so only one stays resident), play
 /// it non-spatially at a low gain.
 fn play_next_music_track(vx: &mut Voxel) {
+    // W232: one decode in flight at a time; the timer that called us
+    // re-rolls regardless, so a still-running decode just plays when
+    // it lands.
+    if vx.music_decode_rx.is_some() {
+        return;
+    }
     let engine_key = match vx.game_mode {
         GameMode::Creative => "music/creative",
         _ => "music/game",
@@ -132,17 +161,34 @@ fn play_next_music_track(vx: &mut Voxel) {
     if variants.is_empty() {
         return;
     }
-    let pick = (rand01(vx.net_tick, 0xBEA7_5EED) * variants.len() as f32) as usize;
-    let path = variants[pick.min(variants.len() - 1)].clone();
-    let Some(audio) = vx.audio.as_mut() else {
-        return;
-    };
-    // Decode just this one track; the insert replaces the previous
-    // track's samples so long sessions don't accumulate memory.
-    let n = vx.audio_bank.load_variants(audio, "music", &[path]);
-    if n == 0 {
+    if vx.audio.is_none() {
         return;
     }
-    vx.audio_bank.play(audio, "music", 0, MUSIC_GAIN);
-    tracing::info!(key = engine_key, "background music track started");
+    let pick = (rand01(vx.net_tick, 0xBEA7_5EED) * variants.len() as f32) as usize;
+    let path = variants[pick.min(variants.len() - 1)].clone();
+    // W232: decode on a named thread - a full music track is a
+    // hundreds-of-ms OGG decode, which used to run synchronously
+    // inside the world tick (the user-visible ~300 ms hitch every
+    // few minutes). `tick` drains the receiver + starts playback.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("voxel_demo_mp::music_decode".to_string())
+        .spawn(move || {
+            let sound = match infengine_audio::decode_sound(&path) {
+                Ok(s) => Some(s),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        path = %path.display(),
+                        "music decode failed"
+                    );
+                    None
+                }
+            };
+            let _ = tx.send(sound);
+        })
+        .is_ok();
+    if spawned {
+        vx.music_decode_rx = Some(rx);
+    }
 }

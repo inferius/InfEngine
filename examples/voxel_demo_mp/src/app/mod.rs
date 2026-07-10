@@ -481,6 +481,18 @@ pub(crate) struct Voxel {
     /// track itself lazy-loads into the bank under the "music" key
     /// (one track resident at a time).
     pub(crate) music_in: f32,
+    /// W232: in-flight background music decode. A full track decode
+    /// takes hundreds of ms (the 295 ms world-tick hitch), so
+    /// `play_next_music_track` decodes on a named thread and
+    /// `audio_ambience::tick` drains the result here (bank insert +
+    /// play, both cheap). `Some` while a decode is in flight - also
+    /// the "don't start another" gate.
+    pub(crate) music_decode_rx:
+        Option<std::sync::mpsc::Receiver<Option<infengine_audio::Sound>>>,
+    /// W232: accumulator gating the random-tick pass to MC's 20 Hz
+    /// game-tick rate (the W104/W198.7 pattern; it used to run per
+    /// render frame).
+    pub(crate) random_tick_accum: f32,
     /// Seconds since the last heartbeat thump. Drives the low-HP
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.

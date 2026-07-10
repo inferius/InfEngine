@@ -227,6 +227,8 @@ impl Voxel {
             // First music track a few minutes after launch (MC's
             // music gap is 5-20 min; we sit at the friendly end).
             music_in: 180.0,
+            music_decode_rx: None,
+            random_tick_accum: 0.0,
             heartbeat_accum: 0.0,
             cactus_damage_accum: 0.0,
             fly_mode: false,

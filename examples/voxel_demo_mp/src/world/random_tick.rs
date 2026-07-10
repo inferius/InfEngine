@@ -56,24 +56,47 @@ const LEAF_SAPLING_DROP_DENOM: u32 = 20;
 /// given random tick (1 in N). Higher = slower growth.
 const CROP_GROW_DENOM: u32 = 6;
 
+/// MC random ticks advance at the 20 Hz game-tick rate. This used to
+/// run per FRAME - at 400 fps that's 20x MC's sample rate for pure
+/// waste, and each pass paid the origin scan below.
+const RANDOM_TICK_HZ: f32 = 20.0;
+
 /// Host-side random-tick driver. Samples random cells from the
 /// loaded chunks near the player and dispatches each to a per-block
 /// behaviour. No-op on clients.
-pub(crate) fn tick(vx: &mut Voxel) {
+pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
     if matches!(vx.net, NetRole::Client { .. }) {
         return;
     }
+    // W232: fixed 20 Hz cadence (the W104/W198.7 accumulator
+    // pattern) instead of per-frame.
+    vx.random_tick_accum += dt;
+    let period = 1.0 / RANDOM_TICK_HZ;
+    if vx.random_tick_accum < period {
+        return;
+    }
+    // One pass per rollover; a long stall doesn't burst-run passes.
+    vx.random_tick_accum = (vx.random_tick_accum - period).min(period);
     let cs = CHUNK_SIZE as i32;
     let pcx = (vx.player_pos.x / cs as f32).floor() as i32;
     let pcz = (vx.player_pos.z / cs as f32).floor() as i32;
     // Snapshot the in-radius loaded chunk origins first so the
     // mutable behaviour pass below doesn't alias the chunk map.
+    //
+    // W232: probe the RADIUS box with chunk() lookups instead of
+    // filtering ALL loaded chunks - the old iter_chunks() pass was
+    // O(loaded world) per call (10k chunks at VD 12 full columns,
+    // 30k+ at VD 40) for a 9x9-column result.
     let mut origins: Vec<[i32; 3]> = Vec::new();
-    for (coord, _) in vx.world.iter_chunks() {
-        if (coord[0] - pcx).abs() <= RADIUS_CHUNKS
-            && (coord[2] - pcz).abs() <= RADIUS_CHUNKS
-        {
-            origins.push([coord[0] * cs, coord[1] * cs, coord[2] * cs]);
+    let (cy_min, cy_max) = Voxel::vertical_chunk_range(vx.player_pos.y);
+    for dz in -RADIUS_CHUNKS..=RADIUS_CHUNKS {
+        for dx in -RADIUS_CHUNKS..=RADIUS_CHUNKS {
+            for cy in cy_min..=cy_max {
+                let cc = [pcx + dx, cy, pcz + dz];
+                if vx.world.chunk(cc).is_some() {
+                    origins.push([cc[0] * cs, cc[1] * cs, cc[2] * cs]);
+                }
+            }
         }
     }
     if origins.is_empty() {
