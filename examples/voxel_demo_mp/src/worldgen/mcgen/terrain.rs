@@ -984,6 +984,106 @@ mod tests {
         }
     }
 
+    /// W232 diagnostic: the user's badlands-canyon "holes" report
+    /// (seed 3653370720, standing at ~(106, 55, -90)). Prints PRE vs
+    /// POST carve solidity + the McBiome across the crevice: if the
+    /// void exists only POST-carve it's the canyon/cave carver
+    /// working as MC intends; if it's in neither it's a chunk hole.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_user_badlands_canyon() {
+        let seed = 3653370720u32;
+        let ow = overworld_for(seed);
+        // Locate the badlands the user stood in (the F3 coords in
+        // their report belong to the ocean-perf moment, not the
+        // canyon screenshot).
+        let mut badlands_at: Option<(i32, i32)> = None;
+        'scan: for r in 1..=16i32 {
+            for dz in (-r..=r).step_by(2) {
+                for dx in (-r..=r).step_by(2) {
+                    if dx.abs() < r && dz.abs() < r {
+                        continue;
+                    }
+                    let (x, z) = (106 + dx * 32, -90 + dz * 32);
+                    let mc = ow.mc_biome_at(x, z);
+                    if matches!(
+                        mc,
+                        McBiome::Badlands
+                            | McBiome::WoodedBadlands
+                            | McBiome::ErodedBadlands
+                    ) {
+                        badlands_at = Some((x, z));
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        println!("nearest badlands column: {badlands_at:?}");
+        // Cross-section the badlands area for carved voids: columns
+        // where POST-carve has air that PRE-carve doesn't = carver.
+        if let Some((bx, bz)) = badlands_at {
+            for z in [bz - 8, bz, bz + 8] {
+                println!(
+                    "\n== badlands columns, z={z}, PRE vs POST carve (y 20..90) =="
+                );
+                for x in (bx - 16..=bx + 16).step_by(4) {
+                    let col = column_data_cached(
+                        &ow,
+                        x.div_euclid(16),
+                        z.div_euclid(16),
+                        seed,
+                    );
+                    let (lx, lz) =
+                        (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+                    let run = |pc: bool| -> String {
+                        let mut s = String::new();
+                        for y in 20..=90 {
+                            let solid = if pc {
+                                col.is_solid_pc(lx, y, lz)
+                            } else {
+                                col.is_solid(lx, y, lz)
+                            };
+                            s.push(if solid { '#' } else { '.' });
+                        }
+                        s
+                    };
+                    let mc = ow.mc_biome_at(x, z);
+                    println!("  x{x:>5} pre : {}   {}", run(false), mc.name());
+                    println!("        post: {}", run(true));
+                }
+            }
+        }
+        for z in [-95i32, -90, -85] {
+            println!("\n== badlands canyon, z={z}, PRE vs POST carve (y 20..90) ==");
+            for x in (96i32..=118).step_by(2) {
+                let col = column_data_cached(
+                    &ow,
+                    x.div_euclid(16),
+                    z.div_euclid(16),
+                    seed,
+                );
+                let (lx, lz) =
+                    (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+                let run = |pc: bool| -> String {
+                    let mut s = String::new();
+                    for y in 20..=90 {
+                        let solid = if pc {
+                            col.is_solid_pc(lx, y, lz)
+                        } else {
+                            col.is_solid(lx, y, lz)
+                        };
+                        s.push(if solid { '#' } else { '.' });
+                    }
+                    s
+                };
+                let mc = ow.mc_biome_at(x, z);
+                println!("  x{x:>4} pre : {}   {}", run(false), mc.name());
+                println!("       post: {}", run(true));
+            }
+        }
+    }
+
     /// W229.2 diagnostic: is the spawn-area canyon carved or a density
     /// feature? Prints PRE-carve vs POST-carve solid runs for columns
     /// across it.
