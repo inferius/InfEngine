@@ -20,14 +20,14 @@ use crate::lighting::sky_engine::propagate_sky_light;
 
 /// After `build_world`, the enqueued count equals (2*view_distance+1)^2 *
 /// visible_y_slices where visible_y_slices comes from vertical_chunk_range.
-/// W28.3: only Y slices within +/-3 of the player's Y chunk are loaded.
+/// W231: that range is now the FULL vertical world (16 slices, MC-style
+/// full columns) regardless of player height.
 #[test]
 fn build_world_target_matches_view_distance_footprint() {
     let mut v = Voxel::new();
     // view_distance defaults to VIEW_DISTANCE_CHUNKS (=4) set in Settings.
     // Clamp mirrors what build_world does: clamp(2..=32).
     let vd = v.settings.view_distance.clamp(2, crate::VIEW_DISTANCE_MAX as u8) as i32;
-    // W28.3: vertical range depends on player Y (default 32.0 -> cy=2 -> 0..=5 = 6).
     let (cy_min, cy_max) = crate::Voxel::vertical_chunk_range(v.player_pos.y);
     let y_slices = (cy_max - cy_min + 1) as u32;
     let expected: u32 = ((2 * vd + 1) * (2 * vd + 1)) as u32 * y_slices;

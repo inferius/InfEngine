@@ -298,19 +298,20 @@ impl Voxel {
         enqueued
     }
 
-    /// W28.3: Compute the vertical chunk index range (inclusive) that
-    /// overlaps the player's visible area. Returns `(cy_min, cy_max)`
-    /// clamped to `[0, VERTICAL_CHUNKS - 1]`. The +/-3 heuristic covers
-    /// ~96 blocks vertically - more than the fov cone at view_distance=4.
-    /// Using this instead of `0..VERTICAL_CHUNKS` cuts ~40% of chunks for
-    /// above-ground players.
+    /// W231: FULL vertical columns, like MC. Returns
+    /// `(0, VERTICAL_CHUNKS - 1)` regardless of player height.
+    ///
+    /// This used to be a `player_cy +/- 3` band (W28.3, a ~40% chunk
+    /// saving tuned for view distance 4 + short fog). With VD 12 and
+    /// the MC fog model the band became user-visible brokenness: fly
+    /// above y~112 over fresh terrain and NOTHING generates below
+    /// (ocean floor lives in cy 2-3), leaving a fog void plus floating
+    /// band-edge mountain tops in the distance. MC generates every
+    /// section of a column; we now do the same and columns are only
+    /// bounded horizontally (view distance + unload ring).
     #[inline]
-    pub fn vertical_chunk_range(player_y: f32) -> (i32, i32) {
-        let cs = CHUNK_SIZE as i32;
-        let player_cy = (player_y.floor() as i32).div_euclid(cs);
-        let cy_min = (player_cy - 3).max(0);
-        let cy_max = (player_cy + 3).min(VERTICAL_CHUNKS - 1);
-        (cy_min, cy_max)
+    pub fn vertical_chunk_range(_player_y: f32) -> (i32, i32) {
+        (0, VERTICAL_CHUNKS - 1)
     }
 
     /// W28.7: Return (max_results, budget_ms) tuned for the current app

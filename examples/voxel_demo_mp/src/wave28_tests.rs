@@ -58,41 +58,23 @@ fn pending_chunk_equal_dist_breaks_tie_by_coord() {
 }
 
 // ---------------------------------------------------------------------------
-// W28.3 - vertical_chunk_range
+// W28.3 / W231 - vertical_chunk_range
 // ---------------------------------------------------------------------------
 
-/// Player at y=32 (chunk y=2): range [0, 5] (cy-3=0 clamped, cy+3=5).
+/// W231: full columns like MC - the range is the whole vertical world
+/// regardless of player height. The old player_cy +/- 3 band left the
+/// world ungenerated below a flying player (fog void + floating
+/// band-edge mountain tops at VD 12).
 #[test]
-fn vertical_chunk_range_default_player_y() {
-    let (cy_min, cy_max) = Voxel::vertical_chunk_range(32.0);
-    assert_eq!(cy_min, 0, "cy_min should be 0 (clamped from -1)");
-    assert_eq!(cy_max, 5, "cy_max should be 5");
-}
-
-/// Player at y=0 (chunk 0): range [0, 3].
-#[test]
-fn vertical_chunk_range_at_y_zero() {
-    let (cy_min, cy_max) = Voxel::vertical_chunk_range(0.0);
-    assert_eq!(cy_min, 0);
-    assert_eq!(cy_max, 3);
-}
-
-/// Player deep underground (chunk y=12): range [9, 15].
-#[test]
-fn vertical_chunk_range_deep_underground() {
-    let cs = CHUNK_SIZE as f32;
-    let player_y = 12.0 * cs + 8.0; // chunk_y = 12
-    let (cy_min, cy_max) = Voxel::vertical_chunk_range(player_y);
-    assert_eq!(cy_min, 9, "12-3=9");
-    assert_eq!(cy_max, 15, "12+3=15, clamped to VERTICAL_CHUNKS-1");
-}
-
-/// Range is always at least 1 slice wide.
-#[test]
-fn vertical_chunk_range_always_nonempty() {
+fn vertical_chunk_range_is_full_world_at_any_y() {
     for y in [0.0, 32.0, 128.0, 240.0, -8.0_f32] {
         let (cy_min, cy_max) = Voxel::vertical_chunk_range(y);
-        assert!(cy_max >= cy_min, "range must not be inverted for y={y}");
+        assert_eq!(cy_min, 0, "full columns start at cy 0 (y={y})");
+        assert_eq!(
+            cy_max,
+            crate::VERTICAL_CHUNKS - 1,
+            "full columns end at the world top (y={y})"
+        );
     }
 }
 
