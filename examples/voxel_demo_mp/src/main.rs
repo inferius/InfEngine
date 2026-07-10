@@ -297,7 +297,11 @@ const VERTICAL_CHUNKS: i32 = 16;
 /// kept loaded; new ones get queued for generation.
 ///
 /// W13.4: renamed from VIEW_DISTANCE_CHUNKS; cap raised from 12 to 24.
-const VIEW_DISTANCE_CHUNKS: i32 = 4;
+/// W229.2: default raised 4 -> 12 = MC's default render distance. The
+/// old 4 (64 blocks) put the fog curtain practically in the player's
+/// face and was a huge part of "does not look like MC"; the W198.x
+/// perf passes made 12 comfortably real-time.
+const VIEW_DISTANCE_CHUNKS: i32 = 12;
 /// Hard cap on the view_distance setting. MC "Far" is 32 chunks;
 /// matches the cap here. Beyond this an LOD layer (W13.5 follow-up)
 /// would be needed - synchronous voxel meshes at 48+ chunks would

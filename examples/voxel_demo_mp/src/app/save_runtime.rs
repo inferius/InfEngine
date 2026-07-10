@@ -262,6 +262,12 @@ impl Voxel {
                 }
                 "view_distance" => {
                     if let Ok(v) = value.parse::<u8>() {
+                        // W229.2: settings saved before the default
+                        // went 4 -> 12 carry the old default; treat a
+                        // stored 4 as "never chose" and migrate it (a
+                        // deliberate low pick can re-lower it in
+                        // Options / via /viewdistance).
+                        let v = if v == 4 { 12 } else { v };
                         self.settings.view_distance =
                             v.clamp(2, VIEW_DISTANCE_MAX as u8);
                     }

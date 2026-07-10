@@ -431,20 +431,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         lit_color = lit_color + albedo * emissive_strength;
     }
 
-    // W30.5: distance fog. Blends lit geometry toward sky_color over
-    // the range [fog_start, fog_end]. Disabled when fog_end <= fog_start
-    // or both are zero (default no-fog state).
-    let fog_start = camera.fog.x;
-    let fog_end = camera.fog.y;
-    let world_dist = distance(camera.camera_pos.xyz, in.world_pos);
-    if fog_end > fog_start {
-        let fog_factor = smoothstep(fog_start, fog_end, world_dist);
-        // W200: EVERYTHING fogs to the sky colour, water included. The
-        // W197.2 water-fogs-to-deep-blue special case made the far ocean a
-        // saturated blue sheet against the hazy horizon - the whole scene
-        // faded into atmosphere except the water, which visibly "did not
-        // belong" (the user's words). MC fogs water into the same
-        // atmospheric haze as land.
+    // W229.2: MC's two-term fog (26.1.2 fog.glsl total_fog_value,
+    // LINEAR - not smoothstep):
+    //  - environmental band (fog.xy): SPHERICAL distance - the gentle
+    //    atmospheric haze (overworld default 0..1024, barely there),
+    //    also reused for the short cave / underwater bands.
+    //  - render-distance mask (fog.zw): CYLINDRICAL distance
+    //    max(|dxz|, |dy|) - a narrow curtain right at the chunk-load
+    //    edge. Cylindrical means looking DOWN from altitude stays
+    //    clear (the old single spherical smoothstep milked out the
+    //    whole view from any height).
+    // W200: EVERYTHING fogs to the sky colour, water included. The
+    // W197.2 water-fogs-to-deep-blue special case made the far ocean a
+    // saturated blue sheet against the hazy horizon - the whole scene
+    // faded into atmosphere except the water, which visibly "did not
+    // belong" (the user's words). MC fogs water into the same
+    // atmospheric haze as land.
+    let dpos = in.world_pos - camera.camera_pos.xyz;
+    let spherical_dist = length(dpos);
+    let cylindrical_dist = max(length(dpos.xz), abs(dpos.y));
+    var fog_factor = 0.0;
+    if camera.fog.y > camera.fog.x {
+        fog_factor = clamp(
+            (spherical_dist - camera.fog.x) / (camera.fog.y - camera.fog.x),
+            0.0,
+            1.0,
+        );
+    }
+    if camera.fog.w > camera.fog.z {
+        let rd = clamp(
+            (cylindrical_dist - camera.fog.z) / (camera.fog.w - camera.fog.z),
+            0.0,
+            1.0,
+        );
+        fog_factor = max(fog_factor, rd);
+    }
+    if fog_factor > 0.0 {
         lit_color = mix(lit_color, camera.sky_color.rgb, fog_factor);
     }
 
@@ -460,7 +482,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // drives alpha. The far-distance backstop remains: it hides
         // unloaded-boundary holes that fog alone misses at grazing
         // angles.
-        let dist_opacify = smoothstep(40.0, 110.0, world_dist);
+        let dist_opacify = smoothstep(40.0, 110.0, spherical_dist);
         out_alpha = mix(alpha, 1.0, dist_opacify);
     }
 

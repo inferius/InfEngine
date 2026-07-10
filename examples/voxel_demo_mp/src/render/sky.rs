@@ -47,6 +47,14 @@ pub(crate) fn apply_tint_and_fog(
     // haze with shorter fog instead of the blue distance band.
     in_nether: bool,
 ) -> [f32; 3] {
+    // W229.2: MC's render-distance fog term - a narrow CYLINDRICAL
+    // curtain right at the chunk-load edge, span = clamp(rd/10, 4, 64)
+    // (FogRenderer.setupFog). It replaces the old spherical band as
+    // the pop-in hider and applies in every environment; the set_fog
+    // calls below carry the ENVIRONMENTAL (spherical) term.
+    let rd_blocks = view_distance_chunks as f32 * infengine_voxel::CHUNK_SIZE as f32;
+    let rd_span = (rd_blocks / 10.0).clamp(4.0, 64.0);
+    renderer.set_fog_render_distance(rd_blocks - rd_span, rd_blocks);
     if in_nether {
         let haze = [0.16_f32, 0.05, 0.05];
         renderer.set_sun_dir(sun_dir);
@@ -114,14 +122,15 @@ pub(crate) fn apply_tint_and_fog(
     // fog + clear colour scale with the camera's sky exposure.
     let dark = [sky[0] * sky_exposure, sky[1] * sky_exposure, sky[2] * sky_exposure];
     renderer.set_clear_color(dark[0] as f64, dark[1] as f64, dark[2] as f64, 1.0);
-    // W30.5: distance fog. Start fading 2 chunks before the view edge,
-    // reach full sky colour 0.5 chunks before the load boundary. Hides
-    // the hard pop-clip at view_distance edges.
-    let cs = infengine_voxel::CHUNK_SIZE as f32;
-    let vd = view_distance_chunks as f32;
-    let fog_start = (vd - 2.0).max(0.0) * cs;
-    let fog_end = vd * cs * 0.95;
-    renderer.set_fog(fog_start, fog_end, dark);
+    // W229.2: the ENVIRONMENTAL fog is MC's gentle atmospheric haze -
+    // overworld attribute defaults FOG_START_DISTANCE 0 /
+    // FOG_END_DISTANCE 1024 (EnvironmentAttributes). At any practical
+    // view distance it contributes only a few percent; the pop-in
+    // hiding is the cylindrical render-distance curtain set above.
+    // The old (vd-2)*16 .. vd*16*0.95 spherical smoothstep wrapped the
+    // whole world in a milk wall at the view edge - THE biggest
+    // "doesn't look like MC" offender at low view distances.
+    renderer.set_fog(0.0, 1024.0, dark);
     sky
 }
 

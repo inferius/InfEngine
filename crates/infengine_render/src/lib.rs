@@ -1050,6 +1050,19 @@ impl Renderer {
         self.camera_3d.sky_color = sky_color;
     }
 
+    /// W229.2: the render-distance fog band - MC's SECOND fog term, a
+    /// CYLINDRICAL-distance mask (`max(|dxz|, |dy|)`) that hides the
+    /// chunk-load edge without hazing steep look-down views the way a
+    /// spherical band does. Ported from the 26.1.2 fog pipeline
+    /// (`FogRenderer.setupFog` + `fog.glsl total_fog_value`). Also
+    /// pushes the far plane out past the band so the projection never
+    /// clips geometry the fog has not fully hidden yet. 0/0 disables.
+    pub fn set_fog_render_distance(&mut self, start: f32, end: f32) {
+        self.camera_3d.fog_rd_start = start.max(0.0);
+        self.camera_3d.fog_rd_end = end.max(0.0);
+        self.camera_3d.z_far = (end * 1.5).max(200.0);
+    }
+
     /// Wave 18.1: queue one textured billboard particle for the next
     /// frame.  Cleared automatically after `render()`.
     pub fn queue_textured_particle(&mut self, inst: TexturedParticleInstance) {

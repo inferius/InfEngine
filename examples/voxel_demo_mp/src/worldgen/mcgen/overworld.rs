@@ -141,13 +141,22 @@ impl Overworld {
     /// temperature / vegetation channels are xz-only and continents /
     /// erosion / ridges are 2D, so `y` doesn't matter.
     pub(crate) fn mc_biome_at(&self, x: i32, z: i32) -> McBiome {
-        let (fx, fz) = (x as f64, z as f64);
-        let t = self.temperature.eval(fx, 0.0, fz);
-        let v = self.vegetation.eval(fx, 0.0, fz);
-        let c = self.continents.eval(fx, 0.0, fz);
-        let e = self.erosion.eval(fx, 0.0, fz);
-        let w = self.ridges.eval(fx, 0.0, fz);
+        let (t, v, c, e, w) = self.climate_at(x, z);
         mc_biome_full(t, v, c, e, w)
+    }
+
+    /// W229.2: the raw climate sample `(temperature, vegetation,
+    /// continents, erosion, weirdness)` at a column - terrain-shape
+    /// diagnostics read the channels the slices key on.
+    pub(crate) fn climate_at(&self, x: i32, z: i32) -> (f64, f64, f64, f64, f64) {
+        let (fx, fz) = (x as f64, z as f64);
+        (
+            self.temperature.eval(fx, 0.0, fz),
+            self.vegetation.eval(fx, 0.0, fz),
+            self.continents.eval(fx, 0.0, fz),
+            self.erosion.eval(fx, 0.0, fz),
+            self.ridges.eval(fx, 0.0, fz),
+        )
     }
 
     /// MC surface block for a column cell, or `None` to leave whatever

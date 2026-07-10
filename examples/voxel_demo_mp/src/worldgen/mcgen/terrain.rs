@@ -889,6 +889,129 @@ mod tests {
         );
     }
 
+    /// W229.2 diagnostic (run with --ignored): where do the steep
+    /// terraced tower formations come from (user report, seed
+    /// 3592732596 near spawn)? Histograms the per-column height
+    /// gradient over the spawn area and prints every "tower" column
+    /// (gradient >= 6) with its biome + the climate channels the
+    /// terrain splines key on - if towers cluster in windswept /
+    /// shattered / peak bands that's MC-faithful roughness; scattered
+    /// through plains/forest at mid erosion it's a spline/density bug.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_steep_formations() {
+        let c = WorldgenCtx {
+            base_seed: 3592732596,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let ow = overworld_for(c.effective_seed());
+        const R: i32 = 64;
+        let h = |x: i32, z: i32| mc_floor_at(&c, x, z);
+        let mut grad_hist = [0u32; 17];
+        let mut towers: Vec<(i32, i32, i32, i32)> = Vec::new();
+        for x in -R..R {
+            for z in -R..R {
+                let h0 = h(x, z);
+                let g = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .map(|(dx, dz)| (h0 - h(x + dx, z + dz)).abs())
+                    .max()
+                    .unwrap();
+                grad_hist[(g as usize).min(16)] += 1;
+                if g >= 6 {
+                    towers.push((x, z, h0, g));
+                }
+            }
+        }
+        println!("\n== gradient histogram ({}x{} cols) ==", 2 * R, 2 * R);
+        for (g, n) in grad_hist.iter().enumerate() {
+            if *n > 0 {
+                println!("  |dh| {g:>2}{}: {n}", if g == 16 { "+" } else { " " });
+            }
+        }
+        towers.sort_by_key(|t| -t.3);
+        println!("== towers (|dh| >= 6): {} ==", towers.len());
+        for (x, z, h0, g) in towers.iter().take(30) {
+            let mc = ow.mc_biome_at(*x, *z);
+            let (_, _, c_, e, w) = ow.climate_at(*x, *z);
+            let pv = crate::worldgen::mcgen::biome::peaks_valleys(w);
+            println!(
+                "  ({x:>4},{z:>4}) h{h0:>3} dh{g:>2}  {:<24} cont {c_:>6.3} ero {e:>6.3} pv {pv:>6.3}",
+                mc.name()
+            );
+        }
+    }
+
+    /// W229.2 diagnostic: does the post-carve floor map agree with the
+    /// GENERATED chunks in the steep-formation cluster near the user's
+    /// spawn? Prints a transect: real top-most non-air block per
+    /// column vs mc_floor_at. A mismatch = the W226.1 carve mask
+    /// diverges from the real carve; agreement = the formations are
+    /// real carved canyons.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_floor_vs_chunks_transect() {
+        let c = WorldgenCtx {
+            base_seed: 3592732596,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let z = -10i32;
+        println!("\n== transect z={z}, x -48..-24: chunk top vs floor map ==");
+        for x in -48i32..-24 {
+            // Real top: scan generated chunks downward from y 96.
+            let mut top = -1i32;
+            let mut top_id = 0u16;
+            'scan: for cy in (1..6).rev() {
+                let ch = crate::worldgen::generate_chunk_at_ctx([x.div_euclid(16), cy, z.div_euclid(16)], &c);
+                let (lx, lz) = (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+                for ly in (0..16).rev() {
+                    let id = ch.get(lx, ly, lz).0;
+                    if id != 0 && id != 36 {
+                        top = cy * 16 + ly as i32;
+                        top_id = id;
+                        break 'scan;
+                    }
+                }
+            }
+            let floor = mc_floor_at(&c, x, z);
+            let mark = if (top - floor).abs() > 1 { "  <-- MISMATCH" } else { "" };
+            let name = crate::block::block_type(top_id).map(|b| b.name).unwrap_or("?");
+            println!("  x{x:>4}: chunk top {top:>3} ({name:<12}) floor {floor:>3}{mark}");
+        }
+    }
+
+    /// W229.2 diagnostic: is the spawn-area canyon carved or a density
+    /// feature? Prints PRE-carve vs POST-carve solid runs for columns
+    /// across it.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_canyon_pre_vs_post_carve()
+    {
+        let seed = 3592732596u32;
+        let ow = overworld_for(seed);
+        let z = -10i32;
+        println!("\n== canyon columns, PRE vs POST carve solid gaps (y 20..75) ==");
+        for x in [-39i32, -37, -36, -35, -34, -33, -31] {
+            let col = column_data_cached(&ow, x.div_euclid(16), z.div_euclid(16), seed);
+            let (lx, lz) = (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+            let run = |pc: bool| -> String {
+                let mut s = String::new();
+                for y in 20..=75 {
+                    let solid = if pc { col.is_solid_pc(lx, y, lz) } else { col.is_solid(lx, y, lz) };
+                    s.push(if solid { '#' } else { '.' });
+                }
+                s
+            };
+            println!("  x{x:>4} pre : {}", run(false));
+            println!("       post: {}", run(true));
+        }
+    }
+
     /// W226.2 diagnostic (run with --ignored): quad counts of the
     /// runtime mesher over real terrain chunks - the greedy-vs-unit
     /// cost ledger for the perf epic (constant light = maximum merge,
