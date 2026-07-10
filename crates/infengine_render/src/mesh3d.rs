@@ -103,9 +103,13 @@ impl MeshVertex {
     }
 
     pub fn with_uv(mut self, uv: [f32; 2]) -> Self {
+        // W229.1: ROUND, don't truncate. Truncation biased every
+        // packed UV up to 1/65535 BELOW the intended coordinate, which
+        // on tile edges sampled the neighbouring atlas tile - the
+        // bright pinstripe seams on block boundaries.
         self.uv_packed = [
-            (uv[0].clamp(0.0, 1.0) * 65535.0) as u16,
-            (uv[1].clamp(0.0, 1.0) * 65535.0) as u16,
+            (uv[0].clamp(0.0, 1.0) * 65535.0).round() as u16,
+            (uv[1].clamp(0.0, 1.0) * 65535.0).round() as u16,
         ];
         // W30.1: keep tile attrs consistent with a per-voxel quad that
         // samples exactly `uv`. tile_uv0 = uv, tile_size = (0,0) means
@@ -128,20 +132,23 @@ impl MeshVertex {
     /// which keeps sampling within `[tile_uv0, tile_uv0 + tile_size]` regardless
     /// of how large the merged quad is.
     pub fn with_tile_uv(mut self, tile_uv0: [f32; 2], tile_size: [f32; 2], quad_uv: [f32; 2]) -> Self {
+        // W229.1: ROUND, don't truncate (see with_uv) - a truncated
+        // tile_uv0 landed below the tile's edge and bled the
+        // neighbouring atlas tile along quad borders.
         self.tile_uv0 = [
-            (tile_uv0[0].clamp(0.0, 1.0) * 65535.0) as u16,
-            (tile_uv0[1].clamp(0.0, 1.0) * 65535.0) as u16,
+            (tile_uv0[0].clamp(0.0, 1.0) * 65535.0).round() as u16,
+            (tile_uv0[1].clamp(0.0, 1.0) * 65535.0).round() as u16,
         ];
         self.tile_size = [
-            (tile_size[0].clamp(0.0, 1.0) * 65535.0) as u16,
-            (tile_size[1].clamp(0.0, 1.0) * 65535.0) as u16,
+            (tile_size[0].clamp(0.0, 1.0) * 65535.0).round() as u16,
+            (tile_size[1].clamp(0.0, 1.0) * 65535.0).round() as u16,
         ];
         // quad_uv range is [0, 16] (max CHUNK_SIZE voxels). Pack into u16
         // by dividing by 16 first so [0,16] maps to [0, 65535].
         const QUAD_UV_SCALE: f32 = 16.0;
         self.quad_uv = [
-            (quad_uv[0].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0) as u16,
-            (quad_uv[1].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0) as u16,
+            (quad_uv[0].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0).round() as u16,
+            (quad_uv[1].clamp(0.0, QUAD_UV_SCALE) / QUAD_UV_SCALE * 65535.0).round() as u16,
         ];
         self
     }

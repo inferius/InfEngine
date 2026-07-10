@@ -72,12 +72,16 @@ pub(crate) fn place_sea_pickles(
     }
 }
 
-/// `UnderwaterMagmaFeature` (all overworld biomes, count 44..52,
-/// y 27..64): magma patches in the water floor. Simplified faithfully:
-/// the water-column floor within `floor_search_range`(5) is found, and
-/// solid cells in the +-1 box around it whose UP face touches water
-/// convert with probability 0.5 (the visible essence of MC's
-/// visibility test).
+/// `UnderwaterMagmaFeature` (all overworld biomes). W229.1 corrected
+/// to the real placement pipeline: count uniform 44..52 per chunk
+/// COLUMN (the old port rolled it per 16^3 slice), height_range over
+/// the full world, and the `surface_relative_threshold_filter`
+/// (OCEAN_FLOOR_WG, max -2) that keeps only tries >= 2 blocks BELOW
+/// the floor heightmap - so magma grows in underwater cavities, not
+/// across the open seabed (the user-visible "way too much magma").
+/// Then MC's feature body: the water-column floor within
+/// `floor_search_range`(5) is found, and solid cells in the +-1 box
+/// around it whose UP face touches water convert with probability 0.5.
 pub(crate) fn place_underwater_magma(
     chunk: &mut Chunk,
     coord: ChunkCoord,
@@ -89,13 +93,21 @@ pub(crate) fn place_underwater_magma(
     };
     let cs = CHUNK_SIZE as i32;
     let seed = ctx.effective_seed();
-    let mut rng =
-        SplitMix64::new(stream_seed(seed, coord[0], coord[2], SALT_MAGMA ^ (coord[1] as u64) << 8));
+    // Column-keyed stream: every vertical slice replays the same rolls
+    // and applies only its own cells.
+    let mut rng = SplitMix64::new(stream_seed(seed, coord[0], coord[2], SALT_MAGMA));
     let count = 44 + next_int(&mut rng, 9); // uniform 44..=52
     for _ in 0..count {
         let lx = next_int(&mut rng, 16);
         let lz = next_int(&mut rng, 16);
-        let wy = 27 + next_int(&mut rng, 38); // uniform 27..=64
+        // height_range uniform [above_bottom 0 .. absolute 256] in MC
+        // coords (-64..256); tries below the engine band discard like
+        // the W202 ore anchors (shape preserved, totals lower).
+        let wy = -64 + next_int(&mut rng, 321);
+        let (wx, wz) = (origin[0] + lx, origin[2] + lz);
+        if wy > mc_floor_at(ctx, wx, wz) - 2 {
+            continue; // surface_relative_threshold_filter max -2
+        }
         let ly = wy - origin[1];
         if !(1..cs - 1).contains(&ly) || !(1..cs - 1).contains(&lx) || !(1..cs - 1).contains(&lz) {
             continue;

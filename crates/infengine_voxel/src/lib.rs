@@ -584,47 +584,47 @@ where
                     // -Z (fa=2,ua=0=X,va=1=Y), side<0, greedy != OLD order:
                     //   frac_u=X=du, frac_v=1-Y=1-dv
                     //   C0(w,0):[w-E,h-E]  C1(w,h):[w-E,0]  C2(0,h):[0,0]  C3(0,0):[0,h-E]
-                    const E: f32 = 0.001;
+                    const E: f32 = 0.004; // W229.1: symmetric inset, must exceed the u16 UV quantization error
                     let quad_uv_corners: [[f32; 2]; 4] = match face.normal {
                         // +X, +Y, -Y: C0=(0,0),C1=(0,h),C2=(w,h),C3=(w,0)
                         //   quad_uv = [dv_edge, (w-du)_edge]
                         [1, 0, 0] | [0, 1, 0] => [
-                            [0.0,   w - E],
+                            [E,     w - E],
                             [h - E, w - E],
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
+                            [h - E, E    ],
+                            [E,     E    ],
                         ],
                         // -Y: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
                         //   same texture projection as group above
                         [0, -1, 0] => [
-                            [0.0,   w - E],
+                            [E,     w - E],
                             [h - E, w - E],
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
+                            [h - E, E    ],
+                            [E,     E    ],
                         ],
                         // -X: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
                         //   frac_u=1-dv (inverted Z), frac_v=1-du (inverted Y)
                         [-1, 0, 0] => [
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   w - E],
+                            [h - E, E    ],
+                            [E,     E    ],
+                            [E,     w - E],
                             [h - E, w - E],
                         ],
                         // +Z: C0=(0,0),C1=(0,h),C2=(w,h),C3=(w,0)
                         //   frac_u=1-du (inverted X), frac_v=1-dv (inverted Y)
                         [0, 0, 1] => [
                             [w - E, h - E],
-                            [w - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   h - E],
+                            [w - E, E    ],
+                            [E,     E    ],
+                            [E,     h - E],
                         ],
                         // -Z: C0=(w,0),C1=(w,h),C2=(0,h),C3=(0,0)
                         //   frac_u=du (X), frac_v=1-dv (inverted Y)
                         _ => [
                             [w - E, h - E],
-                            [w - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   h - E],
+                            [w - E, E    ],
+                            [E,     E    ],
+                            [E,     h - E],
                         ],
                     };
 
@@ -921,37 +921,37 @@ where
                     let tile_size = [u1t - u0t, v1t - v0t];
                     // W34.2: same explicit per-face table as chunk_mesh_greedy.
                     // See that function for the full derivation comment.
-                    const E: f32 = 0.001;
+                    const E: f32 = 0.004; // W229.1: symmetric inset, must exceed the u16 UV quantization error
                     let quad_uv_corners: [[f32; 2]; 4] = match face.normal {
                         [1, 0, 0] | [0, 1, 0] => [
-                            [0.0,   w - E],
+                            [E,     w - E],
                             [h - E, w - E],
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
+                            [h - E, E    ],
+                            [E,     E    ],
                         ],
                         [0, -1, 0] => [
-                            [0.0,   w - E],
+                            [E,     w - E],
                             [h - E, w - E],
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
+                            [h - E, E    ],
+                            [E,     E    ],
                         ],
                         [-1, 0, 0] => [
-                            [h - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   w - E],
+                            [h - E, E    ],
+                            [E,     E    ],
+                            [E,     w - E],
                             [h - E, w - E],
                         ],
                         [0, 0, 1] => [
                             [w - E, h - E],
-                            [w - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   h - E],
+                            [w - E, E    ],
+                            [E,     E    ],
+                            [E,     h - E],
                         ],
                         _ => [
                             [w - E, h - E],
-                            [w - E, 0.0  ],
-                            [0.0,   0.0  ],
-                            [0.0,   h - E],
+                            [w - E, E    ],
+                            [E,     E    ],
+                            [E,     h - E],
                         ],
                     };
                     let nf = [face.normal[0] as f32, face.normal[1] as f32, face.normal[2] as f32];
@@ -2090,6 +2090,48 @@ mod tests {
             naive_top_verts, 256,
             "naive should produce 256 top quads, got {naive_top_verts}"
         );
+    }
+
+    /// W229.1 diagnostic: every runtime-mesher vertex must sit EXACTLY
+    /// on the integer voxel grid, and the shared edge between two
+    /// neighbouring coplanar quads must use bitwise-identical
+    /// coordinates - any deviation is a seam the rasterizer shows as a
+    /// pinhole line between blocks.
+    #[test]
+    #[allow(clippy::print_stdout)]
+    fn runtime_mesher_vertices_are_exact_grid_points() {
+        let cs = CHUNK_SIZE;
+        let mut chunk = Chunk::empty();
+        for x in 0..cs {
+            for z in 0..cs {
+                chunk.set(x, 0, z, BlockId(1));
+            }
+        }
+        let subs = chunk_mesh_greedy_with_special(
+            &chunk,
+            Vec3::new(160.0, 96.0, -320.0), // a realistic chunk origin
+            |_, _| [0.25f32, 0.25, 0.75, 0.75],
+            |_| true,
+            |_, _| [0.0f32, 1.0f32],
+            |_, _| 0u32,
+            |_| false,
+            |_, _, _, _| false,
+        );
+        let mut bad = 0usize;
+        for s in &subs {
+            for v in &s.vertices {
+                for (i, base) in [(0usize, 160.0f32), (1, 96.0), (2, -320.0)] {
+                    let rel = v.position[i] - base;
+                    if rel.fract() != 0.0 {
+                        if bad < 8 {
+                            println!("non-integer vertex coord: {:?}", v.position);
+                        }
+                        bad += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(bad, 0, "{bad} vertex coords off the voxel grid");
     }
 
     /// W226.2: the runtime mesher (`chunk_mesh_greedy_with_special`)

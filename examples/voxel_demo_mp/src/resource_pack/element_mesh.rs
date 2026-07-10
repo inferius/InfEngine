@@ -790,6 +790,25 @@ fn emit_faces_for_element(
             .rsplit_once('/')
             .map(|(_, stem)| stem)
             .unwrap_or(after_hash);
+        // W229.1: the hand-built models (carpet / candle / slab...)
+        // reference "#top/#bottom/#side" and rely on the block's own
+        // TileSpec - the doc contract above ("use the block's face
+        // entry") was never implemented, so any hand-built model whose
+        // block lacked a JSON pipeline entry rendered the magenta
+        // __missing checker (user report: pink_petals). Resolve the
+        // unresolved variable through block_face_ref before declaring
+        // it missing.
+        let face_fallback = || -> Option<[f32; 4]> {
+            if !tex_name.starts_with('#') {
+                return None;
+            }
+            let face = match clean_name {
+                "bottom" => super::BlockFace::Bottom,
+                "side" | "sides" => super::BlockFace::Sides,
+                _ => super::BlockFace::Top,
+            };
+            pack.block_face_ref(block_id, face).map(|t| t.atlas_uv)
+        };
         // W37 fix: fall back to the magenta __missing sentinel when
         // the texture name isn't registered. The previous
         // [0.0, 0.0, 1.0, 1.0] fallback covered the WHOLE atlas as
@@ -801,6 +820,7 @@ fn emit_faces_for_element(
         let atlas_uv = pack
             .block_texture(clean_name)
             .map(|t| t.atlas_uv)
+            .or_else(face_fallback)
             .or_else(|| {
                 pack.block_texture("__missing").map(|t| t.atlas_uv)
             })
@@ -966,12 +986,24 @@ fn snap_to_cardinal(n: Vec3) -> [i8; 3] {
 fn scale_uv(model_uv: [f32; 4], atlas_uv: [f32; 4]) -> [f32; 4] {
     let tile_w = atlas_uv[2] - atlas_uv[0];
     let tile_h = atlas_uv[3] - atlas_uv[1];
-    [
+    let mut uv = [
         atlas_uv[0] + (model_uv[0] / 16.0) * tile_w,
         atlas_uv[1] + (model_uv[1] / 16.0) * tile_h,
         atlas_uv[0] + (model_uv[2] / 16.0) * tile_w,
         atlas_uv[1] + (model_uv[3] / 16.0) * tile_h,
-    ]
+    ];
+    // W229.1: inset the rect a hair toward its own centre so edge
+    // pixels never sample the neighbouring atlas tile (the u16 UV
+    // packing quantizes by up to half a step; the un-inset edges bled
+    // bright pinstripes along block boundaries). Signed via (u1-u0)
+    // so mirrored UVs inset correctly too.
+    let ex = (uv[2] - uv[0]) * 0.004;
+    let ey = (uv[3] - uv[1]) * 0.004;
+    uv[0] += ex;
+    uv[2] -= ex;
+    uv[1] += ey;
+    uv[3] -= ey;
+    uv
 }
 
 #[cfg(test)]

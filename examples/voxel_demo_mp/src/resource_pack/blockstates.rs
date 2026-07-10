@@ -237,6 +237,19 @@ impl BlockState {
                 return Some(m);
             }
         }
+        // W229.1: pillar blocks (logs / basalt / bone...) list their
+        // variants as axis=x/y/z with x FIRST - picking that rendered
+        // every JSON-resolved log lying sideways (user report:
+        // cherry_log ring texture on the trunk sides). The engine has
+        // no per-block axis state yet; upright is the placement +
+        // worldgen default.
+        if let Some((_, m)) = self
+            .variants
+            .iter()
+            .find(|(k, _)| k.pairs.iter().any(|(pk, pv)| pk == "axis" && pv == "y"))
+        {
+            return Some(m);
+        }
         self.variants.first().map(|(_, m)| m)
     }
 
