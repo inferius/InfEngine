@@ -515,6 +515,137 @@ mod tests {
         assert!(!v.spawner_states.contains_key(&pos));
     }
 
+    /// Full-pipeline probe (the in-game-verify stand-in while screen
+    /// control is unavailable): generate the REAL chunks around a
+    /// known monster room with the live worldgen pipeline, index the
+    /// spawner exactly like the stream delivery arm, park the player
+    /// by the cage and run the 20 Hz pass. Proves worldgen -> index
+    /// -> tick -> mint end-to-end on real dungeon geometry, plus the
+    /// crowding cap on long runs. Defaults target the test-mc-9 room
+    /// at (4743, 24, 4733), seed 3592732596.
+    /// `INFENGINE_DUMP_SEED=<seed> INFENGINE_SPAWNER_X/Y/Z=<pos>
+    /// cargo test -p voxel_demo_mp --release --bin voxel_demo_mp
+    /// spawner_live_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn spawner_live_probe() {
+        let env_i32 = |name: &str, default: i32| -> i32 {
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default)
+        };
+        let seed: u32 = std::env::var("INFENGINE_DUMP_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3592732596);
+        let spos = [
+            env_i32("INFENGINE_SPAWNER_X", 4743),
+            env_i32("INFENGINE_SPAWNER_Y", 24),
+            env_i32("INFENGINE_SPAWNER_Z", 4733),
+        ];
+        let mut v = Voxel::new();
+        v.base_seed = seed;
+        v.dim_worldgens.insert(
+            crate::dim::OVERWORLD.to_string(),
+            crate::worldgen::WorldGen::Mc,
+        );
+        // Generate the 3x3 chunk-column neighbourhood on the room's
+        // vertical slice with the LIVE pipeline and index spawners
+        // the way the stream delivery arm does.
+        let cs = CHUNK_SIZE as i32;
+        let ctx = v.current_worldgen_ctx();
+        let (ccx, ccy, ccz) = (
+            spos[0].div_euclid(cs),
+            spos[1].div_euclid(cs),
+            spos[2].div_euclid(cs),
+        );
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let coord = [ccx + dx, ccy, ccz + dz];
+                let chunk = crate::worldgen::generate_chunk_at_ctx(coord, &ctx);
+                for lx in 0..CHUNK_SIZE {
+                    for ly in 0..CHUNK_SIZE {
+                        for lz in 0..CHUNK_SIZE {
+                            if chunk.get(lx, ly, lz).0 == SPAWNER_ID {
+                                v.spawner_positions.insert([
+                                    coord[0] * cs + lx as i32,
+                                    coord[1] * cs + ly as i32,
+                                    coord[2] * cs + lz as i32,
+                                ]);
+                            }
+                        }
+                    }
+                }
+                v.world.insert_chunk(coord, chunk);
+            }
+        }
+        assert!(
+            v.spawner_positions.contains(&spos),
+            "the full worldgen pipeline must place the spawner at {spos:?} \
+             (found: {:?})",
+            v.spawner_positions
+        );
+        // Midnight: unlit probe grids default to sky 15, and the
+        // effective-sky ramp at night matches the cave's real 0 -
+        // the light gate itself is unit-tested above.
+        v.day_time = crate::DAY_LENGTH_S * 0.75;
+        v.player_pos = glam::Vec3::new(
+            spos[0] as f32 + 2.5,
+            spos[1] as f32 + 1.0,
+            spos[2] as f32 + 0.5,
+        );
+        let eff = v.current_worldgen_ctx().effective_seed();
+        let kind = spawner_entity_kind(eff, spos);
+        let mut first_spawn_tick = None;
+        let mut cycles = 0u32;
+        for tick in 0..6000u32 {
+            let before = v.mobs.len();
+            spawner_pass(&mut v);
+            if v.mobs.len() > before {
+                cycles += 1;
+                if first_spawn_tick.is_none() {
+                    first_spawn_tick = Some(tick);
+                }
+                println!(
+                    "tick {tick}: +{} mob(s) -> {} total (kind {})",
+                    v.mobs.len() - before,
+                    v.mobs.len(),
+                    MobKind::from_u8(kind).name(),
+                );
+            }
+        }
+        let first = first_spawn_tick.expect("the real dungeon must spawn mobs");
+        assert_eq!(
+            first, SPAWNER_INITIAL_DELAY as u32,
+            "first cycle fires right after the 20-tick initial delay"
+        );
+        assert!(cycles >= 2, "the 200..800 re-roll must fire more cycles");
+        for m in &v.mobs {
+            assert_eq!(m.kind, kind, "every mint uses the derived kind");
+            assert!(
+                (m.pos[0] - (spos[0] as f32 + 0.5)).abs() <= 4.5
+                    && (m.pos[2] - (spos[2] as f32 + 0.5)).abs() <= 4.5,
+                "mob at {:?} outside the spawn envelope",
+                m.pos
+            );
+        }
+        assert!(
+            v.mobs.len() <= SPAWNER_MAX_NEARBY,
+            "static mobs never leave the box, so the crowding cap must \
+             hold the population at {SPAWNER_MAX_NEARBY}: {}",
+            v.mobs.len()
+        );
+        println!(
+            "spawner at {spos:?}: first spawn at tick {first}, {cycles} \
+             spawning cycles over 6000 ticks (5 min), {} mob(s) alive \
+             (cap {SPAWNER_MAX_NEARBY}), kind {}",
+            v.mobs.len(),
+            MobKind::from_u8(kind).name(),
+        );
+    }
+
     #[test]
     fn spawn_volume_rejects_solid_and_water() {
         let pos = [8, 40, 8];
