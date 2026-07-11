@@ -863,26 +863,47 @@ where
                 }
             }
 
+            let mut done: Vec<bool> = vec![false; cs * cs];
             for u0 in 0..cs {
                 for v0 in 0..cs {
                     let idx0 = u0 * cs + v0;
-                    if mask[idx0].is_none() { continue; }
+                    if done[idx0] || mask[idx0].is_none() { continue; }
                     let key = mask[idx0].clone().unwrap();
                     let block = BlockId(key.block);
 
-                    // W226.2: NO greedy expansion - unit quads only.
-                    // Merging produced quads of different sizes sharing
-                    // partial edges (W122 splits runs at smooth-light
-                    // steps); a vertex mid-edge of a neighbouring quad
-                    // (T-junction) rasterizes with subpixel pinholes -
-                    // the dotted see-through lines on tree trunks. MC
-                    // itself emits per-face unit quads: bitwise-equal
-                    // shared corners make the surface watertight by
-                    // construction. Re-enabling merging requires a
-                    // T-junction-free design (weld neighbour vertices
-                    // into long edges) - tracked in the perf plan.
-                    let u1 = u0 + 1;
-                    let v1 = v0 + 1;
+                    // W241: greedy expansion RESTORED (W226.2 had unit
+                    // quads). The user-visible "pinholes" originally
+                    // pinned on merged-quad T-junctions turned out to
+                    // be u16-UV atlas bleed, fixed in W229.1 (rounded
+                    // packing + symmetric inset) - re-verified in-game
+                    // on the original dark-log repro after this flip.
+                    // Runs still split wherever the quantized corner
+                    // lights / AO / anim / UV differ (FaceKey equality),
+                    // so W122 smooth lighting is unchanged; the win is
+                    // ~2.5-3x fewer quads = the VD-32 render wall.
+                    let mut v1 = v0 + 1;
+                    while v1 < cs {
+                        let idx = u0 * cs + v1;
+                        if done[idx] || mask[idx].as_ref() != Some(&key) {
+                            break;
+                        }
+                        v1 += 1;
+                    }
+                    let mut u1 = u0 + 1;
+                    'u_expand: while u1 < cs {
+                        for v in v0..v1 {
+                            let idx = u1 * cs + v;
+                            if done[idx] || mask[idx].as_ref() != Some(&key) {
+                                break 'u_expand;
+                            }
+                        }
+                        u1 += 1;
+                    }
+                    for u in u0..u1 {
+                        for v in v0..v1 {
+                            done[u * cs + v] = true;
+                        }
+                    }
 
                     let w = (u1 - u0) as f32;
                     let h = (v1 - v0) as f32;
@@ -2134,14 +2155,19 @@ mod tests {
         assert_eq!(bad, 0, "{bad} vertex coords off the voxel grid");
     }
 
-    /// W226.2: the runtime mesher (`chunk_mesh_greedy_with_special`)
-    /// must be watertight: no emitted vertex may lie strictly inside an
-    /// axis-aligned edge of another quad. Such T-junctions rasterize
-    /// with subpixel pinholes - the user-reported dotted see-through
-    /// lines across dark-oak trunks at light-step heights (W122 splits
-    /// merged quads at smooth-light steps, so quads of different sizes
-    /// shared partial edges).
+    /// W226.2 -> W241: this asserted the runtime mesher was
+    /// T-junction-free, which forced per-face unit quads. The
+    /// user-visible "pinholes" that motivated it turned out to be
+    /// u16-UV atlas bleed (fixed in W229.1 with rounded packing + a
+    /// symmetric inset), and unit quads cost ~2.5-3x the vertex
+    /// volume - the measured VD-32 render wall. W241 restored greedy
+    /// merging, which reintroduces GEOMETRIC T-junctions at light /
+    /// block-type run boundaries; in-game verification on the
+    /// original dark-log repro shows no visible artifacts with the
+    /// UV fix in place. Kept as `#[ignore]` documentation: run it
+    /// deliberately if pinholes are ever suspected again.
     #[test]
+    #[ignore]
     fn runtime_mesher_emits_no_t_junctions() {
         let cs = CHUNK_SIZE;
         let mut chunk = Chunk::empty();
