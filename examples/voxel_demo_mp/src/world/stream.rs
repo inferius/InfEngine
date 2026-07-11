@@ -358,7 +358,12 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         queued += 1;
                     }
                 }
-                tracing::info!(
+                // W234: debug, not info - this fired once per Lit result
+                // during streaming and the stdout lock contention with the
+                // 24 workers' own log lines stalled the main thread for
+                // 25-105 ms per call on a live console (apply_ms was 0 the
+                // whole time; the cost was the LOGGING, not the apply).
+                tracing::debug!(
                     grids = new_grid_count,
                     remesh_queued = queued,
                     apply_ms = lit_apply_start.elapsed().as_millis() as u64,

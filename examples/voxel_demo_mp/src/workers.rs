@@ -310,13 +310,32 @@ impl WorkerPool {
                                         &lj.affected,
                                     );
                                     let total_ms = bfs_start.elapsed().as_millis() as u64;
-                                    tracing::info!(
-                                        chunks = chunk_count,
-                                        block_ms = block_done_ms,
-                                        sky_ms = total_ms - block_done_ms,
-                                        total_ms,
-                                        "W46.30: lighting BFS done",
-                                    );
+                                    // W234: demoted to debug + a WARN only for
+                                    // outliers. At INFO this printed once per
+                                    // lighting job from up to 24 worker threads
+                                    // at once during streaming - the stdout
+                                    // writer lock serialized them AND blocked
+                                    // the main thread's own log calls for
+                                    // 25-105 ms per line on a live console
+                                    // (the user's "lit" stream hitches; a
+                                    // file-redirected run never showed it).
+                                    if total_ms >= 750 {
+                                        tracing::warn!(
+                                            chunks = chunk_count,
+                                            block_ms = block_done_ms,
+                                            sky_ms = total_ms - block_done_ms,
+                                            total_ms,
+                                            "W46.30: slow lighting BFS job",
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            chunks = chunk_count,
+                                            block_ms = block_done_ms,
+                                            sky_ms = total_ms - block_done_ms,
+                                            total_ms,
+                                            "W46.30: lighting BFS done",
+                                        );
+                                    }
                                     // Collect the updated grids for the
                                     // affected chunks only. Arc::clone is
                                     // cheap here (just a refcount bump on

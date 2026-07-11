@@ -389,13 +389,23 @@ impl Voxel {
         let Some(pool) = self.workers.as_ref() else {
             return;
         };
-        // Bucket by XZ region (4x4 chunk columns). BTreeMap for a
-        // deterministic dispatch order.
+        // Bucket by XZ region. BTreeMap for a deterministic dispatch
+        // order. Vertical splitting is NOT an option here - sky light
+        // propagates down whole columns, so a column's chunks must
+        // light together.
+        //
+        // W234: region 4x4 -> 2x2 chunk columns. W231 full columns
+        // made a 4x4 bucket up to 256 chunks (16 tall); the user's
+        // log showed 84-95-chunk jobs at sky_ms 300-550 each, which
+        // parked the flood on a few workers and delivered giant Lit
+        // batches (= big remesh waves). 2x2 caps a job at <=64
+        // chunks, quarters its latency, and spreads the same work
+        // across the 24-worker pool.
         let mut segments: std::collections::BTreeMap<(i32, i32), Vec<ChunkCoord>> =
             std::collections::BTreeMap::new();
         for cc in affected {
             segments
-                .entry((cc[0].div_euclid(4), cc[2].div_euclid(4)))
+                .entry((cc[0].div_euclid(2), cc[2].div_euclid(2)))
                 .or_default()
                 .push(cc);
         }
