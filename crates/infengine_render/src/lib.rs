@@ -45,7 +45,7 @@ use grid::GridPass;
 use lights::{LightsResource, PointLight};
 use mesh3d::{Mesh3DPass, Mesh3DRegistry};
 pub use mesh3d::{MeshHandle, MeshInstance, MeshVertex, cube_geometry_public};
-use uber_buffer::{UberMeshAllocator, LAYER_CUTOUT, LAYER_OPAQUE, LAYER_TRANSLUCENT};
+use uber_buffer::{ChunkDrawSegment, UberMeshAllocator, LAYER_CUTOUT, LAYER_OPAQUE, LAYER_TRANSLUCENT};
 pub use uber_buffer::{LAYER_CUTOUT as CHUNK_LAYER_CUTOUT, LAYER_OPAQUE as CHUNK_LAYER_OPAQUE, LAYER_TRANSLUCENT as CHUNK_LAYER_TRANSLUCENT};
 pub use particle_pass::{ParticleInstance as TexturedParticleInstance, ParticlePass};
 use tile_anims::TileAnimsResource;
@@ -151,11 +151,12 @@ pub struct Renderer {
     /// the two handle spaces never collide.
     uber_next_id: u32,
     /// Per-frame opaque indirect draw commands queued by `queue_chunk_draw`.
-    chunk_draw_queue_opaque: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    /// W238: the u32 is the uber page the mesh lives in.
+    chunk_draw_queue_opaque: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance, u32)>,
     /// Per-frame cutout (alpha-discard) indirect draw commands.
-    chunk_draw_queue_cutout: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    chunk_draw_queue_cutout: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance, u32)>,
     /// Per-frame translucent (alpha-blend) indirect draw commands.
-    chunk_draw_queue_translucent: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance)>,
+    chunk_draw_queue_translucent: Vec<(wgpu::util::DrawIndexedIndirectArgs, MeshInstance, u32)>,
     /// GPU buffer for the per-frame indirect command list
     /// (opaque + cutout + translucent, written at the start of each render call).
     uber_indirect_buf: wgpu::Buffer,
@@ -644,12 +645,11 @@ impl Renderer {
     ) -> MeshHandle {
         let handle = MeshHandle(self.uber_next_id);
         self.uber_next_id += 1;
-        if !self.uber.alloc(&self.queue, handle, vertices, indices) {
-            // Pool full - fall back to legacy path. The handle id already
-            // advanced past the uber range; map it into the legacy registry.
-            // This is a rare edge case and the mesh will not benefit from
-            // the batched draw path this frame.
-            warn!(name, "W32: uber pool full, allocating legacy mesh buffer");
+        if !self.uber.alloc(&self.device, &self.queue, handle, vertices, indices) {
+            // W238: every page full AND page cap reached - fall back to
+            // the legacy path (the allocator already warned, once). The
+            // handle id advanced past the uber range; map it into the
+            // legacy registry.
             return self.meshes.insert(&self.device, name, vertices, indices);
         }
         handle
@@ -749,10 +749,11 @@ impl Renderer {
                 first_instance: 0, // patched during flush
             };
             // W33.3: route to the correct per-layer queue.
+            // W238: carry the page so the packer can group segments.
             match alloc.layer {
-                LAYER_CUTOUT      => self.chunk_draw_queue_cutout.push((cmd, instance)),
-                LAYER_TRANSLUCENT => self.chunk_draw_queue_translucent.push((cmd, instance)),
-                _                 => self.chunk_draw_queue_opaque.push((cmd, instance)),
+                LAYER_CUTOUT      => self.chunk_draw_queue_cutout.push((cmd, instance, alloc.page)),
+                LAYER_TRANSLUCENT => self.chunk_draw_queue_translucent.push((cmd, instance, alloc.page)),
+                _                 => self.chunk_draw_queue_opaque.push((cmd, instance, alloc.page)),
             }
         } else {
             // Legacy fallback path (uber pool was full when this mesh was created).
@@ -1215,6 +1216,11 @@ impl Renderer {
         let total_chunk_draws =
             (chunk_opaque_count + chunk_cutout_count + chunk_translucent_count) as u64;
 
+        // W238: pack per (layer, page) so the draw passes can bind each
+        // page's vertex/index buffers once and multi_draw a contiguous
+        // indirect range. Layer order stays opaque -> cutout ->
+        // translucent; within a layer, draws group by page.
+        let mut chunk_segments: Vec<ChunkDrawSegment> = Vec::new();
         if total_chunk_draws > 0 {
             // Grow per-frame buffers if needed (doubling strategy).
             let indirect_elem = std::mem::size_of::<wgpu::util::DrawIndexedIndirectArgs>() as u64;
@@ -1241,30 +1247,48 @@ impl Renderer {
                 self.uber_instance_capacity = new_cap;
             }
 
+            // W238: group each layer's draws by page (stable sort keeps
+            // submission order within a page).
+            self.chunk_draw_queue_opaque.sort_by_key(|(_, _, page)| *page);
+            self.chunk_draw_queue_cutout.sort_by_key(|(_, _, page)| *page);
+            self.chunk_draw_queue_translucent.sort_by_key(|(_, _, page)| *page);
+
             // Pack indirect args with patched first_instance, then pack instances.
             let mut indirect_data: Vec<wgpu::util::DrawIndexedIndirectArgs> =
                 Vec::with_capacity(total_chunk_draws as usize);
             let mut instance_data: Vec<MeshInstance> =
                 Vec::with_capacity(total_chunk_draws as usize);
 
-            for (idx, (base_cmd, inst)) in self
-                .chunk_draw_queue_opaque
-                .iter()
-                .chain(self.chunk_draw_queue_cutout.iter())
-                .chain(self.chunk_draw_queue_translucent.iter())
-                .enumerate()
-            {
-                let mut cmd = *base_cmd;
-                cmd.first_instance = if self.has_indirect_first_instance {
-                    idx as u32
-                } else {
-                    // Without the feature first_instance must be 0.
-                    // We fall back to a draw loop instead of multi-draw,
-                    // so this value is unused in that path.
-                    0
-                };
-                indirect_data.push(cmd);
-                instance_data.push(*inst);
+            for (layer, queue) in [
+                (LAYER_OPAQUE, &self.chunk_draw_queue_opaque),
+                (LAYER_CUTOUT, &self.chunk_draw_queue_cutout),
+                (LAYER_TRANSLUCENT, &self.chunk_draw_queue_translucent),
+            ] {
+                for (base_cmd, inst, page) in queue.iter() {
+                    let idx = indirect_data.len() as u32;
+                    let mut cmd = *base_cmd;
+                    cmd.first_instance = if self.has_indirect_first_instance {
+                        idx
+                    } else {
+                        // Without the feature first_instance must be 0.
+                        // We fall back to a draw loop instead of multi-draw,
+                        // so this value is unused in that path.
+                        0
+                    };
+                    indirect_data.push(cmd);
+                    instance_data.push(*inst);
+                    match chunk_segments.last_mut() {
+                        Some(seg) if seg.layer == layer && seg.page == *page => {
+                            seg.count += 1;
+                        }
+                        _ => chunk_segments.push(ChunkDrawSegment {
+                            layer,
+                            page: *page,
+                            first: idx,
+                            count: 1,
+                        }),
+                    }
+                }
             }
 
             self.queue.write_buffer(
@@ -1315,17 +1339,16 @@ impl Renderer {
             }
             // W33.3: shadow pass for opaque + cutout chunk meshes.
             // Translucent (water) doesn't cast hard shadows.
-            // Both opaque and cutout are packed first in the indirect buffer
-            // so we can pass their combined count to draw_uber (offset 0).
+            // W238: per-(layer, page) segments; draw_uber skips the
+            // translucent ones itself.
             let shadow_count = chunk_opaque_count + chunk_cutout_count;
             if shadow_count > 0 {
                 self.shadow.draw_uber(
                     &mut spass,
-                    &self.uber.vertex_buf,
-                    &self.uber.index_buf,
+                    &self.uber.pages,
                     &self.uber_indirect_buf,
                     &self.uber_instance_buf,
-                    shadow_count,
+                    &chunk_segments,
                     self.has_indirect_first_instance,
                 );
             }
@@ -1373,16 +1396,13 @@ impl Renderer {
             if total_chunk_draws > 0 {
                 self.mesh3d.draw_uber_chunks(
                     &mut rpass,
-                    &self.uber.vertex_buf,
-                    &self.uber.index_buf,
+                    &self.uber.pages,
                     &self.uber_indirect_buf,
                     &self.uber_instance_buf,
                     &self.shadow.sample_bg,
                     &self.lights.bind_group,
                     &self.tile_anims.bind_group,
-                    chunk_opaque_count,
-                    chunk_cutout_count,
-                    chunk_translucent_count,
+                    &chunk_segments,
                     self.has_indirect_first_instance,
                 );
             }

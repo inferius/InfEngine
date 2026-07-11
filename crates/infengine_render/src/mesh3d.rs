@@ -1267,24 +1267,23 @@ impl Mesh3DPass {
     /// Cutout uses the same `pipeline` as opaque (the fragment shader already
     /// discards fragments with alpha < 0.5). A dedicated pipeline_cutout can
     /// be added later for two-pass backface rendering of leaves.
+    /// W238: draws are packed per (layer, page) segment; each segment
+    /// binds its page's vertex/index buffers (only when they change)
+    /// and issues one multi_draw over its contiguous indirect range.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_uber_chunks<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
-        vertex_buf: &'a wgpu::Buffer,
-        index_buf: &'a wgpu::Buffer,
+        pages: &'a [crate::uber_buffer::UberPage],
         indirect_buf: &'a wgpu::Buffer,
         instance_buf: &'a wgpu::Buffer,
         shadow_bg: &'a wgpu::BindGroup,
         lights_bg: &'a wgpu::BindGroup,
         tile_anims_bg: &'a wgpu::BindGroup,
-        opaque_count: u32,
-        cutout_count: u32,
-        translucent_count: u32,
+        segments: &[crate::uber_buffer::ChunkDrawSegment],
         has_indirect_first_instance: bool,
     ) {
-        let total = opaque_count + cutout_count + translucent_count;
-        if total == 0 {
+        if segments.is_empty() {
             return;
         }
 
@@ -1294,50 +1293,44 @@ impl Mesh3DPass {
         rpass.set_bind_group(2, shadow_bg, &[]);
         rpass.set_bind_group(3, lights_bg, &[]);
         rpass.set_bind_group(4, tile_anims_bg, &[]);
-        rpass.set_vertex_buffer(0, vertex_buf.slice(..));
-        rpass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
         rpass.set_vertex_buffer(1, instance_buf.slice(..));
 
-        // Opaque sub-pass.
-        if opaque_count > 0 {
-            rpass.set_pipeline(&self.pipeline);
-            if has_indirect_first_instance {
-                rpass.multi_draw_indexed_indirect(indirect_buf, 0, opaque_count);
-            } else {
-                for i in 0..opaque_count {
-                    rpass.draw_indexed_indirect(indirect_buf, i as u64 * indirect_stride);
-                }
+        // Segments arrive in layer order (opaque, cutout, translucent),
+        // page-grouped within each layer. Opaque + cutout share the
+        // depth-write pipeline (the shader alpha-discards); translucent
+        // switches to the blend pipeline.
+        let mut bound_page: Option<u32> = None;
+        let mut bound_translucent = false;
+        rpass.set_pipeline(&self.pipeline);
+        for seg in segments {
+            if seg.count == 0 {
+                continue;
             }
-        }
-
-        // Cutout sub-pass: same pipeline as opaque (shader discards alpha < 0.5).
-        // Drawn as a separate batch so it can be sorted independently in future.
-        if cutout_count > 0 {
-            let cutout_offset = opaque_count as u64 * indirect_stride;
-            rpass.set_pipeline(&self.pipeline);
+            let translucent = seg.layer == crate::uber_buffer::LAYER_TRANSLUCENT;
+            if translucent != bound_translucent {
+                rpass.set_pipeline(if translucent {
+                    &self.pipeline_transparent
+                } else {
+                    &self.pipeline
+                });
+                bound_translucent = translucent;
+            }
+            if bound_page != Some(seg.page) {
+                let Some(page) = pages.get(seg.page as usize) else {
+                    continue;
+                };
+                rpass.set_vertex_buffer(0, page.vertex_buf.slice(..));
+                rpass.set_index_buffer(page.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                bound_page = Some(seg.page);
+            }
+            let offset = seg.first as u64 * indirect_stride;
             if has_indirect_first_instance {
-                rpass.multi_draw_indexed_indirect(indirect_buf, cutout_offset, cutout_count);
+                rpass.multi_draw_indexed_indirect(indirect_buf, offset, seg.count);
             } else {
-                for i in 0..cutout_count {
+                for i in 0..seg.count {
                     rpass.draw_indexed_indirect(
                         indirect_buf,
-                        cutout_offset + i as u64 * indirect_stride,
-                    );
-                }
-            }
-        }
-
-        // Translucent sub-pass: alpha blend, depth-write off.
-        if translucent_count > 0 {
-            let transl_offset = (opaque_count + cutout_count) as u64 * indirect_stride;
-            rpass.set_pipeline(&self.pipeline_transparent);
-            if has_indirect_first_instance {
-                rpass.multi_draw_indexed_indirect(indirect_buf, transl_offset, translucent_count);
-            } else {
-                for i in 0..translucent_count {
-                    rpass.draw_indexed_indirect(
-                        indirect_buf,
-                        transl_offset + i as u64 * indirect_stride,
+                        offset + i as u64 * indirect_stride,
                     );
                 }
             }

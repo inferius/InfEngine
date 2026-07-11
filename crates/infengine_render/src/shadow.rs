@@ -359,41 +359,56 @@ impl ShadowPass {
         }
     }
 
-    /// W32: shadow pass for uber-buffer chunk meshes (opaque layer only).
+    /// W32: shadow pass for uber-buffer chunk meshes (opaque + cutout).
     ///
     /// Uses the same shadow pipeline (depth-only, no colour output) but binds
     /// the shared uber vertex/index buffers and dispatches commands from the
     /// indirect buffer. Transparent chunk meshes are excluded from the shadow
     /// pass (they don't cast opaque shadows).
+    ///
+    /// W238: draws arrive as per-(layer, page) segments; translucent
+    /// segments are skipped here, page buffers bind on change.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_uber<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
-        vertex_buf: &'a wgpu::Buffer,
-        index_buf: &'a wgpu::Buffer,
+        pages: &'a [crate::uber_buffer::UberPage],
         indirect_buf: &'a wgpu::Buffer,
         instance_buf: &'a wgpu::Buffer,
-        opaque_count: u32,
+        segments: &[crate::uber_buffer::ChunkDrawSegment],
         has_indirect_first_instance: bool,
     ) {
-        if opaque_count == 0 {
+        if segments.is_empty() {
             return;
         }
         let indirect_stride = std::mem::size_of::<wgpu::util::DrawIndexedIndirectArgs>() as u64;
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(0, &self.vertex_bg, &[]);
-        rpass.set_vertex_buffer(0, vertex_buf.slice(..));
-        rpass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
         rpass.set_vertex_buffer(1, instance_buf.slice(..));
 
-        if has_indirect_first_instance {
-            rpass.multi_draw_indexed_indirect(indirect_buf, 0, opaque_count);
-        } else {
-            for i in 0..opaque_count {
-                rpass.draw_indexed_indirect(
-                    indirect_buf,
-                    i as u64 * indirect_stride,
-                );
+        let mut bound_page: Option<u32> = None;
+        for seg in segments {
+            if seg.count == 0 || seg.layer == crate::uber_buffer::LAYER_TRANSLUCENT {
+                continue;
+            }
+            if bound_page != Some(seg.page) {
+                let Some(page) = pages.get(seg.page as usize) else {
+                    continue;
+                };
+                rpass.set_vertex_buffer(0, page.vertex_buf.slice(..));
+                rpass.set_index_buffer(page.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                bound_page = Some(seg.page);
+            }
+            let offset = seg.first as u64 * indirect_stride;
+            if has_indirect_first_instance {
+                rpass.multi_draw_indexed_indirect(indirect_buf, offset, seg.count);
+            } else {
+                for i in 0..seg.count {
+                    rpass.draw_indexed_indirect(
+                        indirect_buf,
+                        offset + i as u64 * indirect_stride,
+                    );
+                }
             }
         }
     }

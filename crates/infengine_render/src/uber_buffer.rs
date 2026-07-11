@@ -69,16 +69,31 @@ pub const LAYER_TRANSLUCENT: u8 = 2;
 /// One allocation record stored per live MeshHandle.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UberAlloc {
-    /// Byte offset into the uber vertex buffer.
+    /// W238: which buffer page the mesh lives in.
+    pub page: u32,
+    /// Byte offset into the page's vertex buffer.
     pub v_byte_off: u64,
     /// Number of vertices.
     pub v_count: u32,
-    /// Byte offset into the uber index buffer.
+    /// Byte offset into the page's index buffer.
     pub i_byte_off: u64,
     /// Number of indices.
     pub i_count: u32,
     /// Render layer: LAYER_OPAQUE / LAYER_CUTOUT / LAYER_TRANSLUCENT.
     pub layer: u8,
+}
+
+/// W238: one contiguous run of packed chunk draws sharing a render
+/// layer + buffer page. The per-frame packer emits these; the draw
+/// passes bind the page's buffers once per segment and issue one
+/// multi_draw over the run.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkDrawSegment {
+    pub layer: u8,
+    pub page: u32,
+    /// First packed row (index into the indirect/instance buffers).
+    pub first: u32,
+    pub count: u32,
 }
 
 /// Freed slot that can be re-used by a future alloc.
@@ -181,33 +196,27 @@ impl SegregatedFreeList {
     }
 }
 
-/// UberMeshAllocator owns the two shared GPU pools and the allocation metadata.
-/// All chunk meshes share these two buffers; vertices/indices are written via
-/// queue.write_buffer into the appropriate sub-range.
-pub(crate) struct UberMeshAllocator {
+/// W238: one vertex+index buffer pair with its own watermark + free
+/// list. `max_buffer_size` caps a SINGLE wgpu buffer (2 GB on this
+/// class of GPU) - view distance 32 with full columns needs several
+/// times that, and overflowing into the legacy per-buffer path
+/// exploded the draw count to ~10 FPS. Pages remove the single-buffer
+/// ceiling while keeping the batched multi_draw path.
+pub(crate) struct UberPage {
     pub(crate) vertex_buf: wgpu::Buffer,
     pub(crate) index_buf: wgpu::Buffer,
-
-    // W46.6: pool sizes stored per-instance (runtime-configured from
-    // adapter limits) rather than as const, so the allocator scales
-    // with GPU VRAM.
-    vertex_pool_bytes: u64,
-    index_pool_bytes: u64,
-
-    // Bump watermarks (in bytes).
     v_watermark: u64,
     i_watermark: u64,
-
-    // W33.2: segregated free list replaces the old flat Vec<FreeSlot>.
     free_list: SegregatedFreeList,
-    pub(crate) allocs: HashMap<MeshHandle, UberAlloc>,
 }
 
-impl UberMeshAllocator {
-    /// Create an allocator with explicit pool sizes (W46.6). The
-    /// Renderer queries `adapter.limits().max_buffer_size` and passes
-    /// the largest size the device supports, up to UBER_POOL_TARGET_BYTES.
-    pub fn new(device: &wgpu::Device, vertex_pool_bytes: u64, index_pool_bytes: u64) -> Self {
+impl UberPage {
+    fn new(
+        device: &wgpu::Device,
+        vertex_pool_bytes: u64,
+        index_pool_bytes: u64,
+        page_no: usize,
+    ) -> Self {
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("infengine_render::uber_vertex_buf"),
             size: vertex_pool_bytes,
@@ -221,27 +230,95 @@ impl UberMeshAllocator {
             mapped_at_creation: false,
         });
         tracing::info!(
+            page = page_no,
             vertex_pool_mb = vertex_pool_bytes / (1024 * 1024),
             index_pool_mb = index_pool_bytes / (1024 * 1024),
-            "W46.6: uber pool allocated",
+            "W46.6/W238: uber pool page allocated",
         );
         Self {
             vertex_buf,
             index_buf,
-            vertex_pool_bytes,
-            index_pool_bytes,
             v_watermark: 0,
             i_watermark: 0,
             free_list: SegregatedFreeList::new(),
+        }
+    }
+
+    /// Try to place `v_bytes`+`i_bytes` in this page. Returns byte
+    /// offsets on success.
+    fn try_alloc(
+        &mut self,
+        v_bytes: u64,
+        i_bytes: u64,
+        vertex_pool_bytes: u64,
+        index_pool_bytes: u64,
+    ) -> Option<(u64, u64)> {
+        if let Some(slot) = self.free_list.pop_fit(v_bytes, i_bytes) {
+            return Some((slot.v_byte_off, slot.i_byte_off));
+        }
+        if self.v_watermark + v_bytes > vertex_pool_bytes
+            || self.i_watermark + i_bytes > index_pool_bytes
+        {
+            return None;
+        }
+        let off = (self.v_watermark, self.i_watermark);
+        self.v_watermark += v_bytes;
+        self.i_watermark += i_bytes;
+        Some(off)
+    }
+}
+
+/// W238: hard cap on pages. Lazily created, so a small view distance
+/// stays at one page; 4 pages x (2 GB vertex + 512 MB index) = 10 GB
+/// worst case on a 16 GB card. VD 40 should NOT get here via more
+/// pages - greedy re-meshing and LOD are the real memory levers (see
+/// the perf-plan notes).
+const MAX_UBER_PAGES: usize = 4;
+
+/// UberMeshAllocator owns the paged GPU pools and the allocation
+/// metadata. All chunk meshes share these buffers; vertices/indices
+/// are written via queue.write_buffer into the owning page's range.
+pub(crate) struct UberMeshAllocator {
+    pub(crate) pages: Vec<UberPage>,
+
+    // W46.6: pool sizes stored per-instance (runtime-configured from
+    // adapter limits) rather than as const, so the allocator scales
+    // with GPU VRAM. W238: these are PER-PAGE sizes now.
+    vertex_pool_bytes: u64,
+    index_pool_bytes: u64,
+
+    /// W238: warn once when the page cap is exhausted; afterwards the
+    /// legacy fallback is silent (the old per-alloc warn printed two
+    /// lines per submesh = thousands of lines a second).
+    pages_exhausted_reported: bool,
+
+    pub(crate) allocs: HashMap<MeshHandle, UberAlloc>,
+}
+
+impl UberMeshAllocator {
+    /// Create an allocator with explicit PER-PAGE pool sizes (W46.6).
+    /// The Renderer queries `adapter.limits().max_buffer_size` and
+    /// passes the largest size the device supports, up to
+    /// UBER_POOL_TARGET_BYTES. Page 0 is created eagerly; more pages
+    /// appear on demand (W238).
+    pub fn new(device: &wgpu::Device, vertex_pool_bytes: u64, index_pool_bytes: u64) -> Self {
+        let first = UberPage::new(device, vertex_pool_bytes, index_pool_bytes, 0);
+        Self {
+            pages: vec![first],
+            vertex_pool_bytes,
+            index_pool_bytes,
+            pages_exhausted_reported: false,
             allocs: HashMap::new(),
         }
     }
 
     /// Allocate space for `vertices` + `indices`, upload via `queue`, store
-    /// the allocation under `handle`. Returns `false` if the pool is full
-    /// (caller should fall back to the legacy per-buffer path).
+    /// the allocation under `handle`. Returns `false` only when every page
+    /// is full AND the page cap is reached (caller falls back to the
+    /// legacy per-buffer path).
     pub fn alloc(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         handle: MeshHandle,
         vertices: &[MeshVertex],
@@ -251,6 +328,7 @@ impl UberMeshAllocator {
             // Empty mesh: insert a zero-size record so the handle is
             // registered (draw calls can safely skip i_count==0).
             self.allocs.insert(handle, UberAlloc {
+                page: 0,
                 v_byte_off: 0,
                 v_count: 0,
                 i_byte_off: 0,
@@ -263,37 +341,48 @@ impl UberMeshAllocator {
         let v_bytes = vertices.len() as u64 * VERTEX_STRIDE;
         let i_bytes = indices.len() as u64 * INDEX_STRIDE;
 
-        // W33.2: O(1) amortised free-list lookup via segregated buckets.
-        let (v_off, i_off) = if let Some(slot) = self.free_list.pop_fit(v_bytes, i_bytes) {
-            (slot.v_byte_off, slot.i_byte_off)
-        } else {
-            // Bump allocate. Check capacity.
-            if self.v_watermark + v_bytes > self.vertex_pool_bytes {
-                tracing::warn!(
-                    "uber vertex pool full ({} / {} bytes used), falling back to legacy path",
-                    self.v_watermark, self.vertex_pool_bytes
-                );
-                return false;
+        // W238: first page with room wins (free-list fit, then bump).
+        let mut placed: Option<(usize, u64, u64)> = None;
+        for (pi, page) in self.pages.iter_mut().enumerate() {
+            if let Some((v_off, i_off)) =
+                page.try_alloc(v_bytes, i_bytes, self.vertex_pool_bytes, self.index_pool_bytes)
+            {
+                placed = Some((pi, v_off, i_off));
+                break;
             }
-            if self.i_watermark + i_bytes > self.index_pool_bytes {
-                tracing::warn!(
-                    "uber index pool full ({} / {} bytes used), falling back to legacy path",
-                    self.i_watermark, self.index_pool_bytes
-                );
-                return false;
+        }
+        // All existing pages full: open a new one (up to the cap).
+        if placed.is_none() && self.pages.len() < MAX_UBER_PAGES {
+            let pi = self.pages.len();
+            let mut page =
+                UberPage::new(device, self.vertex_pool_bytes, self.index_pool_bytes, pi);
+            if let Some((v_off, i_off)) =
+                page.try_alloc(v_bytes, i_bytes, self.vertex_pool_bytes, self.index_pool_bytes)
+            {
+                placed = Some((pi, v_off, i_off));
             }
-            let v_off = self.v_watermark;
-            let i_off = self.i_watermark;
-            self.v_watermark += v_bytes;
-            self.i_watermark += i_bytes;
-            (v_off, i_off)
+            self.pages.push(page);
+        }
+        let Some((pi, v_off, i_off)) = placed else {
+            if !self.pages_exhausted_reported {
+                self.pages_exhausted_reported = true;
+                tracing::warn!(
+                    pages = self.pages.len(),
+                    vertex_pool_mb = self.vertex_pool_bytes / (1024 * 1024),
+                    "W238: uber pool page cap exhausted - further meshes use the \
+                     legacy per-buffer path (reported once)"
+                );
+            }
+            return false;
         };
 
         // Upload data.
-        queue.write_buffer(&self.vertex_buf, v_off, bytemuck::cast_slice(vertices));
-        queue.write_buffer(&self.index_buf, i_off, bytemuck::cast_slice(indices));
+        let page = &self.pages[pi];
+        queue.write_buffer(&page.vertex_buf, v_off, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&page.index_buf, i_off, bytemuck::cast_slice(indices));
 
         self.allocs.insert(handle, UberAlloc {
+            page: pi as u32,
             v_byte_off: v_off,
             v_count: vertices.len() as u32,
             i_byte_off: i_off,
@@ -303,12 +392,14 @@ impl UberMeshAllocator {
         true
     }
 
-    /// Release the slot for `handle`. The memory range is pushed to the free
-    /// list and will be reused by a future alloc() call.
+    /// Release the slot for `handle`. The memory range is pushed to the
+    /// owning page's free list and will be reused by a future alloc().
     pub fn free(&mut self, handle: MeshHandle) -> bool {
         if let Some(alloc) = self.allocs.remove(&handle) {
-            if alloc.v_count > 0 {
-                self.free_list.push(FreeSlot {
+            if alloc.v_count > 0
+                && let Some(page) = self.pages.get_mut(alloc.page as usize)
+            {
+                page.free_list.push(FreeSlot {
                     v_byte_off:   alloc.v_byte_off,
                     v_cap_bytes:  alloc.v_count as u64 * VERTEX_STRIDE,
                     i_byte_off:   alloc.i_byte_off,
