@@ -130,16 +130,10 @@ pub(crate) fn save_one_chunk(
     runtime::save_one_chunk(voxel, slug, dim, coord)
 }
 
-/// W46.28: build a single chunk's save payload on the main thread.
-/// Cheap (chunk clone + filtered overrides ~us). Pair with
-/// `write_chunk_payload` on a background thread to keep the file
-/// write off the main loop.
-pub(crate) fn build_chunk_payload(
-    voxel: &Voxel,
-    coord: infengine_voxel::ChunkCoord,
-) -> Option<chunks::ChunkPayload> {
-    runtime::build_chunk_payload(voxel, coord)
-}
+// W233: the per-chunk `build_chunk_payload` wrapper is gone - the
+// unload path uses `runtime::build_chunk_payloads` (batch form, ONE
+// pass per side map for the whole unload set). The per-chunk fn
+// survives inside `runtime` for the single-chunk save path.
 
 /// W46.28: write a pre-built `ChunkPayload` to disk. Pure I/O,
 /// safe to call from a background thread.

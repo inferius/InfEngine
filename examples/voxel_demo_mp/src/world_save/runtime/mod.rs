@@ -324,6 +324,61 @@ pub(crate) fn build_chunk_payload(
     })
 }
 
+/// W233: batch form of `build_chunk_payload` for the unload path.
+/// The per-chunk form pays `collect_for_chunk` = a FULL scan of each
+/// side map PER CHUNK, i.e. O(unloaded x map size). A single border
+/// crossing at view distance 12 unloads ~400 full-column chunks, so
+/// that cost the crossing frame ~18 ms (the "payload_ms" term of the
+/// W232 rescan probe). Here each side map is walked ONCE, bucketing
+/// entries by their owning chunk, then payloads assemble from the
+/// buckets - O(map + unloaded).
+pub(crate) fn build_chunk_payloads(
+    voxel: &Voxel,
+    coords: &std::collections::HashSet<infengine_voxel::ChunkCoord>,
+) -> Vec<super::chunks::ChunkPayload> {
+    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+    use std::collections::HashMap;
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    let chunk_of = |p: &[i32; 3]| {
+        [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
+    };
+    let local = |p: &[i32; 3]| {
+        [
+            p[0].rem_euclid(cs) as u8,
+            p[1].rem_euclid(cs) as u8,
+            p[2].rem_euclid(cs) as u8,
+        ]
+    };
+    type Bucket = HashMap<infengine_voxel::ChunkCoord, Vec<([u8; 3], u8)>>;
+    let bucket = |map: &HashMap<[i32; 3], u8>| -> Bucket {
+        let mut out: Bucket = HashMap::new();
+        for (k, v) in map {
+            let cc = chunk_of(k);
+            if coords.contains(&cc) {
+                out.entry(cc).or_default().push((local(k), *v));
+            }
+        }
+        out
+    };
+    let mut liq = bucket(&voxel.liquid_level);
+    let mut tor = bucket(&voxel.torch_orient);
+    let mut snow = bucket(&voxel.snow_positions);
+    coords
+        .iter()
+        .filter_map(|cc| {
+            let chunk = voxel.world.chunk(*cc)?;
+            Some(ChunkPayload {
+                format_version: CHUNK_PAYLOAD_VERSION,
+                coord: *cc,
+                voxels: ChunkVoxels::from_chunk(chunk),
+                liquid_levels: liq.remove(cc).unwrap_or_default(),
+                torch_orient: tor.remove(cc).unwrap_or_default(),
+                snow_layers: snow.remove(cc).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
 /// W46.28: write a pre-built payload to disk. Pure I/O - safe to
 /// call from a background thread because it takes only owned data.
 pub(crate) fn write_chunk_payload(

@@ -29,7 +29,9 @@ const GRASS_ID: u16 = 3;
 /// chunks are eligible for random ticks. Vertical sections in those
 /// columns are all eligible (grass / crops live near the surface but
 /// the per-cell match keeps off-surface samples cheap).
-const RADIUS_CHUNKS: i32 = 4;
+/// W233: shared with the lava-ignition pass (fire_runtime) so both
+/// "randomTick near the player" behaviours agree on the range.
+pub(crate) const RADIUS_CHUNKS: i32 = 4;
 
 /// Cells sampled per eligible chunk per frame, before the global cap.
 const CELLS_PER_CHUNK: usize = 1;

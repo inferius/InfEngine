@@ -123,6 +123,15 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     let process_budget = std::time::Duration::from_millis(budget_ms);
     let mut delivered_iter = delivered.into_iter();
     for result in delivered_iter.by_ref() {
+        // W233: name any single result whose processing blows past the
+        // whole frame budget - the user's log showed single-frame
+        // stream_ms of 186/319 ms that no other probe attributed.
+        let _result_t = std::time::Instant::now();
+        let _result_kind = match &result {
+            WorkerResult::Generated { .. } => "generated",
+            WorkerResult::Remeshed { .. } => "remeshed",
+            WorkerResult::Lit { .. } => "lit",
+        };
         match result {
             WorkerResult::Generated {
                 coord,
@@ -358,6 +367,17 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 vx.pending_lighting_jobs = vx.pending_lighting_jobs.saturating_sub(1);
             }
         }
+        // W233: see _result_t above.
+        {
+            let _ms = _result_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 20.0 {
+                tracing::warn!(
+                    ms = _ms,
+                    kind = _result_kind,
+                    "W233: slow stream result"
+                );
+            }
+        }
         // W106: stop once this frame's streaming budget is spent; the
         // remaining drained results stay queued for the next frame.
         if process_start.elapsed() >= process_budget {
@@ -367,6 +387,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     vx.stream_delivered = delivered_iter.collect();
 
     // Drain deferred neighbour re-meshes.
+    let _remesh_t = std::time::Instant::now();
     let mut remesh_done = 0;
     while remesh_done < REMESH_DEFERRED_PER_FRAME {
         let Some(coord) = vx.pending_remesh.pop_front() else {
@@ -378,6 +399,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         }
         vx.rebuild_chunks(&[coord]);
         remesh_done += 1;
+    }
+    // W233: the remesh drain dispatches snapshots (chunk + halo
+    // clones) to the workers - name it if it blows up.
+    {
+        let _ms = _remesh_t.elapsed().as_secs_f32() * 1000.0;
+        if _ms > 20.0 {
+            tracing::warn!(
+                ms = _ms,
+                drained = remesh_done,
+                "W233: slow remesh-drain"
+            );
+        }
     }
 }
 
@@ -468,13 +501,10 @@ fn rescan_chunk_radius(
         && let Some(slug) = vx.current_world_slug.clone()
     {
         let dim = vx.current_dim.clone();
-        let mut payloads: Vec<world_save::chunks::ChunkPayload> =
-            Vec::with_capacity(to_unload.len());
-        for cc in &to_unload {
-            if let Some(p) = world_save::build_chunk_payload(vx, *cc) {
-                payloads.push(p);
-            }
-        }
+        // W233: ONE pass per side map for the whole batch (the
+        // per-chunk build_chunk_payload scanned every side map per
+        // chunk = O(unloaded x map), ~18 ms per crossing at VD 12).
+        let payloads = world_save::runtime::build_chunk_payloads(vx, &to_unload);
         if !payloads.is_empty() {
             std::thread::Builder::new()
                 .name("voxel_demo_mp::unload_writer".to_string())

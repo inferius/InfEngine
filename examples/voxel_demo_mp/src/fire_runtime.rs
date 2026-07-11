@@ -186,7 +186,22 @@ pub(crate) fn tick_lava_fire_emit(vx: &mut crate::Voxel) {
         // that O(all-liquids) per-frame world.get sweep was the ~20ms stall.
         // Re-validate against the world so a momentarily stale entry is
         // skipped.
+        //
+        // W233: distance-cull with plain compares BEFORE the per-cell
+        // world.get. MC's lava ignition is randomTick behaviour, i.e.
+        // ticking chunks near the player only; with W231 full columns
+        // `lava_positions` holds every underground lava cell at VD 12
+        // (tens of thousands) and the unfiltered world.get sweep cost
+        // ~40 ms per pass. Same horizontal radius as the random-tick
+        // module (columns tick full-height, like MC ticking chunks).
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let reach = crate::world::random_tick::RADIUS_CHUNKS * cs + cs;
+        let px = vx.player_pos.x.floor() as i32;
+        let pz = vx.player_pos.z.floor() as i32;
         for pos in vx.lava_positions.iter().copied() {
+            if (pos[0] - px).abs() > reach || (pos[2] - pz).abs() > reach {
+                continue;
+            }
             if vx.world.get(pos).0 != block::LAVA_ID {
                 continue;
             }
