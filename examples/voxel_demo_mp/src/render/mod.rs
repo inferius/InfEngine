@@ -29,3 +29,5 @@ pub mod effect_meshes;
 pub mod held_item;
 // W232 - precomputed per-block draw params for the chunk draw queue.
 pub mod draw_params;
+// W240 - per-layer submesh merge (one draw per chunk per layer).
+pub mod chunk_merge;

@@ -46,7 +46,7 @@ use block::{
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
     block_material, block_required_tier,
-    block_skips_chunk_mesh, block_type, bucket_liquid_id, is_tool_block,
+    block_type, bucket_liquid_id, is_tool_block,
     liquid_to_bucket_id, shovel_tier, tool_effectiveness, tool_label,
     tool_tier, weapon_damage_mult,
 };

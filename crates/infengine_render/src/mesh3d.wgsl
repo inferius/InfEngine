@@ -76,6 +76,23 @@ struct TileAnimsUniform {
 
 @group(4) @binding(0) var<uniform> tile_anims: TileAnimsUniform;
 
+// W240: per-BLOCK draw parameters. Chunk meshes are merged into one
+// draw per render layer; each vertex carries its block id in the
+// HIGH bits of `anim_id` (low 8 bits stay the anim slot). Block id
+// 0 = "no override" (non-chunk meshes: mobs, drops, liquids, UI) -
+// those keep using the per-instance color/material.
+struct BlockParam {
+    color: vec4<f32>,
+    // (metallic, roughness, emissive, _unused)
+    material: vec4<f32>,
+};
+
+struct BlockParamsUniform {
+    entries: array<BlockParam, 1024>,
+};
+
+@group(4) @binding(1) var<storage, read> block_params: BlockParamsUniform;
+
 // Compute the active animated UV for a vertex's static (frame-0)
 // UV rect. `anim_id == 0` short-circuits to the static UV so the
 // shader's hot path stays a single branch. Otherwise we step
@@ -266,8 +283,21 @@ fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let metallic = clamp(in.material.x, 0.0, 1.0);
-    let roughness = clamp(in.material.y, 0.04, 1.0);
+    // W240: split the packed vertex word - low 8 bits = anim slot,
+    // high bits = block id (0 = non-chunk mesh, use instance params).
+    let anim_slot = in.anim_id & 0xFFu;
+    let block_id = in.anim_id >> 8u;
+    var inst_color = in.color;
+    var inst_material = in.material;
+    if (block_id != 0u) {
+        let bp = block_params.entries[min(block_id, 1023u)];
+        inst_color = bp.color;
+        // Keep material.w (the liquid flag) from the instance - the
+        // block table never carries it.
+        inst_material = vec4<f32>(bp.material.xyz, in.material.w);
+    }
+    let metallic = clamp(inst_material.x, 0.0, 1.0);
+    let roughness = clamp(inst_material.y, 0.04, 1.0);
     // material.w >= 0.5 marks the liquid-surface meshes (water + lava).
     // W200: they sample the atlas exactly like chunk meshes now (their
     // vertices carry the water_still / lava_still tile rect + anim slot);
@@ -306,10 +336,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // start; the slot stores frametime_ms, so we convert to
     // ms before the per-frame floor.
     let time_ms = camera.time.x * 1000.0;
-    let sampled_uv = animated_uv(final_uv, in.anim_id, time_ms);
+    let sampled_uv = animated_uv(final_uv, anim_slot, time_ms);
     let tex = textureSample(albedo_tex, albedo_smp, sampled_uv);
-    var albedo = in.color.rgb * tex.rgb;
-    let alpha = in.color.a * tex.a;
+    var albedo = inst_color.rgb * tex.rgb;
+    let alpha = inst_color.a * tex.a;
     // Simple alpha cutout for foliage / leaves. The default 1x1
     // white texture has alpha=1 so opaque blocks are unaffected;
     // atlas tiles with see-through pixels (e.g. leaves) get the
@@ -426,7 +456,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // lit result so self-illuminated blocks (torch tip, glowstone,
     // lava, lit redstone) read at full colour even when the cell is
     // unlit. Skipped (strength = 0) for normal blocks.
-    let emissive_strength = clamp(in.material.z, 0.0, 4.0);
+    let emissive_strength = clamp(inst_material.z, 0.0, 4.0);
     if emissive_strength > 0.0 {
         lit_color = lit_color + albedo * emissive_strength;
     }

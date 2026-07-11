@@ -199,6 +199,7 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
                 r.set_mesh_albedo(w, h, &vx.resource_pack.atlas_rgba);
                 vx.atlas_rgba = Some((w, h, vx.resource_pack.atlas_rgba.clone()));
                 r.upload_tile_anims(&vx.resource_pack.build_tile_anims_uniform());
+                r.set_block_params(&crate::render::draw_params::block_param_entries());
                 if let Some(pa) = &vx.resource_pack.particle_atlas {
                     r.load_particle_atlas_rgba(pa.width, pa.height, &pa.rgba);
                 }

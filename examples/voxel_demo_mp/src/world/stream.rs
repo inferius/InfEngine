@@ -22,8 +22,8 @@ use infengine_voxel::CHUNK_SIZE;
 
 use crate::{
     CHUNK_PHASE_WARN_US, ChunkCoord, ChunkJob, ChunkSideEffect, Job,
-    PendingChunk, REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, REMESH_DEFERRED_PER_FRAME,
-    VIEW_DISTANCE_MAX, Voxel, WorkerResult, block_skips_chunk_mesh, emitter_scan,
+    PendingChunk, REMESH_DEFERRED_PER_FRAME,
+    VIEW_DISTANCE_MAX, Voxel, WorkerResult, emitter_scan,
     net::NetRole, world_save,
 };
 use crate::lighting::HaloLighting;
@@ -272,16 +272,16 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 if !submeshes.is_empty() {
                     let atlas = vx.voxel_atlas.clone();
                     let renderer = vx.renderer.as_mut().expect("renderer ready");
+                    // W240: submeshes arrive MERGED per render layer
+                    // (sub.block = layer sentinel); the skip filter +
+                    // cutout special-case moved into chunk_merge.
                     for sub in submeshes {
                         if sub.vertices.is_empty() || sub.indices.is_empty() {
                             continue;
                         }
-                        if block_skips_chunk_mesh(sub.block) {
-                            continue;
-                        }
                         let handle = renderer.create_chunk_mesh(
                             &format!(
-                                "voxel_chunk_{}_{}_{}_b{}",
+                                "voxel_chunk_{}_{}_{}_l{}",
                                 cc[0], cc[1], cc[2], sub.block.0
                             ),
                             &sub.vertices,
@@ -290,14 +290,8 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         if let Some(a) = atlas.clone() {
                             renderer.bind_chunk_mesh_albedo(handle, a);
                         }
-                        if matches!(
-                            sub.block.0,
-                            REDSTONE_TORCH_ID | REDSTONE_WALL_TORCH_ID
-                        ) {
-                            renderer.set_chunk_mesh_layer(
-                                handle,
-                                infengine_render::CHUNK_LAYER_CUTOUT,
-                            );
+                        if sub.block.0 != 0 {
+                            renderer.set_chunk_mesh_layer(handle, sub.block.0 as u8);
                         }
                         vx.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                     }
@@ -351,16 +345,15 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 if !submeshes.is_empty() {
                     let atlas = vx.voxel_atlas.clone();
                     let renderer = vx.renderer.as_mut().expect("renderer ready");
+                    // W240: merged per-layer submeshes (see the
+                    // Generated arm note).
                     for sub in submeshes {
                         if sub.vertices.is_empty() || sub.indices.is_empty() {
                             continue;
                         }
-                        if block_skips_chunk_mesh(sub.block) {
-                            continue;
-                        }
                         let handle = renderer.create_chunk_mesh(
                             &format!(
-                                "voxel_chunk_{}_{}_{}_b{}",
+                                "voxel_chunk_{}_{}_{}_l{}",
                                 coord[0], coord[1], coord[2], sub.block.0
                             ),
                             &sub.vertices,
@@ -369,14 +362,8 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         if let Some(a) = atlas.clone() {
                             renderer.bind_chunk_mesh_albedo(handle, a);
                         }
-                        if matches!(
-                            sub.block.0,
-                            REDSTONE_TORCH_ID | REDSTONE_WALL_TORCH_ID
-                        ) {
-                            renderer.set_chunk_mesh_layer(
-                                handle,
-                                infengine_render::CHUNK_LAYER_CUTOUT,
-                            );
+                        if sub.block.0 != 0 {
+                            renderer.set_chunk_mesh_layer(handle, sub.block.0 as u8);
                         }
                         vx.chunk_meshes
                             .entry(coord)

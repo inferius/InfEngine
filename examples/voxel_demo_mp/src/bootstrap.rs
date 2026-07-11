@@ -95,6 +95,9 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
         r.set_mesh_albedo(aw, ah, &atlas_rgba);
         vx.atlas_rgba = Some((aw, ah, atlas_rgba));
         r.upload_tile_anims(&vx.resource_pack.build_tile_anims_uniform());
+        // W240: per-block colour/PBR/emissive table for the merged
+        // chunk meshes (vertex anim_id high bits index into it).
+        r.set_block_params(&crate::render::draw_params::block_param_entries());
         // W18.2: push the particle sprite atlas to the GPU.
         if let Some(pa) = &vx.resource_pack.particle_atlas {
             r.load_particle_atlas_rgba(pa.width, pa.height, &pa.rgba);

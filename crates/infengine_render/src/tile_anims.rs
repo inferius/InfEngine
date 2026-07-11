@@ -106,10 +106,38 @@ impl TileAnimsUniform {
     }
 }
 
-/// GPU-side resource: uniform buffer + bind group layout + bind
-/// group. Bound at `@group(4) @binding(0)` in `mesh3d.wgsl`.
+/// W240: per-BLOCK draw parameters, indexed by the block id packed
+/// into a chunk vertex's `anim_id` high bits. Lets a whole chunk
+/// draw as ONE command per render layer instead of one per block
+/// type (the VD-32 wall was the draw-command count). Entry layout
+/// mirrors WGSL: color (tint * texture, alpha included) + material
+/// (metallic, roughness, emissive, unused).
+pub const MAX_BLOCK_PARAMS: usize = 1024;
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
+pub struct BlockParamEntry {
+    pub color: [f32; 4],
+    /// (metallic, roughness, emissive, _unused)
+    pub material: [f32; 4],
+}
+
+impl Default for BlockParamEntry {
+    fn default() -> Self {
+        // Identity: white tint, dielectric mid-roughness, no glow.
+        Self {
+            color: [1.0, 1.0, 1.0, 1.0],
+            material: [0.0, 0.5, 0.0, 0.0],
+        }
+    }
+}
+
+/// GPU-side resource: uniform buffers + bind group layout + bind
+/// group. Bound at `@group(4)` in `mesh3d.wgsl`:
+///   binding(0) = tile anims, binding(1) = block params (W240).
 pub(crate) struct TileAnimsResource {
     pub buffer: wgpu::Buffer,
+    pub block_params_buffer: wgpu::Buffer,
     pub layout: wgpu::BindGroupLayout,
     pub bind_group: wgpu::BindGroup,
 }
@@ -123,29 +151,58 @@ impl TileAnimsResource {
             contents: bytemuck::bytes_of(&initial),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let block_params_initial =
+            [BlockParamEntry::default(); MAX_BLOCK_PARAMS];
+        let block_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("infengine_render::block_params_uniform"),
+                contents: bytemuck::cast_slice(&block_params_initial),
+                // W240: STORAGE, not UNIFORM - the 32 KB table exceeds
+                // the 16 KB max_uniform_buffer_binding_size default.
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("infengine_render::tile_anims_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("infengine_render::tile_anims_bg"),
             layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: block_params_buffer.as_entire_binding(),
+                },
+            ],
         });
         Self {
             buffer,
+            block_params_buffer,
             layout,
             bind_group,
         }
@@ -156,6 +213,16 @@ impl TileAnimsResource {
     /// uniform here on each frame (or only when slots change).
     pub fn upload(&self, queue: &wgpu::Queue, uniform: &TileAnimsUniform) {
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(uniform));
+    }
+
+    /// W240: upload the per-block-id draw parameter table (once at
+    /// startup; ids beyond the slice keep the identity default).
+    pub fn upload_block_params(&self, queue: &wgpu::Queue, entries: &[BlockParamEntry]) {
+        let mut table = [BlockParamEntry::default(); MAX_BLOCK_PARAMS];
+        for (i, e) in entries.iter().take(MAX_BLOCK_PARAMS).enumerate() {
+            table[i] = *e;
+        }
+        queue.write_buffer(&self.block_params_buffer, 0, bytemuck::cast_slice(&table));
     }
 }
 

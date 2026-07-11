@@ -650,7 +650,7 @@ pub(crate) fn mesh_chunk_in_worker(
     };
 
     // W34.2: worker also uses greedy mesher, matching build_lit_submeshes.
-    chunk_mesh_greedy_with_special(
+    let subs = chunk_mesh_greedy_with_special(
         chunk,
         origin,
         uv_resolver,
@@ -662,7 +662,11 @@ pub(crate) fn mesh_chunk_in_worker(
         anim_lookup,
         occluder_at,
         emit_special,
-    )
+    );
+    // W240: collapse the per-block submeshes into one per render
+    // layer (block ids move into the vertices; the shader reads the
+    // per-block params from the uniform table).
+    crate::render::chunk_merge::merge_submeshes(subs)
 }
 
 // W47.27 - chunk worker types relocated from main.rs.

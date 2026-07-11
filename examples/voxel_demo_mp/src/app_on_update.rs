@@ -1865,22 +1865,19 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             if !frustum.is_chunk_visible(*coord) {
                 continue;
             }
-            for (block, handle) in subs {
-                // W232: colour / alpha / PBR / emissive are constant
-                // per block id - read the precomputed table instead
-                // of a registry + emission lookup per submesh per
-                // frame (this loop runs tens of thousands of times a
-                // frame at VD 12; see render::draw_params).
-                if let Some(p) = crate::render::draw_params::for_block(block.0) {
-                    renderer.queue_chunk_draw_emissive(
-                        *handle,
-                        model,
-                        p.color,
-                        p.metallic,
-                        p.roughness,
-                        p.emissive,
-                    );
-                }
+            // W240: submeshes are merged per render layer; per-block
+            // colour / PBR / emissive resolve in the shader from the
+            // block-params table (vertex anim_id high bits carry the
+            // block id). The instance is identity/white.
+            for (_layer, handle) in subs {
+                renderer.queue_chunk_draw_emissive(
+                    *handle,
+                    model,
+                    [1.0, 1.0, 1.0, 1.0],
+                    0.0,
+                    0.5,
+                    0.0,
+                );
             }
         }
         DIAG_DRAWQ_US.fetch_add(_drawq_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);

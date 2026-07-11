@@ -49,7 +49,7 @@ use uber_buffer::{ChunkDrawSegment, UberMeshAllocator, LAYER_CUTOUT, LAYER_OPAQU
 pub use uber_buffer::{LAYER_CUTOUT as CHUNK_LAYER_CUTOUT, LAYER_OPAQUE as CHUNK_LAYER_OPAQUE, LAYER_TRANSLUCENT as CHUNK_LAYER_TRANSLUCENT};
 pub use particle_pass::{ParticleInstance as TexturedParticleInstance, ParticlePass};
 use tile_anims::TileAnimsResource;
-pub use tile_anims::{MAX_ANIM_SLOTS, TileAnimEntry, TileAnimsUniform};
+pub use tile_anims::{BlockParamEntry, MAX_ANIM_SLOTS, MAX_BLOCK_PARAMS, TileAnimEntry, TileAnimsUniform};
 
 /// Reference-counted albedo bind group built once by
 /// `Renderer::make_mesh_albedo` and cheaply cloned into any number
@@ -1132,6 +1132,13 @@ impl Renderer {
     /// pack reloads (slot ids stay stable across frames otherwise).
     pub fn upload_tile_anims(&self, uniform: &TileAnimsUniform) {
         self.tile_anims.upload(&self.queue, uniform);
+    }
+
+    /// W240: upload the per-block-id draw parameter table read by the
+    /// chunk fragment path (vertex `anim_id` high bits carry the block
+    /// id). Call once at startup after building the table.
+    pub fn set_block_params(&self, entries: &[BlockParamEntry]) {
+        self.tile_anims.upload_block_params(&self.queue, entries);
     }
 
     /// Render one frame, with an optional overlay callback.

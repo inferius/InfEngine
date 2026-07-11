@@ -287,20 +287,18 @@ impl Voxel {
             if subs.is_empty() {
                 continue;
             }
+            // W240: collapse to one submesh per render layer (block
+            // ids ride in the vertices; the torch/snow skip filter
+            // lives in the merge).
+            let subs = crate::render::chunk_merge::merge_submeshes(subs);
             let renderer = self.renderer.as_mut().expect("renderer ready");
             for sub in subs {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
-                // Skip torch + snow submeshes: both render through
-                // dedicated world-pass meshes (thin torch + thin snow
-                // slab) instead of as full cube voxels.
-                if block_skips_chunk_mesh(sub.block) {
-                    continue;
-                }
                 let handle = renderer.create_chunk_mesh(
                     &format!(
-                        "voxel_chunk_{}_{}_{}_b{}",
+                        "voxel_chunk_{}_{}_{}_l{}",
                         coord[0], coord[1], coord[2], sub.block.0
                     ),
                     &sub.vertices,
@@ -308,6 +306,9 @@ impl Voxel {
                 );
                 if let Some(a) = atlas.clone() {
                     renderer.bind_chunk_mesh_albedo(handle, a);
+                }
+                if sub.block.0 != 0 {
+                    renderer.set_chunk_mesh_layer(handle, sub.block.0 as u8);
                 }
                 self.chunk_meshes.entry(*coord).or_default().push((sub.block, handle));
             }
@@ -326,21 +327,17 @@ impl Voxel {
             if subs.is_empty() {
                 continue;
             }
+            // W240: one submesh per render layer (skip filter in the
+            // merge).
+            let subs = crate::render::chunk_merge::merge_submeshes(subs);
             let renderer = self.renderer.as_mut().expect("renderer ready");
             for sub in subs {
                 if sub.vertices.is_empty() || sub.indices.is_empty() {
                     continue;
                 }
-                // Skip torch + snow submeshes: both render
-                // through dedicated world-pass meshes (thin
-                // torch + thin snow slab) instead of as full
-                // cube voxels.
-                if block_skips_chunk_mesh(sub.block) {
-                    continue;
-                }
                 let handle = renderer.create_chunk_mesh(
                     &format!(
-                        "voxel_chunk_{}_{}_{}_b{}",
+                        "voxel_chunk_{}_{}_{}_l{}",
                         coord[0], coord[1], coord[2], sub.block.0
                     ),
                     &sub.vertices,
@@ -348,6 +345,9 @@ impl Voxel {
                 );
                 if let Some(a) = atlas.clone() {
                     renderer.bind_chunk_mesh_albedo(handle, a);
+                }
+                if sub.block.0 != 0 {
+                    renderer.set_chunk_mesh_layer(handle, sub.block.0 as u8);
                 }
                 self.chunk_meshes.entry(coord).or_default().push((sub.block, handle));
             }
