@@ -308,10 +308,30 @@ pub(crate) fn load_mc_sound_bank(vx: &mut Voxel) {
 
 // W47.27 - main entry point + arg parsing (relocated from main.rs).
 pub(crate) fn main() -> ExitCode {
+    // W235: NON-BLOCKING log writer. Synchronous stdout logging can
+    // stall the calling thread when the console is a slow reader -
+    // W234 measured 25-105 ms per line during worker log bursts. The
+    // appender moves formatting output to a dedicated thread with a
+    // bounded queue (lossy when full: dropping lines beats dropping
+    // frames). The guard must live for the whole process or the
+    // writer thread shuts down - park it in a static.
+    static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+        std::sync::OnceLock::new();
+    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+    let _ = LOG_GUARD.set(guard);
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            // W235: quiet the per-asset dependency spam at startup
+            // (symphonia logs one line per decoded OGG, wgpu_hal
+            // dumps the whole Vulkan loader walk). RUST_LOG still
+            // overrides everything.
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "info,symphonia=warn,symphonia_format_ogg=warn,symphonia_core=warn,\
+                 symphonia_bundle_mp3=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn"
+                    .into()
+            }),
         )
+        .with_writer(writer)
         .init();
 
     // Parse `--server [addr]` / `--client <addr>` / no-arg offline.

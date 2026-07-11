@@ -42,6 +42,7 @@ directories = { workspace = true }
 chrono = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
+tracing-appender = "0.2.5"
 
 [dev-dependencies]
 tempfile = { workspace = true }
