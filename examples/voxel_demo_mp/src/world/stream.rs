@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use infengine_voxel::CHUNK_SIZE;
+use infengine_voxel::{CHUNK_SIZE, World};
 
 use crate::{
     CHUNK_PHASE_WARN_US, ChunkCoord, ChunkJob, ChunkSideEffect, Job,
@@ -207,6 +207,81 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         }
                         ChunkSideEffect::Rail => {
                             needs_rail_remesh = true;
+                        }
+                        ChunkSideEffect::DungeonChest(wv) => {
+                            // W242: mint the structure chest ONCE with a
+                            // seed+position-deterministic loot roll. A
+                            // container that already exists (saved world,
+                            // possibly looted by the player) always wins.
+                            if !vx.chests.contains_key(wv) {
+                                let seed = vx
+                                    .current_worldgen_ctx()
+                                    .effective_seed();
+                                let mut rng =
+                                    crate::worldgen::mcgen::noise::SplitMix64::new(
+                                        crate::loot::chest_pos_seed(seed, *wv),
+                                    );
+                                let stacks = crate::loot::roll(
+                                    &crate::loot::SIMPLE_DUNGEON,
+                                    &mut rng,
+                                );
+                                let mut c = crate::block::chest::new_chest();
+                                crate::loot::fill_container(
+                                    &mut c, &stacks, &mut rng,
+                                );
+                                vx.chests.insert(*wv, c);
+                                // Latch faces the room: the dungeon rule
+                                // places chests with exactly one solid
+                                // horizontal neighbour, so face AWAY from
+                                // it (MC StructurePiece::reorient).
+                                // dir list index -> facing code (0=+X,
+                                // 1=+Z, 2=-X, 3=-Z per facing_from_look).
+                                // This fold runs BEFORE insert_chunk, so
+                                // in-chunk neighbours read from the local
+                                // chunk; border neighbours fall back to
+                                // the world (may be unloaded = air).
+                                let cs = CHUNK_SIZE as i32;
+                                let ov = World::chunk_world_origin(coord);
+                                let org =
+                                    [ov.x as i32, ov.y as i32, ov.z as i32];
+                                let nb_id = |dx: i32, dz: i32| -> u16 {
+                                    let (x, y, z) =
+                                        (wv[0] + dx, wv[1], wv[2] + dz);
+                                    let (lx, ly, lz) =
+                                        (x - org[0], y - org[1], z - org[2]);
+                                    if (0..cs).contains(&lx)
+                                        && (0..cs).contains(&ly)
+                                        && (0..cs).contains(&lz)
+                                    {
+                                        chunk
+                                            .get(
+                                                lx as usize,
+                                                ly as usize,
+                                                lz as usize,
+                                            )
+                                            .0
+                                    } else {
+                                        vx.world.get([x, y, z]).0
+                                    }
+                                };
+                                let dirs =
+                                    [[1, 0], [-1, 0], [0, 1], [0, -1]];
+                                let codes = [0u8, 2, 1, 3];
+                                let solid_dir =
+                                    dirs.iter().position(|[dx, dz]| {
+                                        let nb = nb_id(*dx, *dz);
+                                        nb != 0
+                                            && crate::block::block_type(nb)
+                                                .is_some_and(|bt| {
+                                                    !bt.transparent
+                                                })
+                                    });
+                                if let Some(d) = solid_dir {
+                                    vx.chest_facing
+                                        .entry(*wv)
+                                        .or_insert((codes[d] + 2) % 4);
+                                }
+                            }
                         }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
                             // W115: tick_offset 0 = a static worldgen liquid

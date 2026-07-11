@@ -253,6 +253,9 @@ pub(crate) fn apply_block_break(
                         vx.spawn_drop(BlockId(STICK_ITEM), voxel);
                     }
                 }
+                // W242: spawners drop nothing in MC (only XP, which
+                // we don't have yet).
+                x if x == crate::block::SPAWNER_ID => {}
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
         }

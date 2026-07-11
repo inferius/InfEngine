@@ -61,6 +61,11 @@ pub mod game_mode;
 #[path = "item/mod.rs"]
 pub mod item;
 
+// W242 - MC loot tables (chest loot rollers; headless-safe: pure
+// data + a SplitMix64 roller over the item registry).
+#[path = "loot/mod.rs"]
+pub mod loot;
+
 #[path = "container/mod.rs"]
 pub mod container;
 

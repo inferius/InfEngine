@@ -857,6 +857,10 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::geode::place_geodes(chunk, coord, ctx, origin);
     super::iceberg::place_icebergs(chunk, coord, ctx, origin);
     super::misc_features::place_forest_rocks(chunk, coord, ctx, origin);
+    // W242: monster rooms (underground_structures, step 3) - after
+    // local_modifications, before the ore step, like the biome lists
+    // order them.
+    super::structures::place_monster_rooms(chunk, coord, ctx, origin);
     // W202: ore veins (underground_ores, step 6) before vegetal
     // decoration. Ores run at EVERY height (coal/iron reach the
     // mountain tops); flora is gated below sea level.

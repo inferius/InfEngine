@@ -145,6 +145,9 @@ mod wave29_tests;
 // tolerates dead_code on the module until then.
 #[allow(dead_code)]
 mod lighting;
+// W242 - MC loot tables (chest loot rollers; first user is the
+// monster-room dungeon chest).
+mod loot;
 mod game_mode;
 // W10.6: Creative-mode searchable inventory tab. The state +
 // filter helpers live here; the egui rendering of the panel

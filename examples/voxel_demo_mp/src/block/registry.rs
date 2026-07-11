@@ -3158,4 +3158,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // W229: mangrove roots that grew into mud (MangroveRootPlacer's
     // muddy_roots_provider).
     BlockType { id: 792, name: "muddy_mangrove_roots", color: [0.35, 0.28, 0.23], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["muddy_mangrove_roots_top.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["muddy_mangrove_roots_top.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["muddy_mangrove_roots_side.png"], keep_alpha: false } },
+    // W242: monster spawner (MonsterRoomFeature). MC model is
+    // cube_all_inner_faces with the CUTOUT cage texture - binary
+    // alpha like glass (transparent + keep_alpha, NO alpha-blend
+    // flag), full collision like MC.
+    BlockType { id: 793, name: "spawner", color: [1.0, 1.0, 1.0], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true } },
 ];

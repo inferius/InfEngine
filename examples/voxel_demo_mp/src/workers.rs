@@ -128,6 +128,11 @@ impl WorkerPool {
                                                     side_effects.push(
                                                         ChunkSideEffect::Snow(wv),
                                                     );
+                                                // W242: structure loot chest.
+                                                } else if b.0 == crate::block::CHEST_ID {
+                                                    side_effects.push(
+                                                        ChunkSideEffect::DungeonChest(wv),
+                                                    );
                                                 // W38.2: any open-flame block
                                                 // registers a particle emitter.
                                                 } else if flame_emitter(b.0) {
@@ -713,6 +718,15 @@ pub(crate) enum ChunkSideEffect {
     /// see neighbours), so the main thread queues one remesh for
     /// the chunk - that rebuild carries the derived shapes.
     Rail,
+    /// W242: a worldgen chest (monster room / future structures) at
+    /// this world position. Players can't have built in a chunk that
+    /// is only now being generated, so every chest the scan finds is
+    /// structure loot: the main thread mints its container with a
+    /// seed-deterministic loot roll + derives the facing. (Spawners
+    /// need no side effect - their entity kind is a pure function of
+    /// world seed + position, derived on demand when W242.2 adds
+    /// ticking.)
+    DungeonChest([i32; 3]),
 }
 
 // W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.

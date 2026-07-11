@@ -594,3 +594,6 @@ pub(crate) const RAIL_ID: u16 = 653;
 pub(crate) const POWERED_RAIL_ID: u16 = 654;
 pub(crate) const DETECTOR_RAIL_ID: u16 = 655;
 pub(crate) const ACTIVATOR_RAIL_ID: u16 = 656;
+// W242 - monster spawner (MonsterRoomFeature places it at the room
+// origin; the worker chunk scan reports it as a side effect).
+pub(crate) const SPAWNER_ID: u16 = 793;
