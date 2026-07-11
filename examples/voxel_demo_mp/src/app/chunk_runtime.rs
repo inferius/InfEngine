@@ -52,6 +52,9 @@ impl Voxel {
         // `pending_lighting_jobs == 0` (the "infinite loading when I
         // load a second world" bug).
         self.pending_lighting_jobs = 0;
+        // W237: queued-but-undispatched lighting segments belong to
+        // the old world's coords - drop them with the job counter.
+        self.pending_lighting_segments.clear();
         self.snow_positions.clear();
         self.torch_positions.clear();
         self.emitter_positions.clear();
@@ -255,6 +258,9 @@ impl Voxel {
         self.pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        // W236: fresh world entry - the Finalising step must apply
+        // persisted state (load_server_state) exactly once again.
+        self.load_state_applied = false;
         // W198.13: force the streamer to re-run its queue + unload scan
         // on the next frame (player_chunk may be numerically unchanged
         // but the loaded set is now empty / freshly built).

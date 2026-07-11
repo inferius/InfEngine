@@ -385,10 +385,6 @@ impl Voxel {
     /// boundaries already had (a job only writes its own affected set;
     /// cross-boundary spill comes from the halo snapshot).
     fn dispatch_lighting_segments(&mut self, affected: Vec<ChunkCoord>) {
-        use std::collections::HashMap as Map;
-        let Some(pool) = self.workers.as_ref() else {
-            return;
-        };
         // Bucket by XZ region. BTreeMap for a deterministic dispatch
         // order. Vertical splitting is NOT an option here - sky light
         // propagates down whole columns, so a column's chunks must
@@ -409,7 +405,38 @@ impl Voxel {
                 .or_default()
                 .push(cc);
         }
+        // W237: queue the segments and drain under a TIME budget.
+        // Snapshotting a segment clones its chunks (+ face halo) on
+        // the MAIN thread; dispatching every segment of a big dirty
+        // batch in one call was the recurring 26-45 ms pre_render
+        // spike while streaming. Whatever doesn't fit this frame's
+        // budget stays queued for the next tick.
         for (_, seg) in segments {
+            self.pending_lighting_segments.push_back(seg);
+        }
+        self.drain_lighting_segments();
+    }
+
+    /// W237: dispatch queued lighting segments to the worker pool,
+    /// bounded by BOTH the in-flight job cap and a per-call time
+    /// budget (the snapshot clone is the main-thread cost).
+    pub(crate) fn drain_lighting_segments(&mut self) {
+        use std::collections::HashMap as Map;
+        const MAX_INFLIGHT_LIGHTING_JOBS: u32 = 24;
+        let Some(pool) = self.workers.as_ref() else {
+            return;
+        };
+        let budget = std::time::Duration::from_millis(4);
+        let start = std::time::Instant::now();
+        while let Some(seg) = {
+            if self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
+                || start.elapsed() >= budget
+            {
+                None
+            } else {
+                self.pending_lighting_segments.pop_front()
+            }
+        } {
             // Snapshot: segment chunks + face-neighbours (BFS frontier
             // correctness at chunk edges), cloned off the live world.
             let mut snap_entries: Map<ChunkCoord, Chunk> = Map::new();
@@ -462,6 +489,9 @@ impl Voxel {
     ///   synchronous path and returns the affected list so the caller
     ///   can remesh immediately.
     pub(crate) fn tick_lighting(&mut self) -> Vec<ChunkCoord> {
+        // W237: drain segments deferred by an earlier over-budget
+        // dispatch even on ticks that add no new dirty voxels.
+        self.drain_lighting_segments();
         // W94/W95: bound lighting work per tick on TWO axes so a fast,
         // sustained re-dirty source (chunk streaming while the player moves
         // through water-rich Natural terrain, where the BFS is slow and the

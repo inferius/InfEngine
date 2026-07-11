@@ -229,6 +229,8 @@ impl Voxel {
             music_in: 180.0,
             music_decode_rx: None,
             random_tick_accum: 0.0,
+            load_state_applied: false,
+            pending_lighting_segments: std::collections::VecDeque::new(),
             heartbeat_accum: 0.0,
             cactus_damage_accum: 0.0,
             fly_mode: false,

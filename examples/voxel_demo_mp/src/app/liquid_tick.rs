@@ -395,7 +395,17 @@ impl Voxel {
             .take(drain)
             .copied()
             .collect();
+        // W237: TIME budget on top of the count cap. Ocean chunks
+        // cost ~1.4 ms each to mesh, so a full 16-chunk drain was a
+        // ~22 ms frame while streaming over water (the user's log).
+        // Chunks past the budget stay in the backlog (each is only
+        // removed as it's processed).
+        let drain_budget = std::time::Duration::from_millis(4);
+        let drain_start = std::time::Instant::now();
         for cc in to_mesh {
+            if drain_start.elapsed() >= drain_budget {
+                break;
+            }
             self.liquid_remesh_backlog.remove(&cc);
             // Per-kind vertex/index pool for THIS chunk only.
             let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();

@@ -1198,49 +1198,74 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 if phase == LoadingPhase::BuildingMeshes
                     && vx.pending_remesh.is_empty()
                 {
-                    // Phase: Finalising - post-load bookkeeping.
-                    if let AppState::Loading { ref mut phase, .. } = vx.state {
-                        *phase = LoadingPhase::Finalising;
-                    }
-                    // W87: resolve the surface spawn BEFORE loading
-                    // persisted state. load_world transiently clears +
-                    // re-streams the procedural chunks, so safe_spawn has
-                    // to read the populated world here - running it after
-                    // load saw an empty world and returned its y=90 sky
-                    // fallback (player spawned in the air and fell). The
-                    // chunks exist now (post-mesh), so this finds real
-                    // ground. load_world's fresh-player branch keeps this
-                    // resolved position; a saved player overrides it with
-                    // their logged-off spot.
-                    let spawn = vx.safe_spawn();
-                    vx.player_pos = spawn;
-                    vx.player_vel = Vec3::ZERO;
-                    vx.fall_start_y = None;
-                    // Load persisted server state (edits, timers,
-                    // containers, player). Clients skip - they sync via
-                    // the catch-up broadcast on first heartbeat.
-                    if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
-                        vx.load_server_state();
-                    }
-                    // W112: load_server_state may restore a player position
-                    // saved before the world's vertical scale changed (sea
-                    // level 12 -> 63 lifted the terrain), or any spot since
-                    // buried by an edit. If the loaded capsule is embedded in
-                    // solid ground, fall back to the surface spawn resolved
-                    // above instead of leaving the player stuck in the terrain.
-                    if vx.capsule_embedded(vx.player_pos) {
+                    if !vx.load_state_applied {
+                        vx.load_state_applied = true;
+                        // Phase: Finalising - post-load bookkeeping.
+                        if let AppState::Loading { ref mut phase, .. } = vx.state {
+                            *phase = LoadingPhase::Finalising;
+                        }
+                        // W87: resolve the surface spawn BEFORE loading
+                        // persisted state. load_world transiently clears +
+                        // re-streams the procedural chunks, so safe_spawn has
+                        // to read the populated world here - running it after
+                        // load saw an empty world and returned its y=90 sky
+                        // fallback (player spawned in the air and fell). The
+                        // chunks exist now (post-mesh), so this finds real
+                        // ground. load_world's fresh-player branch keeps this
+                        // resolved position; a saved player overrides it with
+                        // their logged-off spot.
+                        let spawn = vx.safe_spawn();
                         vx.player_pos = spawn;
                         vx.player_vel = Vec3::ZERO;
                         vx.fall_start_y = None;
+                        // Load persisted server state (edits, timers,
+                        // containers, player). Clients skip - they sync via
+                        // the catch-up broadcast on first heartbeat.
+                        if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
+                            vx.load_server_state();
+                        }
+                        // W112: load_server_state may restore a player position
+                        // saved before the world's vertical scale changed (sea
+                        // level 12 -> 63 lifted the terrain), or any spot since
+                        // buried by an edit. If the loaded capsule is embedded in
+                        // solid ground, fall back to the surface spawn resolved
+                        // above instead of leaving the player stuck in the terrain.
+                        if vx.capsule_embedded(vx.player_pos) {
+                            vx.player_pos = spawn;
+                            vx.player_vel = Vec3::ZERO;
+                            vx.fall_start_y = None;
+                        }
+                        // W236: load_world enqueues every loaded chunk for
+                        // the WORKER remesh pipeline instead of meshing
+                        // them synchronously (the 30-50 s "loader stuck"
+                        // stall). If it queued work, drop back to
+                        // BuildingMeshes so the progress screen stays up
+                        // while the pool drains it; this branch re-fires
+                        // with load_state_applied == true and finishes.
+                        if !vx.pending_remesh.is_empty() {
+                            if let AppState::Loading { ref mut phase, .. } = vx.state {
+                                *phase = LoadingPhase::BuildingMeshes;
+                            }
+                        } else {
+                            vx.world_loaded = true;
+                            vx.state = AppState::Playing;
+                            info!(
+                                slug = ?vx.current_world_slug,
+                                net = %vx.net.label(),
+                                chunks = live,
+                                "voxel: world loaded - entering Playing"
+                            );
+                        }
+                    } else {
+                        vx.world_loaded = true;
+                        vx.state = AppState::Playing;
+                        info!(
+                            slug = ?vx.current_world_slug,
+                            net = %vx.net.label(),
+                            chunks = live,
+                            "voxel: world loaded - entering Playing"
+                        );
                     }
-                    vx.world_loaded = true;
-                    vx.state = AppState::Playing;
-                    info!(
-                        slug = ?vx.current_world_slug,
-                        net = %vx.net.label(),
-                        chunks = live,
-                        "voxel: world loaded - entering Playing"
-                    );
                 }
             }
             // W8.1 + bila-screen fix: no world simulation, but the

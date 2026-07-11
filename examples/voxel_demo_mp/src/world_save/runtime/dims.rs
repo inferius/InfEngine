@@ -185,11 +185,13 @@ pub(super) fn load_all_dims(
     voxel: &mut Voxel,
     slug: &str,
     world_json: &WorldJson,
+    keep_center: [i32; 2],
+    keep_radius: i32,
 ) -> io::Result<usize> {
     let mut total_chunks: usize = 0;
     for dim_name in &world_json.dimensions {
         let n = if dim_name == &voxel.current_dim {
-            load_active_dim(voxel, slug, dim_name)?
+            load_active_dim(voxel, slug, dim_name, keep_center, keep_radius)?
         } else {
             load_parked_dim(voxel, slug, dim_name)?
         };
@@ -200,7 +202,23 @@ pub(super) fn load_all_dims(
 
 /// Load a dim into the active (top-level) Voxel slots. Same
 /// shape as the legacy single-dim load.
-fn load_active_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize> {
+///
+/// W236: only chunks within `keep_radius` (Chebyshev, chunk XZ) of
+/// `keep_center` are read + applied. The save grows every session
+/// (unload-save persists every chunk that scrolls out of range), so
+/// a travelled world accumulates far more files than the view
+/// radius needs - the user's world had 18.5k of which the first
+/// rescan pruned 8.3k immediately. Distant chunks stay on disk; the
+/// stream workers already read the saved payload before falling
+/// back to worldgen (W46.25), so travelling there later restores
+/// edits without this upfront pass.
+fn load_active_dim(
+    voxel: &mut Voxel,
+    slug: &str,
+    dim: &str,
+    keep_center: [i32; 2],
+    keep_radius: i32,
+) -> io::Result<usize> {
     let mut chunks_loaded: usize = 0;
     let dir = layout::world_dir(slug).join("chunks").join(dim);
     if dir.is_dir() {
@@ -214,6 +232,12 @@ fn load_active_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
                 warn!(path = %path.display(), "world_save: skipping unrecognised chunk filename");
                 continue;
             };
+            // W236: distance gate BEFORE the file read.
+            if (coord[0] - keep_center[0]).abs() > keep_radius
+                || (coord[2] - keep_center[1]).abs() > keep_radius
+            {
+                continue;
+            }
             let payload = match chunks::read_chunk(slug, dim, coord)? {
                 Some(p) => p,
                 None => continue,

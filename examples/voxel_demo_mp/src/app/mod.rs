@@ -493,6 +493,18 @@ pub(crate) struct Voxel {
     /// game-tick rate (the W104/W198.7 pattern; it used to run per
     /// render frame).
     pub(crate) random_tick_accum: f32,
+    /// W236: true once the Finalising step of the loading state
+    /// machine has applied persisted server state (load_server_state)
+    /// for the world being entered. Lets the BuildingMeshes phase
+    /// re-fire after the load enqueues its worker remeshes without
+    /// running the load twice. Reset by `build_world`.
+    pub(crate) load_state_applied: bool,
+    /// W237: lighting segments awaiting worker dispatch. Snapshotting
+    /// a segment clones its chunks on the main thread, so
+    /// `drain_lighting_segments` spends at most a small time budget
+    /// per tick and the rest waits here.
+    pub(crate) pending_lighting_segments:
+        std::collections::VecDeque<Vec<ChunkCoord>>,
     /// Seconds since the last heartbeat thump. Drives the low-HP
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.

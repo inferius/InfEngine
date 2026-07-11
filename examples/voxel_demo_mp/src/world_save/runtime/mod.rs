@@ -195,7 +195,26 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     }
 
     // Per-dim chunks + entities + containers.
-    let chunks_loaded = dims::load_all_dims(voxel, slug, &world_meta)?;
+    //
+    // W236: bound the active dim's upfront chunk load to the keep
+    // radius around where the player will stand (saved pose, or the
+    // world spawn for a fresh player). Everything further out loads
+    // on demand through the stream workers' disk-first path.
+    let keep_pos = player
+        .as_ref()
+        .map(|p| [p.pos[0], p.pos[2]])
+        .unwrap_or([world_meta.spawn[0] as f32, world_meta.spawn[2] as f32]);
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    let keep_center = [
+        (keep_pos[0].floor() as i32).div_euclid(cs),
+        (keep_pos[1].floor() as i32).div_euclid(cs),
+    ];
+    let keep_radius =
+        voxel.settings.view_distance.clamp(2, crate::VIEW_DISTANCE_MAX as u8) as i32 + 2;
+    let load_start = std::time::Instant::now();
+    let chunks_loaded =
+        dims::load_all_dims(voxel, slug, &world_meta, keep_center, keep_radius)?;
+    let chunk_load_ms = load_start.elapsed().as_millis() as u64;
 
     // Player pose + inventory + last_dimension.
     // W69: a freshly created world (no player file yet) seeds its
@@ -258,13 +277,28 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
 
     voxel.current_world_slug = Some(slug.to_string());
     voxel.last_state_save = Some(std::time::Instant::now());
-    voxel.rebuild_all_meshes();
+    // W236: NO synchronous rebuild_all_meshes here. Meshing the
+    // loaded chunks on the main thread took tens of seconds on a
+    // travelled world (the "loader looks completely stuck" report).
+    // Enqueue every loaded chunk for the WORKER remesh pipeline
+    // instead; the loading state machine re-enters its
+    // BuildingMeshes phase (progress on screen) until the queue
+    // drains, and the existing lighting store survives the reset so
+    // the meshes come out lit exactly as before.
+    let coords: Vec<infengine_voxel::ChunkCoord> =
+        voxel.world.iter_chunks().map(|(c, _)| *c).collect();
+    for cc in coords {
+        if voxel.pending_remesh_set.insert(cc) {
+            voxel.pending_remesh.push_back(cc);
+        }
+    }
     info!(
         slug = slug,
         chunks = chunks_loaded,
         dims = world_meta.dimensions.len(),
         active_dim = %voxel.current_dim,
-        elapsed_ms = elapsed,
+        chunk_load_ms,
+        offline_ms = elapsed,
         catch_up_events = events.len(),
         "world_save: load_world ok"
     );
