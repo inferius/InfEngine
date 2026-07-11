@@ -303,6 +303,16 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
                                     origin[2] + lz,
                                 ]);
                             }
+                            // W242.2: parked dims never re-run the
+                            // worker scan on a switch - index their
+                            // spawners during the load walk.
+                            if b.0 == crate::block::SPAWNER_ID {
+                                dw.spawner_positions.insert([
+                                    origin[0] + lx,
+                                    origin[1] + ly,
+                                    origin[2] + lz,
+                                ]);
+                            }
                         }
                     }
                 }

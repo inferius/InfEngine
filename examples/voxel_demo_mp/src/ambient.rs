@@ -107,6 +107,37 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
             }
             spawned += 1;
         }
+        // W242.2: monster-spawner cage particles. MC's
+        // `BaseSpawner.clientTick` emits one smoke + one flame at a
+        // random point INSIDE the cage every tick (20 Hz) while a
+        // player is within the 16-block activation range.
+        let spawners: Vec<[i32; 3]> = vx.spawner_positions.iter().copied().collect();
+        for pos in &spawners {
+            if spawned >= AMBIENT_PARTICLE_CAP_PER_TICK {
+                break;
+            }
+            if !within_radius(
+                player,
+                pos,
+                crate::mob::spawner::SPAWNER_PLAYER_RANGE,
+            ) {
+                continue;
+            }
+            if !accumulator_fires(&mut frame_seed, (dt * 20.0).clamp(0.0, 1.0)) {
+                continue;
+            }
+            let mc_tint = resource_pack::particles::smoke_tint_at(
+                &vx.resource_pack,
+                0.0,
+            );
+            spawn_spawner_idle_particles(
+                &mut vx.particles,
+                pos,
+                &mut frame_seed,
+                mc_tint,
+            );
+            spawned += 1;
+        }
         let fires: Vec<[i32; 3]> = vx.fires.keys().copied().collect();
         for pos in &fires {
             if spawned >= AMBIENT_PARTICLE_CAP_PER_TICK {
@@ -406,6 +437,98 @@ pub(crate) fn spawn_smoke_particle(
         // Smoke wisps must rise, not fall.
         gravity_scale: 0.0,
     });
+}
+
+/// W242.2: one idle cage tick - a smoke wisp + a flame mote at the
+/// SAME random point inside the spawner block, zero directed motion
+/// (MC `BaseSpawner.clientTick` passes 0,0,0 velocity; the smoke
+/// sprite's own drift is approximated with a slight rise).
+pub(crate) fn spawn_spawner_idle_particles(
+    sys: &mut infengine_particles::ParticleSystem,
+    pos: &[i32; 3],
+    seed: &mut u32,
+    mc_smoke_tint: Option<[f32; 4]>,
+) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let p = [
+        pos[0] as f32 + rand(seed),
+        pos[1] as f32 + rand(seed),
+        pos[2] as f32 + rand(seed),
+    ];
+    let smoke = match mc_smoke_tint {
+        Some(t) => [t[0], t[1], t[2], 0.7],
+        None => [0.35, 0.35, 0.35, 0.7],
+    };
+    sys.particles.push(infengine_particles::Particle {
+        position: p,
+        velocity: [0.0, 0.12, 0.0],
+        color: smoke,
+        size: 0.08,
+        age: 0.0,
+        lifetime: 1.0,
+        gravity_scale: 0.0,
+    });
+    sys.particles.push(infengine_particles::Particle {
+        position: p,
+        velocity: [0.0, 0.0, 0.0],
+        color: [1.0, 0.78, 0.40, 0.95],
+        size: 0.06,
+        age: 0.0,
+        lifetime: 0.6,
+        gravity_scale: 0.0,
+    });
+}
+
+/// W242.2: `levelEvent(2004)` - the spawner-spawn burst. MC's client
+/// handler (`LevelEventHandler.java` case 2004) pushes 20 smoke + 20
+/// flame particles at random points in the +-1.0 cube around the
+/// spawner block centre, all with zero velocity.
+pub(crate) fn spawn_spawner_burst(
+    sys: &mut infengine_particles::ParticleSystem,
+    pos: [i32; 3],
+    seed: &mut u32,
+    mc_smoke_tint: Option<[f32; 4]>,
+) {
+    let rand = |s: &mut u32| -> f32 {
+        *s ^= *s << 13;
+        *s ^= *s >> 17;
+        *s ^= *s << 5;
+        (*s as f32 / u32::MAX as f32).clamp(0.0, 1.0)
+    };
+    let smoke = match mc_smoke_tint {
+        Some(t) => [t[0], t[1], t[2], 0.7],
+        None => [0.35, 0.35, 0.35, 0.7],
+    };
+    for _ in 0..20 {
+        let p = [
+            pos[0] as f32 + 0.5 + (rand(seed) - 0.5) * 2.0,
+            pos[1] as f32 + 0.5 + (rand(seed) - 0.5) * 2.0,
+            pos[2] as f32 + 0.5 + (rand(seed) - 0.5) * 2.0,
+        ];
+        sys.particles.push(infengine_particles::Particle {
+            position: p,
+            velocity: [0.0, 0.10, 0.0],
+            color: smoke,
+            size: 0.09,
+            age: 0.0,
+            lifetime: 0.9,
+            gravity_scale: 0.0,
+        });
+        sys.particles.push(infengine_particles::Particle {
+            position: p,
+            velocity: [0.0, 0.0, 0.0],
+            color: [1.0, 0.78, 0.40, 0.95],
+            size: 0.07,
+            age: 0.0,
+            lifetime: 0.5,
+            gravity_scale: 0.0,
+        });
+    }
 }
 
 // W18.3: textured billboard particle emitters.

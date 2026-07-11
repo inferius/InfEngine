@@ -1,0 +1,531 @@
+//! W242.2 - monster spawner ticking: `BaseSpawner.java` (26.1.2) port.
+//!
+//! MC mirror:
+//! - `net/minecraft/world/level/BaseSpawner.java::serverTick` - the
+//!   whole cycle: 16-block player gate, 200..800-tick delay, 4 spawn
+//!   attempts at `(rd-rd)*4` horizontal / `y-1..y+1` vertical offsets,
+//!   same-kind crowding cap 6 in `box(pos).inflate(4)`.
+//! - `net/minecraft/world/entity/SpawnPlacements.java` - zombie /
+//!   skeleton / spider all gate through `Monster::checkMonsterSpawnRules`.
+//!   For `EntitySpawnReason.SPAWNER` the below-block `isValidSpawn`
+//!   rule auto-passes (`Mob.checkMobSpawnRules`), so spawner mobs CAN
+//!   mint in mid-air; the light rule does NOT auto-pass (only
+//!   TRIAL_SPAWNER `ignoresLightRequirements`) - torching the room
+//!   shuts the spawner down.
+//! - `net/minecraft/world/level/block/entity/SpawnerBlockEntity.java` -
+//!   block-entity glue (we keep state in `Voxel.spawner_states` keyed
+//!   by position instead).
+//!
+//! The spawned entity kind is a pure function of (effective world
+//! seed, position) over `MonsterRoomFeature.MOBS` = [skeleton, zombie,
+//! zombie, spider] - the W242 design: worldgen never persisted a roll,
+//! so ticking re-derives it on demand and every regeneration agrees.
+//!
+//! Honest gaps vs MC:
+//! - `Delay`/`SpawnPotentials` NBT persistence skipped: delay state is
+//!   runtime-only, an app restart or chunk unload re-inits to the
+//!   20-tick initial delay (MC saves the counter in the block entity).
+//! - Light gate reuses the engine-wide hostile rule
+//!   (`is_dark_enough_for_hostile`: block <= 7 AND effective sky <= 7)
+//!   so spawners and natural spawns stay consistent; 26.1.2's
+//!   `isDarkEnoughToSpawn` (sky > rand(32) reject, overworld block
+//!   limit 0, brightness <= rand(0..=7)) is a global light-rule
+//!   upgrade for a future wave.
+//! - `finalizeSpawn` extras (gear rolls, baby-zombie chance) don't
+//!   exist in the engine's mob model; `isUnobstructed` entity-vs-
+//!   entity overlap isn't checked (engine mobs don't hard-collide).
+//! - The `levelEvent(2004)` smoke+flame burst renders host-side only
+//!   (no level-event broadcast channel yet); remote peers still see
+//!   the mob appear via the normal mob broadcast.
+
+use crate::block::SPAWNER_ID;
+use crate::net::NetRole;
+use crate::worldgen::mcgen::noise::SplitMix64;
+use crate::Voxel;
+
+use super::kinds::{hitbox_for, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE, MobKind};
+use super::light::is_dark_enough_for_hostile;
+use super::spawn::mint_mob;
+
+/// `BaseSpawner.DEFAULT_REQUIRED_PLAYER_RANGE` - a player within this
+/// range (block centre, spherical) keeps the spawner active.
+pub(crate) const SPAWNER_PLAYER_RANGE: f32 = 16.0;
+/// `DEFAULT_MIN_SPAWN_DELAY` / `DEFAULT_MAX_SPAWN_DELAY`: after a
+/// cycle the delay re-rolls to `min + rand(max - min)` ticks.
+pub(crate) const SPAWNER_MIN_DELAY: i32 = 200;
+pub(crate) const SPAWNER_MAX_DELAY: i32 = 800;
+/// `DEFAULT_SPAWN_DELAY` - the fresh block entity's first countdown.
+pub(crate) const SPAWNER_INITIAL_DELAY: i32 = 20;
+/// `DEFAULT_SPAWN_COUNT` - attempts (and max mints) per cycle.
+pub(crate) const SPAWNER_SPAWN_COUNT: u32 = 4;
+/// `DEFAULT_MAX_NEARBY_ENTITIES` - same-kind cap in the +-4 box.
+pub(crate) const SPAWNER_MAX_NEARBY: usize = 6;
+/// `DEFAULT_SPAWN_RANGE` - horizontal half-extent of the spawn area.
+pub(crate) const SPAWNER_SPAWN_RANGE: f32 = 4.0;
+
+/// `MonsterRoomFeature.MOBS` - the dungeon spawner pool: zombie at
+/// double weight.
+const SPAWNER_MOBS: [u8; 4] = [KIND_SKELETON, KIND_ZOMBIE, KIND_ZOMBIE, KIND_SPIDER];
+
+/// Extra mix over the shared position-seed so the spawner-kind stream
+/// never correlates with the chest-loot stream at the same position.
+const SALT_SPAWNER_KIND: u64 = 0xD4E6_0001;
+
+/// Runtime tick state for one spawner block. Keyed by world position
+/// in `Voxel.spawner_states`; minted lazily the first time a player
+/// comes in range (mirrors the fresh block entity's 20-tick delay).
+#[derive(Debug)]
+pub(crate) struct SpawnerState {
+    /// Ticks until the next spawn cycle (`BaseSpawner.spawnDelay`).
+    pub(crate) delay: i32,
+    /// Runtime RNG stream: delay re-rolls + spawn-offset rolls. Seeded
+    /// per spawner from (net_tick, pos) - non-replayed runtime state,
+    /// so determinism isn't required (MC uses the shared level RNG).
+    pub(crate) rng: SplitMix64,
+}
+
+/// The spawned kind for the spawner at `pos`: deterministic in
+/// (effective world seed, position), stable across regeneration and
+/// re-derivation sites - the persisted-SpawnData replacement.
+pub(crate) fn spawner_entity_kind(eff_seed: u32, pos: [i32; 3]) -> u8 {
+    let mut rng = SplitMix64::new(
+        crate::loot::chest_pos_seed(eff_seed, pos) ^ SALT_SPAWNER_KIND,
+    );
+    SPAWNER_MOBS[(rng.next_u64() % SPAWNER_MOBS.len() as u64) as usize]
+}
+
+/// `nextInt(n)` over the SplitMix64 stream (same shape the worldgen
+/// feature streams use).
+fn next_int(r: &mut SplitMix64, n: i32) -> i32 {
+    (r.next_u64() % n.max(1) as u64) as i32
+}
+
+/// Uniform f32 in [0, 1).
+fn next_f32(r: &mut SplitMix64) -> f32 {
+    (r.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// `Level.hasNearbyAlivePlayer` for the spawner gate: host pose +
+/// every server-tracked remote pose, strict `< range` from the block
+/// centre. MC only filters SPECTATORS here - creative players DO
+/// activate spawners (unlike the AI chase-target picker, which skips
+/// creative).
+fn any_player_within(vx: &Voxel, pos: [i32; 3], range: f32) -> bool {
+    let c = [
+        pos[0] as f32 + 0.5,
+        pos[1] as f32 + 0.5,
+        pos[2] as f32 + 0.5,
+    ];
+    let r2 = range * range;
+    let near = |p: [f32; 3]| -> bool {
+        let dx = p[0] - c[0];
+        let dy = p[1] - c[1];
+        let dz = p[2] - c[2];
+        dx * dx + dy * dy + dz * dz < r2
+    };
+    if near([vx.player_pos.x, vx.player_pos.y, vx.player_pos.z]) {
+        return true;
+    }
+    if let NetRole::Server { poses, .. } = &vx.net {
+        for p in poses.values() {
+            if p.id == 0 {
+                continue;
+            }
+            if near(p.pos) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `level.noCollision(getSpawnAABB(...))` + the liquid half of
+/// `checkSpawnObstruction`: every voxel cell the mob's AABB overlaps
+/// must be passable and dry.
+fn spawn_volume_clear(vx: &Voxel, kind: u8, feet: [f32; 3]) -> bool {
+    let (hx, hy, hz, cy_off) = hitbox_for(kind);
+    let min = [feet[0] - hx, feet[1] + cy_off - hy, feet[2] - hz];
+    let max = [feet[0] + hx, feet[1] + cy_off + hy, feet[2] + hz];
+    // Epsilon keeps a box edge that lands exactly on a cell boundary
+    // from counting the next cell over.
+    let lo = [
+        min[0].floor() as i32,
+        min[1].floor() as i32,
+        min[2].floor() as i32,
+    ];
+    let hi = [
+        (max[0] - 1e-4).floor() as i32,
+        (max[1] - 1e-4).floor() as i32,
+        (max[2] - 1e-4).floor() as i32,
+    ];
+    for x in lo[0]..=hi[0] {
+        for y in lo[1]..=hi[1] {
+            for z in lo[2]..=hi[2] {
+                let b = vx.world.get([x, y, z]);
+                if !(b.is_air() || crate::block::block_is_aabb_passable(b)) {
+                    return false;
+                }
+                // Water carries F_AABB_PASS, so the liquid rule is a
+                // separate reject (MC `containsAnyLiquid`).
+                if crate::block::block_is_watery(b.0) || b.0 == crate::LAVA_ID {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Same-kind crowding count: alive mobs whose AABB intersects
+/// `box(spawner block).inflate(4)` (MC counts by exact entity class
+/// over that box).
+fn count_same_kind_near(vx: &Voxel, pos: [i32; 3], kind: u8) -> usize {
+    let min = [
+        pos[0] as f32 - SPAWNER_SPAWN_RANGE,
+        pos[1] as f32 - SPAWNER_SPAWN_RANGE,
+        pos[2] as f32 - SPAWNER_SPAWN_RANGE,
+    ];
+    let max = [
+        pos[0] as f32 + 1.0 + SPAWNER_SPAWN_RANGE,
+        pos[1] as f32 + 1.0 + SPAWNER_SPAWN_RANGE,
+        pos[2] as f32 + 1.0 + SPAWNER_SPAWN_RANGE,
+    ];
+    let (hx, hy, hz, cy_off) = hitbox_for(kind);
+    vx.mobs
+        .iter()
+        .filter(|m| {
+            if m.kind != kind || m.dying > 0.0 {
+                return false;
+            }
+            let c = [m.pos[0], m.pos[1] + cy_off, m.pos[2]];
+            c[0] + hx > min[0]
+                && c[0] - hx < max[0]
+                && c[1] + hy > min[1]
+                && c[1] - hy < max[1]
+                && c[2] + hz > min[2]
+                && c[2] - hz < max[2]
+        })
+        .count()
+}
+
+/// `BaseSpawner.delay`: re-roll the countdown to `min + rand(range)`.
+/// (MC also re-picks from `spawnPotentials` here; our kind is a fixed
+/// function of position, so there's nothing to re-pick.)
+fn reset_delay(st: &mut SpawnerState) {
+    st.delay =
+        SPAWNER_MIN_DELAY + next_int(&mut st.rng, SPAWNER_MAX_DELAY - SPAWNER_MIN_DELAY);
+}
+
+/// One spawn cycle (`spawnDelay == 0` branch of `serverTick`): up to 4
+/// attempts, each rolling a position in the +-4 x [y-1, y+1] envelope;
+/// a crowding-cap hit resets the delay and aborts the whole cycle
+/// (matching the Java early return).
+fn run_spawn_cycle(vx: &mut Voxel, pos: [i32; 3], eff_seed: u32, st: &mut SpawnerState) {
+    let kind = spawner_entity_kind(eff_seed, pos);
+    let mut spawned_any = false;
+    for _ in 0..SPAWNER_SPAWN_COUNT {
+        let sx = pos[0] as f32
+            + (next_f32(&mut st.rng) - next_f32(&mut st.rng)) * SPAWNER_SPAWN_RANGE
+            + 0.5;
+        let sy = (pos[1] + next_int(&mut st.rng, 3) - 1) as f32;
+        let sz = pos[2] as f32
+            + (next_f32(&mut st.rng) - next_f32(&mut st.rng)) * SPAWNER_SPAWN_RANGE
+            + 0.5;
+        let feet = [sx, sy, sz];
+        if !spawn_volume_clear(vx, kind, feet) {
+            continue;
+        }
+        // SpawnPlacements.checkSpawnRules(SPAWNER): the monster light
+        // gate at the target block (ground rule auto-passes).
+        let cell = [
+            sx.floor() as i32,
+            sy.floor() as i32,
+            sz.floor() as i32,
+        ];
+        if !is_dark_enough_for_hostile(vx, cell) {
+            continue;
+        }
+        if count_same_kind_near(vx, pos, kind) >= SPAWNER_MAX_NEARBY {
+            reset_delay(st);
+            return;
+        }
+        let yaw = next_f32(&mut st.rng) * std::f32::consts::TAU;
+        mint_mob(vx, kind, feet, yaw);
+        // `level.levelEvent(2004, pos, 0)` - smoke + flame burst at
+        // the spawner block (host-local; see module gaps).
+        let mut burst_seed =
+            (vx.net_tick as u32) ^ (pos[0] as u32).rotate_left(9) ^ (pos[2] as u32);
+        let tint =
+            crate::resource_pack::particles::smoke_tint_at(&vx.resource_pack, 0.0);
+        crate::ambient::spawn_spawner_burst(&mut vx.particles, pos, &mut burst_seed, tint);
+        tracing::info!(
+            pos = ?pos,
+            kind = MobKind::from_u8(kind).name(),
+            at = ?feet,
+            "W242.2: spawner spawned mob",
+        );
+        spawned_any = true;
+    }
+    if spawned_any {
+        reset_delay(st);
+    }
+}
+
+/// Per-tick spawner pass (`serverTick` over every indexed spawner).
+/// Runs at the fixed 20 Hz mob tick, host/offline only (the caller
+/// guards `NetRole::Client`). Out-of-range spawners freeze their
+/// countdown exactly like MC's `isNearPlayer` gate.
+pub(crate) fn spawner_pass(vx: &mut Voxel) {
+    if vx.spawner_positions.is_empty() {
+        return;
+    }
+    let positions: Vec<[i32; 3]> = vx.spawner_positions.iter().copied().collect();
+    let eff_seed = vx.current_worldgen_ctx().effective_seed();
+    for pos in positions {
+        if !any_player_within(vx, pos, SPAWNER_PLAYER_RANGE) {
+            continue;
+        }
+        // Self-heal: the index tolerates edit paths that bypass
+        // `world_set_tracked` (stale save entries etc.).
+        if vx.world.get(pos).0 != SPAWNER_ID {
+            vx.spawner_positions.remove(&pos);
+            vx.spawner_states.remove(&pos);
+            continue;
+        }
+        let mut st = vx.spawner_states.remove(&pos).unwrap_or_else(|| SpawnerState {
+            delay: SPAWNER_INITIAL_DELAY,
+            rng: SplitMix64::new(
+                (vx.net_tick ^ 0xA5A5_5A5A_0F0F_F0F0)
+                    .wrapping_add(crate::loot::chest_pos_seed(0, pos)),
+            ),
+        });
+        if st.delay > 0 {
+            st.delay -= 1;
+        } else {
+            run_spawn_cycle(vx, pos, eff_seed, &mut st);
+        }
+        vx.spawner_states.insert(pos, st);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infengine_voxel::{BlockId, Chunk, ChunkCoord, CHUNK_SIZE};
+
+    /// Stamp the chunk holding `w` (minting it if needed) + set the
+    /// block. `World::set` is a no-op on unloaded chunks.
+    fn set_block(v: &mut Voxel, w: [i32; 3], id: u16) {
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            w[0].div_euclid(cs),
+            w[1].div_euclid(cs),
+            w[2].div_euclid(cs),
+        ];
+        if v.world.chunk(cc).is_none() {
+            v.world.insert_chunk(cc, Chunk::empty());
+        }
+        v.world.set(w, BlockId(id));
+    }
+
+    fn stamp_dark(v: &mut Voxel, w: [i32; 3]) {
+        let cs = CHUNK_SIZE as i32;
+        let cc: ChunkCoord = [
+            w[0].div_euclid(cs),
+            w[1].div_euclid(cs),
+            w[2].div_euclid(cs),
+        ];
+        let lc = [
+            w[0].rem_euclid(cs) as u32,
+            w[1].rem_euclid(cs) as u32,
+            w[2].rem_euclid(cs) as u32,
+        ];
+        let g = v.lighting.ensure(cc);
+        g.set_block(lc, 0);
+        g.set_sky(lc, 0);
+    }
+
+    /// A dungeon-ish rig: spawner at `pos`, cobble floor one below
+    /// across the spawn envelope, everything else air, all dark.
+    fn spawner_rig(pos: [i32; 3]) -> Voxel {
+        let mut v = Voxel::new();
+        set_block(&mut v, pos, SPAWNER_ID);
+        v.spawner_positions.insert(pos);
+        for dx in -6..=6 {
+            for dz in -6..=6 {
+                set_block(
+                    &mut v,
+                    [pos[0] + dx, pos[1] - 2, pos[2] + dz],
+                    crate::block::COBBLE_ID,
+                );
+                for dy in -1..=3 {
+                    stamp_dark(&mut v, [pos[0] + dx, pos[1] + dy, pos[2] + dz]);
+                }
+            }
+        }
+        // Player right next to the cage.
+        v.player_pos = glam::Vec3::new(
+            pos[0] as f32 + 2.5,
+            pos[1] as f32,
+            pos[2] as f32 + 0.5,
+        );
+        v
+    }
+
+    #[test]
+    fn entity_kind_is_deterministic_and_weighted() {
+        let k1 = spawner_entity_kind(1234, [10, 20, 30]);
+        let k2 = spawner_entity_kind(1234, [10, 20, 30]);
+        assert_eq!(k1, k2, "same seed + pos must derive the same kind");
+        // Across many positions the pool must cover exactly the
+        // dungeon trio, zombie ~2x the others.
+        let mut counts = std::collections::HashMap::new();
+        for i in 0..4000 {
+            let k = spawner_entity_kind(99, [i, i * 7 % 253, -i * 3]);
+            *counts.entry(k).or_insert(0usize) += 1;
+        }
+        assert_eq!(counts.len(), 3, "skeleton, zombie, spider only");
+        let z = counts[&KIND_ZOMBIE] as f64;
+        let s = counts[&KIND_SKELETON] as f64;
+        let p = counts[&KIND_SPIDER] as f64;
+        assert!(z > s * 1.5 && z > p * 1.5, "zombie double weight: z={z} s={s} p={p}");
+    }
+
+    #[test]
+    fn initial_delay_counts_down_before_first_spawn() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        // 20 initial-delay ticks: no mobs yet.
+        for _ in 0..SPAWNER_INITIAL_DELAY {
+            spawner_pass(&mut v);
+            assert!(v.mobs.is_empty(), "no spawn during the initial delay");
+        }
+        // Tick 21 runs the first cycle.
+        spawner_pass(&mut v);
+        assert!(
+            !v.mobs.is_empty(),
+            "first cycle after the 20-tick delay should mint in an open dark room"
+        );
+        let st = v.spawner_states.get(&pos).expect("state exists");
+        assert!(
+            (SPAWNER_MIN_DELAY..SPAWNER_MAX_DELAY).contains(&st.delay),
+            "delay re-rolled into [200, 800): {}",
+            st.delay
+        );
+        // Every minted mob is the derived kind, inside the envelope.
+        let eff = v.current_worldgen_ctx().effective_seed();
+        let want = spawner_entity_kind(eff, pos);
+        for m in &v.mobs {
+            assert_eq!(m.kind, want);
+            assert!((m.pos[0] - (pos[0] as f32 + 0.5)).abs() <= 4.5);
+            assert!((m.pos[2] - (pos[2] as f32 + 0.5)).abs() <= 4.5);
+            let dy = m.pos[1] - pos[1] as f32;
+            assert!((-1.0..=1.0).contains(&dy), "y offset in -1..=1: {dy}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_player_freezes_the_countdown() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        v.player_pos = glam::Vec3::new(
+            pos[0] as f32 + 40.0,
+            pos[1] as f32,
+            pos[2] as f32,
+        );
+        for _ in 0..100 {
+            spawner_pass(&mut v);
+        }
+        assert!(v.mobs.is_empty());
+        assert!(
+            !v.spawner_states.contains_key(&pos),
+            "state stays unminted while nobody is in range"
+        );
+    }
+
+    #[test]
+    fn lit_room_blocks_the_cycle() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        // Torch-lit: every candidate cell over the hostile ceiling.
+        let cs = CHUNK_SIZE as i32;
+        for dx in -6..=6 {
+            for dz in -6..=6 {
+                for dy in -1..=3 {
+                    let w = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                    let cc = [
+                        w[0].div_euclid(cs),
+                        w[1].div_euclid(cs),
+                        w[2].div_euclid(cs),
+                    ];
+                    let lc = [
+                        w[0].rem_euclid(cs) as u32,
+                        w[1].rem_euclid(cs) as u32,
+                        w[2].rem_euclid(cs) as u32,
+                    ];
+                    v.lighting.ensure(cc).set_block(lc, 14);
+                }
+            }
+        }
+        for _ in 0..(SPAWNER_INITIAL_DELAY + 50) {
+            spawner_pass(&mut v);
+        }
+        assert!(v.mobs.is_empty(), "block light 14 must gate every attempt");
+        // MC keeps delay at 0 retrying every tick after a silent
+        // (no-spawn, no-cap) cycle - it never re-rolls.
+        assert_eq!(v.spawner_states.get(&pos).expect("state").delay, 0);
+    }
+
+    #[test]
+    fn crowding_cap_aborts_and_rerolls() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        let eff = v.current_worldgen_ctx().effective_seed();
+        let kind = spawner_entity_kind(eff, pos);
+        for i in 0..SPAWNER_MAX_NEARBY {
+            v.mobs.push(crate::mob::state::MobState::new_natural(
+                (i as u32) + 1,
+                kind,
+                [pos[0] as f32 + 0.5, pos[1] as f32, pos[2] as f32 + 2.5],
+                [pos[0] as f32 + 0.5, pos[1] as f32, pos[2] as f32 + 2.5],
+                0.0,
+                0.0,
+                10.0,
+            ));
+        }
+        for _ in 0..(SPAWNER_INITIAL_DELAY + 1) {
+            spawner_pass(&mut v);
+        }
+        assert_eq!(v.mobs.len(), SPAWNER_MAX_NEARBY, "cap blocks new mints");
+        let st = v.spawner_states.get(&pos).expect("state");
+        assert!(
+            (SPAWNER_MIN_DELAY..SPAWNER_MAX_DELAY).contains(&st.delay),
+            "cap hit re-rolls the delay: {}",
+            st.delay
+        );
+    }
+
+    #[test]
+    fn broken_spawner_self_heals_out_of_the_index() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        set_block(&mut v, pos, 0);
+        spawner_pass(&mut v);
+        assert!(!v.spawner_positions.contains(&pos));
+        assert!(!v.spawner_states.contains_key(&pos));
+    }
+
+    #[test]
+    fn spawn_volume_rejects_solid_and_water() {
+        let pos = [8, 40, 8];
+        let mut v = spawner_rig(pos);
+        // Solid at the feet cell.
+        set_block(&mut v, [12, 40, 8], crate::block::COBBLE_ID);
+        assert!(!spawn_volume_clear(&v, KIND_ZOMBIE, [12.5, 40.0, 8.5]));
+        // Water floods a cell: AABB-passable but wet.
+        set_block(&mut v, [4, 40, 8], crate::block::WATER_ID);
+        assert!(!spawn_volume_clear(&v, KIND_ZOMBIE, [4.5, 40.0, 8.5]));
+        // Open dark air passes.
+        assert!(spawn_volume_clear(&v, KIND_ZOMBIE, [8.5, 40.0, 10.5]));
+    }
+}

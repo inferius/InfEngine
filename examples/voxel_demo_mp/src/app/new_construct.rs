@@ -272,6 +272,8 @@ impl Voxel {
             torch_positions: HashSet::new(),
             emitter_positions: HashMap::new(),
             portal_positions: HashSet::new(),
+            spawner_positions: HashSet::new(),
+            spawner_states: HashMap::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             chests: HashMap::new(),

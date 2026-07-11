@@ -116,6 +116,14 @@ pub(crate) struct DimWorld {
     pub lever_on: std::collections::HashSet<[i32; 3]>,
     /// W143: stored rail shapes (stateful MC RailState port).
     pub rail_shapes: HashMap<[i32; 3], u8>,
+    /// W242.2: monster-spawner index parked per-dim (chunks in the
+    /// parked world never re-run the worker side-effect scan on a
+    /// switch, so the set must survive alongside them).
+    pub spawner_positions: std::collections::HashSet<[i32; 3]>,
+    /// W242.2: per-spawner tick state (delay countdowns keep their
+    /// place across a dim round-trip; MC keeps the loaded block
+    /// entity alive the same way).
+    pub spawner_states: HashMap<[i32; 3], crate::mob::spawner::SpawnerState>,
 }
 
 impl Default for DimWorld {
@@ -141,6 +149,8 @@ impl Default for DimWorld {
             brewing_runtimes: HashMap::new(),
             lever_on: std::collections::HashSet::new(),
             rail_shapes: HashMap::new(),
+            spawner_positions: std::collections::HashSet::new(),
+            spawner_states: HashMap::new(),
         }
     }
 }

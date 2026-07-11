@@ -11,6 +11,8 @@
 //! - `ai`        - per-tick walk + chase + zombie touch-damage.
 //! - `spawn`     - new-mob spawn loop (light-aware in H.2,
 //!   biome-aware in H.3).
+//! - `spawner`   - W242.2 monster-spawner block ticking
+//!   (`BaseSpawner.java` port).
 //! - `damage`    - HP subtract + death event + loot drop.
 //! - `raycast`   - melee mob-targeting raycast.
 //! - `audio`     - footstep + species "say" timers.
@@ -33,6 +35,7 @@ pub(crate) mod pathfind;
 pub(crate) mod pool;
 pub(crate) mod raycast;
 pub(crate) mod spawn;
+pub(crate) mod spawner;
 pub(crate) mod state;
 
 // ----------------------------------------------------------------

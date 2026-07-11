@@ -43,6 +43,9 @@ const GRADIENT: [[f64; 3]; 16] = [
 
 /// SplitMix64 - a tiny, well-distributed 64-bit stream used to seed
 /// the noise permutation + per-octave coordinate offsets.
+// Debug: the W242.2 spawner tick state embeds a stream and derives
+// Debug (the per-dim parking structs already print in tests).
+#[derive(Debug)]
 pub(crate) struct SplitMix64 {
     state: u64,
 }

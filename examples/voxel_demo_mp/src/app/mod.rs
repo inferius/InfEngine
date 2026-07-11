@@ -656,6 +656,18 @@ pub(crate) struct Voxel {
     /// chunk for `PORTAL_ID`. Lit portals don't move; the set
     /// stays empty until `try_ignite` fills in interior cells.
     pub(crate) portal_positions: HashSet<[i32; 3]>,
+    /// W242.2: world coords of every loaded monster-spawner block.
+    /// Fed by the worker side-effect scan (generated + disk-streamed
+    /// chunks), the save-load chunk scan, and `world_set_tracked`
+    /// (place/break); pruned by the unload retain pass. The spawner
+    /// tick + the ambient cage particles walk this set instead of
+    /// scanning chunks.
+    pub(crate) spawner_positions: HashSet<[i32; 3]>,
+    /// W242.2: per-spawner runtime tick state (delay countdown +
+    /// RNG stream), minted lazily when a player first comes within
+    /// activation range. NOT persisted - a reload re-inits to the
+    /// MC initial 20-tick delay (see `mob::spawner` module docs).
+    pub(crate) spawner_states: HashMap<[i32; 3], crate::mob::spawner::SpawnerState>,
     /// Sticky torch orientations keyed by voxel. 0 = floor,
     /// 1 = wall pointing -X (mounted on +X face of a block at
     /// voxel.x+1), 2 = +X, 3 = -Z, 4 = +Z. Set at placement

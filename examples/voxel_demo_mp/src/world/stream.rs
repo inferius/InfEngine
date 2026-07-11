@@ -283,6 +283,11 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 }
                             }
                         }
+                        ChunkSideEffect::Spawner(wv) => {
+                            // W242.2: index only - tick state mints
+                            // lazily when a player walks into range.
+                            vx.spawner_positions.insert(*wv);
+                        }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
                             // W115: tick_offset 0 = a static worldgen liquid
                             // cell at equilibrium (sea resting on seabed) -
@@ -674,6 +679,12 @@ fn rescan_chunk_radius(
     // to keep tidy in the same single pass; the lava fire tick already
     // re-validates, so this is just hygiene against unbounded growth.
     vx.lava_positions.retain(|p| in_keep(p));
+    // W242.2: spawner index + tick state follow their chunks out; the
+    // worker scan re-adds the positions when the chunk streams back
+    // (the delay countdown restarts, like a freshly-loaded MC chunk
+    // whose block entity re-inits from defaults when NBT is absent).
+    vx.spawner_positions.retain(|p| in_keep(p));
+    vx.spawner_states.retain(|p, _| in_keep(p));
     for cc in &to_unload {
         vx.world.remove_chunk(*cc);
     }

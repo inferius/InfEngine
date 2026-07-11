@@ -123,6 +123,13 @@ fn is_hostile_kind(kind: u8) -> bool {
 /// centre). Host/offline only - mirrors the /spawnmob mint but the
 /// mob stays a NATURAL spawn (despawnable), exactly like MC eggs.
 pub(crate) fn spawn_from_egg(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3]) {
+    mint_mob(voxel, kind, pos, 0.0);
+}
+
+/// W242.2: the shared natural-mob mint behind spawn eggs and the
+/// monster spawner (`BaseSpawner` sets a random yaw on the fresh
+/// entity; eggs keep 0). Host/offline only.
+pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f32) {
     use crate::net::{MobMsg, NetRole};
     if matches!(voxel.net, NetRole::Client { .. }) {
         return;
@@ -130,7 +137,7 @@ pub(crate) fn spawn_from_egg(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3]) 
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
     let hp = initial_health_for(kind);
-    let mob = crate::mob::state::MobState::new_natural(id, kind, pos, pos, 0.0, 0.0, hp);
+    let mob = crate::mob::state::MobState::new_natural(id, kind, pos, pos, yaw, 0.0, hp);
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
         id,
@@ -138,9 +145,9 @@ pub(crate) fn spawn_from_egg(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3]) 
             id,
             kind,
             pos,
-            yaw: 0.0,
+            yaw,
             health: hp.max(0.0).round() as u8,
-            head_yaw: 0.0,
+            head_yaw: yaw,
             head_pitch: 0.0,
         },
     );

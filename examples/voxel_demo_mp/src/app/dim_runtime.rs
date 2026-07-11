@@ -79,6 +79,9 @@ impl Voxel {
             brewing_runtimes: std::mem::take(&mut self.brewing_runtimes),
             lever_on: std::mem::take(&mut self.lever_on),
             rail_shapes: std::mem::take(&mut self.rail_shapes),
+            // W242.2: spawner index + tick state park with their dim.
+            spawner_positions: std::mem::take(&mut self.spawner_positions),
+            spawner_states: std::mem::take(&mut self.spawner_states),
         };
         self.worlds.insert(self.current_dim.clone(), parked);
         // W137: a rider can't follow their cart into the parking
@@ -138,6 +141,8 @@ impl Voxel {
         self.brewing_runtimes = target_world.brewing_runtimes;
         self.lever_on = target_world.lever_on;
         self.rail_shapes = target_world.rail_shapes;
+        self.spawner_positions = target_world.spawner_positions;
+        self.spawner_states = target_world.spawner_states;
         let target_ents = self
             .entities_by_dim
             .remove(target)

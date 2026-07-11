@@ -88,6 +88,12 @@ pub(super) fn apply_chunk_payload(voxel: &mut Voxel, payload: ChunkPayload) -> i
                     if b.0 == crate::block::FIRE_ID || b.0 == crate::block::SOUL_FIRE_ID {
                         voxel.fires.entry(world_pos).or_insert(0);
                     }
+                    // W242.2: saved chunks re-index their spawners
+                    // here (streamed chunks go through the worker
+                    // side-effect scan instead).
+                    if b.0 == crate::block::SPAWNER_ID {
+                        voxel.spawner_positions.insert(world_pos);
+                    }
                 }
             }
         }

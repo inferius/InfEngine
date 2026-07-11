@@ -133,6 +133,11 @@ impl WorkerPool {
                                                     side_effects.push(
                                                         ChunkSideEffect::DungeonChest(wv),
                                                     );
+                                                // W242.2: monster spawner.
+                                                } else if b.0 == crate::block::SPAWNER_ID {
+                                                    side_effects.push(
+                                                        ChunkSideEffect::Spawner(wv),
+                                                    );
                                                 // W38.2: any open-flame block
                                                 // registers a particle emitter.
                                                 } else if flame_emitter(b.0) {
@@ -722,11 +727,14 @@ pub(crate) enum ChunkSideEffect {
     /// this world position. Players can't have built in a chunk that
     /// is only now being generated, so every chest the scan finds is
     /// structure loot: the main thread mints its container with a
-    /// seed-deterministic loot roll + derives the facing. (Spawners
-    /// need no side effect - their entity kind is a pure function of
-    /// world seed + position, derived on demand when W242.2 adds
-    /// ticking.)
+    /// seed-deterministic loot roll + derives the facing.
     DungeonChest([i32; 3]),
+    /// W242.2: a monster-spawner block at this world position. The
+    /// main thread folds it into `Voxel.spawner_positions` so the
+    /// spawner tick + cage particles walk a small index instead of
+    /// scanning chunks. (The spawned entity kind still needs no side
+    /// effect - it stays a pure function of world seed + position.)
+    Spawner([i32; 3]),
 }
 
 // W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.

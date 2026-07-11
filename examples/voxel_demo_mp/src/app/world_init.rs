@@ -168,6 +168,14 @@ impl Voxel {
         } else {
             self.portal_positions.remove(&voxel);
         }
+        // W242.2: monster-spawner index for the BaseSpawner tick.
+        // Breaking the cage also drops its runtime delay state.
+        if block.0 == block::SPAWNER_ID {
+            self.spawner_positions.insert(voxel);
+        } else {
+            self.spawner_positions.remove(&voxel);
+            self.spawner_states.remove(&voxel);
+        }
         // Torch removal also clears the sticky orientation
         // override so a future placement starts fresh.
         if block.0 != TORCH_ID {

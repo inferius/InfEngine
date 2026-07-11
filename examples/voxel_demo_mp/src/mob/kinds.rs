@@ -120,6 +120,22 @@ impl MobKind {
     }
 }
 
+/// W242.2: per-kind hitbox as `(hx, hy, hz, cy_off)` - half-extents
+/// plus the box-centre Y offset above the feet position. Single
+/// source of truth shared by the mob-targeting raycast and the
+/// monster spawner's spawn-volume / crowding checks (it started as
+/// the inline table in `raycast.rs`).
+pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
+    match kind {
+        KIND_ZOMBIE | KIND_SKELETON => (0.45, 1.0, 0.45, 1.0),
+        KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
+        KIND_PIG => (0.6, 0.55, 0.45, 0.45),
+        KIND_SPIDER => (0.7, 0.45, 0.7, 0.45),
+        KIND_COW => (0.7, 0.85, 0.5, 0.55),
+        _ => (0.7, 0.75, 0.5, 0.55),
+    }
+}
+
 // ----------------------------------------------------------------
 // Legacy u8 aliases.
 //

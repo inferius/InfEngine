@@ -106,6 +106,9 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
         despawn::despawn_pass(voxel, day_time, voxel.last_despawn_check_time, &mut to_remove);
     evict(voxel, &to_remove);
     spawn::spawn_pass(voxel, day_time, &mut rand_seed);
+    // W242.2: monster-spawner blocks tick at the same fixed 20 Hz
+    // (each call = one MC game tick for the BaseSpawner counters).
+    super::spawner::spawner_pass(voxel);
     // W66.2: decay love / cooldown timers + pair in-love animals into
     // offspring. Runs before the broadcast so new babies ship this
     // tick.
