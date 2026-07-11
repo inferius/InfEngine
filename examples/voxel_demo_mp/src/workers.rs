@@ -48,6 +48,16 @@ impl WorkerPool {
                             };
                             match job {
                                 Job::Generate(gj) => {
+                                    // W239: one job = ONE COLUMN batch.
+                                    // Iterating the column's chunks on this
+                                    // worker keeps the thread-local
+                                    // per-column worldgen cache hot for
+                                    // chunks 2..N (the cold column data is
+                                    // ~26 ms; a warm chunk ~3 ms).
+                                    for (coord, halo) in
+                                        gj.coords.iter().zip(gj.halos.iter())
+                                    {
+                                    let coord = *coord;
                                     // W46.25: disk-first chunk source. If
                                     // the slot has a saved chunk file at
                                     // this coord, decode it - that file
@@ -61,7 +71,7 @@ impl WorkerPool {
                                     // block that lived in it.
                                     let mut chunk_opt: Option<infengine_voxel::Chunk> = None;
                                     if let Some(slug) = gj.slug.as_deref() {
-                                        match world_save::chunks::read_chunk(slug, &gj.dim, gj.coord) {
+                                        match world_save::chunks::read_chunk(slug, &gj.dim, coord) {
                                             Ok(Some(payload)) => {
                                                 if let Ok(ch) = payload.voxels.into_chunk() {
                                                     chunk_opt = Some(ch);
@@ -70,7 +80,7 @@ impl WorkerPool {
                                             Ok(None) => {}
                                             Err(err) => {
                                                 tracing::warn!(
-                                                    coord = ?gj.coord,
+                                                    coord = ?coord,
                                                     error = %err,
                                                     "W46.25: read_chunk failed; falling back to worldgen",
                                                 );
@@ -79,10 +89,10 @@ impl WorkerPool {
                                     }
                                     let chunk = chunk_opt.unwrap_or_else(|| {
                                         worldgen::generate_chunk_at_ctx(
-                                            gj.coord, &gj.ctx,
+                                            coord, &gj.ctx,
                                         )
                                     });
-                                    let origin = World::chunk_world_origin(gj.coord);
+                                    let origin = World::chunk_world_origin(coord);
 
                                     // W13.2: Pre-scan voxels for side-effects
                                     // (snow / torch / liquid) so the main
@@ -240,16 +250,16 @@ impl WorkerPool {
                                     let no_rails = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
-                                        gj.coord,
+                                        coord,
                                         &gj.pack,
-                                        &gj.halo,
+                                        halo,
                                         &no_doors,
                                         &no_rails,
                                     );
 
                                     if res_tx
                                         .send(WorkerResult::Generated {
-                                            coord: gj.coord,
+                                            coord,
                                             chunk,
                                             side_effects,
                                             submeshes,
@@ -258,6 +268,7 @@ impl WorkerPool {
                                     {
                                         return;
                                     }
+                                    } // W239: end of column-batch loop
                                 }
                                 Job::Remesh(rj) => {
                                     // W25: mesh-only - no worldgen, no
@@ -784,12 +795,20 @@ pub(crate) struct LightingJob {
 /// worker can build the full MC-atlas mesh without shared mutable
 /// state.
 pub(crate) struct ChunkJob {
-    pub(crate) coord: ChunkCoord,
+    /// W239: every queued chunk of ONE vertical column (same cx/cz),
+    /// batched so the expensive per-column worldgen data (density
+    /// lattice + carve mask, ~26 ms cold) computes ONCE on one
+    /// worker's thread-local cache. The old one-coord-per-job
+    /// dispatch scattered a column's 16 chunks across the pool and
+    /// recomputed that data on nearly every worker it touched
+    /// (measured 465 ms vs 80 ms per column).
+    pub(crate) coords: Vec<ChunkCoord>,
     pub(crate) ctx: worldgen::WorldgenCtx,
     /// W24: resource pack snapshot for UV / anim lookup.
     pub(crate) pack: Arc<resource_pack::ResourcePack>,
-    /// W24: pre-fetched light grids for own chunk + 6 neighbours.
-    pub(crate) halo: HaloLighting,
+    /// W24: pre-fetched light grids (own chunk + 6 neighbours),
+    /// parallel to `coords`.
+    pub(crate) halos: Vec<HaloLighting>,
     /// W46.25: current world slug + dim so the worker reads the
     /// chunk from disk before falling through to worldgen. Without
     /// this the streamer regenerated every reloaded chunk from

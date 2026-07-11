@@ -33,6 +33,7 @@ impl Voxel {
         }
         self.pending_chunks.clear();
         self.pending_set.clear();
+        self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         // W198.13: force the streamer to re-run its queue + unload scan
@@ -256,6 +257,7 @@ impl Voxel {
         // Clear any stale queue from a previous session.
         self.pending_chunks.clear();
         self.pending_set.clear();
+        self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         // W236: fresh world entry - the Finalising step must apply

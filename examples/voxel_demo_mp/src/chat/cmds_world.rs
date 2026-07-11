@@ -179,6 +179,7 @@ pub(crate) fn cmd_seed(
         }
         voxel.pending_chunks.clear();
         voxel.pending_set.clear();
+        voxel.in_flight_chunks.clear();
         if let NetRole::Server { server, .. } = &mut voxel.net
             && let Ok(buf) = bincode::serde::encode_to_vec(
                 new_seed,
@@ -576,6 +577,7 @@ pub(crate) fn cmd_worldgen(
         }
         voxel.pending_chunks.clear();
         voxel.pending_set.clear();
+        voxel.in_flight_chunks.clear();
         lines.push(format!(
             "Worldgen set to {g:?}; chunks regenerating."
         ));
@@ -624,6 +626,7 @@ pub(crate) fn cmd_clearedits(
         }
         voxel.pending_chunks.clear();
         voxel.pending_set.clear();
+        voxel.in_flight_chunks.clear();
         lines.push(format!(
             "Wiped {n_edits} edits + regenerating chunks."
         ));

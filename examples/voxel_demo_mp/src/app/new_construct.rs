@@ -35,6 +35,7 @@ impl Voxel {
             chunk_meshes: HashMap::new(),
             pending_chunks: BinaryHeap::new(),
             pending_set: HashSet::new(),
+            in_flight_chunks: HashSet::new(),
             pending_remesh: VecDeque::new(),
             pending_remesh_set: HashSet::new(),
             last_stream_origin: None,

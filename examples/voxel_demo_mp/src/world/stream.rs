@@ -56,6 +56,15 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     }
 
     // Dispatch pending chunks to the worker pool.
+    //
+    // W239: dispatch whole COLUMNS. All still-queued chunks of the
+    // popped coord's column go into ONE job, so the expensive
+    // per-column worldgen data (density lattice + carve mask, ~26 ms
+    // cold vs ~3 ms per warm chunk) computes once on one worker's
+    // thread-local cache instead of once per worker the column's 16
+    // chunks used to scatter across (measured 465 ms -> 80 ms per
+    // column). Batched-along coords keep their stale heap entries;
+    // `in_flight_chunks` makes later pops skip them.
     if let Some(pool) = vx.workers.as_ref() {
         let horiz_speed = (vx.player_vel.x * vx.player_vel.x
             + vx.player_vel.z * vx.player_vel.z)
@@ -71,28 +80,61 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         while dispatched < dispatch_cap {
             let Some(pending) = vx.pending_chunks.pop() else { break };
             let cc = pending.coord;
-            let halo = HaloLighting {
-                own: vx.lighting.get(cc).cloned(),
-                px: vx.lighting.get([cc[0] + 1, cc[1], cc[2]]).cloned(),
-                nx: vx.lighting.get([cc[0] - 1, cc[1], cc[2]]).cloned(),
-                pz: vx.lighting.get([cc[0], cc[1], cc[2] + 1]).cloned(),
-                nz: vx.lighting.get([cc[0], cc[1], cc[2] - 1]).cloned(),
-                py: vx.lighting.get([cc[0], cc[1] + 1, cc[2]]).cloned(),
-                ny: vx.lighting.get([cc[0], cc[1] - 1, cc[2]]).cloned(),
-            };
+            // Batched into an earlier column job (stale heap entry).
+            if vx.in_flight_chunks.contains(&cc) {
+                continue;
+            }
+            // Collect every queued, not-yet-flying chunk of this
+            // column (bottom-up so the worker's column cache warms
+            // once and stays hot).
+            let mut coords: Vec<ChunkCoord> = Vec::new();
+            for cy in 0..crate::VERTICAL_CHUNKS {
+                let col_cc = [cc[0], cy, cc[2]];
+                if vx.pending_set.contains(&col_cc)
+                    && !vx.in_flight_chunks.contains(&col_cc)
+                {
+                    coords.push(col_cc);
+                }
+            }
+            if coords.is_empty() {
+                continue;
+            }
+            let halos: Vec<HaloLighting> = coords
+                .iter()
+                .map(|cc| HaloLighting {
+                    own: vx.lighting.get(*cc).cloned(),
+                    px: vx.lighting.get([cc[0] + 1, cc[1], cc[2]]).cloned(),
+                    nx: vx.lighting.get([cc[0] - 1, cc[1], cc[2]]).cloned(),
+                    pz: vx.lighting.get([cc[0], cc[1], cc[2] + 1]).cloned(),
+                    nz: vx.lighting.get([cc[0], cc[1], cc[2] - 1]).cloned(),
+                    py: vx.lighting.get([cc[0], cc[1] + 1, cc[2]]).cloned(),
+                    ny: vx.lighting.get([cc[0], cc[1] - 1, cc[2]]).cloned(),
+                })
+                .collect();
+            let batch = coords.len();
+            for col_cc in &coords {
+                vx.in_flight_chunks.insert(*col_cc);
+            }
             let job = Job::Generate(ChunkJob {
-                coord: cc,
+                coords: coords.clone(),
                 ctx: ctx.clone(),
                 pack: Arc::clone(&pack_arc),
-                halo,
+                halos,
                 slug: vx.current_world_slug.clone(),
                 dim: vx.current_dim.clone(),
             });
             if pool.req_tx.send(job).is_err() {
+                // Pool shutting down: un-mark the batch so a future
+                // dispatch can retry it, and requeue the popped entry.
+                for col_cc in &coords {
+                    vx.in_flight_chunks.remove(col_cc);
+                }
                 vx.pending_chunks.push(pending);
                 break;
             }
-            dispatched += 1;
+            // The cap counts CHUNKS (not jobs) so the in-flight result
+            // volume matches the old per-chunk dispatch behaviour.
+            dispatched += batch;
         }
     }
 
@@ -140,6 +182,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 submeshes,
             } => {
                 vx.pending_set.remove(&coord);
+                vx.in_flight_chunks.remove(&coord);
                 let dx = (coord[0] - player_chunk[0]).abs();
                 let dz = (coord[2] - player_chunk[2]).abs();
                 if dx > unload_dist || dz > unload_dist {

@@ -874,6 +874,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
             }
             vx.pending_chunks.clear();
             vx.pending_set.clear();
+            vx.in_flight_chunks.clear();
             vx.pending_remesh.clear();
             vx.pending_remesh_set.clear();
         }

@@ -984,6 +984,53 @@ mod tests {
         }
     }
 
+    /// W239 diagnostic: where does per-chunk generation time go?
+    /// Prints cold column-data cost vs warm per-chunk cost so the
+    /// worker-dispatch redesign has numbers.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_generation_cost_breakdown() {
+        let c = WorldgenCtx {
+            base_seed: 3653370720,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        // Fresh columns, far from anything cached in this thread.
+        let mut cold_ms = 0.0f64;
+        let mut cols = 0u32;
+        for cx in 500..505i32 {
+            for cz in 500..505 {
+                let t = std::time::Instant::now();
+                let ow = overworld_for(c.effective_seed());
+                let _ = column_data_cached(&ow, cx, cz, c.effective_seed());
+                cold_ms += t.elapsed().as_secs_f64() * 1000.0;
+                cols += 1;
+            }
+        }
+        println!("column_data COLD: {:.1} ms avg over {cols} columns", cold_ms / cols as f64);
+        // Full chunk gen with a WARM column (same thread): fill +
+        // surface + features + everything generate_chunk_at_ctx does.
+        let mut warm_ms = 0.0f64;
+        let mut chunks = 0u32;
+        for cx in 500..505i32 {
+            for cz in 500..505 {
+                for cy in 0..16 {
+                    let t = std::time::Instant::now();
+                    let _ = crate::worldgen::generate_chunk_at_ctx([cx, cy, cz], &c);
+                    warm_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    chunks += 1;
+                }
+            }
+        }
+        println!("chunk gen WARM-column: {:.2} ms avg over {chunks} chunks", warm_ms / chunks as f64);
+        println!(
+            "=> column job (1 cold + 16 warm): {:.1} ms vs scattered worst case (16 cold): {:.1} ms",
+            cold_ms / cols as f64 + 16.0 * warm_ms / chunks as f64,
+            16.0 * (cold_ms / cols as f64 + warm_ms / chunks as f64),
+        );
+    }
+
     /// W232 diagnostic: the user's badlands-canyon "holes" report
     /// (seed 3653370720, standing at ~(106, 55, -90)). Prints PRE vs
     /// POST carve solidity + the McBiome across the crevice: if the

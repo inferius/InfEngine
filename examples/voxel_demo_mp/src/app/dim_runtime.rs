@@ -188,6 +188,7 @@ impl Voxel {
         // something different now.
         self.pending_chunks.clear();
         self.pending_set.clear();
+        self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         // Open UIs reference position-keyed containers that
