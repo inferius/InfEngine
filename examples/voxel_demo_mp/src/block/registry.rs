@@ -3269,4 +3269,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
     },
+    // W262: sculk vein - MC is a multiface overlay; the engine renders
+    // it via the universal cross fallback like glow_lichen (627).
+    BlockType { id: 811, name: "sculk_vein", color: [0.06, 0.10, 0.14], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true } },
 ];

@@ -2484,6 +2484,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 808, name: "cobbled_deepslate_stairs", display: Some("Cobbled Deepslate Stairs"), places: Some(808), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 809, name: "cobbled_deepslate_slab", display: Some("Cobbled Deepslate Slab"), places: Some(809), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 810, name: "cobbled_deepslate_wall", display: Some("Cobbled Deepslate Wall"), places: Some(810), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W262 - sculk vein (deep dark).
+    ItemType { id: 811, name: "sculk_vein", display: Some("Sculk Vein"), places: Some(811), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
