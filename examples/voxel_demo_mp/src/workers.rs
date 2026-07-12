@@ -148,9 +148,22 @@ impl WorkerPool {
                                                         },
                                                     );
                                                 // W242.2: monster spawner.
+                                                // W250: the entity kind
+                                                // resolves HERE (the
+                                                // mineshaft-corridor
+                                                // stand-in probe needs
+                                                // worldgen caches; on
+                                                // the main thread it
+                                                // built the noise
+                                                // stack).
                                                 } else if b.0 == crate::block::SPAWNER_ID {
                                                     side_effects.push(
-                                                        ChunkSideEffect::Spawner(wv),
+                                                        ChunkSideEffect::Spawner {
+                                                            pos: wv,
+                                                            kind: crate::mob::spawner::spawner_entity_kind_at(
+                                                                &gj.ctx, wv,
+                                                            ),
+                                                        },
                                                     );
                                                 // W38.2: any open-flame block
                                                 // registers a particle emitter.
@@ -749,9 +762,10 @@ pub(crate) enum ChunkSideEffect {
     /// W242.2: a monster-spawner block at this world position. The
     /// main thread folds it into `Voxel.spawner_positions` so the
     /// spawner tick + cage particles walk a small index instead of
-    /// scanning chunks. (The spawned entity kind still needs no side
-    /// effect - it stays a pure function of world seed + position.)
-    Spawner([i32; 3]),
+    /// scanning chunks. W250: the entity kind rides along - the
+    /// mineshaft-corridor membership probe behind the cave-spider
+    /// stand-in needs the worldgen caches only workers keep warm.
+    Spawner { pos: [i32; 3], kind: u8 },
 }
 
 /// W249: which loot table a worldgen chest rolls at delivery. Decided

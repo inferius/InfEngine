@@ -300,10 +300,14 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 }
                             }
                         }
-                        ChunkSideEffect::Spawner(wv) => {
+                        ChunkSideEffect::Spawner { pos: wv, kind } => {
                             // W242.2: index only - tick state mints
                             // lazily when a player walks into range.
+                            // W250: the worker-resolved entity kind
+                            // rides along (main-thread membership
+                            // probes built the noise stack).
                             vx.spawner_positions.insert(*wv);
+                            vx.spawner_kinds.insert(*wv, *kind);
                         }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
                             // W115: tick_offset 0 = a static worldgen liquid
@@ -633,10 +637,23 @@ fn rescan_chunk_radius(
         && let Some(slug) = vx.current_world_slug.clone()
     {
         let dim = vx.current_dim.clone();
+        // W250: only DIRTY chunks need a write on unload - untouched
+        // ones either already have their file (disk-first load) or
+        // re-derive deterministically from the seed. This also kills
+        // the disk flood that used to persist every freshly generated
+        // chunk scrolling past the unload ring.
+        let dirty_unload: std::collections::HashSet<ChunkCoord> = to_unload
+            .iter()
+            .filter(|cc| vx.world.dirty().contains(*cc))
+            .copied()
+            .collect();
+        for cc in &dirty_unload {
+            vx.world.clear_dirty_chunk(*cc);
+        }
         // W233: ONE pass per side map for the whole batch (the
         // per-chunk build_chunk_payload scanned every side map per
         // chunk = O(unloaded x map), ~18 ms per crossing at VD 12).
-        let payloads = world_save::runtime::build_chunk_payloads(vx, &to_unload);
+        let payloads = world_save::runtime::build_chunk_payloads(vx, &dirty_unload);
         if !payloads.is_empty() {
             std::thread::Builder::new()
                 .name("voxel_demo_mp::unload_writer".to_string())
@@ -702,6 +719,8 @@ fn rescan_chunk_radius(
     // whose block entity re-inits from defaults when NBT is absent).
     vx.spawner_positions.retain(|p| in_keep(p));
     vx.spawner_states.retain(|p, _| in_keep(p));
+    vx.spawner_kinds.retain(|p, _| in_keep(p));
+    vx.spawner_spin.retain(|p, _| in_keep(p));
     for cc in &to_unload {
         vx.world.remove_chunk(*cc);
     }

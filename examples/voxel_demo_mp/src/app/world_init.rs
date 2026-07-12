@@ -214,6 +214,7 @@ impl Voxel {
         } else {
             self.spawner_positions.remove(&voxel);
             self.spawner_states.remove(&voxel);
+            self.spawner_kinds.remove(&voxel);
         }
         // Torch removal also clears the sticky orientation
         // override so a future placement starts fresh.

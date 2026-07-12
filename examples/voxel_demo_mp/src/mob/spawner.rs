@@ -98,6 +98,12 @@ pub(crate) fn spawner_entity_kind(eff_seed: u32, pos: [i32; 3]) -> u8 {
 /// spawners in MC; until that mob is ported, corridor spawners map to
 /// the regular spider (once-logged stand-in). Everything else rolls
 /// the dungeon table.
+///
+/// W250: WORKER-ONLY. The corridor membership probe folds the mcgen
+/// cache stack (100+ ms cold), so gen workers resolve the kind during
+/// the side-effect scan and ship it in `ChunkSideEffect::Spawner`;
+/// the main thread reads `Voxel.spawner_kinds` and falls back to the
+/// pure dungeon table, never to this probe.
 pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i32; 3]) -> u8 {
     if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft_corridor(ctx, pos) {
         static LOGGED: std::sync::Once = std::sync::Once::new();
@@ -110,6 +116,17 @@ pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i
         return KIND_SPIDER;
     }
     spawner_entity_kind(ctx.effective_seed(), pos)
+}
+
+/// Main-thread kind resolve: the worker-shipped `spawner_kinds` map
+/// first (it knows about mineshaft corridors), the pure dungeon table
+/// as fallback (player-placed cages + stale-save entries that never
+/// went through a gen scan). Shared by the tick and the W250 cage
+/// display render.
+pub(crate) fn spawner_display_kind(vx: &Voxel, pos: [i32; 3]) -> u8 {
+    vx.spawner_kinds.get(&pos).copied().unwrap_or_else(|| {
+        spawner_entity_kind(vx.current_worldgen_ctx().effective_seed(), pos)
+    })
 }
 
 /// `nextInt(n)` over the SplitMix64 stream (same shape the worldgen
@@ -239,7 +256,7 @@ fn reset_delay(st: &mut SpawnerState) {
 /// a crowding-cap hit resets the delay and aborts the whole cycle
 /// (matching the Java early return).
 fn run_spawn_cycle(vx: &mut Voxel, pos: [i32; 3], st: &mut SpawnerState) {
-    let kind = spawner_entity_kind_at(&vx.current_worldgen_ctx(), pos);
+    let kind = spawner_display_kind(vx, pos);
     let mut spawned_any = false;
     for _ in 0..SPAWNER_SPAWN_COUNT {
         let sx = pos[0] as f32
@@ -659,6 +676,85 @@ mod tests {
              (cap {SPAWNER_MAX_NEARBY}), kind {}",
             v.mobs.len(),
             MobKind::from_u8(kind).name(),
+        );
+    }
+
+    /// W250 diagnosis probe: read the SAVED chunks around a spawner
+    /// and print ASCII slices with light emitters marked - answers
+    /// "is the spawner still there, and is the room lit (the MC
+    /// light gate correctly holding spawns back)?" headlessly.
+    /// `INFENGINE_DUMP_WORLD=test-mc-9 INFENGINE_SPAWNER_X/Y/Z=<pos>
+    /// cargo test -p voxel_demo_mp --release --bin voxel_demo_mp
+    /// dump_spawner_room_save -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_spawner_room_save() {
+        let env_i32 = |name: &str, default: i32| -> i32 {
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default)
+        };
+        let slug = std::env::var("INFENGINE_DUMP_WORLD")
+            .unwrap_or_else(|_| "test-mc-9".into());
+        let dim = std::env::var("INFENGINE_DUMP_DIM")
+            .unwrap_or_else(|_| "overworld".into());
+        let spos = [
+            env_i32("INFENGINE_SPAWNER_X", 4743),
+            env_i32("INFENGINE_SPAWNER_Y", 24),
+            env_i32("INFENGINE_SPAWNER_Z", 4733),
+        ];
+        let cs = CHUNK_SIZE as i32;
+        let read = |w: [i32; 3]| -> Option<u16> {
+            let cc = [
+                w[0].div_euclid(cs),
+                w[1].div_euclid(cs),
+                w[2].div_euclid(cs),
+            ];
+            let payload = crate::world_save::chunks::read_chunk(&slug, &dim, cc)
+                .ok()
+                .flatten()?;
+            let chunk = payload.voxels.into_chunk().ok()?;
+            Some(
+                chunk
+                    .get(
+                        w[0].rem_euclid(cs) as usize,
+                        w[1].rem_euclid(cs) as usize,
+                        w[2].rem_euclid(cs) as usize,
+                    )
+                    .0,
+            )
+        };
+        let mut emitters = 0usize;
+        for y in (spos[1] - 1)..=(spos[1] + 3) {
+            println!("--- y = {y} ---");
+            for z in (spos[2] - 6)..=(spos[2] + 6) {
+                let mut line = String::new();
+                for x in (spos[0] - 6)..=(spos[0] + 6) {
+                    let ch = match read([x, y, z]) {
+                        None => '?',
+                        Some(0) => '.',
+                        Some(id) if id == SPAWNER_ID => 'S',
+                        Some(id) if id == crate::block::CHEST_ID => 'C',
+                        Some(id)
+                            if crate::block::light_emission::light_emission_for_id(
+                                id,
+                            ) > 0 =>
+                        {
+                            emitters += 1;
+                            'T'
+                        }
+                        Some(_) => '#',
+                    };
+                    line.push(ch);
+                }
+                println!("{line}");
+            }
+        }
+        println!(
+            "spawner block present: {:?}, light emitters near the room: {emitters}",
+            read(spos).map(|id| id == SPAWNER_ID)
         );
     }
 

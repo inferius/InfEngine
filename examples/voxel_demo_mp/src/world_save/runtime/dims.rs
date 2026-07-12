@@ -50,9 +50,16 @@ pub(super) fn save_all_dims(
     let mut total_chunks: usize = 0;
     for dim_name in &world_json.dimensions {
         let n = if dim_name == &voxel.current_dim {
-            save_active_dim(voxel, slug, dim_name)?
+            let n = save_active_dim(voxel, slug, dim_name)?;
+            // W250: everything dirty is on disk now.
+            voxel.world.clear_dirty();
+            n
         } else {
-            save_parked_dim(voxel, slug, dim_name)?
+            let n = save_parked_dim(voxel, slug, dim_name)?;
+            if let Some(dw) = voxel.worlds.get_mut(dim_name) {
+                dw.world.clear_dirty();
+            }
+            n
         };
         total_chunks += n;
     }
@@ -64,7 +71,12 @@ pub(super) fn save_all_dims(
 /// flow but parameterised on the dim tag.
 fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
     let mut chunk_count: usize = 0;
-    let coords: Vec<ChunkCoord> = voxel.world.iter_chunks().map(|(c, _)| *c).collect();
+    // W250: persist only chunks mutated since the last save. Fresh
+    // worldgen re-derives deterministically; loaded-but-untouched
+    // chunks already have their file. Writing every loaded chunk
+    // made each exit/autosave a 67k-file flush at view distance 32
+    // (the "quitting takes forever" report).
+    let coords: Vec<ChunkCoord> = voxel.world.dirty().iter().copied().collect();
     for coord in coords {
         let Some(chunk) = voxel.world.chunk(coord) else {
             continue;
@@ -117,7 +129,8 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         return Ok(0);
     };
     let mut chunk_count: usize = 0;
-    let coords: Vec<ChunkCoord> = dw.world.iter_chunks().map(|(c, _)| *c).collect();
+    // W250: dirty-only, same as the active dim.
+    let coords: Vec<ChunkCoord> = dw.world.dirty().iter().copied().collect();
     for coord in coords {
         let Some(chunk) = dw.world.chunk(coord) else {
             continue;

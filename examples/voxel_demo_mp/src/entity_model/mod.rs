@@ -438,10 +438,26 @@ pub(crate) fn draw(
     world_pos: Vec3,
     yaw: f32,
     tint: [f32; 4],
-    mut pose_for: impl FnMut(&str) -> BonePose,
+    pose_for: impl FnMut(&str) -> BonePose,
 ) {
     let place = Mat4::from_translation(world_pos + Vec3::new(0.0, baked.ground_offset, 0.0))
         * Mat4::from_rotation_y(yaw);
+    draw_with_root(r, baked, place, tint, pose_for);
+}
+
+/// W250: the same bone walk with a caller-composed root transform.
+/// The spawner-cage display mob needs MC SpawnerRenderer's
+/// translate/spin/tilt/shrink chain around the whole model, which the
+/// pos+yaw form can't express. The root receives model-local space
+/// with the feet at the origin AFTER `ground_offset` - callers that
+/// bypass `draw` must fold `baked.ground_offset` in themselves.
+pub(crate) fn draw_with_root(
+    r: &mut Renderer,
+    baked: &BakedModel,
+    place: Mat4,
+    tint: [f32; 4],
+    mut pose_for: impl FnMut(&str) -> BonePose,
+) {
     let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
     // Cache each bone's local matrix (pose included) once, indexed
     // by position so the parent walk is a cheap slice lookup.

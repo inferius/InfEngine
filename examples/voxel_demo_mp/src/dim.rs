@@ -124,6 +124,8 @@ pub(crate) struct DimWorld {
     /// place across a dim round-trip; MC keeps the loaded block
     /// entity alive the same way).
     pub spawner_states: HashMap<[i32; 3], crate::mob::spawner::SpawnerState>,
+    /// W250: worker-resolved spawner entity kinds park with their dim.
+    pub spawner_kinds: HashMap<[i32; 3], u8>,
 }
 
 impl Default for DimWorld {
@@ -151,6 +153,7 @@ impl Default for DimWorld {
             rail_shapes: HashMap::new(),
             spawner_positions: std::collections::HashSet::new(),
             spawner_states: HashMap::new(),
+            spawner_kinds: HashMap::new(),
         }
     }
 }

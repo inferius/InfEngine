@@ -65,6 +65,8 @@ impl Voxel {
         // W242.2: spawner index + tick state are per-world.
         self.spawner_positions.clear();
         self.spawner_states.clear();
+        self.spawner_kinds.clear();
+        self.spawner_spin.clear();
         self.torch_orient.clear();
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
@@ -276,7 +278,15 @@ impl Voxel {
         // (=3) was used here but stream_chunks uses view_distance (default 4),
         // causing the counter to show e.g. 1296/784 (100%) because the target
         // was 7x7x16=784 but the live count rose to 9x9x16=1296.
-        let radius = self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
+        // W250: the LOADING screen only waits for a core ring - the
+        // streamer extends it to the full view distance during play,
+        // outward from the player (no near-player holes since W249).
+        // Waiting for the whole VD-32 ring (67k chunks) kept the
+        // loading screen up for minutes.
+        const LOADING_CORE_RADIUS: i32 = 12;
+        let radius = (self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8)
+            as i32)
+            .min(LOADING_CORE_RADIUS);
         // W249: centre the initial ring on the PLAYER's chunk. A
         // fresh world still starts at the origin (the old W28.1
         // assumption); a saved world's pose was pre-applied by

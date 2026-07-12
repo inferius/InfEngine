@@ -1799,6 +1799,32 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             // W204: fraction of the 20 Hz mob tick elapsed this frame.
             vx.mob_tick_accum / crate::mob::ai::MOB_TICK_DT,
         );
+        // W250: the miniature display mob spinning inside nearby
+        // spawner cages (MC SpawnerRenderer). Kind comes from the
+        // worker-shipped map; the pure dungeon-table fallback keeps
+        // the ctx cheap (no worldgen caches on the main thread).
+        if !vx.spawner_positions.is_empty() {
+            // Disjoint-field seed derivation - `current_worldgen_ctx`
+            // would borrow all of vx under the live `ui` borrow.
+            let eff_seed = if vx.current_dim.is_empty() {
+                vx.base_seed
+            } else {
+                crate::worldgen::dim_seed(vx.base_seed, &vx.current_dim)
+            };
+            let player_pos = vx.player_pos;
+            render::mobs::draw_spawner_displays(
+                renderer,
+                &mob_frustum,
+                &vx.spawner_positions,
+                &vx.spawner_kinds,
+                &vx.spawner_states,
+                &mut vx.spawner_spin,
+                &vx.mob_meshes,
+                player_pos,
+                eff_seed,
+                dt,
+            );
+        }
         // W126: chest block entities (entity sheets, facing,
         // double-chest halves, lid animation).
         render::chests::draw_chests(

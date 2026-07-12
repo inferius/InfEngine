@@ -1359,17 +1359,49 @@ pub type ChunkCoord = [i32; 3];
 #[derive(Debug, Default)]
 pub struct World {
     chunks: HashMap<ChunkCoord, Chunk>,
+    /// W250: chunks mutated through [`World::set`] /
+    /// [`World::mark_dirty`] since the last clear. The save layer
+    /// persists exactly these - freshly generated chunks re-derive
+    /// deterministically from the seed, and loaded-but-untouched
+    /// chunks already have their file on disk. Writing every loaded
+    /// chunk made each exit/autosave an O(view-distance) disk flush
+    /// (67k files at view distance 32).
+    dirty: std::collections::HashSet<ChunkCoord>,
 }
 
 impl World {
     pub fn new() -> Self {
         Self {
             chunks: HashMap::new(),
+            dirty: std::collections::HashSet::new(),
         }
     }
 
     pub fn insert_chunk(&mut self, coord: ChunkCoord, chunk: Chunk) {
         self.chunks.insert(coord, chunk);
+    }
+
+    /// W250: mark a chunk as needing persistence - for mutations that
+    /// bypass [`World::set`] (per-cell side-state like liquid levels
+    /// that saves as chunk-payload overrides).
+    pub fn mark_dirty(&mut self, coord: ChunkCoord) {
+        self.dirty.insert(coord);
+    }
+
+    /// W250: chunks mutated since the last clear.
+    pub fn dirty(&self) -> &std::collections::HashSet<ChunkCoord> {
+        &self.dirty
+    }
+
+    /// W250: forget dirtiness for one chunk (persisted, or handed to
+    /// the unload-save writer).
+    pub fn clear_dirty_chunk(&mut self, coord: ChunkCoord) {
+        self.dirty.remove(&coord);
+    }
+
+    /// W250: forget all dirtiness (a full save completed).
+    pub fn clear_dirty(&mut self) {
+        self.dirty.clear();
     }
 
     pub fn chunk(&self, coord: ChunkCoord) -> Option<&Chunk> {
@@ -1408,6 +1440,10 @@ impl World {
         let (cc, lc) = split_coord(world);
         let chunk = self.chunks.get_mut(&cc)?;
         chunk.set(lc[0], lc[1], lc[2], block);
+        // W250: every runtime mutation marks its chunk for the next
+        // save (generation writes go through `Chunk::set` before the
+        // chunk is inserted, so they stay clean by construction).
+        self.dirty.insert(cc);
         Some(cc)
     }
 

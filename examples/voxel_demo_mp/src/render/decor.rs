@@ -282,7 +282,23 @@ pub(crate) fn draw(
             // (W199) - sampling is the same animated-tile path as
             // chunk meshes.
             let tint = [tint3[0], tint3[1], tint3[2], alpha];
-            if *liquid_id == WATER_ID || *liquid_id == LAVA_ID {
+            if *liquid_id == LAVA_ID {
+                // W250: lava is self-illuminated - MC renders it at
+                // full brightness regardless of the light grid. The
+                // emissive boost keeps the surface glowing after the
+                // lighting BFS dims the cave's lit result (the "lava
+                // lost its glow after a while" report: fresh chunks
+                // drew before their grids landed, then the relight
+                // darkened them).
+                renderer.draw_mesh_water_emissive(
+                    *handle,
+                    Mat4::IDENTITY.to_cols_array(),
+                    tint,
+                    0.0,
+                    rough,
+                    1.0,
+                );
+            } else if *liquid_id == WATER_ID {
                 renderer.draw_mesh_water(
                     *handle,
                     Mat4::IDENTITY.to_cols_array(),

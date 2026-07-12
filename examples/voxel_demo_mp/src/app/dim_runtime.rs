@@ -82,6 +82,7 @@ impl Voxel {
             // W242.2: spawner index + tick state park with their dim.
             spawner_positions: std::mem::take(&mut self.spawner_positions),
             spawner_states: std::mem::take(&mut self.spawner_states),
+            spawner_kinds: std::mem::take(&mut self.spawner_kinds),
         };
         self.worlds.insert(self.current_dim.clone(), parked);
         // W137: a rider can't follow their cart into the parking
@@ -143,6 +144,7 @@ impl Voxel {
         self.rail_shapes = target_world.rail_shapes;
         self.spawner_positions = target_world.spawner_positions;
         self.spawner_states = target_world.spawner_states;
+        self.spawner_kinds = target_world.spawner_kinds;
         let target_ents = self
             .entities_by_dim
             .remove(target)

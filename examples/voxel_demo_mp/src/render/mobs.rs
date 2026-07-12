@@ -14,7 +14,7 @@ use infengine_render::{MeshHandle, Renderer};
 use crate::frustum::Frustum;
 use crate::mob::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP, KIND_SKELETON,
-    KIND_WOLF, KIND_ZOMBIE,
+    KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
 };
 use crate::mob::state::{MOB_DEATH_FADE, MOB_LUNGE_TIME};
 use crate::mob_meshes::MobMeshes;
@@ -564,4 +564,115 @@ pub fn draw_remote_mobs(
                 } // end match mob.kind
             }
         }
+}
+
+/// W250 - MC `SpawnerRenderer` + the client half of `BaseSpawner`:
+/// the miniature display mob spinning inside the cage.
+///
+/// Transform chain straight from `SpawnerRenderer.render`:
+///   translate(+0.5, +0.4, +0.5)   (cage centre, lifted)
+///   rotY(spin * 10 deg)           (the accelerating spin)
+///   translate(0, -0.2, 0)
+///   rotX(-30 deg)                 (the fixed lean)
+///   scale(0.53125 / max(bbW, bbH, 1))
+/// and `BaseSpawner.clientTick` advances `spin` by
+/// `1000 / (delay + 200)` per tick, frozen whenever no player is
+/// inside the 16-block activation range (the `isNearPlayer` gate) -
+/// so the mob visibly spins up as a spawn approaches.
+///
+/// Runs off the spawner INDEX, not the entity list: the display is a
+/// render-only dummy with no entity backing, exactly like MC's
+/// `getOrCreateDisplayEntity`. Cages whose entity model didn't load
+/// draw nothing rather than a full-size fallback cube filling the
+/// cage.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_spawner_displays(
+    renderer: &mut Renderer,
+    mob_frustum: &Frustum,
+    spawner_positions: &std::collections::HashSet<[i32; 3]>,
+    spawner_kinds: &HashMap<[i32; 3], u8>,
+    spawner_states: &HashMap<[i32; 3], crate::mob::spawner::SpawnerState>,
+    spawner_spin: &mut HashMap<[i32; 3], f32>,
+    mob_meshes: &MobMeshes,
+    player_pos: Vec3,
+    eff_seed: u32,
+    dt: f32,
+) {
+    if spawner_positions.is_empty() {
+        return;
+    }
+    // Block entities render out to 64 in MC; half that is plenty for
+    // a half-block mob and keeps the pass free when no dungeon is
+    // near.
+    const DISPLAY_RANGE: f32 = 32.0;
+    let activation2 = crate::mob::spawner::SPAWNER_PLAYER_RANGE
+        * crate::mob::spawner::SPAWNER_PLAYER_RANGE;
+    for pos in spawner_positions {
+        let centre = Vec3::new(
+            pos[0] as f32 + 0.5,
+            pos[1] as f32 + 0.5,
+            pos[2] as f32 + 0.5,
+        );
+        let d2 = centre.distance_squared(player_pos);
+        if d2 > DISPLAY_RANGE * DISPLAY_RANGE {
+            continue;
+        }
+        // Spin advance BEFORE the frustum cull - MC's clientTick runs
+        // whether or not the block is on screen, so looking away must
+        // not freeze the rotation.
+        let spin = spawner_spin.entry(*pos).or_insert(0.0);
+        if d2 < activation2 {
+            // The tick countdown supplies the speed-up toward the next
+            // spawn. A pure multiplayer client never mints tick state,
+            // so it idles at the mid-range roll (delay 200..800).
+            let delay = spawner_states.get(pos).map_or(400, |s| s.delay);
+            *spin = (*spin + dt * 20.0 * 1000.0 / (delay as f32 + 200.0)) % 360.0;
+        }
+        if !mob_frustum.contains_point(centre) {
+            continue;
+        }
+        let kind = spawner_kinds.get(pos).copied().unwrap_or_else(|| {
+            crate::mob::spawner::spawner_entity_kind(eff_seed, *pos)
+        });
+        let baked = match kind {
+            KIND_ZOMBIE => mob_meshes.zombie_model.as_ref(),
+            KIND_SKELETON => mob_meshes.skeleton_model.as_ref(),
+            KIND_SPIDER => mob_meshes.spider_model.as_ref(),
+            _ => None,
+        };
+        let Some(baked) = baked else { continue };
+        let (hx, hy, _, _) = crate::mob::kinds::hitbox_for(kind);
+        let bb_max = (2.0 * hx).max(2.0 * hy);
+        let scale = if bb_max > 1.0 {
+            0.53125 / bb_max
+        } else {
+            0.53125
+        };
+        // Innermost: fold the model's own ground offset + the same
+        // -90deg model-space yaw every live mob draw applies, so the
+        // chain sees feet-at-origin like MC's dispatcher does.
+        let place = Mat4::from_translation(Vec3::new(
+            pos[0] as f32 + 0.5,
+            pos[1] as f32 + 0.4,
+            pos[2] as f32 + 0.5,
+        )) * Mat4::from_rotation_y((*spin * 10.0).to_radians())
+            * Mat4::from_translation(Vec3::new(0.0, -0.2, 0.0))
+            * Mat4::from_rotation_x((-30.0f32).to_radians())
+            * Mat4::from_scale(Vec3::splat(scale))
+            * Mat4::from_translation(Vec3::new(0.0, baked.ground_offset, 0.0))
+            * Mat4::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+        crate::entity_model::draw_with_root(
+            renderer,
+            baked,
+            place,
+            [1.0, 1.0, 1.0, 1.0],
+            |name| {
+                if name.starts_with("spider_leg") {
+                    crate::entity_model::animation::spider_leg_pose(name, 0.0, 0.0)
+                } else {
+                    crate::entity_model::animation::pose_for_bone(name, 0.0, 0.0, 0.0, 0.0)
+                }
+            },
+        );
+    }
 }

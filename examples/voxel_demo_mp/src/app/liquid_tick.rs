@@ -853,6 +853,13 @@ impl Voxel {
         // of the global O(all-liquids) scan.
         let cs = CHUNK_SIZE as i32;
         for pos in &promoted {
+            // W250: the level change persists as a chunk-payload
+            // override - mark the chunk without a block write.
+            self.world.mark_dirty([
+                pos[0].div_euclid(cs),
+                pos[1].div_euclid(cs),
+                pos[2].div_euclid(cs),
+            ]);
             self.enqueue_liquid_remesh([
                 pos[0].div_euclid(cs),
                 pos[1].div_euclid(cs),

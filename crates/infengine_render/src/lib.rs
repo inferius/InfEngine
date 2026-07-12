@@ -563,6 +563,26 @@ impl Renderer {
         self.mesh3d_queue.push((handle, instance));
     }
 
+    /// W250: liquid-surface draw with an emissive boost - lava is
+    /// self-illuminated (MC renders it at full brightness regardless
+    /// of the light grid), so its mesh must not dim to the cave's
+    /// lit result once the lighting BFS lands.
+    pub fn draw_mesh_water_emissive(
+        &mut self,
+        handle: MeshHandle,
+        model: [f32; 16],
+        color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+        emissive: f32,
+    ) {
+        let instance = MeshInstance::new(model, color)
+            .with_material(metallic, roughness)
+            .with_emissive(emissive)
+            .with_water_marker();
+        self.mesh3d_queue.push((handle, instance));
+    }
+
     /// Register a new mesh and return its handle. The caller can then
     /// reference the mesh via [`Renderer::draw_mesh`].
     pub fn create_mesh(

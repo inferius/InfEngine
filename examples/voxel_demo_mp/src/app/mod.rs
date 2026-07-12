@@ -673,6 +673,17 @@ pub(crate) struct Voxel {
     /// activation range. NOT persisted - a reload re-inits to the
     /// MC initial 20-tick delay (see `mob::spawner` module docs).
     pub(crate) spawner_states: HashMap<[i32; 3], crate::mob::spawner::SpawnerState>,
+    /// W250: worker-resolved entity kind per spawner (the mineshaft
+    /// cave-spider stand-in probe needs worldgen caches only the
+    /// workers keep warm). Missing entries fall back to the pure
+    /// dungeon-table function - never to a main-thread membership
+    /// probe.
+    pub(crate) spawner_kinds: HashMap<[i32; 3], u8>,
+    /// W250: cage display-mob spin angle per spawner (MC
+    /// `BaseSpawner.spin`, in MC spin units - the render multiplies
+    /// by 10 deg). Pure visual: not persisted, not parked per-dim,
+    /// re-inits at 0 like a freshly loaded MC block entity.
+    pub(crate) spawner_spin: HashMap<[i32; 3], f32>,
     /// Sticky torch orientations keyed by voxel. 0 = floor,
     /// 1 = wall pointing -X (mounted on +X face of a block at
     /// voxel.x+1), 2 = +X, 3 = -Z, 4 = +Z. Set at placement
