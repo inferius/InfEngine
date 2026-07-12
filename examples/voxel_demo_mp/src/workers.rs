@@ -777,6 +777,9 @@ pub(crate) enum ChestLootKind {
     DesertPyramid,
     IglooChest,
     PillagerOutpost,
+    ShipwreckMap,
+    ShipwreckTreasure,
+    ShipwreckSupply,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -795,6 +798,14 @@ pub(crate) fn chest_loot_kind(
         ChestLootKind::IglooChest
     } else if mcgen::outpost::pos_in_outpost(ctx, pos) {
         ChestLootKind::PillagerOutpost
+    } else if let Some(k) = mcgen::shipwreck::chest_kind_at(ctx, pos) {
+        match k {
+            mcgen::shipwreck::ShipwreckChest::Map => ChestLootKind::ShipwreckMap,
+            mcgen::shipwreck::ShipwreckChest::Treasure => {
+                ChestLootKind::ShipwreckTreasure
+            }
+            mcgen::shipwreck::ShipwreckChest::Supply => ChestLootKind::ShipwreckSupply,
+        }
     } else {
         ChestLootKind::SimpleDungeon
     }

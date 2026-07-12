@@ -285,6 +285,140 @@ pub(crate) const PILLAGER_OUTPOST: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/shipwreck_map.json` (26.1.2).
+/// The map itself + navigation gear. Gaps via the name mapper: map,
+/// compass, clock, the coast trim + nautilus armors.
+pub(crate) const SHIPWRECK_MAP: LootTable = LootTable {
+    pools: &[
+        LootPool { rolls_min: 1, rolls_max: 1, entries: &[one("map", 1)] },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 3,
+            entries: &[
+                one("compass", 1),
+                one("map", 1),
+                one("clock", 1),
+                counted("paper", 20, 1, 10),
+                counted("feather", 10, 1, 5),
+                counted("book", 5, 1, 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 5),
+                counted("coast_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
+/// `data/minecraft/loot_table/chests/shipwreck_supply.json` (26.1.2).
+pub(crate) const SHIPWRECK_SUPPLY: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 10,
+            entries: &[
+                counted("paper", 8, 1, 12),
+                counted("potato", 7, 2, 6),
+                counted("moss_block", 7, 1, 4),
+                counted("poisonous_potato", 7, 2, 6),
+                counted("carrot", 7, 4, 8),
+                counted("wheat", 7, 8, 21),
+                one("suspicious_stew", 10),
+                counted("coal", 6, 2, 8),
+                counted("rotten_flesh", 5, 5, 24),
+                counted("pumpkin", 2, 1, 3),
+                counted("bamboo", 2, 1, 3),
+                counted("gunpowder", 3, 1, 5),
+                counted("tnt", 1, 1, 2),
+                one("leather_helmet", 3),
+                one("leather_chestplate", 3),
+                one("leather_leggings", 3),
+                one("leather_boots", 3),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 5),
+                counted("coast_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
+/// `data/minecraft/loot_table/chests/shipwreck_treasure.json`
+/// (26.1.2).
+pub(crate) const SHIPWRECK_TREASURE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 6,
+            entries: &[
+                counted("iron_ingot", 90, 1, 5),
+                counted("gold_ingot", 10, 1, 5),
+                counted("emerald", 40, 1, 5),
+                one("diamond", 5),
+                one("experience_bottle", 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 5,
+            entries: &[
+                counted("iron_nugget", 50, 1, 10),
+                counted("gold_nugget", 10, 1, 10),
+                counted("lapis_lazuli", 20, 1, 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 5),
+                counted("coast_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

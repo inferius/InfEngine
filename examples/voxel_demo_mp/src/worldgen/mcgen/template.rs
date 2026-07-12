@@ -50,12 +50,15 @@ pub(crate) struct JigsawInfo {
 }
 
 /// One template cell: local position + palette index (+ jigsaw
-/// metadata when the state is a jigsaw block).
+/// metadata when the state is a jigsaw block, + the data-marker
+/// string when it's a DATA-mode structure block - shipwreck loot
+/// markers like `map_chest` ride these).
 #[derive(Debug, Clone)]
 pub(crate) struct TemplateCell {
     pub(crate) pos: [i32; 3],
     pub(crate) state: usize,
     pub(crate) jigsaw: Option<JigsawInfo>,
+    pub(crate) data_marker: Option<String>,
 }
 
 /// A parsed structure template.
@@ -171,7 +174,20 @@ impl StructureTemplate {
             } else {
                 None
             };
-            cells.push(TemplateCell { pos, state, jigsaw });
+            let data_marker = if palette[state].name == "minecraft:structure_block" {
+                b.get("nbt").and_then(|n| {
+                    (n.get("mode").and_then(Nbt::as_str) == Some("DATA"))
+                        .then(|| {
+                            n.get("metadata")
+                                .and_then(Nbt::as_str)
+                                .map(str::to_string)
+                        })
+                        .flatten()
+                })
+            } else {
+                None
+            };
+            cells.push(TemplateCell { pos, state, jigsaw, data_marker });
         }
         Ok(StructureTemplate { size, palette, cells })
     }

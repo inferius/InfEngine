@@ -53,6 +53,7 @@ pub(crate) mod outpost;
 pub(crate) mod overworld;
 pub(crate) mod pyramid;
 pub(crate) mod scattered;
+pub(crate) mod shipwreck;
 pub(crate) mod structures;
 pub(crate) mod swamp_hut;
 pub(crate) mod surface_rule;
