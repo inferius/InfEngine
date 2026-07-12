@@ -78,3 +78,6 @@ voxel_server_state.bin
 # Asset bundles (big binaries; never commit)
 *.zip
 mc_assets.zip
+# W245.2 exception: the embedded village template data (~780 KB,
+# include_bytes! source - the build breaks without it).
+!examples/voxel_demo_mp/src/worldgen/mcgen/data/village_data.zip
