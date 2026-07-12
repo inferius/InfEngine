@@ -2486,6 +2486,28 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 810, name: "cobbled_deepslate_wall", display: Some("Cobbled Deepslate Wall"), places: Some(810), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     // W262 - sculk vein (deep dark).
     ItemType { id: 811, name: "sculk_vein", display: Some("Sculk Vein"), places: Some(811), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W263 - trial chambers tuff + copper families.
+    ItemType { id: 812, name: "tuff_bricks", display: Some("Tuff Bricks"), places: Some(812), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 813, name: "polished_tuff", display: Some("Polished Tuff"), places: Some(813), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 814, name: "chiseled_tuff_bricks", display: Some("Chiseled Tuff Bricks"), places: Some(814), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 815, name: "chiseled_tuff", display: Some("Chiseled Tuff"), places: Some(815), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 816, name: "polished_tuff_slab", display: Some("Polished Tuff Slab"), places: Some(816), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 817, name: "oxidized_cut_copper", display: Some("Oxidized Cut Copper"), places: Some(817), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 818, name: "chiseled_copper", display: Some("Chiseled Copper"), places: Some(818), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 819, name: "oxidized_chiseled_copper", display: Some("Oxidized Chiseled Copper"), places: Some(819), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 820, name: "copper_grate", display: Some("Copper Grate"), places: Some(820), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 821, name: "oxidized_copper_grate", display: Some("Oxidized Copper Grate"), places: Some(821), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 822, name: "copper_bulb", display: Some("Copper Bulb"), places: Some(822), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 823, name: "cut_copper_stairs", display: Some("Cut Copper Stairs"), places: Some(823), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 824, name: "oxidized_cut_copper_stairs", display: Some("Oxidized Cut Copper Stairs"), places: Some(824), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 825, name: "oxidized_cut_copper_slab", display: Some("Oxidized Cut Copper Slab"), places: Some(825), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 826, name: "copper_door", display: Some("Copper Door"), places: Some(826), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 827, name: "oxidized_copper_door", display: Some("Oxidized Copper Door"), places: Some(827), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 828, name: "copper_trapdoor", display: Some("Copper Trapdoor"), places: Some(828), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 829, name: "oxidized_copper_trapdoor", display: Some("Oxidized Copper Trapdoor"), places: Some(829), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 830, name: "trial_spawner", display: Some("Trial Spawner"), places: Some(830), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 831, name: "vault", display: Some("Vault"), places: Some(831), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 832, name: "cut_copper_slab", display: Some("Cut Copper Slab"), places: Some(832), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

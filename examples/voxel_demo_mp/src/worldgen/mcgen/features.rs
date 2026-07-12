@@ -868,6 +868,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W256: stronghold - before the monster rooms, so dungeons can
     // cut into its walls like MC's structure-then-feature order.
     super::stronghold::place_strongholds(chunk, coord, ctx, origin);
+    // W263: trial chambers (underground_structures, step 3).
+    super::trial_chambers::place_trial_chambers(chunk, coord, ctx, origin);
     // W242: monster rooms (underground_structures, step 3) - after
     // local_modifications, before the ore step, like the biome lists
     // order them.

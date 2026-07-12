@@ -3272,4 +3272,61 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // W262: sculk vein - MC is a multiface overlay; the engine renders
     // it via the universal cross fallback like glow_lichen (627).
     BlockType { id: 811, name: "sculk_vein", color: [0.06, 0.10, 0.14], transparent: true, flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["sculk_vein.png"], keep_alpha: true } },
+    // ============================================================
+    // W263 - the trial-chambers tuff + copper families (waxed
+    // template states RENAME onto these canonical rows - same
+    // textures, no weathering tick yet).
+    // ============================================================
+    BlockType { id: 812, name: "tuff_bricks", color: [0.42, 0.44, 0.40], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["tuff_bricks.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["tuff_bricks.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["tuff_bricks.png"], keep_alpha: false } },
+    BlockType { id: 813, name: "polished_tuff", color: [0.40, 0.42, 0.38], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false } },
+    BlockType { id: 814, name: "chiseled_tuff_bricks", color: [0.42, 0.44, 0.40], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["chiseled_tuff_bricks_top.png", "tuff_bricks.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["chiseled_tuff_bricks_top.png", "tuff_bricks.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["chiseled_tuff_bricks.png", "tuff_bricks.png"], keep_alpha: false } },
+    BlockType { id: 815, name: "chiseled_tuff", color: [0.40, 0.42, 0.38], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["chiseled_tuff_top.png", "tuff.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["chiseled_tuff_top.png", "tuff.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["chiseled_tuff.png", "tuff.png"], keep_alpha: false } },
+    BlockType {
+        id: 816, name: "polished_tuff_slab", color: [0.40, 0.42, 0.38], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_tuff.png"], keep_alpha: false },
+    },
+    BlockType { id: 817, name: "oxidized_cut_copper", color: [0.34, 0.62, 0.54], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png", "oxidized_copper.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png", "oxidized_copper.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png", "oxidized_copper.png"], keep_alpha: false } },
+    BlockType { id: 818, name: "chiseled_copper", color: [0.78, 0.52, 0.38], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["chiseled_copper.png", "copper_block.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["chiseled_copper.png", "copper_block.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["chiseled_copper.png", "copper_block.png"], keep_alpha: false } },
+    BlockType { id: 819, name: "oxidized_chiseled_copper", color: [0.34, 0.62, 0.54], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["oxidized_chiseled_copper.png", "oxidized_copper.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["oxidized_chiseled_copper.png", "oxidized_copper.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["oxidized_chiseled_copper.png", "oxidized_copper.png"], keep_alpha: false } },
+    // Grates: MC cutout cubes (see-through like glass).
+    BlockType { id: 820, name: "copper_grate", color: [0.78, 0.52, 0.38], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["copper_grate.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["copper_grate.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["copper_grate.png"], keep_alpha: true } },
+    BlockType { id: 821, name: "oxidized_copper_grate", color: [0.34, 0.62, 0.54], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["oxidized_copper_grate.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["oxidized_copper_grate.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["oxidized_copper_grate.png"], keep_alpha: true } },
+    // Bulb: the lit/powered states are a redstone follow-up; the
+    // unlit texture stands for all of them.
+    BlockType { id: 822, name: "copper_bulb", color: [0.80, 0.56, 0.40], transparent: false, flags: 0, top: TileSpec { col: 0, row: 0, files: &["copper_bulb.png", "copper_block.png"], keep_alpha: false }, bottom: TileSpec { col: 0, row: 0, files: &["copper_bulb.png", "copper_block.png"], keep_alpha: false }, sides: TileSpec { col: 0, row: 0, files: &["copper_bulb.png", "copper_block.png"], keep_alpha: false } },
+    BlockType {
+        id: 823, name: "cut_copper_stairs", color: [0.78, 0.52, 0.38], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 824, name: "oxidized_cut_copper_stairs", color: [0.34, 0.62, 0.54], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 825, name: "oxidized_cut_copper_slab", color: [0.34, 0.62, 0.54], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["oxidized_cut_copper.png"], keep_alpha: false },
+    },
+    BlockType { id: 826, name: "copper_door", color: [0.78, 0.52, 0.38], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["copper_door_top.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["copper_door_bottom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["copper_door_bottom.png"], keep_alpha: true } },
+    BlockType { id: 827, name: "oxidized_copper_door", color: [0.34, 0.62, 0.54], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER, top: TileSpec { col: 0, row: 0, files: &["oxidized_copper_door_top.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["oxidized_copper_door_bottom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["oxidized_copper_door_bottom.png"], keep_alpha: true } },
+    BlockType { id: 828, name: "copper_trapdoor", color: [0.78, 0.52, 0.38], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_AABB_PASS, top: TileSpec { col: 0, row: 0, files: &["copper_trapdoor.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["copper_trapdoor.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["copper_trapdoor.png"], keep_alpha: true } },
+    BlockType { id: 829, name: "oxidized_copper_trapdoor", color: [0.34, 0.62, 0.54], transparent: true, flags: F_TRANSPARENT_RENDER | F_DEDICATED_RENDER | F_AABB_PASS, top: TileSpec { col: 0, row: 0, files: &["oxidized_copper_trapdoor.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["oxidized_copper_trapdoor.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["oxidized_copper_trapdoor.png"], keep_alpha: true } },
+    // Trial spawner + vault: decorative shells like the W242 spawner
+    // (the trial-wave gameplay is a mob-parity follow-up); cutout
+    // cage textures, full collision.
+    BlockType { id: 830, name: "trial_spawner", color: [1.0, 1.0, 1.0], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["trial_spawner_top_inactive.png", "spawner.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["trial_spawner_bottom.png", "spawner.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["trial_spawner_side_inactive.png", "spawner.png"], keep_alpha: true } },
+    BlockType { id: 831, name: "vault", color: [0.45, 0.48, 0.50], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["vault_top_off.png", "vault_top.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["vault_bottom.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["vault_side_off.png", "vault_front_off.png"], keep_alpha: true } },
+    BlockType {
+        id: 832, name: "cut_copper_slab", color: [0.78, 0.52, 0.38], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
+    },
 ];

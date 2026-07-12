@@ -851,6 +851,83 @@ pub(crate) const ANCIENT_CITY_ICE_BOX: LootTable = LootTable {
     }],
 };
 
+/// `loot_table/chests/trial_chambers/*.json` (26.1.2). The reward /
+/// ominous tables belong to the vault mechanic (follow-up wave);
+/// unmapped items (trial_key, tipped arrows, scaffolding, hanging
+/// signs, milk buckets...) skip via the roller.
+pub(crate) const TRIAL_CHAMBERS_CORRIDOR: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 1,
+        rolls_max: 3,
+        entries: &[
+            one("iron_axe", 1),
+            counted("honeycomb", 1, 2, 8),
+            one("stone_axe", 2),
+            one("stone_pickaxe", 2),
+            counted("ender_pearl", 2, 1, 2),
+            counted("bamboo_hanging_sign", 2, 1, 4),
+            counted("bamboo_planks", 2, 3, 6),
+            counted("scaffolding", 2, 2, 10),
+            counted("torch", 2, 3, 6),
+            counted("tuff", 3, 8, 20),
+        ],
+    }],
+};
+
+pub(crate) const TRIAL_CHAMBERS_ENTRANCE: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 2,
+        rolls_max: 3,
+        entries: &[
+            one("trial_key", 1),
+            counted("stick", 5, 2, 5),
+            one("wooden_axe", 10),
+            counted("honeycomb", 10, 2, 8),
+            counted("arrow", 10, 5, 10),
+        ],
+    }],
+};
+
+pub(crate) const TRIAL_CHAMBERS_INTERSECTION: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 1,
+        rolls_max: 3,
+        entries: &[
+            one("diamond_block", 1),
+            counted("emerald_block", 5, 1, 3),
+            one("diamond_axe", 5),
+            one("diamond_pickaxe", 5),
+            counted("diamond", 10, 1, 2),
+            counted("cake", 20, 1, 4),
+            counted("amethyst_shard", 20, 8, 20),
+            counted("iron_block", 20, 1, 2),
+        ],
+    }],
+};
+
+pub(crate) const TRIAL_CHAMBERS_SUPPLY: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 3,
+        rolls_max: 5,
+        entries: &[
+            counted("arrow", 2, 4, 14),
+            counted("tipped_arrow", 1, 4, 8),
+            counted("tipped_arrow", 1, 4, 8),
+            counted("baked_potato", 2, 2, 4),
+            counted("glow_berries", 2, 2, 10),
+            counted("acacia_planks", 1, 3, 6),
+            counted("moss_block", 1, 2, 5),
+            counted("bone_meal", 1, 2, 5),
+            counted("tuff", 1, 5, 10),
+            counted("torch", 1, 3, 6),
+            counted("potion", 1, 2, 2),
+            counted("potion", 1, 2, 2),
+            one("stone_pickaxe", 2),
+            one("milk_bucket", 1),
+        ],
+    }],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

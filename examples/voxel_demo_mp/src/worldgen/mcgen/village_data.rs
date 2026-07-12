@@ -514,7 +514,11 @@ mod tests {
                         .unwrap_or_else(|| panic!("{id}: template {location} missing"));
                     checked_templates += 1;
                     for (_c, j) in t.jigsaws() {
-                        if j.pool != "minecraft:empty" {
+                        // W263: alias keys resolve per structure
+                        // instance (SolveCfg.aliases), not as files.
+                        if j.pool != "minecraft:empty"
+                            && !j.pool.contains("/spawner/contents/")
+                        {
                             assert!(
                                 pool(&j.pool).is_some(),
                                 "{location}: socket pool {} missing",

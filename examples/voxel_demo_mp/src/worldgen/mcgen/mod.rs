@@ -69,6 +69,7 @@ pub(crate) mod surface_rule;
 pub(crate) mod template;
 pub(crate) mod terrain;
 pub(crate) mod trees;
+pub(crate) mod trial_chambers;
 pub(crate) mod vegetation;
 pub(crate) mod village;
 pub(crate) mod village_data;

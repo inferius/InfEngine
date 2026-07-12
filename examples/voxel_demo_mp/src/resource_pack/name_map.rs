@@ -190,6 +190,16 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 808, block: "cobbled_deepslate_stairs",   top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 809, block: "cobbled_deepslate_slab",     top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 810, block: "cobbled_deepslate_wall",     top: "", bottom: "", sides: "" },
+    // W263 - trial-chambers shapes (JSON pipeline by name).
+    BlockNameMap { infengine_id: 816, block: "polished_tuff_slab",         top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 823, block: "cut_copper_stairs",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 824, block: "oxidized_cut_copper_stairs", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 825, block: "oxidized_cut_copper_slab",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 826, block: "copper_door",                top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 827, block: "oxidized_copper_door",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 828, block: "copper_trapdoor",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 829, block: "oxidized_copper_trapdoor",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 832, block: "cut_copper_slab",            top: "", bottom: "", sides: "" },
     // W35.3 - Stone variants + wood variants + wool + building blocks.
     BlockNameMap { infengine_id: 83, block: "granite",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 84, block: "diorite",          top: "", bottom: "", sides: "" },
@@ -878,6 +888,8 @@ mod tests {
             // W261: deepslate shape blocks - blockstate names, textures
             // via the JSON model refs.
             799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809, 810,
+            // W263: trial-chambers shape blocks (same rule).
+            816, 823, 824, 825, 826, 827, 828, 829, 832,
             543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
             568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)

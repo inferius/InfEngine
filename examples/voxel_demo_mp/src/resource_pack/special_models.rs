@@ -431,6 +431,9 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         // only fire when the JSON path returns None.
         548..=552 => Some("block/trapdoor"),
         568..=575 => Some("block/door_lower"),
+        // W263: copper doors + trapdoors, same fallback rule.
+        826 | 827 => Some("block/door_lower"),
+        828 | 829 => Some("block/trapdoor"),
         // W55.2: chest renders as an inset 14x14x14 box so it
         // visually stands apart from a plain plank block.
         x if x == crate::block::CHEST_ID => Some("block/chest"),

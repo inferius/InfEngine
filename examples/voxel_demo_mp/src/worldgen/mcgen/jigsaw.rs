@@ -361,7 +361,8 @@ fn first_free_height(ctx: &WorldgenCtx, x: i32, z: i32) -> i32 {
 /// W261: the per-structure jigsaw configuration (`JigsawStructure`
 /// JSON fields the solver honours beyond depth).
 pub(crate) struct SolveCfg {
-    /// The structure `size` (villages 6, outposts / ancient city 7).
+    /// The structure `size` (villages 6, outposts / ancient city 7,
+    /// trial chambers 20).
     pub(crate) max_depth: i32,
     /// `max_distance_from_center` horizontal (80 default, city 116).
     pub(crate) max_distance: i32,
@@ -372,6 +373,21 @@ pub(crate) struct SolveCfg {
     /// `start_jigsaw_name`: shift the start template so its jigsaw
     /// with this name lands on the anchor column (city_anchor).
     pub(crate) start_jigsaw: Option<&'static str>,
+    /// W263: per-structure pool-alias bindings (`pool_aliases`,
+    /// trial-chambers spawner contents) - socket pool ids route
+    /// through this before lookup.
+    pub(crate) aliases: std::collections::HashMap<String, String>,
+    /// `use_expansion_hack` (headroom reservation over low pieces).
+    pub(crate) expansion_hack: bool,
+}
+
+/// Alias-routed pool lookup (`PoolAliasLookup`).
+fn pool_resolved(
+    cfg: &SolveCfg,
+    id: &str,
+) -> Option<Rc<village_data::TemplatePool>> {
+    let target = cfg.aliases.get(id).map(|s| s.as_str()).unwrap_or(id);
+    village_data::pool(target)
 }
 
 /// Solve one jigsaw layout anchored at `start_chunk` from
@@ -394,6 +410,8 @@ pub(crate) fn solve(
             max_distance: VILLAGE_MAX_DISTANCE,
             start_y: None,
             start_jigsaw: None,
+            aliases: std::collections::HashMap::new(),
+            expansion_hack: true,
         },
         rng,
     )
@@ -410,7 +428,7 @@ pub(crate) fn solve_cfg(
     let cs = infengine_voxel::CHUNK_SIZE as i32;
     let anchor = [start_chunk[0] * cs, cfg.start_y.unwrap_or(0), start_chunk[1] * cs];
     let center_rotation = next_int(rng, 4) as u8;
-    let start = village_data::pool(start_pool)?;
+    let start = pool_resolved(cfg, start_pool)?;
     let (location, terrain_matching, center_overlays, center_processors) =
         element_parts(random_element(&start, rng)?)?;
     let center_template = village_data::template(&location)?;
@@ -496,7 +514,7 @@ pub(crate) fn solve_cfg(
             entry,
             &mut queue,
             &mut seq,
-            cfg.max_depth,
+            cfg,
             rng,
         );
     }
@@ -511,9 +529,10 @@ fn try_placing_children(
     entry: QueueEntry,
     queue: &mut Vec<QueueEntry>,
     seq: &mut usize,
-    max_depth: i32,
+    cfg: &SolveCfg,
     rng: &mut SplitMix64,
 ) {
+    let max_depth = cfg.max_depth;
     let source = pieces[entry.piece_idx].clone();
     let Some(source_template) = village_data::template(&source.template) else {
         return;
@@ -537,10 +556,10 @@ fn try_placing_children(
         ];
         let source_jigsaw_local_y = source_jigsaw_pos[1] - source_box_y;
         let mut source_base_height: Option<i32> = None;
-        let Some(target_pool) = village_data::pool(&socket.info.pool) else {
+        let Some(target_pool) = pool_resolved(cfg, &socket.info.pool) else {
             continue;
         };
-        let fallback_pool = village_data::pool(&target_pool.fallback);
+        let fallback_pool = pool_resolved(cfg, &target_pool.fallback);
 
         let attach_inside = source_bb.contains(target_jigsaw_pos);
         let children_free: Rc<RefCell<FreeSpace>> = if attach_inside {
@@ -596,7 +615,7 @@ fn try_placing_children(
                 // Expansion hack headroom for low target pieces.
                 let hack_bb =
                     template_bb(target_template.size, [0, 0, 0], target_rotation);
-                let expand_to = if hack_bb.y_span() <= 16 {
+                let expand_to = if cfg.expansion_hack && hack_bb.y_span() <= 16 {
                     target_sockets
                         .iter()
                         .map(|s| {

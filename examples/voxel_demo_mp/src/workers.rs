@@ -791,6 +791,10 @@ pub(crate) enum ChestLootKind {
     WoodlandMansion,
     AncientCity,
     AncientCityIceBox,
+    TrialChambersCorridor,
+    TrialChambersEntrance,
+    TrialChambersIntersection,
+    TrialChambersSupply,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -847,6 +851,21 @@ pub(crate) fn chest_loot_kind(
         match k {
             mcgen::ancient_city::CityChest::IceBox => ChestLootKind::AncientCityIceBox,
             mcgen::ancient_city::CityChest::Regular => ChestLootKind::AncientCity,
+        }
+    } else if let Some(k) = mcgen::trial_chambers::chamber_chest_at(ctx, pos) {
+        match k {
+            mcgen::trial_chambers::ChamberChest::Corridor => {
+                ChestLootKind::TrialChambersCorridor
+            }
+            mcgen::trial_chambers::ChamberChest::Entrance => {
+                ChestLootKind::TrialChambersEntrance
+            }
+            mcgen::trial_chambers::ChamberChest::Intersection => {
+                ChestLootKind::TrialChambersIntersection
+            }
+            mcgen::trial_chambers::ChamberChest::Supply => {
+                ChestLootKind::TrialChambersSupply
+            }
         }
     } else {
         ChestLootKind::SimpleDungeon

@@ -282,6 +282,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::AncientCityIceBox => {
                                         &crate::loot::ANCIENT_CITY_ICE_BOX
                                     }
+                                    crate::workers::ChestLootKind::TrialChambersCorridor => {
+                                        &crate::loot::TRIAL_CHAMBERS_CORRIDOR
+                                    }
+                                    crate::workers::ChestLootKind::TrialChambersEntrance => {
+                                        &crate::loot::TRIAL_CHAMBERS_ENTRANCE
+                                    }
+                                    crate::workers::ChestLootKind::TrialChambersIntersection => {
+                                        &crate::loot::TRIAL_CHAMBERS_INTERSECTION
+                                    }
+                                    crate::workers::ChestLootKind::TrialChambersSupply => {
+                                        &crate::loot::TRIAL_CHAMBERS_SUPPLY
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

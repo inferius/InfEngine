@@ -109,6 +109,10 @@ fn build_layout(ctx: &WorldgenCtx, scx: i32, scz: i32) -> Option<Vec<PlacedPiece
             max_distance: MAX_DISTANCE,
             start_y: Some(START_Y),
             start_jigsaw: Some(START_JIGSAW),
+            aliases: std::collections::HashMap::new(),
+            // W261 shipped with the hack active (established layout);
+            // the city JSON says false - noted divergence.
+            expansion_hack: true,
         },
         &mut rng,
     )

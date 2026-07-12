@@ -96,6 +96,29 @@ const RENAMES: &[(&str, &str)] = &[
     ("redstone_wire", "redstone_dust"),
     ("infested_cobblestone", "cobble"),
     ("trapped_chest", "chest"),
+    // W263 trial chambers: waxed copper states collapse onto the
+    // canonical rows (identical textures; no weathering tick), and
+    // the odd substitutes keep their material family.
+    ("waxed_copper_block", "copper_block"),
+    ("waxed_cut_copper", "cut_copper"),
+    ("waxed_oxidized_copper", "oxidized_copper"),
+    ("waxed_oxidized_cut_copper", "oxidized_cut_copper"),
+    ("waxed_chiseled_copper", "chiseled_copper"),
+    ("waxed_oxidized_chiseled_copper", "oxidized_chiseled_copper"),
+    ("waxed_copper_grate", "copper_grate"),
+    ("waxed_oxidized_copper_grate", "oxidized_copper_grate"),
+    ("waxed_copper_bulb", "copper_bulb"),
+    ("waxed_oxidized_copper_bulb", "copper_bulb"),
+    ("waxed_cut_copper_stairs", "cut_copper_stairs"),
+    ("waxed_oxidized_cut_copper_stairs", "oxidized_cut_copper_stairs"),
+    ("waxed_cut_copper_slab", "cut_copper_slab"),
+    ("waxed_oxidized_cut_copper_slab", "oxidized_cut_copper_slab"),
+    ("waxed_copper_door", "copper_door"),
+    ("waxed_oxidized_copper_door", "oxidized_copper_door"),
+    ("waxed_copper_trapdoor", "copper_trapdoor"),
+    ("waxed_oxidized_copper_trapdoor", "oxidized_copper_trapdoor"),
+    ("powder_snow", "snow_block"),
+    ("mangrove_wood", "mangrove_log"),
 ];
 
 /// Names we knowingly leave unplaced until their blocks exist. The
@@ -135,6 +158,14 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     // the skull piles).
     "piston_head",
     "skeleton_skull",
+    // W263 trial chambers decoration (archaeology pots, tripwire
+    // traps, dripstone, hanging chains).
+    "decorated_pot",
+    "flower_pot",
+    "iron_chain",
+    "pointed_dripstone",
+    "tripwire",
+    "tripwire_hook",
 ];
 
 fn log_unmapped(name: &str) {
