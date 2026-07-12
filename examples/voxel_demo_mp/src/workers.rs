@@ -780,6 +780,7 @@ pub(crate) enum ChestLootKind {
     ShipwreckMap,
     ShipwreckTreasure,
     ShipwreckSupply,
+    BuriedTreasure,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -806,6 +807,8 @@ pub(crate) fn chest_loot_kind(
             }
             mcgen::shipwreck::ShipwreckChest::Supply => ChestLootKind::ShipwreckSupply,
         }
+    } else if mcgen::buried_treasure::is_treasure_chest(ctx, pos) {
+        ChestLootKind::BuriedTreasure
     } else {
         ChestLootKind::SimpleDungeon
     }

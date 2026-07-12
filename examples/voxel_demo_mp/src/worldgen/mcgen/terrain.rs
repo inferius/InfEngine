@@ -313,6 +313,87 @@ pub(crate) fn mc_surface_block_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> u16 {
     crate::worldgen::climate::surface_block(mc.to_engine(), h).0
 }
 
+/// W253: the PAINTED pre-decoration block id at any world cell -
+/// replays the exact `gen_mc` solid-cell fill decision from the
+/// cached column data, replay-invariant like `column_is_solid`.
+/// Returns 0 for cells that are not solid POST-carve (air, water,
+/// lava, carved space) - dig-down callers (buried treasure) only
+/// need the solid material identity.
+pub(crate) fn mc_painted_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> u16 {
+    let seed = ctx.effective_seed();
+    let ow = overworld_for(seed);
+    let cs = CHUNK_SIZE as i32;
+    let data = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
+    let (x, z) = (wx.rem_euclid(cs) as usize, wz.rem_euclid(cs) as usize);
+    if !data.is_solid_pc(x, wy, z) {
+        return 0;
+    }
+    if let Some(b) = strata::bedrock_floor_block(wx, wy, wz, seed) {
+        return b.0;
+    }
+    if wy > LATTICE_TOP {
+        return 0;
+    }
+    let McCol { top: h, mc, surface_depth } = data.cols[x][z];
+    if data.is_solid(x, wy, z) {
+        let depth_above = data.depth_above(x, wy, z, SURFACE_BAND);
+        if depth_above <= SURFACE_BAND {
+            let run_top = wy + depth_above;
+            // The fill's steep grid, re-derived for one column (same
+            // in-chunk-clamped gradient as `mc_surface_block_at`).
+            let steep = {
+                let mut d = 0;
+                if x > 0 {
+                    d = d.max((h - data.cols[x - 1][z].top).abs());
+                }
+                if x + 1 < CHUNK_SIZE {
+                    d = d.max((h - data.cols[x + 1][z].top).abs());
+                }
+                if z > 0 {
+                    d = d.max((h - data.cols[x][z - 1].top).abs());
+                }
+                if z + 1 < CHUNK_SIZE {
+                    d = d.max((h - data.cols[x][z + 1].top).abs());
+                }
+                d >= 4
+            };
+            let sctx = SurfaceCtx {
+                x: wx,
+                y: wy,
+                z: wz,
+                stone_depth_above: depth_above,
+                stone_depth_below: i32::MAX / 2,
+                water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
+                surface: run_top - SURFACE_BAND,
+                surface_depth,
+                steep,
+                frozen: super::vegetation::cold_enough_to_snow_at(mc, wx, wy, wz),
+                mc_name: mc.name(),
+                min_y: ow.min_y,
+                max_y: ow.min_y + ow.height,
+            };
+            if let Some(id) = ow.surface_eval(&sctx) {
+                return id;
+            }
+        }
+        let biome = mc.to_engine();
+        return if wy == h {
+            surface_block(biome, h).0
+        } else if wy >= h - 3 && depth_above <= 3 {
+            near_surface_block(biome).0
+        } else {
+            super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
+                .unwrap_or_else(|| strata::bulk_block(wy))
+                .0
+        };
+    }
+    // Solid post-carve without a pre-carve run: an aquifer pressure
+    // seal - bulk stone + veins, like the fill's Substance::Solid arm.
+    super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
+        .unwrap_or_else(|| strata::bulk_block(wy))
+        .0
+}
+
 /// W220: PRE-DECORATION solidity at any world cell, from the cached
 /// column bitsets. Replay-invariant (every chunk that consults a shared
 /// cell agrees) - the lava-lake border checks key on this. W226.1:

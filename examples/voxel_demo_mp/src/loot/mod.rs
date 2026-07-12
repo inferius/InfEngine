@@ -419,6 +419,71 @@ pub(crate) const SHIPWRECK_TREASURE: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/buried_treasure.json` (26.1.2).
+/// Gaps via the name mapper: heart_of_the_sea, prismarine_crystals,
+/// iron_spear, the water-breathing potion (set_potion), nautilus
+/// armors.
+pub(crate) const BURIED_TREASURE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("heart_of_the_sea", 1)],
+        },
+        LootPool {
+            rolls_min: 5,
+            rolls_max: 8,
+            entries: &[
+                counted("iron_ingot", 20, 1, 4),
+                counted("gold_ingot", 10, 1, 4),
+                counted("tnt", 5, 1, 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 3,
+            entries: &[
+                counted("emerald", 5, 4, 8),
+                counted("diamond", 5, 1, 2),
+                counted("prismarine_crystals", 5, 1, 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 0,
+            rolls_max: 1,
+            entries: &[
+                one("leather_chestplate", 1),
+                one("iron_sword", 1),
+                one("iron_spear", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 2,
+            entries: &[
+                counted("cooked_cod", 1, 2, 4),
+                counted("cooked_salmon", 1, 2, 4),
+            ],
+        },
+        LootPool {
+            rolls_min: 0,
+            rolls_max: 2,
+            entries: &[one("potion", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

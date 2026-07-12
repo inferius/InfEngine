@@ -861,6 +861,9 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // place before the step's FEATURES in MC's decoration order, so
     // the shaft carves ahead of the monster room.
     super::mineshaft::place_mineshafts(chunk, coord, ctx, origin);
+    // W253: buried treasure (underground_structures, step 3 -
+    // structures precede the step's features).
+    super::buried_treasure::place_buried_treasure(chunk, coord, ctx, origin);
     // W242: monster rooms (underground_structures, step 3) - after
     // local_modifications, before the ore step, like the biome lists
     // order them.
