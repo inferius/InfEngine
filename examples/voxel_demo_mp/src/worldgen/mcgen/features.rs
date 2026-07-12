@@ -886,6 +886,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::monument::place_monuments(chunk, coord, ctx, origin);
     // W258: ruined portal (surface_structures, step 4).
     super::ruined_portal::place_ruined_portals(chunk, coord, ctx, origin);
+    // W259: woodland mansion (surface_structures, step 4).
+    super::mansion::place_mansions(chunk, coord, ctx, origin);
     // W246: desert pyramid (surface_structures, step 4).
     super::pyramid::place_desert_pyramids(chunk, coord, ctx, origin);
     // W247: swamp hut (surface_structures, step 4).

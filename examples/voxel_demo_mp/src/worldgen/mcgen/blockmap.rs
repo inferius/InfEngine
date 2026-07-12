@@ -90,6 +90,12 @@ const RENAMES: &[(&str, &str)] = &[
     ("mossy_cobblestone_stairs", "cobblestone_stairs"),
     ("mossy_cobblestone_slab", "cobblestone_slab"),
     ("mossy_cobblestone_wall", "cobblestone_wall"),
+    // W259 mansion: the engine wire block carries the legacy name;
+    // silverfish cobble waits for the mob; trapped chests act as
+    // plain chests until the trap mechanic exists.
+    ("redstone_wire", "redstone_dust"),
+    ("infested_cobblestone", "cobble"),
+    ("trapped_chest", "chest"),
 ];
 
 /// Names we knowingly leave unplaced until their blocks exist. The
@@ -110,6 +116,21 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "water_cauldron",
     // W251 outpost decoration.
     "white_wall_banner",
+    // W259 mansion decoration.
+    "attached_melon_stem",
+    "attached_pumpkin_stem",
+    "black_wall_banner",
+    "cauldron",
+    "gray_wall_banner",
+    "light_gray_wall_banner",
+    "potted_allium",
+    "potted_azure_bluet",
+    "potted_birch_sapling",
+    "potted_blue_orchid",
+    "potted_oxeye_daisy",
+    "potted_red_tulip",
+    "potted_white_tulip",
+    "tnt",
 ];
 
 fn log_unmapped(name: &str) {

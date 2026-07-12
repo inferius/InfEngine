@@ -46,6 +46,7 @@ pub(crate) mod iceberg;
 pub(crate) mod igloo;
 pub(crate) mod jigsaw;
 pub(crate) mod jungle_temple;
+pub(crate) mod mansion;
 pub(crate) mod mineshaft;
 pub(crate) mod misc_features;
 pub(crate) mod monument;

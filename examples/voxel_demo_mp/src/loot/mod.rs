@@ -728,6 +728,61 @@ pub(crate) const RUINED_PORTAL: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/woodland_mansion.json`
+/// (26.1.2). Mapper gaps: lead, the music discs, chainmail, the vex
+/// trim, resin clumps; `book` drops unenchanted.
+pub(crate) const WOODLAND_MANSION: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 3,
+            entries: &[
+                one("lead", 20),
+                one("golden_apple", 15),
+                one("enchanted_golden_apple", 2),
+                one("music_disc_13", 15),
+                one("music_disc_cat", 15),
+                one("chainmail_chestplate", 10),
+                one("diamond_hoe", 15),
+                one("diamond_chestplate", 5),
+                one("book", 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 4,
+            entries: &[
+                counted("iron_ingot", 10, 1, 4),
+                counted("gold_ingot", 5, 1, 4),
+                one("bread", 20),
+                counted("wheat", 20, 1, 4),
+                one("bucket", 10),
+                counted("redstone", 15, 1, 4),
+                counted("coal", 15, 1, 4),
+                counted("melon_seeds", 10, 2, 4),
+                counted("pumpkin_seeds", 10, 2, 4),
+                counted("beetroot_seeds", 10, 2, 4),
+                counted("resin_clump", 50, 2, 4),
+            ],
+        },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 3,
+            entries: &[
+                counted("bone", 10, 1, 8),
+                counted("gunpowder", 10, 1, 8),
+                counted("rotten_flesh", 10, 1, 8),
+                counted("string", 10, 1, 8),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 1), one("vex_armor_trim_smithing_template", 1)],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).
