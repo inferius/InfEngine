@@ -120,7 +120,7 @@ impl Bb {
         Self { x0, y0, z0, x1, y1, z1 }
     }
 
-    fn moved(mut self, dx: i32, dy: i32, dz: i32) -> Self {
+    pub(crate) fn moved(mut self, dx: i32, dy: i32, dz: i32) -> Self {
         self.x0 += dx;
         self.x1 += dx;
         self.y0 += dy;
@@ -130,7 +130,7 @@ impl Bb {
         self
     }
 
-    fn intersects(&self, o: &Bb) -> bool {
+    pub(crate) fn intersects(&self, o: &Bb) -> bool {
         self.x1 >= o.x0
             && self.x0 <= o.x1
             && self.z1 >= o.z0
@@ -157,7 +157,7 @@ impl Bb {
         self.x1 - self.x0 + 1
     }
 
-    fn y_span(&self) -> i32 {
+    pub(crate) fn y_span(&self) -> i32 {
         self.y1 - self.y0 + 1
     }
 

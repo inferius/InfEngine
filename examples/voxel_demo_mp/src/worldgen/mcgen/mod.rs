@@ -42,6 +42,7 @@ pub(crate) mod density;
 pub(crate) mod features;
 pub(crate) mod geode;
 pub(crate) mod iceberg;
+pub(crate) mod jigsaw;
 pub(crate) mod mineshaft;
 pub(crate) mod misc_features;
 pub(crate) mod nbt;
