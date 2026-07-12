@@ -36,7 +36,9 @@ pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         WorldGen::Flat => gen_flat(coord, ctx),
         WorldGen::Islands => gen_islands(coord, ctx),
         WorldGen::Realistic => super::climate::gen_realistic(coord, ctx),
-        WorldGen::Nether => super::nether::gen_nether(coord, ctx),
+        // W266.2: the faithful data-driven nether replaced the legacy
+        // hand-rolled generator behind the same profile.
+        WorldGen::Nether => super::mcgen::nether_mc::gen_nether_mc(coord, ctx),
         WorldGen::Natural => super::natural::gen_natural(coord, ctx),
         WorldGen::Mc => super::mcgen::terrain::gen_mc(coord, ctx),
         WorldGen::End => super::mcgen::the_end::gen_end(coord, ctx),

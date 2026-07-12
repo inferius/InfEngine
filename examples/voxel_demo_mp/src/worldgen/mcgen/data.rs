@@ -64,6 +64,8 @@ pub(crate) fn noise_json(name: &str) -> Option<&'static str> {
         "ice" => Some(include_str!("data/noise/ice.json")),
         "nether_state_selector" => Some(include_str!("data/noise/nether_state_selector.json")),
         "nether_wart" => Some(include_str!("data/noise/nether_wart.json")),
+        "nether/temperature" => Some(include_str!("data/noise/nether/temperature.json")),
+        "nether/vegetation" => Some(include_str!("data/noise/nether/vegetation.json")),
         "netherrack" => Some(include_str!("data/noise/netherrack.json")),
         "patch" => Some(include_str!("data/noise/patch.json")),
         "soul_sand_layer" => Some(include_str!("data/noise/soul_sand_layer.json")),

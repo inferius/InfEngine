@@ -52,6 +52,7 @@ pub(crate) mod mineshaft;
 pub(crate) mod misc_features;
 pub(crate) mod monument;
 pub(crate) mod nbt;
+pub(crate) mod nether_mc;
 pub(crate) mod noise;
 pub(crate) mod ocean_ruin;
 pub(crate) mod ore_vein;

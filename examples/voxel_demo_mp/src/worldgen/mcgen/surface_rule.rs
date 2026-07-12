@@ -494,6 +494,14 @@ pub(crate) fn is_deepslate(x: i32, y: i32, z: i32) -> bool {
     gradient_roll(fnv("minecraft:deepslate"), x, y, z, 0, 8)
 }
 
+/// W266: the nether `bedrock_roof` rule -
+/// `not(vertical_gradient(below_top 5 .. below_top 0))` with
+/// `top_y` the INCLUSIVE world top (127): always bedrock at the
+/// top row, randomized 4 rows under it.
+pub(crate) fn is_bedrock_roof(x: i32, y: i32, z: i32, top_y: i32) -> bool {
+    !gradient_roll(fnv("minecraft:bedrock_roof"), x, y, z, top_y - 5, top_y)
+}
+
 fn pos_hash(seed: u64, x: i32, y: i32, z: i32) -> u64 {
     let mut h = seed ^ 0x9E37_79B9_7F4A_7C15;
     for v in [x as u64, y as u64, z as u64] {

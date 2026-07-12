@@ -50,9 +50,9 @@ pub(crate) mod ground_cover;
 pub(crate) mod height;
 pub(crate) mod mcgen;
 pub(crate) mod natural;
-pub(crate) mod nether;
-#[cfg(test)]
-mod nether_baseline_test;
+// W266.2: the legacy hand-rolled nether generator + its baseline
+// lock retired - `mcgen::nether_mc` is the data-driven replacement
+// behind the same `WorldGen::Nether` profile.
 pub(crate) mod ore;
 pub(crate) mod ravines;
 pub(crate) mod strata;
