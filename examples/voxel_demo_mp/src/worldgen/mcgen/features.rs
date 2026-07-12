@@ -868,6 +868,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W245.5: villages (surface_structures, step 4) - structures
     // precede the step's features.
     super::village::place_villages(chunk, coord, ctx, origin);
+    // W246: desert pyramid (surface_structures, step 4).
+    super::pyramid::place_desert_pyramids(chunk, coord, ctx, origin);
     // W244: desert well (surface_structures, step 4).
     super::structures::place_desert_wells(chunk, coord, ctx, origin);
     // W202: ore veins (underground_ores, step 6) before vegetal

@@ -770,11 +770,12 @@ fn in_column(w: &dyn ShaftWorld, pos: [i32; 3]) -> bool {
     pos[0] >= x0 && pos[0] <= x1 && pos[2] >= z0 && pos[2] <= z1 && pos[1] >= WORLD_MIN_Y && pos[1] < 256
 }
 
-/// Live-pipeline `ShaftWorld` over the chunk being generated.
-struct ChunkShaftWorld<'a> {
-    chunk: &'a mut Chunk,
-    origin: [i32; 3],
-    ctx: &'a WorldgenCtx,
+/// Live-pipeline `ShaftWorld` over the chunk being generated. Shared
+/// with the other hardcoded-piece structures (W246 desert pyramid).
+pub(crate) struct ChunkShaftWorld<'a> {
+    pub(crate) chunk: &'a mut Chunk,
+    pub(crate) origin: [i32; 3],
+    pub(crate) ctx: &'a WorldgenCtx,
 }
 
 impl ShaftWorld for ChunkShaftWorld<'_> {

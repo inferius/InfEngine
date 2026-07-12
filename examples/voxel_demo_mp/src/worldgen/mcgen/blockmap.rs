@@ -33,7 +33,7 @@ pub(crate) enum Mapped {
     Keep,
 }
 
-fn registry_id(name: &str) -> Option<u16> {
+pub(crate) fn registry_id(name: &str) -> Option<u16> {
     static IDX: OnceLock<HashMap<&'static str, u16>> = OnceLock::new();
     IDX.get_or_init(|| {
         crate::block::BLOCK_TYPES

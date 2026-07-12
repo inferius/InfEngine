@@ -220,14 +220,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::worldgen::mcgen::noise::SplitMix64::new(
                                         crate::loot::chest_pos_seed(seed, *wv),
                                     );
-                                // W243: the loot table follows the
-                                // structure that owns the cell -
+                                // W243/W246: the loot table follows
+                                // the structure that owns the cell -
                                 // derived from the deterministic
                                 // layout, no provenance persisted.
                                 let table = if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft(
                                     &ctx, *wv,
                                 ) {
                                     &crate::loot::ABANDONED_MINESHAFT
+                                } else if crate::worldgen::mcgen::pyramid::pos_in_desert_pyramid(
+                                    &ctx, *wv,
+                                ) {
+                                    &crate::loot::DESERT_PYRAMID
                                 } else {
                                     &crate::loot::SIMPLE_DUNGEON
                                 };

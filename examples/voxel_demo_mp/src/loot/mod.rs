@@ -156,6 +156,57 @@ pub(crate) const ABANDONED_MINESHAFT: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/desert_pyramid.json` (26.1.2),
+/// entry-for-entry. Mapper skips until the items exist: horse
+/// armors, enchanted_golden_apple, the dune armor-trim template;
+/// `book` drops UNenchanted. The weight-15 / weight-6 `empty`
+/// entries are real MC no-drop slots.
+pub(crate) const DESERT_PYRAMID: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 4,
+            entries: &[
+                counted("diamond", 5, 1, 3),
+                counted("iron_ingot", 15, 1, 5),
+                counted("gold_ingot", 15, 2, 7),
+                counted("emerald", 15, 1, 3),
+                counted("bone", 25, 4, 6),
+                counted("spider_eye", 25, 1, 3),
+                counted("rotten_flesh", 25, 3, 7),
+                counted("leather", 20, 1, 5),
+                one("copper_horse_armor", 15),
+                one("iron_horse_armor", 15),
+                one("golden_horse_armor", 10),
+                one("diamond_horse_armor", 5),
+                one("book", 20),
+                one("golden_apple", 20),
+                one("enchanted_golden_apple", 2),
+                one("", 15),
+            ],
+        },
+        LootPool {
+            rolls_min: 4,
+            rolls_max: 4,
+            entries: &[
+                counted("bone", 10, 1, 8),
+                counted("gunpowder", 10, 1, 8),
+                counted("rotten_flesh", 10, 1, 8),
+                counted("string", 10, 1, 8),
+                counted("sand", 10, 1, 8),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 6),
+                counted("dune_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

@@ -49,6 +49,7 @@ pub(crate) mod nbt;
 pub(crate) mod noise;
 pub(crate) mod ore_vein;
 pub(crate) mod overworld;
+pub(crate) mod pyramid;
 pub(crate) mod structures;
 pub(crate) mod surface_rule;
 pub(crate) mod template;
