@@ -43,6 +43,9 @@ chrono = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
 tracing-appender = "0.2.5"
+# W245.1: gzip decode for MC structure-template NBT files (already in
+# the dependency tree via zip/image - a direct dep adds no build cost).
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
