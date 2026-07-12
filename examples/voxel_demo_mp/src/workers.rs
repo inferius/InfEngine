@@ -781,6 +781,8 @@ pub(crate) enum ChestLootKind {
     ShipwreckTreasure,
     ShipwreckSupply,
     BuriedTreasure,
+    UnderwaterRuinSmall,
+    UnderwaterRuinBig,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -809,6 +811,12 @@ pub(crate) fn chest_loot_kind(
         }
     } else if mcgen::buried_treasure::is_treasure_chest(ctx, pos) {
         ChestLootKind::BuriedTreasure
+    } else if let Some(big) = mcgen::ocean_ruin::chest_is_big_at(ctx, pos) {
+        if big {
+            ChestLootKind::UnderwaterRuinBig
+        } else {
+            ChestLootKind::UnderwaterRuinSmall
+        }
     } else {
         ChestLootKind::SimpleDungeon
     }

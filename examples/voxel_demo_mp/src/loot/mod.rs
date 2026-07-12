@@ -484,6 +484,89 @@ pub(crate) const BURIED_TREASURE: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/underwater_ruin_small.json`
+/// (26.1.2). Gaps ride the name mapper: stone_spear, the exploration
+/// map (drops as a plain map name -> skipped), fishing_rod enchant,
+/// nautilus armors.
+pub(crate) const UNDERWATER_RUIN_SMALL: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 8,
+            entries: &[
+                counted("coal", 10, 1, 4),
+                one("stone_axe", 2),
+                one("stone_spear", 2),
+                one("rotten_flesh", 5),
+                one("emerald", 1),
+                counted("wheat", 10, 2, 3),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("leather_chestplate", 1),
+                one("golden_helmet", 1),
+                one("fishing_rod", 5),
+                one("map", 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
+/// `data/minecraft/loot_table/chests/underwater_ruin_big.json`
+/// (26.1.2).
+pub(crate) const UNDERWATER_RUIN_BIG: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 8,
+            entries: &[
+                counted("coal", 10, 1, 4),
+                counted("gold_nugget", 10, 1, 3),
+                one("emerald", 1),
+                one("stone_spear", 2),
+                counted("wheat", 10, 2, 3),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("golden_apple", 1),
+                one("book", 5),
+                one("leather_chestplate", 1),
+                one("golden_helmet", 1),
+                one("fishing_rod", 5),
+                one("map", 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 148),
+                one("copper_nautilus_armor", 20),
+                one("iron_nautilus_armor", 10),
+                one("golden_nautilus_armor", 5),
+                one("diamond_nautilus_armor", 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

@@ -49,6 +49,7 @@ pub(crate) mod mineshaft;
 pub(crate) mod misc_features;
 pub(crate) mod nbt;
 pub(crate) mod noise;
+pub(crate) mod ocean_ruin;
 pub(crate) mod ore_vein;
 pub(crate) mod outpost;
 pub(crate) mod overworld;

@@ -877,6 +877,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::outpost::place_outposts(chunk, coord, ctx, origin);
     // W252: shipwreck (surface_structures, step 4).
     super::shipwreck::place_shipwrecks(chunk, coord, ctx, origin);
+    // W254: ocean ruins (surface_structures, step 4).
+    super::ocean_ruin::place_ocean_ruins(chunk, coord, ctx, origin);
     // W246: desert pyramid (surface_structures, step 4).
     super::pyramid::place_desert_pyramids(chunk, coord, ctx, origin);
     // W247: swamp hut (surface_structures, step 4).

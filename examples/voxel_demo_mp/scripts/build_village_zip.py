@@ -37,12 +37,13 @@ zf.write(
 count["pool"] += 1
 
 # Structure NBT subtrees the engine ports (W245 village, W248 igloo,
-# W251 pillager outpost, W252 shipwreck).
+# W251 pillager outpost, W252 shipwreck, W254 ocean ruin).
 for subtree in (
     "structure/village",
     "structure/igloo",
     "structure/pillager_outpost",
     "structure/shipwreck",
+    "structure/underwater_ruin",
 ):
     for root, dirs, files in os.walk(os.path.join(src2, subtree)):
         for f in sorted(files):
