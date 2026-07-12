@@ -67,12 +67,14 @@ fn next_f32(r: &mut SplitMix64) -> f32 {
 
 /// The candidate start chunk of a 32x32 grid cell.
 fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
-    let mut rng =
-        SplitMix64::new(stream_seed(seed, grid_x, grid_z, SALT_PYRAMID_SET));
-    let range = SPACING - SEPARATION;
-    let ox = (rng.next_u64() % range as u64) as i32;
-    let oz = (rng.next_u64() % range as u64) as i32;
-    [grid_x * SPACING + ox, grid_z * SPACING + oz]
+    super::scattered::random_spread_start(
+        seed,
+        grid_x,
+        grid_z,
+        SPACING,
+        SEPARATION,
+        SALT_PYRAMID_SET,
+    )
 }
 
 /// One laid-out pyramid: bounding box + orientation.

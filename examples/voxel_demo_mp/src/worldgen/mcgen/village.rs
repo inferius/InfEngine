@@ -55,12 +55,14 @@ const FOUNDATION_MAX: i32 = 12;
 
 /// The candidate start chunk of a 34x34 grid cell.
 fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
-    let mut rng =
-        SplitMix64::new(stream_seed(seed, grid_x, grid_z, SALT_VILLAGE_SET));
-    let range = SPACING - SEPARATION;
-    let ox = (rng.next_u64() % range as u64) as i32;
-    let oz = (rng.next_u64() % range as u64) as i32;
-    [grid_x * SPACING + ox, grid_z * SPACING + oz]
+    super::scattered::random_spread_start(
+        seed,
+        grid_x,
+        grid_z,
+        SPACING,
+        SEPARATION,
+        SALT_VILLAGE_SET,
+    )
 }
 
 /// The start pool for the biome at the start anchor, per the five
