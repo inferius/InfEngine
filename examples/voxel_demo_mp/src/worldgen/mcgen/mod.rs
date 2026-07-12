@@ -48,6 +48,7 @@ pub(crate) mod jigsaw;
 pub(crate) mod jungle_temple;
 pub(crate) mod mineshaft;
 pub(crate) mod misc_features;
+pub(crate) mod monument;
 pub(crate) mod nbt;
 pub(crate) mod noise;
 pub(crate) mod ocean_ruin;
