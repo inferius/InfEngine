@@ -261,6 +261,15 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::JungleTemple => {
                                         &crate::loot::JUNGLE_TEMPLE
                                     }
+                                    crate::workers::ChestLootKind::StrongholdCorridor => {
+                                        &crate::loot::STRONGHOLD_CORRIDOR
+                                    }
+                                    crate::workers::ChestLootKind::StrongholdCrossing => {
+                                        &crate::loot::STRONGHOLD_CROSSING
+                                    }
+                                    crate::workers::ChestLootKind::StrongholdLibrary => {
+                                        &crate::loot::STRONGHOLD_LIBRARY
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

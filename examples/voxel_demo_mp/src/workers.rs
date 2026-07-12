@@ -784,6 +784,9 @@ pub(crate) enum ChestLootKind {
     UnderwaterRuinSmall,
     UnderwaterRuinBig,
     JungleTemple,
+    StrongholdCorridor,
+    StrongholdCrossing,
+    StrongholdLibrary,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -820,6 +823,18 @@ pub(crate) fn chest_loot_kind(
         }
     } else if mcgen::jungle_temple::pos_in_jungle_temple(ctx, pos) {
         ChestLootKind::JungleTemple
+    } else if let Some(k) = mcgen::stronghold::chest_kind_at(ctx, pos) {
+        match k {
+            mcgen::stronghold::StrongholdChest::Corridor => {
+                ChestLootKind::StrongholdCorridor
+            }
+            mcgen::stronghold::StrongholdChest::Crossing => {
+                ChestLootKind::StrongholdCrossing
+            }
+            mcgen::stronghold::StrongholdChest::Library => {
+                ChestLootKind::StrongholdLibrary
+            }
+        }
     } else {
         ChestLootKind::SimpleDungeon
     }

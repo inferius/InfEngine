@@ -115,6 +115,18 @@ pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i
         });
         return KIND_SPIDER;
     }
+    // W256: the stronghold portal room holds a SILVERFISH spawner in
+    // MC - the spider stands in until the mob exists.
+    if crate::worldgen::mcgen::stronghold::is_portal_spawner(ctx, pos) {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| {
+            tracing::info!(
+                "W256: stronghold portal spawners use SPIDER as the \
+                 silverfish stand-in until the mob is ported"
+            );
+        });
+        return KIND_SPIDER;
+    }
     spawner_entity_kind(ctx.effective_seed(), pos)
 }
 

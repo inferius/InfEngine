@@ -602,6 +602,88 @@ pub(crate) const JUNGLE_TEMPLE: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/stronghold_corridor.json`
+/// (26.1.2). Mapper gaps: ender_pearl?, horse armors, the otherside
+/// disc, the eye trim; `book` drops UNenchanted.
+pub(crate) const STRONGHOLD_CORRIDOR: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 3,
+            entries: &[
+                one("ender_pearl", 10),
+                counted("diamond", 3, 1, 3),
+                counted("iron_ingot", 10, 1, 5),
+                counted("gold_ingot", 5, 1, 3),
+                counted("redstone", 5, 4, 9),
+                counted("bread", 15, 1, 3),
+                counted("apple", 15, 1, 3),
+                one("iron_pickaxe", 5),
+                one("iron_sword", 5),
+                one("iron_chestplate", 5),
+                one("iron_helmet", 5),
+                one("iron_leggings", 5),
+                one("iron_boots", 5),
+                one("golden_apple", 1),
+                counted("leather", 1, 1, 5),
+                one("copper_horse_armor", 1),
+                one("iron_horse_armor", 1),
+                one("golden_horse_armor", 1),
+                one("diamond_horse_armor", 1),
+                one("music_disc_otherside", 1),
+                one("book", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 9), one("eye_armor_trim_smithing_template", 1)],
+        },
+    ],
+};
+
+/// `data/minecraft/loot_table/chests/stronghold_crossing.json`
+/// (26.1.2).
+pub(crate) const STRONGHOLD_CROSSING: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 1,
+        rolls_max: 4,
+        entries: &[
+            counted("iron_ingot", 10, 1, 5),
+            counted("gold_ingot", 5, 1, 3),
+            counted("redstone", 5, 4, 9),
+            counted("coal", 10, 3, 8),
+            counted("bread", 15, 1, 3),
+            counted("apple", 15, 1, 3),
+            one("iron_pickaxe", 1),
+            one("book", 1),
+        ],
+    }],
+};
+
+/// `data/minecraft/loot_table/chests/stronghold_library.json`
+/// (26.1.2). Both book rows drop unenchanted.
+pub(crate) const STRONGHOLD_LIBRARY: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 10,
+            entries: &[
+                counted("book", 20, 1, 3),
+                counted("paper", 20, 2, 7),
+                one("map", 1),
+                one("compass", 1),
+                one("book", 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("eye_armor_trim_smithing_template", 1)],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).
