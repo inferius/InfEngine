@@ -263,6 +263,162 @@ pub(crate) fn place_monster_rooms(
     }
 }
 
+// ----------------------------------------------------------------
+// W244 - desert well (DesertWellFeature.java).
+// ----------------------------------------------------------------
+
+const SALT_DESERT_WELL: u64 = 0xD4E6_0002;
+
+/// `placed_feature/desert_well.json` rarity_filter: 1/1000 chunks.
+const DESERT_WELL_CHANCE: f64 = 1.0 / 1000.0;
+
+const SAND: u16 = 4;
+const SANDSTONE: u16 = 26;
+const SANDSTONE_SLAB: u16 = crate::block::SANDSTONE_SLAB_ID;
+const WATER: u16 = 36;
+
+/// One `DesertWellFeature.place` attempt at surface cell `(ox, oy,
+/// oz)` (the column's top solid block - the MC walk-down landing).
+/// `surface_is_sand` answers the `IS_SAND` gate; solidity reads go
+/// through `base_solid` (post-carve). Writes land in `scratch`.
+pub(crate) fn try_desert_well(
+    rng: &mut SplitMix64,
+    ox: i32,
+    oy: i32,
+    oz: i32,
+    base_solid: &dyn Fn(i32, i32, i32) -> bool,
+    surface_is_sand: &dyn Fn(i32, i32) -> bool,
+    scratch: &mut RoomScratch,
+) -> bool {
+    if !surface_is_sand(ox, oz) {
+        return false;
+    }
+    // Full 5x5 support two deep - any hole under the pad rejects.
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            if !base_solid(ox + dx, oy - 1, oz + dz)
+                && !base_solid(ox + dx, oy - 2, oz + dz)
+            {
+                return false;
+            }
+        }
+    }
+    // Pad: 5x5 x 3 sandstone (y -2..=0).
+    for dy in -2..=0 {
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                scratch.set(ox + dx, oy + dy, oz + dz, SANDSTONE);
+            }
+        }
+    }
+    // Water cross at surface level + sand cross underneath.
+    scratch.set(ox, oy, oz, WATER);
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        scratch.set(ox + dx, oy, oz + dz, WATER);
+    }
+    scratch.set(ox, oy - 1, oz, SAND);
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        scratch.set(ox + dx, oy - 1, oz + dz, SAND);
+    }
+    // Rim ring at y+1 with slab walk-ups at the four midpoints.
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            if dx == -2 || dx == 2 || dz == -2 || dz == 2 {
+                scratch.set(ox + dx, oy + 1, oz + dz, SANDSTONE);
+            }
+        }
+    }
+    for (dx, dz) in [(2, 0), (-2, 0), (0, 2), (0, -2)] {
+        scratch.set(ox + dx, oy + 1, oz + dz, SANDSTONE_SLAB);
+    }
+    // Roof at y+4: slab ring around a sandstone centre.
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let id = if dx == 0 && dz == 0 { SANDSTONE } else { SANDSTONE_SLAB };
+            scratch.set(ox + dx, oy + 4, oz + dz, id);
+        }
+    }
+    // Four corner pillars.
+    for dy in 1..=3 {
+        scratch.set(ox - 1, oy + dy, oz - 1, SANDSTONE);
+        scratch.set(ox - 1, oy + dy, oz + 1, SANDSTONE);
+        scratch.set(ox + 1, oy + dy, oz - 1, SANDSTONE);
+        scratch.set(ox + 1, oy + dy, oz + 1, SANDSTONE);
+    }
+    // MC buries two SUSPICIOUS_SAND archaeology cells under random
+    // water-cross columns (desert_well_archaeology loot). Brushing
+    // doesn't exist yet - plain sand stands in, the rolls stay
+    // consumed so the stream shape matches.
+    let cross = [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)];
+    let (dx, dz) = cross[next_int(rng, 5) as usize];
+    scratch.set(ox + dx, oy - 1, oz + dz, SAND);
+    let (dx, dz) = cross[next_int(rng, 5) as usize];
+    scratch.set(ox + dx, oy - 2, oz + dz, SAND);
+    true
+}
+
+/// The per-chunk desert-well pass: 3x3 source-column replay (the
+/// well spans +-2 blocks and clips vertical cubes), rarity 1/1000,
+/// in_square offset, heightmap landing, desert-only biome gate.
+/// Runs in SURFACE_STRUCTURES (step 4) - after the underground
+/// structures, before the ore step.
+pub(crate) fn place_desert_wells(
+    chunk: &mut Chunk,
+    coord: ChunkCoord,
+    ctx: &WorldgenCtx,
+    origin: [i32; 3],
+) {
+    let cs = CHUNK_SIZE as i32;
+    let seed = ctx.effective_seed();
+    let base_solid =
+        |x: i32, y: i32, z: i32| -> bool { column_is_solid(ctx, x, y, z) };
+    let surface_is_sand =
+        |x: i32, z: i32| -> bool { super::terrain::mc_surface_block_at(ctx, x, z) == SAND };
+    for scx in (coord[0] - 1)..=(coord[0] + 1) {
+        for scz in (coord[2] - 1)..=(coord[2] + 1) {
+            let mut rng =
+                SplitMix64::new(stream_seed(seed, scx, scz, SALT_DESERT_WELL));
+            // rarity_filter(1000) leads the placement pipeline.
+            if rng.next_f64() >= DESERT_WELL_CHANCE {
+                continue;
+            }
+            let ox = scx * cs + next_int(&mut rng, 16);
+            let oz = scz * cs + next_int(&mut rng, 16);
+            // biome modifier: the desert biome list is the only one
+            // carrying desert_well.
+            if super::terrain::mc_full_biome_at(ctx, ox, oz)
+                != super::biome::McBiome::Desert
+            {
+                continue;
+            }
+            let oy = super::terrain::mc_floor_at(ctx, ox, oz);
+            if oy <= 2 {
+                continue;
+            }
+            let mut scratch = RoomScratch::new();
+            if try_desert_well(
+                &mut rng,
+                ox,
+                oy,
+                oz,
+                &base_solid,
+                &surface_is_sand,
+                &mut scratch,
+            ) {
+                for ([x, y, z], id) in &scratch.writes {
+                    let (lx, ly, lz) = (x - origin[0], y - origin[1], z - origin[2]);
+                    if (0..cs).contains(&lx)
+                        && (0..cs).contains(&ly)
+                        && (0..cs).contains(&lz)
+                    {
+                        chunk.set(lx as usize, ly as usize, lz as usize, BlockId(*id));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +466,54 @@ mod tests {
             .filter(|id| **id == CHEST_ID)
             .count();
         assert!(chests <= 2);
+    }
+
+    /// W244: a well on flat sand with solid ground builds the full
+    /// silhouette: water cross at surface level, slab walk-ups, the
+    /// slab roof + pillars.
+    #[test]
+    fn desert_well_builds_on_sand() {
+        let solid = |_x: i32, y: i32, _z: i32| -> bool { y <= 70 };
+        let sand = |_x: i32, _z: i32| -> bool { true };
+        let mut scratch = RoomScratch::new();
+        let mut rng = SplitMix64::new(11);
+        let built = try_desert_well(&mut rng, 0, 70, 0, &solid, &sand, &mut scratch);
+        assert!(built);
+        // Water cross at the old surface level.
+        assert_eq!(scratch.get(0, 70, 0), Some(WATER));
+        assert_eq!(scratch.get(1, 70, 0), Some(WATER));
+        assert_eq!(scratch.get(0, 70, -1), Some(WATER));
+        // Rim slabs at the four midpoints, ring sandstone at corners.
+        assert_eq!(scratch.get(2, 71, 0), Some(SANDSTONE_SLAB));
+        assert_eq!(scratch.get(-2, 71, 2), Some(SANDSTONE));
+        // Roof: slab ring, sandstone centre; pillars at the corners.
+        assert_eq!(scratch.get(0, 74, 0), Some(SANDSTONE));
+        assert_eq!(scratch.get(1, 74, 1), Some(SANDSTONE_SLAB));
+        assert_eq!(scratch.get(1, 72, 1), Some(SANDSTONE));
+        // Pad floor exists two deep.
+        assert_eq!(scratch.get(-2, 68, -2), Some(SANDSTONE));
+    }
+
+    /// W244: the IS_SAND gate + the 5x5 two-deep support scan reject.
+    #[test]
+    fn desert_well_rejects_bad_ground() {
+        let solid = |_x: i32, y: i32, _z: i32| -> bool { y <= 70 };
+        let not_sand = |_x: i32, _z: i32| -> bool { false };
+        let mut scratch = RoomScratch::new();
+        let mut rng = SplitMix64::new(11);
+        assert!(!try_desert_well(&mut rng, 0, 70, 0, &solid, &not_sand, &mut scratch));
+        assert!(scratch.writes.is_empty());
+        // A hole under the pad (both support layers empty) rejects.
+        let holed = |x: i32, y: i32, z: i32| -> bool {
+            if x == 2 && z == 2 && (y == 69 || y == 68) {
+                return false;
+            }
+            y <= 70
+        };
+        let sand = |_x: i32, _z: i32| -> bool { true };
+        let mut scratch = RoomScratch::new();
+        assert!(!try_desert_well(&mut rng, 0, 70, 0, &holed, &sand, &mut scratch));
+        assert!(scratch.writes.is_empty());
     }
 
     /// A fully sealed pocket (zero ring holes) must be rejected with
@@ -441,6 +645,102 @@ mod tests {
                 })
                 .collect();
             println!("chest at {:?}: [{}]", ch.pos, items.join(", "));
+        }
+    }
+
+    /// W244 probe: desert-well origins within `radius` source chunks
+    /// of a centre chunk + a full-pipeline check that the FIRST found
+    /// well materialises its water cross in real generated chunks.
+    /// `INFENGINE_DUMP_SEED=<seed> INFENGINE_DUMP_CX/CZ=<chunk>
+    /// INFENGINE_DUMP_RADIUS=<r> cargo test -p voxel_demo_mp --release
+    /// --lib dump_desert_wells -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_desert_wells() {
+        let env_i32 = |name: &str, default: i32| -> i32 {
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default)
+        };
+        let seed: u32 = std::env::var("INFENGINE_DUMP_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3592732596);
+        let radius = env_i32("INFENGINE_DUMP_RADIUS", 64);
+        let (ccx, ccz) =
+            (env_i32("INFENGINE_DUMP_CX", 0), env_i32("INFENGINE_DUMP_CZ", 0));
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: seed,
+            dim: std::env::var("INFENGINE_DUMP_DIM")
+                .unwrap_or_else(|_| "overworld".into()),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let cs = CHUNK_SIZE as i32;
+        let eff = ctx.effective_seed();
+        let base_solid =
+            |x: i32, y: i32, z: i32| -> bool { column_is_solid(&ctx, x, y, z) };
+        let surface_is_sand = |x: i32, z: i32| -> bool {
+            super::super::terrain::mc_surface_block_at(&ctx, x, z) == SAND
+        };
+        let mut found: Vec<[i32; 3]> = Vec::new();
+        for scx in (ccx - radius)..=(ccx + radius) {
+            for scz in (ccz - radius)..=(ccz + radius) {
+                let mut rng =
+                    SplitMix64::new(stream_seed(eff, scx, scz, SALT_DESERT_WELL));
+                if rng.next_f64() >= DESERT_WELL_CHANCE {
+                    continue;
+                }
+                let ox = scx * cs + next_int(&mut rng, 16);
+                let oz = scz * cs + next_int(&mut rng, 16);
+                let biome = super::super::terrain::mc_full_biome_at(&ctx, ox, oz);
+                if biome != super::super::biome::McBiome::Desert {
+                    continue;
+                }
+                let oy = super::super::terrain::mc_floor_at(&ctx, ox, oz);
+                if oy <= 2 {
+                    continue;
+                }
+                let mut scratch = RoomScratch::new();
+                if try_desert_well(
+                    &mut rng,
+                    ox,
+                    oy,
+                    oz,
+                    &base_solid,
+                    &surface_is_sand,
+                    &mut scratch,
+                ) {
+                    println!("desert well at ({ox}, {oy}, {oz})");
+                    found.push([ox, oy, oz]);
+                }
+            }
+        }
+        println!(
+            "total: {} wells in +/-{radius} chunks around ({ccx}, {ccz})",
+            found.len()
+        );
+        // Full-pipeline slice over the first hit: the water cross +
+        // roof must materialise in real generated chunks.
+        if let Some(&[wx, wy, wz]) = found.first() {
+            let read = |x: i32, y: i32, z: i32| -> u16 {
+                let coord = [x.div_euclid(cs), y.div_euclid(cs), z.div_euclid(cs)];
+                let chunk = crate::worldgen::generate_chunk_at_ctx(coord, &ctx);
+                chunk
+                    .get(
+                        x.rem_euclid(cs) as usize,
+                        y.rem_euclid(cs) as usize,
+                        z.rem_euclid(cs) as usize,
+                    )
+                    .0
+            };
+            assert_eq!(read(wx, wy, wz), WATER, "well water centre");
+            assert_eq!(read(wx + 1, wy, wz), WATER, "well water cross");
+            assert_eq!(read(wx, wy + 4, wz), SANDSTONE, "roof centre");
+            assert_eq!(read(wx + 1, wy + 4, wz + 1), SANDSTONE_SLAB, "roof slab");
+            assert_eq!(read(wx + 1, wy + 2, wz + 1), SANDSTONE, "pillar");
+            println!("full-pipeline well at ({wx}, {wy}, {wz}) verified");
         }
     }
 

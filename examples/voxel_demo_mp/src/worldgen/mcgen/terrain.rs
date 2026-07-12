@@ -256,6 +256,63 @@ pub(crate) fn mc_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     col.floor[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize]
 }
 
+/// W244: the block id painted on a column's TOP surface cell -
+/// replay-invariant (pure column data + surface rule, no chunk
+/// reads), so surface features (desert well's IS_SAND gate) can test
+/// the ground identically from every 3x3 replay window. Returns 0
+/// when the post-carve top differs from the pre-carve top (a carver
+/// shaved the column, exposing the underground paint) - callers
+/// treat that as "not a pristine surface".
+pub(crate) fn mc_surface_block_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> u16 {
+    let seed = ctx.effective_seed();
+    let ow = overworld_for(seed);
+    let cs = CHUNK_SIZE as i32;
+    let data = column_data_cached(&ow, wx.div_euclid(cs), wz.div_euclid(cs), seed);
+    let (x, z) = (wx.rem_euclid(cs) as usize, wz.rem_euclid(cs) as usize);
+    let McCol { top: h, mc, surface_depth } = data.cols[x][z];
+    if data.floor[x][z] != h {
+        return 0;
+    }
+    // The same SurfaceCtx the fill builds for the run-top cell
+    // (depth_above = 0); steep re-derives the in-chunk-clamped
+    // gradient the painted chunk used.
+    let steep = {
+        let mut d = 0;
+        if x > 0 {
+            d = d.max((h - data.cols[x - 1][z].top).abs());
+        }
+        if x + 1 < CHUNK_SIZE {
+            d = d.max((h - data.cols[x + 1][z].top).abs());
+        }
+        if z > 0 {
+            d = d.max((h - data.cols[x][z - 1].top).abs());
+        }
+        if z + 1 < CHUNK_SIZE {
+            d = d.max((h - data.cols[x][z + 1].top).abs());
+        }
+        d >= 4
+    };
+    let sctx = SurfaceCtx {
+        x: wx,
+        y: h,
+        z: wz,
+        stone_depth_above: 0,
+        stone_depth_below: i32::MAX / 2,
+        water_height: if h < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
+        surface: h - SURFACE_BAND,
+        surface_depth,
+        steep,
+        frozen: super::vegetation::cold_enough_to_snow_at(mc, wx, h, wz),
+        mc_name: mc.name(),
+        min_y: ow.min_y,
+        max_y: ow.min_y + ow.height,
+    };
+    if let Some(id) = ow.surface_eval(&sctx) {
+        return id;
+    }
+    crate::worldgen::climate::surface_block(mc.to_engine(), h).0
+}
+
 /// W220: PRE-DECORATION solidity at any world cell, from the cached
 /// column bitsets. Replay-invariant (every chunk that consults a shared
 /// cell agrees) - the lava-lake border checks key on this. W226.1:
