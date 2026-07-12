@@ -42,7 +42,7 @@ use super::village_data;
 use crate::worldgen::WorldgenCtx;
 
 /// `structure_set/villages.json`.
-const SPACING: i32 = 34;
+pub(crate) const SPACING: i32 = 34;
 const SEPARATION: i32 = 8;
 const SALT_VILLAGE_SET: u64 = 10_387_312;
 /// Layout stream per start chunk.
@@ -53,8 +53,10 @@ const FOUNDATION_ID: u16 = 2;
 /// Foundations taller than this stay open (the MC beard fades out).
 const FOUNDATION_MAX: i32 = 12;
 
-/// The candidate start chunk of a 34x34 grid cell.
-fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
+/// The candidate start chunk of a 34x34 grid cell. `pub(crate)`: the
+/// outpost's exclusion zone (10 chunks from any village placement)
+/// probes this grid.
+pub(crate) fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
     super::scattered::random_spread_start(
         seed,
         grid_x,
@@ -115,7 +117,7 @@ fn build_layout(ctx: &WorldgenCtx, scx: i32, scz: i32) -> Option<Vec<PlacedPiece
         scz,
         SALT_VILLAGE_LAYOUT,
     ));
-    jigsaw::solve(ctx, [scx, scz], pool, &mut rng)
+    jigsaw::solve(ctx, [scx, scz], pool, jigsaw::VILLAGE_MAX_DEPTH, &mut rng)
 }
 
 /// The per-chunk village pass: find grid cells whose candidate start
@@ -149,8 +151,23 @@ pub(crate) fn place_villages(
     }
 }
 
-/// Write every piece cell that lands in this 16^3 cube.
-fn carve_layout(
+/// Per-cell keep roll for a list-element overlay (the outpost
+/// overgrown-watchtower `block_rot`): pure in (seed, world cell) so
+/// every replay slice of the column agrees. MC rolls the shared
+/// worldgen RNG sequentially - own-stream approximation, same
+/// trade-off as every other structure stream.
+const SALT_LIST_OVERLAY: u64 = 0xD4E6_0030;
+
+fn overlay_keeps(seed: u32, wx: i32, wy: i32, wz: i32, integrity: f32) -> bool {
+    let s = stream_seed(seed, wx, wz, SALT_LIST_OVERLAY)
+        ^ (wy as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let roll = (SplitMix64::new(s).next_u64() >> 40) as f32 / (1u64 << 24) as f32;
+    roll < integrity
+}
+
+/// Write every piece cell that lands in this 16^3 cube. Shared by the
+/// village and outpost passes (identical carve semantics).
+pub(crate) fn carve_layout(
     layout: &[PlacedPiece],
     chunk: &mut Chunk,
     ctx: &WorldgenCtx,
@@ -211,6 +228,43 @@ fn carve_layout(
             };
             if let Mapped::Id(id) = mapped {
                 chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+            }
+        }
+        // W251: list-element overlays (`ListPoolElement` places every
+        // stacked template at the same anchor): each cell of an
+        // overlay writes only when its block_rot roll keeps it - the
+        // outpost's overgrown watchtower scatters ~5% moss/vine
+        // variance over the plain tower.
+        for ov in &piece.overlays {
+            let Some(ot) = village_data::template(&ov.location) else {
+                continue;
+            };
+            let seed = ctx.effective_seed();
+            for cell in &ot.cells {
+                let rp = jigsaw::rot_pos(piece.rotation, cell.pos);
+                let wx = piece.position[0] + rp[0];
+                let wz = piece.position[2] + rp[2];
+                let wy = if piece.terrain_matching {
+                    mc_floor_at(ctx, wx, wz) + cell.pos[1]
+                } else {
+                    piece.position[1] + rp[1]
+                };
+                let (lx, ly, lz) =
+                    (wx - origin[0], wy - origin[1], wz - origin[2]);
+                if !(0..cs).contains(&lx)
+                    || !(0..cs).contains(&ly)
+                    || !(0..cs).contains(&lz)
+                    || !overlay_keeps(seed, wx, wy, wz, ov.integrity)
+                {
+                    continue;
+                }
+                let mapped = match &cell.jigsaw {
+                    Some(j) => map_state_string(&j.final_state),
+                    None => map_state(&ot.palette[cell.state]),
+                };
+                if let Mapped::Id(id) = mapped {
+                    chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+                }
             }
         }
         // beard_thin approximation: rigid pieces stand on a dirt

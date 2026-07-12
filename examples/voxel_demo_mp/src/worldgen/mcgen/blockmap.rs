@@ -84,6 +84,12 @@ const RENAMES: &[(&str, &str)] = &[
     ("infested_stone_bricks", "stone_bricks"),
     ("infested_mossy_stone_bricks", "mossy_stone_bricks"),
     ("infested_chiseled_stone_bricks", "chiseled_stone_bricks"),
+    // W251 outpost: no mossy cobblestone shapes yet - the plain
+    // cobblestone shapes keep the family (full mossy_cobblestone
+    // blocks hit the registry directly).
+    ("mossy_cobblestone_stairs", "cobblestone_stairs"),
+    ("mossy_cobblestone_slab", "cobblestone_slab"),
+    ("mossy_cobblestone_wall", "cobblestone_wall"),
 ];
 
 /// Names we knowingly leave unplaced until their blocks exist. The
@@ -102,6 +108,8 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "potted_spruce_sapling",
     "spruce_wall_sign",
     "water_cauldron",
+    // W251 outpost decoration.
+    "white_wall_banner",
 ];
 
 fn log_unmapped(name: &str) {

@@ -868,6 +868,10 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W245.5: villages (surface_structures, step 4) - structures
     // precede the step's features.
     super::village::place_villages(chunk, coord, ctx, origin);
+    // W251: pillager outpost (surface_structures, step 4). The
+    // exclusion zone reads the village grid, never the reverse, so
+    // ordering after villages costs nothing.
+    super::outpost::place_outposts(chunk, coord, ctx, origin);
     // W246: desert pyramid (surface_structures, step 4).
     super::pyramid::place_desert_pyramids(chunk, coord, ctx, origin);
     // W247: swamp hut (surface_structures, step 4).

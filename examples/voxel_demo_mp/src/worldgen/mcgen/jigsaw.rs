@@ -36,12 +36,13 @@ use super::mineshaft::Bb;
 use super::noise::SplitMix64;
 use super::template::{JigsawInfo, StructureTemplate};
 use super::terrain::mc_floor_at;
-use super::village_data::{self, ElementKind, TemplatePool};
+use super::village_data::{self, ElementKind, ListOverlay, TemplatePool};
 use crate::worldgen::WorldgenCtx;
 
 /// `village_*.json` shared config: recursion depth 6, +-80 blocks
 /// horizontal, unbounded vertical (the single-value MaxDistance form
-/// defaults vertical to the world height).
+/// defaults vertical to the world height). The outpost runs the same
+/// solver at depth 7 (`pillager_outpost.json` size).
 pub(crate) const VILLAGE_MAX_DEPTH: i32 = 6;
 pub(crate) const VILLAGE_MAX_DISTANCE: i32 = 80;
 
@@ -250,8 +251,13 @@ fn pool_max_size(id: &str) -> i32 {
     let mut max = 0;
     if let Some(p) = village_data::pool(id) {
         for e in &p.elements {
-            if let ElementKind::Single { location, .. } = &e.kind
-                && let Some(t) = village_data::template(location)
+            let loc = match &e.kind {
+                ElementKind::Single { location, .. } => Some(location),
+                ElementKind::List { first, .. } => Some(first),
+                _ => None,
+            };
+            if let Some(loc) = loc
+                && let Some(t) = village_data::template(loc)
             {
                 max = max.max(t.size[1]);
             }
@@ -314,6 +320,23 @@ pub(crate) struct PlacedPiece {
     /// `groundLevelDelta`: world ground = bb.y0 + delta (legacy
     /// elements are built one block below their ground line).
     pub(crate) ground_level_delta: i32,
+    /// W251: list-element overlays carved over `template` at the same
+    /// anchor (empty for plain single elements).
+    pub(crate) overlays: Vec<ListOverlay>,
+}
+
+/// The template + overlays a pool element resolves to (`None` for
+/// feature/empty kinds, which never become pieces).
+fn element_parts(kind: ElementKind) -> Option<(String, bool, Vec<ListOverlay>)> {
+    match kind {
+        ElementKind::Single { location, terrain_matching } => {
+            Some((location, terrain_matching, Vec::new()))
+        }
+        ElementKind::List { first, overlays, terrain_matching } => {
+            Some((first, terrain_matching, overlays))
+        }
+        _ => None,
+    }
 }
 
 struct QueueEntry {
@@ -330,24 +353,23 @@ fn first_free_height(ctx: &WorldgenCtx, x: i32, z: i32) -> i32 {
     mc_floor_at(ctx, x, z) + 1
 }
 
-/// Solve one village layout anchored at `start_chunk` from
-/// `start_pool`. Deterministic in (ctx seed, start chunk, rng
-/// stream); `None` when the start pool rolls empty.
+/// Solve one jigsaw layout anchored at `start_chunk` from
+/// `start_pool`, recursing `max_depth` deep (the structure JSON
+/// `size`: villages 6, outposts 7). Deterministic in (ctx seed,
+/// start chunk, rng stream); `None` when the start pool rolls empty.
 pub(crate) fn solve(
     ctx: &WorldgenCtx,
     start_chunk: [i32; 2],
     start_pool: &str,
+    max_depth: i32,
     rng: &mut SplitMix64,
 ) -> Option<Vec<PlacedPiece>> {
     let cs = infengine_voxel::CHUNK_SIZE as i32;
     let anchor = [start_chunk[0] * cs, 0, start_chunk[1] * cs];
     let center_rotation = next_int(rng, 4) as u8;
     let start = village_data::pool(start_pool)?;
-    let ElementKind::Single { location, terrain_matching } =
-        random_element(&start, rng)?
-    else {
-        return None;
-    };
+    let (location, terrain_matching, center_overlays) =
+        element_parts(random_element(&start, rng)?)?;
     let center_template = village_data::template(&location)?;
     let raw_bb = template_bb(center_template.size, anchor, center_rotation);
     let center_x = (raw_bb.x0 + raw_bb.x1) / 2;
@@ -368,6 +390,7 @@ pub(crate) fn solve(
         bb: center_bb,
         terrain_matching,
         ground_level_delta,
+        overlays: center_overlays,
     }];
 
     let world_free = Rc::new(RefCell::new(FreeSpace {
@@ -407,6 +430,7 @@ pub(crate) fn solve(
             entry,
             &mut queue,
             &mut seq,
+            max_depth,
             rng,
         );
     }
@@ -414,12 +438,14 @@ pub(crate) fn solve(
 }
 
 /// `Placer.tryPlacingChildren`.
+#[allow(clippy::too_many_arguments)]
 fn try_placing_children(
     ctx: &WorldgenCtx,
     pieces: &mut Vec<PlacedPiece>,
     entry: QueueEntry,
     queue: &mut Vec<QueueEntry>,
     seq: &mut usize,
+    max_depth: i32,
     rng: &mut SplitMix64,
 ) {
     let source = pieces[entry.piece_idx].clone();
@@ -467,7 +493,7 @@ fn try_placing_children(
         // Depth-capped pool + fallback, each weight-expanded +
         // shuffled, tried in order.
         let mut candidates: Vec<ElementKind> = Vec::new();
-        if entry.depth != VILLAGE_MAX_DEPTH {
+        if entry.depth != max_depth {
             candidates.extend(shuffled_elements(&target_pool, rng));
         }
         if let Some(f) = &fallback_pool {
@@ -475,14 +501,17 @@ fn try_placing_children(
         }
 
         for candidate in candidates {
-            let (location, target_matching) = match candidate {
+            let (location, target_matching, target_overlays) = match candidate {
                 // An explicit empty element terminates the socket.
                 ElementKind::Empty => break,
                 // Feature elements (street trees) consume the socket;
                 // the tree visual is a later wave (module docs).
                 ElementKind::Feature { .. } => continue 'sockets,
                 ElementKind::Single { location, terrain_matching } => {
-                    (location, terrain_matching)
+                    (location, terrain_matching, Vec::new())
+                }
+                ElementKind::List { first, overlays, terrain_matching } => {
+                    (first, terrain_matching, overlays)
                 }
             };
             let Some(target_template) = village_data::template(&location) else {
@@ -583,8 +612,9 @@ fn try_placing_children(
                         bb: target_bb,
                         terrain_matching: target_matching,
                         ground_level_delta: target_gld,
+                        overlays: target_overlays.clone(),
                     });
-                    if entry.depth < VILLAGE_MAX_DEPTH {
+                    if entry.depth < max_depth {
                         queue.push(QueueEntry {
                             piece_idx: idx,
                             free: children_free.clone(),
@@ -644,11 +674,23 @@ mod tests {
             profile: crate::worldgen::WorldGen::Mc,
         };
         let mut rng = SplitMix64::new(0xB00B1E5);
-        let a = solve(&ctx, [300, 300], "minecraft:village/plains/town_centers", &mut rng)
-            .expect("layout solves");
+        let a = solve(
+            &ctx,
+            [300, 300],
+            "minecraft:village/plains/town_centers",
+            VILLAGE_MAX_DEPTH,
+            &mut rng,
+        )
+        .expect("layout solves");
         let mut rng2 = SplitMix64::new(0xB00B1E5);
-        let b = solve(&ctx, [300, 300], "minecraft:village/plains/town_centers", &mut rng2)
-            .expect("layout solves twice");
+        let b = solve(
+            &ctx,
+            [300, 300],
+            "minecraft:village/plains/town_centers",
+            VILLAGE_MAX_DEPTH,
+            &mut rng2,
+        )
+        .expect("layout solves twice");
         assert_eq!(a.len(), b.len(), "solver must be deterministic");
         for (pa, pb) in a.iter().zip(&b) {
             assert_eq!(pa.template, pb.template);
@@ -730,6 +772,7 @@ mod tests {
             &ctx,
             [cx, cz],
             "minecraft:village/plains/town_centers",
+            VILLAGE_MAX_DEPTH,
             &mut rng,
         )
         .expect("layout solves");

@@ -231,6 +231,60 @@ pub(crate) const IGLOO_CHEST: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/pillager_outpost.json` (26.1.2).
+/// Parity gaps skipped via the name mapper until the items exist:
+/// crossbow, experience_bottle, tripwire_hook, goat_horn (+ its
+/// set_instrument function), sentry_armor_trim_smithing_template;
+/// `book` drops UNenchanted (no enchant_randomly).
+pub(crate) const PILLAGER_OUTPOST: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 0,
+            rolls_max: 1,
+            entries: &[one("crossbow", 1)],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 3,
+            entries: &[
+                counted("wheat", 7, 3, 5),
+                counted("potato", 5, 2, 5),
+                counted("carrot", 5, 3, 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 3,
+            entries: &[counted("dark_oak_log", 1, 2, 3)],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 3,
+            entries: &[
+                one("experience_bottle", 7),
+                counted("string", 4, 1, 6),
+                counted("arrow", 4, 2, 7),
+                counted("tripwire_hook", 3, 1, 3),
+                counted("iron_ingot", 3, 1, 3),
+                one("book", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 0,
+            rolls_max: 1,
+            entries: &[one("goat_horn", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 3),
+                counted("sentry_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

@@ -776,6 +776,7 @@ pub(crate) enum ChestLootKind {
     AbandonedMineshaft,
     DesertPyramid,
     IglooChest,
+    PillagerOutpost,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -792,6 +793,8 @@ pub(crate) fn chest_loot_kind(
         ChestLootKind::DesertPyramid
     } else if mcgen::igloo::pos_in_igloo(ctx, pos) {
         ChestLootKind::IglooChest
+    } else if mcgen::outpost::pos_in_outpost(ctx, pos) {
+        ChestLootKind::PillagerOutpost
     } else {
         ChestLootKind::SimpleDungeon
     }

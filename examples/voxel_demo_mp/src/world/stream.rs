@@ -237,6 +237,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::IglooChest => {
                                         &crate::loot::IGLOO_CHEST
                                     }
+                                    crate::workers::ChestLootKind::PillagerOutpost => {
+                                        &crate::loot::PILLAGER_OUTPOST
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

@@ -20,19 +20,25 @@ def norm(p, base):
     return os.path.relpath(p, base).replace(os.sep, "/")
 
 
-for root, dirs, files in os.walk(os.path.join(src, "worldgen/template_pool/village")):
-    for f in sorted(files):
-        p = os.path.join(root, f)
-        zf.write(p, norm(p, src))
-        count["pool"] += 1
+# Template-pool subtrees the engine ports (W245 village, W251 outpost).
+for subtree in (
+    "worldgen/template_pool/village",
+    "worldgen/template_pool/pillager_outpost",
+):
+    for root, dirs, files in os.walk(os.path.join(src, subtree)):
+        for f in sorted(files):
+            p = os.path.join(root, f)
+            zf.write(p, norm(p, src))
+            count["pool"] += 1
 zf.write(
     os.path.join(src, "worldgen/template_pool/empty.json"),
     "worldgen/template_pool/empty.json",
 )
 count["pool"] += 1
 
-# Structure NBT subtrees the engine ports (W245 village, W248 igloo).
-for subtree in ("structure/village", "structure/igloo"):
+# Structure NBT subtrees the engine ports (W245 village, W248 igloo,
+# W251 pillager outpost).
+for subtree in ("structure/village", "structure/igloo", "structure/pillager_outpost"):
     for root, dirs, files in os.walk(os.path.join(src2, subtree)):
         for f in sorted(files):
             if not f.endswith(".nbt"):

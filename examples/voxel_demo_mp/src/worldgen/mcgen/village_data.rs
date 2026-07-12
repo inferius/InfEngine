@@ -64,6 +64,13 @@ struct ElementJson {
     projection: Option<String>,
     #[serde(default)]
     feature: Option<String>,
+    /// `list_pool_element` inner elements (W251 outpost towers).
+    #[serde(default)]
+    elements: Option<Vec<ElementJson>>,
+    /// Either an inline `{processors: []}` object or a processor-list
+    /// REFERENCE string like `"minecraft:outpost_rot"`.
+    #[serde(default)]
+    processors: Option<serde_json::Value>,
 }
 
 /// One weighted pool entry, decoded to the solver's vocabulary.
@@ -73,11 +80,30 @@ pub(crate) struct PoolElement {
     pub(crate) kind: ElementKind,
 }
 
+/// W251: one stacked element of a `list_pool_element` beyond the
+/// first - carved over the base template with a per-cell keep roll.
+#[derive(Debug, Clone)]
+pub(crate) struct ListOverlay {
+    pub(crate) location: String,
+    /// `block_rot` keep-probability from the element's referenced
+    /// processor list (1.0 = every cell writes).
+    pub(crate) integrity: f32,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum ElementKind {
     /// `legacy_single_pool_element` - one template, either anchored
     /// rigidly to its joint or dropped onto the terrain heightmap.
     Single { location: String, terrain_matching: bool },
+    /// `list_pool_element` - templates stacked at one anchor. The
+    /// FIRST defines the box + jigsaws (`ListPoolElement` delegates
+    /// both to element 0); the rest overlay at carve time (the
+    /// outpost's overgrown-watchtower rot pattern).
+    List {
+        first: String,
+        overlays: Vec<ListOverlay>,
+        terrain_matching: bool,
+    },
     /// `feature_pool_element` - a placed feature (village trees /
     /// pile decorations); carried through for a later wave.
     Feature { feature: String },
@@ -124,23 +150,75 @@ fn load_pool(id: &str) -> Option<TemplatePool> {
     let elements = json
         .elements
         .into_iter()
-        .map(|w| {
-            let kind = match w.element.element_type.as_str() {
-                "minecraft:legacy_single_pool_element"
-                | "minecraft:single_pool_element" => ElementKind::Single {
-                    location: w.element.location.unwrap_or_default(),
-                    terrain_matching: w.element.projection.as_deref()
-                        == Some("terrain_matching"),
-                },
-                "minecraft:feature_pool_element" => ElementKind::Feature {
-                    feature: w.element.feature.unwrap_or_default(),
-                },
-                _ => ElementKind::Empty,
-            };
-            PoolElement { weight: w.weight, kind }
-        })
+        .map(|w| PoolElement { weight: w.weight, kind: decode_element(&w.element) })
         .collect();
     Some(TemplatePool { elements, fallback: json.fallback })
+}
+
+fn decode_element(e: &ElementJson) -> ElementKind {
+    let terrain_matching = e.projection.as_deref() == Some("terrain_matching");
+    match e.element_type.as_str() {
+        "minecraft:legacy_single_pool_element" | "minecraft:single_pool_element" => {
+            ElementKind::Single {
+                location: e.location.clone().unwrap_or_default(),
+                terrain_matching,
+            }
+        }
+        "minecraft:list_pool_element" => {
+            // Element 0 rules the box + jigsaws; the rest carve as
+            // overlays with their processor's block_rot integrity.
+            let inner: Vec<&ElementJson> = e
+                .elements
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|i| i.location.is_some())
+                .collect();
+            let Some(first) = inner.first() else {
+                return ElementKind::Empty;
+            };
+            let overlays = inner[1..]
+                .iter()
+                .map(|i| ListOverlay {
+                    location: i.location.clone().unwrap_or_default(),
+                    integrity: i
+                        .processors
+                        .as_ref()
+                        .and_then(|p| p.as_str())
+                        .and_then(block_rot_integrity)
+                        .unwrap_or(1.0),
+                })
+                .collect();
+            ElementKind::List {
+                first: first.location.clone().unwrap_or_default(),
+                overlays,
+                terrain_matching,
+            }
+        }
+        "minecraft:feature_pool_element" => ElementKind::Feature {
+            feature: e.feature.clone().unwrap_or_default(),
+        },
+        _ => ElementKind::Empty,
+    }
+}
+
+/// The `block_rot` keep-probability of a processor list in the zip
+/// (`worldgen/processor_list/<id>.json`) - `None` when the list has
+/// no block_rot entry.
+fn block_rot_integrity(id: &str) -> Option<f32> {
+    #[derive(Deserialize)]
+    struct ProcessorListJson {
+        processors: Vec<serde_json::Value>,
+    }
+    let path = format!("worldgen/processor_list/{}.json", strip_ns(id));
+    let bytes = zip_entry(&path)?;
+    let json: ProcessorListJson = serde_json::from_slice(&bytes).ok()?;
+    json.processors.iter().find_map(|p| {
+        (p.get("processor_type").and_then(|v| v.as_str())
+            == Some("minecraft:block_rot"))
+        .then(|| p.get("integrity").and_then(|v| v.as_f64()).map(|f| f as f32))
+        .flatten()
+    })
 }
 
 // ----------------------------------------------------------------
