@@ -143,21 +143,38 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
 /// in the active Voxel slots (the dim matching the player's
 /// `last_dimension`) or in the per-dim parking maps. The base seed
 /// and per-dim worldgen profiles come from `world.json` and land in
-/// `voxel.base_seed` + `voxel.dim_worldgens`. W5.1: no global
-/// atomics are touched - every gen call rebuilds a `WorldgenCtx`
-/// from these fields.
-pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
-    let meta = meta::read_meta(slug)?;
+/// W249: apply a saved world's META to the runtime WITHOUT touching
+/// chunks: active dim (from the host player's `last_dimension`),
+/// `base_seed`, the per-dim worldgen profiles and the saved time of
+/// day. Returns the host player's saved position (or the world spawn
+/// for a fresh slot) so the caller can centre the initial build on
+/// it. `enter_world` runs this BEFORE the initial async build - the
+/// build then generates the RIGHT chunks with the RIGHT profile
+/// around the RIGHT position and the disk-first workers stream the
+/// saved chunks straight in; previously the build ran around the
+/// ORIGIN with the DEFAULT (Classic) profile, wasted the full view
+/// distance of wrong generation, leaked those chunks into the save
+/// via unload-writes and threw the rest away on load.
+pub(crate) fn apply_world_meta(voxel: &mut Voxel, slug: &str) -> io::Result<[f32; 3]> {
     let world_meta = world_json::read_world(slug)?;
+    let player = apply_world_meta_inner(voxel, &world_meta, slug)?;
+    let pos = player.as_ref().map(|p| p.pos).unwrap_or([
+        world_meta.spawn[0] as f32 + 0.5,
+        world_meta.spawn[1] as f32 + 1.0,
+        world_meta.spawn[2] as f32 + 0.5,
+    ]);
+    voxel.preapplied_slug = Some(slug.to_string());
+    Ok(pos)
+}
 
-    // Drop any state the runtime had streamed in for a previous
-    // slot.  Also clears the per-dim parking maps so we don't mix
-    // dims from two saves.
-    voxel.reset_world();
-    voxel.worlds.clear();
-    voxel.entities_by_dim.clear();
-    voxel.dim_worldgens.clear();
-
+/// The shared meta-application body: resolve the active dim, pin the
+/// seed + per-dim worldgen table + day time, return the host player
+/// save (when one exists).
+fn apply_world_meta_inner(
+    voxel: &mut Voxel,
+    world_meta: &world_json::WorldJson,
+    slug: &str,
+) -> io::Result<Option<players::PlayerSave>> {
     // Resolve the active dim. The player file is the source of
     // truth for `last_dimension`; fall back to the world's default
     // dimension when no player file exists.
@@ -181,17 +198,56 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     voxel.day_time = world_meta.day_time;
     // Per-dim worldgens table; populate before per-dim load so
     // each dim's chunk-gen can see its assigned variant.
-    dims::apply_dim_worldgens(voxel, &world_meta);
+    dims::apply_dim_worldgens(voxel, world_meta);
 
     // W5.1: the dim_worldgens map (above) is the single source of
     // truth for the active dim's profile; no atomics to pin.
     // Apply the world.json fallback into the map when the map
     // lacks an entry so future ctx reads pick up a sensible
     // default rather than landing on Classic by accident.
-    if !voxel.dim_worldgens.contains_key(&active_dim) {
-        let fallback = WorldGen::from_str(&world_meta.worldgen)
-            .unwrap_or(WorldGen::Classic);
-        voxel.dim_worldgens.insert(active_dim.clone(), fallback);
+    voxel.dim_worldgens.entry(active_dim).or_insert_with(|| {
+        WorldGen::from_str(&world_meta.worldgen).unwrap_or(WorldGen::Classic)
+    });
+    Ok(player)
+}
+
+/// `voxel.base_seed` + `voxel.dim_worldgens`. W5.1: no global
+/// atomics are touched - every gen call rebuilds a `WorldgenCtx`
+/// from these fields.
+///
+/// W249: the meta application lives in [`apply_world_meta`] so
+/// `enter_world` can run it BEFORE the initial async build.
+pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
+    let meta = meta::read_meta(slug)?;
+    let world_meta = world_json::read_world(slug)?;
+
+    // W249: when enter_world pre-applied THIS slug's meta before the
+    // initial async build, the live chunks were already generated with
+    // the right profile around the right position (the disk-first
+    // workers even streamed the saved chunks in). Resetting would
+    // throw all of that away and re-generate everything a second time
+    // - the "holes around the player for minutes after load" report.
+    // Overlay mode keeps the world and lets the per-chunk pass below
+    // re-apply payloads (idempotent) + their side overrides.
+    let overlay = voxel.preapplied_slug.take().as_deref() == Some(slug);
+    if !overlay {
+        // Drop any state the runtime had streamed in for a previous
+        // slot.  Also clears the per-dim parking maps so we don't mix
+        // dims from two saves.
+        voxel.reset_world();
+    }
+    voxel.worlds.clear();
+    voxel.entities_by_dim.clear();
+
+    // Resolve + apply the meta (active dim, seed, per-dim worldgen
+    // profiles, day time). Idempotent with the enter_world pre-apply.
+    let player = apply_world_meta_inner(voxel, &world_meta, slug)?;
+    if overlay {
+        tracing::info!(
+            slug,
+            chunks_kept = voxel.world.iter_chunks().count(),
+            "W249: overlay load - initial-build chunks kept"
+        );
     }
 
     // Per-dim chunks + entities + containers.

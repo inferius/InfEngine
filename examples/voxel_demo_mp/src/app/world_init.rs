@@ -37,6 +37,42 @@ impl Voxel {
                 }
             }
         }
+        // W249: a saved world's meta + host pose must apply BEFORE
+        // the initial async build. The build used to run around the
+        // ORIGIN with the DEFAULT (Classic) profile: it generated the
+        // full view distance of wrong chunks, leaked them into the
+        // save through unload-writes, and threw the rest away when
+        // load_world finally teleported the player - the "holes
+        // around me for minutes after loading" report. With the meta
+        // + pose applied here, the build targets the right chunks
+        // with the right profile and the disk-first workers stream
+        // the SAVED chunks straight in; load_world then overlays
+        // containers/entities without resetting.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+            && let Some(slug) = self.current_world_slug.clone()
+        {
+            match world_save::apply_world_meta(self, &slug) {
+                Ok(pos) => {
+                    self.player_pos = Vec3::new(pos[0], pos[1], pos[2]);
+                    self.player_vel = Vec3::ZERO;
+                    self.fall_start_y = None;
+                    info!(
+                        slug = %slug,
+                        dim = %self.current_dim,
+                        seed = self.base_seed,
+                        pos = ?pos,
+                        "W249: saved-world meta pre-applied before the initial build"
+                    );
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    // Fresh slot - no save on disk yet; the defaults
+                    // (origin + the menu-picked worldgen) are right.
+                }
+                Err(err) => {
+                    warn!(error = %err, "W249: world meta pre-apply failed");
+                }
+            }
+        }
         // L.2: spin up workers first so `build_world` can push into
         // pending_chunks immediately.
         self.workers = Some(WorkerPool::spawn(pick_worker_count()));
@@ -94,6 +130,9 @@ impl Voxel {
         // request channel; the workers exit on the next recv.
         self.workers = None;
         self.world_loaded = false;
+        // W249: never carry the pre-applied-meta marker into the
+        // next world entry.
+        self.preapplied_slug = None;
         info!("voxel: world torn down (returned to menu)");
     }
 

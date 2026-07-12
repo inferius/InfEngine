@@ -277,16 +277,23 @@ impl Voxel {
         // causing the counter to show e.g. 1296/784 (100%) because the target
         // was 7x7x16=784 but the live count rose to 9x9x16=1296.
         let radius = self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
-        // W28.1: player spawns at origin so player_chunk = [0, 0, 0].
-        // Compute XZ squared distance from origin for priority ordering.
+        // W249: centre the initial ring on the PLAYER's chunk. A
+        // fresh world still starts at the origin (the old W28.1
+        // assumption); a saved world's pose was pre-applied by
+        // enter_world, so the build fills the terrain the player
+        // actually stands in instead of a view-distance ring around
+        // 0,0 that load_world used to throw away.
+        let cs = CHUNK_SIZE as i32;
+        let pcx = (self.player_pos.x.floor() as i32).div_euclid(cs);
+        let pcz = (self.player_pos.z.floor() as i32).div_euclid(cs);
         // W28.3: only enqueue Y slices visible from the player's current Y.
         let (cy_min, cy_max) = Self::vertical_chunk_range(self.player_pos.y);
         let mut enqueued: u32 = 0;
-        for cz in -radius..=radius {
-            for cx in -radius..=radius {
-                let dist_sq = (cx * cx + cz * cz) as i64;
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                let dist_sq = (dx * dx + dz * dz) as i64;
                 for cy in cy_min..=cy_max {
-                    let cc: ChunkCoord = [cx, cy, cz];
+                    let cc: ChunkCoord = [pcx + dx, cy, pcz + dz];
                     if self.pending_set.insert(cc) {
                         self.pending_chunks.push(PendingChunk {
                             neg_dist_sq: -dist_sq,
@@ -407,5 +414,40 @@ impl Voxel {
             out.push([cc[0], cc[1], cc[2] + 1]);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod build_world_tests {
+    use crate::Voxel;
+    use infengine_voxel::CHUNK_SIZE;
+
+    /// W249: the initial ring centres on the PLAYER's chunk (a saved
+    /// world's pose is pre-applied by enter_world), and the queue
+    /// pops nearest-first. Regression for the "initial build around
+    /// the origin gets thrown away after load" report.
+    #[test]
+    fn initial_ring_centres_on_the_player() {
+        let cs = CHUNK_SIZE as f32;
+        let mut v = Voxel::new();
+        v.settings.view_distance = 3;
+        v.player_pos = glam::Vec3::new(296.0 * cs + 8.0, 26.0, 295.0 * cs + 8.0);
+        let target = v.build_world();
+        assert!(target > 0);
+        // The very first pop is the player's own column...
+        let first = v.pending_chunks.pop().expect("queue non-empty");
+        assert_eq!(
+            [first.coord[0], first.coord[2]],
+            [296, 295],
+            "nearest-first must start at the player column"
+        );
+        // ...and every queued coord stays inside the ring.
+        while let Some(p) = v.pending_chunks.pop() {
+            assert!(
+                (p.coord[0] - 296).abs() <= 3 && (p.coord[2] - 295).abs() <= 3,
+                "coord outside the player ring: {:?}",
+                p.coord
+            );
+        }
     }
 }

@@ -164,6 +164,15 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
     runtime::load_world(voxel, slug)
 }
 
+/// W249: apply a saved world's meta (active dim, seed, per-dim
+/// worldgen profiles, day time) + return the host player's saved
+/// position, WITHOUT touching chunks. Run by `enter_world` before
+/// the initial async build so the build targets the right chunks
+/// with the right profile.
+pub(crate) fn apply_world_meta(voxel: &mut Voxel, slug: &str) -> io::Result<[f32; 3]> {
+    runtime::apply_world_meta(voxel, slug)
+}
+
 /// One-shot legacy migration. If `worlds/` does not yet exist as a
 /// directory tree AND a `voxel_server_state.bin` does live in the
 /// current working directory, build a `worlds/legacy/` slot from it.

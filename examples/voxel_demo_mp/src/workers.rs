@@ -129,9 +129,23 @@ impl WorkerPool {
                                                         ChunkSideEffect::Snow(wv),
                                                     );
                                                 // W242: structure loot chest.
+                                                // W249: the loot-table
+                                                // pick happens HERE on
+                                                // the worker (layout +
+                                                // column caches warm) -
+                                                // deciding it at delivery
+                                                // built the whole MC
+                                                // noise stack on the
+                                                // MAIN thread (100-200 ms
+                                                // folds near villages).
                                                 } else if b.0 == crate::block::CHEST_ID {
                                                     side_effects.push(
-                                                        ChunkSideEffect::DungeonChest(wv),
+                                                        ChunkSideEffect::DungeonChest {
+                                                            pos: wv,
+                                                            table: chest_loot_kind(
+                                                                &gj.ctx, wv,
+                                                            ),
+                                                        },
                                                     );
                                                 // W242.2: monster spawner.
                                                 } else if b.0 == crate::block::SPAWNER_ID {
@@ -727,14 +741,46 @@ pub(crate) enum ChunkSideEffect {
     /// this world position. Players can't have built in a chunk that
     /// is only now being generated, so every chest the scan finds is
     /// structure loot: the main thread mints its container with a
-    /// seed-deterministic loot roll + derives the facing.
-    DungeonChest([i32; 3]),
+    /// seed-deterministic loot roll + derives the facing. W249: the
+    /// loot-table kind is decided by the WORKER (structure-membership
+    /// probes need the worldgen caches; running them at delivery cost
+    /// the main thread the whole MC noise stack).
+    DungeonChest { pos: [i32; 3], table: ChestLootKind },
     /// W242.2: a monster-spawner block at this world position. The
     /// main thread folds it into `Voxel.spawner_positions` so the
     /// spawner tick + cage particles walk a small index instead of
     /// scanning chunks. (The spawned entity kind still needs no side
     /// effect - it stays a pure function of world seed + position.)
     Spawner([i32; 3]),
+}
+
+/// W249: which loot table a worldgen chest rolls at delivery. Decided
+/// on the worker via the deterministic structure-membership probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChestLootKind {
+    SimpleDungeon,
+    AbandonedMineshaft,
+    DesertPyramid,
+    IglooChest,
+}
+
+/// The membership chain behind [`ChestLootKind`]. Worker-side only:
+/// the probes replay structure layouts through the per-thread
+/// worldgen caches, which are warm right after generating the chunk.
+pub(crate) fn chest_loot_kind(
+    ctx: &crate::worldgen::WorldgenCtx,
+    pos: [i32; 3],
+) -> ChestLootKind {
+    use crate::worldgen::mcgen;
+    if mcgen::mineshaft::pos_in_mineshaft(ctx, pos) {
+        ChestLootKind::AbandonedMineshaft
+    } else if mcgen::pyramid::pos_in_desert_pyramid(ctx, pos) {
+        ChestLootKind::DesertPyramid
+    } else if mcgen::igloo::pos_in_igloo(ctx, pos) {
+        ChestLootKind::IglooChest
+    } else {
+        ChestLootKind::SimpleDungeon
+    }
 }
 
 // W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.

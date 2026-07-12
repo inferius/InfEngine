@@ -64,6 +64,11 @@ pub(crate) struct Voxel {
     /// callers stay deterministic per-dim.
     #[allow(dead_code)]
     pub(crate) base_seed: u32,
+    /// W249: slug whose meta `enter_world` pre-applied before the
+    /// initial async build. `load_world` consumes it (take) and, on
+    /// match, keeps the already-built chunks instead of resetting
+    /// and regenerating the whole view distance a second time.
+    pub(crate) preapplied_slug: Option<String>,
     /// Parking lot for inactive-dim voxel + side-state. The
     /// active dim's slot is empty - its data lives in the
     /// top-level fields (`world`, `chests`, `furnaces`, ...).

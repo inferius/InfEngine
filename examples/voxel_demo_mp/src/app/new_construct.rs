@@ -27,6 +27,7 @@ impl Voxel {
             world: World::new(),
             current_dim: dim::OVERWORLD.to_string(),
             base_seed: 0,
+            preapplied_slug: None,
             worlds: HashMap::new(),
             entities_by_dim: HashMap::new(),
             dim_worldgens: HashMap::new(),

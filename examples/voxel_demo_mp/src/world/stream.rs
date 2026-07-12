@@ -208,36 +208,38 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         ChunkSideEffect::Rail => {
                             needs_rail_remesh = true;
                         }
-                        ChunkSideEffect::DungeonChest(wv) => {
+                        ChunkSideEffect::DungeonChest { pos: wv, table } => {
                             // W242: mint the structure chest ONCE with a
                             // seed+position-deterministic loot roll. A
                             // container that already exists (saved world,
                             // possibly looted by the player) always wins.
                             if !vx.chests.contains_key(wv) {
-                                let ctx = vx.current_worldgen_ctx();
-                                let seed = ctx.effective_seed();
+                                let seed = vx
+                                    .current_worldgen_ctx()
+                                    .effective_seed();
                                 let mut rng =
                                     crate::worldgen::mcgen::noise::SplitMix64::new(
                                         crate::loot::chest_pos_seed(seed, *wv),
                                     );
-                                // W243/W246: the loot table follows
-                                // the structure that owns the cell -
-                                // derived from the deterministic
-                                // layout, no provenance persisted.
-                                let table = if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft(
-                                    &ctx, *wv,
-                                ) {
-                                    &crate::loot::ABANDONED_MINESHAFT
-                                } else if crate::worldgen::mcgen::pyramid::pos_in_desert_pyramid(
-                                    &ctx, *wv,
-                                ) {
-                                    &crate::loot::DESERT_PYRAMID
-                                } else if crate::worldgen::mcgen::igloo::pos_in_igloo(
-                                    &ctx, *wv,
-                                ) {
-                                    &crate::loot::IGLOO_CHEST
-                                } else {
-                                    &crate::loot::SIMPLE_DUNGEON
+                                // W243/W246/W249: the loot table follows
+                                // the structure that owns the cell; the
+                                // WORKER decided it (membership probes
+                                // need the worldgen caches - on the main
+                                // thread they built the whole MC noise
+                                // stack: 100-200 ms delivery folds).
+                                let table = match table {
+                                    crate::workers::ChestLootKind::AbandonedMineshaft => {
+                                        &crate::loot::ABANDONED_MINESHAFT
+                                    }
+                                    crate::workers::ChestLootKind::DesertPyramid => {
+                                        &crate::loot::DESERT_PYRAMID
+                                    }
+                                    crate::workers::ChestLootKind::IglooChest => {
+                                        &crate::loot::IGLOO_CHEST
+                                    }
+                                    crate::workers::ChestLootKind::SimpleDungeon => {
+                                        &crate::loot::SIMPLE_DUNGEON
+                                    }
                                 };
                                 let stacks = crate::loot::roll(table, &mut rng);
                                 let mut c = crate::block::chest::new_chest();
