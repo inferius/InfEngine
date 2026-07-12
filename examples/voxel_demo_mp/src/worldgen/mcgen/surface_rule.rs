@@ -56,7 +56,8 @@ mod ids {
 /// Map an MC block `Name` to an engine id. Unknown -> stone (never panic
 /// mid-gen).
 fn block_id(name: &str) -> u16 {
-    match name.strip_prefix("minecraft:").unwrap_or(name) {
+    let n = name.strip_prefix("minecraft:").unwrap_or(name);
+    match n {
         "air" => ids::AIR,
         "stone" => ids::STONE,
         "dirt" => ids::DIRT,
@@ -80,7 +81,11 @@ fn block_id(name: &str) -> u16 {
         "terracotta" => ids::TERRACOTTA,
         "white_terracotta" => ids::WHITE_TERRACOTTA,
         "orange_terracotta" => ids::ORANGE_TERRACOTTA,
-        _ => ids::STONE,
+        // W266: everything else resolves through the registry (the
+        // nether families: netherrack / soul sand+soil / basalt /
+        // blackstone / nylium / wart blocks / lava); truly unknown
+        // names keep the old stone stand-in.
+        _ => super::features::block_id_by_name(n).unwrap_or(ids::STONE),
     }
 }
 

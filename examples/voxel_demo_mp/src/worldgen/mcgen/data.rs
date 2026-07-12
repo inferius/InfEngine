@@ -12,11 +12,17 @@ pub(crate) const OVERWORLD_SETTINGS: &str = include_str!("data/overworld_noise_s
 /// 97 lines - end_islands + base_3d_noise + slides).
 pub(crate) const END_SETTINGS: &str = include_str!("data/end_noise_settings.json");
 
+/// W266: raw JSON of the Nether noise_settings (router + the
+/// netherrack/soul-sand/basalt/nylium surface rules, lava default
+/// fluid at sea 32, bedrock floor + roof gradients).
+pub(crate) const NETHER_SETTINGS: &str = include_str!("data/nether_noise_settings.json");
+
 /// Density-function JSON by name (path under density_function/).
 pub(crate) fn df_json(name: &str) -> Option<&'static str> {
     match name {
         "end/base_3d_noise" => Some(include_str!("data/density_function/end/base_3d_noise.json")),
         "end/sloped_cheese" => Some(include_str!("data/density_function/end/sloped_cheese.json")),
+        "nether/base_3d_noise" => Some(include_str!("data/density_function/nether/base_3d_noise.json")),
         "overworld/base_3d_noise" => Some(include_str!("data/density_function/overworld/base_3d_noise.json")),
         "overworld/caves/entrances" => Some(include_str!("data/density_function/overworld/caves/entrances.json")),
         "overworld/caves/noodle" => Some(include_str!("data/density_function/overworld/caves/noodle.json")),
@@ -54,7 +60,13 @@ pub(crate) fn noise_json(name: &str) -> Option<&'static str> {
         "continentalness" => Some(include_str!("data/noise/continentalness.json")),
         "erosion" => Some(include_str!("data/noise/erosion.json")),
         "gravel" => Some(include_str!("data/noise/gravel.json")),
+        "gravel_layer" => Some(include_str!("data/noise/gravel_layer.json")),
         "ice" => Some(include_str!("data/noise/ice.json")),
+        "nether_state_selector" => Some(include_str!("data/noise/nether_state_selector.json")),
+        "nether_wart" => Some(include_str!("data/noise/nether_wart.json")),
+        "netherrack" => Some(include_str!("data/noise/netherrack.json")),
+        "patch" => Some(include_str!("data/noise/patch.json")),
+        "soul_sand_layer" => Some(include_str!("data/noise/soul_sand_layer.json")),
         "jagged" => Some(include_str!("data/noise/jagged.json")),
         "noodle" => Some(include_str!("data/noise/noodle.json")),
         "noodle_ridge_a" => Some(include_str!("data/noise/noodle_ridge_a.json")),
