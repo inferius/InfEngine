@@ -8,9 +8,15 @@
 /// + surface_rule).
 pub(crate) const OVERWORLD_SETTINGS: &str = include_str!("data/overworld_noise_settings.json");
 
+/// W264: raw JSON of the End noise_settings (the whole dimension is
+/// 97 lines - end_islands + base_3d_noise + slides).
+pub(crate) const END_SETTINGS: &str = include_str!("data/end_noise_settings.json");
+
 /// Density-function JSON by name (path under density_function/).
 pub(crate) fn df_json(name: &str) -> Option<&'static str> {
     match name {
+        "end/base_3d_noise" => Some(include_str!("data/density_function/end/base_3d_noise.json")),
+        "end/sloped_cheese" => Some(include_str!("data/density_function/end/sloped_cheese.json")),
         "overworld/base_3d_noise" => Some(include_str!("data/density_function/overworld/base_3d_noise.json")),
         "overworld/caves/entrances" => Some(include_str!("data/density_function/overworld/caves/entrances.json")),
         "overworld/caves/noodle" => Some(include_str!("data/density_function/overworld/caves/noodle.json")),

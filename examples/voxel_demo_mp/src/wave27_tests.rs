@@ -28,7 +28,7 @@ fn build_world_target_matches_view_distance_footprint() {
     // view_distance defaults to VIEW_DISTANCE_CHUNKS (=4) set in Settings.
     // Clamp mirrors what build_world does: clamp(2..=32).
     let vd = v.settings.view_distance.clamp(2, crate::VIEW_DISTANCE_MAX as u8) as i32;
-    let (cy_min, cy_max) = crate::Voxel::vertical_chunk_range(v.player_pos.y);
+    let (cy_min, cy_max) = v.vertical_chunk_range();
     let y_slices = (cy_max - cy_min + 1) as u32;
     let expected: u32 = ((2 * vd + 1) * (2 * vd + 1)) as u32 * y_slices;
     let got = v.build_world();

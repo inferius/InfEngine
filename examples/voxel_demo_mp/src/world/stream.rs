@@ -39,7 +39,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     let view_dist = vx.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
     let unload_dist = view_dist + 2;
 
-    let (cy_min, cy_max) = Voxel::vertical_chunk_range(vx.player_pos.y);
+    let (cy_min, cy_max) = vx.vertical_chunk_range();
 
     // W198.13: the queue-missing + unload scans are the only uncapped
     // O(N) work in the streamer (everything past them is count- or
@@ -88,7 +88,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             // column (bottom-up so the worker's column cache warms
             // once and stays hot).
             let mut coords: Vec<ChunkCoord> = Vec::new();
-            for cy in crate::MIN_CHUNK_Y..crate::MIN_CHUNK_Y + crate::VERTICAL_CHUNKS {
+            for cy in cy_min..=cy_max {
                 let col_cc = [cc[0], cy, cc[2]];
                 if vx.pending_set.contains(&col_cc)
                     && !vx.in_flight_chunks.contains(&col_cc)

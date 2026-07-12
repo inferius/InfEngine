@@ -12,14 +12,17 @@ impl Voxel {
     /// time. A later `switch_dim` between enqueue + pickup no
     /// longer poisons the gen.
     pub(crate) fn current_worldgen_ctx(&self) -> worldgen::WorldgenCtx {
-        // W5.1b: no global atomic to fall back on. The active dim
-        // is expected to have an entry in `dim_worldgens` by the
-        // time anyone reaches for a ctx; missing entries default
-        // to Classic.
+        // W264: profile resolution order - the world's explicit
+        // per-dim table, then the dimension registry's default
+        // (nether/end rows), then Classic (unknown custom dims).
         let profile = self
             .dim_worldgens
             .get(&self.current_dim)
             .copied()
+            .or_else(|| {
+                worldgen::dim_registry::dim_def(&self.current_dim)
+                    .and_then(|d| d.default_profile)
+            })
             .unwrap_or(WorldGen::Classic);
         worldgen::WorldgenCtx {
             base_seed: self.base_seed,

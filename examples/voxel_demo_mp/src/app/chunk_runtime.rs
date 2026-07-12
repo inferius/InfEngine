@@ -297,7 +297,7 @@ impl Voxel {
         let pcx = (self.player_pos.x.floor() as i32).div_euclid(cs);
         let pcz = (self.player_pos.z.floor() as i32).div_euclid(cs);
         // W28.3: only enqueue Y slices visible from the player's current Y.
-        let (cy_min, cy_max) = Self::vertical_chunk_range(self.player_pos.y);
+        let (cy_min, cy_max) = self.vertical_chunk_range();
         let mut enqueued: u32 = 0;
         for dz in -radius..=radius {
             for dx in -radius..=radius {
@@ -326,8 +326,8 @@ impl Voxel {
         enqueued
     }
 
-    /// W231: FULL vertical columns, like MC. Returns
-    /// `(0, VERTICAL_CHUNKS - 1)` regardless of player height.
+    /// W231: FULL vertical columns, like MC; W264: PER-DIM spans from
+    /// the dimension registry (overworld -4..=19, nether/end 0..=15).
     ///
     /// This used to be a `player_cy +/- 3` band (W28.3, a ~40% chunk
     /// saving tuned for view distance 4 + short fog). With VD 12 and
@@ -338,9 +338,9 @@ impl Voxel {
     /// section of a column; we now do the same and columns are only
     /// bounded horizontally (view distance + unload ring).
     #[inline]
-    pub fn vertical_chunk_range(_player_y: f32) -> (i32, i32) {
-        // W260: the column spans MIN_CHUNK_Y..=top (MC 1.18+ depth).
-        (crate::MIN_CHUNK_Y, crate::MIN_CHUNK_Y + VERTICAL_CHUNKS - 1)
+    pub fn vertical_chunk_range(&self) -> (i32, i32) {
+        let def = crate::worldgen::dim_registry::dim_def_or_overworld(&self.current_dim);
+        (def.min_chunk_y, def.min_chunk_y + def.vertical_chunks - 1)
     }
 
     /// W28.7: Return (max_results, budget_ms) tuned for the current app

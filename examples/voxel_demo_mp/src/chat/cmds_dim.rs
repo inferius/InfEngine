@@ -52,12 +52,11 @@ pub(crate) fn cmd_dim(
         lines.push(format!("Already in dim '{target}'."));
         return true;
     }
-    // Allow any known dim, plus the canonical "nether" /
-    // "overworld" pair so a Phase E save without a populated
+    // Allow any known dim, plus every dimension-registry row
+    // (W264: overworld / nether / end) so a save without a populated
     // dim_worldgens table can still admin-warp via this cmd.
     let known = voxel.dim_worldgens.contains_key(&target)
-        || target == crate::dim::OVERWORLD
-        || target == crate::dim::NETHER;
+        || crate::worldgen::dim_registry::dim_def(&target).is_some();
     if !known {
         lines.push(format!(
             "Unknown dim '{target}'. Try /dim list."

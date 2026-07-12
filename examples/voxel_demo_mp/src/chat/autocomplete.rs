@@ -245,11 +245,11 @@ pub(crate) fn build_tree() -> CommandNode {
         grammar_verbs.insert("unmute".into());
     }
 
-    // /dim <name>
+    // /dim <name> - the dimension registry rows (W264).
     {
-        let dims: Vec<CommandNode> = ["overworld", "nether"]
+        let dims: Vec<CommandNode> = crate::worldgen::dim_registry::DIMENSIONS
             .iter()
-            .map(|d| CommandNode::literal(d, 3))
+            .map(|d| CommandNode::literal(d.slug, 3))
             .collect();
         root.children.push(CommandNode::literal("dim", 3).with_all(dims));
         grammar_verbs.insert("dim".into());

@@ -39,6 +39,7 @@ pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         WorldGen::Nether => super::nether::gen_nether(coord, ctx),
         WorldGen::Natural => super::natural::gen_natural(coord, ctx),
         WorldGen::Mc => super::mcgen::terrain::gen_mc(coord, ctx),
+        WorldGen::End => super::mcgen::the_end::gen_end(coord, ctx),
     }
 }
 
@@ -85,6 +86,10 @@ pub(crate) fn column_height(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
         // Nether is roofed + lava-floored; its spawn is handled
         // separately. A mid-height fallback keeps the dispatch total.
         WorldGen::Nether => 32,
+        // W264: the main-island crown sits around y 60; the obsidian
+        // arrival platform (the real End spawn) is the portal path's
+        // job.
+        WorldGen::End => 60,
     }
 }
 

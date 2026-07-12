@@ -85,6 +85,79 @@ fn grad_dot(hash: usize, x: f64, y: f64, z: f64) -> f64 {
     g[0] * x + g[1] * y + g[2] * z
 }
 
+/// W264: MC `SimplexNoise` (2D `getValue` - the End island layout
+/// noise). Same GRADIENT table; the permutation + offsets seed from
+/// our SplitMix64 stream (rules, not seed identity - MC burns 17292
+/// legacy-random draws before seeding, which is seed-identity
+/// trivia our streams don't reproduce).
+pub(crate) struct SimplexNoise2 {
+    perm: [u8; 256],
+    xo: f64,
+    yo: f64,
+}
+
+impl SimplexNoise2 {
+    const SQRT_3: f64 = 1.732_050_807_568_877_2;
+    const F2: f64 = 0.5 * (Self::SQRT_3 - 1.0);
+    const G2: f64 = (3.0 - Self::SQRT_3) / 6.0;
+
+    pub(crate) fn new(seed: u64) -> Self {
+        let mut rng = SplitMix64::new(seed);
+        let xo = rng.next_f64() * 256.0;
+        let yo = rng.next_f64() * 256.0;
+        let mut perm = [0u8; 256];
+        for (i, p) in perm.iter_mut().enumerate() {
+            *p = i as u8;
+        }
+        for i in (1..256).rev() {
+            let j = (rng.next_u64() % (i as u64 + 1)) as usize;
+            perm.swap(i, j);
+        }
+        Self { perm, xo, yo }
+    }
+
+    #[inline]
+    fn p(&self, i: i32) -> i32 {
+        self.perm[(i & 255) as usize] as i32
+    }
+
+    /// `getCornerNoise3D` with z = 0 (the 2D path).
+    #[inline]
+    fn corner(&self, gi: usize, x: f64, y: f64, base: f64) -> f64 {
+        let t = base - x * x - y * y;
+        if t < 0.0 {
+            0.0
+        } else {
+            let t = t * t;
+            t * t * grad_dot(gi, x, y, 0.0)
+        }
+    }
+
+    /// MC `SimplexNoise.getValue(x, y)` (the 2D overload), including
+    /// the per-instance offsets like every other noise here.
+    pub(crate) fn get_value(&self, xin: f64, yin: f64) -> f64 {
+        let xin = xin + self.xo;
+        let yin = yin + self.yo;
+        let s = (xin + yin) * Self::F2;
+        let i = (xin + s).floor() as i32;
+        let j = (yin + s).floor() as i32;
+        let t = (i + j) as f64 * Self::G2;
+        let x0 = xin - (i as f64 - t);
+        let y0 = yin - (j as f64 - t);
+        let (i1, j1) = if x0 > y0 { (1, 0) } else { (0, 1) };
+        let x1 = x0 - i1 as f64 + Self::G2;
+        let y1 = y0 - j1 as f64 + Self::G2;
+        let x2 = x0 - 1.0 + 2.0 * Self::G2;
+        let y2 = y0 - 1.0 + 2.0 * Self::G2;
+        let gi0 = (self.p(i + self.p(j)) % 12) as usize;
+        let gi1 = (self.p(i + i1 + self.p(j + j1)) % 12) as usize;
+        let gi2 = (self.p(i + 1 + self.p(j + 1)) % 12) as usize;
+        70.0 * (self.corner(gi0, x0, y0, 0.5)
+            + self.corner(gi1, x1, y1, 0.5)
+            + self.corner(gi2, x2, y2, 0.5))
+    }
+}
+
 /// One octave of improved Perlin noise. The permutation is a shuffle
 /// of 0..=255 + per-octave fractional coordinate offsets, exactly like
 /// MC's `ImprovedNoise` (which draws xo/yo/zo + the shuffle from its

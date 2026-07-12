@@ -90,7 +90,7 @@ pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
     // O(loaded world) per call (10k chunks at VD 12 full columns,
     // 30k+ at VD 40) for a 9x9-column result.
     let mut origins: Vec<[i32; 3]> = Vec::new();
-    let (cy_min, cy_max) = Voxel::vertical_chunk_range(vx.player_pos.y);
+    let (cy_min, cy_max) = vx.vertical_chunk_range();
     for dz in -RADIUS_CHUNKS..=RADIUS_CHUNKS {
         for dx in -RADIUS_CHUNKS..=RADIUS_CHUNKS {
             for cy in cy_min..=cy_max {

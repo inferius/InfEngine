@@ -43,6 +43,7 @@ pub(crate) mod caves;
 pub(crate) mod chunk;
 pub(crate) mod climate;
 pub(crate) mod decor;
+pub mod dim_registry;
 pub(crate) mod dungeons;
 pub(crate) mod flowers;
 pub(crate) mod ground_cover;
@@ -263,6 +264,10 @@ pub enum WorldGen {
     /// below the surface. Default for new overworlds; `Natural` stays as
     /// the lighter fallback.
     Mc = 7,
+    /// W264: the End - `noise_settings/end.json` ported data-driven
+    /// (end_islands + old_blended_noise + slides, end_stone fill).
+    /// Paired with the `end` dim in the dimension registry.
+    End = 8,
 }
 
 impl WorldGen {
@@ -281,6 +286,7 @@ impl WorldGen {
             "nether" | "hell" => Some(Self::Nether),
             "natural" | "nat" => Some(Self::Natural),
             "mc" | "minecraft" | "faithful" => Some(Self::Mc),
+            "end" | "the_end" => Some(Self::End),
             _ => None,
         }
     }

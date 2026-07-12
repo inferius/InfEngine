@@ -68,6 +68,7 @@ pub(crate) mod swamp_hut;
 pub(crate) mod surface_rule;
 pub(crate) mod template;
 pub(crate) mod terrain;
+pub(crate) mod the_end;
 pub(crate) mod trees;
 pub(crate) mod trial_chambers;
 pub(crate) mod vegetation;

@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::noise::{ImprovedNoise, NoiseParams, NormalNoise, SplitMix64};
+use super::noise::{ImprovedNoise, NoiseParams, NormalNoise, SimplexNoise2, SplitMix64};
 
 /// Resolves a density-function name (e.g. `"minecraft:overworld/depth"`)
 /// to its JSON definition. The terrain stage backs this with the
@@ -183,6 +183,9 @@ pub(crate) enum Df {
     /// (x/4, 0, z/4) (a) or (z/4, x/4, 0) (b), scaled by 4.
     ShiftA(Arc<NormalNoise>),
     ShiftB(Arc<NormalNoise>),
+    /// W264: MC `end_islands` - `(getHeightValue(x/8, z/8) - 8) / 128`
+    /// over the seed-built island simplex (the End terrain shape).
+    EndIslands(Arc<SimplexNoise2>),
     Spline(Spline),
     /// MC `old_blended_noise` - the pre-1.18 3D base terrain noise,
     /// still the 3D detail under the splines.
@@ -375,6 +378,13 @@ impl Df {
             }
             Df::ShiftA(n) => n.value(x * 0.25, 0.0, z * 0.25) * 4.0,
             Df::ShiftB(n) => n.value(z * 0.25, x * 0.25, 0.0) * 4.0,
+            Df::EndIslands(n) => {
+                // `compute`: (getHeightValue(blockX/8, blockZ/8) - 8)
+                // / 128 - Java's truncating int division, like Rust's.
+                (end_island_height(n, x.floor() as i32 / 8, z.floor() as i32 / 8) as f64
+                    - 8.0)
+                    / 128.0
+            }
             Df::Spline(s) => s.eval(x, y, z),
             Df::BlendedNoise(b) => b.eval(x, y, z),
             Df::Passthrough(a) => ev(a),
@@ -451,6 +461,7 @@ impl Df {
             | Df::Noise { .. }
             | Df::ShiftA(_)
             | Df::ShiftB(_)
+            | Df::EndIslands(_)
             | Df::BlendedNoise(_) => {}
         }
     }
@@ -493,9 +504,42 @@ impl Df {
             | Df::Noise { .. }
             | Df::ShiftA(_)
             | Df::ShiftB(_)
+            | Df::EndIslands(_)
             | Df::BlendedNoise(_) => {}
         }
     }
+}
+
+/// W264: `EndIslandDensityFunction.getHeightValue`, ported verbatim -
+/// the main island's 100-radius falloff plus the outer-island field
+/// (chunks past 4096 sq-dist where the simplex dips under -0.9 grow
+/// an island of hash-picked size 9..21).
+pub(crate) fn end_island_height(noise: &SimplexNoise2, section_x: i32, section_z: i32) -> f32 {
+    let chunk_x = section_x / 2;
+    let chunk_z = section_z / 2;
+    let sub_x = section_x % 2;
+    let sub_z = section_z % 2;
+    let mut h = 100.0
+        - ((section_x * section_x + section_z * section_z) as f32).sqrt() * 8.0;
+    h = h.clamp(-100.0, 80.0);
+    for xo in -12..=12 {
+        for zo in -12..=12 {
+            let cx = (chunk_x + xo) as i64;
+            let cz = (chunk_z + zo) as i64;
+            if cx * cx + cz * cz > 4096
+                && noise.get_value(cx as f64, cz as f64) < -0.9
+            {
+                let size = ((cx.abs() as f32) * 3439.0 + (cz.abs() as f32) * 147.0)
+                    % 13.0
+                    + 9.0;
+                let xd = (sub_x - xo * 2) as f32;
+                let zd = (sub_z - zo * 2) as f32;
+                let ih = (100.0 - (xd * xd + zd * zd).sqrt() * size).clamp(-100.0, 80.0);
+                h = h.max(ih);
+            }
+        }
+    }
+    h
 }
 
 /// W216: MC `BlendedNoise` (old_blended_noise), ported EXACTLY from the
@@ -694,6 +738,11 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended
         },
         "shift_a" => Df::ShiftA(noise_of(o, "argument", noises)),
         "shift_b" => Df::ShiftB(noise_of(o, "argument", noises)),
+        // W264: the End island field, seeded from the same stream the
+        // blended noise uses (own streams, MC's algorithm).
+        "end_islands" => Df::EndIslands(Arc::new(SimplexNoise2::new(
+            blended_seed ^ 0x00E4_D151_A4D5,
+        ))),
         "spline" => parse_spline(o, df, noises, blended_seed),
         // W216: the exact legacy blended noise, seeded from the world
         // seed (the scales come from base_3d_noise.json).

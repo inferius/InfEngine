@@ -55,9 +55,11 @@ fn fresh_world_json_ships_both_dimensions() {
     write_world_in_dir(tmp.path(), SLUG, &wj).unwrap();
     let loaded = read_world_in_dir(tmp.path(), SLUG).unwrap();
     assert_eq!(loaded.format_version, WORLD_FORMAT_VERSION);
-    assert_eq!(loaded.dimensions.len(), 2);
+    // W264: fresh worlds ship overworld + nether + end.
+    assert_eq!(loaded.dimensions.len(), 3);
     assert!(loaded.dimensions.iter().any(|d| d == "overworld"));
     assert!(loaded.dimensions.iter().any(|d| d == NETHER_DIMENSION));
+    assert!(loaded.dimensions.iter().any(|d| d == "end"));
     assert_eq!(
         loaded.dimension_worldgens.get("overworld").map(String::as_str),
         Some("realistic")
@@ -65,6 +67,10 @@ fn fresh_world_json_ships_both_dimensions() {
     assert_eq!(
         loaded.dimension_worldgens.get(NETHER_DIMENSION).map(String::as_str),
         Some("nether")
+    );
+    assert_eq!(
+        loaded.dimension_worldgens.get("end").map(String::as_str),
+        Some("end")
     );
 }
 

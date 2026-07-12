@@ -123,6 +123,11 @@ pub(crate) const NETHER_DIMENSION: &str = "nether";
 /// on-disk JSON keeps producing nether terrain there.
 pub(crate) const NETHER_WORLDGEN: &str = "nether";
 
+/// W264: the End dimension + its worldgen tag (the third built-in
+/// dimension-registry row).
+pub(crate) const END_DIMENSION: &str = "end";
+pub(crate) const END_WORLDGEN: &str = "end";
+
 /// Build a fresh `WorldJson` for a brand-new slot. Spawn defaults
 /// to `[0, 0, 0]` - worldgen surface fix-up happens on first load.
 ///
@@ -148,6 +153,9 @@ pub fn create_world_with_mode(
     let mut dim_gens = BTreeMap::new();
     dim_gens.insert(DEFAULT_DIMENSION.to_string(), worldgen.to_string());
     dim_gens.insert(NETHER_DIMENSION.to_string(), NETHER_WORLDGEN.to_string());
+    // W264: fresh slots ship the End too (the dimension registry's
+    // third built-in row).
+    dim_gens.insert(END_DIMENSION.to_string(), END_WORLDGEN.to_string());
     WorldJson {
         format_version: WORLD_FORMAT_VERSION,
         worldgen: worldgen.to_string(),
@@ -158,6 +166,7 @@ pub fn create_world_with_mode(
         dimensions: vec![
             DEFAULT_DIMENSION.to_string(),
             NETHER_DIMENSION.to_string(),
+            END_DIMENSION.to_string(),
         ],
         dimension_worldgens: dim_gens,
         default_game_mode: default_game_mode.to_string(),
@@ -394,7 +403,12 @@ mod tests {
             vec![
                 DEFAULT_DIMENSION.to_string(),
                 NETHER_DIMENSION.to_string(),
+                END_DIMENSION.to_string(),
             ]
+        );
+        assert_eq!(
+            w.dimension_worldgens.get(END_DIMENSION).map(String::as_str),
+            Some(END_WORLDGEN)
         );
         // Phase F: per-dim worldgen map is populated from
         // create_world directly. Overworld picks up the requested

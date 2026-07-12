@@ -67,19 +67,18 @@ fn pending_chunk_equal_dist_breaks_tie_by_coord() {
 /// band-edge mountain tops at VD 12).
 #[test]
 fn vertical_chunk_range_is_full_world_at_any_y() {
-    for y in [0.0, 32.0, 128.0, 240.0, -8.0_f32] {
-        let (cy_min, cy_max) = Voxel::vertical_chunk_range(y);
-        assert_eq!(
-            cy_min,
-            crate::MIN_CHUNK_Y,
-            "full columns start at the world floor chunk (y={y})"
-        );
-        assert_eq!(
-            cy_max,
-            crate::MIN_CHUNK_Y + crate::VERTICAL_CHUNKS - 1,
-            "full columns end at the world top (y={y})"
-        );
-    }
+    // W264: the span is PER-DIM from the dimension registry, never a
+    // player-height band.
+    let mut v = Voxel::new();
+    assert_eq!(
+        v.vertical_chunk_range(),
+        (crate::MIN_CHUNK_Y, crate::MIN_CHUNK_Y + crate::VERTICAL_CHUNKS - 1),
+        "overworld columns span the full -4..=19 stack"
+    );
+    v.current_dim = "nether".to_string();
+    assert_eq!(v.vertical_chunk_range(), (0, 15), "nether spans 0..=15");
+    v.current_dim = "end".to_string();
+    assert_eq!(v.vertical_chunk_range(), (0, 15), "end spans 0..=15");
 }
 
 // ---------------------------------------------------------------------------
