@@ -783,6 +783,7 @@ pub(crate) enum ChestLootKind {
     BuriedTreasure,
     UnderwaterRuinSmall,
     UnderwaterRuinBig,
+    JungleTemple,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -817,6 +818,8 @@ pub(crate) fn chest_loot_kind(
         } else {
             ChestLootKind::UnderwaterRuinSmall
         }
+    } else if mcgen::jungle_temple::pos_in_jungle_temple(ctx, pos) {
+        ChestLootKind::JungleTemple
     } else {
         ChestLootKind::SimpleDungeon
     }

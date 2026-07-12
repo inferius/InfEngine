@@ -258,6 +258,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::UnderwaterRuinBig => {
                                         &crate::loot::UNDERWATER_RUIN_BIG
                                     }
+                                    crate::workers::ChestLootKind::JungleTemple => {
+                                        &crate::loot::JUNGLE_TEMPLE
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

@@ -567,6 +567,41 @@ pub(crate) const UNDERWATER_RUIN_BIG: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/jungle_temple.json` (26.1.2).
+/// Gaps via the name mapper: the four horse-armor tiers, the wild
+/// trim; `book` drops UNenchanted (enchant_with_levels 30 gap).
+pub(crate) const JUNGLE_TEMPLE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 6,
+            entries: &[
+                counted("diamond", 3, 1, 3),
+                counted("iron_ingot", 10, 1, 5),
+                counted("gold_ingot", 15, 2, 7),
+                counted("bamboo", 15, 1, 3),
+                counted("emerald", 2, 1, 3),
+                counted("bone", 20, 4, 6),
+                counted("rotten_flesh", 16, 3, 7),
+                counted("leather", 3, 1, 5),
+                one("copper_horse_armor", 1),
+                one("iron_horse_armor", 1),
+                one("golden_horse_armor", 1),
+                one("diamond_horse_armor", 1),
+                one("book", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 2),
+                counted("wild_armor_trim_smithing_template", 1, 2, 2),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).
