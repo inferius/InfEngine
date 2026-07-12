@@ -65,15 +65,21 @@ pub(crate) fn cmd_dim(
     }
     let prev_dim = voxel.current_dim.clone();
     voxel.switch_dim(&target);
-    // Pre-load the destination chunks at the player's current
-    // pos so the ensure_chunks bake into the world map; the
-    // player otherwise falls into ungenerated air.
-    let pos = [
-        voxel.player_pos.x.floor() as i32,
-        voxel.player_pos.y.floor() as i32,
-        voxel.player_pos.z.floor() as i32,
-    ];
-    portal::ensure_return_portal(&mut voxel.world, pos, None);
+    if target == "end" {
+        // W265: End arrival = the obsidian platform at MC's
+        // END_SPAWN_POINT (100, 50, 0) - never a nether portal.
+        crate::dim::arrive_in_end(voxel);
+    } else {
+        // Pre-load the destination chunks at the player's current
+        // pos so the ensure_chunks bake into the world map; the
+        // player otherwise falls into ungenerated air.
+        let pos = [
+            voxel.player_pos.x.floor() as i32,
+            voxel.player_pos.y.floor() as i32,
+            voxel.player_pos.z.floor() as i32,
+        ];
+        portal::ensure_return_portal(&mut voxel.world, pos, None);
+    }
     voxel.portal_cooldown_ticks = portal::PORTAL_COOLDOWN_TICKS;
     voxel.portal_in_ticks = 0;
     lines.push(format!("Switched dim: '{prev_dim}' -> '{target}'"));

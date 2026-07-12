@@ -41,6 +41,42 @@ pub(crate) const OVERWORLD: &str = "overworld";
 #[allow(dead_code)] // first call site lands in F.6 (cross-dim teleport).
 pub(crate) const NETHER: &str = "nether";
 
+/// W265: MC `ServerLevel.END_SPAWN_POINT`.
+pub(crate) const END_SPAWN: [i32; 3] = [100, 50, 0];
+
+/// W265: the End arrival - MC's `makeObsidianPlatform`: a 5x5
+/// obsidian slab two below `END_SPAWN_POINT` (y 48) with the three
+/// layers above forced to air, the player standing on its centre.
+/// Every End entry lands here (the vanilla rule), so the platform
+/// regenerates even if someone mined it.
+pub(crate) fn arrive_in_end(voxel: &mut crate::Voxel) {
+    // Bake real terrain around the spawn column first so the
+    // platform edits land in resident chunks.
+    voxel.ensure_generated_chunks_around(END_SPAWN);
+    let y = END_SPAWN[1] - 2;
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            let (x, z) = (END_SPAWN[0] + dx, END_SPAWN[2] + dz);
+            voxel.world.set(
+                [x, y, z],
+                infengine_voxel::BlockId(crate::block::OBSIDIAN_ID),
+            );
+            for dy in 1..=3 {
+                voxel.world.set([x, y + dy, z], infengine_voxel::BlockId(0));
+            }
+        }
+    }
+    // Feet on the platform centre (the /rtp convention: solid cell
+    // y + 1.5).
+    voxel.player_pos = glam::Vec3::new(
+        END_SPAWN[0] as f32 + 0.5,
+        y as f32 + 1.5,
+        END_SPAWN[2] as f32 + 0.5,
+    );
+    voxel.player_vel = glam::Vec3::ZERO;
+    voxel.fall_start_y = None;
+}
+
 /// Per-dim mob + drop state parked while the dim is inactive.
 ///
 /// Mirrors what `world_save::entities::DimensionEntities` carries

@@ -23,6 +23,19 @@ use infengine_render::Renderer;
 /// The caller still owns `day_night(day_time)`; this helper takes the
 /// sky colour from there and only applies the tint mixes + the fog
 /// band setup.
+/// W264: which sky a dimension renders - derived from the dimension
+/// registry (`has_ceiling` -> the roofed nether haze, no skylight ->
+/// the End void) so modded dims pick a look by their registry row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DimSky {
+    /// Day/night cycle, celestial bodies, weather tints.
+    Day,
+    /// Roofed red murk (the nether).
+    NetherHaze,
+    /// The End: starless dark violet void, long dim fog.
+    EndVoid,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_tint_and_fog(
     renderer: &mut Renderer,
@@ -43,9 +56,8 @@ pub(crate) fn apply_tint_and_fog(
     // fog + clear colour so caves fade to darkness, not to a glowing
     // sky-coloured haze.
     sky_exposure: f32,
-    // W155: nether mode - the dim is roofed, so the "sky" is a red
-    // haze with shorter fog instead of the blue distance band.
-    in_nether: bool,
+    // W155/W264: the dimension's sky kind (registry-derived).
+    dim_sky: DimSky,
 ) -> [f32; 3] {
     // W229.2: MC's render-distance fog term - a narrow CYLINDRICAL
     // curtain right at the chunk-load edge, span = clamp(rd/10, 4, 64)
@@ -55,13 +67,22 @@ pub(crate) fn apply_tint_and_fog(
     let rd_blocks = view_distance_chunks as f32 * infengine_voxel::CHUNK_SIZE as f32;
     let rd_span = (rd_blocks / 10.0).clamp(4.0, 64.0);
     renderer.set_fog_render_distance(rd_blocks - rd_span, rd_blocks);
-    if in_nether {
+    if dim_sky == DimSky::NetherHaze {
         let haze = [0.16_f32, 0.05, 0.05];
         renderer.set_sun_dir(sun_dir);
         renderer.set_clear_color(haze[0] as f64, haze[1] as f64, haze[2] as f64, 1.0);
         // MC nether visibility ~ a few chunks of reddish murk.
         renderer.set_fog(8.0, 96.0, haze);
         return haze;
+    }
+    if dim_sky == DimSky::EndVoid {
+        // MC End fog: the_end's 0xA080A0 scaled by 0.15
+        // (`DimensionSpecialEffects.EndEffects`).
+        let void = [0.094_f32, 0.075, 0.094];
+        renderer.set_sun_dir(sun_dir);
+        renderer.set_clear_color(void[0] as f64, void[1] as f64, void[2] as f64, 1.0);
+        renderer.set_fog(48.0, rd_blocks.max(192.0), void);
+        return void;
     }
     let mut sky = base_sky;
     // Rain: dark stormy grey.

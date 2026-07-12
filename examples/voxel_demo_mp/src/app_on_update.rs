@@ -1662,8 +1662,18 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             None
         };
-        // W155: the nether is roofed - no sky, no sun, red haze.
-        let in_nether = vx.current_dim == crate::dim::NETHER;
+        // W155/W264: the dimension registry decides the sky - roofed
+        // dims render the nether haze, skylight-less open dims (the
+        // End) the void; everything else runs the day cycle.
+        let dim_def =
+            crate::worldgen::dim_registry::dim_def_or_overworld(&vx.current_dim);
+        let dim_sky = if dim_def.has_ceiling {
+            crate::render::sky::DimSky::NetherHaze
+        } else if !dim_def.has_skylight {
+            crate::render::sky::DimSky::EndVoid
+        } else {
+            crate::render::sky::DimSky::Day
+        };
         let _sky = crate::render::sky::apply_tint_and_fog(
             renderer,
             sun_dir,
@@ -1675,11 +1685,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             water_vision,
             water_fog,
             vx.cave_dark,
-            in_nether,
+            dim_sky,
         );
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());
         let session_secs = vx.session_started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
-        if !in_nether {
+        if dim_sky == crate::render::sky::DimSky::Day {
             crate::render::celestial::draw(
                 renderer,
                 player_cube_handle,
