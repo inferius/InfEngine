@@ -79,6 +79,11 @@ const RENAMES: &[(&str, &str)] = &[
     ("acacia_pressure_plate", "oak_pressure_plate"),
     // Farmland is not in the roster; dirt carries the crops.
     ("farmland", "dirt"),
+    // W248 igloo basement: silverfish blocks wait for their mob -
+    // the plain variants stand in.
+    ("infested_stone_bricks", "stone_bricks"),
+    ("infested_mossy_stone_bricks", "mossy_stone_bricks"),
+    ("infested_chiseled_stone_bricks", "chiseled_stone_bricks"),
 ];
 
 /// Names we knowingly leave unplaced until their blocks exist. The
@@ -89,6 +94,7 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "brown_wall_banner",
     "campfire",
     "composter",
+    "oak_wall_sign",
     "potted_cactus",
     "potted_dandelion",
     "potted_dead_bush",
@@ -116,6 +122,10 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
         // The solver replaces jigsaw cells with their final_state
         // before placement; a raw jigsaw never logs.
         "jigsaw" | "structure_void" => return Mapped::Keep,
+        // Data-marker structure blocks: MC's BlockIgnoreProcessor
+        // drops them and the marker handlers clear the cell - air
+        // matches the placed result (the igloo chest marker).
+        "structure_block" => return Mapped::Id(0),
         // Two-cell plants: the engine splits them into two ids.
         "tall_grass" => {
             let ours = match state.prop("half") {

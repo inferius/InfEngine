@@ -207,6 +207,30 @@ pub(crate) const DESERT_PYRAMID: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/igloo_chest.json` (26.1.2).
+pub(crate) const IGLOO_CHEST: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 8,
+            entries: &[
+                counted("apple", 15, 1, 3),
+                counted("coal", 15, 1, 4),
+                counted("gold_nugget", 10, 1, 3),
+                one("stone_axe", 2),
+                one("rotten_flesh", 10),
+                one("emerald", 1),
+                counted("wheat", 10, 2, 3),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("golden_apple", 1)],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

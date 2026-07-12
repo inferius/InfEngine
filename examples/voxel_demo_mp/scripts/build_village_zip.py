@@ -31,13 +31,15 @@ zf.write(
 )
 count["pool"] += 1
 
-for root, dirs, files in os.walk(os.path.join(src2, "structure/village")):
-    for f in sorted(files):
-        if not f.endswith(".nbt"):
-            continue
-        p = os.path.join(root, f)
-        zf.write(p, norm(p, src2))
-        count["nbt"] += 1
+# Structure NBT subtrees the engine ports (W245 village, W248 igloo).
+for subtree in ("structure/village", "structure/igloo"):
+    for root, dirs, files in os.walk(os.path.join(src2, subtree)):
+        for f in sorted(files):
+            if not f.endswith(".nbt"):
+                continue
+            p = os.path.join(root, f)
+            zf.write(p, norm(p, src2))
+            count["nbt"] += 1
 
 for root, dirs, files in os.walk(os.path.join(src, "worldgen/processor_list")):
     for f in sorted(files):

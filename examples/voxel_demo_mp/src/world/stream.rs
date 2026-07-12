@@ -232,6 +232,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     &ctx, *wv,
                                 ) {
                                     &crate::loot::DESERT_PYRAMID
+                                } else if crate::worldgen::mcgen::igloo::pos_in_igloo(
+                                    &ctx, *wv,
+                                ) {
+                                    &crate::loot::IGLOO_CHEST
                                 } else {
                                     &crate::loot::SIMPLE_DUNGEON
                                 };
