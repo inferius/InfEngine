@@ -142,10 +142,10 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
     if let Some(id) = registry_id(name) {
         return Mapped::Id(id);
     }
-    if let Some((_, ours)) = RENAMES.iter().find(|(mc, _)| *mc == name) {
-        if let Some(id) = registry_id(ours) {
-            return Mapped::Id(id);
-        }
+    if let Some((_, ours)) = RENAMES.iter().find(|(mc, _)| *mc == name)
+        && let Some(id) = registry_id(ours)
+    {
+        return Mapped::Id(id);
     }
     log_unmapped(name);
     Mapped::Keep
