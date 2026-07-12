@@ -14,10 +14,12 @@
 //! The pre-W213 spike filter + heightmap machinery is gone - the
 //! interpolation itself is MC's smoothing.
 //!
-//! Engine band note: the engine world floor is y=0 (MC -64..0 is not
-//! realized - the established Anchor convention), so the deepslate
-//! band, the global lava sea (y < -54) and the deep aquifer lava
-//! pockets are out of range; everything above behaves like MC.
+//! W260: the engine world floor moved to MC's -64 (24 vertical
+//! chunks, -64..319). The lattice, the solidity bitsets, the aquifer
+//! (global lava sea below -54, deep lava pockets), the carvers and
+//! the deepslate/bedrock vertical gradients all run in native MC
+//! coordinates now - the pre-W260 "engine floor is y=0" note is
+//! history.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -32,7 +34,7 @@ use super::surface_rule::SurfaceCtx;
 use super::biome::McBiome;
 use crate::worldgen::biome::Biome;
 use crate::worldgen::climate::{SEA_LEVEL, near_surface_block, surface_block};
-use crate::worldgen::{WorldgenCtx, decor, strata};
+use crate::worldgen::{WorldgenCtx, decor};
 
 /// Top of the realized terrain band. MC's top slide
 /// (`y_clamped_gradient` 240 -> 256) forces air well above any real
@@ -45,6 +47,18 @@ const LATTICE_TOP: i32 = 224;
 /// sand+sandstone) reaches ~12 down; 16 covers it with margin. Below the
 /// band the column is the noise-fill stone/ore.
 const SURFACE_BAND: i32 = 16;
+
+/// W260: the solidity bitsets span the full world band -64..=319
+/// (384 bits = 6 words); bit index = `y - BITS_MIN_Y`. `ow.min_y`
+/// (parsed from the MC noise JSON) is debug-asserted against this
+/// once per column build.
+pub(crate) const BITS_MIN_Y: i32 = -64;
+const BITS_MAX_Y: i32 = 319;
+pub(crate) const BITS_WORDS: usize = 6;
+
+/// One chunk column's solidity bitsets (shared with the carver's
+/// dry-run mask sink).
+pub(crate) type SolidBits = [[[u64; BITS_WORDS]; CHUNK_SIZE]; CHUNK_SIZE];
 
 
 /// One column's terrain summary.
@@ -74,9 +88,9 @@ pub(crate) struct McCol {
 /// seagrass float over carver-cut seabeds).
 pub(crate) struct McColumnData {
     cols: [[McCol; CHUNK_SIZE]; CHUNK_SIZE],
-    solid: Box<[[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    solid: Box<SolidBits>,
     /// Post-carve solidity (the carver dry-run mask).
-    solid_pc: Box<[[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    solid_pc: Box<SolidBits>,
     /// Post-carve topmost-solid per column (OCEAN_FLOOR heightmap).
     floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
     cells: CellLattices,
@@ -85,18 +99,20 @@ pub(crate) struct McColumnData {
 
 impl McColumnData {
     fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
-        if !(0..256).contains(&y) {
+        if !(BITS_MIN_Y..=BITS_MAX_Y).contains(&y) {
             return false;
         }
-        (self.solid[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
+        let b = (y - BITS_MIN_Y) as usize;
+        (self.solid[lx][lz][b >> 6] >> (b & 63)) & 1 == 1
     }
 
     /// Post-carve solidity (feature-stage view).
     fn is_solid_pc(&self, lx: usize, y: i32, lz: usize) -> bool {
-        if !(0..256).contains(&y) {
+        if !(BITS_MIN_Y..=BITS_MAX_Y).contains(&y) {
             return false;
         }
-        (self.solid_pc[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
+        let b = (y - BITS_MIN_Y) as usize;
+        (self.solid_pc[lx][lz][b >> 6] >> (b & 63)) & 1 == 1
     }
 
     /// Solid cells between `y` and the top of its contiguous solid run
@@ -142,25 +158,28 @@ fn overworld_for(seed: u32) -> Rc<Overworld> {
 }
 
 /// W213: build one chunk column's data: the interpolation lattices,
-/// the full solidity scan of the interpolated field (0..=LATTICE_TOP
-/// per column), per-column tops + biomes, and a fresh aquifer.
+/// the full solidity scan of the interpolated field
+/// (`min_y..=LATTICE_TOP` per column), per-column tops + biomes, and
+/// a fresh aquifer.
 fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
+    debug_assert_eq!(ow.min_y, BITS_MIN_Y, "solidity bitsets sized for min_y -64");
     let cs = CHUNK_SIZE as i32;
     let ox = cx * cs;
     let oz = cz * cs;
     let cells = ow.build_cells(ox, oz, LATTICE_TOP);
     let mut aquifer = Aquifer::new(ow, seed, ox, oz);
-    let mut solid = Box::new([[[0u64; 4]; CHUNK_SIZE]; CHUNK_SIZE]);
-    let mut cols =
-        [[McCol { top: 0, mc: McBiome::Plains, surface_depth: 3 }; CHUNK_SIZE]; CHUNK_SIZE];
+    let mut solid = Box::new([[[0u64; BITS_WORDS]; CHUNK_SIZE]; CHUNK_SIZE]);
+    let mut cols = [[McCol { top: BITS_MIN_Y, mc: McBiome::Plains, surface_depth: 3 };
+        CHUNK_SIZE]; CHUNK_SIZE];
     for lx in 0..CHUNK_SIZE {
         for lz in 0..CHUNK_SIZE {
             let wx = ox + lx as i32;
             let wz = oz + lz as i32;
-            let mut top = 0;
-            for y in 0..=LATTICE_TOP {
+            let mut top = BITS_MIN_Y;
+            for y in ow.min_y..=LATTICE_TOP {
                 if ow.density_cells(wx, y, wz, &cells) > 0.0 {
-                    solid[lx][lz][(y >> 6) as usize] |= 1u64 << (y & 63);
+                    let b = (y - BITS_MIN_Y) as usize;
+                    solid[lx][lz][b >> 6] |= 1u64 << (b & 63);
                     top = y;
                 }
             }
@@ -176,7 +195,7 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
     // terrain. Same walks + rng as the per-slice chunk carve.
     let mut solid_pc = solid.clone();
     super::carver::carve_mask(&mut solid_pc, cx, cz, seed, ow, &mut aquifer);
-    let mut floor = [[0i32; CHUNK_SIZE]; CHUNK_SIZE];
+    let mut floor = [[BITS_MIN_Y; CHUNK_SIZE]; CHUNK_SIZE];
     for lx in 0..CHUNK_SIZE {
         for lz in 0..CHUNK_SIZE {
             floor[lx][lz] = top_set_bit(&solid_pc[lx][lz]);
@@ -185,15 +204,15 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
     McColumnData { cols, solid, solid_pc, floor, cells, aquifer: RefCell::new(aquifer) }
 }
 
-/// Highest set bit of a 256-bit column bitset (0 when empty, matching
-/// the pre-carve `top` fallback).
-fn top_set_bit(bits: &[u64; 4]) -> i32 {
-    for w in (0..4).rev() {
+/// Highest set bit of a column bitset, as a world Y (`BITS_MIN_Y`
+/// when empty, matching the pre-carve `top` fallback).
+fn top_set_bit(bits: &[u64; BITS_WORDS]) -> i32 {
+    for w in (0..BITS_WORDS).rev() {
         if bits[w] != 0 {
-            return w as i32 * 64 + 63 - bits[w].leading_zeros() as i32;
+            return w as i32 * 64 + 63 - bits[w].leading_zeros() as i32 + BITS_MIN_Y;
         }
     }
-    0
+    BITS_MIN_Y
 }
 
 /// Cached per-column data for `(cx, cz, seed)`.
@@ -328,9 +347,6 @@ pub(crate) fn mc_painted_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) 
     if !data.is_solid_pc(x, wy, z) {
         return 0;
     }
-    if let Some(b) = strata::bedrock_floor_block(wx, wy, wz, seed) {
-        return b.0;
-    }
     if wy > LATTICE_TOP {
         return 0;
     }
@@ -383,15 +399,41 @@ pub(crate) fn mc_painted_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) 
             near_surface_block(biome).0
         } else {
             super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
-                .unwrap_or_else(|| strata::bulk_block(wy))
+                .unwrap_or_else(|| mc_bulk_block(wx, wy, wz, ow.min_y))
                 .0
         };
     }
     // Solid post-carve without a pre-carve run: an aquifer pressure
     // seal - bulk stone + veins, like the fill's Substance::Solid arm.
     super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
-        .unwrap_or_else(|| strata::bulk_block(wy))
+        .unwrap_or_else(|| mc_bulk_block(wx, wy, wz, ow.min_y))
         .0
+}
+
+/// W260: bulk fill for a deep solid cell in MC's filler order - the
+/// vein pass already ran (callers try [`super::ore_vein`] first),
+/// then the surface stage's trailing vertical gradients pick jagged
+/// bedrock at the world floor, deepslate below y 8, stone above.
+/// `SurfaceSystem.buildSurface` only applies rules where the cell
+/// still holds the default block, which is exactly this fallback
+/// position; the gradients share the rule chain's per-cell rolls, so
+/// band-painted and bulk cells agree.
+fn mc_bulk_block(wx: i32, wy: i32, wz: i32, min_y: i32) -> BlockId {
+    use std::sync::OnceLock;
+    if super::surface_rule::is_bedrock_floor(wx, wy, wz, min_y) {
+        static BEDROCK: OnceLock<u16> = OnceLock::new();
+        return BlockId(*BEDROCK.get_or_init(|| {
+            super::features::block_id_by_name("bedrock").unwrap_or(1)
+        }));
+    }
+    if super::surface_rule::is_deepslate(wx, wy, wz) {
+        static DEEPSLATE: OnceLock<u16> = OnceLock::new();
+        BlockId(*DEEPSLATE.get_or_init(|| {
+            super::features::block_id_by_name("deepslate").unwrap_or(1)
+        }))
+    } else {
+        BlockId(1)
+    }
 }
 
 /// W220: PRE-DECORATION solidity at any world cell, from the cached
@@ -461,9 +503,6 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         let wx = origin.x as i32 + x as i32;
         let wz = origin.z as i32 + z as i32;
         let wy = origin.y as i32 + y as i32;
-        if let Some(b) = strata::bedrock_floor_block(wx, wy, wz, seed) {
-            return b;
-        }
         if wy > LATTICE_TOP {
             return BlockId::AIR;
         }
@@ -505,9 +544,11 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             } else {
                 // W215: the giant ore veins substitute the default
                 // stone (OreVeinifier); W202's placed ore features
-                // paint the small blobs later in decoration.
+                // paint the small blobs later in decoration. W260:
+                // the fallback is the bedrock/deepslate gradient
+                // chain, not the legacy rescaled strata.
                 super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
-                    .unwrap_or_else(|| strata::bulk_block(wy))
+                    .unwrap_or_else(|| mc_bulk_block(wx, wy, wz, min_y))
             };
         }
         // Open cell: above the aquifer's sampling ceiling the global
@@ -521,7 +562,7 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             // Pressure-sealed cells take veins too (MC's filler chain
             // runs oreVeinify wherever the base state is stone).
             Substance::Solid => super::ore_vein::ore_vein(&ow, &data.cells, wx, wy, wz, seed)
-                .unwrap_or_else(|| strata::bulk_block(wy)),
+                .unwrap_or_else(|| mc_bulk_block(wx, wy, wz, min_y)),
             Substance::Air => BlockId::AIR,
             Substance::Water => BlockId(36),
             Substance::Lava => BlockId(37),
@@ -558,7 +599,7 @@ mod tests {
             for lx in [0, 8, 15] {
                 for lz in [0, 8, 15] {
                     let h = data.cols[lx][lz].top;
-                    assert!((0..=LATTICE_TOP).contains(&h), "top {h} out of range");
+                    assert!((BITS_MIN_Y..=LATTICE_TOP).contains(&h), "top {h} out of range");
                     seen.insert(h);
                 }
             }
@@ -728,6 +769,101 @@ mod tests {
             }
             let tops: Vec<i32> = (0..4).map(|i| data.cols[i * 5][i * 5].top).collect();
             println!("  sample tops: {tops:?}");
+        }
+    }
+
+    /// W260: the deep band is MC's. Below y -55 every open cell is
+    /// the global lava sea (never bare air), and the deepslate
+    /// gradient owns the bulk below y 0; the tuff/iron vein type has
+    /// its band back (-60..-8), so deep chunks may carry
+    /// deepslate_iron_ore / tuff instead of deepslate - both count
+    /// as "deep strata" here.
+    #[test]
+    fn deep_band_has_lava_sea_and_no_bare_air() {
+        let c = ctx();
+        let (mut lava, mut air_below, mut deep_cells, mut strata_cells) = (0u64, 0u64, 0u64, 0u64);
+        for &(cx, cz) in &[(0, 0), (3, -2), (-5, 7), (10, 10), (17, 3), (-11, -9)] {
+            for cy in [-4, -3] {
+                let chunk = gen_mc([cx, cy, cz], &c);
+                for ly in 0..CHUNK_SIZE {
+                    let wy = cy * 16 + ly as i32;
+                    for lx in 0..CHUNK_SIZE {
+                        for lz in 0..CHUNK_SIZE {
+                            let id = chunk.get(lx, ly, lz).0;
+                            if wy < -55 {
+                                match id {
+                                    0 => air_below += 1,
+                                    37 => lava += 1,
+                                    _ => {}
+                                }
+                            }
+                            if (-60..0).contains(&wy) {
+                                deep_cells += 1;
+                                // Anything but plain stone/air/water:
+                                // deepslate, tuff, deepslate ores,
+                                // bedrock band, vein bodies.
+                                if id != 0 && id != 1 && id != 36 && id != 37 {
+                                    strata_cells += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(air_below, 0, "open cells below -55 must be the lava sea, not air");
+        assert!(lava > 0, "no lava sea found in any sampled deep chunk");
+        assert!(
+            strata_cells > deep_cells / 2,
+            "deep band should be deepslate-family strata: {strata_cells}/{deep_cells}"
+        );
+    }
+
+    /// W260 evidence dump: what the deep band actually contains per
+    /// 16-block Y slab. Run with
+    /// `cargo test dump_deep_band -p voxel_demo_mp --release --lib -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stdout)]
+    fn dump_deep_band() {
+        use std::collections::HashMap;
+        let c = ctx();
+        let mut by_band: HashMap<(i32, u16), u64> = HashMap::new();
+        for &(cx, cz) in &[(0, 0), (3, -2), (-5, 7), (10, 10)] {
+            for cy in -4..0 {
+                let chunk = gen_mc([cx, cy, cz], &c);
+                for ly in 0..CHUNK_SIZE {
+                    let wy = cy * 16 + ly as i32;
+                    let band = wy.div_euclid(16) * 16;
+                    for lx in 0..CHUNK_SIZE {
+                        for lz in 0..CHUNK_SIZE {
+                            *by_band.entry((band, chunk.get(lx, ly, lz).0)).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let mut bands: Vec<i32> = by_band.keys().map(|(b, _)| *b).collect();
+        bands.sort_unstable();
+        bands.dedup();
+        for band in bands {
+            let mut ids: Vec<(u16, u64)> = by_band
+                .iter()
+                .filter(|((b, _), _)| *b == band)
+                .map(|((_, id), n)| (*id, *n))
+                .collect();
+            ids.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            let row: Vec<String> = ids
+                .iter()
+                .take(8)
+                .map(|(id, n)| {
+                    match crate::block::block_type(*id) {
+                        Some(b) => format!("{}:{n}", b.name),
+                        None => format!("id{id}:{n}"),
+                    }
+                })
+                .collect();
+            println!("y {band:>4}..{:<4} {}", band + 15, row.join(" "));
         }
     }
 

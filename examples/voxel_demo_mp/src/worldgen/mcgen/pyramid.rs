@@ -185,7 +185,7 @@ fn rid(name: &str) -> u16 {
 fn put(w: &mut dyn ShaftWorld, p: &Pyramid, x: i32, y: i32, z: i32, id: u16) {
     let pos = p.world(x, y, z);
     let (cx0, cz0, cx1, cz1) = w.column();
-    if pos[0] >= cx0 && pos[0] <= cx1 && pos[2] >= cz0 && pos[2] <= cz1 && (0..256).contains(&pos[1]) {
+    if pos[0] >= cx0 && pos[0] <= cx1 && pos[2] >= cz0 && pos[2] <= cz1 && (-64..320).contains(&pos[1]) {
         w.place(pos, id);
     }
 }

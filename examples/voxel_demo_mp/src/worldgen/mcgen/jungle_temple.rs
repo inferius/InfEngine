@@ -129,7 +129,7 @@ fn put(w: &mut dyn ShaftWorld, p: &ScatteredPiece, x: i32, y: i32, z: i32, id: u
         && pos[0] <= cx1
         && pos[2] >= cz0
         && pos[2] <= cz1
-        && (0..256).contains(&pos[1])
+        && (-64..320).contains(&pos[1])
     {
         w.place(pos, id);
     }
@@ -164,7 +164,7 @@ fn moss_box(
                     && pos[0] <= cx1
                     && pos[2] >= cz0
                     && pos[2] <= cz1
-                    && (0..256).contains(&pos[1])
+                    && (-64..320).contains(&pos[1])
                 {
                     w.place(pos, moss_pick(seed, pos, cobble, mossy));
                 }

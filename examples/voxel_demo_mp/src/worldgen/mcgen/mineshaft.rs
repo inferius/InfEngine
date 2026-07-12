@@ -80,9 +80,11 @@ const START_RADIUS: i32 = 6;
 /// `MineshaftStructure.MAGIC_START_Y`.
 const MAGIC_START_Y: i32 = 50;
 
-/// Our world's sea level + build floor (worldgen minY).
+/// Our world's sea level + build floor (worldgen minY). W260: the
+/// floor is MC's -64, so `moveBelowSeaLevel` sinks normal shafts
+/// into the deepslate depth exactly like MC.
 const SEA_LEVEL: i32 = 63;
-const WORLD_MIN_Y: i32 = 0;
+const WORLD_MIN_Y: i32 = -64;
 
 /// Stand-in for "some solid rock" when a read leaves the live cube
 /// and only the solidity oracle answers. Id 1 = stone.
@@ -767,7 +769,7 @@ pub(crate) trait ShaftWorld {
 
 fn in_column(w: &dyn ShaftWorld, pos: [i32; 3]) -> bool {
     let (x0, z0, x1, z1) = w.column();
-    pos[0] >= x0 && pos[0] <= x1 && pos[2] >= z0 && pos[2] <= z1 && pos[1] >= WORLD_MIN_Y && pos[1] < 256
+    pos[0] >= x0 && pos[0] <= x1 && pos[2] >= z0 && pos[2] <= z1 && pos[1] >= WORLD_MIN_Y && pos[1] < 320
 }
 
 /// Live-pipeline `ShaftWorld` over the chunk being generated. Shared
@@ -795,7 +797,7 @@ impl ShaftWorld for ChunkShaftWorld<'_> {
             || pos[0] >= self.origin[0] + cs
             || pos[2] < self.origin[2]
             || pos[2] >= self.origin[2] + cs
-            || !(0..256).contains(&pos[1])
+            || !(-64..320).contains(&pos[1])
         {
             return 0;
         }
@@ -930,7 +932,7 @@ fn is_in_invalid_location(w: &dyn ShaftWorld, bb: &Bb) -> bool {
     let y0 = (bb.y0 - 1).max(WORLD_MIN_Y);
     let z0 = (bb.z0 - 1).max(cz0);
     let x1 = (bb.x1 + 1).min(cx1);
-    let y1 = (bb.y1 + 1).min(255);
+    let y1 = (bb.y1 + 1).min(319);
     let z1 = (bb.z1 + 1).min(cz1);
     for x in x0..=x1 {
         for z in z0..=z1 {

@@ -87,8 +87,8 @@ pub(crate) fn place_geodes(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenC
             let ox = scx * cs + next_int(&mut rng, 16);
             let oz = scz * cs + next_int(&mut rng, 16);
             // height uniform [above_bottom 6 (MC -58) .. absolute 30];
-            // centres below the engine floor mostly vanish, like MC's
-            // below-bedrock rolls.
+            // W260: the deep band is realized, so sub-zero geodes
+            // materialize in the deepslate strata like MC.
             let oy = uniform_i(&mut rng, -58, 30);
             geode(chunk, origin, ctx, &mut rng, &noise, [ox, oy, oz], &b);
         }

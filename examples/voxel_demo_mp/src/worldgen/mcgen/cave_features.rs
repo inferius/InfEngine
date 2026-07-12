@@ -60,7 +60,9 @@ pub(crate) fn place_glow_lichen(
     for _ in 0..count {
         let lx = next_int(&mut rng, 16);
         let lz = next_int(&mut rng, 16);
-        let wy = next_int(&mut rng, 256);
+        // height_range uniform [above_bottom 0 .. below_top 0]
+        // (W260: the full -64..319 band).
+        let wy = -64 + next_int(&mut rng, 384);
         let ly = wy - origin[1];
         if !(1..cs - 1).contains(&ly) || !(0..cs).contains(&lx) || !(0..cs).contains(&lz) {
             continue;

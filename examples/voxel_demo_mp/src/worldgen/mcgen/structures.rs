@@ -4,10 +4,9 @@
 //!
 //! Ported from `MonsterRoomFeature.java` (decompiled 26.1.2) +
 //! `worldgen/placed_feature/monster_room.json`: 10 attempts per
-//! chunk, in_square, uniform y in [0, world top], every biome. The
-//! `monster_room_deep` variant (count 4, negative-y only) has no
-//! domain in our 0..256 world - skipped, noted as the world-height
-//! parity gap.
+//! chunk, in_square, uniform y in [0, world top], every biome.
+//! W260 adds the `monster_room_deep` variant (count 4, uniform y in
+//! -58..-1) now that the deepslate band exists.
 //!
 //! Determinism / replay (the W226.1 rules): one SplitMix64 stream per
 //! source column, so every chunk that replays the 3x3 neighbourhood
@@ -32,13 +31,22 @@ use crate::block::{CHEST_ID, COBBLE_ID, MOSSY_COBBLESTONE_ID, SPAWNER_ID};
 use crate::worldgen::WorldgenCtx;
 
 const SALT_MONSTER_ROOM: u64 = 0xD4E6_0000;
+/// W260: `monster_room_deep` rolls its own stream so the surface
+/// variant's placements stay put.
+const SALT_MONSTER_ROOM_DEEP: u64 = 0xD4E6_0003;
 
 /// Placement pipeline count (placed_feature/monster_room.json).
 const ATTEMPTS_PER_CHUNK: u32 = 10;
 
 /// Uniform height range top: below_top 0 = the world build limit
-/// (0..256 here; terrain.rs hardcodes the same span).
-const WORLD_TOP_Y: i32 = 256;
+/// (320 since W260; the surface variant's floor is absolute 0).
+const WORLD_TOP_Y: i32 = 320;
+
+/// `placed_feature/monster_room_deep.json`: count 4, uniform y in
+/// [above_bottom 6 .. absolute -1] = -58..-1 (W260: in-domain now).
+const DEEP_ATTEMPTS_PER_CHUNK: u32 = 4;
+const DEEP_Y_MIN: i32 = -58;
+const DEEP_Y_MAX: i32 = -1;
 
 fn next_int(r: &mut SplitMix64, n: i32) -> i32 {
     (r.next_u64() % n.max(1) as u64) as i32
@@ -244,6 +252,26 @@ pub(crate) fn place_monster_rooms(
                 let mut scratch = RoomScratch::new();
                 if try_monster_room(
                     &mut rng, ox, oy, oz, &base_solid, &mut scratch,
+                ) {
+                    rooms.push(scratch);
+                }
+            }
+            // W260: the deep variant (monster_room_deep) seeds the
+            // deepslate cave band.
+            let mut rng_deep = SplitMix64::new(stream_seed(
+                seed,
+                scx,
+                scz,
+                SALT_MONSTER_ROOM_DEEP,
+            ));
+            for _ in 0..DEEP_ATTEMPTS_PER_CHUNK {
+                let ox = scx * cs + next_int(&mut rng_deep, 16);
+                let oz = scz * cs + next_int(&mut rng_deep, 16);
+                let oy =
+                    DEEP_Y_MIN + next_int(&mut rng_deep, DEEP_Y_MAX - DEEP_Y_MIN + 1);
+                let mut scratch = RoomScratch::new();
+                if try_monster_room(
+                    &mut rng_deep, ox, oy, oz, &base_solid, &mut scratch,
                 ) {
                     rooms.push(scratch);
                 }

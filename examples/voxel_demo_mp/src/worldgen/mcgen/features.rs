@@ -449,12 +449,13 @@ pub(crate) fn block_id_by_name(name: &str) -> Option<u16> {
     map.get(name.strip_prefix("minecraft:").unwrap_or(name)).copied()
 }
 
-/// MC vertical anchors, adapted to the engine's world band: the engine
-/// has no negative depth (MC -64..320 vs engine 0..255), so
-/// `above_bottom`/`below_top` anchor to the ENGINE bottom/top. That
-/// keeps each distribution's SHAPE (e.g. diamond's trapezoid peaking at
-/// the world floor) inside the depth that exists; sampled ys outside
-/// the band are discarded like MC discards out-of-dimension positions.
+/// MC vertical anchors. W260: the engine band IS MC's -64..319 now,
+/// so `above_bottom`/`below_top` resolve to the real MC anchors
+/// (`VerticalAnchor`: bottom = min build height, top = max build
+/// height inclusive). Sampled ys outside the band are discarded like
+/// MC discards out-of-dimension positions (a trapezoid whose min
+/// anchor reaches below -64, e.g. diamond's above_bottom -80, keeps
+/// its MC shape and loses the out-of-world tail).
 #[derive(Clone, Copy, Debug)]
 enum Anchor {
     Absolute(i32),
@@ -462,8 +463,8 @@ enum Anchor {
     BelowTop(i32),
 }
 
-const ENGINE_BOTTOM: i32 = 1;
-const ENGINE_TOP: i32 = 255;
+const ENGINE_BOTTOM: i32 = -64;
+const ENGINE_TOP: i32 = 319;
 
 impl Anchor {
     fn parse(v: &serde_json::Value) -> Anchor {

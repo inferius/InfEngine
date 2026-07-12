@@ -319,13 +319,14 @@ pub(crate) fn place_springs(chunk: &mut Chunk, coord: ChunkCoord, ctx: &Worldgen
             let lx = next_int(&mut rng, 16);
             let lz = next_int(&mut rng, 16);
             let wy = if lava {
-                // very_biased_to_bottom(min 1, max 247, inner 8).
-                let upper = next_between(&mut rng, 1 + 8, 247);
-                let biased = next_between(&mut rng, 1, upper - 1);
-                next_between(&mut rng, 1, biased - 1 + 8)
+                // very_biased_to_bottom(above_bottom 0 = -64,
+                // below_top 8 = 311, inner 8) - W260: MC anchors.
+                let upper = next_between(&mut rng, -64 + 8, 311);
+                let biased = next_between(&mut rng, -64, upper - 1);
+                next_between(&mut rng, -64, biased - 1 + 8)
             } else {
-                // uniform(1, 192).
-                next_between(&mut rng, 1, 192)
+                // uniform(above_bottom 0 = -64, absolute 192).
+                next_between(&mut rng, -64, 192)
             };
             let ly = wy - origin[1];
             // Springs are single cells: only in-chunk tries with all six
@@ -485,9 +486,11 @@ pub(crate) fn place_lava_lakes(
                 let pz = scz * cs + next_int(&mut rng, 16);
                 let floor = mc_floor_at(ctx, px, pz);
                 let py = if underground {
-                    // uniform 1..=255, environment_scan down (max 32) to
-                    // solid, then OCEAN_FLOOR-relative threshold <= -5.
-                    let start = next_between(&mut rng, 1, 255);
+                    // uniform [absolute 0 .. below_top 0] = 0..=319,
+                    // environment_scan down (max 32) to solid with
+                    // inside_world_bounds offset -5, then the
+                    // OCEAN_FLOOR-relative threshold <= -5.
+                    let start = next_between(&mut rng, 0, 319);
                     let mut y = start;
                     let mut found = false;
                     for _ in 0..=32 {
@@ -496,7 +499,7 @@ pub(crate) fn place_lava_lakes(
                             break;
                         }
                         y -= 1;
-                        if y < 1 {
+                        if y - 5 < -64 {
                             break;
                         }
                     }
@@ -660,10 +663,10 @@ mod tests {
     fn biased_bottom_sampler_in_range() {
         let mut r = SplitMix64::new(9);
         for _ in 0..2000 {
-            let upper = next_between(&mut r, 9, 247);
-            let biased = next_between(&mut r, 1, upper - 1);
-            let y = next_between(&mut r, 1, biased - 1 + 8);
-            assert!((1..=247).contains(&y));
+            let upper = next_between(&mut r, -64 + 8, 311);
+            let biased = next_between(&mut r, -64, upper - 1);
+            let y = next_between(&mut r, -64, biased - 1 + 8);
+            assert!((-64..=311).contains(&y));
         }
     }
 }

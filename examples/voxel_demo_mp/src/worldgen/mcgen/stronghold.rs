@@ -740,7 +740,7 @@ impl Carver<'_, '_> {
             && pos[0] <= cx1
             && pos[2] >= cz0
             && pos[2] <= cz1
-            && (0..256).contains(&pos[1])
+            && (-64..320).contains(&pos[1])
         {
             self.w.place(pos, id);
         }
@@ -771,7 +771,7 @@ impl Carver<'_, '_> {
                         || pos[0] > cx1
                         || pos[2] < cz0
                         || pos[2] > cz1
-                        || !(0..256).contains(&pos[1])
+                        || !(-64..320).contains(&pos[1])
                     {
                         continue;
                     }

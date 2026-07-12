@@ -12,12 +12,11 @@
 //! pressure gradient can force stone (`density + pressure > 0`), which
 //! is what seals cave lakes apart.
 //!
-//! Faithful with the engine's world band: the engine floor is y=0
-//! (MC -64..0 is not realized - the established Anchor convention), so
-//! the global LAVA band (y < -54) and the deep `fluidSurfaceLevel <=
-//! -10` lava pockets never fire here; aquifers above y=0 behave like
-//! MC's. Randomness is the engine's column-keyed SplitMix64 streams
-//! (documented divergence: rules, not seed identity).
+//! W260: the engine world band is MC's -64..319 now, so the global
+//! LAVA band (y < -54) and the deep `fluidSurfaceLevel <= -10` lava
+//! pockets are live - deep caves flood with lava like MC. Randomness
+//! is the engine's column-keyed SplitMix64 streams (documented
+//! divergence: rules, not seed identity).
 
 use std::collections::HashMap;
 
@@ -57,8 +56,7 @@ pub(crate) enum Substance {
 const WAY_BELOW: i32 = i32::MIN / 2;
 
 /// The global fluid rule (`NoiseBasedChunkGenerator.createFluidPicker`):
-/// lava below min(-54, sea), else water at sea level. The engine floor
-/// is 0, so only the water branch is reachable.
+/// lava below min(-54, sea), else water at sea level.
 fn global_fluid(y: i32) -> FluidStatus {
     if y < (-54).min(SEA_LEVEL) {
         FluidStatus { fluid_level: -54, lava: true }

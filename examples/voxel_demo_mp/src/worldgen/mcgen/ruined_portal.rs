@@ -490,7 +490,7 @@ fn carve(w: &mut dyn ShaftWorld, ctx: &WorldgenCtx, seed: u32, p: &RuinedPortal)
             && pos[0] <= cx1
             && pos[2] >= cz0
             && pos[2] <= cz1
-            && (0..256).contains(&pos[1])
+            && (-64..320).contains(&pos[1])
     };
     // Template cells with the processor chain.
     for cell in &t.cells {
@@ -621,7 +621,7 @@ fn carve(w: &mut dyn ShaftWorld, ctx: &WorldgenCtx, seed: u32, p: &RuinedPortal)
                     }
                     if p.overgrown
                         && cur == ids.netherrack
-                        && y < 255
+                        && y < 319
                         && w.read([x, y + 1, z]) == 0
                         && cell_roll(seed, [x, y + 1, z], SALT_PORTAL_CELL ^ 0x52) < 0.5
                     {

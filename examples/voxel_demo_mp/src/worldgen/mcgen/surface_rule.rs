@@ -447,22 +447,46 @@ fn eval_cond(cond: &Cond, ctx: &SurfaceCtx) -> bool {
         Cond::VerticalGradient { seed, true_below, false_above } => {
             let lo = true_below.resolve(ctx.min_y, ctx.max_y);
             let hi = false_above.resolve(ctx.min_y, ctx.max_y);
-            if ctx.y <= lo {
-                return true;
-            }
-            if ctx.y >= hi {
-                return false;
-            }
-            // Probability of "true" ramps from 1 at `lo` to 0 at `hi`.
-            // MC uses a per-cell random; a position hash keeps it stable
-            // + deterministic.
-            let frac = (ctx.y - lo) as f64 / (hi - lo).max(1) as f64;
-            let h = pos_hash(*seed, ctx.x, ctx.y, ctx.z);
-            (h as f64 / u64::MAX as f64) > frac
+            gradient_roll(*seed, ctx.x, ctx.y, ctx.z, lo, hi)
         }
         Cond::Not(inner) => !eval_cond(inner, ctx),
         Cond::Never => false,
     }
+}
+
+/// One `vertical_gradient` decision (`SurfaceRules
+/// .VerticalGradientConditionSource`): always true at/below `lo`,
+/// never at/above `hi`, in between the probability of "true" ramps
+/// from 1 at `lo` to 0 at `hi`. MC uses a per-cell random from a
+/// named positional factory; a position hash keeps it stable +
+/// deterministic. Shared by the rule-chain eval AND the deep-fill
+/// fast paths ([`is_bedrock_floor`] / [`is_deepslate`]) so a cell
+/// rolls identically wherever it's asked.
+fn gradient_roll(seed: u64, x: i32, y: i32, z: i32, lo: i32, hi: i32) -> bool {
+    if y <= lo {
+        return true;
+    }
+    if y >= hi {
+        return false;
+    }
+    let frac = (y - lo) as f64 / (hi - lo).max(1) as f64;
+    let h = pos_hash(seed, x, y, z);
+    (h as f64 / u64::MAX as f64) > frac
+}
+
+/// W260: the overworld `bedrock_floor` rule (`vertical_gradient`
+/// above_bottom 0..5) as a standalone check. The chunk fill only
+/// evaluates the rule chain inside the surface band, so the deep
+/// bulk cells ask this directly - same stream name + roll as the
+/// JSON rule.
+pub(crate) fn is_bedrock_floor(x: i32, y: i32, z: i32, min_y: i32) -> bool {
+    gradient_roll(fnv("minecraft:bedrock_floor"), x, y, z, min_y, min_y + 5)
+}
+
+/// W260: the overworld trailing `deepslate` rule (`vertical_gradient`
+/// absolute 0..8) as a standalone check for the deep bulk cells.
+pub(crate) fn is_deepslate(x: i32, y: i32, z: i32) -> bool {
+    gradient_roll(fnv("minecraft:deepslate"), x, y, z, 0, 8)
 }
 
 fn pos_hash(seed: u64, x: i32, y: i32, z: i32) -> u64 {

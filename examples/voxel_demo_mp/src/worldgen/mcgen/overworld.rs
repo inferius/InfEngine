@@ -76,14 +76,16 @@ impl Overworld {
     }
 
     /// Build the interpolation lattices for the chunk column at block
-    /// origin `(x0, z0)`, spanning `0..=(ny-1)*CELL_H` vertically.
-    /// Covers `final_density` AND the vein channels (id order).
+    /// origin `(x0, z0)`, spanning `min_y..=min_y+(ny-1)*CELL_H`
+    /// vertically (W260: the corner base is the dimension floor -64,
+    /// not 0). Covers `final_density` AND the vein channels (id order).
     pub(crate) fn build_cells(&self, x0: i32, z0: i32, top_y: i32) -> CellLattices {
-        let ny = (top_y / CELL_H) as usize + 2;
+        let ny = ((top_y - self.min_y) / CELL_H) as usize + 2;
         CellLattices::build(
             &[&self.final_density, &self.vein_toggle, &self.vein_ridged, &self.vein_gap],
             x0,
             z0,
+            self.min_y,
             ny,
         )
     }

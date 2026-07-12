@@ -23,11 +23,11 @@ use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 /// `seed_offset_for`) takes the seed as a parameter. W5.1 deleted
 /// the last globals (`WORLD_SEED` + `WORLDGEN`).
 pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
-    // W260 stage 1: the world spans chunks -4..=19, but no profile
-    // fills below y 0 yet - the sub-zero band is sealed air under
-    // the y-0 bedrock floor. Stage 2 (deepslate strata, caves to
-    // -64) lifts this guard for the Mc profile.
-    if coord[1] < 0 {
+    // W260: the world spans chunks -4..=19. The Mc profile fills the
+    // whole band (bedrock -64, deepslate strata, caves + aquifer
+    // lava); the legacy profiles keep their 0-based world and the
+    // sub-zero band stays sealed air under their y-0 bedrock floor.
+    if coord[1] < 0 && ctx.profile != WorldGen::Mc {
         return Chunk::empty();
     }
     match ctx.profile {
@@ -272,17 +272,16 @@ mod tests {
         assert_eq!(chunk.get(0, 9, 0).0, 0);
     }
 
-    /// W260 stage 1: every profile generates the sub-zero band
-    /// (chunk cy < 0) as sealed air - the y-0 bedrock floor above it
-    /// stays authoritative until stage 2 extends terrain to -64.
+    /// W260: legacy profiles generate the sub-zero band (chunk cy < 0)
+    /// as sealed air - their worlds stay 0-based; only the Mc profile
+    /// fills real terrain down to -64.
     #[test]
-    fn negative_cy_chunks_are_all_air() {
+    fn negative_cy_chunks_are_all_air_for_legacy_profiles() {
         for profile in [
             WorldGen::Classic,
             WorldGen::Flat,
             WorldGen::Natural,
             WorldGen::Nether,
-            WorldGen::Mc,
         ] {
             for cy in [-4, -1] {
                 let chunk = generate_chunk_at_ctx([3, cy, -7], &ctx_for(profile));
@@ -295,6 +294,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// W260: the Mc profile's world floor is MC's: chunk cy -4 has an
+    /// unbroken bedrock row at y -64 and deep strata (deepslate /
+    /// tuff-vein / bedrock band) above it, plus the global lava sea
+    /// filling open cells below -54.
+    #[test]
+    fn mc_bottom_chunk_has_bedrock_floor_and_deepslate() {
+        let ctx = ctx_for(WorldGen::Mc);
+        let bedrock = crate::worldgen::mcgen::features::block_id_by_name("bedrock").unwrap();
+        let deepslate = crate::worldgen::mcgen::features::block_id_by_name("deepslate").unwrap();
+        let mut deepslate_cells = 0u32;
+        for &(cx, cz) in &[(0, 0), (7, -3)] {
+            let chunk = generate_chunk_at_ctx([cx, -4, cz], &ctx);
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    assert_eq!(
+                        chunk.get(x, 0, z).0,
+                        bedrock,
+                        "chunk ({cx},-4,{cz}) local ({x},0,{z}) = world y -64 must be bedrock"
+                    );
+                    for y in 1..CHUNK_SIZE {
+                        if chunk.get(x, y, z).0 == deepslate {
+                            deepslate_cells += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            deepslate_cells > 1000,
+            "deep strata should be dominated by deepslate: {deepslate_cells}"
+        );
     }
 
     #[test]

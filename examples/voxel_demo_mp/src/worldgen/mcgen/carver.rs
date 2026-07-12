@@ -19,15 +19,14 @@
 //!
 //! Config constants are the three `configured_carver` JSONs' values
 //! (embedded + pinned by a test, so a data refresh that changes them
-//! fails loudly). Vertical anchors keep MC coordinates (identity map):
-//! the cave carvers' `above_bottom 8` start band and the `lava_level`
-//! (-56) sit below the engine's realized y>=0 band, so deep-started
-//! tunnels contribute only their upper parts and carver lava never
-//! appears - consistent with the W213 aquifer note. Divergences:
-//! SplitMix64 streams (rules, not seed identity); no carving mask
-//! (idempotent re-carves; air isn't replaceable); the grass-floor
-//! repair is chunk-local (a carved grass cell at a vertical seam can
-//! miss repainting the dirt below).
+//! fails loudly). Vertical anchors keep MC coordinates (identity
+//! map); W260 realized the full -64..319 band, so the cave carvers'
+//! `above_bottom 8` start band (-56..) and the `lava_level` (-56)
+//! are live now - deep tunnels flood with carver lava exactly like
+//! MC. Divergences: SplitMix64 streams (rules, not seed identity);
+//! no carving mask (idempotent re-carves; air isn't replaceable);
+//! the grass-floor repair is chunk-local (a carved grass cell at a
+//! vertical seam can miss repainting the dirt below).
 
 use std::collections::HashSet;
 use std::f32::consts::TAU;
@@ -51,9 +50,9 @@ const TUNNEL_RANGE: i32 = 4;
 const MIN_GEN_Y: i32 = -64;
 /// MC gen depth (canyon width factors span the whole band).
 const GEN_DEPTH: usize = 384;
-/// Top clamp: MC protects the top 7 blocks of the gen band; the
-/// engine band tops out at 255.
-const TOP_PROTECT: i32 = 247;
+/// Top clamp: `WorldCarver.carveEllipsoid` protects the top 7 blocks
+/// of the gen band (`minGenY + genDepth - 1 - 7` = 312 for -64..320).
+const TOP_PROTECT: i32 = MIN_GEN_Y + GEN_DEPTH as i32 - 1 - 7;
 
 // --- configured_carver values (pinned against the embedded JSONs) ---
 const CAVE_PROBABILITY: f32 = 0.15;
@@ -67,6 +66,9 @@ const CAVE_EXTRA_Y_MAX: i32 = 47;
 /// canyon y: uniform [10 .. 67].
 const CANYON_Y_MIN: i32 = 10;
 const CANYON_Y_MAX: i32 = 67;
+/// `lava_level` (above_bottom 8 = -56): carved cells at/below become
+/// lava unconditionally (`WorldCarver.getCarveState`).
+const LAVA_LEVEL: i32 = MIN_GEN_Y + 8;
 
 fn next_f32(r: &mut SplitMix64) -> f32 {
     r.next_f64() as f32
@@ -126,8 +128,7 @@ pub(crate) enum CarveSink<'a> {
         origin: [i32; 3],
     },
     Mask {
-        solid: &'a mut [[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE],
-        seed: u32,
+        solid: &'a mut super::terrain::SolidBits,
     },
 }
 
@@ -230,14 +231,19 @@ fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_g
             if !carvable(cur) {
                 return;
             }
-            // getCarveState: lava_level (-56) is below the engine band;
-            // the aquifer (with density 0) decides the rest. Solid =
-            // the barrier pressure keeps the block.
-            let new = match cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0) {
-                Substance::Solid => return,
-                Substance::Air => BlockId::AIR,
-                Substance::Water => BlockId(36),
-                Substance::Lava => BlockId(37),
+            // getCarveState: at/below the configured lava_level (-56)
+            // the carve becomes lava unconditionally; above it the
+            // aquifer (with density 0) decides. Solid = the barrier
+            // pressure keeps the block.
+            let new = if wy <= LAVA_LEVEL {
+                BlockId(37)
+            } else {
+                match cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0) {
+                    Substance::Solid => return,
+                    Substance::Air => BlockId::AIR,
+                    Substance::Water => BlockId(36),
+                    Substance::Lava => BlockId(37),
+                }
             };
             chunk.set(ux, uy, uz, new);
             // Grass repair: carving through a grass column repaints the
@@ -246,7 +252,7 @@ fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_g
                 chunk.set(ux, uy - 1, uz, BlockId(3));
             }
         }
-        CarveSink::Mask { solid, seed } => {
+        CarveSink::Mask { solid } => {
             // Only solid fill cells matter for the heightmap; a carved
             // open/water cell stays non-solid. The fill's solid cells
             // are all carvable (stone family / ores / surface blocks)
@@ -254,18 +260,27 @@ fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_g
             // surface can emit (ice) and raw-ore vein cells stay solid
             // in the real chunk, so the mask floor may sit a block low
             // there (plants just fail their water check - no floaters).
-            if !(0..256).contains(&wy) {
+            use super::terrain::{BITS_MIN_Y, BITS_WORDS};
+            if !(BITS_MIN_Y..BITS_MIN_Y + BITS_WORDS as i32 * 64).contains(&wy) {
                 return;
             }
             let (ux, uz) = (lx as usize, lz as usize);
-            let (w, b) = ((wy >> 6) as usize, wy & 63);
+            let bit = (wy - BITS_MIN_Y) as usize;
+            let (w, b) = (bit >> 6, bit & 63);
             if (solid[ux][uz][w] >> b) & 1 == 0 {
                 return;
             }
-            if crate::worldgen::strata::bedrock_floor_block(wx, wy, wz, *seed).is_some() {
+            // W260: bedrock (the vertical-gradient floor band) is not
+            // carvable - same roll as the fill's paint.
+            if super::surface_rule::is_bedrock_floor(wx, wy, wz, MIN_GEN_Y) {
                 return;
             }
-            if matches!(cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0), Substance::Solid) {
+            // At/below lava_level the carve is unconditional lava
+            // (non-solid for the heightmap); above it the aquifer's
+            // pressure seal keeps the bit.
+            if wy > LAVA_LEVEL
+                && matches!(cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0), Substance::Solid)
+            {
                 return;
             }
             solid[ux][uz][w] &= !(1u64 << b);
@@ -499,14 +514,14 @@ pub(crate) fn carve_mc(
 /// so the feature stage anchors to post-carve terrain like MC's live
 /// heightmaps - the fix for seagrass floating over carver-cut seabeds.
 pub(crate) fn carve_mask(
-    solid: &mut [[[u64; 4]; CHUNK_SIZE]; CHUNK_SIZE],
+    solid: &mut super::terrain::SolidBits,
     cx: i32,
     cz: i32,
     seed: u32,
     ow: &Overworld,
     aquifer: &mut Aquifer,
 ) {
-    let cc = CarveCtx { ow, aquifer, sink: CarveSink::Mask { solid, seed }, ccx: cx, ccz: cz };
+    let cc = CarveCtx { ow, aquifer, sink: CarveSink::Mask { solid }, ccx: cx, ccz: cz };
     run_carvers(cc, seed);
 }
 

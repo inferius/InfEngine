@@ -12,11 +12,10 @@
 //! the data - they share the chunk-column cell lattices with
 //! `final_density`, so the veins have MC's exact blobby cell look.
 //!
-//! Engine band note: the IRON vein band (MC y -60..-8) lies entirely
-//! below the realized y>=0 world, so only COPPER veins (y 0..50)
-//! materialize - the type logic stays complete for a future deeper
-//! band. Randomness is the engine's positional SplitMix64 (rules, not
-//! seed identity).
+//! W260: the world band reaches MC's -64 now, so BOTH vein types
+//! materialize - COPPER (granite filler, y 0..50) and IRON
+//! (deepslate_iron_ore in tuff, y -60..-8). Randomness is the
+//! engine's positional SplitMix64 (rules, not seed identity).
 
 use std::sync::OnceLock;
 
