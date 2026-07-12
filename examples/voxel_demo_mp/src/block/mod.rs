@@ -305,6 +305,11 @@ fn block_material_by_name(id: u16) -> &'static str {
     // wood "door" rule, nether_brick before "brick"-ish stone).
     if n.contains("deepslate") {
         "deepslate"
+    } else if n == "cobweb" {
+        // W243: MC has a dedicated block.cobweb bank; until its OGGs
+        // are verified in the cache, the soft grass rustle is the
+        // closest loaded family (a stone thud would be worse).
+        "grass"
     } else if n.contains("nether_brick") {
         "nether_bricks"
     } else if n.contains("netherrack") || n.contains("nether_quartz_ore") || n.contains("nether_gold_ore") {

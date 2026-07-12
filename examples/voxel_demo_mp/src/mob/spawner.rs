@@ -94,6 +94,24 @@ pub(crate) fn spawner_entity_kind(eff_seed: u32, pos: [i32; 3]) -> u8 {
     SPAWNER_MOBS[(rng.next_u64() % SPAWNER_MOBS.len() as u64) as usize]
 }
 
+/// Structure-aware kind: W243 mineshaft corridors hold CAVE SPIDER
+/// spawners in MC; until that mob is ported, corridor spawners map to
+/// the regular spider (once-logged stand-in). Everything else rolls
+/// the dungeon table.
+pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i32; 3]) -> u8 {
+    if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft_corridor(ctx, pos) {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| {
+            tracing::info!(
+                "W243: mineshaft spawners use SPIDER as the cave-spider \
+                 stand-in until the mob is ported"
+            );
+        });
+        return KIND_SPIDER;
+    }
+    spawner_entity_kind(ctx.effective_seed(), pos)
+}
+
 /// `nextInt(n)` over the SplitMix64 stream (same shape the worldgen
 /// feature streams use).
 fn next_int(r: &mut SplitMix64, n: i32) -> i32 {
@@ -220,8 +238,8 @@ fn reset_delay(st: &mut SpawnerState) {
 /// attempts, each rolling a position in the +-4 x [y-1, y+1] envelope;
 /// a crowding-cap hit resets the delay and aborts the whole cycle
 /// (matching the Java early return).
-fn run_spawn_cycle(vx: &mut Voxel, pos: [i32; 3], eff_seed: u32, st: &mut SpawnerState) {
-    let kind = spawner_entity_kind(eff_seed, pos);
+fn run_spawn_cycle(vx: &mut Voxel, pos: [i32; 3], st: &mut SpawnerState) {
+    let kind = spawner_entity_kind_at(&vx.current_worldgen_ctx(), pos);
     let mut spawned_any = false;
     for _ in 0..SPAWNER_SPAWN_COUNT {
         let sx = pos[0] as f32
@@ -280,7 +298,6 @@ pub(crate) fn spawner_pass(vx: &mut Voxel) {
         return;
     }
     let positions: Vec<[i32; 3]> = vx.spawner_positions.iter().copied().collect();
-    let eff_seed = vx.current_worldgen_ctx().effective_seed();
     for pos in positions {
         if !any_player_within(vx, pos, SPAWNER_PLAYER_RANGE) {
             continue;
@@ -302,7 +319,7 @@ pub(crate) fn spawner_pass(vx: &mut Voxel) {
         if st.delay > 0 {
             st.delay -= 1;
         } else {
-            run_spawn_cycle(vx, pos, eff_seed, &mut st);
+            run_spawn_cycle(vx, pos, &mut st);
         }
         vx.spawner_states.insert(pos, st);
     }
@@ -596,8 +613,7 @@ mod tests {
             spos[1] as f32 + 1.0,
             spos[2] as f32 + 0.5,
         );
-        let eff = v.current_worldgen_ctx().effective_seed();
-        let kind = spawner_entity_kind(eff, spos);
+        let kind = spawner_entity_kind_at(&v.current_worldgen_ctx(), spos);
         let mut first_spawn_tick = None;
         let mut cycles = 0u32;
         for tick in 0..6000u32 {

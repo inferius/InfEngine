@@ -380,6 +380,9 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         // were falling back to the cube TileSpec -> grass texture on top).
         x if x == SHORT_GRASS_ID => Some("block/cross/short_grass"),
         x if x == FERN_ID => Some("block/cross/fern"),
+        // W243 - cobweb (mineshaft spider corridors): MC renders it as
+        // the same two crossed quads as plants.
+        x if x == crate::block::COBWEB_ID => Some("block/cross/cobweb"),
         // W203: underwater plants carry F_SWIM (waterlogged cells swim
         // like water), which the universal W96 cross fallback excludes -
         // so they get explicit cross entries like the flowers above.

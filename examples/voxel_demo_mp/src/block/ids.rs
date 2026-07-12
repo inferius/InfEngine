@@ -597,3 +597,5 @@ pub(crate) const ACTIVATOR_RAIL_ID: u16 = 656;
 // W242 - monster spawner (MonsterRoomFeature places it at the room
 // origin; the worker chunk scan reports it as a side effect).
 pub(crate) const SPAWNER_ID: u16 = 793;
+// W243 - cobweb (mineshaft spider corridors; MC block `cobweb`).
+pub(crate) const COBWEB_ID: u16 = 794;

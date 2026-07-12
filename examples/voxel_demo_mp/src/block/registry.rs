@@ -3163,4 +3163,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // alpha like glass (transparent + keep_alpha, NO alpha-blend
     // flag), full collision like MC.
     BlockType { id: 793, name: "spawner", color: [1.0, 1.0, 1.0], transparent: true, flags: 0, top: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["spawner.png"], keep_alpha: true } },
+    // W243: cobweb - cross-pattern render (special_models), walk-through
+    // (MC's web slow-down physics is a noted gap), water-washable like
+    // the other cross plants, but placeable + click-targetable so the
+    // player can harvest it.
+    BlockType { id: 794, name: "cobweb", color: [0.95, 0.95, 0.95], transparent: true, flags: F_AABB_PASS | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true } },
 ];

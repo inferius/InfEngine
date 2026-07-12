@@ -857,6 +857,10 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     super::geode::place_geodes(chunk, coord, ctx, origin);
     super::iceberg::place_icebergs(chunk, coord, ctx, origin);
     super::misc_features::place_forest_rocks(chunk, coord, ctx, origin);
+    // W243: mineshafts (underground_structures, step 3) - structures
+    // place before the step's FEATURES in MC's decoration order, so
+    // the shaft carves ahead of the monster room.
+    super::mineshaft::place_mineshafts(chunk, coord, ctx, origin);
     // W242: monster rooms (underground_structures, step 3) - after
     // local_modifications, before the ore step, like the biome lists
     // order them.

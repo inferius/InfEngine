@@ -2465,6 +2465,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 792, name: "muddy_mangrove_roots", display: Some("Muddy Mangrove Roots"), places: Some(792), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     // W242 - monster spawner (creative-only placement, like MC).
     ItemType { id: 793, name: "spawner", display: Some("Monster Spawner"), places: Some(793), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W243 - cobweb (mineshaft spider corridors).
+    ItemType { id: 794, name: "cobweb", display: Some("Cobweb"), places: Some(794), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

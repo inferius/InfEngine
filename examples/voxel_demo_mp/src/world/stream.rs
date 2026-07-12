@@ -214,17 +214,24 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             // container that already exists (saved world,
                             // possibly looted by the player) always wins.
                             if !vx.chests.contains_key(wv) {
-                                let seed = vx
-                                    .current_worldgen_ctx()
-                                    .effective_seed();
+                                let ctx = vx.current_worldgen_ctx();
+                                let seed = ctx.effective_seed();
                                 let mut rng =
                                     crate::worldgen::mcgen::noise::SplitMix64::new(
                                         crate::loot::chest_pos_seed(seed, *wv),
                                     );
-                                let stacks = crate::loot::roll(
-                                    &crate::loot::SIMPLE_DUNGEON,
-                                    &mut rng,
-                                );
+                                // W243: the loot table follows the
+                                // structure that owns the cell -
+                                // derived from the deterministic
+                                // layout, no provenance persisted.
+                                let table = if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft(
+                                    &ctx, *wv,
+                                ) {
+                                    &crate::loot::ABANDONED_MINESHAFT
+                                } else {
+                                    &crate::loot::SIMPLE_DUNGEON
+                                };
+                                let stacks = crate::loot::roll(table, &mut rng);
                                 let mut c = crate::block::chest::new_chest();
                                 crate::loot::fill_container(
                                     &mut c, &stacks, &mut rng,

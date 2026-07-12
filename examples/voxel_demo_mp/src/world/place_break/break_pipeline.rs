@@ -227,6 +227,7 @@ pub(crate) fn apply_block_break(
             // drop-itself path.
             const WHEAT_SEEDS_ITEM: u16 = 338;
             const STICK_ITEM: u16 = 302;
+            const STRING_ITEM: u16 = 301;
             const SHEARS_ITEM: u16 = 640;
             let held_is_shears = held.0 == SHEARS_ITEM;
             // Same inline xorshift idiom as the other loot rolls
@@ -256,6 +257,11 @@ pub(crate) fn apply_block_break(
                 // W242: spawners drop nothing in MC (only XP, which
                 // we don't have yet).
                 x if x == crate::block::SPAWNER_ID => {}
+                // W243: cobwebs drop string without shears (the MC
+                // silk-touch/shears self-drop is a tools gap).
+                x if x == crate::block::COBWEB_ID && !held_is_shears => {
+                    vx.spawn_drop(BlockId(STRING_ITEM), voxel);
+                }
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
         }

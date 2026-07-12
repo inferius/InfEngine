@@ -105,6 +105,57 @@ pub(crate) const SIMPLE_DUNGEON: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/abandoned_mineshaft.json`
+/// (26.1.2), entry-for-entry. Known mapper skips (once-logged until
+/// the items exist): enchanted_golden_apple, name_tag; `book` drops
+/// UNenchanted (no enchant_randomly). The `empty` weight-5 entry of
+/// pool 1 is a real MC no-drop slot.
+pub(crate) const ABANDONED_MINESHAFT: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("golden_apple", 20),
+                one("enchanted_golden_apple", 1),
+                one("name_tag", 30),
+                one("book", 10),
+                one("iron_pickaxe", 5),
+                // minecraft:empty weight 5 - a rolled blank.
+                one("", 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 4,
+            entries: &[
+                counted("iron_ingot", 10, 1, 5),
+                counted("gold_ingot", 5, 1, 3),
+                counted("redstone", 5, 4, 9),
+                counted("lapis_lazuli", 5, 4, 9),
+                counted("diamond", 3, 1, 2),
+                counted("coal", 10, 3, 8),
+                counted("bread", 15, 1, 3),
+                counted("glow_berries", 15, 3, 6),
+                counted("melon_seeds", 10, 2, 4),
+                counted("pumpkin_seeds", 10, 2, 4),
+                counted("beetroot_seeds", 10, 2, 4),
+            ],
+        },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 3,
+            entries: &[
+                counted("rail", 20, 4, 8),
+                counted("powered_rail", 5, 1, 4),
+                counted("detector_rail", 5, 1, 4),
+                counted("activator_rail", 5, 1, 4),
+                counted("torch", 15, 1, 16),
+            ],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).
@@ -179,6 +230,11 @@ pub(crate) fn roll(table: &LootTable, rng: &mut SplitMix64) -> Vec<(u16, u8)> {
                 })
                 .expect("weighted pick is within total by construction");
             let count = roll_range(rng, entry.count_min, entry.count_max);
+            // W243: `minecraft:empty` entries (a real no-drop slot in
+            // e.g. abandoned_mineshaft pool 1) roll silently.
+            if entry.name.is_empty() {
+                continue;
+            }
             match item_id_for_loot_name(entry.name) {
                 Some(id) => out.push((id, count)),
                 None => log_skipped(entry.name),
