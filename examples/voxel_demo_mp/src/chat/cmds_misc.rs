@@ -4,15 +4,12 @@
 //! debug toggles (grid, listmobs), crafting helper.
 
 use glam::Vec3;
-use infengine_voxel::{BlockId, CHUNK_SIZE};
+use infengine_voxel::BlockId;
 
 use crate::Voxel;
 use crate::block::{BLOCK_TYPES, block_type};
 use crate::net::NetRole;
-use crate::{
-    Biome, KIND_ZOMBIE, PLAYER_HEIGHT, RECIPES, Recipe,
-    VERTICAL_CHUNKS, biome_at,
-};
+use crate::{Biome, KIND_ZOMBIE, PLAYER_HEIGHT, RECIPES, Recipe, biome_at};
 
 /// `/listblocks` (alias `/blocks`). Dump every known block
 /// name in groups of ~8 per line.
@@ -152,8 +149,7 @@ pub(crate) fn cmd_randomtp(
     let dist = 30.0 + r2 * 90.0;
     let nx = voxel.player_pos.x + angle.cos() * dist;
     let nz = voxel.player_pos.z + angle.sin() * dist;
-    let cs = CHUNK_SIZE as i32;
-    let ceiling = cs * VERTICAL_CHUNKS - 1;
+    let ceiling = crate::WORLD_MAX_Y;
     let sy = voxel
         .surface_y_below(
             nx.floor() as i32,

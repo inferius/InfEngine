@@ -23,6 +23,13 @@ use super::{WorldGen, WorldgenCtx, cactus, flowers, trees};
 /// `seed_offset_for`) takes the seed as a parameter. W5.1 deleted
 /// the last globals (`WORLD_SEED` + `WORLDGEN`).
 pub fn generate_chunk_at_ctx(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
+    // W260 stage 1: the world spans chunks -4..=19, but no profile
+    // fills below y 0 yet - the sub-zero band is sealed air under
+    // the y-0 bedrock floor. Stage 2 (deepslate strata, caves to
+    // -64) lifts this guard for the Mc profile.
+    if coord[1] < 0 {
+        return Chunk::empty();
+    }
     match ctx.profile {
         WorldGen::Classic => gen_classic(coord, ctx, 1.0),
         WorldGen::Amplified => gen_classic(coord, ctx, 2.5),
@@ -263,6 +270,31 @@ mod tests {
         // y=8 must be grass; y=9 must be air.
         assert_eq!(chunk.get(0, 8, 0).0, 3);
         assert_eq!(chunk.get(0, 9, 0).0, 0);
+    }
+
+    /// W260 stage 1: every profile generates the sub-zero band
+    /// (chunk cy < 0) as sealed air - the y-0 bedrock floor above it
+    /// stays authoritative until stage 2 extends terrain to -64.
+    #[test]
+    fn negative_cy_chunks_are_all_air() {
+        for profile in [
+            WorldGen::Classic,
+            WorldGen::Flat,
+            WorldGen::Natural,
+            WorldGen::Nether,
+            WorldGen::Mc,
+        ] {
+            for cy in [-4, -1] {
+                let chunk = generate_chunk_at_ctx([3, cy, -7], &ctx_for(profile));
+                for (x, y, z) in itertools_xyz() {
+                    assert_eq!(
+                        chunk.get(x, y, z).0,
+                        0,
+                        "profile {profile:?} cy={cy} must be air at ({x},{y},{z})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

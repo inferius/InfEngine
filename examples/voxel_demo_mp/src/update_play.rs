@@ -464,7 +464,7 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 let dz = (rand() % (2 * r as u32 + 1)) as i32 - r;
                 let cx = app.player_pos.x.floor() as i32 + dx;
                 let cz = app.player_pos.z.floor() as i32 + dz;
-                let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+                let ceiling = crate::WORLD_MAX_Y;
                 if let Some(sy) =
                     app.surface_y_below(cx, cz, ceiling)
                 {

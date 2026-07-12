@@ -40,13 +40,14 @@ impl Voxel {
     /// the mob's current head, not the highest block in the
     /// column.
     pub(crate) fn surface_y_below(&self, wx: i32, wz: i32, max_y: i32) -> Option<i32> {
-        let top = max_y.min((CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1).max(0);
+        // W260: clamp to the full world span (-64..=319), not 0..=255.
+        let top = max_y.clamp(crate::WORLD_MIN_Y, crate::WORLD_MAX_Y);
         // W98: ground = first SOLID block, skipping air AND passable
         // decorations (F_AABB_PASS: grass, ferns, flowers, dead bush, ...).
         // Mobs were snapping their feet onto tall grass and bobbing over it;
         // now they stand on the real ground and walk through plants, like
         // the player physics (`voxel_is_solid_with_doors`).
-        (0..=top).rev().find(|&y| {
+        (crate::WORLD_MIN_Y..=top).rev().find(|&y| {
             let b = self.world.get([wx, y, wz]);
             !b.is_air() && !crate::block::block_is_aabb_passable(b)
         })
@@ -92,7 +93,7 @@ impl Voxel {
                 return Vec3::new(p[0], p[1], p[2]);
             }
         }
-        let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+        let ceiling = crate::WORLD_MAX_Y;
         // Square-spiral search out to 48 blocks. A column with a solid
         // top + 3 clear air blocks above (dry, roofless ground) wins.
         // The wider radius matters for the Natural profile, where the

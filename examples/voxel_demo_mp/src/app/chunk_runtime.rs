@@ -339,7 +339,8 @@ impl Voxel {
     /// bounded horizontally (view distance + unload ring).
     #[inline]
     pub fn vertical_chunk_range(_player_y: f32) -> (i32, i32) {
-        (0, VERTICAL_CHUNKS - 1)
+        // W260: the column spans MIN_CHUNK_Y..=top (MC 1.18+ depth).
+        (crate::MIN_CHUNK_Y, crate::MIN_CHUNK_Y + VERTICAL_CHUNKS - 1)
     }
 
     /// W28.7: Return (max_results, budget_ms) tuned for the current app

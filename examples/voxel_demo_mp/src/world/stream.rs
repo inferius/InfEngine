@@ -88,7 +88,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             // column (bottom-up so the worker's column cache warms
             // once and stays hot).
             let mut coords: Vec<ChunkCoord> = Vec::new();
-            for cy in 0..crate::VERTICAL_CHUNKS {
+            for cy in crate::MIN_CHUNK_Y..crate::MIN_CHUNK_Y + crate::VERTICAL_CHUNKS {
                 let col_cc = [cc[0], cy, cc[2]];
                 if vx.pending_set.contains(&col_cc)
                     && !vx.in_flight_chunks.contains(&col_cc)

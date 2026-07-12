@@ -13,7 +13,7 @@ use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
 use crate::Voxel;
 use crate::block::BLOCK_TYPES;
 use crate::net::{EditMsg, NetRole};
-use crate::{DAY_LENGTH_S, VERTICAL_CHUNKS, WorldGen};
+use crate::{DAY_LENGTH_S, WorldGen};
 
 /// `/day`. Snap day_time to mid-morning.
 pub(crate) fn cmd_day(
@@ -683,7 +683,7 @@ pub(crate) fn cmd_tree(
     .normalize_or_zero();
     let cx = (voxel.player_pos.x + fwd.x * 4.0).floor() as i32;
     let cz = (voxel.player_pos.z + fwd.z * 4.0).floor() as i32;
-    let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+    let ceiling = crate::WORLD_MAX_Y;
     let sy = voxel
         .surface_y_below(cx, cz, ceiling)
         .unwrap_or(voxel.player_pos.y.floor() as i32);

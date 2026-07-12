@@ -24,7 +24,7 @@
 use infengine_voxel::CHUNK_SIZE;
 
 use crate::net::{MobMsg, NetRole};
-use crate::{DAY_LENGTH_S, VERTICAL_CHUNKS, Voxel, day_night};
+use crate::{DAY_LENGTH_S, Voxel, day_night};
 
 use super::kinds::{
     KIND_CHICKEN, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
@@ -107,7 +107,7 @@ pub(crate) fn mobs_in_chunk(voxel: &Voxel, wpos: [i32; 3]) -> usize {
 /// Y. `None` means the column has no exposed surface within
 /// `VERTICAL_CHUNKS`.
 pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3], i32)> {
-    let ceiling = (CHUNK_SIZE as i32) * VERTICAL_CHUNKS - 1;
+    let ceiling = crate::WORLD_MAX_Y;
     let sy = voxel.surface_y_below(wx, wz, ceiling)?;
     let spawn_y = sy + 1;
     Some(([wx, spawn_y, wz], sy))

@@ -293,9 +293,16 @@ const PVP_REACH: f32 = 5.5;
 /// `CHUNK_SIZE` (=16) tall.
 ///
 /// W13.3: raised from 4 (64 blocks) to 16 (256 blocks) for MC parity.
-/// Old saves only have y=0..3; y=4..15 are treated as air-filled on
-/// first load so no regeneration happens for pre-W13 worlds.
-const VERTICAL_CHUNKS: i32 = 16;
+/// W260: raised to 24 (384 blocks, chunks -4..=19) for MC 1.18+
+/// parity - the world spans WORLD_MIN_Y..=WORLD_MAX_Y. Old saves
+/// only carry chunks the old range wrote; the new bands regenerate
+/// deterministically on first visit.
+const VERTICAL_CHUNKS: i32 = 24;
+/// The lowest chunk layer (`cy`) of the world (MC 1.18+: -4).
+const MIN_CHUNK_Y: i32 = -4;
+/// World-space block Y bounds (MC 1.18+: -64..=319).
+const WORLD_MIN_Y: i32 = MIN_CHUNK_Y * 16;
+const WORLD_MAX_Y: i32 = WORLD_MIN_Y + VERTICAL_CHUNKS * 16 - 1;
 /// Chunks within this Chebyshev distance of the player chunk are
 /// kept loaded; new ones get queued for generation.
 ///

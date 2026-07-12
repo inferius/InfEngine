@@ -3,8 +3,9 @@
 //! Covers:
 //! - W13.1: shuttering profile constants (RESULTS_PER_FRAME, NUM_WORKERS).
 //! - W13.2: ChunkSideEffect enum shape + WorkerResult carries side_effects.
-//! - W13.3: VERTICAL_CHUNKS = 16, initial build covers y=0..16,
-//!   missing high-y chunks (old saves) are treated as air.
+//! - W13.3 (updated by W260): VERTICAL_CHUNKS = 24 spanning chunk
+//!   ys -4..20 (world y -64..319, MC 1.18+ parity); missing chunk
+//!   files (old saves) are treated as air.
 //! - W13.4: frustum culling (via frustum module tests), VIEW_DISTANCE_MAX.
 
 #![cfg(test)]
@@ -169,34 +170,45 @@ fn snow_voxel_produces_snow_side_effect() {
 }
 
 // -----------------------------------------------------------------------
-// W13.3 - VERTICAL_CHUNKS = 16
+// W13.3 / W260 - VERTICAL_CHUNKS = 24 (world y -64..319)
 // -----------------------------------------------------------------------
 
-/// W13.3: vertical world height is 256 blocks (16 chunks of 16 voxels).
+/// W260: vertical world is 24 chunks spanning chunk ys -4..20
+/// (block y -64..319), matching MC 1.18+ world height.
 #[test]
-fn vertical_chunks_constant_is_16() {
+fn vertical_chunks_constant_is_24() {
     assert_eq!(
-        crate::VERTICAL_CHUNKS, 16,
-        "VERTICAL_CHUNKS must be 16 for MC parity (256-block world)"
+        crate::VERTICAL_CHUNKS, 24,
+        "VERTICAL_CHUNKS must be 24 for MC 1.18+ parity (384-block world)"
+    );
+    assert_eq!(crate::MIN_CHUNK_Y, -4, "world floor chunk must be -4");
+    assert_eq!(crate::WORLD_MIN_Y, -64, "world floor must be y -64");
+    assert_eq!(crate::WORLD_MAX_Y, 319, "world ceiling must be y 319");
+}
+
+/// W260: world height in blocks is CHUNK_SIZE * VERTICAL_CHUNKS = 384.
+#[test]
+fn world_height_is_384_blocks() {
+    use infengine_voxel::CHUNK_SIZE;
+    let height = CHUNK_SIZE as i32 * crate::VERTICAL_CHUNKS;
+    assert_eq!(height, 384, "world height must be 384 blocks");
+    assert_eq!(
+        crate::WORLD_MAX_Y - crate::WORLD_MIN_Y + 1,
+        height,
+        "min/max consts must span exactly the vertical chunk stack"
     );
 }
 
-/// W13.3: world height in blocks is CHUNK_SIZE * VERTICAL_CHUNKS = 256.
-#[test]
-fn world_height_is_256_blocks() {
-    use infengine_voxel::CHUNK_SIZE;
-    let height = CHUNK_SIZE as i32 * crate::VERTICAL_CHUNKS;
-    assert_eq!(height, 256, "world height must be 256 blocks");
-}
-
-/// W13.3: initial build covers y in 0..VERTICAL_CHUNKS.
-/// Old saves have y=0..3; the code must NOT regen y=4..15 from worldgen
-/// for chunks that are absent on disk - they should be treated as air.
+/// W13.3: initial build covers every vertical layer
+/// (MIN_CHUNK_Y..MIN_CHUNK_Y + VERTICAL_CHUNKS).
+/// Old saves have fewer layers on disk; the code must NOT regen the
+/// missing files from worldgen - they should be treated as air.
 #[test]
 fn initial_build_iterates_all_vertical_layers() {
-    // This test verifies that build_world's loop range equals
-    // 0..VERTICAL_CHUNKS by checking the constant directly.
-    // The actual build_world function uses `for cy in 0..VERTICAL_CHUNKS`
+    // This test verifies that build_world's loop range covers the
+    // whole stack by checking the constant directly. The actual
+    // build/stream loops use
+    // `for cy in MIN_CHUNK_Y..MIN_CHUNK_Y + VERTICAL_CHUNKS`
     // so this constant check is the canonical gate.
     const { assert!(crate::VERTICAL_CHUNKS >= 16) };
 }

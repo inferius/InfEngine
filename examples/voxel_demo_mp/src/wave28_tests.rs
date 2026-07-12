@@ -69,10 +69,14 @@ fn pending_chunk_equal_dist_breaks_tie_by_coord() {
 fn vertical_chunk_range_is_full_world_at_any_y() {
     for y in [0.0, 32.0, 128.0, 240.0, -8.0_f32] {
         let (cy_min, cy_max) = Voxel::vertical_chunk_range(y);
-        assert_eq!(cy_min, 0, "full columns start at cy 0 (y={y})");
+        assert_eq!(
+            cy_min,
+            crate::MIN_CHUNK_Y,
+            "full columns start at the world floor chunk (y={y})"
+        );
         assert_eq!(
             cy_max,
-            crate::VERTICAL_CHUNKS - 1,
+            crate::MIN_CHUNK_Y + crate::VERTICAL_CHUNKS - 1,
             "full columns end at the world top (y={y})"
         );
     }
