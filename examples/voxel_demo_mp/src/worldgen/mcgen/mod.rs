@@ -56,6 +56,7 @@ pub(crate) mod ore_vein;
 pub(crate) mod outpost;
 pub(crate) mod overworld;
 pub(crate) mod pyramid;
+pub(crate) mod ruined_portal;
 pub(crate) mod scattered;
 pub(crate) mod shipwreck;
 pub(crate) mod stronghold;

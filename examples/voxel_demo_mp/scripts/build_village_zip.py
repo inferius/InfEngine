@@ -44,6 +44,7 @@ for subtree in (
     "structure/pillager_outpost",
     "structure/shipwreck",
     "structure/underwater_ruin",
+    "structure/ruined_portal",
 ):
     for root, dirs, files in os.walk(os.path.join(src2, subtree)):
         for f in sorted(files):

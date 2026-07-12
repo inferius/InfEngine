@@ -270,6 +270,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::StrongholdLibrary => {
                                         &crate::loot::STRONGHOLD_LIBRARY
                                     }
+                                    crate::workers::ChestLootKind::RuinedPortal => {
+                                        &crate::loot::RUINED_PORTAL
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

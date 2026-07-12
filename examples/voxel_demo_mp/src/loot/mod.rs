@@ -684,6 +684,50 @@ pub(crate) const STRONGHOLD_LIBRARY: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/ruined_portal.json` (26.1.2).
+/// Golden gear drops UNenchanted; fire_charge / glistering melon /
+/// lodestone / enchanted_golden_apple etc. ride the name mapper.
+pub(crate) const RUINED_PORTAL: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 4,
+            rolls_max: 8,
+            entries: &[
+                counted("obsidian", 40, 1, 2),
+                counted("flint", 40, 1, 4),
+                counted("iron_nugget", 40, 9, 18),
+                one("flint_and_steel", 40),
+                one("fire_charge", 40),
+                one("golden_apple", 15),
+                counted("gold_nugget", 15, 4, 24),
+                one("golden_sword", 15),
+                one("golden_axe", 15),
+                one("golden_hoe", 15),
+                one("golden_shovel", 15),
+                one("golden_pickaxe", 15),
+                one("golden_boots", 15),
+                one("golden_chestplate", 15),
+                one("golden_helmet", 15),
+                one("golden_leggings", 15),
+                counted("glistering_melon_slice", 5, 4, 12),
+                one("golden_horse_armor", 5),
+                one("light_weighted_pressure_plate", 5),
+                counted("golden_carrot", 5, 4, 12),
+                one("clock", 5),
+                counted("gold_ingot", 5, 2, 8),
+                one("bell", 1),
+                one("enchanted_golden_apple", 1),
+                counted("gold_block", 1, 1, 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 1), counted("lodestone", 2, 1, 2)],
+        },
+    ],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

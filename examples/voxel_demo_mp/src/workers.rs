@@ -787,6 +787,7 @@ pub(crate) enum ChestLootKind {
     StrongholdCorridor,
     StrongholdCrossing,
     StrongholdLibrary,
+    RuinedPortal,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -835,6 +836,8 @@ pub(crate) fn chest_loot_kind(
                 ChestLootKind::StrongholdLibrary
             }
         }
+    } else if mcgen::ruined_portal::pos_in_ruined_portal(ctx, pos) {
+        ChestLootKind::RuinedPortal
     } else {
         ChestLootKind::SimpleDungeon
     }
