@@ -168,6 +168,22 @@ pub(crate) fn template(id: &str) -> Option<Rc<StructureTemplate>> {
     loaded
 }
 
+/// Every structure-template data id in the archive (test + audit
+/// helper - the runtime always asks by id).
+pub(crate) fn all_template_ids() -> Vec<String> {
+    let cursor = std::io::Cursor::new(VILLAGE_ZIP);
+    let Ok(mut ar) = zip::ZipArchive::new(cursor) else {
+        return Vec::new();
+    };
+    (0..ar.len())
+        .filter_map(|i| {
+            let name = ar.by_index(i).ok()?.name().to_string();
+            let p = name.strip_prefix("structure/")?.strip_suffix(".nbt")?;
+            Some(format!("minecraft:{p}"))
+        })
+        .collect()
+}
+
 fn load_template(id: &str) -> Option<StructureTemplate> {
     let path = format!("structure/{}.nbt", strip_ns(id));
     let bytes = zip_entry(&path)?;
