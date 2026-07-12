@@ -55,5 +55,6 @@ pub(crate) mod template;
 pub(crate) mod terrain;
 pub(crate) mod trees;
 pub(crate) mod vegetation;
+pub(crate) mod village;
 pub(crate) mod village_data;
 pub(crate) mod vines;
