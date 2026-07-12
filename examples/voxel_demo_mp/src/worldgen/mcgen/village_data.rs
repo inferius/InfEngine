@@ -94,7 +94,13 @@ pub(crate) struct ListOverlay {
 pub(crate) enum ElementKind {
     /// `legacy_single_pool_element` - one template, either anchored
     /// rigidly to its joint or dropped onto the terrain heightmap.
-    Single { location: String, terrain_matching: bool },
+    /// `processors` is the element's processor-list REFERENCE (W261:
+    /// the ancient-city degradation rules run per cell at carve).
+    Single {
+        location: String,
+        terrain_matching: bool,
+        processors: Option<String>,
+    },
     /// `list_pool_element` - templates stacked at one anchor. The
     /// FIRST defines the box + jigsaws (`ListPoolElement` delegates
     /// both to element 0); the rest overlay at carve time (the
@@ -103,6 +109,7 @@ pub(crate) enum ElementKind {
         first: String,
         overlays: Vec<ListOverlay>,
         terrain_matching: bool,
+        processors: Option<String>,
     },
     /// `feature_pool_element` - a placed feature (village trees /
     /// pile decorations); carried through for a later wave.
@@ -157,11 +164,20 @@ fn load_pool(id: &str) -> Option<TemplatePool> {
 
 fn decode_element(e: &ElementJson) -> ElementKind {
     let terrain_matching = e.projection.as_deref() == Some("terrain_matching");
+    // Processor-list REFERENCE only (inline `{processors: []}`
+    // objects carry nothing the carve pass needs).
+    let proc_ref = |el: &ElementJson| -> Option<String> {
+        el.processors
+            .as_ref()
+            .and_then(|p| p.as_str())
+            .map(String::from)
+    };
     match e.element_type.as_str() {
         "minecraft:legacy_single_pool_element" | "minecraft:single_pool_element" => {
             ElementKind::Single {
                 location: e.location.clone().unwrap_or_default(),
                 terrain_matching,
+                processors: proc_ref(e),
             }
         }
         "minecraft:list_pool_element" => {
@@ -193,6 +209,7 @@ fn decode_element(e: &ElementJson) -> ElementKind {
                 first: first.location.clone().unwrap_or_default(),
                 overlays,
                 terrain_matching,
+                processors: proc_ref(first),
             }
         }
         "minecraft:feature_pool_element" => ElementKind::Feature {
@@ -200,6 +217,115 @@ fn decode_element(e: &ElementJson) -> ElementKind {
         },
         _ => ElementKind::Empty,
     }
+}
+
+/// W261: one decoded per-cell processor program - the subset the
+/// carve pass executes (`StructureProcessor` list order):
+/// `block_rot` first (a failed keep roll SKIPS the cell, leaving the
+/// world block - the ruin holes), then the `rule` entries (first
+/// matching `random_block_match` replaces the block). Rule blocks
+/// resolve to engine ids up front; unresolvable names drop their
+/// rule (warn-once via the blockmap's own logging path).
+#[derive(Debug, Default)]
+pub(crate) struct CellProcessors {
+    /// `block_rot` keep probability (1.0 = keep everything).
+    pub(crate) rot_integrity: f32,
+    /// Engine ids the rot applies to (empty = every block).
+    pub(crate) rottable: Vec<u16>,
+    /// `rule` rows: (input engine id, probability, output engine id).
+    pub(crate) rules: Vec<(u16, f32, u16)>,
+}
+
+/// Load + cache the carve-executable processors of a processor list.
+pub(crate) fn cell_processors(id: &str) -> Rc<CellProcessors> {
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Rc<CellProcessors>>> =
+            RefCell::new(HashMap::new());
+    }
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(id).cloned()) {
+        return hit;
+    }
+    let built = Rc::new(load_cell_processors(id).unwrap_or_default());
+    CACHE.with(|c| c.borrow_mut().insert(id.to_string(), built.clone()));
+    built
+}
+
+fn load_cell_processors(id: &str) -> Option<CellProcessors> {
+    use super::features::block_id_by_name;
+    let path = format!("worldgen/processor_list/{}.json", strip_ns(id));
+    let bytes = zip_entry(&path)?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let block_id = |name: &str| -> Option<u16> {
+        if strip_ns(name) == "air" {
+            return Some(0);
+        }
+        block_id_by_name(name)
+    };
+    let mut out = CellProcessors { rot_integrity: 1.0, ..Default::default() };
+    for p in json.get("processors")?.as_array()? {
+        match p.get("processor_type").and_then(|v| v.as_str()) {
+            Some("minecraft:block_rot") => {
+                out.rot_integrity = p
+                    .get("integrity")
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as f32)
+                    .unwrap_or(1.0);
+                if let Some(tag) = p.get("rottable_blocks").and_then(|v| v.as_str()) {
+                    // `#minecraft:<tag>` -> tags/block/<tag>.json
+                    // (packed alongside the processor lists).
+                    let tag_path =
+                        format!("tags/block/{}.json", strip_ns(tag.trim_start_matches('#')));
+                    if let Some(tb) = zip_entry(&tag_path)
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    {
+                        out.rottable = tb
+                            .get("values")
+                            .and_then(|v| v.as_array())
+                            .map(|vals| {
+                                vals.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .filter_map(block_id)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                    }
+                }
+            }
+            Some("minecraft:rule") => {
+                for rule in p.get("rules").and_then(|v| v.as_array()).unwrap_or(&Vec::new()) {
+                    let ip = rule.get("input_predicate");
+                    if ip.and_then(|v| v.get("predicate_type")).and_then(|v| v.as_str())
+                        != Some("minecraft:random_block_match")
+                    {
+                        continue;
+                    }
+                    let Some(input) = ip
+                        .and_then(|v| v.get("block"))
+                        .and_then(|v| v.as_str())
+                        .and_then(block_id)
+                    else {
+                        continue;
+                    };
+                    let prob = ip
+                        .and_then(|v| v.get("probability"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1.0) as f32;
+                    let Some(output) = rule
+                        .get("output_state")
+                        .and_then(|v| v.get("Name"))
+                        .and_then(|v| v.as_str())
+                        .and_then(block_id)
+                    else {
+                        continue;
+                    };
+                    out.rules.push((input, prob, output));
+                }
+            }
+            // protected_blocks etc.: nothing the carve consults.
+            _ => {}
+        }
+    }
+    Some(out)
 }
 
 /// The `block_rot` keep-probability of a processor list in the zip
@@ -337,6 +463,20 @@ mod tests {
         }
     }
 
+    /// W261: the ancient-city degradation lists decode to the carve
+    /// program - block_rot 0.95 over the replaceable tag + the three
+    /// crack/snuff rules.
+    #[test]
+    fn ancient_city_degradation_processors_parse() {
+        let p = cell_processors("minecraft:ancient_city_generic_degradation");
+        assert!((p.rot_integrity - 0.95).abs() < 1e-6, "rot {}", p.rot_integrity);
+        assert!(p.rottable.len() >= 8, "rottable tag ids: {}", p.rottable.len());
+        assert_eq!(p.rules.len(), 3, "crack bricks/tiles + lantern-snuff rules");
+        let start = cell_processors("minecraft:ancient_city_start_degradation");
+        assert!((start.rot_integrity - 1.0).abs() < 1e-6, "start list has no rot");
+        assert_eq!(start.rules.len(), 3);
+    }
+
     /// Packaging integrity: every Single element of every village
     /// pool must resolve to a template inside the zip, and every
     /// pool referenced by a jigsaw socket of those templates must
@@ -357,11 +497,19 @@ mod tests {
             }
         }
         assert!(pool_ids.len() > 60, "village pools packaged: {}", pool_ids.len());
+        // Vanilla data bug: this pool entry references an NBT that
+        // 26.1.2 does not ship (MC logs an error + skips it at
+        // runtime, exactly like our solver's template miss path).
+        const KNOWN_MISSING_TEMPLATES: &[&str] =
+            &["minecraft:ancient_city/walls/intact_horizontal_wall_stairs_5"];
         let mut checked_templates = 0usize;
         for id in &pool_ids {
             let p = pool(id).unwrap_or_else(|| panic!("pool {id} must parse"));
             for e in &p.elements {
                 if let ElementKind::Single { location, .. } = &e.kind {
+                    if KNOWN_MISSING_TEMPLATES.contains(&location.as_str()) {
+                        continue;
+                    }
                     let t = template(location)
                         .unwrap_or_else(|| panic!("{id}: template {location} missing"));
                     checked_templates += 1;

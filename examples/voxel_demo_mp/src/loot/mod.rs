@@ -783,6 +783,74 @@ pub(crate) const WOODLAND_MANSION: LootTable = LootTable {
     ],
 };
 
+/// `data/minecraft/loot_table/chests/ancient_city.json` (26.1.2).
+/// Unmapped items skip via the roller (compass, leads, horse armor,
+/// music discs / disc fragments, amethyst/echo shards, candles,
+/// experience bottles, potions, smithing templates...); `book` drops
+/// unenchanted, `diamond_hoe`/armor drop unenchanted + undamaged.
+pub(crate) const ANCIENT_CITY: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 5,
+            rolls_max: 10,
+            entries: &[
+                counted("enchanted_golden_apple", 1, 1, 2),
+                one("music_disc_otherside", 1),
+                one("compass", 2),
+                counted("sculk_catalyst", 2, 1, 2),
+                one("diamond_hoe", 2),
+                one("lead", 2),
+                one("diamond_horse_armor", 2),
+                counted("leather", 2, 1, 5),
+                one("music_disc_13", 2),
+                one("music_disc_cat", 2),
+                one("diamond_leggings", 2),
+                one("book", 3),
+                counted("sculk", 3, 4, 10),
+                counted("sculk_sensor", 3, 1, 3),
+                counted("candle", 3, 1, 4),
+                counted("amethyst_shard", 3, 1, 15),
+                counted("experience_bottle", 3, 1, 3),
+                counted("glow_berries", 3, 1, 15),
+                one("iron_leggings", 3),
+                counted("echo_shard", 4, 1, 3),
+                counted("disc_fragment_5", 4, 1, 3),
+                counted("potion", 5, 1, 3),
+                one("book", 5),
+                counted("book", 5, 3, 10),
+                counted("bone", 5, 1, 15),
+                counted("soul_torch", 5, 1, 15),
+                counted("coal", 7, 6, 15),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("", 75),
+                one("ward_armor_trim_smithing_template", 4),
+                one("silence_armor_trim_smithing_template", 1),
+            ],
+        },
+    ],
+};
+
+/// `data/minecraft/loot_table/chests/ancient_city_ice_box.json`
+/// (26.1.2). `suspicious_stew` drops without its stew effects.
+pub(crate) const ANCIENT_CITY_ICE_BOX: LootTable = LootTable {
+    pools: &[LootPool {
+        rolls_min: 4,
+        rolls_max: 10,
+        entries: &[
+            counted("suspicious_stew", 1, 2, 6),
+            counted("golden_carrot", 1, 1, 10),
+            counted("baked_potato", 1, 1, 10),
+            counted("packed_ice", 2, 2, 6),
+            counted("snowball", 4, 2, 6),
+        ],
+    }],
+};
+
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).

@@ -276,6 +276,12 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::WoodlandMansion => {
                                         &crate::loot::WOODLAND_MANSION
                                     }
+                                    crate::workers::ChestLootKind::AncientCity => {
+                                        &crate::loot::ANCIENT_CITY
+                                    }
+                                    crate::workers::ChestLootKind::AncientCityIceBox => {
+                                        &crate::loot::ANCIENT_CITY_ICE_BOX
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

@@ -436,6 +436,14 @@ fn mc_bulk_block(wx: i32, wy: i32, wz: i32, min_y: i32) -> BlockId {
     }
 }
 
+/// W261: `OverworldBiomeBuilder.isDeepDarkRegion` at a world cell -
+/// the 3D cave-biome check (erosion + depth) the ancient city's
+/// `has_structure/deep_dark` gate needs. Replay-invariant (pure
+/// noise evals).
+pub(crate) fn mc_is_deep_dark(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> bool {
+    overworld_for(ctx.effective_seed()).is_deep_dark(wx, wy, wz)
+}
+
 /// W220: PRE-DECORATION solidity at any world cell, from the cached
 /// column bitsets. Replay-invariant (every chunk that consults a shared
 /// cell agrees) - the lava-lake border checks key on this. W226.1:

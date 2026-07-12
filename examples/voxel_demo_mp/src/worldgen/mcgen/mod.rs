@@ -28,6 +28,7 @@
 //! pipeline wires everything up.
 #![allow(dead_code)]
 
+pub(crate) mod ancient_city;
 pub(crate) mod aquatic_features;
 pub(crate) mod aquifer;
 pub(crate) mod bamboo;

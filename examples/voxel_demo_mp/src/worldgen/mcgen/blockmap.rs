@@ -131,6 +131,10 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "potted_red_tulip",
     "potted_white_tulip",
     "tnt",
+    // W261 ancient city decoration (the redstone lab's piston head,
+    // the skull piles).
+    "piston_head",
+    "skeleton_skull",
 ];
 
 fn log_unmapped(name: &str) {

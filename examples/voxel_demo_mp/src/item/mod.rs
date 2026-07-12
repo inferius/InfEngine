@@ -2467,6 +2467,23 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 793, name: "spawner", display: Some("Monster Spawner"), places: Some(793), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     // W243 - cobweb (mineshaft spider corridors).
     ItemType { id: 794, name: "cobweb", display: Some("Cobweb"), places: Some(794), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W261 - the ancient-city deepslate building family.
+    ItemType { id: 795, name: "chiseled_deepslate", display: Some("Chiseled Deepslate"), places: Some(795), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 796, name: "cracked_deepslate_bricks", display: Some("Cracked Deepslate Bricks"), places: Some(796), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 797, name: "cracked_deepslate_tiles", display: Some("Cracked Deepslate Tiles"), places: Some(797), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 798, name: "reinforced_deepslate", display: Some("Reinforced Deepslate"), places: Some(798), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 799, name: "deepslate_brick_stairs", display: Some("Deepslate Brick Stairs"), places: Some(799), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 800, name: "deepslate_brick_slab", display: Some("Deepslate Brick Slab"), places: Some(800), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 801, name: "deepslate_brick_wall", display: Some("Deepslate Brick Wall"), places: Some(801), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 802, name: "deepslate_tile_stairs", display: Some("Deepslate Tile Stairs"), places: Some(802), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 803, name: "deepslate_tile_slab", display: Some("Deepslate Tile Slab"), places: Some(803), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 804, name: "deepslate_tile_wall", display: Some("Deepslate Tile Wall"), places: Some(804), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 805, name: "polished_deepslate_stairs", display: Some("Polished Deepslate Stairs"), places: Some(805), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 806, name: "polished_deepslate_slab", display: Some("Polished Deepslate Slab"), places: Some(806), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 807, name: "polished_deepslate_wall", display: Some("Polished Deepslate Wall"), places: Some(807), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 808, name: "cobbled_deepslate_stairs", display: Some("Cobbled Deepslate Stairs"), places: Some(808), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 809, name: "cobbled_deepslate_slab", display: Some("Cobbled Deepslate Slab"), places: Some(809), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 810, name: "cobbled_deepslate_wall", display: Some("Cobbled Deepslate Wall"), places: Some(810), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

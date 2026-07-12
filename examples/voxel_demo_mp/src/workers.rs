@@ -789,6 +789,8 @@ pub(crate) enum ChestLootKind {
     StrongholdLibrary,
     RuinedPortal,
     WoodlandMansion,
+    AncientCity,
+    AncientCityIceBox,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -841,6 +843,11 @@ pub(crate) fn chest_loot_kind(
         ChestLootKind::RuinedPortal
     } else if mcgen::mansion::pos_in_mansion(ctx, pos) {
         ChestLootKind::WoodlandMansion
+    } else if let Some(k) = mcgen::ancient_city::city_chest_at(ctx, pos) {
+        match k {
+            mcgen::ancient_city::CityChest::IceBox => ChestLootKind::AncientCityIceBox,
+            mcgen::ancient_city::CityChest::Regular => ChestLootKind::AncientCity,
+        }
     } else {
         ChestLootKind::SimpleDungeon
     }

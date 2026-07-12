@@ -165,6 +165,43 @@ fn overlay_keeps(seed: u32, wx: i32, wy: i32, wz: i32, integrity: f32) -> bool {
     roll < integrity
 }
 
+/// W261: run a piece's processor list on one mapped cell (the
+/// ancient-city degradation): `block_rot` keep roll first (`None` =
+/// the cell is dropped, the world block stays - the ruin holes),
+/// then the first matching `random_block_match` rule replaces the
+/// block (cracked bricks / snuffed soul lanterns). Pure per (seed,
+/// world cell), rolls sequential within the cell.
+const SALT_CELL_PROC: u64 = 0xD4E6_00E1;
+
+fn apply_cell_processors(
+    seed: u32,
+    list: &str,
+    pos: [i32; 3],
+    id: u16,
+) -> Option<u16> {
+    let procs = village_data::cell_processors(list);
+    if procs.rot_integrity >= 1.0 && procs.rules.is_empty() {
+        return Some(id);
+    }
+    let mut r = SplitMix64::new(
+        stream_seed(seed, pos[0], pos[2], SALT_CELL_PROC)
+            ^ (pos[1] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    );
+    let mut next_f = || (r.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
+    if procs.rot_integrity < 1.0
+        && (procs.rottable.is_empty() || procs.rottable.contains(&id))
+        && next_f() > procs.rot_integrity
+    {
+        return None;
+    }
+    for (input, prob, output) in &procs.rules {
+        if *input == id && next_f() < *prob {
+            return Some(*output);
+        }
+    }
+    Some(id)
+}
+
 /// Write every piece cell that lands in this 16^3 cube. Shared by the
 /// village and outpost passes (identical carve semantics).
 pub(crate) fn carve_layout(
@@ -191,13 +228,16 @@ pub(crate) fn carve_layout(
         if piece.terrain_matching {
             // The drape can move columns anywhere on the terrain:
             // widen the y test to the full column.
-            real_bb.y0 = 0;
-            real_bb.y1 = 255;
+            real_bb.y0 = -64;
+            real_bb.y1 = 319;
         }
         // Foundations extend below the box - include them in the clip
         // test so a cube under a house still writes the dirt legs.
+        // (W261: clamp at the REAL world floor -64 - the old .max(0)
+        // degenerated the box for sub-zero pieces and skipped every
+        // ancient-city cell.)
         let test_bb = super::mineshaft::Bb {
-            y0: (real_bb.y0 - FOUNDATION_MAX).max(0),
+            y0: (real_bb.y0 - FOUNDATION_MAX).max(-64),
             ..real_bb
         };
         if !test_bb.intersects(&cube) {
@@ -226,7 +266,19 @@ pub(crate) fn carve_layout(
                 Some(j) => map_state_string(&j.final_state),
                 None => map_state(&t.palette[cell.state]),
             };
-            if let Mapped::Id(id) = mapped {
+            if let Mapped::Id(mut id) = mapped {
+                // W261: the element's processor list (degradation).
+                if let Some(list) = &piece.processors {
+                    match apply_cell_processors(
+                        ctx.effective_seed(),
+                        list,
+                        [wx, wy, wz],
+                        id,
+                    ) {
+                        Some(out) => id = out,
+                        None => continue,
+                    }
+                }
                 chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
             }
         }

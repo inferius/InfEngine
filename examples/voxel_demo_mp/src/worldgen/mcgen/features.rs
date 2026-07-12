@@ -906,6 +906,9 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W219: the floor disks share step 6 (they run after the ore
     // entries in every biome list).
     super::misc_features::place_disks(chunk, coord, ctx, origin);
+    // W261: ancient city (its structure JSON steps it at
+    // underground_decoration, 7 - after the ore step).
+    super::ancient_city::place_ancient_cities(chunk, coord, ctx, origin);
     // W223: underwater magma patches close step 6.
     super::aquatic_features::place_underwater_magma(chunk, coord, ctx, origin);
     // W223: glow lichen (underground_decoration, step 7).

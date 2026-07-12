@@ -20,10 +20,12 @@ def norm(p, base):
     return os.path.relpath(p, base).replace(os.sep, "/")
 
 
-# Template-pool subtrees the engine ports (W245 village, W251 outpost).
+# Template-pool subtrees the engine ports (W245 village, W251 outpost,
+# W261 ancient city).
 for subtree in (
     "worldgen/template_pool/village",
     "worldgen/template_pool/pillager_outpost",
+    "worldgen/template_pool/ancient_city",
 ):
     for root, dirs, files in os.walk(os.path.join(src, subtree)):
         for f in sorted(files):
@@ -46,6 +48,7 @@ for subtree in (
     "structure/underwater_ruin",
     "structure/ruined_portal",
     "structure/woodland_mansion",
+    "structure/ancient_city",
 ):
     for root, dirs, files in os.walk(os.path.join(src2, subtree)):
         for f in sorted(files):
@@ -60,6 +63,12 @@ for root, dirs, files in os.walk(os.path.join(src, "worldgen/processor_list")):
         p = os.path.join(root, f)
         zf.write(p, norm(p, src))
         count["proc"] += 1
+
+# W261: block tags the processor lists reference (block_rot
+# rottable_blocks sets).
+for tag in ("tags/block/ancient_city_replaceable.json",):
+    zf.write(os.path.join(src, tag), tag)
+    count["proc"] += 1
 
 zf.close()
 print(count, "size:", os.path.getsize(out))

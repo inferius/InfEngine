@@ -323,17 +323,22 @@ pub(crate) struct PlacedPiece {
     /// W251: list-element overlays carved over `template` at the same
     /// anchor (empty for plain single elements).
     pub(crate) overlays: Vec<ListOverlay>,
+    /// W261: the element's processor-list reference (the ancient-city
+    /// degradation rules) - applied per cell at carve time.
+    pub(crate) processors: Option<String>,
 }
 
-/// The template + overlays a pool element resolves to (`None` for
-/// feature/empty kinds, which never become pieces).
-fn element_parts(kind: ElementKind) -> Option<(String, bool, Vec<ListOverlay>)> {
+/// The template + overlays + processors a pool element resolves to
+/// (`None` for feature/empty kinds, which never become pieces).
+type ElementParts = (String, bool, Vec<ListOverlay>, Option<String>);
+
+fn element_parts(kind: ElementKind) -> Option<ElementParts> {
     match kind {
-        ElementKind::Single { location, terrain_matching } => {
-            Some((location, terrain_matching, Vec::new()))
+        ElementKind::Single { location, terrain_matching, processors } => {
+            Some((location, terrain_matching, Vec::new(), processors))
         }
-        ElementKind::List { first, overlays, terrain_matching } => {
-            Some((first, terrain_matching, overlays))
+        ElementKind::List { first, overlays, terrain_matching, processors } => {
+            Some((first, terrain_matching, overlays, processors))
         }
         _ => None,
     }
@@ -353,6 +358,22 @@ fn first_free_height(ctx: &WorldgenCtx, x: i32, z: i32) -> i32 {
     mc_floor_at(ctx, x, z) + 1
 }
 
+/// W261: the per-structure jigsaw configuration (`JigsawStructure`
+/// JSON fields the solver honours beyond depth).
+pub(crate) struct SolveCfg {
+    /// The structure `size` (villages 6, outposts / ancient city 7).
+    pub(crate) max_depth: i32,
+    /// `max_distance_from_center` horizontal (80 default, city 116).
+    pub(crate) max_distance: i32,
+    /// `Some(y)` = absolute `start_height`, no heightmap projection
+    /// (ancient city -27); `None` = project the start piece onto the
+    /// surface (`project_start_to_heightmap`, villages / outposts).
+    pub(crate) start_y: Option<i32>,
+    /// `start_jigsaw_name`: shift the start template so its jigsaw
+    /// with this name lands on the anchor column (city_anchor).
+    pub(crate) start_jigsaw: Option<&'static str>,
+}
+
 /// Solve one jigsaw layout anchored at `start_chunk` from
 /// `start_pool`, recursing `max_depth` deep (the structure JSON
 /// `size`: villages 6, outposts 7). Deterministic in (ctx seed,
@@ -364,23 +385,65 @@ pub(crate) fn solve(
     max_depth: i32,
     rng: &mut SplitMix64,
 ) -> Option<Vec<PlacedPiece>> {
+    solve_cfg(
+        ctx,
+        start_chunk,
+        start_pool,
+        &SolveCfg {
+            max_depth,
+            max_distance: VILLAGE_MAX_DISTANCE,
+            start_y: None,
+            start_jigsaw: None,
+        },
+        rng,
+    )
+}
+
+/// [`solve`] with the full config (`JigsawPlacement.addPieces`).
+pub(crate) fn solve_cfg(
+    ctx: &WorldgenCtx,
+    start_chunk: [i32; 2],
+    start_pool: &str,
+    cfg: &SolveCfg,
+    rng: &mut SplitMix64,
+) -> Option<Vec<PlacedPiece>> {
     let cs = infengine_voxel::CHUNK_SIZE as i32;
-    let anchor = [start_chunk[0] * cs, 0, start_chunk[1] * cs];
+    let anchor = [start_chunk[0] * cs, cfg.start_y.unwrap_or(0), start_chunk[1] * cs];
     let center_rotation = next_int(rng, 4) as u8;
     let start = village_data::pool(start_pool)?;
-    let (location, terrain_matching, center_overlays) =
+    let (location, terrain_matching, center_overlays, center_processors) =
         element_parts(random_element(&start, rng)?)?;
     let center_template = village_data::template(&location)?;
-    let raw_bb = template_bb(center_template.size, anchor, center_rotation);
+    // start_jigsaw_name: `position.subtract(localAnchorPosition)` -
+    // the named jigsaw (random among matches via the shuffle) lands
+    // exactly on the anchor.
+    let position = if let Some(name) = cfg.start_jigsaw {
+        let a = shuffled_sockets(&center_template, anchor, center_rotation, rng)
+            .into_iter()
+            .find(|s| s.info.name == name)?;
+        [
+            anchor[0] - (a.pos[0] - anchor[0]),
+            anchor[1] - (a.pos[1] - anchor[1]),
+            anchor[2] - (a.pos[2] - anchor[2]),
+        ]
+    } else {
+        anchor
+    };
+    let raw_bb = template_bb(center_template.size, position, center_rotation);
     let center_x = (raw_bb.x0 + raw_bb.x1) / 2;
     let center_z = (raw_bb.z0 + raw_bb.z1) / 2;
-    // project_start_to_heightmap WORLD_SURFACE_WG + groundLevelDelta 1
-    // (legacy elements): the piece floor line lands on the surface.
+    // groundLevelDelta 1 (every pool element); with a heightmap
+    // projection the piece floor line lands on the surface, an
+    // absolute start keeps `bottomY = adjustedPosition.getY()`.
     let ground_level_delta = 1;
-    let bottom_y = first_free_height(ctx, center_x, center_z);
+    let bottom_y = if cfg.start_y.is_some() {
+        position[1]
+    } else {
+        first_free_height(ctx, center_x, center_z)
+    };
     let dy = bottom_y - (raw_bb.y0 + ground_level_delta);
     let center_bb = raw_bb.moved(0, dy, 0);
-    let center_pos = [anchor[0], anchor[1] + dy, anchor[2]];
+    let center_pos = [position[0], position[1] + dy, position[2]];
     let center_y = bottom_y;
 
     let mut pieces = vec![PlacedPiece {
@@ -391,16 +454,19 @@ pub(crate) fn solve(
         terrain_matching,
         ground_level_delta,
         overlays: center_overlays,
+        processors: center_processors,
     }];
 
     let world_free = Rc::new(RefCell::new(FreeSpace {
         allowed: Bb {
-            x0: center_x - VILLAGE_MAX_DISTANCE,
-            y0: 0,
-            z0: center_z - VILLAGE_MAX_DISTANCE,
-            x1: center_x + VILLAGE_MAX_DISTANCE,
-            y1: 255,
-            z1: center_z + VILLAGE_MAX_DISTANCE,
+            x0: center_x - cfg.max_distance,
+            // The single-int MaxDistance form leaves the vertical
+            // unbounded - the world band clamps it (W260: -64..319).
+            y0: -64,
+            z0: center_z - cfg.max_distance,
+            x1: center_x + cfg.max_distance,
+            y1: 319,
+            z1: center_z + cfg.max_distance,
         },
         taken: vec![center_bb],
     }));
@@ -430,7 +496,7 @@ pub(crate) fn solve(
             entry,
             &mut queue,
             &mut seq,
-            max_depth,
+            cfg.max_depth,
             rng,
         );
     }
@@ -501,19 +567,20 @@ fn try_placing_children(
         }
 
         for candidate in candidates {
-            let (location, target_matching, target_overlays) = match candidate {
-                // An explicit empty element terminates the socket.
-                ElementKind::Empty => break,
-                // Feature elements (street trees) consume the socket;
-                // the tree visual is a later wave (module docs).
-                ElementKind::Feature { .. } => continue 'sockets,
-                ElementKind::Single { location, terrain_matching } => {
-                    (location, terrain_matching, Vec::new())
-                }
-                ElementKind::List { first, overlays, terrain_matching } => {
-                    (first, terrain_matching, overlays)
-                }
-            };
+            let (location, target_matching, target_overlays, target_processors) =
+                match candidate {
+                    // An explicit empty element terminates the socket.
+                    ElementKind::Empty => break,
+                    // Feature elements (street trees) consume the
+                    // socket; the tree visual is a later wave.
+                    ElementKind::Feature { .. } => continue 'sockets,
+                    ElementKind::Single { location, terrain_matching, processors } => {
+                        (location, terrain_matching, Vec::new(), processors)
+                    }
+                    ElementKind::List { first, overlays, terrain_matching, processors } => {
+                        (first, terrain_matching, overlays, processors)
+                    }
+                };
             let Some(target_template) = village_data::template(&location) else {
                 continue;
             };
@@ -613,6 +680,7 @@ fn try_placing_children(
                         terrain_matching: target_matching,
                         ground_level_delta: target_gld,
                         overlays: target_overlays.clone(),
+                        processors: target_processors.clone(),
                     });
                     if entry.depth < max_depth {
                         queue.push(QueueEntry {

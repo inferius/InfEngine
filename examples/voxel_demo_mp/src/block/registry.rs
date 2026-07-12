@@ -3168,4 +3168,105 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     // the other cross plants, but placeable + click-targetable so the
     // player can harvest it.
     BlockType { id: 794, name: "cobweb", color: [0.95, 0.95, 0.95], transparent: true, flags: F_AABB_PASS | F_WASHABLE, top: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true }, bottom: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true }, sides: TileSpec { col: 0, row: 0, files: &["cobweb.png"], keep_alpha: true } },
+    // ============================================================
+    // W261 - the ancient-city deepslate building family (the city
+    // templates' palette worklist). Shaped blocks route through the
+    // MC JSON model pipeline via their name_map rows.
+    // ============================================================
+    BlockType {
+        id: 795, name: "chiseled_deepslate", color: [0.30, 0.30, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chiseled_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chiseled_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chiseled_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 796, name: "cracked_deepslate_bricks", color: [0.30, 0.30, 0.32], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 797, name: "cracked_deepslate_tiles", color: [0.26, 0.26, 0.28], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_tiles.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_tiles.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cracked_deepslate_tiles.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 798, name: "reinforced_deepslate", color: [0.34, 0.36, 0.34], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["reinforced_deepslate_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["reinforced_deepslate_bottom.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["reinforced_deepslate_side.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 799, name: "deepslate_brick_stairs", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 800, name: "deepslate_brick_slab", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 801, name: "deepslate_brick_wall", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 802, name: "deepslate_tile_stairs", color: [0.28, 0.28, 0.30], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 803, name: "deepslate_tile_slab", color: [0.28, 0.28, 0.30], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 804, name: "deepslate_tile_wall", color: [0.28, 0.28, 0.30], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["deepslate_tiles.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 805, name: "polished_deepslate_stairs", color: [0.30, 0.30, 0.32], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 806, name: "polished_deepslate_slab", color: [0.30, 0.30, 0.32], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 807, name: "polished_deepslate_wall", color: [0.30, 0.30, 0.32], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 808, name: "cobbled_deepslate_stairs", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 809, name: "cobbled_deepslate_slab", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 810, name: "cobbled_deepslate_wall", color: [0.32, 0.32, 0.34], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cobbled_deepslate.png"], keep_alpha: false },
+    },
 ];

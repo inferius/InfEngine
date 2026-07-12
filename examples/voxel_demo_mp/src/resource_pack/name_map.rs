@@ -177,6 +177,19 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 80, block: "glass_pane",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 81, block: "iron_bars",           top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 82, block: "cobblestone_wall",    top: "", bottom: "", sides: "" },
+    // W261 - the ancient-city deepslate shapes (JSON pipeline by name).
+    BlockNameMap { infengine_id: 799, block: "deepslate_brick_stairs",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 800, block: "deepslate_brick_slab",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 801, block: "deepslate_brick_wall",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 802, block: "deepslate_tile_stairs",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 803, block: "deepslate_tile_slab",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 804, block: "deepslate_tile_wall",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 805, block: "polished_deepslate_stairs",  top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 806, block: "polished_deepslate_slab",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 807, block: "polished_deepslate_wall",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 808, block: "cobbled_deepslate_stairs",   top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 809, block: "cobbled_deepslate_slab",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 810, block: "cobbled_deepslate_wall",     top: "", bottom: "", sides: "" },
     // W35.3 - Stone variants + wood variants + wool + building blocks.
     BlockNameMap { infengine_id: 83, block: "granite",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 84, block: "diorite",          top: "", bottom: "", sides: "" },
@@ -862,6 +875,9 @@ mod tests {
             12,  // raw_beef - item only
             35,  // red_bed - entity model, no block textures
             68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, // shape blocks
+            // W261: deepslate shape blocks - blockstate names, textures
+            // via the JSON model refs.
+            799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809, 810,
             543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
             568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)
