@@ -457,7 +457,7 @@ pub(crate) fn block_id_by_name(name: &str) -> Option<u16> {
 /// anchor reaches below -64, e.g. diamond's above_bottom -80, keeps
 /// its MC shape and loses the out-of-world tail).
 #[derive(Clone, Copy, Debug)]
-enum Anchor {
+pub(crate) enum Anchor {
     Absolute(i32),
     AboveBottom(i32),
     BelowTop(i32),
@@ -467,7 +467,7 @@ const ENGINE_BOTTOM: i32 = -64;
 const ENGINE_TOP: i32 = 319;
 
 impl Anchor {
-    fn parse(v: &serde_json::Value) -> Anchor {
+    pub(crate) fn parse(v: &serde_json::Value) -> Anchor {
         if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) {
             Anchor::Absolute(a as i32)
         } else if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) {
@@ -478,25 +478,30 @@ impl Anchor {
             panic!("unknown height anchor: {v}")
         }
     }
-    fn resolve(self) -> i32 {
+    /// W268: anchors resolve against a DIMENSION band (the nether is
+    /// 0..127); the overworld helpers pass the engine band.
+    pub(crate) fn resolve_in(self, bottom: i32, top: i32) -> i32 {
         match self {
             Anchor::Absolute(v) => v,
-            Anchor::AboveBottom(v) => ENGINE_BOTTOM + v,
-            Anchor::BelowTop(v) => ENGINE_TOP - v,
+            Anchor::AboveBottom(v) => bottom + v,
+            Anchor::BelowTop(v) => top - v,
         }
+    }
+    fn resolve(self) -> i32 {
+        self.resolve_in(ENGINE_BOTTOM, ENGINE_TOP)
     }
 }
 
 /// MC height providers used by the ore set.
 #[derive(Clone, Copy, Debug)]
-enum HeightProvider {
+pub(crate) enum HeightProvider {
     Uniform { min: Anchor, max: Anchor },
     /// MC trapezoid (plateau 0): the mean of two uniform rolls.
     Trapezoid { min: Anchor, max: Anchor },
 }
 
 impl HeightProvider {
-    fn parse(v: &serde_json::Value) -> HeightProvider {
+    pub(crate) fn parse(v: &serde_json::Value) -> HeightProvider {
         let min = Anchor::parse(&v["min_inclusive"]);
         let max = Anchor::parse(&v["max_inclusive"]);
         match v["type"].as_str() {
@@ -505,23 +510,29 @@ impl HeightProvider {
             other => panic!("unsupported height provider {other:?}"),
         }
     }
-    /// Sample a y. Consumes a FIXED number of rolls per variant so the
-    /// replayed streams stay aligned across chunks.
-    fn sample(self, rng: &mut SplitMix64) -> Option<i32> {
-        let (lo, hi, y) = match self {
+    /// Sample a y within a dimension band. Consumes a FIXED number of
+    /// rolls per variant so the replayed streams stay aligned across
+    /// chunks.
+    pub(crate) fn sample_in(
+        self,
+        rng: &mut SplitMix64,
+        bottom: i32,
+        top: i32,
+    ) -> Option<i32> {
+        let y = match self {
             HeightProvider::Uniform { min, max } => {
-                let lo = min.resolve();
-                let hi = max.resolve();
+                let lo = min.resolve_in(bottom, top);
+                let hi = max.resolve_in(bottom, top);
                 if hi < lo {
                     let _ = rng.next_u64();
                     return None;
                 }
                 let span = (hi - lo + 1) as u64;
-                (lo, hi, lo + (rng.next_u64() % span) as i32)
+                lo + (rng.next_u64() % span) as i32
             }
             HeightProvider::Trapezoid { min, max } => {
-                let lo = min.resolve();
-                let hi = max.resolve();
+                let lo = min.resolve_in(bottom, top);
+                let hi = max.resolve_in(bottom, top);
                 if hi < lo {
                     let _ = rng.next_u64();
                     let _ = rng.next_u64();
@@ -530,23 +541,25 @@ impl HeightProvider {
                 let span = (hi - lo + 1) as u64;
                 let a = (rng.next_u64() % span) as i32;
                 let b = (rng.next_u64() % span) as i32;
-                (lo, hi, lo + (a + b) / 2)
+                lo + (a + b) / 2
             }
         };
-        let _ = (lo, hi);
-        (ENGINE_BOTTOM..=ENGINE_TOP).contains(&y).then_some(y)
+        (bottom..=top).contains(&y).then_some(y)
+    }
+    fn sample(self, rng: &mut SplitMix64) -> Option<i32> {
+        self.sample_in(rng, ENGINE_BOTTOM, ENGINE_TOP)
     }
 }
 
 /// `count` is either a literal or a uniform int provider (ore_gold_lower).
 #[derive(Clone, Copy, Debug)]
-enum CountProvider {
+pub(crate) enum CountProvider {
     Fixed(u32),
     Uniform { min: u32, max: u32 },
 }
 
 impl CountProvider {
-    fn parse(v: &serde_json::Value) -> CountProvider {
+    pub(crate) fn parse(v: &serde_json::Value) -> CountProvider {
         if let Some(n) = v.as_u64() {
             return CountProvider::Fixed(n as u32);
         }
@@ -556,7 +569,7 @@ impl CountProvider {
             max: v["max_inclusive"].as_u64().expect("count max") as u32,
         }
     }
-    fn sample(self, rng: &mut SplitMix64) -> u32 {
+    pub(crate) fn sample(self, rng: &mut SplitMix64) -> u32 {
         match self {
             CountProvider::Fixed(n) => n,
             CountProvider::Uniform { min, max } => {
@@ -567,21 +580,21 @@ impl CountProvider {
 }
 
 /// One replaceable->ore mapping of an ore configured_feature.
-struct OreTarget {
-    replaceable: std::collections::HashSet<u16>,
-    state: u16,
+pub(crate) struct OreTarget {
+    pub(crate) replaceable: std::collections::HashSet<u16>,
+    pub(crate) state: u16,
 }
 
 /// A fully-resolved ore placed_feature.
 pub(crate) struct OreRule {
     pub(crate) name: &'static str,
-    count: CountProvider,
+    pub(crate) count: CountProvider,
     /// rarity_filter: Some(n) = 1-in-n chunks run this feature.
-    rarity: Option<u32>,
-    height: HeightProvider,
-    size: u32,
-    discard_on_air: f64,
-    targets: Vec<OreTarget>,
+    pub(crate) rarity: Option<u32>,
+    pub(crate) height: HeightProvider,
+    pub(crate) size: u32,
+    pub(crate) discard_on_air: f64,
+    pub(crate) targets: Vec<OreTarget>,
 }
 
 fn parse_ore_rules() -> Vec<OreRule> {
@@ -669,7 +682,7 @@ pub(crate) fn ore_rules() -> &'static [OreRule] {
 /// Deterministic [0,1) roll from a world position (for
 /// discard_chance_on_air_exposure - keyed by position, not stream, so
 /// vertical chunk replays agree without tracking stream consumption).
-fn pos_roll(x: i32, y: i32, z: i32, seed: u32) -> f64 {
+pub(crate) fn pos_roll(x: i32, y: i32, z: i32, seed: u32) -> f64 {
     let mut h = SplitMix64::new(
         (seed as u64)
             ^ (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -687,7 +700,7 @@ fn pos_roll(x: i32, y: i32, z: i32, seed: u32) -> f64 {
 /// the y sample) so replayed streams stay aligned; the air-exposure
 /// discard rolls come from `pos_roll`, not the stream.
 #[allow(clippy::too_many_arguments)]
-fn ore_try(
+pub(crate) fn ore_try(
     chunk: &mut Chunk,
     origin: [i32; 3],
     rule: &OreRule,
@@ -695,11 +708,12 @@ fn ore_try(
     scx: i32,
     scz: i32,
     seed: u32,
+    band: (i32, i32),
 ) {
     let cs = CHUNK_SIZE as i32;
     let rx = (rng.next_u64() % 16) as i32;
     let rz = (rng.next_u64() % 16) as i32;
-    let Some(cy) = rule.height.sample(rng) else {
+    let Some(cy) = rule.height.sample_in(rng, band.0, band.1) else {
         // Keep consumption fixed: the angle roll below still burns even
         // for a discarded y (mirrors the "always roll" discipline).
         let _ = rng.next_f64();
@@ -836,7 +850,16 @@ fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [
                 }
                 let count = rule.count.sample(&mut rng);
                 for _ in 0..count {
-                    ore_try(chunk, origin, rule, &mut rng, scx, scz, seed);
+                    ore_try(
+                        chunk,
+                        origin,
+                        rule,
+                        &mut rng,
+                        scx,
+                        scz,
+                        seed,
+                        (ENGINE_BOTTOM, ENGINE_TOP),
+                    );
                 }
             }
         }

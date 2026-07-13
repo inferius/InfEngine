@@ -40,11 +40,11 @@ use super::surface_rule::{SurfaceCtx, SurfaceRules};
 use crate::worldgen::WorldgenCtx;
 
 /// Engine ids the fill places directly.
-const LAVA_ID: u16 = 37;
+pub(crate) const LAVA_ID: u16 = 37;
 /// The nether world band (noise: min_y 0, height 128).
-const TOP_Y: i32 = 127;
+pub(crate) const TOP_Y: i32 = 127;
 /// `sea_level` (the lava ocean surface).
-const SEA_LEVEL: i32 = 32;
+pub(crate) const SEA_LEVEL: i32 = 32;
 /// Surface-band depth, like the overworld's (the deepest nether rule
 /// reaches ~5 down; 16 keeps the SurfaceSystem semantics shared).
 const SURFACE_BAND: i32 = 16;
@@ -162,14 +162,14 @@ fn nether_for(seed: u32) -> Rc<NetherDim> {
 
 /// One chunk column: 128-bit solidity per cell + biome + surface
 /// depth per column.
-struct NetherCol {
+pub(crate) struct NetherCol {
     solid: Box<[[[u64; 2]; CHUNK_SIZE]; CHUNK_SIZE]>,
-    biome: [[&'static str; CHUNK_SIZE]; CHUNK_SIZE],
+    pub(crate) biome: [[&'static str; CHUNK_SIZE]; CHUNK_SIZE],
     surface_depth: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
 }
 
 impl NetherCol {
-    fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
+    pub(crate) fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
         if !(0..=TOP_Y).contains(&y) {
             return false;
         }
@@ -223,6 +223,87 @@ fn column_cached(nd: &NetherDim, cx: i32, cz: i32, seed: u32) -> Rc<NetherCol> {
     })
 }
 
+/// W268: the cached column for a chunk column, for the feature passes
+/// (solidity bitsets + biomes without generating the chunk).
+pub(crate) fn nether_col(ctx: &WorldgenCtx, cx: i32, cz: i32) -> Rc<NetherCol> {
+    let seed = ctx.effective_seed();
+    let nd = nether_for(seed);
+    column_cached(&nd, cx, cz, seed)
+}
+
+/// The TERRAIN block at one cell (pre-features): bedrock shell /
+/// surface-rule block / netherrack for solid cells, lava-or-air for
+/// open ones. W268: factored out of the chunk fill so the feature
+/// passes can read the pre-feature world across chunk borders (the
+/// same read-the-terrain doctrine as the sculk pass).
+#[allow(clippy::too_many_arguments)]
+fn terrain_block(
+    nd: &NetherDim,
+    col: &NetherCol,
+    lx: usize,
+    lz: usize,
+    wx: i32,
+    wy: i32,
+    wz: i32,
+    bedrock: u16,
+    netherrack: u16,
+) -> u16 {
+    if !(0..=TOP_Y).contains(&wy) {
+        return 0;
+    }
+    // The bedrock gradients paint SOLID cells only (the surface
+    // stage never fills open space) - roof first, floor after,
+    // both shared with the in-band rule via the same rolls.
+    if col.is_solid(lx, wy, lz) {
+        if super::surface_rule::is_bedrock_roof(wx, wy, wz, TOP_Y) {
+            return bedrock;
+        }
+        if super::surface_rule::is_bedrock_floor(wx, wy, wz, 0) {
+            return bedrock;
+        }
+        let depth_above = col.depth_above(lx, wy, lz);
+        if depth_above <= SURFACE_BAND {
+            let run_top = wy + depth_above;
+            let sctx = SurfaceCtx {
+                x: wx,
+                y: wy,
+                z: wz,
+                stone_depth_above: depth_above,
+                stone_depth_below: i32::MAX / 2,
+                water_height: if run_top < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
+                surface: run_top - SURFACE_BAND,
+                surface_depth: col.surface_depth[lx][lz],
+                steep: false,
+                frozen: false,
+                mc_name: col.biome[lx][lz],
+                min_y: 0,
+                // The INCLUSIVE top: the roof gradient's
+                // below_top anchors resolve against it.
+                max_y: TOP_Y,
+            };
+            if let Some(id) = nd.surface.eval(&sctx) {
+                return id;
+            }
+        }
+        return netherrack;
+    }
+    // Open cells: the lava ocean below sea level 32.
+    if wy < SEA_LEVEL { LAVA_ID } else { 0 }
+}
+
+/// W268: the pre-feature terrain block at a world position (feature
+/// passes' cross-chunk read).
+pub(crate) fn nether_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> u16 {
+    let seed = ctx.effective_seed();
+    let nd = nether_for(seed);
+    let cs = CHUNK_SIZE as i32;
+    let col = column_cached(&nd, wx.div_euclid(cs), wz.div_euclid(cs), seed);
+    let (lx, lz) = (wx.rem_euclid(cs) as usize, wz.rem_euclid(cs) as usize);
+    let bedrock = super::features::block_id_by_name("bedrock").unwrap_or(45);
+    let netherrack = super::features::block_id_by_name("netherrack").unwrap_or(1);
+    terrain_block(&nd, &col, lx, lz, wx, wy, wz, bedrock, netherrack)
+}
+
 /// The faithful Nether chunk generator (behind `WorldGen::Nether`).
 pub(crate) fn gen_nether_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
@@ -238,53 +319,13 @@ pub(crate) fn gen_nether_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let netherrack = super::features::block_id_by_name("netherrack").unwrap_or(1);
     chunk.fill_with(|x, y, z| {
         let wy = oy + y as i32;
-        if !(0..=TOP_Y).contains(&wy) {
-            return BlockId::AIR;
-        }
         let (wx, wz) = (ox + x as i32, oz + z as i32);
-        // The bedrock gradients paint SOLID cells only (the surface
-        // stage never fills open space) - roof first, floor after,
-        // both shared with the in-band rule via the same rolls.
-        if col.is_solid(x, wy, z) {
-            if super::surface_rule::is_bedrock_roof(wx, wy, wz, TOP_Y) {
-                return BlockId(bedrock);
-            }
-            if super::surface_rule::is_bedrock_floor(wx, wy, wz, 0) {
-                return BlockId(bedrock);
-            }
-            let depth_above = col.depth_above(x, wy, z);
-            if depth_above <= SURFACE_BAND {
-                let run_top = wy + depth_above;
-                let sctx = SurfaceCtx {
-                    x: wx,
-                    y: wy,
-                    z: wz,
-                    stone_depth_above: depth_above,
-                    stone_depth_below: i32::MAX / 2,
-                    water_height: if run_top < SEA_LEVEL { SEA_LEVEL } else { i32::MIN },
-                    surface: run_top - SURFACE_BAND,
-                    surface_depth: col.surface_depth[x][z],
-                    steep: false,
-                    frozen: false,
-                    mc_name: col.biome[x][z],
-                    min_y: 0,
-                    // The INCLUSIVE top: the roof gradient's
-                    // below_top anchors resolve against it.
-                    max_y: TOP_Y,
-                };
-                if let Some(id) = nd.surface.eval(&sctx) {
-                    return BlockId(id);
-                }
-            }
-            return BlockId(netherrack);
-        }
-        // Open cells: the lava ocean below sea level 32.
-        if wy < SEA_LEVEL {
-            BlockId(LAVA_ID)
-        } else {
-            BlockId::AIR
-        }
+        BlockId(terrain_block(&nd, &col, x, z, wx, wy, wz, bedrock, netherrack))
     });
+    // W268: the biome decoration (glowstone, fire, deltas, fungi, the
+    // nether ore set) - after the terrain fill, like the overworld's
+    // decor pass.
+    super::nether_features::place_from_coord_nether(&mut chunk, coord, ctx);
     chunk
 }
 

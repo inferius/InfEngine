@@ -3329,4 +3329,20 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["cut_copper.png"], keep_alpha: false },
     },
+    // W268: nether forest ground cover (the dominant blocks of the
+    // crimson/warped forest_vegetation weighted providers).
+    BlockType {
+        id: 833, name: "crimson_roots", color: [0.78, 0.18, 0.25], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["crimson_roots.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["crimson_roots.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["crimson_roots.png"], keep_alpha: true },
+    },
+    BlockType {
+        id: 834, name: "warped_roots", color: [0.25, 0.62, 0.55], transparent: true,
+        flags: F_RAY_PASS | F_AABB_PASS | F_NO_PLACE | F_WASHABLE,
+        top: TileSpec { col: 0, row: 0, files: &["warped_roots.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["warped_roots.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["warped_roots.png"], keep_alpha: true },
+    },
 ];

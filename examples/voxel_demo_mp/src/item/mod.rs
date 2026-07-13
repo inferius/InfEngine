@@ -2508,6 +2508,9 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 830, name: "trial_spawner", display: Some("Trial Spawner"), places: Some(830), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 831, name: "vault", display: Some("Vault"), places: Some(831), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 832, name: "cut_copper_slab", display: Some("Cut Copper Slab"), places: Some(832), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W268: nether forest roots.
+    ItemType { id: 833, name: "crimson_roots", display: Some("Crimson Roots"), places: Some(833), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 834, name: "warped_roots", display: Some("Warped Roots"), places: Some(834), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
