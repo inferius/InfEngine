@@ -184,16 +184,29 @@ pub(crate) fn tick_ambient_particles(vx: &mut crate::Voxel, dt: f32) {
         // Lava cells. W230: this used to WALK EVERY LOADED CHUNK and
         // full-scan its 4096 cells per frame - ~26M reads at view
         // distance 12 = the user's 15 FPS (the 7th "per-frame
-        // O(all-of-world)" bug; see the perf-plan memory). Iterate the
-        // maintained `lava_positions` subset (W198.10) instead,
-        // distance-culled first; re-validate against the world since
-        // the subset can lag an edit by a frame.
-        let lava_nearby: Vec<[i32; 3]> = vx
-            .lava_positions
-            .iter()
-            .filter(|p| within_radius(player, p, VISIBLE_RADIUS))
-            .copied()
-            .collect();
+        // O(all-of-world)" bug; see the perf-plan memory). W267: the
+        // lava subset is COLUMN-KEYED now (the deep lava sea grew it
+        // to ~1M cells and even the flat filter pass was a per-frame
+        // stall) - look up only the columns within the visible
+        // radius; re-validate against the world since the subset can
+        // lag an edit by a frame.
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let vis_chunks = (VISIBLE_RADIUS as i32) / cs + 1;
+        let (pcx, pcz) = (
+            (player[0].floor() as i32).div_euclid(cs),
+            (player[2].floor() as i32).div_euclid(cs),
+        );
+        let mut lava_nearby: Vec<[i32; 3]> = Vec::new();
+        for dcx in -vis_chunks..=vis_chunks {
+            for dcz in -vis_chunks..=vis_chunks {
+                let Some(cells) = vx.lava_columns.get(&[pcx + dcx, pcz + dcz]) else {
+                    continue;
+                };
+                lava_nearby.extend(
+                    cells.iter().filter(|p| within_radius(player, p, VISIBLE_RADIUS)),
+                );
+            }
+        }
         for pos in lava_nearby {
             if spawned >= AMBIENT_PARTICLE_CAP_PER_TICK {
                 break;

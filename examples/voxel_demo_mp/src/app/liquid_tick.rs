@@ -304,14 +304,19 @@ impl Voxel {
             // liquid on a dirty rescan, so it's free, and it stops
             // tick_lava_fire_emit from scanning all ~300k liquids every frame
             // (that O(all-liquids) world.get sweep was the ~20ms sim stall).
-            self.lava_positions.clear();
+            // W267: keyed by chunk column so consumers only touch their
+            // reach (the deep lava sea made the flat set ~1M cells).
+            self.lava_columns.clear();
             for p in self.liquid_positions.iter().copied() {
                 let blk = self.world.get(p);
                 if liquid_for(blk).is_none() {
                     continue;
                 }
                 if blk.0 == crate::block::LAVA_ID {
-                    self.lava_positions.insert(p);
+                    self.lava_columns
+                        .entry([p[0].div_euclid(cs), p[2].div_euclid(cs)])
+                        .or_default()
+                        .push(p);
                 }
                 let lvl = self.liquid_level.get(&p).copied().unwrap_or(0) as u64;
                 let mut hsh = 0xcbf2_9ce4_8422_2325u64;

@@ -174,41 +174,46 @@ pub(crate) fn tick_lava_fire_emit(vx: &mut crate::Voxel) {
         }
         // W198.10: gate on the lava subset, not all liquids. Standing in an
         // ocean world `liquid_positions` is 300k+ cells; lava is a handful.
-        if vx.lava_positions.is_empty() {
+        if vx.lava_columns.is_empty() {
             return;
         }
         let clock = vx.fire_clock;
         // Snapshot source cells - only level-0 lava blocks count
         // per MC (`fluid_lava_flow_does_not_ignite` test).
         let mut sources: Vec<[i32; 3]> = Vec::new();
-        // W198.10: iterate only the lava candidate set (rebuilt on liquid
-        // change in the mesh rescan), not all ~300k liquids every frame -
-        // that O(all-liquids) per-frame world.get sweep was the ~20ms stall.
-        // Re-validate against the world so a momentarily stale entry is
-        // skipped.
-        //
-        // W233: distance-cull with plain compares BEFORE the per-cell
-        // world.get. MC's lava ignition is randomTick behaviour, i.e.
-        // ticking chunks near the player only; with W231 full columns
-        // `lava_positions` holds every underground lava cell at VD 12
-        // (tens of thousands) and the unfiltered world.get sweep cost
-        // ~40 ms per pass. Same horizontal radius as the random-tick
-        // module (columns tick full-height, like MC ticking chunks).
+        // W233: MC's lava ignition is randomTick behaviour, i.e.
+        // ticking chunks near the player only - same horizontal radius
+        // as the random-tick module (columns tick full-height, like MC
+        // ticking chunks). W267: the subset is COLUMN-KEYED now - look
+        // up only the (2r+1)^2 columns in reach instead of scanning
+        // the whole set (the W260 deep lava sea grew it to ~1M cells
+        // and the flat scan alone cost 5-13 ms per tick). Entries
+        // re-validate against the world, so a momentarily stale cell
+        // is skipped.
         let cs = infengine_voxel::CHUNK_SIZE as i32;
-        let reach = crate::world::random_tick::RADIUS_CHUNKS * cs + cs;
+        let reach_chunks = crate::world::random_tick::RADIUS_CHUNKS + 1;
+        let reach = reach_chunks * cs;
         let px = vx.player_pos.x.floor() as i32;
         let pz = vx.player_pos.z.floor() as i32;
-        for pos in vx.lava_positions.iter().copied() {
-            if (pos[0] - px).abs() > reach || (pos[2] - pz).abs() > reach {
-                continue;
+        let (pcx, pcz) = (px.div_euclid(cs), pz.div_euclid(cs));
+        for dcx in -reach_chunks..=reach_chunks {
+            for dcz in -reach_chunks..=reach_chunks {
+                let Some(cells) = vx.lava_columns.get(&[pcx + dcx, pcz + dcz]) else {
+                    continue;
+                };
+                for pos in cells.iter().copied() {
+                    if (pos[0] - px).abs() > reach || (pos[2] - pz).abs() > reach {
+                        continue;
+                    }
+                    if vx.world.get(pos).0 != block::LAVA_ID {
+                        continue;
+                    }
+                    if vx.liquid_level.get(&pos).copied().unwrap_or(0) != 0 {
+                        continue;
+                    }
+                    sources.push(pos);
+                }
             }
-            if vx.world.get(pos).0 != block::LAVA_ID {
-                continue;
-            }
-            if vx.liquid_level.get(&pos).copied().unwrap_or(0) != 0 {
-                continue;
-            }
-            sources.push(pos);
         }
         if sources.is_empty() {
             return;

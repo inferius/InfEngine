@@ -36,7 +36,19 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         0,
         (vx.player_pos.z.floor() as i32).div_euclid(cs),
     ];
-    let view_dist = vx.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
+    // W267: during the LOADING screen the stream must not widen the
+    // ring past the initial-build core - the loading gate waits for
+    // `pending_remesh` to drain, and every extra streamed chunk keeps
+    // feeding it, so a VD-32 world sat on the progress bar for the
+    // WHOLE 101k-chunk ring (~5 min) instead of the 15k core. Clamp
+    // to the core radius while loading; the full ring streams in the
+    // background once Playing.
+    let cfg_dist = vx.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8) as i32;
+    let view_dist = if matches!(vx.state, crate::AppState::Loading { .. }) {
+        cfg_dist.min(Voxel::LOADING_CORE_RADIUS)
+    } else {
+        cfg_dist
+    };
     let unload_dist = view_dist + 2;
 
     let (cy_min, cy_max) = vx.vertical_chunk_range();
@@ -765,11 +777,17 @@ fn rescan_chunk_radius(
     vx.snow_positions.retain(|p, _| in_keep(p));
     vx.liquid_positions.retain(|p| in_keep(p));
     vx.liquid_level.retain(|p, _| in_keep(p));
-    // W198.15: lava_positions (W198.10 lava-emitter subset) was never
-    // pruned on unload, leaving stale entries for unloaded chunks. Cheap
-    // to keep tidy in the same single pass; the lava fire tick already
-    // re-validates, so this is just hygiene against unbounded growth.
-    vx.lava_positions.retain(|p| in_keep(p));
+    // W198.15: the lava subset was never pruned on unload, leaving
+    // stale entries for unloaded chunks. W267: column-keyed - drop
+    // whole columns outside the keep rect (the fire tick still
+    // re-validates surviving entries).
+    let min_cx = player_chunk[0] - unload_dist;
+    let max_cx = player_chunk[0] + unload_dist;
+    let min_cz = player_chunk[2] - unload_dist;
+    let max_cz = player_chunk[2] + unload_dist;
+    vx.lava_columns.retain(|c, _| {
+        c[0] >= min_cx && c[0] <= max_cx && c[1] >= min_cz && c[1] <= max_cz
+    });
     // W242.2: spawner index + tick state follow their chunks out; the
     // worker scan re-adds the positions when the chunk streams back
     // (the delay countdown restarts, like a freshly-loaded MC chunk

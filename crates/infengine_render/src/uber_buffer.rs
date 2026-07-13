@@ -269,11 +269,14 @@ impl UberPage {
 }
 
 /// W238: hard cap on pages. Lazily created, so a small view distance
-/// stays at one page; 4 pages x (2 GB vertex + 512 MB index) = 10 GB
-/// worst case on a 16 GB card. VD 40 should NOT get here via more
-/// pages - greedy re-meshing and LOD are the real memory levers (see
-/// the perf-plan notes).
-const MAX_UBER_PAGES: usize = 4;
+/// stays at one page. W267: 4 -> 5 - the W260 world-depth extension
+/// (24 vertical chunks) grew VD-32 mesh volume past 4 pages and the
+/// overflow fell onto the legacy per-buffer path (a large slice of
+/// the 10-FPS report). 5 pages x (2 GB vertex + 512 MB index) =
+/// 12.5 GB worst case on a 16 GB card. VD 40 should NOT get here via
+/// more pages - greedy re-meshing and LOD are the real memory levers
+/// (see the perf-plan notes).
+const MAX_UBER_PAGES: usize = 5;
 
 /// UberMeshAllocator owns the paged GPU pools and the allocation
 /// metadata. All chunk meshes share these buffers; vertices/indices

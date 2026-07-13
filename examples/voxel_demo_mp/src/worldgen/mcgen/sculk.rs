@@ -493,6 +493,34 @@ fn can_spread_from(scratch: &Scratch, ctx: &WorldgenCtx, p: [i32; 3]) -> bool {
     DIRS.iter().any(|d| scratch.read(ctx, [p[0] + d[0], p[1] + d[1], p[2] + d[2]]) != 0)
 }
 
+/// W267: cached per-column deep-dark probe. `isDeepDarkRegion`'s
+/// erosion channel is xz-only and deep dark is rare, so one probe at
+/// the column centre (y -40 makes the depth channel a given) answers
+/// for the whole column - and the 24 vertical chunk gens of a column
+/// (x 3x3 replay, x the vein pass) were each re-running the two
+/// spline evals, a measurable slice of the W260 fill slowdown.
+fn column_is_deep_dark(ctx: &WorldgenCtx, cx: i32, cz: i32) -> bool {
+    use std::cell::RefCell;
+    thread_local! {
+        static CACHE: RefCell<HashMap<(i32, i32, u32), bool>> =
+            RefCell::new(HashMap::new());
+    }
+    let seed = ctx.effective_seed();
+    CACHE.with(|c| {
+        if let Some(hit) = c.borrow().get(&(cx, cz, seed)) {
+            return *hit;
+        }
+        let cs = CHUNK_SIZE as i32;
+        let v = mc_is_deep_dark(ctx, cx * cs + 8, -40, cz * cs + 8);
+        let mut map = c.borrow_mut();
+        if map.len() > 4096 {
+            map.clear();
+        }
+        map.insert((cx, cz, seed), v);
+        v
+    })
+}
+
 /// The per-chunk deep-dark sculk pass (underground_decoration step):
 /// sculk veins (multiface growth) then the sculk patches, exactly
 /// the deep_dark biome feature order.
@@ -510,7 +538,10 @@ pub(crate) fn place_sculk(
 
     // sculk_vein: count uniform 204..=250, y uniform -64..256, biome
     // deep_dark - the glow-lichen pattern with all-face hosts.
-    {
+    // W267: veins are chunk-local, so the whole 240-try loop (and its
+    // per-try 3D biome evals) skips unless THIS column is deep dark -
+    // that per-chunk cost ran for every chunk of the world.
+    if column_is_deep_dark(ctx, coord[0], coord[2]) {
         let mut rng = SplitMix64::new(stream_seed(
             seed,
             coord[0],
@@ -559,13 +590,11 @@ pub(crate) fn place_sculk(
     let mut patches: Vec<Scratch> = Vec::new();
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
-            // Column pre-filter: `isDeepDarkRegion`'s erosion channel
-            // is xz-only and deep dark is rare - one probe at the
-            // column centre (y -40 makes the depth channel a given)
-            // skips the 256-try loop for the whole non-deep-dark
-            // world. Replay-safe: every chunk replaying this source
-            // column runs the same check.
-            if !mc_is_deep_dark(ctx, scx * cs + 8, -40, scz * cs + 8) {
+            // Column pre-filter (cached, W267): skips the 256-try
+            // loop for the whole non-deep-dark world. Replay-safe:
+            // every chunk replaying this source column runs the same
+            // check.
+            if !column_is_deep_dark(ctx, scx, scz) {
                 continue;
             }
             let mut rng =

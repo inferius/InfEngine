@@ -75,7 +75,7 @@ impl Voxel {
         self.liquid_remesh_backlog.clear();
         self.liquid_level.clear();
         self.liquid_positions.clear();
-        self.lava_positions.clear();
+        self.lava_columns.clear();
         self.falling_pending.clear();
         self.persistent_leaves.clear();
         self.lever_on.clear();
@@ -282,11 +282,12 @@ impl Voxel {
         // streamer extends it to the full view distance during play,
         // outward from the player (no near-player holes since W249).
         // Waiting for the whole VD-32 ring (67k chunks) kept the
-        // loading screen up for minutes.
-        const LOADING_CORE_RADIUS: i32 = 12;
+        // loading screen up for minutes. (W267: the streamer now also
+        // clamps to this radius while Loading - it used to widen the
+        // ring underneath the loading gate, recreating the wait.)
         let radius = (self.settings.view_distance.clamp(2, VIEW_DISTANCE_MAX as u8)
             as i32)
-            .min(LOADING_CORE_RADIUS);
+            .min(Self::LOADING_CORE_RADIUS);
         // W249: centre the initial ring on the PLAYER's chunk. A
         // fresh world still starts at the origin (the old W28.1
         // assumption); a saved world's pose was pre-applied by
@@ -325,6 +326,10 @@ impl Voxel {
         );
         enqueued
     }
+
+    /// W267: the loading-screen core ring radius (see build_world +
+    /// the streamer's Loading clamp).
+    pub(crate) const LOADING_CORE_RADIUS: i32 = 12;
 
     /// W231: FULL vertical columns, like MC; W264: PER-DIM spans from
     /// the dimension registry (overworld -4..=19, nether/end 0..=15).

@@ -332,7 +332,7 @@ impl Voxel {
             mob_prev_pos: HashMap::new(),
             liquid_level: HashMap::new(),
             liquid_positions: HashSet::new(),
-            lava_positions: HashSet::new(),
+            lava_columns: HashMap::new(),
             falling_pending: HashSet::new(),
             persistent_leaves: HashSet::new(),
             lever_on: HashSet::new(),
