@@ -36,7 +36,11 @@ pub(crate) const LIGHT_LAYER_BYTES: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZ
 /// W24: `Clone` is derived so workers can receive a snapshot copy
 /// of the 6-neighbour halo without sharing a reference into the
 /// main-thread lighting state.
-#[derive(Debug, Clone)]
+///
+/// W275: `PartialEq` so the lighting worker can DIFF a re-flooded
+/// grid against its warm-start copy and skip the remesh + grid swap
+/// when nothing changed (two boxed memcmps).
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LightGrid {
     block: Box<[u8; LIGHT_LAYER_BYTES]>,
     sky: Box<[u8; LIGHT_LAYER_BYTES]>,

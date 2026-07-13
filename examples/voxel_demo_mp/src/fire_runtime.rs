@@ -161,70 +161,72 @@ pub(crate) fn apply_fire_step(vx: &mut crate::Voxel, step: crate::block::fire::F
     }
 
     /// Q.4d: lava source cells emit fire on flammable neighbours
-    /// (MC LavaFluid::randomTick, lines 78..=114). Walks every
-    /// lava source cell once per net-tick frame; each gates
-    /// 1/LAVA_IGNITE_RATE_DENOM and rolls the two-branch ignite
-    /// algorithm from `block::fire::plan_lava_random_tick`. The
-    /// produced `ignite` entries route through `apply_fire_step`
-    /// so the broadcast + chunk-rebuild plumbing is shared with
-    /// the regular fire spread path.
+    /// (MC LavaFluid::randomTick). W275: SAMPLED like MC's random
+    /// ticks instead of iterating every source - the W260 deep lava
+    /// sea puts ~2.5k lava cells in EVERY in-reach column, and the
+    /// old full walk (world.get + level lookup per cell, then a hash
+    /// gate) cost 4-23 ms per tick even after the W267 column index.
+    /// Now each in-reach column rolls SAMPLES_PER_COLUMN random cells
+    /// per tick and a 1-in-4 gate: a small surface pool (few cells)
+    /// still ignites within seconds, while a deep-sea column costs
+    /// two array picks - MC's 3-per-section sampling economics.
 pub(crate) fn tick_lava_fire_emit(vx: &mut crate::Voxel) {
         if matches!(vx.net, NetRole::Client { .. }) {
             return;
         }
-        // W198.10: gate on the lava subset, not all liquids. Standing in an
-        // ocean world `liquid_positions` is 300k+ cells; lava is a handful.
         if vx.lava_columns.is_empty() {
             return;
         }
         let clock = vx.fire_clock;
-        // Snapshot source cells - only level-0 lava blocks count
-        // per MC (`fluid_lava_flow_does_not_ignite` test).
-        let mut sources: Vec<[i32; 3]> = Vec::new();
-        // W233: MC's lava ignition is randomTick behaviour, i.e.
-        // ticking chunks near the player only - same horizontal radius
-        // as the random-tick module (columns tick full-height, like MC
-        // ticking chunks). W267: the subset is COLUMN-KEYED now - look
-        // up only the (2r+1)^2 columns in reach instead of scanning
-        // the whole set (the W260 deep lava sea grew it to ~1M cells
-        // and the flat scan alone cost 5-13 ms per tick). Entries
-        // re-validate against the world, so a momentarily stale cell
-        // is skipped.
+        // W233: same horizontal radius as the random-tick module
+        // (columns tick full-height, like MC ticking chunks).
         let cs = infengine_voxel::CHUNK_SIZE as i32;
         let reach_chunks = crate::world::random_tick::RADIUS_CHUNKS + 1;
         let reach = reach_chunks * cs;
         let px = vx.player_pos.x.floor() as i32;
         let pz = vx.player_pos.z.floor() as i32;
         let (pcx, pcz) = (px.div_euclid(cs), pz.div_euclid(cs));
+        const SAMPLES_PER_COLUMN: usize = 2;
+        let mut step = block::fire::FireStep::default();
+        // Counter-hash sampling off the fire clock (a live host-side
+        // event - no worldgen replay constraint).
+        let mut counter: u32 = clock as u32 ^ 0xA5A5_5A5A;
+        let mut next = move || {
+            counter ^= counter << 13;
+            counter ^= counter >> 17;
+            counter ^= counter << 5;
+            counter
+        };
         for dcx in -reach_chunks..=reach_chunks {
             for dcz in -reach_chunks..=reach_chunks {
                 let Some(cells) = vx.lava_columns.get(&[pcx + dcx, pcz + dcz]) else {
                     continue;
                 };
-                for pos in cells.iter().copied() {
+                if cells.is_empty() {
+                    continue;
+                }
+                for _ in 0..SAMPLES_PER_COLUMN {
+                    let pos = cells[next() as usize % cells.len()];
                     if (pos[0] - px).abs() > reach || (pos[2] - pz).abs() > reach {
                         continue;
                     }
+                    // The sampled-attempt gate keeps small pools at a
+                    // visible-but-not-instant ignite feel (the W8.4
+                    // tuning, re-expressed for sampling).
+                    if !block::fire::hash3_for(pos, clock, 0x9000).is_multiple_of(4) {
+                        continue;
+                    }
+                    // Only level-0 lava blocks ignite, per MC
+                    // (`fluid_lava_flow_does_not_ignite`).
                     if vx.world.get(pos).0 != block::LAVA_ID {
                         continue;
                     }
                     if vx.liquid_level.get(&pos).copied().unwrap_or(0) != 0 {
                         continue;
                     }
-                    sources.push(pos);
+                    block::fire::plan_lava_random_tick(&vx.world, pos, clock, &mut step);
                 }
             }
-        }
-        if sources.is_empty() {
-            return;
-        }
-        let mut step = block::fire::FireStep::default();
-        for pos in sources {
-            let h_gate = block::fire::hash3_for(pos, clock, 0x9000);
-            if !h_gate.is_multiple_of(block::fire::LAVA_IGNITE_RATE_DENOM) {
-                continue;
-            }
-            block::fire::plan_lava_random_tick(&vx.world, pos, clock, &mut step);
         }
         if step.ignite.is_empty() && step.consume.is_empty() {
             return;

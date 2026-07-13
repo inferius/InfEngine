@@ -213,16 +213,25 @@ fn leaf_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
 }
 
 /// True when a `WOOD_ID` log sits within `r` (Chebyshev) of `pos`.
-/// Early-exits on the first hit so leaves near a trunk are cheap;
-/// only orphaned leaves pay the full box scan before decaying.
+/// W275: scans in EXPANDING SHELLS so canopy leaves exit at their
+/// trunk's distance instead of walking the flat 9^3 box in dx order
+/// (a dark-forest random-tick pass hit leaves constantly and the
+/// ~350-get average scan was the 3-10 ms `random_tick` phase; a
+/// trunk 2 away now costs ~100 cheap skips + a few dozen gets).
+/// Only orphaned leaves pay the full box before decaying - once.
 fn has_log_within(world: &infengine_voxel::World, pos: [i32; 3], r: i32) -> bool {
-    for dx in -r..=r {
-        for dy in -r..=r {
-            for dz in -r..=r {
-                if world.get([pos[0] + dx, pos[1] + dy, pos[2] + dz]).0
-                    == crate::block::WOOD_ID
-                {
-                    return true;
+    for shell in 1..=r {
+        for dx in -shell..=shell {
+            for dy in -shell..=shell {
+                for dz in -shell..=shell {
+                    if dx.abs().max(dy.abs()).max(dz.abs()) != shell {
+                        continue;
+                    }
+                    if world.get([pos[0] + dx, pos[1] + dy, pos[2] + dz]).0
+                        == crate::block::WOOD_ID
+                    {
+                        return true;
+                    }
                 }
             }
         }

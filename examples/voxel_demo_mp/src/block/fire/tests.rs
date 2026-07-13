@@ -507,7 +507,8 @@ fn lava_horizontal_sweep_ignores_blocked_above_target() {
 // ----------------------------------------------------------------
 
 /// Helper: run the gate + plan path for `pos` over `ticks` clocks,
-/// matching the runtime's flow in `tick_lava_fire_emit`.
+/// matching the runtime's flow in `tick_lava_fire_emit` (W275: the
+/// sampled-attempt 1-in-4 gate; the sampler itself picks the cell).
 fn drive_lava_ignite(
     w: &World,
     lava_pos: [i32; 3],
@@ -516,7 +517,7 @@ fn drive_lava_ignite(
     let mut ignites: Vec<([i32; 3], u8)> = Vec::new();
     for clock in 1..=ticks {
         let h_gate = hash3_for(lava_pos, clock, 0x9000);
-        if !h_gate.is_multiple_of(LAVA_IGNITE_RATE_DENOM) {
+        if !h_gate.is_multiple_of(4) {
             continue;
         }
         let mut step = FireStep::default();
@@ -578,17 +579,17 @@ fn lava_spread_horizontal_max_3_cells_per_mc_drop_off() {
 #[test]
 fn lava_ignite_gate_fires_at_least_once_in_400_ticks() {
     // The hash3_for-based gate is deterministic but pseudo-random.
-    // Over 400 clocks we expect the gate to fire many times for
-    // any fixed source position. Locks in the behaviour the wider
-    // integration tests above rely on.
+    // Over 400 clocks we expect the W275 sampled-attempt gate (1 in
+    // 4) to fire many times for any fixed source position. Locks in
+    // the behaviour the wider integration tests above rely on.
     let pos = [10, 7, -3];
     let mut hits = 0u32;
     for clock in 1..=400u64 {
         let h = hash3_for(pos, clock, 0x9000);
-        if h.is_multiple_of(LAVA_IGNITE_RATE_DENOM) {
+        if h.is_multiple_of(4) {
             hits += 1;
         }
     }
-    assert!(hits >= 10, "lava ignite gate fired only {hits} times in 400 ticks");
-    assert!(hits <= 60, "lava ignite gate fired too often: {hits}");
+    assert!(hits >= 60, "lava ignite gate fired only {hits} times in 400 ticks");
+    assert!(hits <= 160, "lava ignite gate fired too often: {hits}");
 }

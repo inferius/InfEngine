@@ -339,6 +339,10 @@ impl WorkerPool {
                                     // BFS clears + re-floods from scratch.
                                     let chunk_count = lj.affected.len();
                                     let bfs_start = std::time::Instant::now();
+                                    // W275: keep the warm-start Arcs for the
+                                    // post-BFS diff (refcount bumps only; the
+                                    // engines copy-on-write shared grids).
+                                    let warm_start = lj.existing_grids.clone();
                                     let mut local_state =
                                         lighting::LightingState::with_grids(lj.existing_grids);
                                     // W207: MC's last-chunk cache in front of the
@@ -384,20 +388,36 @@ impl WorkerPool {
                                             "W46.30: lighting BFS done",
                                         );
                                     }
-                                    // Collect the updated grids for the
-                                    // affected chunks only. Arc::clone is
-                                    // cheap here (just a refcount bump on
-                                    // the freshly created arcs).
-                                    let new_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> =
-                                        lj.affected
-                                            .iter()
-                                            .filter_map(|cc| {
-                                                local_state
-                                                    .get(*cc)
-                                                    .map(|g| (*cc, Arc::clone(g)))
-                                            })
-                                            .collect();
-                                    let affected_for_remesh = lj.affected;
+                                    // W275: DIFF against the warm-start
+                                    // grids and ship only chunks whose
+                                    // light actually changed. The old
+                                    // path returned the WHOLE segment
+                                    // unconditionally, so the post-load
+                                    // relight of a 105k-chunk world
+                                    // queued ~100 redundant remeshes per
+                                    // Lit result - pending_remesh pinned
+                                    // at ~26k, every mesh churned through
+                                    // remove+create (falling to the
+                                    // legacy render path once the uber
+                                    // pool filled) and render_ms crawled
+                                    // to 145-166. Identical grids don't
+                                    // need a grid swap or a remesh.
+                                    let mut new_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>> =
+                                        HashMap::new();
+                                    let mut affected_for_remesh: Vec<ChunkCoord> = Vec::new();
+                                    for cc in &lj.affected {
+                                        let Some(new_g) = local_state.get(*cc) else {
+                                            continue;
+                                        };
+                                        let unchanged = warm_start
+                                            .get(cc)
+                                            .is_some_and(|old| **old == **new_g);
+                                        if unchanged {
+                                            continue;
+                                        }
+                                        new_grids.insert(*cc, Arc::clone(new_g));
+                                        affected_for_remesh.push(*cc);
+                                    }
                                     if res_tx
                                         .send(WorkerResult::Lit {
                                             new_grids,

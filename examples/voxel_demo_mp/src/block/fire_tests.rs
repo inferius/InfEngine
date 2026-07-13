@@ -94,11 +94,7 @@ fn fire_block_is_dedicated_render() {
     );
 }
 
-#[test]
-fn lava_ignite_rate_denom_matches_w8_target() {
-    // W8.4: bumped from 60 to 20 so a lava bucket on grass ignites
-    // a flammable neighbour within ~10-20s of wall time. The
-    // constant is the inverse of MC's per-section random tick
-    // rate, scaled to our smaller worlds.
-    assert_eq!(super::fire::LAVA_IGNITE_RATE_DENOM, 20);
-}
+// W275: the per-cell LAVA_IGNITE_RATE_DENOM pin retired with the
+// full-walk emitter - lava ignition now samples per column (see
+// `fire_runtime::tick_lava_fire_emit`); the sampled-attempt gate is
+// pinned by `fire::tests::lava_ignite_gate_fires_at_least_once...`.
