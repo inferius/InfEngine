@@ -161,19 +161,31 @@ fn nether_for(seed: u32) -> Rc<NetherDim> {
 }
 
 /// One chunk column: 128-bit solidity per cell + biome + surface
-/// depth per column.
+/// depth per column. W269: `carved` = `solid` minus the nether_cave
+/// carver's cells (the dry-run mask) - the feature stage's floor and
+/// layer scans read it, like MC's live post-carve heightmaps.
 pub(crate) struct NetherCol {
     solid: Box<[[[u64; 2]; CHUNK_SIZE]; CHUNK_SIZE]>,
+    carved: Box<[[[u64; 2]; CHUNK_SIZE]; CHUNK_SIZE]>,
     pub(crate) biome: [[&'static str; CHUNK_SIZE]; CHUNK_SIZE],
     surface_depth: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
 }
 
 impl NetherCol {
+    /// The FILL solidity (pre-carve; the terrain paint reads this).
     pub(crate) fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
         if !(0..=TOP_Y).contains(&y) {
             return false;
         }
         (self.solid[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
+    }
+
+    /// W269: post-carve solidity (the feature floors).
+    pub(crate) fn is_solid_carved(&self, lx: usize, y: i32, lz: usize) -> bool {
+        if !(0..=TOP_Y).contains(&y) {
+            return false;
+        }
+        (self.carved[lx][lz][(y >> 6) as usize] >> (y & 63)) & 1 == 1
     }
 
     /// Solid cells between `y` and its run top (SurfaceSystem's
@@ -205,7 +217,11 @@ fn column_data(nd: &NetherDim, cx: i32, cz: i32, seed: u32) -> NetherCol {
             surface_depth[lx][lz] = nd.surface_depth(wx, wz, seed);
         }
     }
-    NetherCol { solid, biome, surface_depth }
+    // W269: the carver dry-run over a copy (same walks as the chunk
+    // carve; the features anchor to the carved floors).
+    let mut carved = solid.clone();
+    super::carver::carve_nether_mask(&mut carved, cx, cz, seed);
+    NetherCol { solid, carved, biome, surface_depth }
 }
 
 fn column_cached(nd: &NetherDim, cx: i32, cz: i32, seed: u32) -> Rc<NetherCol> {
@@ -292,7 +308,9 @@ fn terrain_block(
 }
 
 /// W268: the pre-feature terrain block at a world position (feature
-/// passes' cross-chunk read).
+/// passes' cross-chunk read). W269: carver-aware - a carved cell
+/// reads as the carver's lava / cave air, so features see the same
+/// world the chunk carve produces.
 pub(crate) fn nether_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> u16 {
     let seed = ctx.effective_seed();
     let nd = nether_for(seed);
@@ -301,7 +319,18 @@ pub(crate) fn nether_block_at(ctx: &WorldgenCtx, wx: i32, wy: i32, wz: i32) -> u
     let (lx, lz) = (wx.rem_euclid(cs) as usize, wz.rem_euclid(cs) as usize);
     let bedrock = super::features::block_id_by_name("bedrock").unwrap_or(45);
     let netherrack = super::features::block_id_by_name("netherrack").unwrap_or(1);
-    terrain_block(&nd, &col, lx, lz, wx, wy, wz, bedrock, netherrack)
+    let terrain = terrain_block(&nd, &col, lx, lz, wx, wy, wz, bedrock, netherrack);
+    if (0..=TOP_Y).contains(&wy)
+        && col.is_solid(lx, wy, lz)
+        && !col.is_solid_carved(lx, wy, lz)
+        // The chunk carve honors the replaceables tag (a gravel band
+        // keeps its shelf); the read must mirror it exactly.
+        && super::carver::nether_carvable(terrain)
+    {
+        // NetherWorldCarver.carveBlock's states.
+        return if wy <= 31 { LAVA_ID } else { 0 };
+    }
+    terrain
 }
 
 /// The faithful Nether chunk generator (behind `WorldGen::Nether`).
@@ -322,9 +351,12 @@ pub(crate) fn gen_nether_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         let (wx, wz) = (ox + x as i32, oz + z as i32);
         BlockId(terrain_block(&nd, &col, x, z, wx, wy, wz, bedrock, netherrack))
     });
+    // W269: the nether_cave carver cuts the painted fill (MC's
+    // fill -> surface -> carvers order; carved walls expose raw
+    // blocks, lava floods below 32).
+    super::carver::carve_nether(&mut chunk, coord, seed, [ox, oy, oz]);
     // W268: the biome decoration (glowstone, fire, deltas, fungi, the
-    // nether ore set) - after the terrain fill, like the overworld's
-    // decor pass.
+    // nether ore set) - after the carve, like MC's decoration stage.
     super::nether_features::place_from_coord_nether(&mut chunk, coord, ctx);
     chunk
 }
@@ -338,11 +370,12 @@ pub(crate) fn nether_floor_at(ctx: &WorldgenCtx, wx: i32, wz: i32) -> i32 {
     let col = column_cached(&nd, wx.div_euclid(cs), wz.div_euclid(cs), seed);
     let (lx, lz) = (wx.rem_euclid(cs) as usize, wz.rem_euclid(cs) as usize);
     // Scan down from just under the roof band for the first solid
-    // with open space above (a walkable nether floor).
+    // with open space above (a walkable nether floor). W269:
+    // post-carve bits, so spawns don't land on carved-away ledges.
     for y in (SEA_LEVEL..=TOP_Y - 8).rev() {
-        if col.is_solid(lx, y, lz)
-            && !col.is_solid(lx, y + 1, lz)
-            && !col.is_solid(lx, y + 2, lz)
+        if col.is_solid_carved(lx, y, lz)
+            && !col.is_solid_carved(lx, y + 1, lz)
+            && !col.is_solid_carved(lx, y + 2, lz)
         {
             return y;
         }

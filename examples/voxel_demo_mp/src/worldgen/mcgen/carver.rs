@@ -117,7 +117,7 @@ fn carvable(id: u16) -> bool {
     .contains(&id)
 }
 
-/// Where a carve pass writes: the real chunk slice (world gen), or the
+/// Where a carve pass writes: the real chunk slice (world gen), or a
 /// column solidity bitset (W226.1 dry-run - the post-carve heightmap
 /// the feature stage reads; MC updates its heightmaps on every carver
 /// `setBlock`, so features anchor to the carved floor, not the fill).
@@ -130,17 +130,32 @@ pub(crate) enum CarveSink<'a> {
     Mask {
         solid: &'a mut super::terrain::SolidBits,
     },
+    /// W269: the nether column bitset ([u64; 2] per cell, y 0..127).
+    NetherMask {
+        solid: &'a mut [[[u64; 2]; CHUNK_SIZE]; CHUNK_SIZE],
+    },
+}
+
+/// W269: the dimension-specific half of `carveBlock` (the overworld
+/// consults the aquifer; the NetherWorldCarver override is
+/// unconditional lava below minGenY + 32).
+pub(crate) enum CarveDim<'a> {
+    Overworld { ow: &'a Overworld, aquifer: &'a mut Aquifer },
+    Nether,
 }
 
 /// Everything one carve pass needs; threads through the tunnel
 /// recursion instead of MC's 15-argument methods.
 struct CarveCtx<'a> {
-    ow: &'a Overworld,
-    aquifer: &'a mut Aquifer,
+    dim: CarveDim<'a>,
     sink: CarveSink<'a>,
     /// Target chunk column coords.
     ccx: i32,
     ccz: i32,
+    /// The dimension band: minGenY + the ellipsoid top clamp
+    /// (`minGenY + genDepth - 1 - 7`).
+    min_y: i32,
+    top_protect: i32,
 }
 
 impl CarveCtx<'_> {
@@ -176,8 +191,8 @@ fn carve_ellipsoid(
     if (x - cc.center_x()).abs() > 16.0 + hr * 2.0 || (z - cc.center_z()).abs() > 16.0 + hr * 2.0 {
         return;
     }
-    let min_wy = ((y - vr).floor() as i32 - 1).max(MIN_GEN_Y + 1);
-    let max_wy = ((y + vr).floor() as i32 + 1).min(TOP_PROTECT);
+    let min_wy = ((y - vr).floor() as i32 - 1).max(cc.min_y + 1);
+    let max_wy = ((y + vr).floor() as i32 + 1).min(cc.top_protect);
     // Chunk sink: outside this vertical chunk entirely - the vertical
     // neighbours' replays own those cells. (The mask sink spans the
     // whole column.)
@@ -225,24 +240,37 @@ fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_g
             }
             let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
             let cur = chunk.get(ux, uy, uz).0;
-            if cur == 3 || block_id_by_name("mycelium") == Some(cur) {
-                *has_grass = true;
-            }
-            if !carvable(cur) {
-                return;
-            }
-            // getCarveState: at/below the configured lava_level (-56)
-            // the carve becomes lava unconditionally; above it the
-            // aquifer (with density 0) decides. Solid = the barrier
-            // pressure keeps the block.
-            let new = if wy <= LAVA_LEVEL {
-                BlockId(37)
-            } else {
-                match cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0) {
-                    Substance::Solid => return,
-                    Substance::Air => BlockId::AIR,
-                    Substance::Water => BlockId(36),
-                    Substance::Lava => BlockId(37),
+            let new = match &mut cc.dim {
+                CarveDim::Overworld { ow, aquifer } => {
+                    if cur == 3 || block_id_by_name("mycelium") == Some(cur) {
+                        *has_grass = true;
+                    }
+                    if !carvable(cur) {
+                        return;
+                    }
+                    // getCarveState: at/below the configured lava_level
+                    // (-56) the carve becomes lava unconditionally;
+                    // above it the aquifer (with density 0) decides.
+                    // Solid = the barrier pressure keeps the block.
+                    if wy <= LAVA_LEVEL {
+                        BlockId(37)
+                    } else {
+                        match aquifer.substance(ow, wx, wy, wz, 0.0) {
+                            Substance::Solid => return,
+                            Substance::Air => BlockId::AIR,
+                            Substance::Water => BlockId(36),
+                            Substance::Lava => BlockId(37),
+                        }
+                    }
+                }
+                CarveDim::Nether => {
+                    // NetherWorldCarver.carveBlock: replaceables per
+                    // the nether tag, unconditional lava at/below
+                    // minGenY + 31, cave air above - no aquifer.
+                    if !nether_carvable(cur) {
+                        return;
+                    }
+                    if wy <= cc.min_y + 31 { BlockId(37) } else { BlockId::AIR }
                 }
             };
             chunk.set(ux, uy, uz, new);
@@ -278,14 +306,52 @@ fn carve_block(cc: &mut CarveCtx<'_>, local: [i32; 3], world_xz: [i32; 2], has_g
             // At/below lava_level the carve is unconditional lava
             // (non-solid for the heightmap); above it the aquifer's
             // pressure seal keeps the bit.
-            if wy > LAVA_LEVEL
-                && matches!(cc.aquifer.substance(cc.ow, wx, wy, wz, 0.0), Substance::Solid)
+            if let CarveDim::Overworld { ow, aquifer } = &mut cc.dim
+                && wy > LAVA_LEVEL
+                && matches!(aquifer.substance(ow, wx, wy, wz, 0.0), Substance::Solid)
             {
                 return;
             }
             solid[ux][uz][w] &= !(1u64 << b);
         }
+        CarveSink::NetherMask { solid } => {
+            // W269: the nether column bitset (y 0..127). The bedrock
+            // shell keeps its bits (not in the replaceables tag);
+            // everything else the fill marks solid is carvable
+            // (netherrack / basalt / blackstone / soul / nylium).
+            if !(0..128).contains(&wy) {
+                return;
+            }
+            if super::surface_rule::is_bedrock_roof(wx, wy, wz, 127)
+                || super::surface_rule::is_bedrock_floor(wx, wy, wz, 0)
+            {
+                return;
+            }
+            let (ux, uz) = (lx as usize, lz as usize);
+            solid[ux][uz][(wy >> 6) as usize] &= !(1u64 << (wy & 63));
+        }
     }
+}
+
+/// The `nether_carver_replaceables` tag as engine ids: base stone
+/// families (overworld + nether), substrate_overworld (dirt / mud /
+/// moss / grass - NOT gravel, so the nether's gravel bands keep
+/// their shelves like vanilla), nyliums, wart blocks, soul sand/soil.
+pub(crate) fn nether_carvable(id: u16) -> bool {
+    static SET: OnceLock<HashSet<u16>> = OnceLock::new();
+    SET.get_or_init(|| {
+        [
+            "stone", "granite", "diorite", "andesite", "tuff", "deepslate",
+            "netherrack", "basalt", "blackstone", "dirt", "coarse_dirt",
+            "podzol", "rooted_dirt", "mycelium", "mud", "moss_block",
+            "grass_block", "crimson_nylium", "warped_nylium",
+            "nether_wart_block", "warped_wart_block", "soul_sand", "soul_soil",
+        ]
+        .iter()
+        .filter_map(|n| block_id_by_name(n))
+        .collect()
+    })
+    .contains(&id)
 }
 
 /// `CaveWorldCarver.shouldSkip`.
@@ -296,8 +362,12 @@ fn cave_skip(xd: f64, yd: f64, zd: f64, floor: f64) -> bool {
     xd * xd + yd * yd + zd * zd >= 1.0
 }
 
-/// `CaveWorldCarver.getThickness`.
-fn cave_thickness(r: &mut SplitMix64) -> f32 {
+/// `CaveWorldCarver.getThickness` (the nether override doubles it and
+/// drops the 1-in-10 bonus).
+fn cave_thickness(r: &mut SplitMix64, nether: bool) -> f32 {
+    if nether {
+        return (next_f32(r) * 2.0 + next_f32(r)) * 2.0;
+    }
     let mut t = next_f32(r) * 2.0 + next_f32(r);
     if next_int(r, 10) == 0 {
         t *= next_f32(r) * next_f32(r) * 3.0 + 1.0;
@@ -305,25 +375,59 @@ fn cave_thickness(r: &mut SplitMix64) -> f32 {
     t
 }
 
-/// One cave carver pass for source chunk `(scx, scz)` (the y range is
-/// the only difference between `cave` and `cave_extra_underground`).
-#[allow(clippy::too_many_arguments)]
-fn cave_carve(cc: &mut CarveCtx<'_>, r: &mut SplitMix64, scx: i32, scz: i32, y_min: i32, y_max: i32) {
+/// A carver-config float provider: MC's `ConstantFloat.sample`
+/// consumes NO rng roll, `UniformFloat` consumes one - the constants
+/// in the nether JSON must not burn the overworld's rolls.
+#[derive(Clone, Copy)]
+enum Roll {
+    Const(f64),
+    Uniform(f32, f32),
+}
+
+impl Roll {
+    fn sample(self, r: &mut SplitMix64) -> f64 {
+        match self {
+            Roll::Const(v) => v,
+            Roll::Uniform(lo, hi) => uniform_f(r, lo, hi) as f64,
+        }
+    }
+}
+
+/// One cave carver's configuration (`configured_carver` values +
+/// the per-class overrides).
+#[derive(Clone, Copy)]
+struct CaveCfg {
+    /// `getCaveBound()`: 15 overworld, 10 nether.
+    bound: i32,
+    y_min: i32,
+    y_max: i32,
+    /// `getYScale()` for tunnels: 1.0 overworld, 5.0 nether.
+    tunnel_y_scale: f64,
+    h_mul: Roll,
+    v_mul: Roll,
+    floor: Roll,
+    /// The JSON `yScale` (rooms only).
+    room_y_scale: Roll,
+    nether_thickness: bool,
+}
+
+/// One cave carver pass for source chunk `(scx, scz)`.
+fn cave_carve(cc: &mut CarveCtx<'_>, r: &mut SplitMix64, scx: i32, scz: i32, cfg: &CaveCfg) {
     let max_dist = (TUNNEL_RANGE * 2 - 1) * 16;
-    // nextInt(nextInt(nextInt(15) + 1) + 1), evaluated inside-out.
-    let inner = next_int(r, 15) + 1;
+    // nextInt(nextInt(nextInt(bound) + 1) + 1), evaluated inside-out.
+    let inner = next_int(r, cfg.bound) + 1;
     let mid = next_int(r, inner) + 1;
     let cave_count = next_int(r, mid);
     for _ in 0..cave_count {
         let x = (scx * 16 + next_int(r, 16)) as f64;
-        let y = uniform_i(r, y_min, y_max) as f64;
+        let y = uniform_i(r, cfg.y_min, cfg.y_max) as f64;
         let z = (scz * 16 + next_int(r, 16)) as f64;
-        let h_mul = uniform_f(r, 0.7, 1.4) as f64;
-        let v_mul = uniform_f(r, 0.8, 1.3) as f64;
-        let floor = uniform_f(r, -1.0, -0.4) as f64;
+        let h_mul = cfg.h_mul.sample(r);
+        let v_mul = cfg.v_mul.sample(r);
+        let floor = cfg.floor.sample(r);
         let mut tunnels = 1;
         if next_int(r, 4) == 0 {
-            let y_scale = uniform_f(r, 0.1, 0.9) as f64;
+            let y_scale = cfg.room_y_scale.sample(r);
             let thickness = 1.0 + next_f32(r) * 6.0;
             let hr = 1.5 + thickness as f64; // sin(pi/2) = 1
             carve_ellipsoid(cc, x + 1.0, y, z, hr, hr * y_scale, &|xd, yd, zd, _| {
@@ -334,9 +438,15 @@ fn cave_carve(cc: &mut CarveCtx<'_>, r: &mut SplitMix64, scx: i32, scz: i32, y_m
         for _ in 0..tunnels {
             let h_rot = next_f32(r) * TAU;
             let v_rot = (next_f32(r) - 0.5) / 4.0;
-            let thickness = cave_thickness(r);
+            let thickness = cave_thickness(r, cfg.nether_thickness);
             let dist = max_dist - next_int(r, max_dist / 4);
-            let params = TunnelParams { h_mul, v_mul, thickness, floor, y_scale: 1.0 };
+            let params = TunnelParams {
+                h_mul,
+                v_mul,
+                thickness,
+                floor,
+                y_scale: cfg.tunnel_y_scale,
+            };
             cave_tunnel(cc, r.next_u64(), [x, y, z], &params, h_rot, v_rot, 0, dist);
         }
     }
@@ -499,11 +609,12 @@ pub(crate) fn carve_mc(
 ) {
     let seed = ctx.effective_seed();
     let cc = CarveCtx {
-        ow,
-        aquifer,
+        dim: CarveDim::Overworld { ow, aquifer },
         sink: CarveSink::Chunk { chunk, origin },
         ccx: coord[0],
         ccz: coord[2],
+        min_y: MIN_GEN_Y,
+        top_protect: TOP_PROTECT,
     };
     run_carvers(cc, seed);
 }
@@ -521,23 +632,42 @@ pub(crate) fn carve_mask(
     ow: &Overworld,
     aquifer: &mut Aquifer,
 ) {
-    let cc = CarveCtx { ow, aquifer, sink: CarveSink::Mask { solid }, ccx: cx, ccz: cz };
+    let cc = CarveCtx {
+        dim: CarveDim::Overworld { ow, aquifer },
+        sink: CarveSink::Mask { solid },
+        ccx: cx,
+        ccz: cz,
+        min_y: MIN_GEN_Y,
+        top_protect: TOP_PROTECT,
+    };
     run_carvers(cc, seed);
 }
 
 /// The shared +-8 source-chunk replay; both sinks consume identical
 /// rng rolls (the walks never read what they carve).
 fn run_carvers(mut cc: CarveCtx<'_>, seed: u32) {
+    let cave_cfg = CaveCfg {
+        bound: 15,
+        y_min: CAVE_Y_MIN,
+        y_max: CAVE_Y_MAX,
+        tunnel_y_scale: 1.0,
+        h_mul: Roll::Uniform(0.7, 1.4),
+        v_mul: Roll::Uniform(0.8, 1.3),
+        floor: Roll::Uniform(-1.0, -0.4),
+        room_y_scale: Roll::Uniform(0.1, 0.9),
+        nether_thickness: false,
+    };
+    let extra_cfg = CaveCfg { y_max: CAVE_EXTRA_Y_MAX, ..cave_cfg };
     for scx in (cc.ccx - SOURCE_RANGE)..=(cc.ccx + SOURCE_RANGE) {
         for scz in (cc.ccz - SOURCE_RANGE)..=(cc.ccz + SOURCE_RANGE) {
             // Carver order matches the biome JSON list.
             let mut r0 = SplitMix64::new(stream_seed(seed, scx, scz, SALT_CARVER));
             if next_f32(&mut r0) <= CAVE_PROBABILITY {
-                cave_carve(&mut cc, &mut r0, scx, scz, CAVE_Y_MIN, CAVE_Y_MAX);
+                cave_carve(&mut cc, &mut r0, scx, scz, &cave_cfg);
             }
             let mut r1 = SplitMix64::new(stream_seed(seed, scx, scz, SALT_CARVER ^ (1 << 32)));
             if next_f32(&mut r1) <= CAVE_EXTRA_PROBABILITY {
-                cave_carve(&mut cc, &mut r1, scx, scz, CAVE_Y_MIN, CAVE_EXTRA_Y_MAX);
+                cave_carve(&mut cc, &mut r1, scx, scz, &extra_cfg);
             }
             let mut r2 = SplitMix64::new(stream_seed(seed, scx, scz, SALT_CARVER ^ (2 << 32)));
             if next_f32(&mut r2) <= CANYON_PROBABILITY {
@@ -545,6 +675,81 @@ fn run_carvers(mut cc: CarveCtx<'_>, seed: u32) {
             }
         }
     }
+}
+
+// --- W269: the nether_cave carver (`configured_carver/nether_cave`) ---
+
+/// nether_cave probability.
+const NETHER_CAVE_PROBABILITY: f32 = 0.2;
+/// The nether band + the ellipsoid top clamp (0 + 128 - 1 - 7).
+const NETHER_MIN_Y: i32 = 0;
+const NETHER_TOP_PROTECT: i32 = 120;
+
+fn nether_cave_cfg() -> CaveCfg {
+    CaveCfg {
+        // NetherWorldCarver.getCaveBound().
+        bound: 10,
+        // y: uniform [absolute 0 .. below_top 1] = 0..126.
+        y_min: 0,
+        y_max: 126,
+        // NetherWorldCarver.getYScale().
+        tunnel_y_scale: 5.0,
+        // horizontal/vertical_radius_multiplier: constant 1.0,
+        // floor_level: constant -0.7, yScale: constant 0.5 - constant
+        // providers consume no rng.
+        h_mul: Roll::Const(1.0),
+        v_mul: Roll::Const(1.0),
+        floor: Roll::Const(-0.7),
+        room_y_scale: Roll::Const(0.5),
+        nether_thickness: true,
+    }
+}
+
+/// The shared nether replay (single carver, every nether biome).
+fn run_nether_carvers(mut cc: CarveCtx<'_>, seed: u32) {
+    let cfg = nether_cave_cfg();
+    for scx in (cc.ccx - SOURCE_RANGE)..=(cc.ccx + SOURCE_RANGE) {
+        for scz in (cc.ccz - SOURCE_RANGE)..=(cc.ccz + SOURCE_RANGE) {
+            let mut r = SplitMix64::new(stream_seed(seed, scx, scz, SALT_CARVER ^ (3 << 32)));
+            if next_f32(&mut r) <= NETHER_CAVE_PROBABILITY {
+                cave_carve(&mut cc, &mut r, scx, scz, &cfg);
+            }
+        }
+    }
+}
+
+/// W269 entry: carve the nether chunk (after the fill + surface, like
+/// MC's applyCarvers - carved cells expose raw walls; lava floods
+/// below y 32).
+pub(crate) fn carve_nether(chunk: &mut Chunk, coord: ChunkCoord, seed: u32, origin: [i32; 3]) {
+    let cc = CarveCtx {
+        dim: CarveDim::Nether,
+        sink: CarveSink::Chunk { chunk, origin },
+        ccx: coord[0],
+        ccz: coord[2],
+        min_y: NETHER_MIN_Y,
+        top_protect: NETHER_TOP_PROTECT,
+    };
+    run_nether_carvers(cc, seed);
+}
+
+/// W269 entry: the nether column-bitset dry-run (identical streams),
+/// so the feature stage's floor/layer scans see post-carve terrain.
+pub(crate) fn carve_nether_mask(
+    solid: &mut [[[u64; 2]; CHUNK_SIZE]; CHUNK_SIZE],
+    cx: i32,
+    cz: i32,
+    seed: u32,
+) {
+    let cc = CarveCtx {
+        dim: CarveDim::Nether,
+        sink: CarveSink::NetherMask { solid },
+        ccx: cx,
+        ccz: cz,
+        min_y: NETHER_MIN_Y,
+        top_protect: NETHER_TOP_PROTECT,
+    };
+    run_nether_carvers(cc, seed);
 }
 
 #[cfg(test)]
@@ -587,10 +792,97 @@ mod tests {
     fn thickness_and_trapezoid_stay_in_range() {
         let mut r = SplitMix64::new(42);
         for _ in 0..2000 {
-            let t = cave_thickness(&mut r);
+            let t = cave_thickness(&mut r, false);
             assert!((0.0..=12.0).contains(&t), "thickness {t} out of range");
             let tr = trapezoid_f(&mut r, 0.0, 6.0, 2.0);
             assert!((0.0..=6.0).contains(&tr), "trapezoid {tr} out of range");
         }
+    }
+
+    /// W269: the nether_cave constants pin against its embedded JSON.
+    #[test]
+    fn nether_cave_constants_match_the_embedded_json() {
+        let j: serde_json::Value =
+            serde_json::from_str(include_str!("data/feature/carver/nether_cave.json")).unwrap();
+        let cfg = &j["config"];
+        assert!(
+            (cfg["probability"].as_f64().unwrap() - NETHER_CAVE_PROBABILITY as f64).abs() < 1e-6
+        );
+        let cave = nether_cave_cfg();
+        assert_eq!(cfg["y"]["min_inclusive"]["absolute"].as_i64().unwrap(), cave.y_min as i64);
+        assert_eq!(cfg["y"]["max_inclusive"]["below_top"].as_i64().unwrap(), (127 - cave.y_max) as i64);
+        assert!((cfg["floor_level"].as_f64().unwrap() - (-0.7)).abs() < 1e-9);
+        assert!((cfg["yScale"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+        assert!((cfg["horizontal_radius_multiplier"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert!((cfg["vertical_radius_multiplier"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        // `lava_level: above_bottom 10` is documentation only for the
+        // nether: NetherWorldCarver.carveBlock hardcodes minGenY + 31.
+    }
+
+    /// W269: the mask dry-run and the chunk carve open the same
+    /// cells; carved cells below y 32 flood with lava.
+    #[test]
+    fn nether_carver_cuts_tunnels_and_floods_lava() {
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 0,
+            dim: "nether".into(),
+            profile: crate::worldgen::WorldGen::Nether,
+        };
+        let mut carved_open = 0u32;
+        let mut carved_lava = 0u32;
+        // Scan a band of columns; the carver fires in ~20% of source
+        // chunks, so a few columns are plenty.
+        'outer: for cx in 0..40 {
+            let col = super::super::nether_mc::nether_col(&ctx, cx, 0);
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    for y in 1..=126 {
+                        if col.is_solid(lx, y, lz) && !col.is_solid_carved(lx, y, lz) {
+                            carved_open += 1;
+                            if y <= 31 {
+                                carved_lava += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if carved_open > 5_000 && carved_lava > 50 {
+                break 'outer;
+            }
+        }
+        assert!(carved_open > 5_000, "nether carver opened {carved_open} cells");
+        assert!(carved_lava > 50, "no carver cells below the lava line: {carved_lava}");
+        // The chunk carve opens what the mask predicts: regenerate a
+        // carved column's chunks; a carved cell must not hold the
+        // fill's rock (features may have decorated the fresh cave -
+        // glowstone, basalt columns, vines - so open-or-feature is
+        // the invariant, never netherrack/bedrock).
+        let netherrack =
+            super::super::features::block_id_by_name("netherrack").unwrap();
+        let bedrock = super::super::features::block_id_by_name("bedrock").unwrap();
+        let col = super::super::nether_mc::nether_col(&ctx, 7, 0);
+        let mut checked = 0u32;
+        for cy in 0..8 {
+            let ch = super::super::nether_mc::gen_nether_mc([7, cy, 0], &ctx);
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    for ly in 0..CHUNK_SIZE {
+                        let wy = cy * 16 + ly as i32;
+                        if !(1..=126).contains(&wy) {
+                            continue;
+                        }
+                        if col.is_solid(lx, wy, lz) && !col.is_solid_carved(lx, wy, lz) {
+                            let id = ch.get(lx, ly, lz).0;
+                            assert!(
+                                id != netherrack && id != bedrock,
+                                "carved cell at ({lx},{wy},{lz}) still terrain: {id}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 0, "the probe column had no carved cells - pick another");
     }
 }

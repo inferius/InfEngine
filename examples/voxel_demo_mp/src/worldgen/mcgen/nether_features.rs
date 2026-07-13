@@ -183,7 +183,8 @@ fn layer_y(ctx: &WorldgenCtx, wx: i32, wz: i32, layer: u32) -> Option<i32> {
     let mut current_empty = true; // y = TOP_Y + 1 is above the roof
     let mut current_layer = 0u32;
     for y in (1..=TOP_Y + 1).rev() {
-        let below_solid = col.is_solid(lx, y - 1, lz);
+        // W269: post-carve floors (MC's heightmaps track the carve).
+        let below_solid = col.is_solid_carved(lx, y - 1, lz);
         if below_solid && current_empty {
             let below_bedrock = super::surface_rule::is_bedrock_roof(wx, y - 1, wz, TOP_Y)
                 || super::surface_rule::is_bedrock_floor(wx, y - 1, wz, 0);
