@@ -127,6 +127,18 @@ pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i
         });
         return KIND_SPIDER;
     }
+    // W271: the fortress monster throne holds a BLAZE spawner in MC -
+    // the skeleton (ranged) stands in until the mob is ported.
+    if crate::worldgen::mcgen::fortress::is_throne_spawner(ctx, pos) {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| {
+            tracing::info!(
+                "W271: fortress throne spawners use SKELETON as the \
+                 blaze stand-in until the mob is ported"
+            );
+        });
+        return KIND_SKELETON;
+    }
     spawner_entity_kind(ctx.effective_seed(), pos)
 }
 

@@ -43,6 +43,7 @@ pub(crate) mod coral;
 pub(crate) mod data;
 pub(crate) mod density;
 pub(crate) mod features;
+pub(crate) mod fortress;
 pub(crate) mod geode;
 pub(crate) mod iceberg;
 pub(crate) mod igloo;

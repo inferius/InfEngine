@@ -851,6 +851,38 @@ pub(crate) const ANCIENT_CITY_ICE_BOX: LootTable = LootTable {
     }],
 };
 
+/// `loot_table/chests/nether_bridge.json` (26.1.2). Unmapped items
+/// (saddle, horse armors, flint_and_steel, the trim template) skip
+/// via the roller; enchanted gear drops unenchanted.
+pub(crate) const NETHER_BRIDGE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 4,
+            entries: &[
+                counted("diamond", 5, 1, 3),
+                counted("iron_ingot", 5, 1, 5),
+                counted("gold_ingot", 15, 1, 3),
+                one("golden_sword", 5),
+                one("golden_chestplate", 5),
+                one("flint_and_steel", 5),
+                counted("nether_wart", 5, 3, 7),
+                one("saddle", 10),
+                one("golden_horse_armor", 8),
+                one("copper_horse_armor", 5),
+                one("iron_horse_armor", 5),
+                one("diamond_horse_armor", 3),
+                counted("obsidian", 2, 2, 4),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 14), one("rib_armor_trim_smithing_template", 1)],
+        },
+    ],
+};
+
 /// `loot_table/chests/bastion_*.json` (26.1.2). Unmapped items
 /// (netherite ingots/scrap, smithing templates, spectral arrows,
 /// banner patterns, saddles, lodestone, music discs...) skip via the

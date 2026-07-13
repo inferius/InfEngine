@@ -318,6 +318,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::BastionHoglinStable => {
                                         &crate::loot::BASTION_HOGLIN_STABLE
                                     }
+                                    crate::workers::ChestLootKind::NetherBridge => {
+                                        &crate::loot::NETHER_BRIDGE
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

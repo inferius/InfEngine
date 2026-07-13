@@ -799,6 +799,7 @@ pub(crate) enum ChestLootKind {
     BastionOther,
     BastionBridge,
     BastionHoglinStable,
+    NetherBridge,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -880,6 +881,8 @@ pub(crate) fn chest_loot_kind(
             mcgen::bastion::BastionChest::Bridge => ChestLootKind::BastionBridge,
             mcgen::bastion::BastionChest::Other => ChestLootKind::BastionOther,
         }
+    } else if mcgen::fortress::is_fortress_chest(ctx, pos) {
+        ChestLootKind::NetherBridge
     } else {
         ChestLootKind::SimpleDungeon
     }
