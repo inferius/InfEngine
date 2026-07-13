@@ -1,76 +1,53 @@
-//! Nether portal frame detection + ignition (Phase F.5)
-//! plus cross-dim teleport orchestration (Phase F.6).
+//! Nether portal frame detection + ignition (W273: the full
+//! `PortalShape.java` port) plus cross-dim teleport orchestration.
 //!
-//! Algorithm (MC-faithful, simplified):
-//! 1. RMB hands us an air cell adjacent to obsidian.
-//! 2. Flood-fill up to `MAX_FLOOD_CELLS` cells of air, walking
-//!    only along the portal's two interior axes (the third axis
-//!    stays pinned to the hit cell's coord). The portal plane
-//!    is the axis-aligned 2D plane the obsidian frame sits in;
-//!    we infer it by checking which neighbouring cells are
-//!    obsidian.
-//! 3. Validate the flood region is a rectangle of size 2x3 or
-//!    3x2 (the legal MC sizes) and that EVERY perimeter cell
-//!    around it is obsidian.
-//! 4. Replace every interior air cell with `PORTAL_ID`. The
-//!    portal axis is implicit in the chosen plane; render-side
-//!    rotation will use it once dedicated portal rendering
-//!    lands.
+//! Ignition mirrors MC exactly:
+//! 1. Drop from the hit cell to the frame floor (<= 21 empties).
+//! 2. Walk left over frame-floored empties to the BOTTOM-LEFT
+//!    corner, then measure the width to the right edge (2..21;
+//!    every interior column must sit on obsidian).
+//! 3. Measure the height (3..21): both side walls obsidian, all
+//!    interior cells empty, a full obsidian top row.
+//! 4. An "empty" cell is air, fire or an existing portal block -
+//!    so re-igniting through fire works like MC.
+//! 5. Fill the interior with `PORTAL_ID` and hand the caller the
+//!    exact cell list for the edit broadcast.
 //!
-//! The fn is pure on `(World, hit_pos)` so unit tests build a
-//! tiny world with a hand-laid obsidian frame and assert the
-//! ignition outcome. The main.rs integration just calls
-//! `try_ignite` from the RMB handler with `&mut voxel.world`.
-//!
-//! Durability + cooldown are explicitly out of scope (see Phase
-//! F module docs for the full deferred list).
+//! The X axis is preferred, then Z (`findEmptyPortalShape`'s
+//! order when fire lands). The fn is pure on `(World, hit_pos)`
+//! so unit tests build tiny hand-laid frames.
 
 use infengine_voxel::{BlockId, World};
 
 use super::{OBSIDIAN_ID, PORTAL_ID};
 
-/// Hard cap on the flood-fill cell count, matching MC's
-/// portal-ignition limit (a 3x4 frame yields 12 interior cells;
-/// the cap is generous so it catches accidental ignitions inside
-/// large air pockets without iterating forever).
-pub(crate) const MAX_FLOOD_CELLS: usize = 22;
+/// `PortalShape` frame limits.
+pub(crate) const MIN_WIDTH: i32 = 2;
+pub(crate) const MAX_WIDTH: i32 = 21;
+pub(crate) const MIN_HEIGHT: i32 = 3;
+pub(crate) const MAX_HEIGHT: i32 = 21;
 
-/// Axis the portal plane runs along. The portal's "tall" side
-/// is always the Y axis; the third axis (the one perpendicular
-/// to the plane) is locked.
+/// Axis the portal plane runs along (MC `Direction.Axis`): `Xy`
+/// = the frame spans X (faces +/-Z), `Zy` spans Z.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PortalPlane {
-    /// XY plane - the portal faces along +/-Z. Interior cells
-    /// vary in X and Y; Z is fixed.
     Xy,
-    /// ZY plane - the portal faces along +/-X. Interior cells
-    /// vary in Z and Y; X is fixed.
     Zy,
 }
 
 /// Result of a portal-ignition attempt.
-///
-/// The fail kinds are surfaced so the chat / HUD can show a
-/// helpful diagnostic ("frame is the wrong size", "perimeter
-/// has gaps"). The runtime currently just no-ops on a fail;
-/// callers can wire the diagnostic into chat as a follow-up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IgniteResult {
-    /// Portal lit successfully. The frame interior was filled
-    /// with `PORTAL_ID` blocks; the caller should run a
-    /// world-edit broadcast for each cell.
-    Ok { plane: PortalPlane, interior_count: u8 },
-    /// The hit cell isn't adjacent to any obsidian, so there's
-    /// no candidate frame plane to start a flood-fill on.
+    /// Portal lit; `cells` is the exact interior (already edited
+    /// in place) for the caller's edit broadcast.
+    Ok { plane: PortalPlane, cells: Vec<[i32; 3]> },
+    /// No obsidian near the hit cell - nothing that could be a
+    /// frame (the caller falls through to plain fire placement).
     NoAdjacentObsidian,
-    /// The flood-fill exceeded `MAX_FLOOD_CELLS` - the player
-    /// is trying to ignite an air pocket too big to be a portal.
-    FloodTooLarge,
-    /// The flood region isn't a rectangle of size 2x3 or 3x2.
+    /// A frame-like anchor exists but the shape is invalid
+    /// (wrong size, missing wall/top, interior blocked - the
+    /// PortalShape walk folds perimeter gaps in here too).
     NotRectangular,
-    /// The rectangle's perimeter cells aren't all obsidian -
-    /// the frame has a gap.
-    PerimeterIncomplete,
     /// The cell already holds a portal block (idempotent no-op).
     AlreadyLit,
 }
@@ -82,217 +59,204 @@ impl IgniteResult {
     }
 }
 
-/// Attempt to ignite a portal at `hit_pos`. See module docs for
-/// the algorithm.
-///
-/// The hit cell MUST be air (otherwise there's nothing to
-/// flood-fill); the caller is expected to have run a sane
-/// "RMB target" check first. Returns the outcome; on `Ok` the
-/// world has been edited in place.
+/// `PortalShape.isEmpty`: air, fire (both kinds) or portal.
+fn is_empty_cell(id: u16) -> bool {
+    // 49 = fire, 56 = soul_fire (BlockTags.FIRE).
+    id == 0 || id == 49 || id == 56 || id == PORTAL_ID
+}
+
+fn is_frame(id: u16) -> bool {
+    id == OBSIDIAN_ID
+}
+
+/// A validated (or failed) portal shape - `PortalShape.java`.
+pub(crate) struct PortalShape {
+    pub(crate) plane: PortalPlane,
+    /// Interior bottom-left cell.
+    pub(crate) bottom_left: [i32; 3],
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) portal_blocks: i32,
+}
+
+impl PortalShape {
+    pub(crate) fn is_valid(&self) -> bool {
+        (MIN_WIDTH..=MAX_WIDTH).contains(&self.width)
+            && (MIN_HEIGHT..=MAX_HEIGHT).contains(&self.height)
+    }
+
+    /// The interior cell list (width x height in the plane).
+    pub(crate) fn cells(&self) -> Vec<[i32; 3]> {
+        let (dx, dz) = right_step(self.plane);
+        let mut out = Vec::with_capacity((self.width * self.height) as usize);
+        for w in 0..self.width {
+            for h in 0..self.height {
+                out.push([
+                    self.bottom_left[0] + dx * w,
+                    self.bottom_left[1] + h,
+                    self.bottom_left[2] + dz * w,
+                ]);
+            }
+        }
+        out
+    }
+}
+
+/// The plane's "right" direction (MC: axis X -> WEST, axis Z ->
+/// SOUTH).
+fn right_step(plane: PortalPlane) -> (i32, i32) {
+    match plane {
+        PortalPlane::Xy => (-1, 0),
+        PortalPlane::Zy => (0, 1),
+    }
+}
+
+/// `PortalShape.findAnyShape` for one axis.
+pub(crate) fn find_any_shape(world: &World, pos: [i32; 3], plane: PortalPlane) -> PortalShape {
+    let (rx, rz) = right_step(plane);
+    let fail = |anchor: [i32; 3]| PortalShape {
+        plane,
+        bottom_left: anchor,
+        width: 0,
+        height: 0,
+        portal_blocks: 0,
+    };
+    // calculateBottomLeft: sink to the frame floor (<= 21 down,
+    // clamped to the world floor), then walk left over
+    // frame-floored empties.
+    let mut p = pos;
+    let min_y = (pos[1] - 21).max(-64);
+    while p[1] > min_y && is_empty_cell(world.get([p[0], p[1] - 1, p[2]]).0) {
+        p[1] -= 1;
+    }
+    let (lx, lz) = (-rx, -rz);
+    let edge = distance_until_edge(world, p, lx, lz) - 1;
+    if edge < 0 {
+        return fail(p);
+    }
+    let bottom_left = [p[0] + lx * edge, p[1], p[2] + lz * edge];
+    // calculateWidth.
+    let width = distance_until_edge(world, bottom_left, rx, rz);
+    if !(MIN_WIDTH..=MAX_WIDTH).contains(&width) {
+        return fail(bottom_left);
+    }
+    // calculateHeight: rows of wall/interior checks, then the top
+    // frame row.
+    let mut portal_blocks = 0;
+    let mut height = MAX_HEIGHT;
+    'rows: for h in 0..MAX_HEIGHT {
+        let y = bottom_left[1] + h;
+        // Left wall (right * -1) and right wall (right * width).
+        let lw = [bottom_left[0] - rx, y, bottom_left[2] - rz];
+        if !is_frame(world.get(lw).0) {
+            height = h;
+            break;
+        }
+        let rw = [bottom_left[0] + rx * width, y, bottom_left[2] + rz * width];
+        if !is_frame(world.get(rw).0) {
+            height = h;
+            break;
+        }
+        for w in 0..width {
+            let c = [bottom_left[0] + rx * w, y, bottom_left[2] + rz * w];
+            let id = world.get(c).0;
+            if !is_empty_cell(id) {
+                height = h;
+                break 'rows;
+            }
+            if id == PORTAL_ID {
+                portal_blocks += 1;
+            }
+        }
+    }
+    let has_top = (0..width).all(|w| {
+        let c = [
+            bottom_left[0] + rx * w,
+            bottom_left[1] + height,
+            bottom_left[2] + rz * w,
+        ];
+        is_frame(world.get(c).0)
+    });
+    let height = if (MIN_HEIGHT..=MAX_HEIGHT).contains(&height) && has_top {
+        height
+    } else {
+        0
+    };
+    PortalShape { plane, bottom_left, width, height, portal_blocks }
+}
+
+/// `getDistanceUntilEdgeAboveFrame`: steps until the obsidian
+/// edge, requiring an obsidian floor under every empty cell.
+fn distance_until_edge(world: &World, pos: [i32; 3], dx: i32, dz: i32) -> i32 {
+    for step in 0..=MAX_WIDTH {
+        let c = [pos[0] + dx * step, pos[1], pos[2] + dz * step];
+        let id = world.get(c).0;
+        if !is_empty_cell(id) {
+            if is_frame(id) {
+                return step;
+            }
+            break;
+        }
+        let below = [c[0], c[1] - 1, c[2]];
+        if !is_frame(world.get(below).0) {
+            break;
+        }
+    }
+    0
+}
+
+/// `findEmptyPortalShape`: X axis first, then Z; valid + zero
+/// existing portal blocks.
+pub(crate) fn find_empty_shape(world: &World, pos: [i32; 3]) -> Option<PortalShape> {
+    let x = find_any_shape(world, pos, PortalPlane::Xy);
+    if x.is_valid() && x.portal_blocks == 0 {
+        return Some(x);
+    }
+    let z = find_any_shape(world, pos, PortalPlane::Zy);
+    if z.is_valid() && z.portal_blocks == 0 {
+        return Some(z);
+    }
+    None
+}
+
+/// Attempt to ignite a portal at `hit_pos` (the fire cell inside
+/// the frame). On `Ok` the interior has been filled in place.
 pub(crate) fn try_ignite(world: &mut World, hit_pos: [i32; 3]) -> IgniteResult {
     let cell = world.get(hit_pos);
     if cell.0 == PORTAL_ID {
         return IgniteResult::AlreadyLit;
     }
     if !cell.is_air() {
-        // Lighting a non-air, non-portal cell is meaningless -
-        // the player should target the air gap inside the frame.
         return IgniteResult::NoAdjacentObsidian;
     }
-    // Pick the plane: prefer XY if obsidian sits on the +/- Z
-    // sides (the frame walls run perpendicular to Z), otherwise
-    // try ZY. The two cases never collide for a well-formed
-    // axis-aligned frame.
-    let plane = match infer_plane(world, hit_pos) {
-        Some(p) => p,
-        None => return IgniteResult::NoAdjacentObsidian,
-    };
-    // Walk +/- along each free axis from the hit cell until we
-    // hit obsidian (= the frame wall). This gives us the
-    // bounding rectangle; doing a hard "first obsidian wins"
-    // sweep is more robust than a generic flood-fill, since the
-    // air "outside" the frame doesn't poison the result.
-    let rect = match scan_rect_from(world, hit_pos, plane) {
-        Some(r) => r,
-        None => return IgniteResult::NotRectangular,
-    };
-    // Accept 2x3 and 3x2 interior sizes (the two MC legal frames).
-    let width = (rect.a_max - rect.a_min + 1) as usize;
-    let height = (rect.b_max - rect.b_min + 1) as usize;
-    if width * height > MAX_FLOOD_CELLS {
-        return IgniteResult::FloodTooLarge;
-    }
-    let ok_dims = (width == 2 && height == 3) || (width == 3 && height == 2);
-    if !ok_dims {
-        return IgniteResult::NotRectangular;
-    }
-    // Every interior cell must be air (no obsidian protrusions).
-    // Skip the corner-of-perimeter check that MC also skips;
-    // the perimeter sweep below covers the four edges only.
-    let fixed = rect.fixed;
-    for a in rect.a_min..=rect.a_max {
-        for b in rect.b_min..=rect.b_max {
-            let p = make_pos(plane, a, b, fixed);
-            if !world.get(p).is_air() {
-                return IgniteResult::NotRectangular;
-            }
-        }
-    }
-    // Perimeter sweep: every cell one step outside the
-    // rectangle (along the four edges, NOT the corners) must be
-    // obsidian.
-    for b in rect.b_min..=rect.b_max {
-        for &edge_a in &[rect.a_min - 1, rect.a_max + 1] {
-            let p = make_pos(plane, edge_a, b, fixed);
-            if world.get(p).0 != OBSIDIAN_ID {
-                return IgniteResult::PerimeterIncomplete;
-            }
-        }
-    }
-    for a in rect.a_min..=rect.a_max {
-        for &edge_b in &[rect.b_min - 1, rect.b_max + 1] {
-            let p = make_pos(plane, a, edge_b, fixed);
-            if world.get(p).0 != OBSIDIAN_ID {
-                return IgniteResult::PerimeterIncomplete;
-            }
-        }
-    }
-    // Edit: every interior cell becomes a portal block.
-    let interior_count = (width * height) as u8;
-    for a in rect.a_min..=rect.a_max {
-        for b in rect.b_min..=rect.b_max {
-            let p = make_pos(plane, a, b, fixed);
+    if let Some(shape) = find_empty_shape(world, hit_pos) {
+        let cells = shape.cells();
+        for &p in &cells {
             world.set(p, BlockId(PORTAL_ID));
         }
+        return IgniteResult::Ok { plane: shape.plane, cells };
     }
-    IgniteResult::Ok {
-        plane,
-        interior_count,
-    }
-}
-
-/// Plane-aligned bounding rectangle of the air interior reached
-/// by sweeping +/-A and +/-B from the hit cell.
-struct InteriorRect {
-    a_min: i32,
-    a_max: i32,
-    b_min: i32,
-    b_max: i32,
-    /// Coord of the axis perpendicular to the plane (locked).
-    fixed: i32,
-}
-
-/// Walk +/- along each free axis of `plane`. Stops on the first
-/// non-air cell each direction. Returns the bounding rect of
-/// the air interior. Caps the sweep at `MAX_FLOOD_CELLS` cells
-/// per axis to defend against runaway air pockets.
-fn scan_rect_from(world: &World, seed: [i32; 3], plane: PortalPlane) -> Option<InteriorRect> {
-    let (ax_a, ax_b, ax_fixed) = match plane {
-        PortalPlane::Xy => (0, 1, 2),
-        PortalPlane::Zy => (2, 1, 0),
-    };
-    let mut a_min = seed[ax_a];
-    let mut a_max = seed[ax_a];
-    let mut b_min = seed[ax_b];
-    let mut b_max = seed[ax_b];
-    let fixed = seed[ax_fixed];
-
-    // Sweep +A
-    let mut steps = 0;
-    let mut probe = seed;
-    while steps < MAX_FLOOD_CELLS {
-        probe[ax_a] += 1;
-        if !world.get(probe).is_air() {
-            break;
-        }
-        a_max = probe[ax_a];
-        steps += 1;
-    }
-    // Sweep -A
-    steps = 0;
-    probe = seed;
-    while steps < MAX_FLOOD_CELLS {
-        probe[ax_a] -= 1;
-        if !world.get(probe).is_air() {
-            break;
-        }
-        a_min = probe[ax_a];
-        steps += 1;
-    }
-    // Sweep +B
-    steps = 0;
-    probe = seed;
-    while steps < MAX_FLOOD_CELLS {
-        probe[ax_b] += 1;
-        if !world.get(probe).is_air() {
-            break;
-        }
-        b_max = probe[ax_b];
-        steps += 1;
-    }
-    // Sweep -B
-    steps = 0;
-    probe = seed;
-    while steps < MAX_FLOOD_CELLS {
-        probe[ax_b] -= 1;
-        if !world.get(probe).is_air() {
-            break;
-        }
-        b_min = probe[ax_b];
-        steps += 1;
-    }
-    Some(InteriorRect {
-        a_min,
-        a_max,
-        b_min,
-        b_max,
-        fixed,
-    })
-}
-
-/// Decide which plane the candidate frame sits in by inspecting
-/// the four lateral neighbours of `hit_pos`.
-///
-/// A frame in the XY plane has its side walls along the X axis
-/// (cells at +/-X are obsidian for at least one interior row).
-/// A frame in the ZY plane has its side walls along the Z axis.
-/// We pick the plane by which neighbour axis shows obsidian.
-///
-/// Ambiguous (both X and Z neighbours look like walls -> picks
-/// XY to match MC's implicit axis pick).
-fn infer_plane(world: &World, p: [i32; 3]) -> Option<PortalPlane> {
-    let has_x_obsidian = world.get([p[0] - 1, p[1], p[2]]).0 == OBSIDIAN_ID
-        || world.get([p[0] + 1, p[1], p[2]]).0 == OBSIDIAN_ID;
-    let has_z_obsidian = world.get([p[0], p[1], p[2] - 1]).0 == OBSIDIAN_ID
-        || world.get([p[0], p[1], p[2] + 1]).0 == OBSIDIAN_ID;
-    // Bottom must also be obsidian for either plane (the floor
-    // of the frame). Without it we can't be inside a frame.
-    let has_floor = world.get([p[0], p[1] - 1, p[2]]).0 == OBSIDIAN_ID;
-    if !has_floor && !has_x_obsidian && !has_z_obsidian {
-        return None;
-    }
-    if has_x_obsidian {
-        // Side walls run along X => frame's free axis is X (and
-        // Y); the plane is XY.
-        Some(PortalPlane::Xy)
-    } else if has_z_obsidian {
-        // Side walls run along Z => frame's free axis is Z (and
-        // Y); the plane is ZY.
-        Some(PortalPlane::Zy)
-    } else if has_floor {
-        // Standing on a single obsidian block with no adjacent
-        // side walls means there's no frame yet - bail.
-        None
+    // Distinguish "no frame at all" (fall through to plain fire)
+    // from "there is obsidian here but the shape is wrong" (chat
+    // diagnostic), like the old ignition did.
+    let near_obsidian = [
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ]
+    .iter()
+    .any(|d| {
+        world
+            .get([hit_pos[0] + d[0], hit_pos[1] + d[1], hit_pos[2] + d[2]])
+            .0
+            == OBSIDIAN_ID
+    });
+    if near_obsidian {
+        IgniteResult::NotRectangular
     } else {
-        None
-    }
-}
-
-/// Reconstruct a world-space coord from plane-local axes.
-fn make_pos(plane: PortalPlane, a: i32, b: i32, fixed: i32) -> [i32; 3] {
-    match plane {
-        PortalPlane::Xy => [a, b, fixed],
-        PortalPlane::Zy => [fixed, b, a],
+        IgniteResult::NoAdjacentObsidian
     }
 }
 
@@ -300,9 +264,6 @@ fn make_pos(plane: PortalPlane, a: i32, b: i32, fixed: i32) -> [i32; 3] {
 // Phase F.6: cross-dim teleport helpers.
 // ---------------------------------------------------------------
 
-/// MC's overworld <-> nether ratio. One block in the overworld
-/// covers 8 blocks in the nether (and vice-versa).
-pub(crate) const COORD_SCALE: i32 = 8;
 
 /// Number of consecutive ticks the player must stand in a
 /// portal cell before triggering a teleport. W156: back to MC's
@@ -321,27 +282,27 @@ pub(crate) const PORTAL_COOLDOWN_TICKS: u32 = 60;
 /// "search a 16x16x16 cube" heuristic.
 pub(crate) const PORTAL_SEARCH_RADIUS: i32 = 16;
 
-/// Convert a position between paired dims. From the overworld
-/// to the nether: divide by 8 (Euclidean). From the nether to
-/// the overworld: multiply by 8.
-///
-/// String literals here mirror `dim::OVERWORLD` / `dim::NETHER`
-/// but keep the function lib-friendly (the lib crate doesn't
-/// see the bin-only `dim` module).
+/// Convert a position between paired dims. W273: the scale comes
+/// from the dimension registry (`DimensionType.getTeleportationScale`
+/// = from.coordinate_scale / to.coordinate_scale - nether 8, so
+/// overworld -> nether divides by 8, back multiplies), and the exit
+/// Y clamps into the TARGET's logical height (an overworld mountain
+/// portal at y 200 must not exit above the nether's bedrock roof).
 pub(crate) fn pair_coord(from_dim: &str, pos: [i32; 3]) -> [i32; 3] {
-    if from_dim == "overworld" {
-        [
-            pos[0].div_euclid(COORD_SCALE),
-            pos[1],
-            pos[2].div_euclid(COORD_SCALE),
-        ]
+    use crate::worldgen::dim_registry::dim_def_or_overworld;
+    let from = dim_def_or_overworld(from_dim);
+    let to = dim_def_or_overworld(pair_dim(from_dim));
+    let (x, z) = if from.coordinate_scale >= to.coordinate_scale {
+        let s = from.coordinate_scale / to.coordinate_scale.max(1);
+        (pos[0] * s, pos[2] * s)
     } else {
-        [
-            pos[0] * COORD_SCALE,
-            pos[1],
-            pos[2] * COORD_SCALE,
-        ]
-    }
+        let s = to.coordinate_scale / from.coordinate_scale.max(1);
+        (pos[0].div_euclid(s), pos[2].div_euclid(s))
+    };
+    let min_y = to.min_chunk_y * 16;
+    // Leave room for the frame + platform under the roof.
+    let max_y = min_y + to.logical_height - 6;
+    [x, pos[1].clamp(min_y + 1, max_y), z]
 }
 
 /// Resolve the paired dim name for `dim`. Today the pairing is
@@ -478,7 +439,8 @@ pub(crate) fn connected_portal_cells(world: &World, start: [i32; 3]) -> Vec<[i32
     let mut queue: Vec<[i32; 3]> = vec![start];
     let mut seen: std::collections::HashSet<[i32; 3]> = std::collections::HashSet::new();
     while let Some(p) = queue.pop() {
-        if out.len() >= 64 || !seen.insert(p) {
+        // W273: 21x21 frames hold up to 441 curtain cells.
+        if out.len() >= 512 || !seen.insert(p) {
             continue;
         }
         if world.get(p).0 != PORTAL_ID {

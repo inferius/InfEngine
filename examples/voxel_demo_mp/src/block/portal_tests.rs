@@ -1,4 +1,4 @@
-//! Test suite for `block::portal`.
+﻿//! Test suite for `block::portal`.
 //!
 //! W5.2c: split out of `portal.rs` (810 LOC -> 496 prod + this
 //! sibling) so each file lands well under the 500-LOC soft cap.
@@ -178,7 +178,9 @@ mod ignite_tests {
         w
     }
 
-    fn world_with_3x2_frame_zy(fixed_x: i32) -> World {
+    /// W273: PortalShape rejects 2-tall interiors (MIN_HEIGHT 3) -
+    /// the old engine wrongly accepted "3x2".
+    fn world_with_3wide_2tall_frame_zy(fixed_x: i32) -> World {
         let mut w = World::new();
         insert_neighbour_chunks(&mut w);
         // Interior: z in 0..=2 (3 wide), y in 0..=1 (2 tall).
@@ -194,14 +196,29 @@ mod ignite_tests {
         w
     }
 
+    /// A valid Z-plane frame: 3 wide x 3 tall.
+    fn world_with_3x3_frame_zy(fixed_x: i32) -> World {
+        let mut w = World::new();
+        insert_neighbour_chunks(&mut w);
+        for z in -1..=3 {
+            w.set([fixed_x, -1, z], BlockId(OBSIDIAN_ID));
+            w.set([fixed_x, 3, z], BlockId(OBSIDIAN_ID));
+        }
+        for y in -1..=3 {
+            w.set([fixed_x, y, -1], BlockId(OBSIDIAN_ID));
+            w.set([fixed_x, y, 3], BlockId(OBSIDIAN_ID));
+        }
+        w
+    }
+
     #[test]
     fn ignites_a_valid_2x3_xy_frame() {
         let mut w = world_with_2x3_frame_xy(5);
         let res = try_ignite(&mut w, [0, 0, 5]); // bottom-left interior
         assert!(res.is_ok(), "expected Ok, got {res:?}");
-        if let IgniteResult::Ok { plane, interior_count } = res {
-            assert_eq!(plane, PortalPlane::Xy);
-            assert_eq!(interior_count, 6);
+        if let IgniteResult::Ok { plane, cells } = &res {
+            assert_eq!(*plane, PortalPlane::Xy);
+            assert_eq!(cells.len(), 6);
         }
         // Every interior cell must now be PORTAL_ID.
         for x in 0..=1 {
@@ -216,16 +233,38 @@ mod ignite_tests {
     }
 
     #[test]
-    fn ignites_a_valid_3x2_zy_frame() {
-        let mut w = world_with_3x2_frame_zy(7);
+    fn ignites_from_any_interior_cell_after_sinking_to_the_floor() {
+        // MC's calculateBottomLeft drops from the fire cell to the
+        // frame floor - igniting at the TOP of the opening works.
+        let mut w = world_with_2x3_frame_xy(5);
+        let res = try_ignite(&mut w, [1, 2, 5]);
+        assert!(res.is_ok(), "expected Ok, got {res:?}");
+    }
+
+    #[test]
+    fn rejects_a_2_tall_frame() {
+        let mut w = world_with_3wide_2tall_frame_zy(7);
+        let res = try_ignite(&mut w, [7, 0, 0]);
+        assert!(
+            matches!(
+                res,
+                IgniteResult::NotRectangular
+            ),
+            "2-tall interiors are below MIN_HEIGHT, got {res:?}"
+        );
+    }
+
+    #[test]
+    fn ignites_a_valid_3x3_zy_frame() {
+        let mut w = world_with_3x3_frame_zy(7);
         let res = try_ignite(&mut w, [7, 0, 0]);
         assert!(res.is_ok(), "expected Ok, got {res:?}");
-        if let IgniteResult::Ok { plane, interior_count } = res {
-            assert_eq!(plane, PortalPlane::Zy);
-            assert_eq!(interior_count, 6);
+        if let IgniteResult::Ok { plane, cells } = &res {
+            assert_eq!(*plane, PortalPlane::Zy);
+            assert_eq!(cells.len(), 9);
         }
         for z in 0..=2 {
-            for y in 0..=1 {
+            for y in 0..=2 {
                 assert_eq!(
                     w.get([7, y, z]).0,
                     PORTAL_ID,
@@ -241,14 +280,10 @@ mod ignite_tests {
         // Punch a hole in the top row.
         w.set([0, 3, 5], BlockId::AIR);
         let res = try_ignite(&mut w, [0, 0, 5]);
-        // Either NotRectangular (the flood escapes through the
-        // gap) or PerimeterIncomplete (the flood stayed contained
-        // but a perimeter check failed). Both indicate the frame
-        // is invalid.
         assert!(
             matches!(
                 res,
-                IgniteResult::NotRectangular | IgniteResult::PerimeterIncomplete | IgniteResult::FloodTooLarge
+                IgniteResult::NotRectangular
             ),
             "expected ignition failure, got {res:?}"
         );
@@ -302,13 +337,13 @@ mod ignite_tests {
     }
 
     #[test]
-    fn rejects_oversize_air_pocket() {
-        // Build a 5x5 air pocket sealed with obsidian - more
-        // than MAX_FLOOD_CELLS interior cells. Must reject.
+    fn ignites_a_5x5_frame_like_mc() {
+        // W273: PortalShape accepts up to 21x21 - the old engine's
+        // 2x3-only rule wrongly rejected big frames.
         let mut w = World::new();
         insert_neighbour_chunks(&mut w);
         let fixed_z = 0;
-        // Frame: x in [-1..=5], y in [-1..=5]. Interior 5x5 = 25 cells > 22.
+        // Frame: x in [-1..=5], y in [-1..=5]. Interior 5 x 5.
         for x in -1..=5 {
             w.set([x, -1, fixed_z], BlockId(OBSIDIAN_ID));
             w.set([x, 5, fixed_z], BlockId(OBSIDIAN_ID));
@@ -318,14 +353,14 @@ mod ignite_tests {
             w.set([5, y, fixed_z], BlockId(OBSIDIAN_ID));
         }
         let res = try_ignite(&mut w, [0, 0, fixed_z]);
-        // Either FloodTooLarge (cap hit during flood) or
-        // NotRectangular (the 5x5 isn't a 2x3 or 3x2).
-        assert!(
-            matches!(
-                res,
-                IgniteResult::FloodTooLarge | IgniteResult::NotRectangular
-            ),
-            "expected size-rejection, got {res:?}"
-        );
+        assert!(res.is_ok(), "5x5 must ignite, got {res:?}");
+        if let IgniteResult::Ok { cells, .. } = &res {
+            assert_eq!(cells.len(), 25);
+        }
+        for x in 0..=4 {
+            for y in 0..=4 {
+                assert_eq!(w.get([x, y, fixed_z]).0, PORTAL_ID);
+            }
+        }
     }
 }

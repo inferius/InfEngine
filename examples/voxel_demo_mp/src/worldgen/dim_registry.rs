@@ -40,6 +40,10 @@ pub struct DimensionDef {
     pub vertical_chunks: i32,
     /// `coordinate_scale` (nether 8: one nether block = 8 overworld).
     pub coordinate_scale: i32,
+    /// `logical_height` - the band portals/chorus may target (the
+    /// nether's 128 keeps exits under the bedrock roof even though
+    /// its build band runs to 256).
+    pub logical_height: i32,
     /// `has_skylight` - drives the sky/celestial pass.
     pub has_skylight: bool,
     /// `has_ceiling` - a roofed dim (nether bedrock roof).
@@ -64,6 +68,7 @@ pub const DIMENSIONS: &[DimensionDef] = &[
         min_chunk_y: -4,
         vertical_chunks: 24,
         coordinate_scale: 1,
+        logical_height: 384,
         has_skylight: true,
         has_ceiling: false,
         ambient_light: 0.0,
@@ -77,6 +82,7 @@ pub const DIMENSIONS: &[DimensionDef] = &[
         min_chunk_y: 0,
         vertical_chunks: 16,
         coordinate_scale: 8,
+        logical_height: 128,
         has_skylight: false,
         has_ceiling: true,
         ambient_light: 0.1,
@@ -90,6 +96,7 @@ pub const DIMENSIONS: &[DimensionDef] = &[
         min_chunk_y: 0,
         vertical_chunks: 16,
         coordinate_scale: 1,
+        logical_height: 256,
         has_skylight: false,
         has_ceiling: false,
         ambient_light: 0.0,

@@ -29,26 +29,20 @@ pub(crate) fn apply_flint_and_steel_ignite(
     use crate::{EditMsg, Voxel, block};
     let cfg = bincode::config::standard();
     let res = block::portal::try_ignite(&mut vx.world, place_at);
-    if let block::portal::IgniteResult::Ok { interior_count, .. } = res {
-        let center = place_at;
-        let mut emitted: Vec<EditMsg> = Vec::with_capacity(interior_count as usize);
-        for dx in -3..=3 {
-            for dy in -3..=3 {
-                for dz in -3..=3 {
-                    let p = [center[0] + dx, center[1] + dy, center[2] + dz];
-                    if vx.world.get(p).0 == block::PORTAL_ID {
-                        vx.portal_positions.insert(p);
-                        emitted.push(EditMsg {
-                            x: p[0],
-                            y: p[1],
-                            z: p[2],
-                            block: block::PORTAL_ID,
-                        });
-                    }
+    if let block::portal::IgniteResult::Ok { cells, .. } = &res {
+        // W273: the shape hands over the exact interior (up to
+        // 21x21 - the old +-3 rescan missed big frames).
+        let mut emitted: Vec<EditMsg> = Vec::with_capacity(cells.len());
+        let mut coords: Vec<crate::ChunkCoord> = Vec::new();
+        for &p in cells {
+            vx.portal_positions.insert(p);
+            emitted.push(EditMsg { x: p[0], y: p[1], z: p[2], block: block::PORTAL_ID });
+            for c in Voxel::affected_chunks(p) {
+                if !coords.contains(&c) {
+                    coords.push(c);
                 }
             }
         }
-        let coords = Voxel::affected_chunks(place_at);
         vx.rebuild_chunks(&coords);
         match &mut vx.net {
             NetRole::Offline => {}
@@ -70,11 +64,7 @@ pub(crate) fn apply_flint_and_steel_ignite(
             std::time::Instant::now(),
             "Portal lit.".to_string(),
         ));
-    } else if matches!(
-        res,
-        block::portal::IgniteResult::NotRectangular
-            | block::portal::IgniteResult::PerimeterIncomplete
-    ) {
+    } else if matches!(res, block::portal::IgniteResult::NotRectangular) {
         vx.chat_log.push((
             std::time::Instant::now(),
             "Portal frame is invalid.".to_string(),
