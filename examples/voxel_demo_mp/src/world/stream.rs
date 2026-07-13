@@ -306,6 +306,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                     crate::workers::ChestLootKind::TrialChambersSupply => {
                                         &crate::loot::TRIAL_CHAMBERS_SUPPLY
                                     }
+                                    crate::workers::ChestLootKind::BastionTreasure => {
+                                        &crate::loot::BASTION_TREASURE
+                                    }
+                                    crate::workers::ChestLootKind::BastionOther => {
+                                        &crate::loot::BASTION_OTHER
+                                    }
+                                    crate::workers::ChestLootKind::BastionBridge => {
+                                        &crate::loot::BASTION_BRIDGE
+                                    }
+                                    crate::workers::ChestLootKind::BastionHoglinStable => {
+                                        &crate::loot::BASTION_HOGLIN_STABLE
+                                    }
                                     crate::workers::ChestLootKind::SimpleDungeon => {
                                         &crate::loot::SIMPLE_DUNGEON
                                     }

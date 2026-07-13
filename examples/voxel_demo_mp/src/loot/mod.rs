@@ -851,6 +851,228 @@ pub(crate) const ANCIENT_CITY_ICE_BOX: LootTable = LootTable {
     }],
 };
 
+/// `loot_table/chests/bastion_*.json` (26.1.2). Unmapped items
+/// (netherite ingots/scrap, smithing templates, spectral arrows,
+/// banner patterns, saddles, lodestone, music discs...) skip via the
+/// roller; enchanted gear drops unenchanted.
+pub(crate) const BASTION_TREASURE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 3,
+            entries: &[
+                one("netherite_ingot", 15),
+                one("ancient_debris", 10),
+                one("netherite_scrap", 8),
+                counted("ancient_debris", 4, 2, 2),
+                one("diamond_sword", 6),
+                one("diamond_spear", 6),
+                one("diamond_chestplate", 6),
+                one("diamond_helmet", 6),
+                one("diamond_leggings", 6),
+                one("diamond_boots", 6),
+                one("diamond_sword", 6),
+                one("diamond_spear", 6),
+                one("diamond_chestplate", 5),
+                one("diamond_helmet", 5),
+                one("diamond_boots", 5),
+                one("diamond_leggings", 5),
+                counted("diamond", 5, 2, 6),
+                one("enchanted_golden_apple", 2),
+            ],
+        },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 4,
+            entries: &[
+                counted("spectral_arrow", 1, 12, 25),
+                counted("gold_block", 1, 2, 5),
+                counted("iron_block", 1, 2, 5),
+                counted("gold_ingot", 1, 3, 9),
+                counted("iron_ingot", 1, 3, 9),
+                counted("crying_obsidian", 1, 3, 5),
+                counted("quartz", 1, 8, 23),
+                counted("gilded_blackstone", 1, 5, 15),
+                counted("magma_cream", 1, 3, 8),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("netherite_upgrade_smithing_template", 1)],
+        },
+    ],
+};
+
+pub(crate) const BASTION_OTHER: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("diamond_pickaxe", 6),
+                one("diamond_shovel", 6),
+                one("crossbow", 6),
+                one("ancient_debris", 12),
+                one("netherite_scrap", 4),
+                counted("spectral_arrow", 10, 10, 22),
+                one("piglin_banner_pattern", 9),
+                one("music_disc_pigstep", 5),
+                counted("golden_carrot", 12, 6, 17),
+                one("golden_apple", 9),
+                one("book", 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 2,
+            entries: &[
+                one("iron_sword", 2),
+                one("iron_block", 2),
+                one("golden_boots", 1),
+                one("golden_axe", 1),
+                one("gold_block", 2),
+                one("crossbow", 1),
+                counted("gold_ingot", 2, 1, 6),
+                counted("iron_ingot", 2, 1, 6),
+                one("golden_sword", 1),
+                one("golden_chestplate", 1),
+                one("golden_helmet", 1),
+                one("golden_leggings", 1),
+                one("golden_boots", 1),
+                counted("crying_obsidian", 2, 1, 5),
+            ],
+        },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 4,
+            entries: &[
+                counted("gilded_blackstone", 2, 1, 5),
+                counted("iron_chain", 1, 2, 10),
+                counted("magma_cream", 2, 2, 6),
+                counted("bone_block", 1, 3, 6),
+                counted("iron_nugget", 1, 2, 8),
+                counted("obsidian", 1, 4, 6),
+                counted("gold_nugget", 1, 2, 8),
+                counted("string", 1, 4, 6),
+                counted("arrow", 2, 5, 17),
+                one("cooked_porkchop", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
+        },
+    ],
+};
+
+pub(crate) const BASTION_BRIDGE: LootTable = LootTable {
+    pools: &[
+        LootPool { rolls_min: 1, rolls_max: 1, entries: &[one("lodestone", 1)] },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 2,
+            entries: &[
+                one("crossbow", 1),
+                counted("spectral_arrow", 1, 10, 28),
+                counted("gilded_blackstone", 1, 8, 12),
+                counted("crying_obsidian", 1, 3, 8),
+                one("gold_block", 1),
+                counted("gold_ingot", 1, 4, 9),
+                counted("iron_ingot", 1, 4, 9),
+                one("golden_sword", 1),
+                one("golden_chestplate", 1),
+                one("golden_helmet", 1),
+                one("golden_leggings", 1),
+                one("golden_boots", 1),
+                one("golden_axe", 1),
+            ],
+        },
+        LootPool {
+            rolls_min: 2,
+            rolls_max: 4,
+            entries: &[
+                counted("string", 1, 1, 6),
+                counted("leather", 1, 1, 3),
+                counted("arrow", 1, 5, 17),
+                counted("iron_nugget", 1, 2, 6),
+                counted("gold_nugget", 1, 2, 6),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
+        },
+    ],
+};
+
+pub(crate) const BASTION_HOGLIN_STABLE: LootTable = LootTable {
+    pools: &[
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[
+                one("diamond_shovel", 15),
+                one("diamond_pickaxe", 12),
+                one("netherite_scrap", 8),
+                one("ancient_debris", 12),
+                counted("ancient_debris", 5, 2, 2),
+                one("saddle", 12),
+                counted("gold_block", 16, 2, 4),
+                counted("golden_carrot", 10, 8, 17),
+                one("golden_apple", 10),
+            ],
+        },
+        LootPool {
+            rolls_min: 3,
+            rolls_max: 4,
+            entries: &[
+                one("golden_axe", 1),
+                counted("crying_obsidian", 1, 1, 5),
+                counted("glowstone", 1, 3, 6),
+                counted("gilded_blackstone", 1, 2, 5),
+                counted("soul_sand", 1, 2, 7),
+                counted("crimson_nylium", 1, 2, 7),
+                counted("gold_nugget", 1, 2, 8),
+                counted("leather", 1, 1, 3),
+                counted("arrow", 1, 5, 17),
+                counted("string", 1, 3, 8),
+                counted("porkchop", 1, 2, 5),
+                counted("cooked_porkchop", 1, 2, 5),
+                counted("crimson_fungus", 1, 2, 7),
+                counted("crimson_roots", 1, 2, 7),
+            ],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
+        },
+        LootPool {
+            rolls_min: 1,
+            rolls_max: 1,
+            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
+        },
+    ],
+};
+
 /// `loot_table/chests/trial_chambers/*.json` (26.1.2). The reward /
 /// ominous tables belong to the vault mechanic (follow-up wave);
 /// unmapped items (trial_key, tipped arrows, scaffolding, hanging

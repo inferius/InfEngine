@@ -21,12 +21,13 @@ def norm(p, base):
 
 
 # Template-pool subtrees the engine ports (W245 village, W251 outpost,
-# W261 ancient city, W263 trial chambers).
+# W261 ancient city, W263 trial chambers, W270 bastion).
 for subtree in (
     "worldgen/template_pool/village",
     "worldgen/template_pool/pillager_outpost",
     "worldgen/template_pool/ancient_city",
     "worldgen/template_pool/trial_chambers",
+    "worldgen/template_pool/bastion",
 ):
     for root, dirs, files in os.walk(os.path.join(src, subtree)):
         for f in sorted(files):
@@ -51,6 +52,7 @@ for subtree in (
     "structure/woodland_mansion",
     "structure/ancient_city",
     "structure/trial_chambers",
+    "structure/bastion",
 ):
     for root, dirs, files in os.walk(os.path.join(src2, subtree)):
         for f in sorted(files):

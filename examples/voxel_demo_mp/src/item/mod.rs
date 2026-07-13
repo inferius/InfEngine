@@ -2511,6 +2511,16 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     // W268: nether forest roots.
     ItemType { id: 833, name: "crimson_roots", display: Some("Crimson Roots"), places: Some(833), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 834, name: "warped_roots", display: Some("Warped Roots"), places: Some(834), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W270: the bastion's blackstone + quartz family.
+    ItemType { id: 835, name: "chiseled_polished_blackstone", display: Some("Chiseled Polished Blackstone"), places: Some(835), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 836, name: "cracked_polished_blackstone_bricks", display: Some("Cracked Polished Blackstone Bricks"), places: Some(836), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 837, name: "quartz_block", display: Some("Block of Quartz"), places: Some(837), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 838, name: "smooth_quartz", display: Some("Smooth Quartz Block"), places: Some(838), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 839, name: "blackstone_stairs", display: Some("Blackstone Stairs"), places: Some(839), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 840, name: "blackstone_slab", display: Some("Blackstone Slab"), places: Some(840), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 841, name: "blackstone_wall", display: Some("Blackstone Wall"), places: Some(841), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 842, name: "polished_blackstone_brick_stairs", display: Some("Polished Blackstone Brick Stairs"), places: Some(842), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    ItemType { id: 843, name: "smooth_quartz_slab", display: Some("Smooth Quartz Slab"), places: Some(843), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

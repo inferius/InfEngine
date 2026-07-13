@@ -1162,6 +1162,10 @@ pub(crate) fn place_from_coord_nether(chunk: &mut Chunk, coord: ChunkCoord, ctx:
     }
     let seed = ctx.effective_seed();
 
+    // W270: structures precede the step features (surface_structures)
+    // - the bastion carves before the decoration passes.
+    super::bastion::place_bastions(chunk, coord, ctx, origin);
+
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
             let biome = biome_of(ctx, scx, scz);

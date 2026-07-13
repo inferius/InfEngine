@@ -795,6 +795,10 @@ pub(crate) enum ChestLootKind {
     TrialChambersEntrance,
     TrialChambersIntersection,
     TrialChambersSupply,
+    BastionTreasure,
+    BastionOther,
+    BastionBridge,
+    BastionHoglinStable,
 }
 
 /// The membership chain behind [`ChestLootKind`]. Worker-side only:
@@ -866,6 +870,15 @@ pub(crate) fn chest_loot_kind(
             mcgen::trial_chambers::ChamberChest::Supply => {
                 ChestLootKind::TrialChambersSupply
             }
+        }
+    } else if let Some(k) = mcgen::bastion::bastion_chest_at(ctx, pos) {
+        match k {
+            mcgen::bastion::BastionChest::Treasure => ChestLootKind::BastionTreasure,
+            mcgen::bastion::BastionChest::HoglinStable => {
+                ChestLootKind::BastionHoglinStable
+            }
+            mcgen::bastion::BastionChest::Bridge => ChestLootKind::BastionBridge,
+            mcgen::bastion::BastionChest::Other => ChestLootKind::BastionOther,
         }
     } else {
         ChestLootKind::SimpleDungeon

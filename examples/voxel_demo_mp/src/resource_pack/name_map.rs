@@ -200,6 +200,12 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 828, block: "copper_trapdoor",            top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 829, block: "oxidized_copper_trapdoor",   top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 832, block: "cut_copper_slab",            top: "", bottom: "", sides: "" },
+    // W270 - bastion blackstone/quartz shapes (JSON pipeline by name).
+    BlockNameMap { infengine_id: 839, block: "blackstone_stairs",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 840, block: "blackstone_slab",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 841, block: "blackstone_wall",            top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 842, block: "polished_blackstone_brick_stairs", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 843, block: "smooth_quartz_slab",         top: "", bottom: "", sides: "" },
     // W35.3 - Stone variants + wood variants + wool + building blocks.
     BlockNameMap { infengine_id: 83, block: "granite",          top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 84, block: "diorite",          top: "", bottom: "", sides: "" },
@@ -890,6 +896,8 @@ mod tests {
             799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809, 810,
             // W263: trial-chambers shape blocks (same rule).
             816, 823, 824, 825, 826, 827, 828, 829, 832,
+            // W270: bastion blackstone/quartz shape blocks (same rule).
+            839, 840, 841, 842, 843,
             543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
             568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)

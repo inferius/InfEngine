@@ -3345,4 +3345,59 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["warped_roots.png"], keep_alpha: true },
         sides: TileSpec { col: 0, row: 0, files: &["warped_roots.png"], keep_alpha: true },
     },
+    // W270: the bastion remnant's blackstone + quartz family.
+    BlockType {
+        id: 835, name: "chiseled_polished_blackstone", color: [0.22, 0.20, 0.24], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["chiseled_polished_blackstone.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["chiseled_polished_blackstone.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["chiseled_polished_blackstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 836, name: "cracked_polished_blackstone_bricks", color: [0.20, 0.18, 0.22], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["cracked_polished_blackstone_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["cracked_polished_blackstone_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["cracked_polished_blackstone_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 837, name: "quartz_block", color: [0.92, 0.90, 0.86], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["quartz_block_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["quartz_block_side.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 838, name: "smooth_quartz", color: [0.94, 0.92, 0.88], transparent: false, flags: 0,
+        top: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 839, name: "blackstone_stairs", color: [0.16, 0.14, 0.18], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["blackstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 840, name: "blackstone_slab", color: [0.16, 0.14, 0.18], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["blackstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 841, name: "blackstone_wall", color: [0.16, 0.14, 0.18], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["blackstone_top.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["blackstone.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 842, name: "polished_blackstone_brick_stairs", color: [0.20, 0.18, 0.22], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["polished_blackstone_bricks.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["polished_blackstone_bricks.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["polished_blackstone_bricks.png"], keep_alpha: false },
+    },
+    BlockType {
+        id: 843, name: "smooth_quartz_slab", color: [0.94, 0.92, 0.88], transparent: true, flags: F_DEDICATED_RENDER,
+        top: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+        bottom: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+        sides: TileSpec { col: 0, row: 0, files: &["quartz_block_bottom.png"], keep_alpha: false },
+    },
 ];
