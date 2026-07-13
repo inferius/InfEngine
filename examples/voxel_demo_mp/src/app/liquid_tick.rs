@@ -580,6 +580,16 @@ impl Voxel {
         // that don't fit keep their slot in the schedule and tick on
         // the next game tick.
         const MAX_LIQUID_PER_FRAME: usize = 4096;
+        // W272: a TIME budget on top of the cell cap. A fresh ocean
+        // world's settle storm schedules tens of thousands of cells;
+        // 4096 cells x ~10 world.gets each x 2+ catch-up ticks was a
+        // ~90 ms `liquids` phase at 10 FPS - a death spiral (slower
+        // frames -> more catch-up ticks -> slower frames). Unprocessed
+        // cells stay due in the schedule (pop_due only removes what we
+        // handle), so the settle just spreads over more frames.
+        const LIQUID_TIME_BUDGET: std::time::Duration =
+            std::time::Duration::from_millis(4);
+        let budget_start = std::time::Instant::now();
         // W103: chunks touched by liquid edits this frame, deduplicated
         // across every catch-up tick. Rebuilt ONCE at the end instead
         // of per-cell (per-cell cloned the same ~8 KB chunk thousands
@@ -593,6 +603,13 @@ impl Voxel {
             let now = self.liquid_clock;
             let mut processed = 0usize;
             while processed < MAX_LIQUID_PER_FRAME {
+                // Check the time budget every 64 cells (Instant::now
+                // per cell would itself cost).
+                if processed.is_multiple_of(64)
+                    && budget_start.elapsed() > LIQUID_TIME_BUDGET
+                {
+                    break;
+                }
                 let Some(pos) = self.liquid_schedule.pop_due(now) else {
                     break;
                 };
@@ -616,6 +633,12 @@ impl Voxel {
                 if liquid.infinite_source {
                     self.tick_liquid_merge(liquid);
                 }
+            }
+            // W272: over budget - skip further catch-up ticks this
+            // frame (the accumulator carries over; the schedule keeps
+            // the unprocessed cells due).
+            if budget_start.elapsed() > LIQUID_TIME_BUDGET {
+                break;
             }
         }
         // Drop any backlog beyond the catch-up cap so the accumulator
