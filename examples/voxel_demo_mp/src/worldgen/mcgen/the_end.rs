@@ -120,7 +120,122 @@ pub(crate) fn gen_end(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
             BlockId::AIR
         }
     });
+    // W274: the ten obsidian pillars of the main island.
+    place_end_spikes(&mut chunk, ctx, [ox, oy, oz]);
     chunk
+}
+
+// ----------------------------------------------------------------
+// W274 - EndSpikeFeature: the ten obsidian pillars.
+// ----------------------------------------------------------------
+
+/// One pillar (`EndSpikeFeature.EndSpike`).
+struct EndSpike {
+    center_x: i32,
+    center_z: i32,
+    radius: i32,
+    height: i32,
+    guarded: bool,
+}
+
+const SALT_SPIKES: u64 = 0xD4E6_0320;
+
+/// `SpikeCacheLoader.load`: sizes = shuffled 0..9, positions on the
+/// 42-radius circle; radius 2 + size/3, height 76 + size*3, the two
+/// smallest-but-one sizes carry iron-bar cages.
+fn spikes_for_seed(seed: u32) -> Vec<EndSpike> {
+    use super::features::stream_seed;
+    use super::noise::SplitMix64;
+    let mut rng = SplitMix64::new(stream_seed(seed, 0, 0, SALT_SPIKES));
+    let mut sizes: Vec<i32> = (0..10).collect();
+    // Fisher-Yates (Util.toShuffledList).
+    for i in (1..sizes.len()).rev() {
+        let j = (rng.next_u64() % (i as u64 + 1)) as usize;
+        sizes.swap(i, j);
+    }
+    (0..10)
+        .map(|i| {
+            let angle = 2.0 * (-std::f64::consts::PI + std::f64::consts::PI / 10.0 * i as f64);
+            let size = sizes[i as usize];
+            EndSpike {
+                center_x: (42.0 * angle.cos()).floor() as i32,
+                center_z: (42.0 * angle.sin()).floor() as i32,
+                radius: 2 + size / 3,
+                height: 76 + size * 3,
+                guarded: size == 1 || size == 2,
+            }
+        })
+        .collect()
+}
+
+/// `EndSpikeFeature.placeSpike`, chunk-clipped. The end-crystal
+/// ENTITY is the dragon-fight follow-up; its bedrock pedestal + the
+/// fire cell place like MC so the pillar tops read right.
+fn place_end_spikes(chunk: &mut Chunk, ctx: &WorldgenCtx, origin: [i32; 3]) {
+    let seed = ctx.effective_seed();
+    let cs = CHUNK_SIZE as i32;
+    let iron_bars = super::features::block_id_by_name("iron_bars").unwrap_or(0);
+    let bedrock = super::features::block_id_by_name("bedrock").unwrap_or(45);
+    let obsidian = super::features::block_id_by_name("obsidian").unwrap_or(0);
+    const FIRE_ID: u16 = 49;
+    let put = |chunk: &mut Chunk, wx: i32, wy: i32, wz: i32, id: u16| {
+        let (lx, ly, lz) = (wx - origin[0], wy - origin[1], wz - origin[2]);
+        if (0..cs).contains(&lx) && (0..cs).contains(&ly) && (0..cs).contains(&lz) {
+            chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+        }
+    };
+    for spike in spikes_for_seed(seed) {
+        // Quick reject: the spike's write box (radius + the cage).
+        let reach = spike.radius.max(2);
+        if origin[0] + cs <= spike.center_x - reach
+            || origin[0] > spike.center_x + reach
+            || origin[2] + cs <= spike.center_z - reach
+            || origin[2] > spike.center_z + reach
+        {
+            continue;
+        }
+        let r = spike.radius;
+        // The obsidian column (full band up to `height`) + the air
+        // sweep above y 65 that shears the island around it.
+        for wx in (spike.center_x - r)..=(spike.center_x + r) {
+            for wz in (spike.center_z - r)..=(spike.center_z + r) {
+                let dx = wx - spike.center_x;
+                let dz = wz - spike.center_z;
+                let inside = dx * dx + dz * dz <= r * r + 1;
+                for wy in 0..=(spike.height + 10) {
+                    if inside && wy < spike.height {
+                        put(chunk, wx, wy, wz, obsidian);
+                    } else if wy > 65 {
+                        put(chunk, wx, wy, wz, 0);
+                    }
+                }
+            }
+        }
+        // The guarded cage: iron bars around + over the crystal.
+        if spike.guarded {
+            for dx in -2..=2 {
+                for dz in -2..=2 {
+                    for dy in 0..=3 {
+                        let x_side = dx == -2 || dx == 2;
+                        let z_side = dz == -2 || dz == 2;
+                        let top = dy == 3;
+                        if x_side || z_side || top {
+                            put(
+                                chunk,
+                                spike.center_x + dx,
+                                spike.height + dy,
+                                spike.center_z + dz,
+                                iron_bars,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // The crystal pedestal (entity deferred): bedrock + fire.
+        put(chunk, spike.center_x, spike.height, spike.center_z, bedrock);
+        put(chunk, spike.center_x, spike.height + 1, spike.center_z, FIRE_ID);
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +249,53 @@ mod tests {
             dim: "end".into(),
             profile: WorldGen::End,
         }
+    }
+
+    /// W274: the ten pillars stand on the 42-radius circle - full
+    /// obsidian columns, a bedrock crystal pedestal + fire on top,
+    /// and iron-bar cages on exactly the two guarded sizes.
+    #[test]
+    fn end_spikes_materialize() {
+        let c = ctx();
+        let spikes = spikes_for_seed(c.effective_seed());
+        assert_eq!(spikes.len(), 10);
+        assert_eq!(spikes.iter().filter(|s| s.guarded).count(), 2);
+        let obsidian = super::super::features::block_id_by_name("obsidian").unwrap();
+        let bars = super::super::features::block_id_by_name("iron_bars").unwrap();
+        let cs = CHUNK_SIZE as i32;
+        let mut cage_bars = 0u32;
+        for spike in &spikes {
+            let (ccx, ccz) = (spike.center_x.div_euclid(cs), spike.center_z.div_euclid(cs));
+            // The pillar shaft: obsidian at half height.
+            let mid_cy = (spike.height / 2).div_euclid(cs);
+            let chunk = gen_end([ccx, mid_cy, ccz], &c);
+            let (lx, lz) =
+                (spike.center_x.rem_euclid(cs) as usize, spike.center_z.rem_euclid(cs) as usize);
+            let ly = (spike.height / 2).rem_euclid(cs) as usize;
+            assert_eq!(
+                chunk.get(lx, ly, lz).0,
+                obsidian,
+                "pillar shaft missing at spike ({}, {})",
+                spike.center_x,
+                spike.center_z
+            );
+            // The cage band.
+            if spike.guarded {
+                for cy in (spike.height.div_euclid(cs))..=((spike.height + 3).div_euclid(cs)) {
+                    let top = gen_end([ccx, cy, ccz], &c);
+                    for x in 0..CHUNK_SIZE {
+                        for y in 0..CHUNK_SIZE {
+                            for z in 0..CHUNK_SIZE {
+                                if top.get(x, y, z).0 == bars {
+                                    cage_bars += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cage_bars > 20, "guarded cages carried {cage_bars} bars");
     }
 
     /// The main island exists: chunks around the origin carry
