@@ -297,6 +297,7 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/redstone_torch" | "redstone_torch" => Some(build_redstone_torch()),
         "block/soul_torch" | "soul_torch" => Some(build_soul_torch()),
         "block/wall_torch" | "wall_torch" => Some(build_wall_torch()),
+        "block/dirt_path" | "dirt_path" => Some(build_dirt_path()),
         "block/slab" | "slab" => Some(build_slab_bottom()),
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
         "block/carpet" | "carpet" => Some(build_carpet()),
@@ -359,6 +360,11 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
         .is_some_and(|b| b.name == "candle" || b.name.ends_with("_candle"))
     {
         return Some("block/candle");
+    }
+    // W280: dirt path is 15/16 tall (MC block/dirt_path.json) - the
+    // full-cube render read as a lifted lid you could see into.
+    if crate::block::block_type(id).is_some_and(|b| b.name == "dirt_path") {
+        return Some("block/dirt_path");
     }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -701,6 +707,31 @@ pub(crate) fn build_wall_torch() -> BlockModel {
         }],
         textures,
         ambient_occlusion: false,
+    }
+}
+
+/// W280: dirt path - the MC 15/16-tall block. Cite
+/// `block/dirt_path.json`: `from = [0,0,0] to = [16,15,16]`, side UV
+/// `[0,1,16,16]` (the texture's top pixel row is skipped so the
+/// grass fringe sits at the lowered lip).
+pub(crate) fn build_dirt_path() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [0.0, 0.0, 0.0],
+            to: [16.0, 15.0, 16.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#bottom", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 16.0, 16.0], "#top", None)),
+                north: Some(uv_face([0.0, 1.0, 16.0, 16.0], "#side", Some(CubeFace::North))),
+                south: Some(uv_face([0.0, 1.0, 16.0, 16.0], "#side", Some(CubeFace::South))),
+                west: Some(uv_face([0.0, 1.0, 16.0, 16.0], "#side", Some(CubeFace::West))),
+                east: Some(uv_face([0.0, 1.0, 16.0, 16.0], "#side", Some(CubeFace::East))),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
     }
 }
 

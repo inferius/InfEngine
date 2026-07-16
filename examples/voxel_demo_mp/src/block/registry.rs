@@ -2592,7 +2592,7 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     },
     // Misc - earth + ice variants.
     BlockType {
-        id: 393, name: "dirt_path", color: [0.55, 0.45, 0.28], transparent: false, flags: 0,
+        id: 393, name: "dirt_path", color: [0.55, 0.45, 0.28], transparent: true, flags: F_DEDICATED_RENDER,
         top: TileSpec { col: 0, row: 0, files: &["dirt_path_top.png", "grass_path_top.png"], keep_alpha: false },
         bottom: TileSpec { col: 1, row: 0, files: &["dirt.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["dirt_path_side.png", "grass_path_side.png"], keep_alpha: false },
