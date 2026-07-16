@@ -167,11 +167,16 @@ impl Voxel {
         };
         // Top face (CCW from above so the Back-cull keeps it) - only when
         // the cell above isn't the same liquid (waterlogged counts).
-        let above_same = crate::liquid::counts_as_liquid(
-            self.world.get([vx, vy + 1, vz]).0,
-            liquid_id,
-        );
-        if !above_same {
+        // W276: ALSO cull against a full opaque block above (MC's
+        // shouldRenderFace(UP)). Without it every underwater cell under
+        // the seabed/beach emitted a phantom surface quad ~0.11 under
+        // the solid's bottom face - visible as floating water sheets
+        // from below, z-fight shimmer while swimming (the user's
+        // screenshot 1).
+        let above = self.world.get([vx, vy + 1, vz]);
+        let above_same = crate::liquid::counts_as_liquid(above.0, liquid_id);
+        let above_occludes = !above.is_air() && crate::block::block_is_opaque(above);
+        if !above_same && !above_occludes {
             let t0 = [fx, fy + h00, fz];
             let t1 = [fx, fy + h01, fz + 1.0];
             let t2 = [fx + 1.0, fy + h11, fz + 1.0];
