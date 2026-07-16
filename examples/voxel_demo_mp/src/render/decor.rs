@@ -257,13 +257,20 @@ pub(crate) fn draw(
             // surface opacity (higher = less see-through), `rough` =
             // matte<->reflective (lower = more sky reflection).
             // W179 0.50/0.18(mirror) -> 0.70(too flat); W188 0.50->0.70
-            // opacity; W194: alpha 0.70 -> 0.80 (still too see-through
-            // from above) and rough 0.70 -> 0.55 (the flat matte read as
-            // no reflection at all; 0.55 gives a soft sky reflection
-            // without the old mirror). A flat alpha is the simple lever
-            // until depth-based water fog lands.
+            // opacity; W194: alpha 0.70 -> 0.80 and rough -> 0.55.
+            // W286: MC parity pass (docx img16-18 - the lake read as
+            // an opaque, milky-pale sheet). Vanilla water has NO
+            // specular at all - the 0.55 roughness sky/sun lobe was
+            // what washed the biome blue toward white, so rough goes
+            // to 1.0 (the shader's matte-kill zeroes the lobe, same
+            // rule as terrain). Alpha 0.80 -> 0.72, matching the
+            // vanilla water_still texture's ~180/255 alpha - shallow
+            // bottoms read through again. The other half of the fix
+            // is the fog-relative far-opacify in mesh3d.wgsl (the
+            // fixed 40-110 m backstop made ANY lake seen from a hill
+            // fully opaque).
             let (alpha, rough) = match *liquid_id {
-                WATER_ID => (0.80_f32, 0.55_f32),
+                WATER_ID => (0.72_f32, 1.0_f32),
                 LAVA_ID => (1.0, 0.55),
                 _ => (1.0, 0.30),
             };

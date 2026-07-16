@@ -512,7 +512,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // drives alpha. The far-distance backstop remains: it hides
         // unloaded-boundary holes that fog alone misses at grazing
         // angles.
-        let dist_opacify = smoothstep(40.0, 110.0, spherical_dist);
+        //
+        // W286: the backstop is FOG-RELATIVE now. The fixed 40-110 m
+        // ramp made any lake viewed from a hilltop a fully opaque
+        // sheet (docx img17 - in MC the same view still reads into
+        // the water). Tie it to the far fog edge instead: holes can
+        // only exist near the streaming boundary, which sits at the
+        // fog range, so opacify only as the surface approaches it.
+        let far_fog = max(camera.fog.y, camera.fog.w);
+        var dist_opacify = 0.0;
+        if far_fog > 0.0 {
+            dist_opacify = smoothstep(0.55 * far_fog, 0.9 * far_fog, spherical_dist);
+        }
         out_alpha = mix(alpha, 1.0, dist_opacify);
     }
 
