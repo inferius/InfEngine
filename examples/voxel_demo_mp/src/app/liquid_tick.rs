@@ -396,21 +396,45 @@ impl Voxel {
         // drain costing 17-75 ms/frame in a water-heavy world (each ocean
         // chunk emit is ~1 ms) - the catch-up must never dominate the
         // frame. 16/frame still clears a 1200-entry load burst in ~5 s.
+        // W278: while essentially stationary spend a bigger budget -
+        // the user watches the ocean surface fill in, and a 4 ms
+        // trickle took minutes over a VD-32 ocean backlog (~30k+
+        // entries after the initial fill). Standing still a ~12 ms
+        // frame is imperceptible (same policy as the GPU-upload
+        // budget in current_results_budget); the instant the player
+        // moves we drop back so travel never stutters.
+        let v = self.player_vel;
+        let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0;
+        let (drain_cap, budget_ms) = if stationary { (48, 12) } else { (16, 4) };
         let drain = LIQUID_CHUNKS_PER_FRAME
             .max(self.liquid_remesh_backlog.len() / 8)
-            .min(16);
-        let to_mesh: Vec<ChunkCoord> = self
+            .min(drain_cap);
+        // W278: NEAREST-first. The backlog is an unordered HashSet, so
+        // the old `.take(drain)` meshed arbitrary (often distant)
+        // chunks while the water around the player stayed missing.
+        // One O(n) pass keeps the `drain` closest entries.
+        let pcx = (self.player_pos.x.floor() as i32).div_euclid(cs);
+        let pcz = (self.player_pos.z.floor() as i32).div_euclid(cs);
+        let mut to_mesh: Vec<(i32, ChunkCoord)> = self
             .liquid_remesh_backlog
             .iter()
-            .take(drain)
-            .copied()
+            .map(|cc| {
+                let (dx, dz) = (cc[0] - pcx, cc[2] - pcz);
+                (dx * dx + dz * dz, *cc)
+            })
             .collect();
+        if to_mesh.len() > drain {
+            to_mesh.select_nth_unstable_by_key(drain, |(d, _)| *d);
+            to_mesh.truncate(drain);
+        }
+        to_mesh.sort_unstable_by_key(|(d, _)| *d);
+        let to_mesh: Vec<ChunkCoord> = to_mesh.into_iter().map(|(_, cc)| cc).collect();
         // W237: TIME budget on top of the count cap. Ocean chunks
         // cost ~1.4 ms each to mesh, so a full 16-chunk drain was a
         // ~22 ms frame while streaming over water (the user's log).
         // Chunks past the budget stay in the backlog (each is only
         // removed as it's processed).
-        let drain_budget = std::time::Duration::from_millis(4);
+        let drain_budget = std::time::Duration::from_millis(budget_ms);
         let drain_start = std::time::Instant::now();
         for cc in to_mesh {
             if drain_start.elapsed() >= drain_budget {
