@@ -265,19 +265,45 @@ pub(crate) fn emit_fence_gate(
         let hi = [o.x + x1 / 16.0, o.y + y1 / 16.0, o.z + z1 / 16.0];
         emit_cuboid(verts, idxs, lo, hi, tile, light);
     };
+    // W287: MC template_fence_gate geometry (docx img9 - the old
+    // ground-to-top posts + two continuous rails read as a weird
+    // tall crate). Posts FLOAT at y 5..16 like the vanilla model,
+    // the closed leaves are two short bar pairs meeting at a pair
+    // of centre uprights, and an OPEN gate swings its leaves to the
+    // facing side (two wings) instead of vanishing entirely.
     if span_x {
-        bx(0.0, 0.0, 7.0, 2.0, 16.0, 9.0);
-        bx(14.0, 0.0, 7.0, 16.0, 16.0, 9.0);
+        bx(0.0, 5.0, 7.0, 2.0, 16.0, 9.0);
+        bx(14.0, 5.0, 7.0, 16.0, 16.0, 9.0);
         if !open {
-            bx(2.0, 6.0, 7.0, 14.0, 9.0, 9.0);
-            bx(2.0, 12.0, 7.0, 14.0, 15.0, 9.0);
+            // Centre uprights + upper/lower bars, vanilla 16ths.
+            bx(6.0, 6.0, 7.0, 8.0, 15.0, 9.0);
+            bx(8.0, 6.0, 7.0, 10.0, 15.0, 9.0);
+            bx(2.0, 6.0, 7.0, 6.0, 9.0, 9.0);
+            bx(2.0, 12.0, 7.0, 6.0, 15.0, 9.0);
+            bx(10.0, 6.0, 7.0, 14.0, 9.0, 9.0);
+            bx(10.0, 12.0, 7.0, 14.0, 15.0, 9.0);
+        } else {
+            // Leaves swung 90 degrees toward the facing direction
+            // (south +Z for facing 1, north -Z for facing 3).
+            let (z0, z1) = if facing == 1 { (9.0, 16.0) } else { (0.0, 7.0) };
+            bx(0.0, 6.0, z0, 2.0, 15.0, z1);
+            bx(14.0, 6.0, z0, 16.0, 15.0, z1);
         }
     } else {
-        bx(7.0, 0.0, 0.0, 9.0, 16.0, 2.0);
-        bx(7.0, 0.0, 14.0, 9.0, 16.0, 16.0);
+        bx(7.0, 5.0, 0.0, 9.0, 16.0, 2.0);
+        bx(7.0, 5.0, 14.0, 9.0, 16.0, 16.0);
         if !open {
-            bx(7.0, 6.0, 2.0, 9.0, 9.0, 14.0);
-            bx(7.0, 12.0, 2.0, 9.0, 15.0, 14.0);
+            bx(7.0, 6.0, 6.0, 9.0, 15.0, 8.0);
+            bx(7.0, 6.0, 8.0, 9.0, 15.0, 10.0);
+            bx(7.0, 6.0, 2.0, 9.0, 9.0, 6.0);
+            bx(7.0, 12.0, 2.0, 9.0, 15.0, 6.0);
+            bx(7.0, 6.0, 10.0, 9.0, 9.0, 14.0);
+            bx(7.0, 12.0, 10.0, 9.0, 15.0, 14.0);
+        } else {
+            // Facing east (+X, code 0) or west (-X, code 2).
+            let (x0, x1) = if facing == 0 { (9.0, 16.0) } else { (0.0, 7.0) };
+            bx(x0, 6.0, 0.0, x1, 15.0, 2.0);
+            bx(x0, 6.0, 14.0, x1, 15.0, 16.0);
         }
     }
 }

@@ -252,11 +252,18 @@ pub(crate) fn multipart_connects(self_id: u16, neighbor: BlockId) -> bool {
     };
     let pane_or_bars = |id: u16| id == GLASS_PANE_ID || id == IRON_BARS_ID;
     let solid = !neighbor.is_air() && block_fully_occludes(neighbor);
+    // W287: MC FenceBlock.connectsTo includes fence GATES - the
+    // village fence used to stop one block short of every gate
+    // (docx img9). Honest divergence: MC also checks the gate's
+    // facing axis (connectsToDirection); the neighbour's facing
+    // lives in the runtime door map which this pure id-level rule
+    // can't see, so an axis-misaligned gate still grabs an arm.
+    let gate = |id: u16| crate::block::door::is_fence_gate_block(id);
     if wood_fence(self_id) {
-        return wood_fence(n) || solid;
+        return wood_fence(n) || gate(n) || solid;
     }
     if self_id == NETHER_BRICK_FENCE_ID {
-        return n == NETHER_BRICK_FENCE_ID || solid;
+        return n == NETHER_BRICK_FENCE_ID || gate(n) || solid;
     }
     if pane_or_bars(self_id) {
         return pane_or_bars(n) || wall(n) || solid;
