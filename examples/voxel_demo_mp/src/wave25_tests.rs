@@ -21,6 +21,7 @@ fn worker_result_remeshed_shape() {
         coord: [4, 5, 6],
         revision: 99,
         submeshes: Vec::<ChunkSubmesh>::new(),
+        dim: "overworld".to_string(),
     };
     // Pattern-match to confirm shape compiles and the fields are accessible.
     match r {
@@ -28,10 +29,12 @@ fn worker_result_remeshed_shape() {
             coord,
             revision,
             submeshes,
+            dim,
         } => {
             assert_eq!(coord, [4, 5, 6]);
             assert_eq!(revision, 99);
             assert!(submeshes.is_empty());
+            assert_eq!(dim, "overworld");
         }
         _ => panic!("expected Remeshed variant"),
     }
@@ -61,6 +64,7 @@ fn remesh_job_has_revision_field() {
         revision: 7,
         doors: std::collections::HashMap::new(),
         rails: std::collections::HashMap::new(),
+        dim: "overworld".to_string(),
     };
     assert_eq!(rj.revision, 7);
     // Wrap in Job::Remesh to confirm the enum variant exists.

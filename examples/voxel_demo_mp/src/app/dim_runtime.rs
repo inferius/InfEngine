@@ -201,6 +201,10 @@ impl Voxel {
         self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        // W277: results already PULLED off the channel but not yet
+        // processed belong to the old dim too (in-flight ones are
+        // caught by the per-result dim tag on the drain).
+        self.stream_delivered.clear();
         // Open UIs reference position-keyed containers that
         // belong to the parked dim. Close them on switch so the
         // player doesn't see a stale chest panel.
@@ -233,12 +237,20 @@ impl Voxel {
     /// player_pos.x/z; player_pos.y - PLAYER_HEIGHT/2). When
     /// the foot voxel is a `PORTAL_ID` and we're not on
     /// cool-down, increment; on miss, reset to 0.
-    pub(crate) fn tick_player_portal(&mut self) {
-        if self.portal_cooldown_ticks > 0 {
-            self.portal_cooldown_ticks -= 1;
-            self.portal_in_ticks = 0;
+    pub(crate) fn tick_player_portal(&mut self, dt: f32) {
+        // W277: advance at the FIXED 20 Hz game-tick rate. This used
+        // to run once per FRAME, so at 200 FPS the 80-tick warmup was
+        // 0.4 s and the 60-tick cooldown 0.3 s - the player was still
+        // standing in the arrival portal when the cooldown expired
+        // and instantly bounced back (the ping-pong report).
+        const PORTAL_TICK_DT: f32 = 1.0 / 20.0;
+        self.portal_tick_accum += dt;
+        if self.portal_tick_accum < PORTAL_TICK_DT {
             return;
         }
+        // One logical tick per rollover; a stall doesn't burst.
+        self.portal_tick_accum =
+            (self.portal_tick_accum - PORTAL_TICK_DT).min(PORTAL_TICK_DT);
         // Foot voxel: the cell the player's feet sit in. Round
         // X/Z to floor; Y is the integer floor of the player's
         // base.
@@ -250,6 +262,19 @@ impl Voxel {
         let in_portal = self.world.get(foot).0 == block::PORTAL_ID
             || self.world.get([foot[0], foot[1] + 1, foot[2]]).0
                 == block::PORTAL_ID;
+        if self.portal_cooldown_ticks > 0 {
+            // W277: MC Entity.setAsInsidePortal - standing inside a
+            // portal WHILE on cooldown re-arms the FULL cooldown, so
+            // the return trip can never fire until the player steps
+            // out of the frame at least once.
+            if in_portal {
+                self.portal_cooldown_ticks = block::portal::PORTAL_COOLDOWN_TICKS;
+            } else {
+                self.portal_cooldown_ticks -= 1;
+            }
+            self.portal_in_ticks = 0;
+            return;
+        }
         if !in_portal {
             self.portal_in_ticks = 0;
             return;

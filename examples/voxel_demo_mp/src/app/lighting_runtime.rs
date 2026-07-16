@@ -468,6 +468,7 @@ impl Voxel {
                 affected: seg,
                 snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
                 existing_grids,
+                dim: self.current_dim.clone(),
             });
             if pool.req_tx.send(job).is_ok() {
                 self.pending_lighting_jobs += 1;

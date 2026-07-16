@@ -1403,7 +1403,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // and rolls the two-branch ignite algorithm.
         wt_slow!("lava_emit", vx.tick_lava_fire_emit());
         // Phase F.6: portal-overlap counter + cross-dim teleport.
-        wt_slow!("portal", vx.tick_player_portal());
+        wt_slow!("portal", vx.tick_player_portal(dt));
         // Auto-close the chest UI when the player walks more than
         // ~5 blocks from the open chest. Matches MC's "stay close
         // to the container" rule. Done here (per-frame) so the

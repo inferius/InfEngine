@@ -300,6 +300,7 @@ impl WorkerPool {
                                             chunk,
                                             side_effects,
                                             submeshes,
+                                            dim: gj.dim.clone(),
                                         })
                                         .is_err()
                                     {
@@ -325,6 +326,7 @@ impl WorkerPool {
                                             coord: rj.coord,
                                             revision: rj.revision,
                                             submeshes,
+                                            dim: rj.dim,
                                         })
                                         .is_err()
                                     {
@@ -422,6 +424,7 @@ impl WorkerPool {
                                         .send(WorkerResult::Lit {
                                             new_grids,
                                             affected_for_remesh,
+                                            dim: lj.dim,
                                         })
                                         .is_err()
                                     {
@@ -929,6 +932,12 @@ pub(crate) enum WorkerResult {
         side_effects: Vec<ChunkSideEffect>,
         /// W24: MC-atlas submeshes built by the worker.
         submeshes: Vec<infengine_voxel::ChunkSubmesh>,
+        /// W277: the dim the job was enqueued against. The drain drops
+        /// results whose dim no longer matches `current_dim` - a
+        /// portal ping-pong used to let an old dim's in-flight chunks
+        /// land in the NEW dim's world, permanently shadowing worldgen
+        /// at those coords (the "no chunks load anywhere" breakage).
+        dim: String,
     },
     /// W25: remesh of an already-loaded chunk (block edit / neighbour
     /// update). No worldgen, no side-effect scan.
@@ -938,6 +947,8 @@ pub(crate) enum WorkerResult {
         /// `chunk_revisions[coord]` has advanced past it.
         revision: u64,
         submeshes: Vec<infengine_voxel::ChunkSubmesh>,
+        /// W277: see `Generated::dim`.
+        dim: String,
     },
     /// W27: lighting BFS result. The worker computed new LightGrids for
     /// `affected` chunks; the main thread swaps them in and triggers a
@@ -947,6 +958,9 @@ pub(crate) enum WorkerResult {
         new_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
         /// Chunks that should be remeshed now that their lighting changed.
         affected_for_remesh: Vec<ChunkCoord>,
+        /// W277: see `Generated::dim` (stale Lit still decrements the
+        /// in-flight counter, its grids are just discarded).
+        dim: String,
     },
 }
 
@@ -979,6 +993,8 @@ pub(crate) struct LightingJob {
     /// and re-floods so these are optional context; passing them avoids
     /// a cold-start cost on subsequent tick_lighting calls.
     pub(crate) existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
+    /// W277: dim at dispatch time (echoed in the result).
+    pub(crate) dim: String,
 }
 
 /// One unit of work for the chunk worker pool. Carries the per-job
@@ -1041,5 +1057,7 @@ pub(crate) struct RemeshJob {
     /// -> RailShape code). Computed on the main thread where the
     /// full World is visible (cross-chunk neighbours included).
     pub(crate) rails: std::collections::HashMap<[i32; 3], u8>,
+    /// W277: dim at dispatch time (echoed in the result).
+    pub(crate) dim: String,
 }
 

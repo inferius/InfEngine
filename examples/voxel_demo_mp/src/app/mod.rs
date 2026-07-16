@@ -95,9 +95,15 @@ pub(crate) struct Voxel {
     /// Phase F.6: cool-down counter set on teleport. Decremented
     /// each tick; while > 0 the portal-overlap check is
     /// suppressed so the player doesn't immediately bounce
-    /// back through the destination portal.
+    /// back through the destination portal. W277: RE-ARMED to
+    /// full while the player stands inside a portal (MC
+    /// Entity.setAsInsidePortal), so it only runs down after
+    /// stepping out of the frame.
     #[allow(dead_code)]
     pub(crate) portal_cooldown_ticks: u32,
+    /// W277: 20 Hz accumulator for the portal tick (it used to run
+    /// per frame, making warmup/cooldown frame-rate dependent).
+    pub(crate) portal_tick_accum: f32,
     /// Mesh handles grouped by the chunk that produced them. Lets the
     /// streaming code rebuild / unload only the chunks that change.
     ///

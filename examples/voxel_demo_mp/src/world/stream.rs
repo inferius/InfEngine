@@ -192,9 +192,17 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 chunk,
                 side_effects,
                 submeshes,
+                dim,
             } => {
                 vx.pending_set.remove(&coord);
                 vx.in_flight_chunks.remove(&coord);
+                // W277: a result enqueued against another dim (portal
+                // switch mid-flight) must NOT land in this dim's world
+                // - it would permanently shadow worldgen at that coord
+                // (the post-ping-pong "no chunks load" breakage).
+                if dim != vx.current_dim {
+                    continue;
+                }
                 let dx = (coord[0] - player_chunk[0]).abs();
                 let dz = (coord[2] - player_chunk[2]).abs();
                 if dx > unload_dist || dz > unload_dist {
@@ -502,7 +510,13 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 coord,
                 revision,
                 submeshes,
+                dim,
             } => {
+                // W277: stale-dim remesh would mint ghost meshes for
+                // chunks that aren't in this dim's world.
+                if dim != vx.current_dim {
+                    continue;
+                }
                 let current_rev = vx.chunk_revisions.get(&coord).copied().unwrap_or(0);
                 if revision < current_rev {
                     tracing::debug!(
@@ -560,7 +574,16 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             WorkerResult::Lit {
                 new_grids,
                 affected_for_remesh,
+                dim,
             } => {
+                // W277: stale-dim grids are discarded, but the job
+                // still finished - the in-flight counter MUST drop or
+                // the dispatch cap wedges at MAX forever.
+                if dim != vx.current_dim {
+                    vx.pending_lighting_jobs =
+                        vx.pending_lighting_jobs.saturating_sub(1);
+                    continue;
+                }
                 let lit_apply_start = std::time::Instant::now();
                 let new_grid_count = new_grids.len();
                 for (cc, grid) in new_grids {

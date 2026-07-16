@@ -95,6 +95,7 @@ fn worker_result_generated_has_submeshes_field() {
         chunk: Chunk::empty(),
         side_effects: vec![],
         submeshes: Vec::<ChunkSubmesh>::new(),
+        dim: "overworld".to_string(),
     };
 }
 
@@ -107,5 +108,6 @@ fn worker_result_remeshed_has_revision_and_submeshes() {
         coord: [1, 2, 3],
         revision: 42,
         submeshes: Vec::<ChunkSubmesh>::new(),
+        dim: "overworld".to_string(),
     };
 }

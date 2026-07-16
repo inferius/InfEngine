@@ -1,4 +1,4 @@
-//! Integration tests for the F.6 cross-dim teleport flow.
+﻿//! Integration tests for the F.6 cross-dim teleport flow.
 //!
 //! These build a Voxel directly and call `tick_player_portal` /
 //! `do_cross_dim_teleport` so we exercise the same code paths
@@ -33,10 +33,10 @@ fn standing_in_portal_increments_counter() {
     v.player_pos = glam::Vec3::new(0.5, 9.0, 0.5); // foot at y=8
     v.portal_cooldown_ticks = 0;
     v.portal_in_ticks = 0;
-    v.tick_player_portal();
+    v.tick_player_portal(0.05);
     assert_eq!(v.portal_in_ticks, 1);
-    v.tick_player_portal();
-    v.tick_player_portal();
+    v.tick_player_portal(0.05);
+    v.tick_player_portal(0.05);
     assert_eq!(v.portal_in_ticks, 3);
 }
 
@@ -48,12 +48,12 @@ fn stepping_out_resets_counter() {
     v.world.set([0, 8, 0], BlockId(PORTAL_ID));
     v.player_pos = glam::Vec3::new(0.5, 9.0, 0.5);
     v.portal_cooldown_ticks = 0;
-    v.tick_player_portal();
-    v.tick_player_portal();
+    v.tick_player_portal(0.05);
+    v.tick_player_portal(0.05);
     assert_eq!(v.portal_in_ticks, 2);
     // Walk out of the portal cell.
     v.player_pos = glam::Vec3::new(5.5, 9.0, 0.5);
-    v.tick_player_portal();
+    v.tick_player_portal(0.05);
     assert_eq!(v.portal_in_ticks, 0);
 }
 
@@ -66,11 +66,39 @@ fn cooldown_blocks_re_trigger() {
     v.player_pos = glam::Vec3::new(0.5, 9.0, 0.5);
     // Player JUST teleported - cool-down should suppress
     // the in-portal counter even though they're standing
-    // inside a portal cell.
+    // inside a portal cell. W277: standing inside RE-ARMS the
+    // cooldown to full (MC Entity.setAsInsidePortal) instead of
+    // letting it tick down under their feet.
     v.portal_cooldown_ticks = 5;
-    v.tick_player_portal();
+    v.tick_player_portal(0.05);
     assert_eq!(v.portal_in_ticks, 0);
-    assert_eq!(v.portal_cooldown_ticks, 4);
+    assert_eq!(v.portal_cooldown_ticks, portal::PORTAL_COOLDOWN_TICKS);
+}
+
+#[test]
+fn cooldown_rearms_while_standing_inside_portal() {
+    // W277: MC Entity.setAsInsidePortal - the cooldown re-arms to
+    // FULL every tick the player stays inside a portal, so the
+    // return trip can only start after stepping out of the frame.
+    let mut v = Voxel::new();
+    insert_chunks(&mut v, 1);
+    v.current_dim = OVERWORLD.to_string();
+    v.world.set([0, 8, 0], BlockId(PORTAL_ID));
+    v.player_pos = glam::Vec3::new(0.5, 9.0, 0.5);
+    v.portal_cooldown_ticks = 5;
+    for _ in 0..20 {
+        v.tick_player_portal(0.05);
+    }
+    assert_eq!(
+        v.portal_cooldown_ticks,
+        portal::PORTAL_COOLDOWN_TICKS,
+        "standing inside must pin the cooldown at full"
+    );
+    assert_eq!(v.portal_in_ticks, 0);
+    // Step out: now it finally runs down.
+    v.player_pos = glam::Vec3::new(5.5, 9.0, 0.5);
+    v.tick_player_portal(0.05);
+    assert_eq!(v.portal_cooldown_ticks, portal::PORTAL_COOLDOWN_TICKS - 1);
 }
 
 #[test]
@@ -85,7 +113,7 @@ fn standing_long_enough_teleports_to_paired_dim() {
     v.portal_in_ticks = 0;
     // Walk through enough ticks to trigger.
     for _ in 0..portal::PORTAL_TRIGGER_TICKS + 1 {
-        v.tick_player_portal();
+        v.tick_player_portal(0.05);
     }
     assert_eq!(v.current_dim, NETHER, "should be in the nether now");
     // Cool-down should be set.

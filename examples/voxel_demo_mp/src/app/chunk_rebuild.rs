@@ -252,6 +252,7 @@ impl Voxel {
                 revision,
                 doors: self.door_state_snapshot(coord),
                 rails: self.rail_state_snapshot(coord),
+                dim: self.current_dim.clone(),
             });
             // If the send fails the pool is shutting down; ignore.
             if let Some(pool) = self.workers.as_ref() {
