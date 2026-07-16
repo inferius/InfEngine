@@ -898,7 +898,13 @@ fn place_plant(
             }
         }
     } else {
-        mc_floor_at(ctx, wx, wz) == wy - 1 && floor == FloorRule::DirtFamily
+        // W285: the natural-floor fallback can't see structure
+        // blocks - a village path/plate that replaced the turf at
+        // the vertical seam otherwise sprouts grass + flowers
+        // floating on top of it (docx img5-8).
+        mc_floor_at(ctx, wx, wz) == wy - 1
+            && floor == FloorRule::DirtFamily
+            && !super::village::pos_in_village(ctx, [wx, wy - 1, wz])
     };
     if !floor_ok {
         return;

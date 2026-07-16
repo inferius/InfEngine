@@ -239,6 +239,63 @@ pub(crate) fn place_villages(
     }
 }
 
+/// W285: deterministic membership - is `pos` inside the REAL footprint
+/// of any village piece in reach? Surface features consult this so
+/// they stop growing through houses: a tree whose base sits in a
+/// NEIGHBOUR source chunk skips the in-chunk floor check (that
+/// chunk's cells aren't available while carving this one), so without
+/// a box test its canopy writes straight through whatever piece
+/// stands there - while the base's own chunk rejects the same try,
+/// leaving an orphaned floating canopy at the border (docx img27/30).
+/// Uses the same cached layouts the carve does, so a probe is a few
+/// grid lookups + a piece-box scan.
+pub(crate) fn pos_in_village(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
+    let seed = ctx.effective_seed();
+    let cs = CHUNK_SIZE as i32;
+    let (ccx, ccz) = (pos[0].div_euclid(cs), pos[2].div_euclid(cs));
+    const REACH: i32 = 7;
+    for gx in (ccx - REACH).div_euclid(SPACING)..=(ccx + REACH).div_euclid(SPACING) {
+        for gz in
+            (ccz - REACH).div_euclid(SPACING)..=(ccz + REACH).div_euclid(SPACING)
+        {
+            let [scx, scz] = potential_start(seed, gx, gz);
+            if (scx - ccx).abs() > REACH || (scz - ccz).abs() > REACH {
+                continue;
+            }
+            let Some(layout) = layout_for_start(ctx, scx, scz) else {
+                continue;
+            };
+            if layout_contains(&layout, pos) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Piece-box membership for a solved jigsaw layout, mirroring the
+/// carve's clip semantics: real template footprint (not the
+/// expansion-hack headroom), full column for terrain_matching drapes
+/// (paths follow the heightmap), foundation legs included below.
+pub(crate) fn layout_contains(layout: &[PlacedPiece], pos: [i32; 3]) -> bool {
+    for piece in layout {
+        let Some(t) = village_data::template(&piece.template) else {
+            continue;
+        };
+        let mut bb = template_bb(t.size, piece.position, piece.rotation);
+        if piece.terrain_matching {
+            bb.y0 = -64;
+            bb.y1 = 319;
+        } else {
+            bb.y0 = (bb.y0 - FOUNDATION_MAX).max(-64);
+        }
+        if bb.contains(pos) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Per-cell keep roll for a list-element overlay (the outpost
 /// overgrown-watchtower `block_rot`): pure in (seed, world cell) so
 /// every replay slice of the column agrees. MC rolls the shared
@@ -517,6 +574,49 @@ mod tests {
         assert!(start_pool_for(McBiome::Taiga).unwrap().contains("taiga"));
         assert_eq!(start_pool_for(McBiome::SavannaPlateau), None);
         assert_eq!(start_pool_for(McBiome::Badlands), None);
+    }
+
+    /// W285: the feature-exclusion probe agrees with the carve - a
+    /// point inside a piece's real footprint is a member, a far-away
+    /// point is not, and the answer is deterministic per seed.
+    #[test]
+    fn pos_in_village_matches_piece_footprints() {
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 3592732596,
+            dim: "overworld".into(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        // Find any village within a modest scan (same seed the dump
+        // probe pins; start (296, 295) area hosts one).
+        let mut found: Option<(i32, i32)> = None;
+        'scan: for gx in 7..12 {
+            for gz in 7..12 {
+                let [sx, sz] = potential_start(ctx.effective_seed(), gx, gz);
+                if layout_for_start(&ctx, sx, sz).is_some() {
+                    found = Some((sx, sz));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((sx, sz)) = found else {
+            // Seed-dependent scan came up dry - nothing to assert
+            // against (the dump probe covers discovery).
+            return;
+        };
+        let layout = layout_for_start(&ctx, sx, sz).expect("layout");
+        // A cell INSIDE the town centre's real footprint is a member.
+        let t = village_data::template(&layout[0].template).expect("centre template");
+        let bb = template_bb(t.size, layout[0].position, layout[0].rotation);
+        let inside = [(bb.x0 + bb.x1) / 2, (bb.y0 + bb.y1) / 2, (bb.z0 + bb.z1) / 2];
+        assert!(pos_in_village(&ctx, inside), "centre cell must be a member");
+        assert!(
+            layout_contains(&layout, inside),
+            "layout_contains agrees on the centre cell"
+        );
+        // A point far outside every piece (villages span < 200 blocks)
+        // is not a member.
+        let outside = [inside[0] + 4096, inside[1], inside[2] + 4096];
+        assert!(!pos_in_village(&ctx, outside), "far point must not be a member");
     }
 
     /// Probe: scan for villages near a seed/centre + full-pipeline

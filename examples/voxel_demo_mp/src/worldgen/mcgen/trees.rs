@@ -1800,6 +1800,22 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                         continue;
                     }
                 }
+                // W285: never root a tree inside a village/outpost
+                // piece (docx img30 trees-through-houses). The
+                // in-chunk floor check above rejects LOCAL bases
+                // standing on structure blocks, but a base in a
+                // neighbour source chunk skips it (those cells are
+                // not available here) - the canopy then wrote
+                // straight through whatever piece stands there while
+                // the base's own chunk rejected the same try (the
+                // orphaned floating canopies, img27). The box probe
+                // is deterministic per seed, so every chunk slice of
+                // the try agrees.
+                if super::village::pos_in_village(ctx, [wx, floor, wz])
+                    || super::outpost::pos_in_outpost(ctx, [wx, floor, wz])
+                {
+                    continue;
+                }
                 match pick {
                     Pick::Tree(def) => {
                         place_tree(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
