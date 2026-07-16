@@ -53,6 +53,94 @@ const FOUNDATION_ID: u16 = 2;
 /// Foundations taller than this stay open (the MC beard fades out).
 const FOUNDATION_MAX: i32 = 12;
 
+// ---------------------------------------------------------------
+// W279: template blockstate ORIENTATION. The palette carries the MC
+// properties (facing / half / open) but the carve only wrote block
+// ids - every stair rendered its default facing (the user's
+// unclimbable village stairs), doors ignored their hinge, trapdoors
+// their half. Carve now records oriented placements in a
+// thread-local; the worker gen job drains it right after
+// `generate_chunk_at_ctx`, feeds the mesher AND ships the entries as
+// ChunkSideEffects for the main-thread state maps.
+// ---------------------------------------------------------------
+
+/// One oriented template placement (world pos + kind + state byte +
+/// open flag). Kinds: 0 = stairs, 1 = door (lower half), 2 =
+/// trapdoor, 3 = fence gate.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CarvedOriented {
+    pub(crate) pos: [i32; 3],
+    pub(crate) kind: u8,
+    /// facing (bits 0-1) | TRAPDOOR_TOP_BIT (bit 2, stairs/trapdoor
+    /// upside-down half).
+    pub(crate) state: u8,
+    pub(crate) open: bool,
+}
+
+thread_local! {
+    static CARVE_ORIENTED: RefCell<Vec<CarvedOriented>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Drain the oriented placements recorded since the last take (the
+/// worker calls this right after generating one chunk).
+pub(crate) fn take_carved_oriented() -> Vec<CarvedOriented> {
+    CARVE_ORIENTED.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// MC facing prop -> engine facing code (0=+X east, 1=+Z south,
+/// 2=-X west, 3=-Z north - the door/torch convention).
+fn facing_code(name: &str) -> Option<u8> {
+    Some(match name {
+        "east" => 0,
+        "south" => 1,
+        "west" => 2,
+        "north" => 3,
+        _ => return None,
+    })
+}
+
+/// Record the orientation of an oriented-family block placed from a
+/// template palette state, composing the piece rotation (CW quarter
+/// turns rotate +X -> +Z, so `facing' = facing + r`).
+fn record_oriented(
+    id: u16,
+    state: &super::template::PaletteState,
+    rot: u8,
+    pos: [i32; 3],
+) {
+    let name = crate::block::block_type(id).map(|b| b.name).unwrap_or("");
+    let is_stairs = name.ends_with("_stairs");
+    let is_door = crate::block::door::is_door_block(id);
+    let is_trap = crate::block::door::is_trapdoor_block(id);
+    let is_gate = crate::block::door::is_fence_gate_block(id);
+    if !(is_stairs || is_door || is_trap || is_gate) {
+        return;
+    }
+    // Doors: only the LOWER half keys the state maps.
+    if is_door && state.prop("half") == Some("upper") {
+        return;
+    }
+    let Some(f) = state.prop("facing").and_then(facing_code) else {
+        return;
+    };
+    let facing = (f + rot) % 4;
+    let top = state.prop("half") == Some("top");
+    let open = state.prop("open") == Some("true");
+    let kind = if is_stairs {
+        0
+    } else if is_door {
+        1
+    } else if is_trap {
+        2
+    } else {
+        3
+    };
+    let stt = facing | if top { crate::block::door::TRAPDOOR_TOP_BIT } else { 0 };
+    CARVE_ORIENTED.with(|c| {
+        c.borrow_mut().push(CarvedOriented { pos, kind, state: stt, open })
+    });
+}
+
 /// The candidate start chunk of a 34x34 grid cell. `pub(crate)`: the
 /// outpost's exclusion zone (10 chunks from any village placement)
 /// probes this grid.
@@ -280,6 +368,16 @@ pub(crate) fn carve_layout(
                     }
                 }
                 chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+                // W279: stairs/doors/trapdoors/gates carry their
+                // palette orientation to the mesher + state maps.
+                if cell.jigsaw.is_none() {
+                    record_oriented(
+                        id,
+                        &t.palette[cell.state],
+                        piece.rotation,
+                        [wx, wy, wz],
+                    );
+                }
             }
         }
         // W251: list-element overlays (`ListPoolElement` places every
@@ -316,6 +414,14 @@ pub(crate) fn carve_layout(
                 };
                 if let Mapped::Id(id) = mapped {
                     chunk.set(lx as usize, ly as usize, lz as usize, BlockId(id));
+                    if cell.jigsaw.is_none() {
+                        record_oriented(
+                            id,
+                            &ot.palette[cell.state],
+                            piece.rotation,
+                            [wx, wy, wz],
+                        );
+                    }
                 }
             }
         }
@@ -352,6 +458,43 @@ pub(crate) fn carve_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W279: template stairs record their rotated facing; the piece
+    /// rotation composes as `facing + r` (CW90 maps +X to +Z); door
+    /// UPPER halves record nothing (state keys the lower voxel).
+    #[test]
+    fn oriented_carve_records_rotated_stairs_and_skips_door_uppers() {
+        let _ = take_carved_oriented(); // drain any prior entries
+        let stairs_id = crate::block::BLOCK_TYPES
+            .iter()
+            .find(|b| b.name.ends_with("_stairs"))
+            .map(|b| b.id)
+            .expect("a stairs block exists");
+        let st = super::super::template::PaletteState {
+            name: "minecraft:oak_stairs".into(),
+            props: vec![
+                ("facing".into(), "north".into()),
+                ("half".into(), "top".into()),
+            ],
+        };
+        record_oriented(stairs_id, &st, 1, [5, 6, 7]);
+        let door_upper = super::super::template::PaletteState {
+            name: "minecraft:oak_door".into(),
+            props: vec![
+                ("facing".into(), "east".into()),
+                ("half".into(), "upper".into()),
+            ],
+        };
+        record_oriented(77, &door_upper, 0, [1, 2, 3]);
+        let got = take_carved_oriented();
+        assert_eq!(got.len(), 1, "door upper must not record: {got:?}");
+        let o = got[0];
+        assert_eq!(o.kind, 0);
+        assert_eq!(o.pos, [5, 6, 7]);
+        // north(3) rotated CW once -> +X east(0), plus the top bit.
+        assert_eq!(o.state & 3, 0);
+        assert_ne!(o.state & crate::block::door::TRAPDOOR_TOP_BIT, 0);
+    }
 
     #[test]
     fn potential_starts_stay_in_their_cells() {

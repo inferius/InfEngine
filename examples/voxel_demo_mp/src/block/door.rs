@@ -48,6 +48,21 @@ pub(crate) fn is_fence_gate_block(id: u16) -> bool {
     (726..=731).contains(&id)
 }
 
+/// W279: true when `id` is any stairs block (registry name suffix -
+/// the family spans legacy ids + every W-wave stone/wood variant).
+pub(crate) fn is_stairs_block(id: u16) -> bool {
+    use std::sync::OnceLock;
+    static SET: OnceLock<std::collections::HashSet<u16>> = OnceLock::new();
+    SET.get_or_init(|| {
+        crate::block::BLOCK_TYPES
+            .iter()
+            .filter(|b| b.name.ends_with("_stairs"))
+            .map(|b| b.id)
+            .collect()
+    })
+    .contains(&id)
+}
+
 /// W125: per-door facing, keyed by the LOWER half voxel.
 /// 0 = +X (east), 1 = +Z (south), 2 = -X (west), 3 = -Z (north) -
 /// the horizontal direction the PLACER was looking.

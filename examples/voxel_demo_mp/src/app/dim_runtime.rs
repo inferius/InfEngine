@@ -64,6 +64,7 @@ impl Voxel {
             torch_positions: std::mem::take(&mut self.torch_positions),
             emitter_positions: std::mem::take(&mut self.emitter_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
+            stair_states: std::mem::take(&mut self.stair_states),
             snow_positions: std::mem::take(&mut self.snow_positions),
             fires: std::mem::take(&mut self.fires),
             liquid_schedule: std::mem::replace(
@@ -132,6 +133,7 @@ impl Voxel {
         self.torch_positions = target_world.torch_positions;
         self.emitter_positions = target_world.emitter_positions;
         self.torch_orient = target_world.torch_orient;
+        self.stair_states = target_world.stair_states;
         self.snow_positions = target_world.snow_positions;
         self.fires = target_world.fires;
         self.liquid_schedule = target_world.liquid_schedule;
@@ -543,6 +545,25 @@ impl Voxel {
                         }
                     }
                     self.world.insert_chunk(c, chunk);
+                    // W279: the synchronous gen path (portal arrival)
+                    // runs the carve on THIS thread - fold its
+                    // oriented template placements into the state
+                    // maps directly (the worker path ships them as
+                    // side effects instead).
+                    for o in crate::worldgen::mcgen::village::take_carved_oriented()
+                    {
+                        match o.kind {
+                            0 => {
+                                self.stair_states.insert(o.pos, o.state);
+                            }
+                            _ => {
+                                self.door_facing.insert(o.pos, o.state);
+                                if o.open {
+                                    self.door_open.insert(o.pos);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -690,6 +690,11 @@ pub(crate) struct Voxel {
     /// by 10 deg). Pure visual: not persisted, not parked per-dim,
     /// re-inits at 0 like a freshly loaded MC block entity.
     pub(crate) spawner_spin: HashMap<[i32; 3], f32>,
+    /// W279: stair orientation per voxel (facing bits 0-1 in the
+    /// door convention + TRAPDOOR_TOP_BIT for upside-down halves),
+    /// recorded from template placements; stairs without an entry
+    /// mesh the static default model (player-placed).
+    pub(crate) stair_states: HashMap<[i32; 3], u8>,
     /// Sticky torch orientations keyed by voxel. 0 = floor,
     /// 1 = wall pointing -X (mounted on +X face of a block at
     /// voxel.x+1), 2 = +X, 3 = -Z, 4 = +Z. Set at placement

@@ -37,6 +37,24 @@ impl Voxel {
         out
     }
 
+    /// W279: stair orientation snapshot for one chunk (template
+    /// placements recorded in `stair_states`).
+    pub(crate) fn stair_state_snapshot(
+        &self,
+        coord: ChunkCoord,
+    ) -> std::collections::HashMap<[i32; 3], u8> {
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let mut out = std::collections::HashMap::new();
+        for (&pos, &state) in &self.stair_states {
+            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
+                == coord
+            {
+                out.insert(pos, state);
+            }
+        }
+        out
+    }
+
     /// W127: derive the rail shapes for every rail in `coord`.
     /// Pure function of the World (cross-chunk neighbours seen),
     /// computed on the main thread at dispatch time - rails carry
@@ -252,6 +270,7 @@ impl Voxel {
                 revision,
                 doors: self.door_state_snapshot(coord),
                 rails: self.rail_state_snapshot(coord),
+                stairs: self.stair_state_snapshot(coord),
                 dim: self.current_dim.clone(),
             });
             // If the send fails the pool is shutting down; ignore.

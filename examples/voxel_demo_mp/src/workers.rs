@@ -276,22 +276,59 @@ impl WorkerPool {
                                         }
                                     }
 
+                                    // W279: drain the oriented template
+                                    // placements the carve recorded for
+                                    // THIS chunk - they feed the mesher
+                                    // (stairs/doors render their real
+                                    // facing on first sight) and ride to
+                                    // the main-thread state maps as side
+                                    // effects.
+                                    let oriented =
+                                        crate::worldgen::mcgen::village::take_carved_oriented();
+                                    let mut gen_doors: std::collections::HashMap<
+                                        [i32; 3],
+                                        (u8, bool),
+                                    > = std::collections::HashMap::new();
+                                    let mut gen_stairs: std::collections::HashMap<
+                                        [i32; 3],
+                                        u8,
+                                    > = std::collections::HashMap::new();
+                                    for o in &oriented {
+                                        match o.kind {
+                                            0 => {
+                                                gen_stairs.insert(o.pos, o.state);
+                                            }
+                                            // Doors, trapdoors + fence
+                                            // gates all read the door
+                                            // snapshot in the mesher.
+                                            _ => {
+                                                gen_doors
+                                                    .insert(o.pos, (o.state, o.open));
+                                            }
+                                        }
+                                        side_effects.push(ChunkSideEffect::Oriented {
+                                            pos: o.pos,
+                                            kind: o.kind,
+                                            state: o.state,
+                                            open: o.open,
+                                        });
+                                    }
                                     // W24: Build MC-atlas submeshes in the
                                     // worker using the pre-fetched halo
                                     // lighting + pack snapshot. Main thread
                                     // only does GPU upload.
-                                    // W125/W127: freshly-generated chunks
-                                    // carry no doors or rails (worldgen
-                                    // doesn't place them) - empty snapshots.
-                                    let no_doors = std::collections::HashMap::new();
+                                    // W125/W127: player doors/rails can't
+                                    // exist in a freshly-generated chunk;
+                                    // the W279 template states stand in.
                                     let no_rails = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
                                         coord,
                                         &gj.pack,
                                         halo,
-                                        &no_doors,
+                                        &gen_doors,
                                         &no_rails,
+                                        &gen_stairs,
                                     );
 
                                     if res_tx
@@ -320,6 +357,7 @@ impl WorkerPool {
                                         &rj.halo,
                                         &rj.doors,
                                         &rj.rails,
+                                        &rj.stairs,
                                     );
                                     if res_tx
                                         .send(WorkerResult::Remeshed {
@@ -487,6 +525,7 @@ pub(crate) fn mesh_chunk_in_worker(
     halo: &HaloLighting,
     doors: &std::collections::HashMap<[i32; 3], (u8, bool)>,
     rails: &std::collections::HashMap<[i32; 3], u8>,
+    stairs: &std::collections::HashMap<[i32; 3], u8>,
 ) -> Vec<infengine_voxel::ChunkSubmesh> {
     let origin = World::chunk_world_origin(coord);
     let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -544,6 +583,24 @@ pub(crate) fn mesh_chunk_in_worker(
         // The chunk mesh emits nothing for its cell.
         if block.0 == crate::block::CHEST_ID {
             return true;
+        }
+        // W279: stairs with a recorded orientation (template
+        // placements) emit the rotated two-box shape; stairs without
+        // one fall through to the static default model below.
+        if crate::block::door::is_stairs_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            if let Some(state) = stairs.get(&wp).copied() {
+                let light = halo.lookup(coord, wp);
+                resource_pack::element_mesh::emit_stairs(
+                    verts, idxs, voxel_origin, block.0, state, pack, light,
+                );
+                return true;
+            }
+            return false;
         }
         // W129: trapdoors render closed (floor slab) or open
         // (panel at the hinge edge) from the same door snapshot.
@@ -789,6 +846,12 @@ pub(crate) enum ChunkSideEffect {
     /// mineshaft-corridor membership probe behind the cave-spider
     /// stand-in needs the worldgen caches only workers keep warm.
     Spawner { pos: [i32; 3], kind: u8 },
+    /// W279: a template-placed oriented block (stairs / door lower /
+    /// trapdoor / fence gate). The main thread folds it into the
+    /// per-block state maps so remeshes keep the orientation. Kinds:
+    /// 0 stairs, 1 door, 2 trapdoor, 3 fence gate; `state` = facing
+    /// (bits 0-1) | top-half bit 2.
+    Oriented { pos: [i32; 3], kind: u8, state: u8, open: bool },
 }
 
 /// W249: which loot table a worldgen chest rolls at delivery. Decided
@@ -1057,6 +1120,9 @@ pub(crate) struct RemeshJob {
     /// -> RailShape code). Computed on the main thread where the
     /// full World is visible (cross-chunk neighbours included).
     pub(crate) rails: std::collections::HashMap<[i32; 3], u8>,
+    /// W279: stair orientation states for this chunk (world pos ->
+    /// facing | top bit), from `Voxel::stair_states`.
+    pub(crate) stairs: std::collections::HashMap<[i32; 3], u8>,
     /// W277: dim at dispatch time (echoed in the result).
     pub(crate) dim: String,
 }

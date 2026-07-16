@@ -401,6 +401,24 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             vx.spawner_positions.insert(*wv);
                             vx.spawner_kinds.insert(*wv, *kind);
                         }
+                        ChunkSideEffect::Oriented { pos, kind, state, open } => {
+                            // W279: template-placed oriented blocks.
+                            // Stairs key their own map; doors (lower
+                            // half), trapdoors + fence gates share the
+                            // door facing/open state the mesher +
+                            // toggles already read.
+                            match kind {
+                                0 => {
+                                    vx.stair_states.insert(*pos, *state);
+                                }
+                                _ => {
+                                    vx.door_facing.insert(*pos, *state);
+                                    if *open {
+                                        vx.door_open.insert(*pos);
+                                    }
+                                }
+                            }
+                        }
                         ChunkSideEffect::Liquid { pos, tick_offset } => {
                             // W115: tick_offset 0 = a static worldgen liquid
                             // cell at equilibrium (sea resting on seabed) -

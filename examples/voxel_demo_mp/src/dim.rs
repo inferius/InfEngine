@@ -128,6 +128,8 @@ pub(crate) struct DimWorld {
     /// `Voxel::emitter_positions` for semantics.
     pub emitter_positions: HashMap<[i32; 3], u16>,
     pub torch_orient: HashMap<[i32; 3], u8>,
+    /// W279: template stair orientations park with their dim.
+    pub stair_states: HashMap<[i32; 3], u8>,
     pub snow_positions: HashMap<[i32; 3], u8>,
     /// Per-cell fire age (Q.4b). Parked alongside chests + furnaces
     /// when the dim swaps out.
@@ -174,6 +176,7 @@ impl Default for DimWorld {
             torch_positions: std::collections::HashSet::new(),
             emitter_positions: HashMap::new(),
             torch_orient: HashMap::new(),
+            stair_states: HashMap::new(),
             snow_positions: HashMap::new(),
             fires: HashMap::new(),
             liquid_schedule: LiquidSchedule::new(),

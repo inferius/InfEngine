@@ -153,6 +153,57 @@ pub(crate) fn emit_trapdoor(
     }
 }
 
+/// W279 - oriented stairs: the MC two-box shape (base slab + riser on
+/// the facing side), rotated per the recorded template state. `state`
+/// = facing (bits 0-1, door convention 0=+X..3=-Z) | TRAPDOOR_TOP_BIT
+/// for `half=top` (upside-down stairs hang the slab from the ceiling
+/// and drop the riser to the floor half).
+pub(crate) fn emit_stairs(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    state: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let top_half = state & crate::block::door::TRAPDOOR_TOP_BIT != 0;
+    let facing = state & 3;
+    let tile = pack
+        .block_face_ref(block_id, super::BlockFace::Sides)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [1, 0, 0],
+            )
+        });
+    let o = [origin.x, origin.y, origin.z];
+    let boxed = |lo: [f32; 3], hi: [f32; 3]| {
+        (
+            [o[0] + lo[0], o[1] + lo[1], o[2] + lo[2]],
+            [o[0] + hi[0], o[1] + hi[1], o[2] + hi[2]],
+        )
+    };
+    // Base slab: bottom half (or ceiling half when upside-down).
+    let (slab_lo, slab_hi) = if top_half {
+        boxed([0.0, 0.5, 0.0], [1.0, 1.0, 1.0])
+    } else {
+        boxed([0.0, 0.0, 0.0], [1.0, 0.5, 1.0])
+    };
+    emit_cuboid(verts, idxs, slab_lo, slab_hi, tile, light);
+    // Riser: the other vertical half, covering the facing-side half
+    // of the cell (MC stairs ascend TOWARD their facing).
+    let (ry0, ry1) = if top_half { (0.0, 0.5) } else { (0.5, 1.0) };
+    let (rlo, rhi) = match facing {
+        0 => boxed([0.5, ry0, 0.0], [1.0, ry1, 1.0]), // +X east
+        1 => boxed([0.0, ry0, 0.5], [1.0, ry1, 1.0]), // +Z south
+        2 => boxed([0.0, ry0, 0.0], [0.5, ry1, 1.0]), // -X west
+        _ => boxed([0.0, ry0, 0.0], [1.0, ry1, 0.5]), // -Z north
+    };
+    emit_cuboid(verts, idxs, rlo, rhi, tile, light);
+}
+
 /// W167 - emit one axis-aligned cuboid (all 6 faces, full tile) in
 /// world coords. Shared by the fence-gate parts.
 fn emit_cuboid(

@@ -278,6 +278,7 @@ impl Voxel {
             spawner_states: HashMap::new(),
             spawner_kinds: HashMap::new(),
             spawner_spin: HashMap::new(),
+            stair_states: HashMap::new(),
             torch_orient: HashMap::new(),
             snow_positions: HashMap::new(),
             chests: HashMap::new(),

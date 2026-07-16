@@ -68,6 +68,7 @@ impl Voxel {
         self.spawner_kinds.clear();
         self.spawner_spin.clear();
         self.torch_orient.clear();
+        self.stair_states.clear();
         self.liquid_schedule.clear();
         self.liquid_clock = 0;
         self.liquid_tick_accum = 0.0;
