@@ -324,9 +324,11 @@ impl Voxel {
         // permanently shadowed worldgen for those coords.
         let arrival_region = self.ensure_generated_chunks_around(dest);
         // Ground-snap the portal: first open spot with a solid
-        // floor, scanning down from the dest height band.
-        let ground = Self::portal_ground_y(&self.world, dest);
-        let target = [dest[0], ground, dest[2]];
+        // floor, scanning down from the dest height band. W282:
+        // searches a growing ring of columns (up to 8 blocks out)
+        // like MC's candidate scan - a single-column miss used to
+        // drop to the mid-shelf fallback and hang the frame in air.
+        let target = Self::portal_ground_spot(&self.world, dest);
         // Find or build a return portal at the scaled coord.
         let cfg = bincode::config::standard();
         let mut edits: Vec<[i32; 3]> = Vec::new();
@@ -577,24 +579,61 @@ impl Voxel {
     /// whose cell + the two above are open with a fully-occluding
     /// floor below - where a portal frame can stand. Falls back to
     /// a mid-height shelf when the column is all solid / all air.
-    pub(crate) fn portal_ground_y(
+    fn portal_ground_in_column(
         world: &infengine_voxel::World,
-        dest: [i32; 3],
-    ) -> i32 {
-        let (x, z) = (dest[0], dest[2]);
-        let start = dest[1].clamp(40, 100);
-        // Prefer a spot near the arrival height, then sweep down.
+        x: i32,
+        z: i32,
+        start: i32,
+    ) -> Option<i32> {
         for y in (6..=start).rev() {
             let below = world.get([x, y - 1, z]);
             let open = world.get([x, y, z]).is_air()
                 && world.get([x, y + 1, z]).is_air()
                 && world.get([x, y + 2, z]).is_air();
             if open && crate::block::block_fully_occludes(below) {
-                return y;
+                return Some(y);
             }
         }
-        // All-solid column: carve nothing, just use a mid shelf -
-        // build_minimal_portal overwrites the cells it needs.
-        48
+        None
+    }
+
+    /// W282: the ground snap searches a REGION like MC's
+    /// createPortal candidate scan, not just the exact dest column.
+    /// A single-column miss (cavern / lava-sea shaft) used to fall
+    /// straight to the mid-shelf fallback and the return portal hung
+    /// in the air. Rings of growing radius keep the found spot as
+    /// close to the scaled dest as possible; only when EVERY column
+    /// within 8 blocks misses does the forced mid-shelf remain (MC's
+    /// forced roof portal equivalent).
+    pub(crate) fn portal_ground_spot(
+        world: &infengine_voxel::World,
+        dest: [i32; 3],
+    ) -> [i32; 3] {
+        let start = dest[1].clamp(40, 100);
+        if let Some(y) =
+            Self::portal_ground_in_column(world, dest[0], dest[2], start)
+        {
+            return [dest[0], y, dest[2]];
+        }
+        for r in 1..=8i32 {
+            for dx in -r..=r {
+                for dz in -r..=r {
+                    if dx.abs().max(dz.abs()) != r {
+                        continue;
+                    }
+                    if let Some(y) = Self::portal_ground_in_column(
+                        world,
+                        dest[0] + dx,
+                        dest[2] + dz,
+                        start,
+                    ) {
+                        return [dest[0] + dx, y, dest[2] + dz];
+                    }
+                }
+            }
+        }
+        // All-solid / all-air region: carve nothing, just use a mid
+        // shelf - the platform build guarantees the floor.
+        [dest[0], 48, dest[2]]
     }
 }

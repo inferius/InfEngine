@@ -94,6 +94,14 @@ pub(super) fn apply_chunk_payload(voxel: &mut Voxel, payload: ChunkPayload) -> i
                     if b.0 == crate::block::SPAWNER_ID {
                         voxel.spawner_positions.insert(world_pos);
                     }
+                    // W282: portal cells re-index their swirl render
+                    // list too - a reload used to come back with the
+                    // portal teleporting but looking unlit, and
+                    // re-lighting was a no-op (the cells were already
+                    // PORTAL_ID).
+                    if b.0 == crate::block::PORTAL_ID {
+                        voxel.portal_positions.insert(world_pos);
+                    }
                 }
             }
         }

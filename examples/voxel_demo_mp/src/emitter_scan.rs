@@ -32,6 +32,7 @@ pub(crate) fn scan_chunk(
     emitter_positions: &mut std::collections::HashMap<[i32; 3], u16>,
     torch_positions: &mut std::collections::HashSet<[i32; 3]>,
     fires: &mut std::collections::HashMap<[i32; 3], u8>,
+    portal_positions: &mut std::collections::HashSet<[i32; 3]>,
 ) {
     let cs = CHUNK_SIZE as i32;
     let origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
@@ -62,6 +63,15 @@ pub(crate) fn scan_chunk(
                 if id == crate::block::FIRE_ID || id == crate::block::SOUL_FIRE_ID {
                     fires.entry(world).or_insert(0);
                 }
+                // W282: portal cells feed the swirl render list. It
+                // was only populated by `world_set_tracked` at ignite
+                // time, so a save/load came back with the PORTAL_ID
+                // blocks present (teleport worked) but the visual
+                // dead - and re-lighting was a no-op because the
+                // cells were already portal.
+                if id == crate::block::PORTAL_ID {
+                    portal_positions.insert(world);
+                }
             }
         }
     }
@@ -89,6 +99,7 @@ pub(crate) fn rebuild_all(vx: &mut crate::Voxel) {
     let emitter_positions = &mut vx.emitter_positions;
     let torch_positions = &mut vx.torch_positions;
     let fires = &mut vx.fires;
+    let portal_positions = &mut vx.portal_positions;
     let mut scanned = 0usize;
     for (coord, chunk) in world.iter_chunks() {
         scan_chunk(
@@ -97,6 +108,7 @@ pub(crate) fn rebuild_all(vx: &mut crate::Voxel) {
             emitter_positions,
             torch_positions,
             fires,
+            portal_positions,
         );
         scanned += 1;
     }

@@ -472,6 +472,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     &mut vx.emitter_positions,
                     &mut vx.torch_positions,
                     &mut vx.fires,
+                    &mut vx.portal_positions,
                 );
                 vx.world.insert_chunk(coord, chunk);
                 // W127: rails meshed with an empty shape snapshot in the
@@ -828,6 +829,9 @@ fn rescan_chunk_radius(
     };
     vx.emitter_positions.retain(|p, _| in_keep(p));
     vx.torch_positions.retain(|p| in_keep(p));
+    // W282: portal swirl cells follow their chunks out (the scan
+    // re-adds them on stream-in).
+    vx.portal_positions.retain(|p| in_keep(p));
     vx.torch_orient.retain(|p, _| in_keep(p));
     vx.fires.retain(|p, _| in_keep(p));
     vx.snow_positions.retain(|p, _| in_keep(p));
