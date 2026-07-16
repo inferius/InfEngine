@@ -234,6 +234,66 @@ fn emit_cuboid(
     }
 }
 
+/// W288 - wall torch (MC template_torch_wall). The 2x2 px column
+/// mounts on the wall the torch hangs from (opposite `facing`) at
+/// y=3.5/16 and leans 22.5 degrees toward `facing` - previously wall
+/// placements (village templates, player side-clicks) drew the
+/// STANDING model floating mid-air at the cell centre (docx img15).
+/// `facing`: door convention, the direction the torch points AWAY
+/// from its wall (0=+X, 1=+Z, 2=-X, 3=-Z).
+pub(crate) fn emit_wall_torch(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    facing: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let tile = pack
+        .block_face_ref(block_id, super::BlockFace::Sides)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(infengine_voxel::BlockId(block_id), [1, 0, 0])
+        });
+    let dir = match facing & 3 {
+        0 => [1.0f32, 0.0],
+        1 => [0.0, 1.0],
+        2 => [-1.0, 0.0],
+        _ => [0.0, -1.0],
+    };
+    let f = Vec3::new(dir[0], 0.0, dir[1]);
+    let s = Vec3::new(-dir[1], 0.0, dir[0]);
+    let up = Vec3::Y;
+    let (sin_t, cos_t) = (22.5f32.to_radians().sin(), 22.5f32.to_radians().cos());
+    // Column axis tilted toward `facing`; `nf` is the box depth
+    // direction perpendicular to it (both in the f-up plane).
+    let axis = f * sin_t + up * cos_t;
+    let nf = f * cos_t - up * sin_t;
+    // Base centre sits a hair off the wall face, 3.5 px up (vanilla).
+    let base = origin + Vec3::new(0.5, 0.0, 0.5) - f * (0.5 - 0.5 / 16.0)
+        + up * (3.5 / 16.0);
+    let w_s = s * (1.0 / 16.0);
+    let w_f = nf * (1.0 / 16.0);
+    let h = axis * (10.0 / 16.0);
+    let corner = |du: f32, dv: f32, top: f32| -> [f32; 3] {
+        (base + w_s * du + w_f * dv + h * top).into()
+    };
+    // Same face/winding layout as emit_cuboid, with s/nf/axis
+    // standing in for the x/z/y axes of the sheared box.
+    let quads: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        (s.into(), [corner(1.0, -1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, 1.0, 1.0), corner(1.0, -1.0, 1.0)]),
+        ((-s).into(), [corner(-1.0, 1.0, 0.0), corner(-1.0, -1.0, 0.0), corner(-1.0, -1.0, 1.0), corner(-1.0, 1.0, 1.0)]),
+        (axis.into(), [corner(-1.0, -1.0, 1.0), corner(1.0, -1.0, 1.0), corner(1.0, 1.0, 1.0), corner(-1.0, 1.0, 1.0)]),
+        ((-axis).into(), [corner(-1.0, 1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, -1.0, 0.0), corner(-1.0, -1.0, 0.0)]),
+        (nf.into(), [corner(1.0, 1.0, 0.0), corner(-1.0, 1.0, 0.0), corner(-1.0, 1.0, 1.0), corner(1.0, 1.0, 1.0)]),
+        ((-nf).into(), [corner(-1.0, -1.0, 0.0), corner(1.0, -1.0, 0.0), corner(1.0, -1.0, 1.0), corner(-1.0, -1.0, 1.0)]),
+    ];
+    for (normal, corners) in quads {
+        infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
+    }
+}
+
 /// W167 - fence gate. Closed = two side posts + two horizontal rails
 /// spanning the opening; open = posts only (a gap to walk through).
 /// `facing` is the door-style horizontal facing (bit 0 picks the

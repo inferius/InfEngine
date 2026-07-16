@@ -437,6 +437,19 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 0 => {
                                     vx.stair_states.insert(*pos, *state);
                                 }
+                                // W288: wall torches land in the same
+                                // orient map player placements use
+                                // (facing 0..3 -> the place-pipeline
+                                // 1..4 wall codes).
+                                4 => {
+                                    let orient = match *state & 3 {
+                                        0 => 1u8,
+                                        1 => 3,
+                                        2 => 2,
+                                        _ => 4,
+                                    };
+                                    vx.torch_orient.insert(*pos, orient);
+                                }
                                 _ => {
                                     vx.door_facing.insert(*pos, *state);
                                     if *open {

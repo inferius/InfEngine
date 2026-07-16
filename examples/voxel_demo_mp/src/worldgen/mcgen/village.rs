@@ -113,7 +113,11 @@ fn record_oriented(
     let is_door = crate::block::door::is_door_block(id);
     let is_trap = crate::block::door::is_trapdoor_block(id);
     let is_gate = crate::block::door::is_fence_gate_block(id);
-    if !(is_stairs || is_door || is_trap || is_gate) {
+    // W288: wall torches keep their template facing too - the MC
+    // name (from the palette, BEFORE the blockmap folds wall_torch
+    // into the plain torch id) is the only trace of wall-ness.
+    let is_wall_torch = state.name.ends_with("wall_torch");
+    if !(is_stairs || is_door || is_trap || is_gate || is_wall_torch) {
         return;
     }
     // Doors: only the LOWER half keys the state maps.
@@ -132,8 +136,10 @@ fn record_oriented(
         1
     } else if is_trap {
         2
-    } else {
+    } else if is_gate {
         3
+    } else {
+        4
     };
     let stt = facing | if top { crate::block::door::TRAPDOOR_TOP_BIT } else { 0 };
     CARVE_ORIENTED.with(|c| {

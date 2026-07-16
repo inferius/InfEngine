@@ -578,6 +578,17 @@ impl Voxel {
                             0 => {
                                 self.stair_states.insert(o.pos, o.state);
                             }
+                            // W288: wall torch -> place-pipeline
+                            // orient codes (see the stream drain arm).
+                            4 => {
+                                let orient = match o.state & 3 {
+                                    0 => 1u8,
+                                    1 => 3,
+                                    2 => 2,
+                                    _ => 4,
+                                };
+                                self.torch_orient.insert(o.pos, orient);
+                            }
                             _ => {
                                 self.door_facing.insert(o.pos, o.state);
                                 if o.open {

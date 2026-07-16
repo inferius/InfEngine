@@ -619,6 +619,23 @@ pub(crate) fn mesh_chunk_in_worker(
             );
             return true;
         }
+        // W288: wall torches lean off their wall; floor torches (no
+        // orient row) keep the static standing model fallback.
+        if block.0 == crate::block::TORCH_ID {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            if let Some(&(facing, _)) = doors.get(&wp) {
+                let light = halo.lookup(coord, wp);
+                resource_pack::element_mesh::emit_wall_torch(
+                    verts, idxs, voxel_origin, block.0, facing, pack, light,
+                );
+                return true;
+            }
+            return false;
+        }
         // W167: fence gate - closed = two posts + two rails across the
         // facing axis; open = posts only (a gap to walk through).
         if crate::block::door::is_fence_gate_block(block.0) {

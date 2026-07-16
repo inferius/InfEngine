@@ -34,6 +34,22 @@ impl Voxel {
                 out.insert(pos, (0, true));
             }
         }
+        // W288: wall-torch orientation rides in the same snapshot
+        // (cell sets are disjoint from doors). The place-pipeline
+        // orient codes 1..4 (+X/-X/+Z/-Z) map to door-facing 0..3;
+        // orient 0 = floor torch = the static standing model.
+        for (&pos, &orient) in &self.torch_orient {
+            let facing = match orient {
+                1 => 0u8,
+                2 => 2,
+                3 => 1,
+                4 => 3,
+                _ => continue,
+            };
+            if in_chunk(pos) {
+                out.entry(pos).or_insert((facing, false));
+            }
+        }
         out
     }
 
