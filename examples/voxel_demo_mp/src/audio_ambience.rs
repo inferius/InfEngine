@@ -52,12 +52,18 @@ pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
     // swimming through a kelp forest keeps the underwater ambience.
     let underwater = crate::block::block_is_watery(vx.world.get(eye_voxel).0);
     if underwater != vx.underwater_was {
-        let key = if underwater {
-            "ambient/underwater_enter"
-        } else {
-            "ambient/underwater_exit"
-        };
-        vx.sfx_at(key, pos, |_, _| {});
+        // W281: the eye bobs across the surface every stroke while
+        // swimming - debounce the enter/exit one-shots on the shared
+        // splash cooldown (the STATE still flips immediately so the
+        // loop gating below stays correct).
+        if vx.splash_sfx_cooldown <= 0.0 {
+            let key = if underwater {
+                "ambient/underwater_enter"
+            } else {
+                "ambient/underwater_exit"
+            };
+            vx.sfx_at(key, pos, |_, _| {});
+        }
         vx.underwater_was = underwater;
         vx.underwater_sfx_accum = 0.0;
     }

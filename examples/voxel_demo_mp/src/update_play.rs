@@ -746,15 +746,32 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             }
         }
         let in_water = liquid_under.is_some();
+        // W281: lava has its own entry cue (a sizzle-pop, not a
+        // water splash) - the user report: diving into lava sounded
+        // like water.
+        let in_lava = liquid_under
+            .map(|l| l.block_id == crate::block::LAVA_ID)
+            .unwrap_or(false);
         // Splash on the air -> water transition: short droplet
         // burst + click SFX. Quieter cue going the other way.
-        if in_water != app.was_in_water {
+        // W281: debounced - surface swimming flips the foot test
+        // every stroke and each flip fired the one-shot (splash
+        // spam). The STATE still updates every frame; only the
+        // sound + droplets are rate-limited.
+        app.splash_sfx_cooldown = (app.splash_sfx_cooldown - dt).max(0.0);
+        if in_water != app.was_in_water && app.splash_sfx_cooldown <= 0.0 {
+            app.splash_sfx_cooldown = 0.5;
             let base = [
                 app.player_pos.x,
                 app.player_pos.y - PLAYER_HEIGHT * 0.5,
                 app.player_pos.z,
             ];
-            if in_water {
+            if in_lava {
+                app.sfx_at("lava:pop", base, |a, g| {
+                    let _ = a.play_thud(90.0, 0.22 * g);
+                    let _ = a.play_swish(0.10 * g);
+                });
+            } else if in_water {
                 // Splash synth: a low thud (mass hitting water)
                 // layered with a high noise swish (the spray).
                 // Much more water-like than a single click.

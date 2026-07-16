@@ -34,6 +34,7 @@ impl Voxel {
             portal_in_ticks: 0,
             portal_cooldown_ticks: 0,
             portal_tick_accum: 0.0,
+            splash_sfx_cooldown: 0.0,
             chunk_meshes: HashMap::new(),
             pending_chunks: BinaryHeap::new(),
             pending_set: HashSet::new(),

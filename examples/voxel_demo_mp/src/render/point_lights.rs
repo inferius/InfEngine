@@ -39,6 +39,12 @@ pub(crate) fn push(
     const CULL_R2: f32 = 40.0 * 40.0;
     let samples: Vec<emitter_lights::EmitterSample> = emitter_positions
         .iter()
+        // W281: LAVA is lit by the block-light BFS alone, like MC.
+        // The unoccluded point light shone THROUGH solid ground onto
+        // the trees above (the user docx), and a lava lake's 32
+        // lights x5.5 washed cave walls to white - all double
+        // lighting on top of the baked emission.
+        .filter(|(_, id)| **id != crate::block::LAVA_ID)
         .filter(|(p, _)| {
             let dx = p[0] as f32 + 0.5 - pp[0];
             let dy = p[1] as f32 + 0.5 - pp[1];

@@ -104,6 +104,11 @@ pub(crate) struct Voxel {
     /// W277: 20 Hz accumulator for the portal tick (it used to run
     /// per frame, making warmup/cooldown frame-rate dependent).
     pub(crate) portal_tick_accum: f32,
+    /// W281: debounce for the water/lava enter+exit one-shots. The
+    /// foot/eye liquid test flips every stroke while swimming at the
+    /// surface, and each flip fired splash + enter/exit cues (the
+    /// user docx: spammy splashes, wedged underwater ambience).
+    pub(crate) splash_sfx_cooldown: f32,
     /// Mesh handles grouped by the chunk that produced them. Lets the
     /// streaming code rebuild / unload only the chunks that change.
     ///
