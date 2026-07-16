@@ -178,6 +178,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 light_peak_ms = light_pk as f32 / 1000.0,
                 liq_pos = vx.liquid_positions.len(),
                 liq_sched = vx.liquid_schedule.len(),
+                // W284: wedge + backlog gauges. `light_dirty` growing
+                // while `light_jobs` sits at the in-flight cap = the
+                // lighting dispatcher is wedged (leaked counter);
+                // `liq_backlog` non-draining = liquid remesh churn.
+                liq_backlog = vx.liquid_remesh_backlog.len(),
+                light_dirty = vx.lighting.dirty.len(),
+                light_segq = vx.pending_lighting_segments.len(),
                 "voxel: perf diag"
             );
         }

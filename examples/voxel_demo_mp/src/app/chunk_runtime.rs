@@ -53,6 +53,7 @@ impl Voxel {
         // `pending_lighting_jobs == 0` (the "infinite loading when I
         // load a second world" bug).
         self.pending_lighting_jobs = 0;
+        self.lighting_capped_frames = 0;
         // W237: queued-but-undispatched lighting segments belong to
         // the old world's coords - drop them with the job counter.
         self.pending_lighting_segments.clear();
@@ -74,6 +75,7 @@ impl Voxel {
         self.liquid_tick_accum = 0.0;
         self.liquid_chunk_sig.clear();
         self.liquid_remesh_backlog.clear();
+        self.water_tint_cache.clear();
         self.liquid_level.clear();
         self.liquid_positions.clear();
         self.lava_columns.clear();

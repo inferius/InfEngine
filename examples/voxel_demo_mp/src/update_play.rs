@@ -649,8 +649,16 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             if app.player_vel.y < liquid.swim_fall_cap {
                 app.player_vel.y = liquid.swim_fall_cap;
             }
-            app.player_vel.x *= liquid.swim_horiz_drag;
-            app.player_vel.z *= liquid.swim_horiz_drag;
+            // W284: `swim_horiz_drag` is a PER-GAME-TICK multiplier
+            // (MC LivingEntity.travelInFluid: water *0.8, lava *0.5
+            // per 20 Hz tick). It used to multiply raw per FRAME, so
+            // at 144+ FPS lava's 0.5 compounded ~150x/sec and pinned
+            // the player in place - the "stuck in lava, couldn't
+            // move even to escape" report. powf(dt * 20) applies the
+            // same total drag per second at any frame rate.
+            let drag = liquid.swim_horiz_drag.powf(dt * 20.0);
+            app.player_vel.x *= drag;
+            app.player_vel.z *= drag;
             // Current: flowing cells push the player downstream
             // at the liquid's `current_strength`. Source cells
             // (level 0 with no lower-level neighbour) return a

@@ -170,6 +170,11 @@ pub(crate) struct Voxel {
     /// delivery. The loading phase waits for this to reach 0 before
     /// transitioning from `BuildingLighting` to `BuildingMeshes`.
     pub(crate) pending_lighting_jobs: u32,
+    /// W284: consecutive `tick_lighting` calls spent AT the in-flight
+    /// cap without a slot freeing up. Feeds the wedged-counter
+    /// self-heal (a leaked decrement otherwise disables lighting for
+    /// the rest of the session).
+    pub(crate) lighting_capped_frames: u32,
     /// Most recent ray hit while looking around in Play. Drives the
     /// crosshair / wireframe overlay and the RMB-place step. Skips
     /// `F_RAY_PASS` decorations (torch, flowers) so the player can
@@ -1040,6 +1045,11 @@ pub(crate) struct Voxel {
     /// frame (the old code rescanned ~400k cells every frame while the
     /// mesh budget was backlogged - the "FPS zalostny u vody" bug).
     pub(crate) liquid_remesh_backlog: std::collections::HashSet<ChunkCoord>,
+    /// W284: per-chunk-column MC biome water colour, so a busy liquid
+    /// remesh backlog doesn't re-run the climate-noise biome sample
+    /// for the same column every rebuild. Cleared on dim switch /
+    /// world reset (biomes are per-dim + per-seed).
+    pub(crate) water_tint_cache: HashMap<[i32; 2], [f32; 3]>,
     /// Worldgen variant the current chunks were generated from.
     /// Compared against `WorldGen::current()` on `Play offline`
     /// so the world rebuilds when the user picks a different

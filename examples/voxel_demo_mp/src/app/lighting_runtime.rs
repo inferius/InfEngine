@@ -526,8 +526,29 @@ impl Voxel {
         if self.workers.is_some()
             && self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
         {
+            // W284: self-heal a leaked in-flight counter. A real
+            // lighting job finishes in well under a second, so
+            // sitting AT the cap for thousands of consecutive frames
+            // without a single Lit result means the decrements were
+            // lost (e.g. results dropped by a buffer clear) - and a
+            // wedged counter silently disables ALL lighting updates
+            // for the rest of the session while the dirty set grows
+            // without bound. Reset + warn; a rare false positive
+            // just over-dispatches once (the arriving results
+            // saturating_sub at zero).
+            self.lighting_capped_frames += 1;
+            if self.lighting_capped_frames > 3600 {
+                tracing::warn!(
+                    stuck = self.pending_lighting_jobs,
+                    dirty = self.lighting.dirty.len(),
+                    "W284: lighting in-flight counter wedged at cap - resetting"
+                );
+                self.pending_lighting_jobs = 0;
+                self.lighting_capped_frames = 0;
+            }
             return Vec::new();
         }
+        self.lighting_capped_frames = 0;
         let mut dirty = self.lighting.take_dirty();
         // W28.5: also drain the per-change emission records.
         let dirty_changes = self.lighting.take_dirty_changes();

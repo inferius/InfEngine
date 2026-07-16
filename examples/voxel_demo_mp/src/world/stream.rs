@@ -30,6 +30,18 @@ use crate::lighting::HaloLighting;
 
 /// W47.18: drive one frame of the chunk stream. See module docs.
 pub(crate) fn stream_chunks(vx: &mut Voxel) {
+    // W284: whole-phase breakdown. The user's 10-FPS log showed
+    // stream_ms pinned at ~120/frame while EVERY existing sub-probe
+    // (W232 rescan, W233 result + remesh-drain) stayed silent - so
+    // time each section and name the split whenever the phase blows
+    // past 25 ms. Cheap: five Instant reads per frame.
+    let _sc_t = std::time::Instant::now();
+    let mut _ms_dispatch = 0.0f32;
+    let mut _ms_recv = 0.0f32;
+    let mut _ms_process = 0.0f32;
+    let mut _n_generated = 0usize;
+    let mut _n_remeshed = 0usize;
+    let mut _n_lit = 0usize;
     let cs = CHUNK_SIZE as i32;
     let player_chunk = [
         (vx.player_pos.x.floor() as i32).div_euclid(cs),
@@ -77,6 +89,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     // chunks used to scatter across (measured 465 ms -> 80 ms per
     // column). Batched-along coords keep their stale heap entries;
     // `in_flight_chunks` makes later pops skip them.
+    let _t = std::time::Instant::now();
     if let Some(pool) = vx.workers.as_ref() {
         let horiz_speed = (vx.player_vel.x * vx.player_vel.x
             + vx.player_vel.z * vx.player_vel.z)
@@ -150,7 +163,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         }
     }
 
+    _ms_dispatch = _t.elapsed().as_secs_f32() * 1000.0;
+
     // Drain finished results from the workers.
+    let _t = std::time::Instant::now();
     let (results_cap, budget_ms) = vx.current_results_budget();
     // W106: do NOT clear here - results that last frame's processing
     // time-budget left unprocessed carry over, so a burst of finished
@@ -165,6 +181,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             vx.stream_delivered.push(r);
         }
     }
+    _ms_recv = _t.elapsed().as_secs_f32() * 1000.0;
     let delivered = std::mem::take(&mut vx.stream_delivered);
     // W106: apply the per-frame time budget to PROCESSING (the GPU mesh
     // uploads), which is what the budget always intended (see the
@@ -182,9 +199,18 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         // stream_ms of 186/319 ms that no other probe attributed.
         let _result_t = std::time::Instant::now();
         let _result_kind = match &result {
-            WorkerResult::Generated { .. } => "generated",
-            WorkerResult::Remeshed { .. } => "remeshed",
-            WorkerResult::Lit { .. } => "lit",
+            WorkerResult::Generated { .. } => {
+                _n_generated += 1;
+                "generated"
+            }
+            WorkerResult::Remeshed { .. } => {
+                _n_remeshed += 1;
+                "remeshed"
+            }
+            WorkerResult::Lit { .. } => {
+                _n_lit += 1;
+                "lit"
+            }
         };
         match result {
             WorkerResult::Generated {
@@ -646,6 +672,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             break;
         }
     }
+    _ms_process = process_start.elapsed().as_secs_f32() * 1000.0;
     vx.stream_delivered = delivered_iter.collect();
 
     // Drain deferred neighbour re-meshes.
@@ -671,6 +698,27 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 ms = _ms,
                 drained = remesh_done,
                 "W233: slow remesh-drain"
+            );
+        }
+    }
+    // W284: name the split whenever the whole phase runs long (the
+    // existing narrower probes stayed silent through a sustained
+    // stream_ms=120/frame incident - whatever section they don't
+    // cover shows up here as total minus the parts).
+    {
+        let _ms_total = _sc_t.elapsed().as_secs_f32() * 1000.0;
+        if _ms_total > 25.0 {
+            tracing::warn!(
+                total_ms = _ms_total,
+                dispatch_ms = _ms_dispatch,
+                recv_ms = _ms_recv,
+                process_ms = _ms_process,
+                remesh_ms = _remesh_t.elapsed().as_secs_f32() * 1000.0,
+                generated = _n_generated,
+                remeshed = _n_remeshed,
+                lit = _n_lit,
+                carry = vx.stream_delivered.len(),
+                "W284: slow stream_chunks"
             );
         }
     }

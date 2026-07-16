@@ -188,6 +188,8 @@ impl Voxel {
             }
             self.liquid_chunk_sig.clear();
             self.liquid_remesh_backlog.clear();
+            // W284: water tint is biome-derived = per-dim.
+            self.water_tint_cache.clear();
         }
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's
@@ -206,7 +208,25 @@ impl Voxel {
         // W277: results already PULLED off the channel but not yet
         // processed belong to the old dim too (in-flight ones are
         // caught by the per-result dim tag on the drain).
+        //
+        // W284: a Lit result dropped HERE must still give its
+        // in-flight slot back. The drain's stale-dim arm decrements
+        // `pending_lighting_jobs`; this clear() didn't, so every
+        // portal cycle could ratchet the counter up until it hit
+        // MAX_INFLIGHT_LIGHTING_JOBS (24) and lighting dispatch
+        // wedged for the rest of the session (the user's pinned
+        // `light_jobs=24` + `light_ms=0.0` log signature).
+        for r in &self.stream_delivered {
+            if matches!(r, crate::workers::WorkerResult::Lit { .. }) {
+                self.pending_lighting_jobs = self.pending_lighting_jobs.saturating_sub(1);
+            }
+        }
         self.stream_delivered.clear();
+        // W284: queued-but-undispatched lighting segments hold OLD
+        // dim chunk coords - snapshotting them against the swapped
+        // world would light garbage. rebuild_all_lighting above
+        // already re-seeds the new dim.
+        self.pending_lighting_segments.clear();
         // Open UIs reference position-keyed containers that
         // belong to the parked dim. Close them on switch so the
         // player doesn't see a stale chest panel.

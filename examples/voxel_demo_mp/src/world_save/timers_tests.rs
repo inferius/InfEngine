@@ -380,3 +380,253 @@ fn catch_up_tick_constant_matches_50ms() {
     // math doesn't silently drift when someone tweaks the constant.
     assert_eq!(TICK_MS, 50);
 }
+
+/// Diagnostic dump (not a regression test - #[ignore]d). Reads a LIVE
+/// save's scheduled.bin + the chunks around each liquid timer and
+/// prints the neighbourhood, so a "N liquid timers never settle"
+/// report can be root-caused offline. Run with:
+///   cargo test -p voxel_demo_mp --release --lib \
+///     dump_live_save_liquid_timers -- --ignored --nocapture
+/// Slug via DUMP_SLUG env (default test-mc-15).
+#[test]
+#[ignore]
+#[allow(clippy::print_stdout)]
+fn dump_live_save_liquid_timers() {
+    let slug = std::env::var("DUMP_SLUG").unwrap_or_else(|_| "test-mc-15".into());
+    let Ok(Some(bundle)) = crate::world_save::timers::read_timers(&slug) else {
+        println!("no timers bundle for slug {slug}");
+        return;
+    };
+    println!("timers: {} items", bundle.items.len());
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    let name_of = |id: u16| -> String {
+        if id == 0 {
+            "air".into()
+        } else {
+            crate::block::block_type(id)
+                .map(|bt| bt.name.to_string())
+                .unwrap_or_else(|| format!("id{id}"))
+        }
+    };
+    for t in &bundle.items {
+        let TimerKind::LiquidScheduled { liquid_id } = &t.kind else {
+            println!("- {:?} dim={} kind={:?}", t.pos, t.dim, t.kind);
+            continue;
+        };
+        println!(
+            "- liquid timer at {:?} dim={} liquid={}",
+            t.pos,
+            t.dim,
+            name_of(*liquid_id)
+        );
+        // Print a 3x3x3 neighbourhood: block name + saved liquid level.
+        for dy in (-1..=1).rev() {
+            for dz in -1..=1 {
+                let mut row = String::new();
+                for dx in -1..=1 {
+                    let p = [t.pos[0] + dx, t.pos[1] + dy, t.pos[2] + dz];
+                    let cc = [
+                        p[0].div_euclid(cs),
+                        p[1].div_euclid(cs),
+                        p[2].div_euclid(cs),
+                    ];
+                    let cell = crate::world_save::chunks::read_chunk(&slug, &t.dim, cc)
+                        .ok()
+                        .flatten()
+                        .map(|payload| {
+                            let local = [
+                                p[0].rem_euclid(cs) as u8,
+                                p[1].rem_euclid(cs) as u8,
+                                p[2].rem_euclid(cs) as u8,
+                            ];
+                            let lvl = payload
+                                .liquid_levels
+                                .iter()
+                                .find(|(l, _)| *l == local)
+                                .map(|(_, v)| *v);
+                            let chunk = payload.voxels.into_chunk().ok();
+                            let id = chunk
+                                .map(|c| {
+                                    c.get(
+                                        local[0] as usize,
+                                        local[1] as usize,
+                                        local[2] as usize,
+                                    )
+                                    .0
+                                })
+                                .unwrap_or(u16::MAX);
+                            match lvl {
+                                Some(l) => format!("{}:{}", name_of(id), l),
+                                None => name_of(id),
+                            }
+                        })
+                        .unwrap_or_else(|| "?".into());
+                    row.push_str(&format!("{cell:<22}"));
+                }
+                println!("  y{dy:+} z{dz:+}: {row}");
+            }
+        }
+    }
+}
+
+/// Companion diagnostic to `dump_live_save_liquid_timers`: rebuild the
+/// saved neighbourhood in a headless Voxel (disk chunks + real worldgen
+/// for the gaps), seed the schedule with the persisted timers, then run
+/// the REAL per-cell tick machinery and watch whether the schedule
+/// drains. Reproduces "N liquid timers tick forever" reports offline.
+/// Run with:
+///   cargo test -p voxel_demo_mp --release --bin voxel_demo_mp \
+///     simulate_live_save_liquid_settle -- --ignored --nocapture
+#[test]
+#[ignore]
+#[allow(clippy::print_stdout)]
+fn simulate_live_save_liquid_settle() {
+    let slug = std::env::var("DUMP_SLUG").unwrap_or_else(|_| "test-mc-15".into());
+    let seed: u32 = std::env::var("DUMP_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(857148473);
+    let Ok(Some(bundle)) = crate::world_save::timers::read_timers(&slug) else {
+        println!("no timers bundle for slug {slug}");
+        return;
+    };
+    let dim = "overworld".to_string();
+    let timer_cells: Vec<[i32; 3]> = bundle
+        .items
+        .iter()
+        .filter(|t| {
+            t.dim == dim && matches!(t.kind, TimerKind::LiquidScheduled { .. })
+        })
+        .map(|t| t.pos)
+        .collect();
+    println!("seeding {} liquid timers", timer_cells.len());
+
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    let ctx = crate::worldgen::WorldgenCtx {
+        base_seed: seed,
+        dim: dim.clone(),
+        profile: crate::worldgen::WorldGen::Mc,
+    };
+    let mut v = crate::Voxel::new();
+    // Pull a chunk box around every timer: disk first (real edited
+    // state incl. liquid levels), worldgen for never-saved gaps.
+    let mut wanted: std::collections::BTreeSet<[i32; 3]> = Default::default();
+    for p in &timer_cells {
+        let cc = [
+            p[0].div_euclid(cs),
+            p[1].div_euclid(cs),
+            p[2].div_euclid(cs),
+        ];
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                for dz in -2..=2 {
+                    wanted.insert([cc[0] + dx, cc[1] + dy, cc[2] + dz]);
+                }
+            }
+        }
+    }
+    let mut from_disk = 0usize;
+    let mut from_gen = 0usize;
+    for cc in wanted {
+        match crate::world_save::chunks::read_chunk(&slug, &dim, cc) {
+            Ok(Some(payload)) => {
+                let coord = payload.coord;
+                let liquid_levels = payload.liquid_levels.clone();
+                let chunk = payload.voxels.into_chunk().expect("chunk decode");
+                let origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
+                // Index liquid cells like apply_chunk_payload does.
+                for ly in 0..cs {
+                    for lz in 0..cs {
+                        for lx in 0..cs {
+                            let b = chunk.get(lx as usize, ly as usize, lz as usize);
+                            if crate::liquid::liquid_for(b).is_some() {
+                                v.liquid_positions.insert([
+                                    origin[0] + lx,
+                                    origin[1] + ly,
+                                    origin[2] + lz,
+                                ]);
+                            }
+                        }
+                    }
+                }
+                v.world.insert_chunk(coord, chunk);
+                for (local, level) in liquid_levels {
+                    let wp = [
+                        origin[0] + local[0] as i32,
+                        origin[1] + local[1] as i32,
+                        origin[2] + local[2] as i32,
+                    ];
+                    v.liquid_level.insert(wp, level.min(8));
+                }
+                from_disk += 1;
+            }
+            _ => {
+                let chunk = crate::worldgen::generate_chunk_at_ctx(cc, &ctx);
+                let origin = [cc[0] * cs, cc[1] * cs, cc[2] * cs];
+                for ly in 0..cs {
+                    for lz in 0..cs {
+                        for lx in 0..cs {
+                            let b = chunk.get(lx as usize, ly as usize, lz as usize);
+                            if crate::liquid::liquid_for(b).is_some() {
+                                v.liquid_positions.insert([
+                                    origin[0] + lx,
+                                    origin[1] + ly,
+                                    origin[2] + lz,
+                                ]);
+                            }
+                        }
+                    }
+                }
+                v.world.insert_chunk(cc, chunk);
+                from_gen += 1;
+            }
+        }
+    }
+    println!("chunks: {from_disk} disk + {from_gen} gen");
+
+    for p in &timer_cells {
+        v.liquid_schedule.schedule(*p, 1);
+    }
+    v.liquid_clock = 0;
+    let mut last_fired: Vec<[i32; 3]> = Vec::new();
+    for tick in 1..=400u64 {
+        v.liquid_clock = tick;
+        let mut dirty: std::collections::HashSet<infengine_voxel::ChunkCoord> =
+            Default::default();
+        let mut fired: Vec<[i32; 3]> = Vec::new();
+        while let Some(pos) = v.liquid_schedule.pop_due(tick) {
+            let b = v.world.get(pos);
+            let Some(lq) = crate::liquid::liquid_for(b) else {
+                continue;
+            };
+            let lq = *lq;
+            v.tick_liquid_cell(pos, &lq, tick, &mut dirty);
+            fired.push(pos);
+        }
+        for lq in crate::liquid::LIQUIDS {
+            if lq.infinite_source {
+                v.tick_liquid_merge(lq);
+            }
+        }
+        if tick <= 10 || tick % 40 == 0 || v.liquid_schedule.len() == 0 {
+            println!(
+                "tick {tick}: fired={} sched={} dirty_chunks={}",
+                fired.len(),
+                v.liquid_schedule.len(),
+                dirty.len()
+            );
+        }
+        last_fired = fired;
+        if v.liquid_schedule.len() == 0 {
+            println!("SETTLED at tick {tick}");
+            return;
+        }
+    }
+    println!("NOT SETTLED after 400 ticks; survivors:");
+    for pos in v.liquid_schedule.iter().take(40) {
+        let b = v.world.get(pos);
+        let lvl = v.liquid_level.get(&pos).copied();
+        println!("  {:?} block={} level={:?}", pos, b.0, lvl);
+    }
+    println!("last tick fired {} cells: {:?}", last_fired.len(), &last_fired[..last_fired.len().min(40)]);
+}

@@ -512,14 +512,31 @@ impl Voxel {
             // turquoise, swamp murk, frozen ocean steel-blue). Non-Mc
             // profiles keep the BLOCK_TYPES water blue. Lava's texture
             // is fully coloured, so it always tints white (W200).
-            let ctx = self.current_worldgen_ctx();
-            let water_tint = if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
-                let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(&ctx, bx + 8, bz + 8);
-                crate::worldgen::mcgen::colors::water_color(mc)
-            } else {
-                crate::block::block_type(crate::block::WATER_ID)
-                    .map(|bt| bt.color)
-                    .unwrap_or([1.0, 1.0, 1.0])
+            //
+            // W284: cached per chunk COLUMN. The climate-noise biome
+            // sample is not free, and a busy backlog re-meshes up to 48
+            // chunks per frame - re-deriving the same column colour on
+            // every rebuild was pure waste. Cleared on dim switch /
+            // world reset alongside the other liquid state.
+            let water_tint = match self.water_tint_cache.get(&[cc[0], cc[2]]) {
+                Some(t) => *t,
+                None => {
+                    let ctx = self.current_worldgen_ctx();
+                    let t = if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+                        let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(
+                            &ctx,
+                            bx + 8,
+                            bz + 8,
+                        );
+                        crate::worldgen::mcgen::colors::water_color(mc)
+                    } else {
+                        crate::block::block_type(crate::block::WATER_ID)
+                            .map(|bt| bt.color)
+                            .unwrap_or([1.0, 1.0, 1.0])
+                    };
+                    self.water_tint_cache.insert([cc[0], cc[2]], t);
+                    t
+                }
             };
             let renderer = self.renderer.as_mut().expect("renderer ready");
             if let Some(old) = self.liquid_mesh_handles.remove(&cc) {

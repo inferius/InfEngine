@@ -137,7 +137,9 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         tick_period: 5,
         fall_period: 2,
         infinite_source: true,
-        swim_horiz_drag: 0.45,
+        // W284: PER-GAME-TICK multiplier (MC travelInFluid water
+        // factor 0.8/tick); update_play applies powf(dt * 20).
+        swim_horiz_drag: 0.8,
         swim_fall_cap: -1.8,
         swim_jump_vel: 2.2,
         swim_buoyancy: 12.0,
@@ -162,7 +164,9 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         tick_period: 30,
         fall_period: 10,
         infinite_source: false,
-        swim_horiz_drag: 0.20,
+        // W284: PER-GAME-TICK multiplier (MC travelInFluid lava
+        // factor 0.5/tick); update_play applies powf(dt * 20).
+        swim_horiz_drag: 0.5,
         swim_fall_cap: -0.5,
         swim_jump_vel: 1.0,
         swim_buoyancy: 4.0,
