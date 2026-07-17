@@ -17,40 +17,72 @@
 use crate::net::{MobMsg, NetRole};
 use crate::Voxel;
 
-use super::kinds::{KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP};
+use super::kinds::{KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_RABBIT, KIND_SHEEP};
 use super::spawn::initial_health_for;
 use super::state::MobState;
 
-/// Seconds a fed animal stays in love, looking for a mate.
+/// Seconds a fed animal stays in love, looking for a mate (MC 600
+/// ticks).
 const LOVE_TIME: f32 = 30.0;
-/// Seconds before a bred animal can be fed again.
-const BREED_COOLDOWN: f32 = 60.0;
+/// W290: seconds before a bred animal can be fed again - MC's 6000
+/// tick `setAge(6000)` parent cooldown (was 60 s).
+const BREED_COOLDOWN: f32 = 300.0;
 /// Horizontal distance (blocks) two in-love animals must be within
 /// to pair off.
 const BREED_RANGE: f32 = 3.0;
 
-/// Item ids that put an animal into love mode. v1: wheat (337) breeds
-/// every farm animal; MC's per-species food is a follow-up.
+/// W290: MC per-species food (`Animal.isFood`): cow + sheep eat
+/// wheat, pigs carrot/potato/beetroot, chickens seeds, rabbits
+/// carrot/dandelion (no golden carrot item yet). The same table
+/// drives BOTH feeding (love mode) and the TemptGoal follow.
+pub(crate) fn is_food_for(kind: u8, item_id: u16) -> bool {
+    match kind {
+        k if k == KIND_COW || k == KIND_SHEEP => item_id == 337,
+        k if k == KIND_PIG => (343..=345).contains(&item_id),
+        k if k == KIND_CHICKEN => item_id == 338,
+        k if k == KIND_RABBIT => matches!(item_id, 344 | 480),
+        _ => false,
+    }
+}
+
+/// Any item at least one species eats - the cheap pre-filter the
+/// RMB path runs before the per-kind check.
 pub(crate) fn is_breeding_food(item_id: u16) -> bool {
-    item_id == 337 // wheat
+    matches!(item_id, 337 | 338 | 343 | 344 | 345 | 480)
+}
+
+/// W290: MC TemptGoal speed modifier per kind (Cow 1.25, Sheep 1.1,
+/// Pig 1.2, Chicken 1.0, Rabbit 1.0).
+pub(crate) fn tempt_speed(kind: u8) -> f32 {
+    match kind {
+        k if k == KIND_COW => 1.25,
+        k if k == KIND_SHEEP => 1.1,
+        k if k == KIND_PIG => 1.2,
+        _ => 1.0,
+    }
 }
 
 /// Kinds that can breed (passive farm animals).
 fn can_breed(kind: u8) -> bool {
-    matches!(kind, KIND_SHEEP | KIND_COW | KIND_PIG | KIND_CHICKEN)
+    matches!(
+        kind,
+        KIND_SHEEP | KIND_COW | KIND_PIG | KIND_CHICKEN | KIND_RABBIT
+    )
 }
 
 /// Try to feed the mob `mob_id`. Returns `true` (the caller then
 /// consumes one food) when it's a breedable, alive animal that's off
 /// cooldown and not already in love; sets its love timer + a heart
 /// particle puff. Returns `false` otherwise (no food consumed).
-pub(crate) fn try_feed(voxel: &mut Voxel, mob_id: u32) -> bool {
+pub(crate) fn try_feed(voxel: &mut Voxel, mob_id: u32, item_id: u16) -> bool {
     let pos;
     {
         let Some(m) = voxel.mobs.iter_mut().find(|m| m.id == mob_id) else {
             return false;
         };
+        // W290: the species must actually EAT this item (MC isFood).
         if !can_breed(m.kind)
+            || !is_food_for(m.kind, item_id)
             || m.dying > 0.0
             || m.breed_cooldown > 0.0
             || m.love > 0.0
@@ -162,10 +194,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wheat_is_breeding_food_other_items_are_not() {
-        assert!(is_breeding_food(337)); // wheat
+    fn per_species_food_matches_mc() {
+        // W290 pins: Animal.isFood per species.
+        assert!(is_food_for(KIND_COW, 337)); // wheat
+        assert!(is_food_for(KIND_SHEEP, 337));
+        assert!(!is_food_for(KIND_COW, 344)); // no carrots for cows
+        assert!(is_food_for(KIND_PIG, 344)); // carrot
+        assert!(is_food_for(KIND_PIG, 343)); // potato
+        assert!(is_food_for(KIND_PIG, 345)); // beetroot
+        assert!(!is_food_for(KIND_PIG, 337)); // pigs refuse wheat
+        assert!(is_food_for(KIND_CHICKEN, 338)); // seeds
+        assert!(!is_food_for(KIND_CHICKEN, 337));
+        assert!(is_food_for(KIND_RABBIT, 344)); // carrot
+        assert!(is_food_for(KIND_RABBIT, 480)); // dandelion
+        assert!(is_breeding_food(337));
         assert!(!is_breeding_food(1)); // stone
-        assert!(!is_breeding_food(338)); // wheat_seeds (v1: wheat only)
+        assert!((tempt_speed(KIND_COW) - 1.25).abs() < 1e-6);
+        assert!((tempt_speed(KIND_CHICKEN) - 1.0).abs() < 1e-6);
     }
 
     #[test]

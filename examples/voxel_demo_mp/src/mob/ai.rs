@@ -265,6 +265,62 @@ fn step_one(
         m.strolling = true;
         m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
     }
+    // W290: BreedGoal + TemptGoal for passive animals (in that MC
+    // priority order, both below PanicGoal).
+    if !kind_is_hostile(m.kind) && m.panic_left <= 0.0 {
+        if m.love > 0.0 {
+            // BreedGoal: walk to the nearest in-love same-kind
+            // partner within 8 blocks; breed_pass pairs them off
+            // once they close to 3.
+            let mut best: Option<([f32; 3], f32)> = None;
+            for o in voxel.mobs.iter() {
+                if o.id != m.id
+                    && o.kind == m.kind
+                    && o.love > 0.0
+                    && o.dying <= 0.0
+                {
+                    let d2 = (o.pos[0] - m.pos[0]).powi(2)
+                        + (o.pos[2] - m.pos[2]).powi(2);
+                    if d2 < 64.0 && best.is_none_or(|(_, bd)| d2 < bd) {
+                        best = Some((o.pos, d2));
+                    }
+                }
+            }
+            if let Some((p, _)) = best {
+                m.target = p;
+                m.strolling = true;
+                m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+            }
+        } else if let Some((b, _)) = voxel.inventory[voxel.selected_slot]
+            && super::breed::is_food_for(m.kind, b.0)
+        {
+            // TemptGoal: follow the player holding this species'
+            // food within 10 blocks, stopping at 2.5 (MC
+            // stop-distance 6.25 squared) so the animal stands and
+            // stares instead of shoving into the player.
+            let pp = [
+                voxel.player_pos.x,
+                voxel.player_pos.y,
+                voxel.player_pos.z,
+            ];
+            let dx = pp[0] - m.pos[0];
+            let dz = pp[2] - m.pos[2];
+            let d2 = dx * dx + dz * dz;
+            if d2 < 100.0 {
+                if d2 > 6.25 {
+                    m.target = pp;
+                    m.strolling = true;
+                    m.retarget_at =
+                        (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+                    speed *= super::breed::tempt_speed(m.kind);
+                } else {
+                    // Close enough: stand still, face the food.
+                    m.strolling = false;
+                    m.target = m.pos;
+                }
+            }
+        }
+    }
     let dx = m.target[0] - m.pos[0];
     let dz = m.target[2] - m.pos[2];
     let d2 = dx * dx + dz * dz;

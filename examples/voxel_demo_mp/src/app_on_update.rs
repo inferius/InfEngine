@@ -844,7 +844,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && let Some((mob_id, _)) =
                 vx.raycast_mob(vx.player_pos, forward, MOB_ATTACK_REACH)
         {
-            fed = crate::mob::breed::try_feed(vx, mob_id);
+            // W290: per-species food check happens inside try_feed.
+            let held = selected_block.map(|b| b.0).unwrap_or(0);
+            fed = crate::mob::breed::try_feed(vx, mob_id, held);
             if fed {
                 if !vx.abilities.instabuild
                     && let Some((_, count)) =
