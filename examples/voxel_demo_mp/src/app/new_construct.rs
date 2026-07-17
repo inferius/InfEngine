@@ -385,6 +385,7 @@ impl Voxel {
                 head_bob: true,
                 invert_mouse_y: false,
                 invert_wheel: false,
+                ui_scale: 1.0,
                 lock_cursor: true,
                 hide_cursor: true,
                 // W9.7: filled by `sync_menu_options` from the live

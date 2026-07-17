@@ -405,6 +405,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // `&mut vx.settings` capture so the immutable borrow on
         // vx doesn't collide with the mutable capture chain.
         let active_world_seed = vx.current_worldgen_ctx().effective_seed();
+        // W292: read the GUI scale before `settings_edit` takes the
+        // exclusive borrow below (the zoom application near ui.run
+        // only needs the value).
+        let ui_scale = vx.settings.ui_scale.clamp(0.5, 3.0);
         let settings_edit = &mut vx.settings;
         // Live-edit flag the F6 panel writes back when the user
         // clicks its window close button. Mirrors back to
@@ -799,6 +803,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let Some(ui) = vx.ui.as_mut() else {
             return;
         };
+        // W292: GUI scale (MC "GUI Scale"). zoom_factor composes
+        // with the OS pixels_per_point, so 1.0 = native look and
+        // 2.0 doubles every panel/font on a 4K monitor. No-op when
+        // unchanged; egui applies it from the next pass.
+        if (ui.context().zoom_factor() - ui_scale).abs() > 0.001 {
+            ui.context().set_zoom_factor(ui_scale);
+        }
         ui.run(window.raw(), |ctx| match state {
             // Wave 4 (Phase G.6): all four pre-Play AppStates now
             // funnel through the menu module. The new state

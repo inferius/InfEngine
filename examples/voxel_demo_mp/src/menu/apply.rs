@@ -162,6 +162,7 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
             vx.settings.head_bob = snapshot.head_bob;
             vx.settings.invert_mouse_y = snapshot.invert_mouse_y;
             vx.settings.invert_wheel = snapshot.invert_wheel;
+            vx.settings.ui_scale = snapshot.ui_scale.clamp(0.5, 3.0);
             vx.settings.lock_cursor = snapshot.lock_cursor;
             vx.settings.hide_cursor = snapshot.hide_cursor;
             let trimmed = snapshot.mc_assets_path.trim();

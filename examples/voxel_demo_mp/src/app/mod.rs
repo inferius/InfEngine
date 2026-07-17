@@ -1245,6 +1245,11 @@ pub(crate) struct Settings {
     /// "cs_cz"). Drives item/block display names via `lang`;
     /// search always matches this language AND English.
     pub(crate) language: String,
+    /// W292: GUI scale multiplier (MC "GUI Scale"). Applied as the
+    /// egui zoom_factor, which COMPOSES with the OS DPI scale -
+    /// 1.0 keeps the platform-native size, 2.0 doubles every
+    /// panel/font (the 4K-monitor fix). Clamped to 0.5..=3.0.
+    pub(crate) ui_scale: f32,
 }
 
 impl Default for Settings {
@@ -1260,6 +1265,7 @@ impl Default for Settings {
             invert_wheel: false,
             mc_assets_path: None,
             language: "en_us".to_string(),
+            ui_scale: 1.0,
         }
     }
 }

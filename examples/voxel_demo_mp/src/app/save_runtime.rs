@@ -172,6 +172,7 @@ impl Voxel {
             "invert_wheel={}",
             self.settings.invert_wheel
         );
+        let _ = writeln!(text, "ui_scale={}", self.settings.ui_scale);
         if let Some(p) = self.home_pos {
             let _ = writeln!(text, "home={},{},{}", p[0], p[1], p[2]);
         }
@@ -279,6 +280,11 @@ impl Voxel {
                 "invert_mouse_y" => {
                     self.settings.invert_mouse_y =
                         matches!(value, "true" | "1" | "yes");
+                }
+                "ui_scale" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        self.settings.ui_scale = v.clamp(0.5, 3.0);
+                    }
                 }
                 "invert_wheel" => {
                     self.settings.invert_wheel =

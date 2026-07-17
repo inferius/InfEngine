@@ -78,6 +78,7 @@ impl Voxel {
         self.menu.options.head_bob = self.settings.head_bob;
         self.menu.options.invert_mouse_y = self.settings.invert_mouse_y;
         self.menu.options.invert_wheel = self.settings.invert_wheel;
+        self.menu.options.ui_scale = self.settings.ui_scale;
         self.menu.options.lock_cursor = self.settings.lock_cursor;
         self.menu.options.hide_cursor = self.settings.hide_cursor;
         // W9.7: surface the live resource-pack state. `mc_assets_path`

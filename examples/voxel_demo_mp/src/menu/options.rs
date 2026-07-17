@@ -46,6 +46,10 @@ pub(crate) fn draw(
             .text("FOV (stupne)"),
     );
     ui.add(
+        Slider::new(&mut ctx.options.ui_scale, 0.5..=3.0)
+            .text("Meritko UI (GUI scale)"),
+    );
+    ui.add(
         Slider::new(&mut ctx.options.mouse_sensitivity, 0.05..=4.0)
             .text("Citlivost mysi"),
     );
