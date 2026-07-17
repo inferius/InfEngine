@@ -79,7 +79,9 @@ pub(super) fn apply_chunk_payload(voxel: &mut Voxel, payload: ChunkPayload) -> i
                     if liquid_for(b).is_some() {
                         voxel.liquid_positions.insert(world_pos);
                     }
-                    if crate::block::light_emission::light_emission_for_id(b.0) > 0 {
+                    if crate::block::light_emission::light_emission_for_id(b.0) > 0
+                        && b.0 != crate::block::LAVA_ID
+                    {
                         voxel.emitter_positions.insert(world_pos, b.0);
                     }
                     if crate::flame_emitter(b.0) {

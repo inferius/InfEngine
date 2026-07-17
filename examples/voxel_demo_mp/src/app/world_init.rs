@@ -185,7 +185,11 @@ impl Voxel {
         // soul torches, sea_lantern, jack_o_lantern, end_rod, lava,
         // fire, glowstone, shroomlight, lit_furnace, ...).
         if block::light_emission::light_emission_for_id(block.0) > 0 {
-            self.emitter_positions.insert(voxel, block.0);
+            // W297: lava stays out (see emitter_scan) - point
+            // lights skip it and the nether map exploded otherwise.
+            if block.0 != crate::block::LAVA_ID {
+                self.emitter_positions.insert(voxel, block.0);
+            }
         } else {
             self.emitter_positions.remove(&voxel);
         }

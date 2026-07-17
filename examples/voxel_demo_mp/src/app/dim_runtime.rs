@@ -63,6 +63,7 @@ impl Voxel {
             furnace_runtimes: std::mem::take(&mut self.furnace_runtimes),
             torch_positions: std::mem::take(&mut self.torch_positions),
             emitter_positions: std::mem::take(&mut self.emitter_positions),
+            portal_positions: std::mem::take(&mut self.portal_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
             stair_states: std::mem::take(&mut self.stair_states),
             snow_positions: std::mem::take(&mut self.snow_positions),
@@ -132,6 +133,7 @@ impl Voxel {
         self.furnace_runtimes = target_world.furnace_runtimes;
         self.torch_positions = target_world.torch_positions;
         self.emitter_positions = target_world.emitter_positions;
+        self.portal_positions = target_world.portal_positions;
         self.torch_orient = target_world.torch_orient;
         self.stair_states = target_world.stair_states;
         self.snow_positions = target_world.snow_positions;

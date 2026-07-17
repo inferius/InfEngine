@@ -432,16 +432,23 @@ fn step_one(
         // (clear) - the mob then walks onto the step. Mirrors that
         // here so a sheep doesn't get stuck against any 1-block
         // ridge / staircase corner.
+        // W297: only SOLID cells block - the old is_air() test made
+        // tall grass / flowers / crops read as walls, so on a grassy
+        // plain every animal wedged in place and the rabbit hopped
+        // into the same grass tuft forever (the user's screenshot).
+        // MC mobs walk straight through non-collidable decorations.
+        let solid_at = |p: [i32; 3]| -> bool {
+            let b = voxel.world.get(p);
+            !b.is_air() && !crate::block::block_is_aabb_passable(b)
+        };
         let try_x = m.pos[0] + step_x;
         let body_y = m.pos[1].floor() as i32;
         let feet_x = try_x.floor() as i32;
         let cur_z = m.pos[2].floor() as i32;
-        let blocked_feet =
-            !voxel.world.get([feet_x, body_y, cur_z]).is_air();
-        let blocked_head =
-            !voxel.world.get([feet_x, body_y + 1, cur_z]).is_air();
+        let blocked_feet = solid_at([feet_x, body_y, cur_z]);
+        let blocked_head = solid_at([feet_x, body_y + 1, cur_z]);
         if blocked_feet && !blocked_head
-            && voxel.world.get([feet_x, body_y + 2, cur_z]).is_air()
+            && !solid_at([feet_x, body_y + 2, cur_z])
         {
             // Step-up: walk onto the higher block.
             m.pos[0] = try_x;
@@ -455,12 +462,10 @@ fn step_one(
         let cur_x = m.pos[0].floor() as i32;
         let feet_z = try_z.floor() as i32;
         let body_y2 = m.pos[1].floor() as i32; // may have changed above
-        let blocked_feet_z =
-            !voxel.world.get([cur_x, body_y2, feet_z]).is_air();
-        let blocked_head_z =
-            !voxel.world.get([cur_x, body_y2 + 1, feet_z]).is_air();
+        let blocked_feet_z = solid_at([cur_x, body_y2, feet_z]);
+        let blocked_head_z = solid_at([cur_x, body_y2 + 1, feet_z]);
         if blocked_feet_z && !blocked_head_z
-            && voxel.world.get([cur_x, body_y2 + 2, feet_z]).is_air()
+            && !solid_at([cur_x, body_y2 + 2, feet_z])
         {
             m.pos[2] = try_z;
             m.pos[1] = (body_y2 + 1) as f32;

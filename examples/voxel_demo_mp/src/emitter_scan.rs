@@ -51,7 +51,13 @@ pub(crate) fn scan_chunk(
                 ];
                 // Any emission level > 0 -> point-light source.
                 if light_emission_for_id(id) > 0 {
-                    emitter_positions.insert(world, id);
+                    // W297: lava is excluded - its light is the
+                    // block-light BFS (W281), point_lights filters it
+                    // out anyway, and a nether lava ocean pushed the
+                    // map to 1.78M entries = a 12 ms/frame scan.
+                    if id != crate::block::LAVA_ID {
+                        emitter_positions.insert(world, id);
+                    }
                 }
                 // Torch family -> flame + smoke spawn list.
                 if flame_emitter(id) {

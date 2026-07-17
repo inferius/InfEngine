@@ -263,7 +263,12 @@ pub(crate) fn emit_wall_torch(
         _ => [0.0, -1.0],
     };
     let f = Vec3::new(dir[0], 0.0, dir[1]);
-    let s = Vec3::new(-dir[1], 0.0, dir[0]);
+    // W297: sideways axis picked so (s, axis, nf) is RIGHT-handed
+    // like (x, y, z) - the first cut used the opposite sign, which
+    // turned the sheared box inside out: every face backface-culled
+    // = invisible wall torches (the nether screenshot showed only
+    // the floating flame particles).
+    let s = Vec3::new(dir[1], 0.0, -dir[0]);
     let up = Vec3::Y;
     let (sin_t, cos_t) = (22.5f32.to_radians().sin(), 22.5f32.to_radians().cos());
     // Column axis tilted toward `facing`; `nf` is the box depth

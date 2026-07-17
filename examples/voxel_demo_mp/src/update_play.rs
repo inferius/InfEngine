@@ -686,7 +686,13 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             // sting near the foot position. Source ponds stay
             // silent (no flow direction).
             app.flow_sfx_accum -= dt;
-            if foot_in_flow && app.flow_sfx_accum <= 0.0 {
+            // W297: the running-water sting is WATER only - a lava
+            // stream played the same river swish (the user report:
+            // lava sounds like water).
+            if foot_in_flow
+                && liquid.block_id == crate::block::WATER_ID
+                && app.flow_sfx_accum <= 0.0
+            {
                 app.flow_sfx_accum = 0.55;
                 let center = [
                     foot[0] as f32 + 0.5,
