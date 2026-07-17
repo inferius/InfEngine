@@ -149,6 +149,7 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
             health: hp.max(0.0).round() as u8,
             head_yaw: yaw,
             head_pitch: 0.0,
+            baby: false,
         },
     );
 }
@@ -269,6 +270,7 @@ pub(crate) fn try_spawn_one(
             health: initial_hp,
             head_yaw: 0.0,
             head_pitch: 0.0,
+            baby: false,
         },
     );
     voxel.last_mob_spawn_time = day_time;

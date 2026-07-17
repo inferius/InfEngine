@@ -83,6 +83,7 @@ pub(crate) fn try_feed(voxel: &mut Voxel, mob_id: u32, item_id: u16) -> bool {
         // W290: the species must actually EAT this item (MC isFood).
         if !can_breed(m.kind)
             || !is_food_for(m.kind, item_id)
+            || m.baby_left > 0.0
             || m.dying > 0.0
             || m.breed_cooldown > 0.0
             || m.love > 0.0
@@ -113,6 +114,8 @@ pub(crate) fn breed_pass(voxel: &mut Voxel, dt: f32) {
     for m in voxel.mobs.iter_mut() {
         m.love = (m.love - dt).max(0.0);
         m.breed_cooldown = (m.breed_cooldown - dt).max(0.0);
+        // W291: babies grow toward adulthood (MC -24000 age ticks).
+        m.baby_left = (m.baby_left - dt).max(0.0);
     }
     // Snapshot the in-love subset (index, kind, pos) so the pairing
     // search doesn't hold a borrow across the spawn.
@@ -165,15 +168,21 @@ fn pair_breeders(
     out
 }
 
-/// Spawn a fresh adult of `kind` at `pos`, flagged persistent so the
-/// bred animal doesn't despawn. The pose broadcasts on the next
-/// `tick_mobs` broadcast pass.
+/// W291: seconds a newborn spends as a baby - MC's -24000 age ticks
+/// (20 minutes).
+const BABY_GROW_TIME: f32 = 1200.0;
+
+/// Spawn a BABY of `kind` at `pos`, flagged persistent so the bred
+/// animal doesn't despawn. Renders at half scale + follows a parent
+/// until `baby_left` runs out (MC AgeableMob). The pose broadcasts
+/// on the next `tick_mobs` broadcast pass.
 fn spawn_offspring(voxel: &mut Voxel, kind: u8, pos: [f32; 3]) {
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
     let hp = initial_health_for(kind);
     let mut mob = MobState::new_natural(id, kind, pos, pos, 0.0, 0.0, hp);
     mob.persistent = true;
+    mob.baby_left = BABY_GROW_TIME;
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
         id,
@@ -185,6 +194,7 @@ fn spawn_offspring(voxel: &mut Voxel, kind: u8, pos: [f32; 3]) {
             health: hp as u8,
             head_yaw: 0.0,
             head_pitch: 0.0,
+            baby: true,
         },
     );
 }

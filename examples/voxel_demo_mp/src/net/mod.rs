@@ -110,6 +110,10 @@ pub(crate) struct MobMsg {
     /// W147: head pitch, MC convention (positive = down).
     #[serde(default)]
     pub(crate) head_pitch: f32,
+    /// W291: true while the mob is a growing baby - every peer
+    /// renders it at half scale (MC AgeableMob).
+    #[serde(default)]
+    pub(crate) baby: bool,
 }
 
 /// W134: snapshot of one host-side minecart. Sent as `vx.cart` at

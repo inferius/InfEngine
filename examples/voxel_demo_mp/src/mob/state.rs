@@ -82,6 +82,10 @@ pub(crate) struct MobState {
     /// airborne (MC rabbits jump to move); grounded rabbits wait
     /// here between hops.
     pub(crate) hop_cd: f32,
+    /// W291: seconds left growing up (MC baby age -24000 ticks =
+    /// 20 min). 0 = adult. Babies render at half scale, follow the
+    /// nearest adult of their kind, and can't breed or be tempted.
+    pub(crate) baby_left: f32,
 }
 
 impl MobState {
@@ -119,6 +123,7 @@ impl MobState {
             panic_left: 0.0,
             strolling: false,
             hop_cd: 0.0,
+            baby_left: 0.0,
         }
     }
 }

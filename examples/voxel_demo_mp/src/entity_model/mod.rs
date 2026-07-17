@@ -440,7 +440,24 @@ pub(crate) fn draw(
     tint: [f32; 4],
     pose_for: impl FnMut(&str) -> BonePose,
 ) {
-    let place = Mat4::from_translation(world_pos + Vec3::new(0.0, baked.ground_offset, 0.0))
+    draw_scaled(r, baked, world_pos, yaw, 1.0, tint, pose_for);
+}
+
+/// W291: `draw` with a uniform scale about the FEET (world_pos) -
+/// the baby-mob render (MC babies draw at half scale). ground_offset
+/// scales with the model so a shrunk mob still stands on the ground.
+pub(crate) fn draw_scaled(
+    r: &mut Renderer,
+    baked: &BakedModel,
+    world_pos: Vec3,
+    yaw: f32,
+    scale: f32,
+    tint: [f32; 4],
+    pose_for: impl FnMut(&str) -> BonePose,
+) {
+    let place = Mat4::from_translation(world_pos)
+        * Mat4::from_scale(Vec3::splat(scale))
+        * Mat4::from_translation(Vec3::new(0.0, baked.ground_offset, 0.0))
         * Mat4::from_rotation_y(yaw);
     draw_with_root(r, baked, place, tint, pose_for);
 }

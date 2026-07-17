@@ -131,6 +131,10 @@ pub fn draw_remote_mobs(
                     0.0
                 };
                 let fwd = Vec3::new(mob.yaw.cos(), 0.0, -mob.yaw.sin());
+                // W291: babies render at half scale about the feet
+                // (MC AgeableMob). Legacy cube fallbacks stay
+                // full-size (texture-less debug path only).
+                let mob_scale = if mob.baby { 0.5f32 } else { 1.0 };
 
                 // W147: advance the MC walk animation from observed
                 // motion (works for the host sim and 10 Hz remote
@@ -202,11 +206,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -215,11 +220,12 @@ pub fn draw_remote_mobs(
                             // over the skin; dye tint is a follow-up -
                             // natural sheep render white).
                             if let Some(fur) = &mob_meshes.sheep_fur_model {
-                                crate::entity_model::draw(
+                                crate::entity_model::draw_scaled(
                                     renderer,
                                     fur,
                                     pos,
                                     model_yaw,
+                                    mob_scale,
                                     apply_tint(white),
                                     mob_pose,
                                 );
@@ -277,11 +283,12 @@ pub fn draw_remote_mobs(
                             // W147: the universal pose closure raises
                             // the zombie arms (animateZombieArms) and
                             // swings the legs.
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -312,11 +319,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -343,11 +351,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -374,11 +383,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -400,11 +410,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -431,11 +442,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -468,11 +480,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -502,11 +515,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );
@@ -541,11 +555,12 @@ pub fn draw_remote_mobs(
                                 base_z,
                             );
                             let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
-                            crate::entity_model::draw(
+                            crate::entity_model::draw_scaled(
                                 renderer,
                                 baked,
                                 pos,
                                 model_yaw,
+                                mob_scale,
                                 apply_tint(white),
                                 mob_pose,
                             );

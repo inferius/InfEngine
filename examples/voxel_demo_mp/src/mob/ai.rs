@@ -99,6 +99,7 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
                 health: m.health.max(0.0).round() as u8,
                 head_yaw: m.head_yaw,
                 head_pitch: m.head_pitch,
+                baby: m.baby_left > 0.0,
             },
         );
     }
@@ -268,7 +269,33 @@ fn step_one(
     // W290: BreedGoal + TemptGoal for passive animals (in that MC
     // priority order, both below PanicGoal).
     if !kind_is_hostile(m.kind) && m.panic_left <= 0.0 {
-        if m.love > 0.0 {
+        if m.baby_left > 0.0 {
+            // W291: FollowParentGoal - a baby trails the nearest
+            // ADULT of its kind within 8 blocks (speed 1.1),
+            // stopping once it's within 3. Babies skip love/tempt.
+            let mut best: Option<([f32; 3], f32)> = None;
+            for o in voxel.mobs.iter() {
+                if o.id != m.id
+                    && o.kind == m.kind
+                    && o.baby_left <= 0.0
+                    && o.dying <= 0.0
+                {
+                    let d2 = (o.pos[0] - m.pos[0]).powi(2)
+                        + (o.pos[2] - m.pos[2]).powi(2);
+                    if d2 < 64.0 && best.is_none_or(|(_, bd)| d2 < bd) {
+                        best = Some((o.pos, d2));
+                    }
+                }
+            }
+            if let Some((p, d2)) = best
+                && d2 > 9.0
+            {
+                m.target = p;
+                m.strolling = true;
+                m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+                speed *= 1.1;
+            }
+        } else if m.love > 0.0 {
             // BreedGoal: walk to the nearest in-love same-kind
             // partner within 8 blocks; breed_pass pairs them off
             // once they close to 3.
@@ -618,6 +645,7 @@ fn broadcast(voxel: &Voxel) {
                 health: m.health.max(0.0).round() as u8,
                 head_yaw: m.head_yaw,
                 head_pitch: m.head_pitch,
+                baby: m.baby_left > 0.0,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.mob", buf);
