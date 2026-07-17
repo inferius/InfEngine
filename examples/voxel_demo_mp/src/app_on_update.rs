@@ -1462,6 +1462,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &crate::perf::CHK_WORLD_MS,
             _frame_start.elapsed().as_secs_f32() * 1000.0,
         );
+        // W293/W295: the user's hitches (89-297 ms) live in this
+        // CHK_WORLD..CHK_MID span and the first probe started too
+        // late (after the lighting tick + liquid remesh) - cover the
+        // WHOLE span with named marks now.
+        let _pr_t = std::time::Instant::now();
         // Tick the day clock unconditionally - even paused / in
         // menus the world keeps turning so the host's lighting is
         // never out of sync with what a client sees. /freezetime
@@ -1489,6 +1494,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             DIAG_LIGHT_US.fetch_add(light_us, DiagOrd::Relaxed);
             DIAG_LIGHT_PEAK_US.fetch_max(light_us, DiagOrd::Relaxed);
         }
+        let _ms_light_tick = _pr_t.elapsed().as_secs_f32() * 1000.0;
         // Day <-> night transition announcer. Fires once per
         // crossing using the sun elevation so the chat doesn't
         // spam every frame.
@@ -1515,6 +1521,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         let liqmesh_t0 = std::time::Instant::now();
         vx.maybe_rebuild_liquid_mesh();
         DIAG_LIQMESH_US.fetch_add(liqmesh_t0.elapsed().as_micros() as u64, DiagOrd::Relaxed);
+        let _ms_liqmesh = _pr_t.elapsed().as_secs_f32() * 1000.0;
         let player_pos = vx.player_pos;
         // W77: borrow the mesh table instead of cloning the whole
         // HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>> every frame.
@@ -1608,10 +1615,6 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             }
             cam.fov_y_rad = vx.fov_y_rad;
         }
-        // W293: the user's walking hitches showed 136-297 ms spikes
-        // attributed only to the coarse pre_render bucket - name the
-        // sub-phases so the next log pins the culprit.
-        let _pr_t = std::time::Instant::now();
         // W47.15: sky / weather / fog tint moved into render::sky.
         let (sun_dir, base_sky) = day_night(vx.day_time);
         // W113: underwater post-process - true when the camera (eye) voxel is
@@ -1770,7 +1773,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             if _ms_tail > 30.0 {
                 tracing::warn!(
                     total_ms = _ms_tail,
-                    sky_ms = _ms_sky,
+                    light_tick_ms = _ms_light_tick,
+                    liqmesh_ms = _ms_liqmesh - _ms_light_tick,
+                    sky_cam_ms = _ms_sky - _ms_liqmesh,
                     celestial_ms = _ms_celestial - _ms_sky,
                     plights_ms = _ms_plights - _ms_celestial,
                     decor_drops_ms = _ms_tail - _ms_plights,

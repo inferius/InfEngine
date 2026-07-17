@@ -125,6 +125,28 @@ pub(crate) fn breed_pass(voxel: &mut Voxel, dt: f32) {
         // W291: babies grow toward adulthood (MC -24000 age ticks).
         m.baby_left = (m.baby_left - dt).max(0.0);
     }
+    // W295: MC in-love HEART particles - vanilla animals shed hearts
+    // for the whole love window, not only at feed time (the user
+    // bred cows and saw nothing above them). ~2 puffs/s per animal,
+    // staggered by id off the shared 20 Hz tick counter.
+    let hearts: Vec<[f32; 3]> = voxel
+        .mobs
+        .iter()
+        .filter(|m| {
+            m.love > 0.0
+                && m.dying <= 0.0
+                && voxel.net_tick % 10 == (m.id as u64) % 10
+        })
+        .map(|m| m.pos)
+        .collect();
+    for p in hearts {
+        let cell = [
+            p[0].floor() as i32,
+            (p[1] + 1.2).floor() as i32,
+            p[2].floor() as i32,
+        ];
+        voxel.spawn_place_particles(cell, [0.95, 0.35, 0.5]);
+    }
     // Snapshot the in-love subset (index, kind, pos) so the pairing
     // search doesn't hold a borrow across the spawn.
     let in_love: Vec<(usize, u8, [f32; 3])> = voxel

@@ -301,6 +301,11 @@ impl Voxel {
         // drains a few chunks per frame WITHOUT rescanning. A settled
         // ocean then costs nothing per frame.
         if self.liquid_mesh_dirty {
+            // W295: this rescan walks EVERY tracked liquid cell
+            // (800k+ on an explored ocean world) - name every run so
+            // a stray dirty-flag setter can't hide behind the coarse
+            // pre_render bucket again.
+            let _scan_t = std::time::Instant::now();
             let chunk_of = |p: [i32; 3]| -> ChunkCoord {
                 [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
             };
@@ -368,6 +373,15 @@ impl Voxel {
                 self.liquid_chunk_sig.remove(&cc);
             }
             self.liquid_mesh_dirty = false;
+            let _ms = _scan_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms > 15.0 {
+                tracing::warn!(
+                    ms = _ms,
+                    cells = self.liquid_positions.len(),
+                    queued = self.liquid_remesh_backlog.len(),
+                    "W295: liquid dirty rescan (O(all-liquids) fallback)"
+                );
+            }
         }
 
         if self.liquid_remesh_backlog.is_empty() {
