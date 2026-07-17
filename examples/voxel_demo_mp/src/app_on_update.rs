@@ -1608,6 +1608,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             }
             cam.fov_y_rad = vx.fov_y_rad;
         }
+        // W293: the user's walking hitches showed 136-297 ms spikes
+        // attributed only to the coarse pre_render bucket - name the
+        // sub-phases so the next log pins the culprit.
+        let _pr_t = std::time::Instant::now();
         // W47.15: sky / weather / fog tint moved into render::sky.
         let (sun_dir, base_sky) = day_night(vx.day_time);
         // W113: underwater post-process - true when the camera (eye) voxel is
@@ -1696,6 +1700,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.cave_dark,
             dim_sky,
         );
+        let _ms_sky = _pr_t.elapsed().as_secs_f32() * 1000.0;
         let player_cube_handle = *vx.player_cube.get_or_insert_with(|| renderer.cube_handle());
         let session_secs = vx.session_started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
         if dim_sky == crate::render::sky::DimSky::Day {
@@ -1708,7 +1713,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 session_secs,
             );
         }
+        let _ms_celestial = _pr_t.elapsed().as_secs_f32() * 1000.0;
         crate::render::point_lights::push(renderer, &vx.emitter_positions, player_pos, vx.day_time);
+        let _ms_plights = _pr_t.elapsed().as_secs_f32() * 1000.0;
         // W46.13: legacy pre-MC torch render path REMOVED.
         //
         // Up to W45 this block drew every entry in `vx.torch_positions`
@@ -1755,6 +1762,24 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W47.17: remote + local player cube render moved into
         // render::players. own_id derives from net role; remote
         // sampling skipped offline; local override added in 3rd-person.
+        // W293: name the pre-render split when it spikes. `sky` covers
+        // camera+fog+tint, `celestial` the sun/moon draws, `plights`
+        // the emitter point-light push, `tail` decor + drops.
+        {
+            let _ms_tail = _pr_t.elapsed().as_secs_f32() * 1000.0;
+            if _ms_tail > 30.0 {
+                tracing::warn!(
+                    total_ms = _ms_tail,
+                    sky_ms = _ms_sky,
+                    celestial_ms = _ms_celestial - _ms_sky,
+                    plights_ms = _ms_plights - _ms_celestial,
+                    decor_drops_ms = _ms_tail - _ms_plights,
+                    emitters = vx.emitter_positions.len(),
+                    liquid_mesh_chunks = vx.liquid_mesh_handles.len(),
+                    "W293: slow pre-render split"
+                );
+            }
+        }
         // W198.4: cumulative time up to the start of the entity/particle
         // render-prep block, to localize the untimed sim gap.
         crate::perf::store(

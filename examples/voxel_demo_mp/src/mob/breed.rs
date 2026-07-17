@@ -36,11 +36,19 @@ const BREED_RANGE: f32 = 3.0;
 /// carrot/dandelion (no golden carrot item yet). The same table
 /// drives BOTH feeding (love mode) and the TemptGoal follow.
 pub(crate) fn is_food_for(kind: u8, item_id: u16) -> bool {
+    // W293: harvesting a crop drops the BLOCK-FORM item (wheat 493,
+    // carrots 494, potatoes 495, beetroots 496), not the plain item
+    // row - the user held 493 and no cow followed. Both id families
+    // count as the species food.
+    let wheat = item_id == 337 || item_id == 493;
+    let carrot = item_id == 344 || item_id == 494;
+    let potato = item_id == 343 || item_id == 495;
+    let beetroot = item_id == 345 || item_id == 496;
     match kind {
-        k if k == KIND_COW || k == KIND_SHEEP => item_id == 337,
-        k if k == KIND_PIG => (343..=345).contains(&item_id),
+        k if k == KIND_COW || k == KIND_SHEEP => wheat,
+        k if k == KIND_PIG => carrot || potato || beetroot,
         k if k == KIND_CHICKEN => item_id == 338,
-        k if k == KIND_RABBIT => matches!(item_id, 344 | 480),
+        k if k == KIND_RABBIT => carrot || item_id == 480,
         _ => false,
     }
 }
@@ -48,7 +56,7 @@ pub(crate) fn is_food_for(kind: u8, item_id: u16) -> bool {
 /// Any item at least one species eats - the cheap pre-filter the
 /// RMB path runs before the per-kind check.
 pub(crate) fn is_breeding_food(item_id: u16) -> bool {
-    matches!(item_id, 337 | 338 | 343 | 344 | 345 | 480)
+    matches!(item_id, 337 | 338 | 343 | 344 | 345 | 480 | 493 | 494 | 495 | 496)
 }
 
 /// W290: MC TemptGoal speed modifier per kind (Cow 1.25, Sheep 1.1,

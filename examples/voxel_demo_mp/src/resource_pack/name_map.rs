@@ -553,6 +553,14 @@ pub(crate) struct ItemNameMap {
 pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     // Meat / food.
     ItemNameMap { infengine_id: 12, item: "beef" },
+    // W293: crop-drop block-form items (493..=496). icon_ref skips
+    // the item-sprite path for placeable items, so without these
+    // rows the hotbar showed the CROP BLOCK texture (the user's
+    // wrong wheat icon) instead of the MC item sprite.
+    ItemNameMap { infengine_id: 493, item: "wheat" },
+    ItemNameMap { infengine_id: 494, item: "carrot" },
+    ItemNameMap { infengine_id: 495, item: "potato" },
+    ItemNameMap { infengine_id: 496, item: "beetroot" },
     // Pickaxes
     ItemNameMap { infengine_id: 16, item: "wooden_pickaxe" },
     ItemNameMap { infengine_id: 17, item: "stone_pickaxe" },
