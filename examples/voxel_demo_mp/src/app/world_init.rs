@@ -239,6 +239,18 @@ impl Voxel {
         // propagate flow from a source. Non-liquid writes purge
         // the entry so a broken liquid cell doesn't leak into
         // the tracker.
+        // W296: block edits enqueue an INCREMENTAL per-chunk liquid
+        // remesh instead of tripping the global `liquid_mesh_dirty`
+        // rescan - that flag re-signatures EVERY tracked liquid cell
+        // (~800k on the user's explored world = the 213 ms hitch the
+        // W295 probe caught on every dig near water). The lava-column
+        // index the rescan used to rebuild is maintained inline.
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let cc = [
+            voxel[0].div_euclid(cs),
+            voxel[1].div_euclid(cs),
+            voxel[2].div_euclid(cs),
+        ];
         if let Some(liquid) = liquid_for(block) {
             // MC-style: the freshly placed cell ticks after
             // `tick_period` frames - matches the legacy cadence
@@ -247,7 +259,13 @@ impl Voxel {
             self.liquid_schedule.schedule(voxel, when);
             self.liquid_level.entry(voxel).or_insert(0);
             if self.liquid_positions.insert(voxel) {
-                self.liquid_mesh_dirty = true;
+                self.enqueue_liquid_remesh(cc);
+                if block.0 == crate::block::LAVA_ID {
+                    let col = self.lava_columns.entry([cc[0], cc[2]]).or_default();
+                    if !col.contains(&voxel) {
+                        col.push(voxel);
+                    }
+                }
             }
         } else if self.liquid_positions.remove(&voxel) {
             self.liquid_level.remove(&voxel);
@@ -255,7 +273,10 @@ impl Voxel {
             // the schedule. The matching heap entry becomes a
             // tombstone, popped + skipped on the next sweep.
             self.liquid_schedule.cancel(voxel);
-            self.liquid_mesh_dirty = true;
+            self.enqueue_liquid_remesh(cc);
+            if let Some(col) = self.lava_columns.get_mut(&[cc[0], cc[2]]) {
+                col.retain(|p| *p != voxel);
+            }
         } else {
             self.liquid_level.remove(&voxel);
         }
@@ -298,10 +319,9 @@ impl Voxel {
             }
         }
         if neighbour_liquid {
-            self.liquid_mesh_dirty = true;
-            // The 1-tick neighbour wake above already gets us
-            // the next-frame response - no separate force flag
-            // needed in the per-cell schedule model.
+            // W296: incremental too (self + 6 face neighbours re-cull
+            // their shared faces); the global rescan is load-time only.
+            self.enqueue_liquid_remesh(cc);
         }
         // Phase L.6: every block edit potentially changes the
         // local light field - whether the new block is an

@@ -802,11 +802,17 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
             );
         }
         if !liquid_level_updates.is_empty() {
+            // W296: incremental per-chunk remesh (the global dirty
+            // flag re-signatures every tracked liquid cell).
+            let cs = infengine_voxel::CHUNK_SIZE as i32;
             for (v, level) in liquid_level_updates {
                 vx.liquid_level.insert(v, level.min(7));
+                vx.enqueue_liquid_remesh([
+                    v[0].div_euclid(cs),
+                    v[1].div_euclid(cs),
+                    v[2].div_euclid(cs),
+                ]);
             }
-            // New levels reshape the slope mesh.
-            vx.liquid_mesh_dirty = true;
         }
         for m in drop_spawns {
             // Q.5: clients mirror the spawn but pickup is
