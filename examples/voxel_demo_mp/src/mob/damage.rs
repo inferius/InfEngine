@@ -59,6 +59,33 @@ pub(crate) fn damage_mob_scaled(
         mob_pos = m.pos;
         kind = m.kind;
         killed = m.health <= 0.0 && !already_dying;
+        // W289: MC PanicGoal - a hurt passive animal sprints away
+        // (away from the attacker: the demo tracks no attacker pos,
+        // so flee AWAY FROM THE PLAYER, which is who hits mobs).
+        // Hostiles keep chasing instead.
+        if !killed
+            && !matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+        {
+            let day_time = voxel.day_time;
+            let px = voxel.player_pos.x;
+            let pz = voxel.player_pos.z;
+            let m = &mut voxel.mobs[idx];
+            let mut fx = m.pos[0] - px;
+            let mut fz = m.pos[2] - pz;
+            let len = (fx * fx + fz * fz).sqrt();
+            if len < 1e-3 {
+                fx = 1.0;
+                fz = 0.0;
+            } else {
+                fx /= len;
+                fz /= len;
+            }
+            m.panic_left = 3.0;
+            m.strolling = true;
+            m.target = [m.pos[0] + fx * 9.0, m.pos[1], m.pos[2] + fz * 9.0];
+            m.retarget_at =
+                (day_time + 4.0).rem_euclid(crate::DAY_LENGTH_S);
+        }
     }
     // No re-damage during the death fade.
     if already_dying {

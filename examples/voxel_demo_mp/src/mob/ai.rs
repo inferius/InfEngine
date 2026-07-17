@@ -21,9 +21,9 @@ use super::despawn;
 use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
 use super::spawn;
 use super::state::{
-    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MOB_SPEED, MobState,
-    ZOMBIE_ATTACK_COOLDOWN, ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH,
-    ZOMBIE_SIGHT_RANGE, ZOMBIE_SPEED, ZOMBIE_TOUCH_DAMAGE,
+    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MobState, ZOMBIE_ATTACK_COOLDOWN,
+    ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH, ZOMBIE_SIGHT_RANGE,
+    ZOMBIE_TOUCH_DAMAGE,
 };
 
 /// W198.7 fixed mob-tick period (MC's 20 Hz). Module-scope since W204:
@@ -242,25 +242,27 @@ fn step_one(
         return m;
     }
     let mut rng = spawn::SpawnRng::new(rand_seed);
-    // Per-kind targeting:
-    //  - Sheep wander randomly + retarget on arrival or
-    //    5 s timeout.
-    //  - Zombies pick the nearest player within
-    //    `ZOMBIE_SIGHT_RANGE` and lock onto their pose;
-    //    when no player is in range they fall back to the
-    //    sheep wander logic so they don't freeze in place.
+    // W289: MC goal shapes instead of the old perpetual pacing.
+    //  - Hostiles chase the nearest player in sight range.
+    //  - PanicGoal: a hurt passive sprints (kind panic multiplier)
+    //    to a far point until the timer runs out.
+    //  - RandomStrollGoal: otherwise mobs IDLE, and with chance
+    //    1/120 per tick pick a stroll target within a 10-block
+    //    square (MC WaterAvoidingRandomStrollGoal interval).
     let chase_player_pos: Option<[f32; 3]> = if kind_is_hostile(m.kind) {
         voxel.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
     } else {
         None
     };
-    let speed = if kind_is_hostile(m.kind) {
-        ZOMBIE_SPEED
-    } else {
-        MOB_SPEED
-    };
+    m.panic_left = (m.panic_left - dt).max(0.0);
+    m.hop_cd = (m.hop_cd - dt).max(0.0);
+    let mut speed = super::state::kind_walk_speed(m.kind);
+    if m.panic_left > 0.0 {
+        speed *= super::state::kind_panic_mult(m.kind);
+    }
     if let Some(p) = chase_player_pos {
         m.target = p;
+        m.strolling = true;
         m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
     }
     let dx = m.target[0] - m.pos[0];
@@ -287,20 +289,54 @@ fn step_one(
         if m.kind == KIND_SKELETON {
             m.yaw = (-dz).atan2(dx);
         }
+    } else if !m.strolling && m.panic_left <= 0.0 {
+        // IDLE - the default state. MC RandomStrollGoal: chance
+        // 1/interval(120) per tick to start a stroll; standing
+        // animals just graze/look around between strolls.
+        if rng.next_f32() < (dt * 20.0) / 120.0 {
+            // MC RandomPos land target: +-10 blocks on each axis.
+            let tx = m.pos[0] + (rng.next_f32() * 2.0 - 1.0) * 10.0;
+            let tz = m.pos[2] + (rng.next_f32() * 2.0 - 1.0) * 10.0;
+            m.target = [tx, m.pos[1], tz];
+            m.strolling = true;
+            // Generous timeout so a blocked path ends the goal.
+            m.retarget_at = (day_time + 15.0).rem_euclid(DAY_LENGTH_S);
+        }
     } else if d2 < 0.25 || day_time >= m.retarget_at {
-        // Pick a new wander target nearby (within 12 blocks).
-        let theta = rng.next_f32() * std::f32::consts::TAU;
-        let dist = 4.0 + rng.next_f32() * 8.0;
-        m.target = [
-            m.pos[0] + theta.cos() * dist,
-            m.pos[1],
-            m.pos[2] + theta.sin() * dist,
-        ];
-        m.retarget_at = (day_time + 5.0).rem_euclid(DAY_LENGTH_S);
+        // Arrived (or gave up): back to IDLE. While panicking keep
+        // fleeing - pick a fresh far point instead of stopping.
+        if m.panic_left > 0.0 {
+            let theta = rng.next_f32() * std::f32::consts::TAU;
+            let dist = 6.0 + rng.next_f32() * 6.0;
+            m.target = [
+                m.pos[0] + theta.cos() * dist,
+                m.pos[1],
+                m.pos[2] + theta.sin() * dist,
+            ];
+            m.retarget_at = (day_time + 4.0).rem_euclid(DAY_LENGTH_S);
+        } else {
+            m.strolling = false;
+        }
     } else {
         let inv = d2.sqrt().max(1e-3).recip();
-        let vx = dx * inv * speed;
-        let vz = dz * inv * speed;
+        let mut vx = dx * inv * speed;
+        let mut vz = dz * inv * speed;
+        // W289: rabbits move ONLY by hopping (MC RabbitJumpControl).
+        // A grounded rabbit that wants to move launches a hop; while
+        // waiting between hops it stands still. Airborne = full
+        // horizontal speed (the hop arc carries it).
+        if m.kind == super::kinds::KIND_RABBIT {
+            let grounded = m.vy == 0.0;
+            if grounded {
+                if m.hop_cd <= 0.0 {
+                    m.vy = 4.6;
+                    m.hop_cd = 0.3 + rng.next_f32() * 0.4;
+                } else {
+                    vx = 0.0;
+                    vz = 0.0;
+                }
+            }
+        }
         // Axis-resolved collision against world voxels so
         // the sheep can't walk into trees / walls.
         let step_x = vx * dt;
@@ -372,14 +408,52 @@ fn step_one(
         // Y-up frame, so the world-velocity needs the
         // negated-Z form to keep body + head pointing the
         // same direction the sheep is walking.
-        m.yaw = (-vz).atan2(vx);
+        //
+        // W289: the body TURNS toward the heading at MC's body-yaw
+        // rate (~10 deg/tick) instead of snapping - the instant flip
+        // on every retarget was a big part of the "weird" motion.
+        if vx != 0.0 || vz != 0.0 {
+            let want = (-vz).atan2(vx);
+            m.yaw = crate::entity_model::animation::approach_angle(
+                m.yaw,
+                want,
+                10.0f32.to_radians() * dt * 20.0,
+            );
+        }
     }
-    // Surface snap: keep the sheep's feet on the ground.
+    // W289: gravity + landing (MC LivingEntity -0.08 b/t^2 = -32
+    // b/s^2). The old code TELEPORT-snapped feet to the surface every
+    // tick, so mobs rode cliffs down like an elevator and never left
+    // the ground. Now: at/below ground = stand there (the step-up
+    // above already lifted onto 1-block steps); above it = fall, with
+    // the chicken's wing-flutter clamp (MC Chicken caps fall speed +
+    // takes no fall damage).
     let wx = m.pos[0].floor() as i32;
     let wz = m.pos[2].floor() as i32;
-    let scan_top = m.pos[1].floor() as i32;
-    if let Some(sy) = voxel.surface_y_below(wx, wz, scan_top) {
-        m.pos[1] = sy as f32 + 1.0;
+    let scan_top = (m.pos[1] + 0.01).floor() as i32;
+    let ground = voxel
+        .surface_y_below(wx, wz, scan_top)
+        .map(|sy| sy as f32 + 1.0);
+    match ground {
+        // Standing (a fresh hop with vy > 0 must NOT re-land here).
+        Some(g) if m.pos[1] <= g + 0.001 && m.vy <= 0.0 => {
+            m.pos[1] = g;
+            m.vy = 0.0;
+        }
+        _ => {
+            m.vy -= 32.0 * dt;
+            if m.kind == super::kinds::KIND_CHICKEN {
+                m.vy = m.vy.max(-2.0);
+            }
+            m.vy = m.vy.max(-40.0);
+            m.pos[1] += m.vy * dt;
+            if let Some(g) = ground
+                && m.pos[1] <= g
+            {
+                m.pos[1] = g;
+                m.vy = 0.0;
+            }
+        }
     }
     // Hostile touch damage: zombies + skeletons + spiders all
     // share the stub melee path. Decrement attack cooldown each
@@ -478,14 +552,16 @@ fn broadcast(voxel: &Voxel) {
     if let NetRole::Server { server, .. } = &voxel.net {
         let cfg = bincode::config::standard();
         for m in &voxel.mobs {
+            // W289: ship the REAL head pose - the body-yaw copy here
+            // meant remote peers never saw a glance.
             let msg = MobMsg {
                 id: m.id,
                 kind: m.kind,
                 pos: m.pos,
                 yaw: m.yaw,
                 health: m.health.max(0.0).round() as u8,
-                head_yaw: m.yaw,
-                head_pitch: 0.0,
+                head_yaw: m.head_yaw,
+                head_pitch: m.head_pitch,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.mob", buf);

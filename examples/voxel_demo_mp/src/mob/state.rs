@@ -66,6 +66,22 @@ pub(crate) struct MobState {
     pub(crate) head_pitch: f32,
     /// W147: seconds left in the current look-at-player glance.
     pub(crate) look_left: f32,
+    /// W289: vertical velocity (blocks/s). MC LivingEntity gravity
+    /// (-0.08 b/t^2) replaces the old teleport-snap to the surface,
+    /// so mobs fall off ledges instead of riding terrain like an
+    /// elevator. Chickens clamp their fall (wing flutter).
+    pub(crate) vy: f32,
+    /// W289: MC PanicGoal - seconds left sprinting away after a hit.
+    pub(crate) panic_left: f32,
+    /// W289: true while a stroll/chase target is active. MC passive
+    /// mobs IDLE between strolls (RandomStrollGoal fires with chance
+    /// 1/120 per tick); the old AI re-picked a target immediately on
+    /// arrival, so every animal paced nonstop - the "weird behaviour".
+    pub(crate) strolling: bool,
+    /// W289: rabbit hop cooldown (s). Rabbits move ONLY while
+    /// airborne (MC rabbits jump to move); grounded rabbits wait
+    /// here between hops.
+    pub(crate) hop_cd: f32,
 }
 
 impl MobState {
@@ -99,7 +115,44 @@ impl MobState {
             head_yaw: yaw,
             head_pitch: 0.0,
             look_left: 0.0,
+            vy: 0.0,
+            panic_left: 0.0,
+            strolling: false,
+            hop_cd: 0.0,
         }
+    }
+}
+
+/// W289: per-kind walk speed in blocks/s. MC's movement-speed
+/// attribute scaled by the empirical mob-walk factor (~x10: zombie
+/// attr 0.23 walks ~2.3 b/s in vanilla, pig 0.25 ~2.5). One shared
+/// table instead of the old flat MOB_SPEED 1.2 for every passive.
+pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
+    use super::kinds::*;
+    match kind {
+        k if k == KIND_COW => 2.0,          // attr 0.20
+        k if k == KIND_SHEEP => 2.3,        // attr 0.23
+        k if k == KIND_PIG => 2.5,          // attr 0.25
+        k if k == KIND_CHICKEN => 2.5,      // attr 0.25
+        k if k == KIND_RABBIT => 3.0,       // attr 0.30
+        k if k == KIND_WOLF => 3.0,         // attr 0.30
+        k if k == KIND_POLAR_BEAR => 2.5,   // attr 0.25
+        k if k == KIND_ZOMBIE => 2.3,       // attr 0.23
+        k if k == KIND_SKELETON => 2.5,     // attr 0.25
+        k if k == KIND_SPIDER => 3.0,       // attr 0.30
+        _ => 2.3,
+    }
+}
+
+/// W289: MC PanicGoal speed modifier per kind (Cow 2.0, Sheep/Pig
+/// 1.25, Chicken 1.4, Rabbit 2.2).
+pub(crate) fn kind_panic_mult(kind: u8) -> f32 {
+    use super::kinds::*;
+    match kind {
+        k if k == KIND_COW => 2.0,
+        k if k == KIND_CHICKEN => 1.4,
+        k if k == KIND_RABBIT => 2.2,
+        _ => 1.25,
     }
 }
 
@@ -117,7 +170,7 @@ pub(crate) const MOB_DEATH_FADE: f32 = 0.55;
 // 128x128 column; the demo runs a single global cap, so 25 keeps
 // the world feeling populated without overwhelming the renderer.
 pub(crate) const MOB_CAP_DEFAULT: usize = 25;
-pub(crate) const MOB_SPEED: f32 = 1.2;
+// W289: superseded by kind_walk_speed (per-kind MC attributes).
 pub(crate) const MOB_MAX_HEALTH: f32 = 8.0;
 pub(crate) const MOB_HIT_DAMAGE: f32 = 2.0;
 
@@ -125,7 +178,7 @@ pub(crate) const MOB_HIT_DAMAGE: f32 = 2.0;
 // Zombie / hostile knobs.
 // ---------------------------------------------------------------
 
-pub(crate) const ZOMBIE_SPEED: f32 = 1.8;
+
 pub(crate) const ZOMBIE_MAX_HEALTH: f32 = 14.0;
 pub(crate) const ZOMBIE_TOUCH_DAMAGE: f32 = 2.5;
 pub(crate) const ZOMBIE_ATTACK_COOLDOWN: f32 = 0.9;

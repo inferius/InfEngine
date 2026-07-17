@@ -13,9 +13,9 @@ use super::kinds::{
 use super::spawn::SpawnRng;
 use super::state::{
     MOB_ATTACK_REACH, MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_DESPAWN_DIST_SQ,
-    MOB_HIT_DAMAGE, MOB_LUNGE_TIME, MOB_MAX_HEALTH, MOB_SPEED,
-    ZOMBIE_ATTACK_COOLDOWN, ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH,
-    ZOMBIE_SIGHT_RANGE, ZOMBIE_SPEED, ZOMBIE_TOUCH_DAMAGE,
+    MOB_HIT_DAMAGE, MOB_LUNGE_TIME, MOB_MAX_HEALTH, ZOMBIE_ATTACK_COOLDOWN,
+    ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH, ZOMBIE_SIGHT_RANGE,
+    ZOMBIE_TOUCH_DAMAGE, kind_panic_mult, kind_walk_speed,
 };
 
 // Re-export check: the same `MobKind` discriminants must come out
@@ -29,15 +29,13 @@ fn balance_constants_are_positive_finite() {
     // independent runtime - cheap insurance. Read each constant
     // through a `black_box`-style binding so clippy treats the
     // check as a runtime assert, not a compile-time tautology.
-    let knobs: [f32; 13] = [
+    let knobs: [f32; 11] = [
         MOB_DEATH_FADE,
-        MOB_SPEED,
         MOB_MAX_HEALTH,
         MOB_HIT_DAMAGE,
         MOB_DESPAWN_DIST_SQ,
         MOB_LUNGE_TIME,
         MOB_ATTACK_REACH,
-        ZOMBIE_SPEED,
         ZOMBIE_MAX_HEALTH,
         ZOMBIE_TOUCH_DAMAGE,
         ZOMBIE_ATTACK_COOLDOWN,
@@ -56,9 +54,10 @@ fn zombie_outclasses_baseline_passive() {
     // Sanity guard: a zombie has to walk faster + bite harder
     // than a sheep, otherwise the player has nothing to fear.
     // Bind through locals so clippy doesn't see the comparison
-    // as a const tautology.
-    let zs = ZOMBIE_SPEED;
-    let ms = MOB_SPEED;
+    // as a const tautology. W289: speeds come from the per-kind MC
+    // attribute table now.
+    let zs = kind_walk_speed(KIND_ZOMBIE);
+    let ms = kind_walk_speed(KIND_COW);
     let zh = ZOMBIE_MAX_HEALTH;
     let mh = MOB_MAX_HEALTH;
     let zd = ZOMBIE_TOUCH_DAMAGE;
@@ -122,4 +121,18 @@ fn spawn_rng_diverges_from_distinct_seeds() {
     let a: Vec<u32> = (0..8).map(|_| r1.next_u32()).collect();
     let b: Vec<u32> = (0..8).map(|_| r2.next_u32()).collect();
     assert_ne!(a, b);
+}
+
+/// W289: pin the MC per-kind movement tables (attribute x10 walk
+/// speeds + PanicGoal speed modifiers) so a stray edit can't silently
+/// deviate from the vanilla values.
+#[test]
+fn mc_speed_tables_pin() {
+    assert_eq!(kind_walk_speed(KIND_COW), 2.0);
+    assert_eq!(kind_walk_speed(KIND_SHEEP), 2.3);
+    assert_eq!(kind_walk_speed(KIND_PIG), 2.5);
+    assert_eq!(kind_walk_speed(KIND_CHICKEN), 2.5);
+    assert_eq!(kind_panic_mult(KIND_COW), 2.0);
+    assert_eq!(kind_panic_mult(KIND_CHICKEN), 1.4);
+    assert_eq!(kind_panic_mult(KIND_SHEEP), 1.25);
 }
