@@ -409,6 +409,18 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // exclusive borrow below (the zoom application near ui.run
         // only needs the value).
         let ui_scale = vx.settings.ui_scale.clamp(0.5, 3.0);
+        // W298: portal overlay strength - MC shows the purple swirl
+        // vignette the whole time you stand in a portal (warm-up)
+        // and briefly after arrival, so the transport reads as an
+        // effect instead of a silent cut. Warm ramps 0..1 over the
+        // 4 s trigger; the arrival fade reuses the cooldown timer.
+        let portal_overlay = {
+            let warm = vx.portal_in_ticks as f32
+                / crate::block::portal::PORTAL_TRIGGER_TICKS as f32;
+            let cool = vx.portal_cooldown_ticks as f32
+                / crate::block::portal::PORTAL_COOLDOWN_TICKS as f32;
+            (warm.clamp(0.0, 1.0) * 0.85).max(cool.clamp(0.0, 1.0) * 0.45)
+        };
         let settings_edit = &mut vx.settings;
         // Live-edit flag the F6 panel writes back when the user
         // clicks its window close button. Mirrors back to
@@ -984,6 +996,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 });
             }
             AppState::Playing => {
+                // W298: full-screen portal vignette (see the strength
+                // snapshot above). Foreground order = over the HUD,
+                // like vanilla's nausea/portal overlay.
+                if portal_overlay > 0.01 {
+                    let a = (portal_overlay * 200.0) as u8;
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("portal_overlay"),
+                    ));
+                    painter.rect_filled(
+                        ctx.viewport_rect(),
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(96, 24, 150, a),
+                    );
+                }
                 if hud_visible {
                 egui::Area::new(egui::Id::new("voxel_hud"))
                     .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])

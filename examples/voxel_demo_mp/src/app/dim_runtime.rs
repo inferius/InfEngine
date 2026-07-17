@@ -350,7 +350,24 @@ impl Voxel {
         // searches a growing ring of columns (up to 8 blocks out)
         // like MC's candidate scan - a single-column miss used to
         // drop to the mid-shelf fallback and hang the frame in air.
-        let target = Self::portal_ground_spot(&self.world, dest);
+        let mut target = Self::portal_ground_spot(&self.world, dest);
+        // W298: sink the frame onto the REAL floor when the picked
+        // spot hovers a few blocks above it - the netherrack platform
+        // used to float over visible ground (MC only builds the
+        // platform when there is truly nothing below).
+        {
+            let mut drop = 0;
+            while drop < 12
+                && target[1] > crate::WORLD_MIN_Y + 2
+                && self
+                    .world
+                    .get([target[0], target[1] - 1, target[2]])
+                    .is_air()
+            {
+                target[1] -= 1;
+                drop += 1;
+            }
+        }
         // Find or build a return portal at the scaled coord.
         let cfg = bincode::config::standard();
         let mut edits: Vec<[i32; 3]> = Vec::new();

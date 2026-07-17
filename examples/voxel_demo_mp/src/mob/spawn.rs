@@ -107,7 +107,16 @@ pub(crate) fn mobs_in_chunk(voxel: &Voxel, wpos: [i32; 3]) -> usize {
 /// Y. `None` means the column has no exposed surface within
 /// `VERTICAL_CHUNKS`.
 pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3], i32)> {
-    let ceiling = crate::WORLD_MAX_Y;
+    // W298: ceiled dims (nether) probe from near the PLAYER, not the
+    // world top - the sky-down scan always landed on the bedrock
+    // roof, so nothing ever spawned inside (the dead nether).
+    let dim_def =
+        crate::worldgen::dim_registry::dim_def_or_overworld(&voxel.current_dim);
+    let ceiling = if dim_def.has_ceiling {
+        (voxel.player_pos.y as i32 + 8).min(crate::WORLD_MAX_Y)
+    } else {
+        crate::WORLD_MAX_Y
+    };
     let sy = voxel.surface_y_below(wx, wz, ceiling)?;
     let spawn_y = sy + 1;
     Some(([wx, spawn_y, wz], sy))
@@ -190,6 +199,32 @@ pub(crate) fn pick_kind_for(
 ) -> Option<u8> {
     let (sun_dir, _sky) = day_night(day_time);
     let is_night = sun_dir.y < 0.0;
+    // W298: ceiled dims use the NETHER pool - MC nether_wastes
+    // weights (zombified_piglin 100 / ghast 50 / magma_cube 2) with
+    // the engine's stand-in kinds until those mobs are ported (same
+    // once-logged policy as the fortress spawner stand-ins). Any
+    // light level, no grass gate - zombified piglins spawn in full
+    // glowstone light in vanilla.
+    let dim_def =
+        crate::worldgen::dim_registry::dim_def_or_overworld(&voxel.current_dim);
+    if dim_def.has_ceiling {
+        static NETHER_STANDIN_LOGGED: std::sync::Once = std::sync::Once::new();
+        NETHER_STANDIN_LOGGED.call_once(|| {
+            tracing::info!(
+                "W298: nether spawns use ZOMBIE/SKELETON/SPIDER as \
+                 zombified-piglin/ghast/magma-cube stand-ins until \
+                 those mobs are ported"
+            );
+        });
+        let roll = rng.next_f32() * 152.0;
+        return Some(if roll < 100.0 {
+            KIND_ZOMBIE
+        } else if roll < 150.0 {
+            KIND_SKELETON
+        } else {
+            KIND_SPIDER
+        });
+    }
     let biome = biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed);
     let pool = pool_for(biome);
     let active = if is_night { pool.night } else { pool.day };
