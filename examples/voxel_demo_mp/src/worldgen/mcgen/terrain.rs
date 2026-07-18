@@ -487,6 +487,15 @@ fn steep_grid(data: &McColumnData) -> [[bool; CHUNK_SIZE]; CHUNK_SIZE] {
 }
 
 
+thread_local! {
+    /// W307: per-worker phase split inside `gen_mc` -
+    /// (column_us, fill_us, carve_us, deco_us, chunks). The W305
+    /// worker profile showed gen at 30-40 ms/chunk vs 4.4 ms meshing;
+    /// this names WHICH stage burns it. One log per 512 chunks.
+    static MC_PROF: std::cell::RefCell<(u64, u64, u64, u64, u32)> =
+        const { std::cell::RefCell::new((0, 0, 0, 0, 0)) };
+}
+
 /// W213: MC-profile chunk generator, full 3D. Solidity comes from the
 /// cached per-column scan of the CELL-INTERPOLATED `final_density`
 /// (overhangs + density caves included); open cells route through the
@@ -498,7 +507,10 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     let seed = ctx.effective_seed();
     let ow = overworld_for(seed);
     let origin = World::chunk_world_origin(coord);
+    let _t0 = std::time::Instant::now();
     let data = column_data_cached(&ow, coord[0], coord[2], seed);
+    let _col_us = _t0.elapsed().as_micros() as u64;
+    let _t1 = std::time::Instant::now();
 
     // Steepness per column for the surface rule's `steep` condition.
     let steep = steep_grid(&data);
@@ -580,9 +592,33 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     // canyon) cut through the filled+painted terrain, with the same
     // aquifer deciding what the carved cells become.
     let origin_i = [origin.x as i32, origin.y as i32, origin.z as i32];
+    let _fill_us = _t1.elapsed().as_micros() as u64;
+    let _t2 = std::time::Instant::now();
     super::carver::carve_mc(&mut chunk, coord, ctx, &ow, &mut aquifer, origin_i);
     drop(aquifer);
+    let _carve_us = _t2.elapsed().as_micros() as u64;
+    let _t3 = std::time::Instant::now();
     decor::place_realistic(&mut chunk, coord, ctx);
+    let _deco_us = _t3.elapsed().as_micros() as u64;
+    MC_PROF.with(|p| {
+        let mut p = p.borrow_mut();
+        p.0 += _col_us;
+        p.1 += _fill_us;
+        p.2 += _carve_us;
+        p.3 += _deco_us;
+        p.4 += 1;
+        if p.4 >= 512 {
+            tracing::info!(
+                avg_column_ms = p.0 as f32 / 1000.0 / p.4 as f32,
+                avg_fill_ms = p.1 as f32 / 1000.0 / p.4 as f32,
+                avg_carve_ms = p.2 as f32 / 1000.0 / p.4 as f32,
+                avg_deco_ms = p.3 as f32 / 1000.0 / p.4 as f32,
+                chunks = p.4,
+                "W307: mc gen phase split"
+            );
+            *p = (0, 0, 0, 0, 0);
+        }
+    });
     chunk
 }
 
