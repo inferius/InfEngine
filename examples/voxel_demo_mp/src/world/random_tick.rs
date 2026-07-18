@@ -45,12 +45,6 @@ const MAX_CELLS_PER_TICK: usize = 256;
 /// random tick (1 in N). Higher = slower growth.
 const SAPLING_GROW_DENOM: u32 = 8;
 
-/// Chebyshev radius searched for a sustaining log around a leaf. A
-/// leaf with no `WOOD_ID` log inside this box decays. (MC uses a
-/// distance-7 flood-fill through leaves; the box scan is the cheap
-/// stateless stand-in.)
-const LEAF_DECAY_RADIUS: i32 = 4;
-
 /// Inverse chance a decaying leaf drops an oak sapling (1 in N).
 const LEAF_SAPLING_DROP_DENOM: u32 = 20;
 
@@ -134,7 +128,7 @@ fn random_tick_cell(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
         }
     } else if is_sapling(id) {
         sapling_tick(vx, pos, rng);
-    } else if id == crate::block::LEAVES_ID {
+    } else if is_leaf_block(id) {
         leaf_tick(vx, pos, rng);
     } else if crate::world::crop::is_immature_crop(id) {
         crop_tick(vx, pos, rng);
@@ -238,49 +232,105 @@ fn sapling_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
     }
 }
 
-/// Leaf random tick: a tree-generated leaf with no sustaining log in
-/// range decays to air. Player-placed leaves (tracked in
-/// `persistent_leaves`) are exempt. On decay there's a small chance
-/// to drop an oak sapling, so chopping a tree can reseed.
+/// W303: any leaf species (the dispatch used to sample OAK only, so
+/// birch/spruce/... canopies never decayed).
+fn is_leaf_block(id: u16) -> bool {
+    id == crate::block::LEAVES_ID
+        || crate::block::block_type(id)
+            .is_some_and(|b| b.name.ends_with("_leaves"))
+}
+
+/// W303: any log/trunk block sustains leaves (MC's `LOGS` tag - the
+/// old check matched the OAK log id alone, letting other species'
+/// canopies rot on living trees).
+fn is_log_block(id: u16) -> bool {
+    id == crate::block::WOOD_ID
+        || crate::block::block_type(id)
+            .is_some_and(|b| b.name.ends_with("_log") || b.name.ends_with("_wood"))
+}
+
+/// Leaf random tick, MC `LeavesBlock` distance rule: a leaf survives
+/// while a log is reachable within distance 7 stepping THROUGH
+/// leaves (6-connected; MC recomputes the `distance` state on
+/// neighbour updates - the tick derives it directly with a
+/// depth-capped BFS, replacing the W275 Chebyshev box stand-in that
+/// kept leaves alive across air gaps). Player-placed leaves
+/// (`persistent_leaves`) are exempt like MC's `persistent` state.
+/// Decay drops the species sapling at 1-in-20 plus the oak/dark-oak
+/// apple at 1-in-200.
 fn leaf_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
     if vx.persistent_leaves.contains(&pos) {
         return;
     }
-    if has_log_within(&vx.world, pos, LEAF_DECAY_RADIUS) {
+    if log_supported(&vx.world, pos) {
         return;
     }
+    let id = vx.world.get(pos).0;
     crate::world::edit::emit(vx, pos, BlockId::AIR);
     if rng.is_multiple_of(LEAF_SAPLING_DROP_DENOM) {
-        // Oak sapling (id 468) - replantable drop.
-        vx.spawn_drop(BlockId(468), pos);
+        vx.spawn_drop(BlockId(sapling_for_leaf(id)), pos);
+    }
+    // Oak + dark oak canopies drop the 0.5% apple (loot tables).
+    let name = crate::block::block_type(id).map(|b| b.name).unwrap_or("");
+    if (id == crate::block::LEAVES_ID || name == "dark_oak_leaves")
+        && (rng >> 8).is_multiple_of(200)
+    {
+        const APPLE_ITEM: u16 = 162;
+        vx.spawn_drop(BlockId(APPLE_ITEM), pos);
     }
 }
 
-/// True when a `WOOD_ID` log sits within `r` (Chebyshev) of `pos`.
-/// W275: scans in EXPANDING SHELLS so canopy leaves exit at their
-/// trunk's distance instead of walking the flat 9^3 box in dx order
-/// (a dark-forest random-tick pass hit leaves constantly and the
-/// ~350-get average scan was the 3-10 ms `random_tick` phase; a
-/// trunk 2 away now costs ~100 cheap skips + a few dozen gets).
-/// Only orphaned leaves pay the full box before decaying - once.
-fn has_log_within(world: &infengine_voxel::World, pos: [i32; 3], r: i32) -> bool {
-    for shell in 1..=r {
-        for dx in -shell..=shell {
-            for dy in -shell..=shell {
-                for dz in -shell..=shell {
-                    if dx.abs().max(dy.abs()).max(dz.abs()) != shell {
-                        continue;
-                    }
-                    if world.get([pos[0] + dx, pos[1] + dy, pos[2] + dz]).0
-                        == crate::block::WOOD_ID
-                    {
-                        return true;
-                    }
-                }
+/// The `distance <= 6` reachability test: BFS from the leaf through
+/// leaf blocks only (6-connected), depth-capped so a log adjacent to
+/// any visited node within 5 hops keeps the MC max surviving
+/// distance of 6. Worst case (orphaned dense canopy) visits a few
+/// hundred cells once before the leaf decays.
+fn log_supported(world: &infengine_voxel::World, start: [i32; 3]) -> bool {
+    const NEIGHBOURS: [[i32; 3]; 6] = [
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ];
+    let mut seen: std::collections::HashSet<[i32; 3]> =
+        std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<([i32; 3], u8)> =
+        std::collections::VecDeque::new();
+    seen.insert(start);
+    queue.push_back((start, 0));
+    while let Some((p, depth)) = queue.pop_front() {
+        for d in NEIGHBOURS {
+            let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+            let id = world.get(n).0;
+            if is_log_block(id) {
+                return true;
+            }
+            if depth < 5 && is_leaf_block(id) && seen.insert(n) {
+                queue.push_back((n, depth + 1));
             }
         }
     }
     false
+}
+
+/// Species sapling for a decaying leaf (`<species>_leaves` ->
+/// `<species>_sapling` when the registry has it; oak otherwise).
+fn sapling_for_leaf(leaf_id: u16) -> u16 {
+    const OAK_SAPLING: u16 = 468;
+    let Some(b) = crate::block::block_type(leaf_id) else {
+        return OAK_SAPLING;
+    };
+    let Some(species) = b.name.strip_suffix("_leaves") else {
+        return OAK_SAPLING;
+    };
+    let sapling = format!("{species}_sapling");
+    crate::block::BLOCK_TYPES
+        .iter()
+        .find(|t| t.name == sapling)
+        .map(|t| t.id)
+        .unwrap_or(OAK_SAPLING)
 }
 
 /// True when the block directly blocks light from above: a non-air,
@@ -398,25 +448,47 @@ mod tests {
         assert_eq!(grass_tick(&w, [5, 10, 5], rng), None);
     }
 
+    /// W303: the MC distance rule - a log ADJACENT to the leaf (or
+    /// reachable through a leaf bridge) sustains it; a log across an
+    /// air gap does not (the old Chebyshev box said it did).
     #[test]
-    fn log_within_radius_sustains_leaf() {
+    fn leaf_bridge_to_log_sustains() {
         let mut w = test_world();
         w.set([10, 10, 10], BlockId(crate::block::WOOD_ID));
-        // Leaf 3 cells away on x - inside the radius-4 box.
-        assert!(has_log_within(&w, [13, 10, 10], LEAF_DECAY_RADIUS));
+        // Leaf chain 11..=16 on x: [16] sits at distance 6 (the
+        // leaf next to the log is distance 1) - still alive.
+        for x in 11..=16 {
+            w.set([x, 10, 10], BlockId(crate::block::LEAVES_ID));
+        }
+        assert!(log_supported(&w, [16, 10, 10]));
+        // One more hop = distance 7 - past the MC cap, decays.
+        w.set([17, 10, 10], BlockId(crate::block::LEAVES_ID));
+        assert!(!log_supported(&w, [17, 10, 10]));
     }
 
     #[test]
-    fn no_log_in_range_lets_leaf_decay() {
-        let w = test_world(); // empty - no logs anywhere
-        assert!(!has_log_within(&w, [10, 10, 10], LEAF_DECAY_RADIUS));
-    }
-
-    #[test]
-    fn log_just_outside_radius_does_not_sustain() {
+    fn air_gap_breaks_support() {
         let mut w = test_world();
-        // Log 5 cells away on x, radius is 4 -> out of range.
-        w.set([15, 10, 10], BlockId(crate::block::WOOD_ID));
-        assert!(!has_log_within(&w, [10, 10, 10], LEAF_DECAY_RADIUS));
+        // Log 2 away but with AIR between - the old box scan kept
+        // this leaf alive; the flood-fill lets it decay.
+        w.set([12, 10, 10], BlockId(crate::block::WOOD_ID));
+        assert!(!log_supported(&w, [10, 10, 10]));
+    }
+
+    #[test]
+    fn no_log_lets_leaf_decay() {
+        let w = test_world(); // empty - no logs anywhere
+        assert!(!log_supported(&w, [10, 10, 10]));
+    }
+
+    #[test]
+    fn species_map_to_their_saplings() {
+        // Birch leaves reseed birch, not oak.
+        assert_ne!(
+            sapling_for_leaf(crate::block::BIRCH_LEAVES_ID),
+            sapling_for_leaf(crate::block::LEAVES_ID),
+        );
+        // Oak fallback for non-leaf ids.
+        assert_eq!(sapling_for_leaf(1), 468);
     }
 }
