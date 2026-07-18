@@ -63,6 +63,7 @@ impl Voxel {
         // W5.2a: portal tracker rebuilds via world_set_tracked
         // when chunks reload, so clear here too.
         self.portal_positions.clear();
+        self.structure_mob_anchors.clear();
         // W242.2: spawner index + tick state are per-world.
         self.spawner_positions.clear();
         self.spawner_states.clear();

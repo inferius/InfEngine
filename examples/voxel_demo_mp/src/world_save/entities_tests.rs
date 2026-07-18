@@ -47,6 +47,8 @@ fn sample_sheep(id: u32) -> MobSave {
         vel: [0.1, 0.0, -0.1],
         health: 8.0,
         age_seconds: 120.0,
+        persistent: false,
+        baby_left: 0.0,
     }
 }
 
@@ -59,6 +61,8 @@ fn sample_zombie(id: u32) -> MobSave {
         vel: [-0.05, -0.2, 0.0],
         health: 20.0,
         age_seconds: 7.5,
+        persistent: false,
+        baby_left: 0.0,
     }
 }
 
@@ -71,6 +75,8 @@ fn sample_cow(id: u32) -> MobSave {
         vel: [0.0, 0.0, 0.0],
         health: 10.0,
         age_seconds: 600.0,
+        persistent: false,
+        baby_left: 0.0,
     }
 }
 
@@ -112,6 +118,7 @@ fn entities_roundtrip_with_mobs() {
         next_drop_id: 0,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -144,6 +151,7 @@ fn entities_roundtrip_with_drops() {
         next_drop_id: 5,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -167,6 +175,7 @@ fn entities_roundtrip_mixed() {
         next_drop_id: 2,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -288,6 +297,7 @@ fn entities_recover_from_bak() {
         next_drop_id: 0,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     let second = DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
@@ -297,6 +307,7 @@ fn entities_recover_from_bak() {
         next_drop_id: 0,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     write_entities_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_entities_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();

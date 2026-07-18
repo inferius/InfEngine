@@ -671,6 +671,9 @@ pub(crate) struct Voxel {
     /// just torches + glowstone. Maintained by `world_set_tracked`
     /// alongside `torch_positions`.
     pub(crate) emitter_positions: HashMap<[i32; 3], u16>,
+    /// W302: template-entity anchors already spawned (persistent -
+    /// saves in entities v3). Chunk regen checks before minting.
+    pub(crate) structure_mob_anchors: HashSet<[i32; 3]>,
     /// W5.2a: tracker for placed portal blocks. Driven by
     /// `world_set_tracked` (the central edit path) so the renderer
     /// can walk a small per-frame set instead of scanning every

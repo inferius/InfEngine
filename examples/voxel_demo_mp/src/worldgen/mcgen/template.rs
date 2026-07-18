@@ -61,12 +61,28 @@ pub(crate) struct TemplateCell {
     pub(crate) data_marker: Option<String>,
 }
 
+/// W302: one entity saved in the template (`StructureTemplate`
+/// stores an `entities` list next to `blocks` - the village
+/// `villagers/*.nbt` jigsaw pieces and the farm/stable pens carry
+/// their inhabitants this way).
+#[derive(Debug, Clone)]
+pub(crate) struct TemplateEntity {
+    /// Cell the entity stands in (template-local, like cell.pos).
+    pub(crate) block_pos: [i32; 3],
+    /// Entity id, `minecraft:` prefix stripped (e.g. "villager").
+    pub(crate) id: String,
+    /// `Age < 0` in the embedded nbt (baby villager / baby animal).
+    pub(crate) baby: bool,
+}
+
 /// A parsed structure template.
 #[derive(Debug)]
 pub(crate) struct StructureTemplate {
     pub(crate) size: [i32; 3],
     pub(crate) palette: Vec<PaletteState>,
     pub(crate) cells: Vec<TemplateCell>,
+    /// W302: entities embedded in the template.
+    pub(crate) entities: Vec<TemplateEntity>,
 }
 
 impl StructureTemplate {
@@ -189,7 +205,34 @@ impl StructureTemplate {
             };
             cells.push(TemplateCell { pos, state, jigsaw, data_marker });
         }
-        Ok(StructureTemplate { size, palette, cells })
+        // W302: the entities list ({pos: [f64;3], blockPos: [i32;3],
+        // nbt: {id, Age?, ...}}). Missing/odd entries drop silently -
+        // a template without entities is the common case.
+        let mut entities = Vec::new();
+        if let Some(list) = root.get("entities").and_then(Nbt::as_list) {
+            for e in list {
+                let Some(block_pos) =
+                    e.get("blockPos").and_then(Nbt::as_ivec3)
+                else {
+                    continue;
+                };
+                let Some(nbt) = e.get("nbt") else { continue };
+                let Some(id) = nbt.get("id").and_then(Nbt::as_str) else {
+                    continue;
+                };
+                let baby = nbt
+                    .get("Age")
+                    .and_then(Nbt::as_i32)
+                    .map(|a| a < 0)
+                    .unwrap_or(false);
+                entities.push(TemplateEntity {
+                    block_pos,
+                    id: id.strip_prefix("minecraft:").unwrap_or(id).to_string(),
+                    baby,
+                });
+            }
+        }
+        Ok(StructureTemplate { size, palette, cells, entities })
     }
 
     /// Every jigsaw socket in the template.
@@ -256,6 +299,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// W302: the villagers-pool pieces carry their entity; Age<0
+    /// marks the baby variant.
+    #[test]
+    fn parses_villager_template_entities() {
+        let Some(root) = mc_data_root() else {
+            return;
+        };
+        let path = root
+            .join("minecraft/structure/village/plains/villagers/unemployed.nbt");
+        let t = StructureTemplate::from_nbt_bytes(
+            &std::fs::read(&path).expect("unemployed reads"),
+        )
+        .expect("unemployed parses");
+        assert_eq!(t.entities.len(), 1, "one embedded villager");
+        assert_eq!(t.entities[0].id, "villager");
+        assert!(!t.entities[0].baby);
+        let baby = root
+            .join("minecraft/structure/village/plains/villagers/baby.nbt");
+        let t2 = StructureTemplate::from_nbt_bytes(
+            &std::fs::read(&baby).expect("baby reads"),
+        )
+        .expect("baby parses");
+        assert_eq!(t2.entities.len(), 1);
+        assert!(t2.entities[0].baby, "Age<0 = baby villager");
     }
 
     #[test]

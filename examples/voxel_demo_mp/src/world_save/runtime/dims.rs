@@ -99,6 +99,7 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
         voxel.next_mob_id,
         voxel.next_drop_id,
         voxel.next_cart_id,
+        &voxel.structure_mob_anchors,
     );
     entities::write_entities(slug, dim, &dim_entities)?;
     let dim_containers = build_dimension_containers_from(
@@ -165,7 +166,15 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
             1u32,
         ),
     };
-    let dim_entities = build_dimension_entities_from(mobs, drops, carts, nm, nd, nc);
+    let dim_entities = build_dimension_entities_from(
+        mobs,
+        drops,
+        carts,
+        nm,
+        nd,
+        nc,
+        &dw.structure_mob_anchors,
+    );
     entities::write_entities(slug, dim, &dim_entities)?;
     let dim_containers = build_dimension_containers_from(
         &dw.chests,
@@ -364,7 +373,7 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
         if m.health <= 0.0 {
             continue;
         }
-        parked.mobs.push(MobState::new_natural(
+        let mut mob = MobState::new_natural(
             m.id,
             m.kind,
             m.pos,
@@ -372,7 +381,16 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
             m.yaw,
             0.0,
             m.health,
-        ));
+        );
+        // W302 (v3): persistence + babyhood survive reload.
+        mob.persistent = m.persistent;
+        mob.baby_left = m.baby_left;
+        parked.mobs.push(mob);
+    }
+    // W302: parked dim's spawned-anchor set.
+    if let Some(d) = voxel.worlds.get_mut(dim) {
+        d.structure_mob_anchors =
+            ents.structure_mob_anchors.iter().copied().collect();
     }
     for d in ents.drops {
         let age_ticks = (d.age * 20.0).max(0.0) as u32;

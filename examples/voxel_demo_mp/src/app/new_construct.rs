@@ -276,6 +276,7 @@ impl Voxel {
             f3_prev: false,
             torch_positions: HashSet::new(),
             emitter_positions: HashMap::new(),
+            structure_mob_anchors: HashSet::new(),
             portal_positions: HashSet::new(),
             spawner_positions: HashSet::new(),
             spawner_states: HashMap::new(),

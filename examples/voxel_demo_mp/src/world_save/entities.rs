@@ -49,7 +49,11 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 /// - v2 (W137): adds `carts` + `next_cart_id` (minecarts persist).
 ///   Migration lives in `entities_v1_to_v2`, registered in
 ///   `migrate::register_production_arrows`.
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 2;
+/// - v3 (W302): adds `structure_mob_anchors` (template-entity spawn
+///   dedup - villages stay populated exactly once) + per-mob
+///   `persistent` / `baby_left` (villagers + pen animals survive
+///   reload as non-despawning; babies keep growing).
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 3;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
@@ -89,6 +93,10 @@ pub(crate) struct DimensionEntities {
     pub carts: Vec<CartSave>,
     /// W137 (v2): monotonic id source for the next minted cart.
     pub next_cart_id: u32,
+    /// W302 (v3): template-entity anchors already spawned. A chunk
+    /// that regenerates (streamed out + revisited) checks this set
+    /// before minting its embedded villagers / pen animals.
+    pub structure_mob_anchors: Vec<[i32; 3]>,
 }
 
 impl DimensionEntities {
@@ -104,6 +112,7 @@ impl DimensionEntities {
             next_drop_id: 0,
             carts: Vec::new(),
             next_cart_id: 0,
+            structure_mob_anchors: Vec::new(),
         }
     }
 }
@@ -154,8 +163,14 @@ pub(crate) struct MobSave {
     /// Age in seconds since spawn. Used by behaviours that gate on
     /// lifetime (e.g. baby -> adult transitions).
     pub age_seconds: f32,
-    // Future fields go here. New optional fields land via
-    // `#[serde(default)]` so old saves still load cleanly.
+    /// W302 (v3): MC `PersistenceRequired` - structure-spawned mobs
+    /// (villagers, pen animals) never despawn.
+    pub persistent: bool,
+    /// W302 (v3): seconds of babyhood left (0 = adult). Was runtime
+    /// only before v3 - babies reloaded as adults.
+    pub baby_left: f32,
+    // Future fields go here - with a version bump + migration arrow
+    // (bincode is positional; `#[serde(default)]` does NOT cover it).
 }
 
 /// One persistent dropped-item entry. Despawn timers live on the
@@ -405,10 +420,51 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 struct DimensionEntitiesV1 {
     #[allow(dead_code)]
     format_version: u32,
-    mobs: Vec<MobSave>,
+    mobs: Vec<MobSaveV2>,
     drops: Vec<DropSave>,
     next_mob_id: u32,
     next_drop_id: u32,
+}
+
+/// W302: the v2 on-disk mob shape (pre-`persistent`/`baby_left`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct MobSaveV2 {
+    id: u32,
+    kind: u8,
+    pos: [f32; 3],
+    yaw: f32,
+    vel: [f32; 3],
+    health: f32,
+    age_seconds: f32,
+}
+
+/// W302: the v2 on-disk dimension shape (pre-anchor-set).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionEntitiesV2 {
+    format_version: u32,
+    mobs: Vec<MobSaveV2>,
+    drops: Vec<DropSave>,
+    next_mob_id: u32,
+    next_drop_id: u32,
+    carts: Vec<CartSave>,
+    next_cart_id: u32,
+}
+
+impl MobSaveV2 {
+    /// Lift to the current shape with the v3 defaults.
+    fn lift(self) -> MobSave {
+        MobSave {
+            id: self.id,
+            kind: self.kind,
+            pos: self.pos,
+            yaw: self.yaw,
+            vel: self.vel,
+            health: self.health,
+            age_seconds: self.age_seconds,
+            persistent: false,
+            baby_left: 0.0,
+        }
+    }
 }
 
 /// One-step v1 -> v2 migration arrow: decode the v1 envelope,
@@ -450,7 +506,9 @@ pub(crate) fn entities_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v1, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV1, _>(&raw_v1, cfg)
         .map_err(|err| invalid(format!("entities v1 payload decode failed: {err}")))?;
-    let v2 = DimensionEntities {
+    // W302: emit the TRUE v2 shape - encoding the current (v3)
+    // struct under a v2 tag would break the chained 2 -> 3 arrow.
+    let v2 = DimensionEntitiesV2 {
         format_version: 2,
         mobs: v1.mobs,
         drops: v1.drops,
@@ -475,9 +533,124 @@ pub(crate) fn entities_v1_to_v2(bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// W302: one-step v2 -> v3 migration arrow. Decodes the v2 envelope,
+/// lifts every mob with `persistent: false` / `baby_left: 0` and adds
+/// an empty `structure_mob_anchors` set. Same envelope walk as
+/// `entities_v1_to_v2`.
+pub(crate) fn entities_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("entities v2 envelope truncated"));
+    }
+    if &bytes[..4] != ENTITIES_MAGIC {
+        return Err(invalid("entities v2 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 2 {
+        return Err(invalid(format!(
+            "entities_v2_to_v3 expected v2, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v2: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("entities v2 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown entities v2 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v2, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV2, _>(&raw_v2, cfg)
+        .map_err(|err| invalid(format!("entities v2 payload decode failed: {err}")))?;
+    let v3 = DimensionEntities {
+        format_version: 3,
+        mobs: v2.mobs.into_iter().map(MobSaveV2::lift).collect(),
+        drops: v2.drops,
+        next_mob_id: v2.next_mob_id,
+        next_drop_id: v2.next_drop_id,
+        carts: v2.carts,
+        next_cart_id: v2.next_cart_id,
+        structure_mob_anchors: Vec::new(),
+    };
+    let raw_v3 = bincode::serde::encode_to_vec(&v3, cfg)
+        .map_err(|err| invalid(format!("entities v3 payload encode failed: {err}")))?;
+    let uncompressed_len_v3 = raw_v3.len() as u64;
+    let (kind_v3, body_v3): (u8, Vec<u8>) = match zstd::encode_all(&raw_v3[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v3.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v3),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v3.len() + 17);
+    out.extend_from_slice(ENTITIES_MAGIC);
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.push(kind_v3);
+    out.extend_from_slice(&uncompressed_len_v3.to_le_bytes());
+    out.extend_from_slice(&body_v3);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W302: the v2 -> v3 arrow lifts mobs with persistence defaults
+    /// and adds the empty anchor set.
+    #[test]
+    fn entities_v2_to_v3_lifts_mobs_and_adds_anchor_set() {
+        let cfg = bincode::config::standard();
+        let v2 = DimensionEntitiesV2 {
+            format_version: 2,
+            mobs: vec![MobSaveV2 {
+                id: 7,
+                kind: 11,
+                pos: [1.0, 2.0, 3.0],
+                yaw: 0.5,
+                vel: [0.0; 3],
+                health: 20.0,
+                age_seconds: 0.0,
+            }],
+            drops: Vec::new(),
+            next_mob_id: 8,
+            next_drop_id: 1,
+            carts: Vec::new(),
+            next_cart_id: 1,
+        };
+        let raw = bincode::serde::encode_to_vec(&v2, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let out = entities_v2_to_v3(&bytes).expect("arrow lifts");
+        assert_eq!(&out[..4], ENTITIES_MAGIC);
+        assert_eq!(u32::from_le_bytes([out[4], out[5], out[6], out[7]]), 3);
+        let kind = out[8];
+        let len = u64::from_le_bytes(out[9..17].try_into().unwrap()) as usize;
+        let body: Vec<u8> = match kind {
+            COMP_NONE => out[17..].to_vec(),
+            _ => decode_zstd(&out[17..], len).unwrap(),
+        };
+        let (v3, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+            &body, cfg,
+        )
+        .unwrap();
+        assert_eq!(v3.format_version, 3);
+        assert_eq!(v3.mobs.len(), 1);
+        assert_eq!(v3.mobs[0].kind, 11);
+        assert!(!v3.mobs[0].persistent);
+        assert_eq!(v3.mobs[0].baby_left, 0.0);
+        assert!(v3.structure_mob_anchors.is_empty());
+    }
 
     #[test]
     fn empty_constructor_uses_current_format_version() {
@@ -499,14 +672,14 @@ mod tests {
         #[derive(Serialize)]
         struct V1Out {
             format_version: u32,
-            mobs: Vec<MobSave>,
+            mobs: Vec<MobSaveV2>,
             drops: Vec<DropSave>,
             next_mob_id: u32,
             next_drop_id: u32,
         }
         let v1 = V1Out {
             format_version: 1,
-            mobs: vec![MobSave {
+            mobs: vec![MobSaveV2 {
                 id: 7,
                 kind: 1,
                 pos: [1.0, 2.0, 3.0],
@@ -544,7 +717,10 @@ mod tests {
         } else {
             body.to_vec()
         };
-        let (v2, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+        // W302: the arrow emits the TRUE v2 shape now - decode with
+        // the frozen legacy struct (the chained 2 -> 3 arrow owns the
+        // lift to the current shape).
+        let (v2, _) = bincode::serde::decode_from_slice::<DimensionEntitiesV2, _>(
             &raw2,
             cfg,
         )

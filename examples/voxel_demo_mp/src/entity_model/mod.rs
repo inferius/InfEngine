@@ -43,6 +43,7 @@ pub(crate) mod rabbit;
 pub(crate) mod sheep;
 pub(crate) mod skeleton;
 pub(crate) mod spider;
+pub(crate) mod villager;
 pub(crate) mod wolf;
 pub(crate) mod zombie;
 

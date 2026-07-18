@@ -313,6 +313,19 @@ impl WorkerPool {
                                             open: o.open,
                                         });
                                     }
+                                    // W302: structure-embedded mobs the
+                                    // carve found in this chunk.
+                                    for m in
+                                        crate::worldgen::mcgen::village::take_carved_mobs()
+                                    {
+                                        side_effects.push(
+                                            ChunkSideEffect::StructureMob {
+                                                anchor: m.anchor,
+                                                kind: m.kind,
+                                                baby: m.baby,
+                                            },
+                                        );
+                                    }
                                     // W24: Build MC-atlas submeshes in the
                                     // worker using the pre-fetched halo
                                     // lighting + pack snapshot. Main thread
@@ -869,6 +882,10 @@ pub(crate) enum ChunkSideEffect {
     /// 0 stairs, 1 door, 2 trapdoor, 3 fence gate; `state` = facing
     /// (bits 0-1) | top-half bit 2.
     Oriented { pos: [i32; 3], kind: u8, state: u8, open: bool },
+    /// W302: a template-embedded entity (villager / pen animal). The
+    /// main thread dedups on `anchor` via the persistent
+    /// `structure_mob_anchors` set and mints a persistent mob.
+    StructureMob { anchor: [i32; 3], kind: u8, baby: bool },
 }
 
 /// W249: which loot table a worldgen chest rolls at delivery. Decided

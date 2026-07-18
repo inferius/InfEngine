@@ -107,12 +107,15 @@ fn per_dim_entities_files_independent() {
             vel: [0.0; 3],
             health: 20.0,
             age_seconds: 0.0,
+            persistent: false,
+            baby_left: 0.0,
         }],
         drops: Vec::new(),
         next_mob_id: 2,
         next_drop_id: 1,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     let nt = DimensionEntities {
         format_version: ENTITIES_FORMAT_VERSION,
@@ -124,12 +127,15 @@ fn per_dim_entities_files_independent() {
             vel: [0.0; 3],
             health: 15.0,
             age_seconds: 0.0,
+            persistent: false,
+            baby_left: 0.0,
         }],
         drops: Vec::new(),
         next_mob_id: 3,
         next_drop_id: 1,
         carts: Vec::new(),
         next_cart_id: 0,
+        structure_mob_anchors: Vec::new(),
     };
     write_entities_in_dir(tmp.path(), SLUG, "overworld", &ow).unwrap();
     write_entities_in_dir(tmp.path(), SLUG, "nether", &nt).unwrap();

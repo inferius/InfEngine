@@ -127,6 +127,8 @@ pub(crate) struct DimWorld {
     /// W12.5: generic MC-emitter index parked per-dim. See
     /// `Voxel::emitter_positions` for semantics.
     pub emitter_positions: HashMap<[i32; 3], u16>,
+    /// W302: spawned template-entity anchors (see Voxel field).
+    pub structure_mob_anchors: std::collections::HashSet<[i32; 3]>,
     /// W297: portal swirl cells are per-dim too - they were the ONE
     /// side map switch_dim did not park, so the other dim unload
     /// prune wiped them and a round trip came back to an unlit
@@ -180,6 +182,7 @@ impl Default for DimWorld {
             furnace_runtimes: HashMap::new(),
             torch_positions: std::collections::HashSet::new(),
             emitter_positions: HashMap::new(),
+            structure_mob_anchors: std::collections::HashSet::new(),
             portal_positions: std::collections::HashSet::new(),
             torch_orient: HashMap::new(),
             stair_states: HashMap::new(),

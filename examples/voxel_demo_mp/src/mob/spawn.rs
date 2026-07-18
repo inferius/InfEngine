@@ -163,6 +163,35 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
     );
 }
 
+/// W302: mint a STRUCTURE-spawned mob (villager / pen animal):
+/// `mint_mob` + `PersistenceRequired` (structure inhabitants never
+/// despawn in MC) + the baby growth timer when the template entity
+/// carried `Age < 0`.
+pub(crate) fn mint_structure_mob(
+    voxel: &mut crate::Voxel,
+    kind: u8,
+    pos: [f32; 3],
+    yaw: f32,
+    baby: bool,
+) {
+    use crate::net::NetRole;
+    if matches!(voxel.net, NetRole::Client { .. }) {
+        return;
+    }
+    mint_mob(voxel, kind, pos, yaw);
+    if let Some(m) = voxel.mobs.last_mut() {
+        m.persistent = true;
+        if baby {
+            m.baby_left = crate::mob::breed::BABY_GROW_TIME;
+        }
+        let baby_flag = m.baby_left > 0.0;
+        let id = m.id;
+        if let Some(msg) = voxel.remote_mobs.get_mut(&id) {
+            msg.baby = baby_flag;
+        }
+    }
+}
+
 /// Initial HP for a freshly spawned mob. Pulled out so the place
 /// site + the wire-init match stay in sync.
 pub(crate) fn initial_health_for(kind: u8) -> f32 {
@@ -170,6 +199,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         KIND_ZOMBIE | KIND_SKELETON => ZOMBIE_MAX_HEALTH,
         // W300: ZombifiedPiglin.createAttributes MAX_HEALTH 20.
         x if x == super::kinds::KIND_ZOMBIFIED_PIGLIN => 20.0,
+        // W302: Villager.createAttributes MAX_HEALTH 20.
+        x if x == super::kinds::KIND_VILLAGER => 20.0,
         KIND_SPIDER => 12.0,
         KIND_CHICKEN => 4.0,
         KIND_PIG => 10.0,

@@ -487,6 +487,8 @@ pub(crate) struct MobMeshes {
     pub(crate) zombie_model: Option<crate::entity_model::BakedModel>,
     /// W300 - zombified piglin (universal `AdultPiglinModel` data).
     pub(crate) zombified_piglin_model: Option<crate::entity_model::BakedModel>,
+    /// W302 - villager (universal `VillagerModel` data).
+    pub(crate) villager_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -941,6 +943,26 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "zombified piglin entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Villager (64x64, entity/villager subdir) --------------------------
+    // W302: base skin only; the type/profession overlay layers are a
+    // follow-up (they composite three textures in MC).
+    for root in &entity_roots {
+        let p = root.join("villager").join("villager.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.villager_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::villager::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "villager entity texture bound (universal model)"
             );
             break;
         }

@@ -151,6 +151,9 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         k if k == KIND_ZOMBIE => 2.3,       // attr 0.23
         // W300: ZombifiedPiglin.createAttributes MOVEMENT_SPEED 0.23.
         k if k == KIND_ZOMBIFIED_PIGLIN => 2.3,
+        // W302: villager attr 0.5 x the 0.4 stroll speedModifier
+        // (VillagerGoalPackages) - vanilla villagers AMBLE at 0.2.
+        k if k == KIND_VILLAGER => 2.0,
         k if k == KIND_SKELETON => 2.5,     // attr 0.25
         k if k == KIND_SPIDER => 3.0,       // attr 0.30
         _ => 2.3,

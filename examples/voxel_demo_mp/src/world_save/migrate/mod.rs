@@ -244,6 +244,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         2,
         super::entities::entities_v1_to_v2,
     );
+    // W302: entities v2 -> v3 adds the structure-mob anchor set +
+    // per-mob persistence/baby fields (villages stay populated).
+    reg.register(
+        SaveKind::Entities,
+        2,
+        3,
+        super::entities::entities_v2_to_v3,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

@@ -427,6 +427,25 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             vx.spawner_positions.insert(*wv);
                             vx.spawner_kinds.insert(*wv, *kind);
                         }
+                        ChunkSideEffect::StructureMob { anchor, kind, baby } => {
+                            // W302: spawn once per anchor, ever - the
+                            // persistent set survives saves, so chunk
+                            // regen (stream-out + revisit) can't
+                            // double-populate a village.
+                            if vx.structure_mob_anchors.insert(*anchor) {
+                                crate::mob::spawn::mint_structure_mob(
+                                    vx,
+                                    *kind,
+                                    [
+                                        anchor[0] as f32 + 0.5,
+                                        anchor[1] as f32,
+                                        anchor[2] as f32 + 0.5,
+                                    ],
+                                    0.0,
+                                    *baby,
+                                );
+                            }
+                        }
                         ChunkSideEffect::Oriented { pos, kind, state, open } => {
                             // W279: template-placed oriented blocks.
                             // Stairs key their own map; doors (lower

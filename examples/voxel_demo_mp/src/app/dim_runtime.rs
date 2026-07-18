@@ -63,6 +63,7 @@ impl Voxel {
             furnace_runtimes: std::mem::take(&mut self.furnace_runtimes),
             torch_positions: std::mem::take(&mut self.torch_positions),
             emitter_positions: std::mem::take(&mut self.emitter_positions),
+            structure_mob_anchors: std::mem::take(&mut self.structure_mob_anchors),
             portal_positions: std::mem::take(&mut self.portal_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
             stair_states: std::mem::take(&mut self.stair_states),
@@ -133,6 +134,7 @@ impl Voxel {
         self.furnace_runtimes = target_world.furnace_runtimes;
         self.torch_positions = target_world.torch_positions;
         self.emitter_positions = target_world.emitter_positions;
+        self.structure_mob_anchors = target_world.structure_mob_anchors;
         self.portal_positions = target_world.portal_positions;
         self.torch_orient = target_world.torch_orient;
         self.stair_states = target_world.stair_states;
@@ -627,6 +629,22 @@ impl Voxel {
                     // oriented template placements into the state
                     // maps directly (the worker path ships them as
                     // side effects instead).
+                    // W302: structure-embedded mobs (sync path).
+                    for m in crate::worldgen::mcgen::village::take_carved_mobs() {
+                        if self.structure_mob_anchors.insert(m.anchor) {
+                            crate::mob::spawn::mint_structure_mob(
+                                self,
+                                m.kind,
+                                [
+                                    m.anchor[0] as f32 + 0.5,
+                                    m.anchor[1] as f32,
+                                    m.anchor[2] as f32 + 0.5,
+                                ],
+                                0.0,
+                                m.baby,
+                            );
+                        }
+                    }
                     for o in crate::worldgen::mcgen::village::take_carved_oriented()
                     {
                         match o.kind {

@@ -30,7 +30,8 @@ use super::chunks::{
 };
 use super::entities::{
     DimensionEntities, ENTITIES_FORMAT_VERSION, ENTITIES_MAGIC, entities_path_in_dir,
-    entities_v1_to_v2, read_entities_in_dir_with_registry, write_entities_in_dir,
+    entities_v1_to_v2, entities_v2_to_v3, read_entities_in_dir_with_registry,
+    write_entities_in_dir,
 };
 use super::layout::{meta_path_in, world_dir_in, world_json_path_in};
 use super::meta::{META_FORMAT_VERSION, WorldMeta, create_meta, read_meta_in_dir_with_registry};
@@ -370,6 +371,8 @@ fn entities_migration_v0_to_v1_round_trip() {
     let mut registry = MigrationRegistry::new();
     registry.register(SaveKind::Entities, 0, 1, bump_envelope_v0_to_v1);
     registry.register(SaveKind::Entities, 1, 2, entities_v1_to_v2);
+    // W302: the chain runs to v3 now.
+    registry.register(SaveKind::Entities, 2, 3, entities_v2_to_v3);
 
     let loaded = read_entities_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

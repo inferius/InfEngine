@@ -46,6 +46,8 @@ pub(crate) enum MobKind {
     /// W300 - zombified piglin (the nether's native ambler;
     /// `NeutralMob` - only fights back after being hit).
     ZombifiedPiglin = 10,
+    /// W302 - villager (structure-spawned; villages are alive).
+    Villager = 11,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -66,6 +68,7 @@ impl MobKind {
             8 => MobKind::PolarBear,
             9 => MobKind::Rabbit,
             10 => MobKind::ZombifiedPiglin,
+            11 => MobKind::Villager,
             _ => MobKind::Sheep,
         }
     }
@@ -104,6 +107,10 @@ impl MobKind {
                 // W162: rabbit hops + flees (the MC hop gait is a
                 // follow-up; for now it wanders like other passives).
                 | MobKind::Rabbit
+                // W302: villager - strolls + panics + looks at players
+                // (trades/schedules are follow-ups). Structure-spawned
+                // only; the natural-spawn pools never pick it.
+                | MobKind::Villager
         )
     }
 
@@ -121,6 +128,7 @@ impl MobKind {
             MobKind::PolarBear => "polar_bear",
             MobKind::Rabbit => "rabbit",
             MobKind::ZombifiedPiglin => "zombified_piglin",
+            MobKind::Villager => "villager",
         }
     }
 }
@@ -132,6 +140,8 @@ impl MobKind {
 /// the inline table in `raycast.rs`).
 pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
     match kind {
+        // W302: MC villager 0.6 x 1.95.
+        KIND_VILLAGER => (0.3, 0.975, 0.3, 0.975),
         KIND_ZOMBIE | KIND_SKELETON | KIND_ZOMBIFIED_PIGLIN => (0.45, 1.0, 0.45, 1.0),
         KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
         KIND_PIG => (0.6, 0.55, 0.45, 0.45),
@@ -161,6 +171,7 @@ pub(crate) const KIND_WOLF: u8 = MobKind::Wolf as u8;
 pub(crate) const KIND_POLAR_BEAR: u8 = MobKind::PolarBear as u8;
 pub(crate) const KIND_RABBIT: u8 = MobKind::Rabbit as u8;
 pub(crate) const KIND_ZOMBIFIED_PIGLIN: u8 = MobKind::ZombifiedPiglin as u8;
+pub(crate) const KIND_VILLAGER: u8 = MobKind::Villager as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -223,9 +234,10 @@ mod tests {
         assert_eq!(MobKind::from_u8(7), MobKind::Wolf);
         assert_eq!(MobKind::from_u8(8), MobKind::PolarBear);
         assert_eq!(MobKind::from_u8(9), MobKind::Rabbit);
-        // W300: 10 = ZombifiedPiglin.
+        // W300: 10 = ZombifiedPiglin. W302: 11 = Villager.
         assert_eq!(MobKind::from_u8(10), MobKind::ZombifiedPiglin);
-        for raw in [11u8, 100, 255] {
+        assert_eq!(MobKind::from_u8(11), MobKind::Villager);
+        for raw in [12u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

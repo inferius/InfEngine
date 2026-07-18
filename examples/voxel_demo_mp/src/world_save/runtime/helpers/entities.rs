@@ -23,6 +23,7 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
     next_mob_id: u32,
     next_drop_id: u32,
     next_cart_id: u32,
+    structure_mob_anchors: &std::collections::HashSet<[i32; 3]>,
 ) -> DimensionEntities {
     let mob_saves: Vec<MobSave> = mobs
         .iter()
@@ -34,8 +35,14 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             vel: [0.0, 0.0, 0.0],
             health: m.health,
             age_seconds: 0.0,
+            persistent: m.persistent,
+            baby_left: m.baby_left,
         })
         .collect();
+    // Deterministic order keeps identical saves byte-identical.
+    let mut anchors: Vec<[i32; 3]> =
+        structure_mob_anchors.iter().copied().collect();
+    anchors.sort();
     let drop_saves: Vec<DropSave> = drops
         .iter()
         .map(|d| DropSave {
@@ -66,6 +73,7 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
         next_drop_id,
         carts: cart_saves,
         next_cart_id,
+        structure_mob_anchors: anchors,
     }
 }
 
@@ -88,7 +96,7 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         if m.health <= 0.0 {
             continue;
         }
-        voxel.mobs.push(MobState::new_natural(
+        let mut mob = MobState::new_natural(
             m.id,
             m.kind,
             m.pos,
@@ -96,8 +104,17 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
             m.yaw,
             0.0,
             m.health,
-        ));
+        );
+        // W302 (v3): persistence + babyhood survive reload.
+        mob.persistent = m.persistent;
+        mob.baby_left = m.baby_left;
+        voxel.mobs.push(mob);
     }
+    // W302: the spawned-anchor set (v2 saves migrate with an empty
+    // one; already-live villagers keep their persistent flag OFF for
+    // pre-v3 saves - regenerating chunks may re-mint once there).
+    voxel.structure_mob_anchors =
+        entities.structure_mob_anchors.iter().copied().collect();
     for d in entities.drops {
         // Older saves don't carry the Q.5 fields; rehydrate as if
         // freshly spawned (count = 1, pickup-delay already

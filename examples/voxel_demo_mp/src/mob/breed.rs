@@ -200,7 +200,7 @@ fn pair_breeders(
 
 /// W291: seconds a newborn spends as a baby - MC's -24000 age ticks
 /// (20 minutes).
-const BABY_GROW_TIME: f32 = 1200.0;
+pub(crate) const BABY_GROW_TIME: f32 = 1200.0;
 
 /// Spawn a BABY of `kind` at `pos`, flagged persistent so the bred
 /// animal doesn't despawn. Renders at half scale + follows a parent

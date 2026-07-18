@@ -137,6 +137,8 @@ fn mc_speed_tables_pin() {
         kind_walk_speed(crate::mob::kinds::KIND_ZOMBIFIED_PIGLIN),
         2.3
     );
+    // W302: villager ambles at attr 0.5 x stroll modifier 0.4.
+    assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_VILLAGER), 2.0);
     assert_eq!(kind_panic_mult(KIND_COW), 2.0);
     assert_eq!(kind_panic_mult(KIND_CHICKEN), 1.4);
     assert_eq!(kind_panic_mult(KIND_SHEEP), 1.25);

@@ -77,8 +77,54 @@ pub(crate) struct CarvedOriented {
     pub(crate) open: bool,
 }
 
+/// W302: one structure-spawned mob the carve found in THIS chunk.
+/// `anchor` is the template cell (world coords) - the persistent
+/// dedup key, so a chunk regenerating after streaming out doesn't
+/// double-spawn its villagers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CarvedMob {
+    pub(crate) anchor: [i32; 3],
+    pub(crate) kind: u8,
+    pub(crate) baby: bool,
+}
+
 thread_local! {
     static CARVE_ORIENTED: RefCell<Vec<CarvedOriented>> = const { RefCell::new(Vec::new()) };
+    static CARVE_MOBS: RefCell<Vec<CarvedMob>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Drain the structure-mob spawns recorded since the last take.
+pub(crate) fn take_carved_mobs() -> Vec<CarvedMob> {
+    CARVE_MOBS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// W302: template entity id -> engine mob kind. Ported kinds map
+/// 1:1; the rest (cat / horse / iron_golem / zombie_villager /
+/// donkey...) SKIP with a once-log - a missing mob beats a wrong
+/// stand-in (the W298/W300 lesson).
+fn entity_kind_for(id: &str) -> Option<u8> {
+    // Raw MobKind discriminants - the mob module lives in the bin
+    // tree, and the kind bytes are wire/save-pinned by design
+    // (mob/kinds.rs: "discriminants are pinned numerically").
+    Some(match id {
+        "villager" => 11, // MobKind::Villager
+        "cow" => 4,       // MobKind::Cow
+        "pig" => 3,       // MobKind::Pig
+        "sheep" => 0,     // MobKind::Sheep
+        "chicken" => 2,   // MobKind::Chicken
+        "rabbit" => 9,    // MobKind::Rabbit
+        _ => {
+            static SKIPPED: std::sync::Once = std::sync::Once::new();
+            SKIPPED.call_once(|| {
+                tracing::info!(
+                    id,
+                    "W302: template entity kind not ported yet - skipped \
+                     (cat/horse/iron_golem/zombie_villager land later)"
+                );
+            });
+            return None;
+        }
+    })
 }
 
 /// Drain the oriented placements recorded since the last take (the
@@ -443,6 +489,38 @@ pub(crate) fn carve_layout(
                 }
             }
         }
+        // W302: entities embedded in the template (the villagers-pool
+        // pieces + farm pens). Same rotation lattice as the cells;
+        // only the chunk containing the anchor records the spawn, so
+        // one entity spawns exactly once per generation.
+        for ent in &t.entities {
+            let Some(kind) = entity_kind_for(&ent.id) else {
+                continue;
+            };
+            let rp = jigsaw::rot_pos(piece.rotation, ent.block_pos);
+            let wx = piece.position[0] + rp[0];
+            let wz = piece.position[2] + rp[2];
+            let wy = if piece.terrain_matching {
+                mc_floor_at(ctx, wx, wz) + ent.block_pos[1]
+            } else {
+                piece.position[1] + rp[1]
+            };
+            let (lx, ly, lz) =
+                (wx - origin[0], wy - origin[1], wz - origin[2]);
+            if !(0..cs).contains(&lx)
+                || !(0..cs).contains(&ly)
+                || !(0..cs).contains(&lz)
+            {
+                continue;
+            }
+            CARVE_MOBS.with(|c| {
+                c.borrow_mut().push(CarvedMob {
+                    anchor: [wx, wy, wz],
+                    kind,
+                    baby: ent.baby,
+                })
+            });
+        }
         // W251: list-element overlays (`ListPoolElement` places every
         // stacked template at the same anchor): each cell of an
         // overlay writes only when its block_rot roll keeps it - the
@@ -557,6 +635,64 @@ mod tests {
         // north(3) rotated CW once -> +X east(0), plus the top bit.
         assert_eq!(o.state & 3, 0);
         assert_ne!(o.state & crate::block::door::TRAPDOOR_TOP_BIT, 0);
+    }
+
+    /// W302: a solved village layout reaches the villagers pool, the
+    /// piece templates carry their entity, and carving the anchor
+    /// chunk records the structure-mob spawn exactly once.
+    #[test]
+    fn village_layout_spawns_villagers() {
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 3592732596,
+            dim: "overworld".into(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let mut found: Option<(i32, i32)> = None;
+        'scan: for gx in 7..12 {
+            for gz in 7..12 {
+                let [sx, sz] = potential_start(ctx.effective_seed(), gx, gz);
+                if layout_for_start(&ctx, sx, sz).is_some() {
+                    found = Some((sx, sz));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((sx, sz)) = found else {
+            return;
+        };
+        let layout = layout_for_start(&ctx, sx, sz).expect("layout");
+        let vp: Vec<_> = layout
+            .iter()
+            .filter(|p| p.template.contains("villagers/"))
+            .collect();
+        assert!(!vp.is_empty(), "layout has villager pieces");
+        let piece = vp[0];
+        let t = village_data::template(&piece.template).expect("template");
+        assert!(!t.entities.is_empty(), "villager template has an entity");
+        assert_eq!(t.entities[0].id, "villager");
+        let rp = jigsaw::rot_pos(piece.rotation, t.entities[0].block_pos);
+        let wx = piece.position[0] + rp[0];
+        let wz = piece.position[2] + rp[2];
+        let wy = if piece.terrain_matching {
+            mc_floor_at(&ctx, wx, wz) + t.entities[0].block_pos[1]
+        } else {
+            piece.position[1] + rp[1]
+        };
+        let cs = CHUNK_SIZE as i32;
+        let origin = [
+            wx.div_euclid(cs) * cs,
+            wy.div_euclid(cs) * cs,
+            wz.div_euclid(cs) * cs,
+        ];
+        let _ = take_carved_mobs();
+        let mut chunk = Chunk::empty();
+        carve_layout(&layout, &mut chunk, &ctx, origin);
+        let got = take_carved_mobs();
+        assert!(
+            got.iter().any(|m| m.kind == 11 && m.anchor == [wx, wy, wz]),
+            "carve records the villager at {:?}: {got:?}",
+            [wx, wy, wz]
+        );
     }
 
     #[test]
