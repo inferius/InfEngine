@@ -559,6 +559,12 @@ pub(crate) const ITEM_NAME_MAP: &[ItemNameMap] = &[
     // wrong wheat icon) instead of the MC item sprite.
     ItemNameMap { infengine_id: 493, item: "wheat" },
     ItemNameMap { infengine_id: 494, item: "carrot" },
+    // W308: loot-batch items whose MC name has no same-named item
+    // sprite - fall back to the closest vanilla sprite stem.
+    ItemNameMap { infengine_id: 911, item: "golden_apple" },
+    ItemNameMap { infengine_id: 915, item: "arrow" },
+    ItemNameMap { infengine_id: 942, item: "bamboo" },
+    ItemNameMap { infengine_id: 945, item: "string" },
     ItemNameMap { infengine_id: 495, item: "potato" },
     ItemNameMap { infengine_id: 496, item: "beetroot" },
     // Pickaxes
