@@ -555,24 +555,54 @@ fn step_one(
     let ground = voxel
         .surface_y_below(wx, wz, scan_top)
         .map(|sy| sy as f32 + 1.0);
-    match ground {
-        // Standing (a fresh hop with vy > 0 must NOT re-land here).
-        Some(g) if m.pos[1] <= g + 0.001 && m.vy <= 0.0 => {
+    // W309: buoyancy - MC land mobs SWIM UP in fluids (Mob.aiStep
+    // presses jumpInLiquid +0.04/t while in water OR lava, and the
+    // fluid travel branch quarters gravity + damps vertical speed
+    // 0.8/t), so they bob to the surface instead of trudging the
+    // seabed (the "mobs walk on the ocean floor" report - and the
+    // lava-sea piglins now float like vanilla).
+    let body_fluid = crate::liquid::liquid_for(
+        voxel.world.get([wx, (m.pos[1] + 0.5).floor() as i32, wz]),
+    )
+    .is_some();
+    if body_fluid {
+        let head_in_fluid = crate::liquid::liquid_for(
+            voxel.world.get([wx, (m.pos[1] + 1.2).floor() as i32, wz]),
+        )
+        .is_some();
+        // Quarter gravity, up-press (stronger while fully submerged),
+        // MC's 0.8/tick vertical fluid friction. At the surface the
+        // press and gravity cancel and the friction settles a bob.
+        m.vy -= 8.0 * dt;
+        m.vy += if head_in_fluid { 24.0 } else { 8.0 } * dt;
+        m.vy *= 0.8f32.powf(dt * 20.0);
+        m.pos[1] += m.vy * dt;
+        if let Some(g) = ground
+            && m.pos[1] <= g
+        {
             m.pos[1] = g;
-            m.vy = 0.0;
+            m.vy = m.vy.max(0.0);
         }
-        _ => {
-            m.vy -= 32.0 * dt;
-            if m.kind == super::kinds::KIND_CHICKEN {
-                m.vy = m.vy.max(-2.0);
-            }
-            m.vy = m.vy.max(-40.0);
-            m.pos[1] += m.vy * dt;
-            if let Some(g) = ground
-                && m.pos[1] <= g
-            {
+    } else {
+        match ground {
+            // Standing (a fresh hop with vy > 0 must NOT re-land here).
+            Some(g) if m.pos[1] <= g + 0.001 && m.vy <= 0.0 => {
                 m.pos[1] = g;
                 m.vy = 0.0;
+            }
+            _ => {
+                m.vy -= 32.0 * dt;
+                if m.kind == super::kinds::KIND_CHICKEN {
+                    m.vy = m.vy.max(-2.0);
+                }
+                m.vy = m.vy.max(-40.0);
+                m.pos[1] += m.vy * dt;
+                if let Some(g) = ground
+                    && m.pos[1] <= g
+                {
+                    m.pos[1] = g;
+                    m.vy = 0.0;
+                }
             }
         }
     }
