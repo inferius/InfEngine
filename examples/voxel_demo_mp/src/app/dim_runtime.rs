@@ -443,16 +443,32 @@ impl Voxel {
         // meshed). Rebuild every region chunk + the ground-snapped
         // frame's chunks (W156: they can sit chunks apart in Y).
         if self.renderer.is_some() {
-            let mut coords = arrival_region;
+            // W301: only the chunks the player can immediately see -
+            // the portal frame + spawn columns - mesh SYNCHRONOUSLY;
+            // the rest of the 3x3-column arrival region drains through
+            // the budgeted pending_remesh queue over the next frames.
+            // The full sync rebuild of ~74 chunks was the 3.1 s
+            // dim-switch stall in the user log (the purple cooldown
+            // vignette covers the brief pop-in, like MC's own
+            // progressive terrain load after a dim change).
+            let mut hot: Vec<infengine_voxel::ChunkCoord> = Vec::new();
             for c in Self::affected_chunks(spawn)
                 .into_iter()
                 .chain(Self::affected_chunks(target))
             {
-                if !coords.contains(&c) {
-                    coords.push(c);
+                if !hot.contains(&c) {
+                    hot.push(c);
                 }
             }
-            self.rebuild_chunks(&coords);
+            self.rebuild_chunks(&hot);
+            for c in arrival_region {
+                if !hot.contains(&c)
+                    && self.world.chunk(c).is_some()
+                    && self.pending_remesh_set.insert(c)
+                {
+                    self.pending_remesh.push_back(c);
+                }
+            }
         }
         // Broadcast portal edits so remote peers see the new frame
         // appear.
