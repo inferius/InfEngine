@@ -1892,7 +1892,7 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     },
     ItemType {
         id: 338, name: "wheat_seeds", display: Some("Wheat Seeds"),
-        places: None, max_stack: 64, icon: None,
+        places: Some(646), max_stack: 64, icon: None,
         category: ItemCategory::Ingredient,
     },
     ItemType {
@@ -1907,7 +1907,7 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     },
     ItemType {
         id: 341, name: "beetroot_seeds", display: Some("Beetroot Seeds"),
-        places: None, max_stack: 64, icon: None,
+        places: Some(649), max_stack: 64, icon: None,
         category: ItemCategory::Ingredient,
     },
     ItemType {
@@ -1917,12 +1917,12 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     },
     ItemType {
         id: 343, name: "potato", display: None,
-        places: None, max_stack: 64, icon: None,
+        places: Some(648), max_stack: 64, icon: None,
         category: ItemCategory::Food,
     },
     ItemType {
         id: 344, name: "carrot", display: None,
-        places: None, max_stack: 64, icon: None,
+        places: Some(647), max_stack: 64, icon: None,
         category: ItemCategory::Food,
     },
     ItemType {
@@ -2521,6 +2521,31 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 841, name: "blackstone_wall", display: Some("Blackstone Wall"), places: Some(841), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 842, name: "polished_blackstone_brick_stairs", display: Some("Polished Blackstone Brick Stairs"), places: Some(842), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
     ItemType { id: 843, name: "smooth_quartz_slab", display: Some("Smooth Quartz Slab"), places: Some(843), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
+    // W294: crop stage + farmland block-form rows (the registry
+    // invariant: every BlockType has a same-id ItemType). Stage
+    // blocks only exist via growth - places: None keeps them
+    // uncraftable into shortcuts; farmland places itself.
+    ItemType { id: 844, name: "wheat_age1", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 845, name: "wheat_age2", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 846, name: "wheat_age3", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 847, name: "wheat_age4", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 848, name: "wheat_age5", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 849, name: "wheat_age6", display: Some("Wheat (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 850, name: "carrots_age1", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 851, name: "carrots_age2", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 852, name: "carrots_age3", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 853, name: "carrots_age4", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 854, name: "carrots_age5", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 855, name: "carrots_age6", display: Some("Carrots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 856, name: "potatoes_age1", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 857, name: "potatoes_age2", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 858, name: "potatoes_age3", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 859, name: "potatoes_age4", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 860, name: "potatoes_age5", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 861, name: "potatoes_age6", display: Some("Potatoes (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 862, name: "beetroots_age1", display: Some("Beetroots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 863, name: "beetroots_age2", display: Some("Beetroots (Growing)"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 864, name: "farmland", display: Some("Farmland"), places: Some(864), max_stack: 64, icon: None, category: ItemCategory::BuildingBlock },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

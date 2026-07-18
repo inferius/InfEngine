@@ -78,7 +78,6 @@ const RENAMES: &[(&str, &str)] = &[
     ("spruce_pressure_plate", "oak_pressure_plate"),
     ("acacia_pressure_plate", "oak_pressure_plate"),
     // Farmland is not in the roster; dirt carries the crops.
-    ("farmland", "dirt"),
     // W248 igloo basement: silverfish blocks wait for their mob -
     // the plain variants stand in.
     ("infested_stone_bricks", "stone_bricks"),
@@ -197,6 +196,20 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
                 _ => "tall_grass_bottom",
             };
             return registry_id(ours).map(Mapped::Id).unwrap_or(Mapped::Keep);
+        }
+        // W294: crop states carry their growth age - route to the
+        // matching stage id so village farms carve half-grown rows
+        // like vanilla instead of everything fully mature.
+        "wheat" | "carrots" | "potatoes" | "beetroots" => {
+            let age: usize = state
+                .prop("age")
+                .and_then(|a| a.parse().ok())
+                .unwrap_or(0);
+            if let Some(id) =
+                crate::block::crop_stages::stage_for_age(name, age)
+            {
+                return Mapped::Id(id);
+            }
         }
         // No large fern blocks: the single fern stands in below, the
         // upper half opens to air.

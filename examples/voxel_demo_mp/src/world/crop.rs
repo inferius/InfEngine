@@ -1,58 +1,14 @@
-//! W65.4 - crop growth (immature -> mature).
+//! W65.4 / W294 - crop growth plumbing for the world pipelines.
 //!
-//! The existing crop blocks (wheat 493, carrots 494, potatoes 495,
-//! beetroots 496) are the *mature* stage. W65.4 adds one immature
-//! stage per crop (ids 646..=649) that mirrors the mature block's
-//! render path but shows an early-stage sprite. Planting substitutes
-//! the immature block for the mature crop item, and a random tick
-//! advances immature -> mature once the crop has had time on soil.
-//!
-//! This is a 2-stage approximation of MC's 8-stage wheat / 4-stage
-//! root crops - enough to make crops visibly grow over time without a
-//! farmland + seed-item + per-stage cross-model pass, which is filed
-//! as a follow-up.
+//! The 2-stage approximation is gone: stages, MC growth data and the
+//! harvest loot live in [`crate::block::crop_stages`] (block tree, so
+//! the worldgen blockmap resolves `wheat[age=N]` template states
+//! too). This module keeps the thin API the place/break pipelines +
+//! random tick were already calling.
 
-use crate::block::{
-    BEETROOTS_IMMATURE_ID, CARROTS_IMMATURE_ID, POTATOES_IMMATURE_ID,
-    WHEAT_IMMATURE_ID,
+pub(crate) use crate::block::crop_stages::{
+    immature_for, is_crop, is_immature_crop, next_stage,
 };
-
-/// Mature crop block ids (the pre-existing fully-grown crops).
-const WHEAT: u16 = 493;
-const CARROTS: u16 = 494;
-const POTATOES: u16 = 495;
-const BEETROOTS: u16 = 496;
-
-/// The immature block a freshly planted `mature` crop should start
-/// as, or `None` when `mature` isn't a crop. Used by the place
-/// pipeline to swap a planted crop for its young stage.
-pub(crate) fn immature_for(mature: u16) -> Option<u16> {
-    match mature {
-        WHEAT => Some(WHEAT_IMMATURE_ID),
-        CARROTS => Some(CARROTS_IMMATURE_ID),
-        POTATOES => Some(POTATOES_IMMATURE_ID),
-        BEETROOTS => Some(BEETROOTS_IMMATURE_ID),
-        _ => None,
-    }
-}
-
-/// The mature crop an `immature` block grows into, or `None` when the
-/// id isn't an immature crop stage.
-pub(crate) fn mature_for(immature: u16) -> Option<u16> {
-    match immature {
-        WHEAT_IMMATURE_ID => Some(WHEAT),
-        CARROTS_IMMATURE_ID => Some(CARROTS),
-        POTATOES_IMMATURE_ID => Some(POTATOES),
-        BEETROOTS_IMMATURE_ID => Some(BEETROOTS),
-        _ => None,
-    }
-}
-
-/// True for an immature crop stage (the random-tick growth subject
-/// and the no-drop case in the break pipeline).
-pub(crate) fn is_immature_crop(id: u16) -> bool {
-    mature_for(id).is_some()
-}
 
 #[cfg(test)]
 mod tests {
@@ -60,19 +16,25 @@ mod tests {
 
     #[test]
     fn immature_and_mature_round_trip() {
-        for mature in [WHEAT, CARROTS, POTATOES, BEETROOTS] {
-            let imm = immature_for(mature).expect("crop has an immature stage");
-            assert_eq!(mature_for(imm), Some(mature));
+        for mature in [493u16, 494, 495, 496] {
+            let imm = immature_for(mature).expect("crop has an age-0 stage");
             assert!(is_immature_crop(imm));
+            // Walking the chain from age 0 ends at the mature id.
+            let mut id = imm;
+            while let Some(next) = next_stage(id) {
+                id = next;
+            }
+            assert_eq!(id, mature);
+            assert!(crate::block::crop_stages::is_mature_crop(id));
         }
     }
 
     #[test]
     fn non_crop_ids_map_to_none() {
         assert_eq!(immature_for(1), None); // stone
-        assert_eq!(mature_for(1), None);
         assert!(!is_immature_crop(1));
+        assert!(!is_crop(1));
         // A mature crop is not itself an immature stage.
-        assert!(!is_immature_crop(WHEAT));
+        assert!(!is_immature_crop(493));
     }
 }

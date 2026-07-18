@@ -143,6 +143,18 @@ pub(crate) fn apply_block_place(
         Some(immature) => BlockId(immature),
         None => placed_block,
     };
+    // W294: crops only plant on FARMLAND (CropBlock.mayPlaceOn) -
+    // seeds bounce off bare dirt exactly like vanilla; the hoe makes
+    // the soil first.
+    if crate::world::crop::is_crop(placed_block.0) {
+        let below = vx
+            .world
+            .get([target_voxel[0], target_voxel[1] - 1, target_voxel[2]])
+            .0;
+        if below != crate::block::crop_stages::FARMLAND_ID {
+            return;
+        }
+    }
     let edit = EditMsg {
         x: target_voxel[0],
         y: target_voxel[1],

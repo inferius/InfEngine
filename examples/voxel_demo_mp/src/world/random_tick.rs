@@ -54,10 +54,6 @@ const LEAF_DECAY_RADIUS: i32 = 4;
 /// Inverse chance a decaying leaf drops an oak sapling (1 in N).
 const LEAF_SAPLING_DROP_DENOM: u32 = 20;
 
-/// Inverse chance a sampled immature crop advances to mature on a
-/// given random tick (1 in N). Higher = slower growth.
-const CROP_GROW_DENOM: u32 = 6;
-
 /// MC random ticks advance at the 20 Hz game-tick rate. This used to
 /// run per FRAME - at 400 fps that's 20x MC's sample rate for pure
 /// waste, and each pass paid the origin scan below.
@@ -145,22 +141,70 @@ fn random_tick_cell(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
     }
 }
 
-/// Immature-crop random tick: on a fraction of ticks, if the crop
-/// stands on soil (dirt / grass), advance it to the mature stage.
-/// Two-stage growth; MC's finer stage chain + farmland hydration are
-/// a follow-up.
+/// W294: `CropBlock.randomTick`, 1:1 growth shape - one age per
+/// roll of `nextInt(25 / growthSpeed + 1) == 0`, where the speed
+/// counts the farmland under the 3x3 around the soil block
+/// (`getGrowthSpeed`; our farmland has no moisture states, so every
+/// farmland counts as MOIST - village farms sit next to water) plus
+/// the same-crop row penalty. Beetroots roll the extra
+/// `nextInt(3) != 0 -> skip` gate first (`BeetrootBlock`). The
+/// `light >= 9` gate waits on a random-tick light accessor (the
+/// grass stand-in shares that gap).
 fn crop_tick(vx: &mut Voxel, pos: [i32; 3], rng: u32) {
-    if !rng.is_multiple_of(CROP_GROW_DENOM) {
-        return;
-    }
-    let below = vx.world.get([pos[0], pos[1] - 1, pos[2]]).0;
-    if below != DIRT_ID && below != GRASS_ID {
-        return;
-    }
     let id = vx.world.get(pos).0;
-    if let Some(mature) = crate::world::crop::mature_for(id) {
-        crate::world::edit::emit(vx, pos, BlockId(mature));
+    let Some(next) = crate::world::crop::next_stage(id) else {
+        return;
+    };
+    if crate::block::crop_stages::is_beetroot_stage(id) && !rng.is_multiple_of(3) {
+        return;
     }
+    let below_pos = [pos[0], pos[1] - 1, pos[2]];
+    let below = vx.world.get(below_pos).0;
+    let farmland = crate::block::crop_stages::FARMLAND_ID;
+    // Legacy crops planted on dirt/grass before W294 still grow (at
+    // base speed); fresh plants require farmland at place time.
+    if below != farmland && below != DIRT_ID && below != GRASS_ID {
+        return;
+    }
+    let mut speed = 1.0f32;
+    if below == farmland {
+        speed += 3.0;
+        for dx in -1..=1i32 {
+            for dz in -1..=1i32 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                let p = [below_pos[0] + dx, below_pos[1], below_pos[2] + dz];
+                if vx.world.get(p).0 == farmland {
+                    speed += 0.75;
+                }
+            }
+        }
+    }
+    // Row penalty: same crop on both axes (or diagonally) halves the
+    // speed - vanilla's anti-solid-field rule.
+    let same = |dx: i32, dz: i32| {
+        crate::block::crop_stages::same_family(
+            vx.world.get([pos[0] + dx, pos[1], pos[2] + dz]).0,
+            id,
+        )
+    };
+    let row = same(-1, 0) || same(1, 0);
+    let col = same(0, -1) || same(0, 1);
+    let diag = same(-1, -1) || same(1, -1) || same(-1, 1) || same(1, 1);
+    if (row && col) || diag {
+        speed /= 2.0;
+    }
+    let denom = (25.0 / speed) as u32 + 1;
+    // Second hash so the beetroot pre-gate above doesn't correlate.
+    let mut r = rng ^ 0x9E37_79B9;
+    r ^= r << 13;
+    r ^= r >> 17;
+    r ^= r << 5;
+    if !r.is_multiple_of(denom) {
+        return;
+    }
+    crate::world::edit::emit(vx, pos, BlockId(next));
 }
 
 /// True for the standard 7 `_sapling` blocks (oak / birch / spruce /

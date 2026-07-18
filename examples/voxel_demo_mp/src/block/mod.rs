@@ -21,6 +21,7 @@ use infengine_voxel::BlockId;
 
 pub(crate) mod brewing;
 pub(crate) mod chest;
+pub(crate) mod crop_stages;
 pub(crate) mod door;
 pub(crate) mod rail;
 pub(crate) mod rail_state;
@@ -618,6 +619,17 @@ pub(crate) fn weapon_damage_mult(block: BlockId) -> f32 {
 }
 
 /// Tier of a shovel slot, 0 = none.
+/// W294: tier of a hoe slot, 0 = none (332 wooden, 333 stone,
+/// 334 iron, 335 golden, 278 netherite).
+pub(crate) fn hoe_tier(block: BlockId) -> u8 {
+    match block.0 {
+        332 => 1,
+        333 | 335 => 2,
+        334 | 278 => 3,
+        _ => 0,
+    }
+}
+
 pub(crate) fn shovel_tier(block: BlockId) -> u8 {
     match block.0 {
         29 => 1,

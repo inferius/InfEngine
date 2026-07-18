@@ -210,10 +210,7 @@ pub(crate) fn apply_block_break(
         // W65.4: immature crops have no item form - harvest before
         // maturity drops nothing (MC drops only seeds early; we keep
         // it simple). Mature crops fall through to the normal drop.
-        if !suppress_drops
-            && tier >= needed
-            && !crate::world::crop::is_immature_crop(broken.0)
-        {
+        if !suppress_drops && tier >= needed {
             // W35.2: wall-torch variants drop the floor-torch item.
             let drop_id = match broken.0 {
                 x if x == REDSTONE_WALL_TORCH_ID => REDSTONE_TORCH_ID,
@@ -261,6 +258,19 @@ pub(crate) fn apply_block_break(
                 // silk-touch/shears self-drop is a tools gap).
                 x if x == crate::block::COBWEB_ID && !held_is_shears => {
                     vx.spawn_drop(BlockId(STRING_ITEM), voxel);
+                }
+                // W294: MC crop loot tables - wheat drops the ITEM
+                // + seeds (never the block); immature stages drop a
+                // single seed / root. Roll shapes live in
+                // block::crop_stages (unit-tested).
+                x if crate::world::crop::is_crop(x) => {
+                    for (item, count) in
+                        crate::block::crop_stages::harvest_drops(x, rng)
+                    {
+                        for _ in 0..count {
+                            vx.spawn_drop(BlockId(item), voxel);
+                        }
+                    }
                 }
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
@@ -330,6 +340,48 @@ pub(crate) fn apply_block_break(
 /// the same local edit (so the path appears instantly under the
 /// player's feet) and sends a `vx.path` request that the server will
 /// replay or reject.
+/// W294: hoe-RMB on dirt / grass tills FARMLAND (`HoeItem`
+/// TILLABLES). Host/offline applies + broadcasts like the shovel
+/// path; a pure client routes through the generic edit channel.
+pub(crate) fn apply_hoe_till(vx: &mut crate::Voxel, voxel: [i32; 3]) {
+    use crate::net::NetRole;
+    use crate::{BlockId, EditMsg, Voxel};
+    let cfg = bincode::config::standard();
+    let farmland = crate::block::crop_stages::FARMLAND_ID;
+    vx.world_set_tracked(voxel, BlockId(farmland));
+    let coords = Voxel::affected_chunks(voxel);
+    vx.rebuild_chunks(&coords);
+    let edit = EditMsg {
+        x: voxel[0],
+        y: voxel[1],
+        z: voxel[2],
+        block: farmland,
+    };
+    match &mut vx.net {
+        NetRole::Offline => {}
+        NetRole::Server { server, .. } => {
+            vx.edit_history.push(edit);
+            if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                server.broadcast_bytes("vx.edit", buf);
+            }
+        }
+        NetRole::Client { client, .. } => {
+            if let Ok(buf) = bincode::serde::encode_to_vec(edit, cfg) {
+                let _ = client.send_bytes("vx.edit", buf);
+            }
+        }
+    }
+    vx.sfx_at(
+        "dig/gravel",
+        [
+            voxel[0] as f32 + 0.5,
+            voxel[1] as f32 + 0.5,
+            voxel[2] as f32 + 0.5,
+        ],
+        |_, _| {},
+    );
+}
+
 pub(crate) fn apply_shovel_grass_path(vx: &mut crate::Voxel, voxel: [i32; 3]) {
     use crate::net::NetRole;
     use crate::{BlockId, EditMsg, Voxel};

@@ -568,10 +568,8 @@ pub(crate) const GRAVEL_ID: u16 = 644;
 pub(crate) const RED_SAND_ID: u16 = 645;
 // W65.4 - immature crop stages (grow to the mature crop via random
 // tick). World-only intermediate blocks, no item form.
-pub(crate) const WHEAT_IMMATURE_ID: u16 = 646;
-pub(crate) const CARROTS_IMMATURE_ID: u16 = 647;
-pub(crate) const POTATOES_IMMATURE_ID: u16 = 648;
-pub(crate) const BEETROOTS_IMMATURE_ID: u16 = 649;
+// W294: the *_IMMATURE_ID consts retired - crop stage chains live
+// in block::crop_stages (age 0 = 646..649).
 // W67.1 - redstone signal blocks. Wire (309) + sources + lamp pair.
 pub(crate) const REDSTONE_DUST_ID: u16 = 309;
 pub(crate) const REDSTONE_LAMP_ID: u16 = 650;

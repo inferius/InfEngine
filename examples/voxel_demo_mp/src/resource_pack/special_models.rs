@@ -298,6 +298,9 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/soul_torch" | "soul_torch" => Some(build_soul_torch()),
         "block/wall_torch" | "wall_torch" => Some(build_wall_torch()),
         "block/dirt_path" | "dirt_path" => Some(build_dirt_path()),
+        // W294: farmland shares the 15/16 geometry with its own top.
+        "block/farmland_moist" | "farmland_moist" | "block/farmland"
+        | "farmland" => Some(build_farmland()),
         "block/slab" | "slab" => Some(build_slab_bottom()),
         "block/slab_top" | "slab_top" => Some(build_slab_top()),
         "block/carpet" | "carpet" => Some(build_carpet()),
@@ -365,6 +368,10 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     // full-cube render read as a lifted lid you could see into.
     if crate::block::block_type(id).is_some_and(|b| b.name == "dirt_path") {
         return Some("block/dirt_path");
+    }
+    // W294: farmland - the moist variant (see the crop tick).
+    if crate::block::block_type(id).is_some_and(|b| b.name == "farmland") {
+        return Some("block/farmland_moist");
     }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -714,6 +721,17 @@ pub(crate) fn build_wall_torch() -> BlockModel {
 /// `block/dirt_path.json`: `from = [0,0,0] to = [16,15,16]`, side UV
 /// `[0,1,16,16]` (the texture's top pixel row is skipped so the
 /// grass fringe sits at the lowered lip).
+/// W294: farmland - dirt_path's 15/16 box with the farmland top.
+/// LITERAL texture names (the W56.2 magenta trap: empty textures +
+/// "#var" refs render __missing).
+pub(crate) fn build_farmland() -> BlockModel {
+    let mut m = build_dirt_path();
+    m.textures.insert("top".into(), "farmland_moist".into());
+    m.textures.insert("side".into(), "dirt".into());
+    m.textures.insert("bottom".into(), "dirt".into());
+    m
+}
+
 pub(crate) fn build_dirt_path() -> BlockModel {
     BlockModel {
         elements: vec![ModelElement {

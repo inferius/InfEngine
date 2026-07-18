@@ -47,7 +47,9 @@ mod place_pipeline;
 pub(crate) mod rail_place;
 mod rmb_use;
 
-pub(crate) use break_pipeline::{apply_block_break, apply_shovel_grass_path};
+pub(crate) use break_pipeline::{
+    apply_block_break, apply_hoe_till, apply_shovel_grass_path,
+};
 pub(crate) use combat::apply_combat;
 pub(crate) use containers::{
     open_brewing_stand, open_chest, open_crafting_table, open_furnace, open_stonecutter,
@@ -116,6 +118,8 @@ pub enum RmbAction {
     /// Shovel right-click on a grass voxel (id 3) - degrades to
     /// dirt (the MC "path" shortcut).
     PathGrass,
+    /// W294: hoe right-click on dirt / grass - tills farmland.
+    TillFarmland,
     /// Right-click on a furnace voxel - opens the furnace UI.
     OpenFurnace,
     /// Right-click on a chest voxel - opens the chest UI.
@@ -205,6 +209,14 @@ pub fn classify_rmb_action(
     //    AND target must be the grass block.
     if target_id == 3 && held_shovel_tier > 0 {
         return RmbAction::PathGrass;
+    }
+    // 1b. W294: hoe + dirt/grass -> farmland (HoeItem TILLABLES).
+    if (target_id == 2 || target_id == 3)
+        && held_id
+            .map(|h| crate::block::hoe_tier(crate::BlockId(h)) > 0)
+            .unwrap_or(false)
+    {
+        return RmbAction::TillFarmland;
     }
     // 2. Containers + bed are target-only - the held block does
     //    not matter for these. A shovel on a furnace still opens
