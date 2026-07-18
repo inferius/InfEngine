@@ -290,8 +290,14 @@ impl Voxel {
                 dim: self.current_dim.clone(),
             });
             // If the send fails the pool is shutting down; ignore.
+            // W306: remesh jobs ride the PRIORITY lane. A player edit
+            // used to queue behind hundreds of Generate jobs in the
+            // shared FIFO - breaking a block showed nothing for ~5 s
+            // while the gen backlog drained (the user report). Remesh
+            // volume is small (edits + the budgeted pending_remesh
+            // drain), so the lane stays bounded.
             if let Some(pool) = self.workers.as_ref() {
-                let _ = pool.req_tx.send(job);
+                let _ = pool.light_tx.send(job);
             }
         }
     }

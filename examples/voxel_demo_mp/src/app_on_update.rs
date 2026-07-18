@@ -1619,7 +1619,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             cam.fov_y_rad = vx.fov_y_rad;
         }
         // W47.15: sky / weather / fog tint moved into render::sky.
-        let (sun_dir, base_sky) = day_night(vx.day_time);
+        // W306: `fixed_time` dims (nether 18000, End 6000) pin the
+        // celestial clock - the nether visibly cycled day/night
+        // shadows because the shared overworld day_time kept feeding
+        // the sun direction. MC freezes it per dimension_type.
+        let eff_day_time = {
+            let d = crate::worldgen::dim_registry::dim_def_or_overworld(
+                &vx.current_dim,
+            );
+            match d.fixed_time {
+                Some(t) => t as f32 / 24_000.0 * crate::DAY_LENGTH_S,
+                None => vx.day_time,
+            }
+        };
+        let (sun_dir, base_sky) = day_night(eff_day_time);
         // W113: underwater post-process - true when the camera (eye) voxel is
         // water, so the sky/fog setup can wash the view blue + pull the fog in
         // tight (MC's submerged look). player_pos.y is the eye height.

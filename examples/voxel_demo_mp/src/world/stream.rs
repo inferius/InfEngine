@@ -167,22 +167,36 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
 
     // Drain finished results from the workers.
     let _t = std::time::Instant::now();
-    let (results_cap, budget_ms) = vx.current_results_budget();
+    let (_results_cap, budget_ms) = vx.current_results_budget();
     // W106: do NOT clear here - results that last frame's processing
     // time-budget left unprocessed carry over, so a burst of finished
     // chunks drains across several frames instead of one big spike.
+    //
+    // W306: drain the channel FULLY every frame (a try_recv is
+    // pointer-cheap; PROCESSING is what the time budget bounds). The
+    // old results_cap left results IN the channel, so during a gen
+    // burst hundreds of Generated entries queued AHEAD of Lit results
+    // - the in-flight lighting slots never freed and light_segq froze
+    // at 1600+ for minutes (the underwater-portal 10 FPS log). The
+    // 8192 guard only bounds a pathological worker flood.
     if let Some(pool) = vx.workers.as_ref() {
-        let drain_start = std::time::Instant::now();
-        let drain_budget = std::time::Duration::from_millis(budget_ms);
-        while vx.stream_delivered.len() < results_cap
-            && drain_start.elapsed() < drain_budget
+        while vx.stream_delivered.len() < 8192
             && let Ok(r) = pool.res_rx.try_recv()
         {
             vx.stream_delivered.push(r);
         }
     }
     _ms_recv = _t.elapsed().as_secs_f32() * 1000.0;
-    let delivered = std::mem::take(&mut vx.stream_delivered);
+    let mut delivered = std::mem::take(&mut vx.stream_delivered);
+    // W306: process priority - Lit first (frees the lighting lane,
+    // cheap Arc swaps), then Remeshed (player edits must show NOW,
+    // not after the gen backlog), then Generated bulk. Stable sort
+    // keeps FIFO order within each class.
+    delivered.sort_by_key(|r| match r {
+        WorkerResult::Lit { .. } => 0u8,
+        WorkerResult::Remeshed { .. } => 1,
+        WorkerResult::Generated { .. } => 2,
+    });
     // W106: apply the per-frame time budget to PROCESSING (the GPU mesh
     // uploads), which is what the budget always intended (see the
     // RESULTS_BUDGET_MS doc). Previously it gated only the cheap try_recv

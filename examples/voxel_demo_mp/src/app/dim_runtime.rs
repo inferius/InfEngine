@@ -359,7 +359,9 @@ impl Voxel {
         // platform when there is truly nothing below).
         {
             let mut drop = 0;
-            while drop < 12
+            // W306: 12 -> 24 - tall nether caverns left the frame
+            // hovering with 13+ blocks of air under it.
+            while drop < 24
                 && target[1] > crate::WORLD_MIN_Y + 2
                 && self
                     .world
@@ -411,13 +413,30 @@ impl Voxel {
                 }
             }
         } else {
-            // W179: OVERWORLD return - NO stone platform. The old 4x4
-            // stone floor + carve walled the player in a stone box (the
-            // user's screenshot) because the overworld portal sits on
-            // real terrain, not over void. Just clear the player's own
-            // 1x1x3 standing column if it's buried so they don't
-            // suffocate; the W173 embedded-safety-net lifts them out if
-            // the spot is still solid.
+            // W306: forced-platform case - when the ground under the
+            // frame is NOT solid (ocean surface / air), build a small
+            // obsidian platform like MC's forced portal. Terrain
+            // arrivals keep the W179 no-platform behaviour.
+            let under = self.world.get([spawn[0], base_y - 1, spawn[2]]);
+            if !crate::block::block_fully_occludes(under) {
+                for dx in -1..=2i32 {
+                    for dz in -1..=2i32 {
+                        let fp = [spawn[0] + dx, base_y - 1, spawn[2] + dz];
+                        if !crate::block::block_fully_occludes(self.world.get(fp)) {
+                            self.world_set_tracked(
+                                fp,
+                                BlockId(block::OBSIDIAN_ID),
+                            );
+                            edits.push(fp);
+                        }
+                    }
+                }
+            }
+            // W179: OVERWORLD return - NO stone platform on real
+            // terrain. Just clear the player's own 1x1x3 standing
+            // column if it's buried so they don't suffocate; the W173
+            // embedded-safety-net lifts them out if the spot is still
+            // solid.
             for dy in 0..3 {
                 let cp = [spawn[0], base_y + dy, spawn[2]];
                 let here = self.world.get(cp).0;
@@ -719,7 +738,8 @@ impl Voxel {
         {
             return [dest[0], y, dest[2]];
         }
-        for r in 1..=8i32 {
+        // W306: 8 -> 16 - MC's createPortal scans 16 blocks out.
+        for r in 1..=16i32 {
             for dx in -r..=r {
                 for dz in -r..=r {
                     if dx.abs().max(dz.abs()) != r {
@@ -736,8 +756,17 @@ impl Voxel {
                 }
             }
         }
-        // All-solid / all-air region: carve nothing, just use a mid
-        // shelf - the platform build guarantees the floor.
-        [dest[0], 48, dest[2]]
+        // W306: no valid dry column anywhere (mid-ocean / all-air).
+        // The old fixed y=48 shelf put the frame UNDER the ocean (the
+        // user's water portal). Use the column's SURFACE instead -
+        // first non-air cell scanning down - so the forced platform
+        // builds at sea level / ground level like MC's forced portal.
+        let mut y = crate::WORLD_MAX_Y - 2;
+        while y > crate::WORLD_MIN_Y + 2
+            && world.get([dest[0], y, dest[2]]).is_air()
+        {
+            y -= 1;
+        }
+        [dest[0], (y + 1).clamp(crate::WORLD_MIN_Y + 2, crate::WORLD_MAX_Y - 4), dest[2]]
     }
 }

@@ -446,6 +446,34 @@ fn step_one(
             let b = voxel.world.get(p);
             !b.is_air() && !crate::block::block_is_aabb_passable(b)
         };
+        // W306: lava-edge refusal - MC's pathfinder never routes a
+        // mob through lava (getPathfindingMalus(LAVA) = -1), but our
+        // straight-line stroll marched every piglin off the shore
+        // into the lava sea. A strolling (non-chasing, non-panicking)
+        // mob that would step onto lava - or over a drop into lava -
+        // abandons the stroll and repicks a target later.
+        let (step_x, step_z) = if m.panic_left <= 0.0
+            && chase_player_pos.is_none()
+            && (step_x != 0.0 || step_z != 0.0)
+        {
+            let ax = (m.pos[0] + step_x.signum() * 0.8).floor() as i32;
+            let az = (m.pos[2] + step_z.signum() * 0.8).floor() as i32;
+            let by = m.pos[1].floor() as i32;
+            let lava_at = |p: [i32; 3]| -> bool {
+                voxel.world.get(p).0 == crate::block::LAVA_ID
+            };
+            if lava_at([ax, by, az])
+                || lava_at([ax, by - 1, az])
+                || lava_at([ax, by - 2, az])
+            {
+                m.strolling = false;
+                (0.0, 0.0)
+            } else {
+                (step_x, step_z)
+            }
+        } else {
+            (step_x, step_z)
+        };
         let try_x = m.pos[0] + step_x;
         let body_y = m.pos[1].floor() as i32;
         let feet_x = try_x.floor() as i32;
