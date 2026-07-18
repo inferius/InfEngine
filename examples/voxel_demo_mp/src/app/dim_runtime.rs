@@ -426,6 +426,14 @@ impl Voxel {
                 }
             }
         }
+        // W299: index the arrival curtain into the swirl render list.
+        // `build_minimal_portal` writes via `world.set` (untracked) and
+        // the sync gen path never emitter-scanned, so both a freshly
+        // BUILT and a freshly FOUND return portal rendered dead - the
+        // "portal arrived inactive" report, three times over.
+        for p in block::portal::connected_portal_cells(&self.world, spawn) {
+            self.portal_positions.insert(p);
+        }
         // W178: re-mesh the WHOLE arrival region, not just the portal
         // frame's chunks. switch_dim dropped the meshes of restored
         // chunks and the streamer only meshes chunks MISSING from the
@@ -585,6 +593,18 @@ impl Voxel {
                             }
                         }
                     }
+                    // W299: same emitter indexing the streamer runs
+                    // (stream.rs) - without it the arrival region had
+                    // no torch flames, no fire ticks, no portal swirl
+                    // and no ambient-emitter entries at all.
+                    crate::emitter_scan::scan_chunk(
+                        c,
+                        &chunk,
+                        &mut self.emitter_positions,
+                        &mut self.torch_positions,
+                        &mut self.fires,
+                        &mut self.portal_positions,
+                    );
                     self.world.insert_chunk(c, chunk);
                     // W279: the synchronous gen path (portal arrival)
                     // runs the carve on THIS thread - fold its

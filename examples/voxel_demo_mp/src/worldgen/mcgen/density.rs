@@ -212,11 +212,19 @@ pub(crate) struct CellLattices {
     z0: i32,
     /// W260: corner Y base (the dimension's `min_y`; was hardwired 0
     /// before the world floor moved to -64). The lattice spans
-    /// `y0..=y0+(ny-1)*8`.
+    /// `y0..=y0+(ny-1)*ch`.
     y0: i32,
     /// Corner Y count.
     ny: usize,
-    /// One `[ny][5][5]` corner grid per interpolated-node id.
+    /// W299: cell dims - `4 * size_horizontal` / `4 * size_vertical`
+    /// from the dim's noise settings. Overworld + nether run 4x8;
+    /// the End runs 8x4 (`size_horizontal: 2, size_vertical: 1`).
+    cw: i32,
+    ch: i32,
+    /// Horizontal corner count per axis (`16 / cw + 1`, <= 5).
+    nw: usize,
+    /// One `[ny][5][5]` corner grid per interpolated-node id (only
+    /// the first `nw` entries of the horizontal axes are live).
     grids: Vec<Vec<[[f64; 5]; 5]>>,
 }
 
@@ -226,8 +234,24 @@ pub(crate) const CELL_H: i32 = 8;
 impl CellLattices {
     /// Fill the lattices for the `interpolated` nodes of `roots` (in
     /// the SAME order their ids were assigned) over the chunk column at
-    /// block origin `(x0, z0)`, corners `y = y0, y0+8, .., y0+(ny-1)*8`.
+    /// block origin `(x0, z0)`, corners `y = y0, y0+8, .., y0+(ny-1)*8`
+    /// (the overworld/nether 4x8 cell).
     pub(crate) fn build(roots: &[&Df], x0: i32, z0: i32, y0: i32, ny: usize) -> CellLattices {
+        Self::build_sized(roots, x0, z0, y0, ny, CELL_W, CELL_H)
+    }
+
+    /// W299: `build` with explicit cell dims for dims whose noise
+    /// settings differ from the overworld's 4x8 (the End is 8x4).
+    pub(crate) fn build_sized(
+        roots: &[&Df],
+        x0: i32,
+        z0: i32,
+        y0: i32,
+        ny: usize,
+        cw: i32,
+        ch: i32,
+    ) -> CellLattices {
+        let nw = (16 / cw + 1) as usize;
         let mut nodes = Vec::new();
         for root in roots {
             root.collect_interp(&mut nodes);
@@ -237,11 +261,11 @@ impl CellLattices {
             .map(|inner| {
                 let mut g = vec![[[0.0f64; 5]; 5]; ny];
                 for (j, layer) in g.iter_mut().enumerate() {
-                    let wy = (y0 + j as i32 * CELL_H) as f64;
-                    for (i, row) in layer.iter_mut().enumerate() {
-                        let wx = (x0 + i as i32 * CELL_W) as f64;
-                        for (k, c) in row.iter_mut().enumerate() {
-                            let wz = (z0 + k as i32 * CELL_W) as f64;
+                    let wy = (y0 + j as i32 * ch) as f64;
+                    for (i, row) in layer.iter_mut().enumerate().take(nw) {
+                        let wx = (x0 + i as i32 * cw) as f64;
+                        for (k, c) in row.iter_mut().enumerate().take(nw) {
+                            let wz = (z0 + k as i32 * cw) as f64;
                             *c = inner.eval(wx, wy, wz);
                         }
                     }
@@ -249,7 +273,7 @@ impl CellLattices {
                 g
             })
             .collect();
-        CellLattices { x0, z0, y0, ny, grids }
+        CellLattices { x0, z0, y0, ny, cw, ch, nw, grids }
     }
 
     /// Trilinear sample of node `id`'s lattice at block `(x, y, z)`.
@@ -257,9 +281,10 @@ impl CellLattices {
     /// corner only occur in the always-air sky band).
     fn sample(&self, id: usize, x: f64, y: f64, z: f64) -> f64 {
         let g = &self.grids[id];
-        let fx = ((x - self.x0 as f64) / CELL_W as f64).clamp(0.0, 4.0 - 1e-9);
-        let fz = ((z - self.z0 as f64) / CELL_W as f64).clamp(0.0, 4.0 - 1e-9);
-        let fy = ((y - self.y0 as f64) / CELL_H as f64).clamp(0.0, (self.ny - 1) as f64 - 1e-9);
+        let span = (self.nw - 1) as f64 - 1e-9;
+        let fx = ((x - self.x0 as f64) / self.cw as f64).clamp(0.0, span);
+        let fz = ((z - self.z0 as f64) / self.cw as f64).clamp(0.0, span);
+        let fy = ((y - self.y0 as f64) / self.ch as f64).clamp(0.0, (self.ny - 1) as f64 - 1e-9);
         let (ix, iy, iz) = (fx as usize, fy as usize, fz as usize);
         let (tx, ty, tz) = (fx - ix as f64, fy - iy as f64, fz - iz as f64);
         let l = |a: f64, b: f64, t: f64| a + (b - a) * t;

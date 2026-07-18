@@ -1717,7 +1717,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             );
         }
         let _ms_celestial = _pr_t.elapsed().as_secs_f32() * 1000.0;
-        crate::render::point_lights::push(renderer, &vx.emitter_positions, player_pos, vx.day_time);
+        // W299: dynamic emitter point lights REMOVED - MC has no
+        // dynamic lights. Block light is the baked BFS (torch 14,
+        // glowstone 15...), identical at any viewer distance. The
+        // nearest-32 pass double-lit surfaces near the player and
+        // popped as emitters crossed the 40-block cull ring (the
+        // "light gets stronger as I approach" nether report).
         let _ms_plights = _pr_t.elapsed().as_secs_f32() * 1000.0;
         // W46.13: legacy pre-MC torch render path REMOVED.
         //

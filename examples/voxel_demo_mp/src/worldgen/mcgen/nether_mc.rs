@@ -99,8 +99,17 @@ pub(crate) fn build_nether(seed: u32) -> NetherDim {
             blended_seed,
         )
     };
+    // W299: number the `interpolated` wrappers so the terrain fill
+    // can run them at MC's cell resolution (4x8 trilinear lattice).
+    // Without this the fill sampled the blended noise per BLOCK -
+    // the nether's high-frequency base_3d_noise (xz_factor 80 vs the
+    // overworld's 684) turned into noise-grain pillar chaos instead
+    // of MC's smooth caverns.
+    let mut final_density = p("final_density");
+    let mut next_interp = 0usize;
+    final_density.assign_interp_ids(&mut next_interp);
     NetherDim {
-        final_density: p("final_density"),
+        final_density,
         temperature: p("temperature"),
         vegetation: p("vegetation"),
         surface: SurfaceRules::parse(&settings["surface_rule"], &noise_res, seed),
@@ -205,11 +214,21 @@ fn column_data(nd: &NetherDim, cx: i32, cz: i32, seed: u32) -> NetherCol {
     let mut solid = Box::new([[[0u64; 2]; CHUNK_SIZE]; CHUNK_SIZE]);
     let mut biome = [[""; CHUNK_SIZE]; CHUNK_SIZE];
     let mut surface_depth = [[3i32; CHUNK_SIZE]; CHUNK_SIZE];
+    // W299: MC cell semantics - `interpolated` subtrees sampled at
+    // the 4x8 corner lattice + trilinear, everything else per block
+    // (same as the overworld fill since W213).
+    let ny = (TOP_Y / super::density::CELL_H) as usize + 2;
+    let cells =
+        super::density::CellLattices::build(&[&nd.final_density], ox, oz, 0, ny);
     for lx in 0..CHUNK_SIZE {
         for lz in 0..CHUNK_SIZE {
             let (wx, wz) = (ox + lx as i32, oz + lz as i32);
             for y in 0..=TOP_Y {
-                if nd.final_density.eval(wx as f64, y as f64, wz as f64) > 0.0 {
+                if nd
+                    .final_density
+                    .eval_cells(wx as f64, y as f64, wz as f64, &cells)
+                    > 0.0
+                {
                     solid[lx][lz][(y >> 6) as usize] |= 1u64 << (y & 63);
                 }
             }
@@ -449,6 +468,64 @@ mod tests {
         assert!(rack > 20_000, "netherrack bulk: {rack}");
         assert!(lava > 100, "the lava sea is missing: {lava}");
         assert!(air > 1_000, "no open caverns: {air}");
+    }
+
+    /// W299: the fill must run at MC's cell resolution. Full-res
+    /// sampling of the nether blend noise (xz_factor 80) shreds the
+    /// terrain into noise grain - a column then flips solid<->open
+    /// many more times than the trilinear-interpolated fill. Pin
+    /// both: the live fill stays smooth AND stays visibly smoother
+    /// than a full-res evaluation of the same columns.
+    #[test]
+    fn nether_fill_uses_cell_interpolation() {
+        let seed = ctx().effective_seed();
+        let nd = nether_for(seed);
+        let mut cell_flips = 0u32;
+        let mut full_flips = 0u32;
+        let mut cols = 0u32;
+        for &(cx, cz) in &[(0, 0), (3, -2)] {
+            let col = column_cached(&nd, cx, cz, seed);
+            let (ox, oz) = (cx * CHUNK_SIZE as i32, cz * CHUNK_SIZE as i32);
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    cols += 1;
+                    let mut prev_cell = col.is_solid(lx, 8, lz);
+                    let mut prev_full = nd
+                        .final_density
+                        .eval((ox + lx as i32) as f64, 8.0, (oz + lz as i32) as f64)
+                        > 0.0;
+                    for y in 9..=120 {
+                        let c = col.is_solid(lx, y, lz);
+                        if c != prev_cell {
+                            cell_flips += 1;
+                            prev_cell = c;
+                        }
+                        let f = nd
+                            .final_density
+                            .eval(
+                                (ox + lx as i32) as f64,
+                                y as f64,
+                                (oz + lz as i32) as f64,
+                            )
+                            > 0.0;
+                        if f != prev_full {
+                            full_flips += 1;
+                            prev_full = f;
+                        }
+                    }
+                }
+            }
+        }
+        let cell_avg = cell_flips as f32 / cols as f32;
+        let full_avg = full_flips as f32 / cols as f32;
+        assert!(
+            cell_avg < full_avg,
+            "cell fill must be smoother than full-res: cell {cell_avg} vs full {full_avg}"
+        );
+        assert!(
+            cell_avg < 8.0,
+            "nether columns too fragmented (lattice inactive?): {cell_avg}"
+        );
     }
 
     /// All five biomes materialize somewhere in a wide scan (the

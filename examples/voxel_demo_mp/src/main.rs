@@ -178,8 +178,6 @@ mod particle_pass;
 #[allow(dead_code)]
 mod sky;
 #[allow(dead_code)]
-mod emitter_lights;
-#[allow(dead_code)]
 mod panorama;
 #[allow(dead_code)]
 mod jar_cache;

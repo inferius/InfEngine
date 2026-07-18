@@ -226,14 +226,9 @@ pub(crate) fn draw(
                     0.0,
                     0.8,
                 );
-                // Add a small point light so the fire glows nearby
-                // surfaces - matches lava + torch behaviour.
-                renderer.queue_point_light(
-                    [cx, cy + 0.2, cz],
-                    [1.0, 0.55, 0.15],
-                    1.6 + 0.4 * flicker,
-                    6.0,
-                );
+                // W299: the fire point light is gone with the rest
+                // of the dynamic lights - fire emits baked level 15
+                // via the block-light BFS, like MC.
             }
         }
         // Liquids: one slope-aware mesh per kind (water + lava +

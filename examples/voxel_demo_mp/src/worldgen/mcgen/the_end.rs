@@ -62,12 +62,16 @@ pub(crate) fn build_end(seed: u32) -> EndDim {
     };
     let nr = &settings["noise_router"];
     let blended_seed = noise_seed(seed, "end_blended_noise");
-    let final_density = parse(
+    let mut final_density = parse(
         &nr["final_density"],
         &df_res,
         &noise_res as &super::density::NoiseResolver<'_>,
         blended_seed,
     );
+    // W299: id the `interpolated` wrappers for the cell lattice
+    // (the End samples 8x4 cells - size_horizontal 2, size_vertical 1).
+    let mut next_interp = 0usize;
+    final_density.assign_interp_ids(&mut next_interp);
     let noise = &settings["noise"];
     EndDim {
         final_density,
@@ -104,6 +108,18 @@ pub(crate) fn gen_end(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
     if oy + (CHUNK_SIZE as i32) <= end.min_y || oy >= end.min_y + end.height {
         return chunk;
     }
+    // W299: MC cell semantics - the End interpolates its blended
+    // noise over 8x4 cells (size_horizontal 2 / size_vertical 1);
+    // the old per-block eval shredded the islands into noise grain.
+    let cells = super::density::CellLattices::build_sized(
+        &[&end.final_density],
+        ox,
+        oz,
+        oy,
+        (CHUNK_SIZE as i32 / 4 + 1) as usize,
+        8,
+        4,
+    );
     chunk.fill_with(|x, y, z| {
         let wy = oy + y as i32;
         if wy < end.min_y || wy >= end.min_y + end.height {
@@ -112,7 +128,7 @@ pub(crate) fn gen_end(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         let (wx, wz) = (ox + x as i32, oz + z as i32);
         if end
             .final_density
-            .eval(wx as f64, wy as f64, wz as f64)
+            .eval_cells(wx as f64, wy as f64, wz as f64, &cells)
             > 0.0
         {
             BlockId(END_STONE)
