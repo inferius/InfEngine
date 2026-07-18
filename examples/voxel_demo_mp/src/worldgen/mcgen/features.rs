@@ -821,7 +821,7 @@ fn ore_salt(index: usize) -> u64 {
 /// The per-chunk ore pass: replay the 3x3 source-column neighbourhood
 /// of every ore rule (veins reach a few blocks past their source
 /// chunk) and paint the cells that land here.
-fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
+pub(crate) fn place_ores(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
     let seed = ctx.effective_seed();
     for (idx, rule) in ore_rules().iter().enumerate() {
         for scx in (coord[0] - 1)..=(coord[0] + 1) {

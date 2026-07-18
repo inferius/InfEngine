@@ -224,6 +224,75 @@ pub(crate) fn try_monster_room(
 
 /// The per-chunk monster-room pass: replay the 3x3 source-column
 /// neighbourhood and keep the cells that land in this chunk.
+/// W310: memo value - the ordered rooms one source chunk rolls.
+type RoomsMemoMap =
+    std::collections::HashMap<(i32, i32, u32), std::rc::Rc<Vec<RoomScratch>>>;
+
+// W310: per-source-chunk room lists. The 3x3 neighbourhood replay
+// re-rolled EVERY attempt (with its hundreds of `column_is_solid`
+// probes) for every vertical chunk - up to 24 x 9 = 216 recomputes
+// per column. The list is deterministic per (source chunk, seed), so
+// one compute serves the whole column and all eight neighbours.
+thread_local! {
+    static ROOMS_MEMO: std::cell::RefCell<RoomsMemoMap> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The ordered room list one SOURCE chunk (scx, scz) contributes -
+/// normal attempts first, then the deep variant, exactly the old
+/// inline order.
+fn rooms_for_source(
+    ctx: &WorldgenCtx,
+    scx: i32,
+    scz: i32,
+) -> std::rc::Rc<Vec<RoomScratch>> {
+    let seed = ctx.effective_seed();
+    if let Some(hit) =
+        ROOMS_MEMO.with(|m| m.borrow().get(&(scx, scz, seed)).cloned())
+    {
+        return hit;
+    }
+    let cs = CHUNK_SIZE as i32;
+    let base_solid =
+        |x: i32, y: i32, z: i32| -> bool { column_is_solid(ctx, x, y, z) };
+    let mut rooms: Vec<RoomScratch> = Vec::new();
+    let mut rng = SplitMix64::new(stream_seed(seed, scx, scz, SALT_MONSTER_ROOM));
+    for _ in 0..ATTEMPTS_PER_CHUNK {
+        // in_square then height_range, like the placement pipeline
+        // orders its modifiers.
+        let ox = scx * cs + next_int(&mut rng, 16);
+        let oz = scz * cs + next_int(&mut rng, 16);
+        let oy = next_int(&mut rng, WORLD_TOP_Y);
+        let mut scratch = RoomScratch::new();
+        if try_monster_room(&mut rng, ox, oy, oz, &base_solid, &mut scratch) {
+            rooms.push(scratch);
+        }
+    }
+    // W260: the deep variant (monster_room_deep) seeds the deepslate
+    // cave band.
+    let mut rng_deep =
+        SplitMix64::new(stream_seed(seed, scx, scz, SALT_MONSTER_ROOM_DEEP));
+    for _ in 0..DEEP_ATTEMPTS_PER_CHUNK {
+        let ox = scx * cs + next_int(&mut rng_deep, 16);
+        let oz = scz * cs + next_int(&mut rng_deep, 16);
+        let oy = DEEP_Y_MIN + next_int(&mut rng_deep, DEEP_Y_MAX - DEEP_Y_MIN + 1);
+        let mut scratch = RoomScratch::new();
+        if try_monster_room(&mut rng_deep, ox, oy, oz, &base_solid, &mut scratch)
+        {
+            rooms.push(scratch);
+        }
+    }
+    let rc = std::rc::Rc::new(rooms);
+    ROOMS_MEMO.with(|m| {
+        let mut map = m.borrow_mut();
+        if map.len() > 4096 {
+            map.clear();
+        }
+        map.insert((scx, scz, seed), rc.clone());
+    });
+    rc
+}
+
 pub(crate) fn place_monster_rooms(
     chunk: &mut Chunk,
     coord: ChunkCoord,
@@ -231,61 +300,28 @@ pub(crate) fn place_monster_rooms(
     origin: [i32; 3],
 ) {
     let cs = CHUNK_SIZE as i32;
-    let seed = ctx.effective_seed();
-    let base_solid =
-        |x: i32, y: i32, z: i32| -> bool { column_is_solid(ctx, x, y, z) };
     // Ordered room list: rooms apply column-major (the replay
     // iteration order), later rooms overwriting earlier ones where
     // they overlap. Within one room the map holds the final per-cell
     // state, so its iteration order is irrelevant.
-    let mut rooms: Vec<RoomScratch> = Vec::new();
     for scx in (coord[0] - 1)..=(coord[0] + 1) {
         for scz in (coord[2] - 1)..=(coord[2] + 1) {
-            let mut rng =
-                SplitMix64::new(stream_seed(seed, scx, scz, SALT_MONSTER_ROOM));
-            for _ in 0..ATTEMPTS_PER_CHUNK {
-                // in_square then height_range, like the placement
-                // pipeline orders its modifiers.
-                let ox = scx * cs + next_int(&mut rng, 16);
-                let oz = scz * cs + next_int(&mut rng, 16);
-                let oy = next_int(&mut rng, WORLD_TOP_Y);
-                let mut scratch = RoomScratch::new();
-                if try_monster_room(
-                    &mut rng, ox, oy, oz, &base_solid, &mut scratch,
-                ) {
-                    rooms.push(scratch);
+            for room in rooms_for_source(ctx, scx, scz).iter() {
+                for ([x, y, z], id) in &room.writes {
+                    let (lx, ly, lz) =
+                        (x - origin[0], y - origin[1], z - origin[2]);
+                    if (0..cs).contains(&lx)
+                        && (0..cs).contains(&ly)
+                        && (0..cs).contains(&lz)
+                    {
+                        chunk.set(
+                            lx as usize,
+                            ly as usize,
+                            lz as usize,
+                            BlockId(*id),
+                        );
+                    }
                 }
-            }
-            // W260: the deep variant (monster_room_deep) seeds the
-            // deepslate cave band.
-            let mut rng_deep = SplitMix64::new(stream_seed(
-                seed,
-                scx,
-                scz,
-                SALT_MONSTER_ROOM_DEEP,
-            ));
-            for _ in 0..DEEP_ATTEMPTS_PER_CHUNK {
-                let ox = scx * cs + next_int(&mut rng_deep, 16);
-                let oz = scz * cs + next_int(&mut rng_deep, 16);
-                let oy =
-                    DEEP_Y_MIN + next_int(&mut rng_deep, DEEP_Y_MAX - DEEP_Y_MIN + 1);
-                let mut scratch = RoomScratch::new();
-                if try_monster_room(
-                    &mut rng_deep, ox, oy, oz, &base_solid, &mut scratch,
-                ) {
-                    rooms.push(scratch);
-                }
-            }
-        }
-    }
-    for room in &rooms {
-        for ([x, y, z], id) in &room.writes {
-            let (lx, ly, lz) = (x - origin[0], y - origin[1], z - origin[2]);
-            if (0..cs).contains(&lx)
-                && (0..cs).contains(&ly)
-                && (0..cs).contains(&lz)
-            {
-                chunk.set(lx as usize, ly as usize, lz as usize, BlockId(*id));
             }
         }
     }
