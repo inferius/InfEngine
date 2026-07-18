@@ -18,7 +18,7 @@ use crate::net::{MobEventMsg, MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, Voxel};
 
 use super::despawn;
-use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
+use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE, KIND_ZOMBIFIED_PIGLIN};
 use super::spawn;
 use super::state::{
     MOB_LUNGE_TIME, MOB_MAX_HEALTH, MobState, ZOMBIE_ATTACK_COOLDOWN,
@@ -252,10 +252,15 @@ fn step_one(
     //    square (MC WaterAvoidingRandomStrollGoal interval).
     let chase_player_pos: Option<[f32; 3]> = if kind_is_hostile(m.kind) {
         voxel.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
+    } else if m.kind == KIND_ZOMBIFIED_PIGLIN && m.anger_left > 0.0 {
+        // W300: NeutralMob anger - an angered zombified piglin hunts
+        // the player for the anger window (MC follow range 35).
+        voxel.nearest_player_pos(m.pos, 35.0)
     } else {
         None
     };
     m.panic_left = (m.panic_left - dt).max(0.0);
+    m.anger_left = (m.anger_left - dt).max(0.0);
     m.hop_cd = (m.hop_cd - dt).max(0.0);
     let mut speed = super::state::kind_walk_speed(m.kind);
     if m.panic_left > 0.0 {
@@ -548,7 +553,9 @@ fn step_one(
     // frame; when in range of the host + cooldown expired,
     // hit the local player + reset. H.8 splits skeleton off into
     // a ranged-bow goal.
-    if kind_is_hostile(m.kind) {
+    if kind_is_hostile(m.kind)
+        || (m.kind == KIND_ZOMBIFIED_PIGLIN && m.anger_left > 0.0)
+    {
         m.attack_cd = (m.attack_cd - dt).max(0.0);
         // W140: the skeleton's defining ranged attack. Out of melee
         // reach but inside bow range -> loose an arrow at the

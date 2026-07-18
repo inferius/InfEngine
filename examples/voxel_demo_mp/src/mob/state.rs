@@ -73,6 +73,11 @@ pub(crate) struct MobState {
     pub(crate) vy: f32,
     /// W289: MC PanicGoal - seconds left sprinting away after a hit.
     pub(crate) panic_left: f32,
+    /// W300: MC `NeutralMob` persistent-anger seconds left. While
+    /// positive a zombified piglin chases + melees like a hostile;
+    /// at zero it goes back to ambling. Set on player hit
+    /// (`rangeOfSeconds(20, 39)`).
+    pub(crate) anger_left: f32,
     /// W289: true while a stroll/chase target is active. MC passive
     /// mobs IDLE between strolls (RandomStrollGoal fires with chance
     /// 1/120 per tick); the old AI re-picked a target immediately on
@@ -121,6 +126,7 @@ impl MobState {
             look_left: 0.0,
             vy: 0.0,
             panic_left: 0.0,
+            anger_left: 0.0,
             strolling: false,
             hop_cd: 0.0,
             baby_left: 0.0,
@@ -143,6 +149,8 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         k if k == KIND_WOLF => 3.0,         // attr 0.30
         k if k == KIND_POLAR_BEAR => 2.5,   // attr 0.25
         k if k == KIND_ZOMBIE => 2.3,       // attr 0.23
+        // W300: ZombifiedPiglin.createAttributes MOVEMENT_SPEED 0.23.
+        k if k == KIND_ZOMBIFIED_PIGLIN => 2.3,
         k if k == KIND_SKELETON => 2.5,     // attr 0.25
         k if k == KIND_SPIDER => 3.0,       // attr 0.30
         _ => 2.3,

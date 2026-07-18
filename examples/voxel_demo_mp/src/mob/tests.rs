@@ -132,6 +132,11 @@ fn mc_speed_tables_pin() {
     assert_eq!(kind_walk_speed(KIND_SHEEP), 2.3);
     assert_eq!(kind_walk_speed(KIND_PIG), 2.5);
     assert_eq!(kind_walk_speed(KIND_CHICKEN), 2.5);
+    // W300: zombified piglin walks at the zombie attribute (0.23).
+    assert_eq!(
+        kind_walk_speed(crate::mob::kinds::KIND_ZOMBIFIED_PIGLIN),
+        2.3
+    );
     assert_eq!(kind_panic_mult(KIND_COW), 2.0);
     assert_eq!(kind_panic_mult(KIND_CHICKEN), 1.4);
     assert_eq!(kind_panic_mult(KIND_SHEEP), 1.25);

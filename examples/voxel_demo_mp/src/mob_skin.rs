@@ -44,6 +44,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::PolarBear => ("bear", "polarbear"),
         // W162: MC ships rabbit colour variants; brown is the default.
         MobKind::Rabbit => ("rabbit", "rabbit_brown"),
+        // W300: piglin family shares the piglin subdir.
+        MobKind::ZombifiedPiglin => ("piglin", "zombified_piglin"),
     }
 }
 
@@ -111,6 +113,7 @@ pub(crate) struct MobSkinSet {
     pub(crate) polar_bear: Option<PathBuf>,
     /// W162.
     pub(crate) rabbit: Option<PathBuf>,
+    pub(crate) zombified_piglin: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -126,6 +129,7 @@ impl MobSkinSet {
             wolf: mob_skin_path(assets_root, MobKind::Wolf),
             polar_bear: mob_skin_path(assets_root, MobKind::PolarBear),
             rabbit: mob_skin_path(assets_root, MobKind::Rabbit),
+            zombified_piglin: mob_skin_path(assets_root, MobKind::ZombifiedPiglin),
         }
     }
 
@@ -141,6 +145,7 @@ impl MobSkinSet {
             MobKind::Wolf => &self.wolf,
             MobKind::PolarBear => &self.polar_bear,
             MobKind::Rabbit => &self.rabbit,
+            MobKind::ZombifiedPiglin => &self.zombified_piglin,
         };
         opt.as_deref()
     }

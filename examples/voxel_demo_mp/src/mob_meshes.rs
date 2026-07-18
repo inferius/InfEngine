@@ -485,6 +485,8 @@ pub(crate) struct MobMeshes {
     pub(crate) zombie_left_leg: Option<MeshHandle>,
     /// W92 - zombie baked from universal MC `ZombieModel` data.
     pub(crate) zombie_model: Option<crate::entity_model::BakedModel>,
+    /// W300 - zombified piglin (universal `AdultPiglinModel` data).
+    pub(crate) zombified_piglin_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -920,6 +922,28 @@ pub fn load_non_sheep_mob_meshes(
         // W92 - universal MC ZombieModel. Render prefers this.
         mm.zombie_model = Some(crate::entity_model::bake(r, &crate::entity_model::zombie::MODEL, &img));
         info!(texture = format!("{w}x{h}"), "zombie entity texture bound (universal model + 6 legacy parts)");
+    }
+
+    // ---- Zombified piglin (64x64) ------------------------------------------
+    // W300: MC ships it under the piglin subdir
+    // (entity/piglin/zombified_piglin.png), so try_open_entity's
+    // bare-name candidates would miss it - direct open like the
+    // polar bear's bear/polarbear.png.
+    for root in &entity_roots {
+        let p = root.join("piglin").join("zombified_piglin.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.zombified_piglin_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::piglin::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "zombified piglin entity texture bound (universal model)"
+            );
+            break;
+        }
     }
 
     // ---- Chicken (64x32) ---------------------------------------------------

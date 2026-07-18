@@ -37,6 +37,7 @@ pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod minecart;
 pub(crate) mod pig;
+pub(crate) mod piglin;
 pub(crate) mod polar_bear;
 pub(crate) mod rabbit;
 pub(crate) mod sheep;

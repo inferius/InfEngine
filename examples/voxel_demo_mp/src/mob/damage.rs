@@ -21,6 +21,7 @@ use crate::net::{MobEventMsg, NetRole};
 
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
+    KIND_ZOMBIFIED_PIGLIN,
 };
 use super::state::{MOB_DEATH_FADE, MOB_HIT_DAMAGE};
 
@@ -63,7 +64,16 @@ pub(crate) fn damage_mob_scaled(
         // (away from the attacker: the demo tracks no attacker pos,
         // so flee AWAY FROM THE PLAYER, which is who hits mobs).
         // Hostiles keep chasing instead.
-        if !killed
+        if !killed && kind == KIND_ZOMBIFIED_PIGLIN {
+            // W300: NeutralMob - a hit ANGERS the piglin (MC
+            // `PERSISTENT_ANGER_TIME = rangeOfSeconds(20, 39)`)
+            // instead of panicking it; the AI chases + melees while
+            // the timer runs. Cheap position hash stands in for the
+            // uniform roll.
+            let m = &mut voxel.mobs[idx];
+            let h = (mob_id.wrapping_mul(0x9E37_79B1) >> 7) % 1900;
+            m.anger_left = 20.0 + h as f32 / 100.0;
+        } else if !killed
             && !matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
         {
             let day_time = voxel.day_time;

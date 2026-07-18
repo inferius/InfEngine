@@ -168,6 +168,8 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
 pub(crate) fn initial_health_for(kind: u8) -> f32 {
     match kind {
         KIND_ZOMBIE | KIND_SKELETON => ZOMBIE_MAX_HEALTH,
+        // W300: ZombifiedPiglin.createAttributes MAX_HEALTH 20.
+        x if x == super::kinds::KIND_ZOMBIFIED_PIGLIN => 20.0,
         KIND_SPIDER => 12.0,
         KIND_CHICKEN => 4.0,
         KIND_PIG => 10.0,
@@ -217,13 +219,15 @@ pub(crate) fn pick_kind_for(
             );
         });
         let roll = rng.next_f32() * 152.0;
-        return Some(if roll < 100.0 {
-            KIND_ZOMBIE
-        } else if roll < 150.0 {
-            KIND_SKELETON
+        // W300: the real nether_wastes pool - zombified piglin 100 /
+        // ghast 50 / magma cube 2. The ghast + magma slots SKIP
+        // until those mobs are ported (missing mob > wrong mob; the
+        // overworld zombie/skeleton stand-ins are gone).
+        return if roll < 100.0 {
+            Some(super::kinds::KIND_ZOMBIFIED_PIGLIN)
         } else {
-            KIND_SPIDER
-        });
+            None
+        };
     }
     let biome = biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed);
     let pool = pool_for(biome);

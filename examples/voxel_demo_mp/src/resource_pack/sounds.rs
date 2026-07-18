@@ -248,6 +248,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/sheep/death", "entity.sheep.death"),
     // W55.4 - per-mob ambient + step + hurt + death events.
     ("mob/zombie/say", "entity.zombie.ambient"),
+    // W300: zombified piglin (zpig*.ogg family in the vanilla pack).
+    ("mob/zombified_piglin/say", "entity.zombified_piglin.ambient"),
+    ("mob/zombified_piglin/hurt", "entity.zombified_piglin.hurt"),
+    ("mob/zombified_piglin/death", "entity.zombified_piglin.death"),
     ("mob/zombie/step", "entity.zombie.step"),
     ("mob/zombie/hurt", "entity.zombie.hurt"),
     ("mob/zombie/death", "entity.zombie.death"),

@@ -43,6 +43,9 @@ pub(crate) enum MobKind {
     PolarBear = 8,
     /// W162 - rabbit (first NESTED bone hierarchy; plains/desert/taiga).
     Rabbit = 9,
+    /// W300 - zombified piglin (the nether's native ambler;
+    /// `NeutralMob` - only fights back after being hit).
+    ZombifiedPiglin = 10,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -62,6 +65,7 @@ impl MobKind {
             7 => MobKind::Wolf,
             8 => MobKind::PolarBear,
             9 => MobKind::Rabbit,
+            10 => MobKind::ZombifiedPiglin,
             _ => MobKind::Sheep,
         }
     }
@@ -116,6 +120,7 @@ impl MobKind {
             MobKind::Wolf => "wolf",
             MobKind::PolarBear => "polar_bear",
             MobKind::Rabbit => "rabbit",
+            MobKind::ZombifiedPiglin => "zombified_piglin",
         }
     }
 }
@@ -127,7 +132,7 @@ impl MobKind {
 /// the inline table in `raycast.rs`).
 pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
     match kind {
-        KIND_ZOMBIE | KIND_SKELETON => (0.45, 1.0, 0.45, 1.0),
+        KIND_ZOMBIE | KIND_SKELETON | KIND_ZOMBIFIED_PIGLIN => (0.45, 1.0, 0.45, 1.0),
         KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
         KIND_PIG => (0.6, 0.55, 0.45, 0.45),
         KIND_SPIDER => (0.7, 0.45, 0.7, 0.45),
@@ -155,6 +160,7 @@ pub(crate) const KIND_SKELETON: u8 = MobKind::Skeleton as u8;
 pub(crate) const KIND_WOLF: u8 = MobKind::Wolf as u8;
 pub(crate) const KIND_POLAR_BEAR: u8 = MobKind::PolarBear as u8;
 pub(crate) const KIND_RABBIT: u8 = MobKind::Rabbit as u8;
+pub(crate) const KIND_ZOMBIFIED_PIGLIN: u8 = MobKind::ZombifiedPiglin as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -217,7 +223,9 @@ mod tests {
         assert_eq!(MobKind::from_u8(7), MobKind::Wolf);
         assert_eq!(MobKind::from_u8(8), MobKind::PolarBear);
         assert_eq!(MobKind::from_u8(9), MobKind::Rabbit);
-        for raw in [10u8, 100, 255] {
+        // W300: 10 = ZombifiedPiglin.
+        assert_eq!(MobKind::from_u8(10), MobKind::ZombifiedPiglin);
+        for raw in [11u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }
