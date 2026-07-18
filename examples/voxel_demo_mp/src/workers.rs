@@ -11,6 +11,15 @@
 use crate::*;
 use crate::lighting::HaloLighting;
 
+thread_local! {
+    /// W305: per-worker gen profile - (gen_us, scan_us, mesh_us,
+    /// chunks). One summary log per 512 generated chunks tells the
+    /// next perf report WHERE worker time goes (worldgen vs the
+    /// side-effect scan vs meshing) without per-chunk log spam.
+    static GEN_PROF: std::cell::RefCell<(u64, u64, u64, u32)> =
+        const { std::cell::RefCell::new((0, 0, 0, 0)) };
+}
+
 /// Thread pool that runs `generate_chunk` + `chunk_mesh` (and W25:
 /// remesh-only jobs) off the main thread. The main thread enqueues
 /// `Job` requests on `req_tx`; workers produce `WorkerResult` on
@@ -109,11 +118,15 @@ impl WorkerPool {
                                             }
                                         }
                                     }
+                                    let _prof_t0 = std::time::Instant::now();
                                     let chunk = chunk_opt.unwrap_or_else(|| {
                                         worldgen::generate_chunk_at_ctx(
                                             coord, &gj.ctx,
                                         )
                                     });
+                                    let _prof_gen_us =
+                                        _prof_t0.elapsed().as_micros() as u64;
+                                    let _prof_t1 = std::time::Instant::now();
                                     let origin = World::chunk_world_origin(coord);
 
                                     // W13.2: Pre-scan voxels for side-effects
@@ -348,6 +361,8 @@ impl WorkerPool {
                                             },
                                         );
                                     }
+                                    let _prof_scan_us =
+                                        _prof_t1.elapsed().as_micros() as u64;
                                     // W24: Build MC-atlas submeshes in the
                                     // worker using the pre-fetched halo
                                     // lighting + pack snapshot. Main thread
@@ -355,6 +370,7 @@ impl WorkerPool {
                                     // W125/W127: player doors/rails can't
                                     // exist in a freshly-generated chunk;
                                     // the W279 template states stand in.
+                                    let _prof_t2 = std::time::Instant::now();
                                     let no_rails = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
@@ -365,6 +381,28 @@ impl WorkerPool {
                                         &no_rails,
                                         &gen_stairs,
                                     );
+                                    let _prof_mesh_us =
+                                        _prof_t2.elapsed().as_micros() as u64;
+                                    GEN_PROF.with(|p| {
+                                        let mut p = p.borrow_mut();
+                                        p.0 += _prof_gen_us;
+                                        p.1 += _prof_scan_us;
+                                        p.2 += _prof_mesh_us;
+                                        p.3 += 1;
+                                        if p.3 >= 512 {
+                                            tracing::info!(
+                                                avg_gen_ms =
+                                                    p.0 as f32 / 1000.0 / p.3 as f32,
+                                                avg_scan_ms =
+                                                    p.1 as f32 / 1000.0 / p.3 as f32,
+                                                avg_mesh_ms =
+                                                    p.2 as f32 / 1000.0 / p.3 as f32,
+                                                chunks = p.3,
+                                                "W305: worker gen profile"
+                                            );
+                                            *p = (0, 0, 0, 0);
+                                        }
+                                    });
 
                                     if res_tx
                                         .send(WorkerResult::Generated {
