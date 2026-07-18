@@ -8,6 +8,8 @@
 //! into one [`Df`] tree. Sampling that tree at a world point gives MC's
 //! terrain density: > 0 solid, < 0 air. Wave 3b turns it into chunks.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -57,6 +59,12 @@ pub(crate) struct Overworld {
     pub(crate) sea_level: i32,
     pub(crate) min_y: i32,
     pub(crate) height: i32,
+    /// W304: per-column biome memo. One `mc_biome_at` costs 5 density
+    /// evals (dozens of octave samples each) and the surface stage +
+    /// every feature pass + spawns re-ask the same columns. RefCell
+    /// is safe: `Overworld` lives in a per-thread `Rc` cache (one
+    /// instance per thread + seed, never shared across threads).
+    biome_memo: RefCell<HashMap<(i32, i32), McBiome>>,
 }
 
 impl Overworld {
@@ -143,8 +151,19 @@ impl Overworld {
     /// temperature / vegetation channels are xz-only and continents /
     /// erosion / ridges are 2D, so `y` doesn't matter.
     pub(crate) fn mc_biome_at(&self, x: i32, z: i32) -> McBiome {
+        if let Some(b) = self.biome_memo.borrow().get(&(x, z)) {
+            return *b;
+        }
         let (t, v, c, e, w) = self.climate_at(x, z);
-        mc_biome_full(t, v, c, e, w)
+        let b = mc_biome_full(t, v, c, e, w);
+        let mut memo = self.biome_memo.borrow_mut();
+        // ~262k entries = a few MB; wholesale clear keeps the common
+        // steady-state (a moving gen frontier) fully cached.
+        if memo.len() >= (1 << 18) {
+            memo.clear();
+        }
+        memo.insert((x, z), b);
+        b
     }
 
     /// W229.2: the raw climate sample `(temperature, vegetation,
@@ -276,6 +295,7 @@ pub(crate) fn build_overworld(seed: u32) -> Overworld {
         sea_level,
         min_y,
         height,
+        biome_memo: RefCell::new(HashMap::new()),
     }
 }
 

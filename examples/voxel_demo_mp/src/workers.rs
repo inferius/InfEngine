@@ -18,6 +18,12 @@ use crate::lighting::HaloLighting;
 /// `recv` return Err and exit.
 pub(crate) struct WorkerPool {
     pub(crate) req_tx: Sender<Job>,
+    /// W304: the lighting PRIORITY lane. Gen/remesh floods `req_tx`
+    /// by the hundred at high view distance; lighting segments queued
+    /// behind them starved for minutes (light_dirty 10k-20k in the
+    /// user log). Workers drain this channel first; the in-flight
+    /// lighting cap (24) bounds the lane so gen can't starve either.
+    pub(crate) light_tx: Sender<Job>,
     pub(crate) res_rx: Receiver<WorkerResult>,
     pub(crate) threads: Vec<JoinHandle<()>>,
 }
@@ -31,20 +37,36 @@ impl WorkerPool {
     pub(crate) fn spawn(num_workers: usize) -> Self {
         // W28.10: crossbeam-channel MPMC - receiver is Cloneable, no Mutex needed.
         let (req_tx, req_rx) = cb_unbounded::<Job>();
+        let (light_tx, light_rx) = cb_unbounded::<Job>();
         let (res_tx, res_rx) = cb_unbounded::<WorkerResult>();
         let mut threads = Vec::with_capacity(num_workers);
         for i in 0..num_workers {
             let req_rx = req_rx.clone();
+            let light_rx = light_rx.clone();
             let res_tx = res_tx.clone();
             threads.push(
                 thread::Builder::new()
                     .name(format!("voxel_worker_{i}"))
                     .spawn(move || {
                         loop {
-                            // W28.10: crossbeam recv() blocks without Mutex.
-                            let job = match req_rx.recv() {
+                            // W28.10: crossbeam recv() blocks without
+                            // Mutex. W304: lighting lane first - a
+                            // waiting lighting segment always beats
+                            // the gen/remesh backlog.
+                            let job = match light_rx.try_recv() {
                                 Ok(j) => j,
-                                Err(_) => return,
+                                Err(_) => {
+                                    crossbeam_channel::select! {
+                                        recv(light_rx) -> j => match j {
+                                            Ok(j) => j,
+                                            Err(_) => return,
+                                        },
+                                        recv(req_rx) -> j => match j {
+                                            Ok(j) => j,
+                                            Err(_) => return,
+                                        },
+                                    }
+                                }
                             };
                             match job {
                                 Job::Generate(gj) => {
@@ -491,6 +513,7 @@ impl WorkerPool {
         drop(res_tx); // workers keep their own clones
         Self {
             req_tx,
+            light_tx,
             res_rx,
             threads,
         }
@@ -512,6 +535,8 @@ impl Drop for WorkerPool {
         // workers, so detaching is safe.
         let (dummy_tx, _) = cb_unbounded::<Job>();
         let _ = std::mem::replace(&mut self.req_tx, dummy_tx);
+        let (dummy_light, _) = cb_unbounded::<Job>();
+        let _ = std::mem::replace(&mut self.light_tx, dummy_light);
         // Drop all handles (detach). Workers exit on the next recv() Err or
         // when they finish their current job and see the closed channel.
         let n = self.threads.len();

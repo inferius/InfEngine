@@ -470,7 +470,8 @@ impl Voxel {
                 existing_grids,
                 dim: self.current_dim.clone(),
             });
-            if pool.req_tx.send(job).is_ok() {
+            // W304: the priority lane - see WorkerPool::light_tx.
+            if pool.light_tx.send(job).is_ok() {
                 self.pending_lighting_jobs += 1;
             }
         }
