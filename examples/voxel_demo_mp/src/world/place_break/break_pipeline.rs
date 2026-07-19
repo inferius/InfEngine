@@ -192,6 +192,35 @@ pub(crate) fn apply_block_break(
         }
         vx.edit_history.push(edit);
     }
+    // W318: MC snow-layer support - snow sits on solid ground, so
+    // breaking the block under it POPS the layer (vanilla destroys
+    // it outright; it never falls as a block).
+    let above = [voxel[0], voxel[1] + 1, voxel[2]];
+    if vx.world.get(above).0 == 15 {
+        vx.world_set_tracked(above, BlockId::AIR);
+        vx.snow_positions.remove(&above);
+        let coords = Voxel::affected_chunks(above);
+        vx.rebuild_chunks(&coords);
+        let pop = EditMsg {
+            x: above[0],
+            y: above[1],
+            z: above[2],
+            block: 0,
+        };
+        match &mut vx.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                vx.edit_history.push(pop);
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(pop, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+            }
+            NetRole::Client { pending_edits, .. } => {
+                pending_edits.push(pop);
+            }
+        }
+    }
     if !is_client && broken != BlockId::AIR {
         // W10.2: Creative `instabuild` suppresses block drops.
         // Container contents (chest, furnace) still drop below.

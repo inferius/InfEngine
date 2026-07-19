@@ -200,6 +200,44 @@ pub(crate) const MAGNET_PER_TICK_FRAC: f32 = 0.25;
 /// Returns the id of the drop that was merged-away (if any) so
 /// the caller can broadcast a removal to peers. The merged drop
 /// keeps its id; the caller doesn't have to re-broadcast.
+/// W318: one full merge sweep - every same-id pair within the merge
+/// radius collapses, without restarting the scan per merge. Returns
+/// the removed drop ids (for the despawn broadcast).
+pub(crate) fn merge_stacks_pass(
+    drops: &mut Vec<DropItem>,
+    cfg: &PickupConfig,
+) -> Vec<u32> {
+    let r2 = cfg.merge_radius * cfg.merge_radius;
+    let mut removed: Vec<u32> = Vec::new();
+    let mut i = 0;
+    while i < drops.len() {
+        let mut j = i + 1;
+        while j < drops.len() {
+            let mergeable = drops[i].block == drops[j].block && {
+                let dx = drops[i].pos[0] - drops[j].pos[0];
+                let dy = drops[i].pos[1] - drops[j].pos[1];
+                let dz = drops[i].pos[2] - drops[j].pos[2];
+                dx * dx + dy * dy + dz * dz <= r2
+            };
+            if mergeable {
+                let combined = drops[i].count as u16 + drops[j].count as u16;
+                if combined <= STACK_MAX as u16 {
+                    drops[i].count = combined as u8;
+                    removed.push(drops[j].id);
+                    drops.swap_remove(j);
+                    // The swapped-in element re-checks at the same j.
+                    continue;
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    removed
+}
+
+#[cfg(test)] // W318: production merges via merge_stacks_pass; the
+// single-step form remains for the fine-grained unit tests.
 pub(crate) fn maybe_merge_stacks(
     drops: &mut Vec<DropItem>,
     cfg: &PickupConfig,
@@ -253,11 +291,12 @@ pub(crate) fn step_logical_tick(
     let mut despawn_idx: Vec<usize> = Vec::new();
 
     // Merge pass first so the per-tick magnet lerp acts on the
-    // post-merge stack count.
-    let mut merged_ids: Vec<u32> = Vec::new();
-    while let Some(id) = maybe_merge_stacks(drops, cfg) {
-        merged_ids.push(id);
-    }
+    // post-merge stack count. W318: ONE sweep per tick - the old
+    // `while maybe_merge_stacks` restarted the O(N^2) scan from
+    // scratch after every single merge, so a mining burst (a tree's
+    // worth of drops) went quadratic-times-merges and the `drops`
+    // phase pinned at 10-14 ms per frame (the user's FPS-drop log).
+    let merged_ids: Vec<u32> = merge_stacks_pass(drops, cfg);
 
     let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
     for (i, drop) in drops.iter_mut().enumerate() {
