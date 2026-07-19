@@ -122,6 +122,39 @@ pub(crate) fn cmd_give(
                 .iter()
                 .find(|it| it.name.eq_ignore_ascii_case(block_name))
                 .map(|it| it.id)
+        })
+        // W346: no exact hit -> try a SUBSTRING match. A unique hit
+        // resolves ("/give diamond_p" works); several hits list the
+        // candidates instead of a bare "unknown".
+        .or_else(|| {
+            let needle = block_name.to_ascii_lowercase();
+            let mut hits: Vec<(&str, u16)> = BLOCK_TYPES
+                .iter()
+                .filter(|bt| bt.name.contains(&needle))
+                .map(|bt| (bt.name, bt.id))
+                .collect();
+            for it in crate::item::ITEM_TYPES.iter() {
+                if it.name.contains(&needle)
+                    && !hits.iter().any(|(n, _)| *n == it.name)
+                {
+                    hits.push((it.name, it.id));
+                }
+            }
+            match hits.len() {
+                1 => Some(hits[0].1),
+                0 => None,
+                n => {
+                    let mut names: Vec<&str> =
+                        hits.iter().take(8).map(|(n, _)| *n).collect();
+                    names.sort_unstable();
+                    lines.push(format!(
+                        "{n} matches: {}{}",
+                        names.join(", "),
+                        if n > 8 { ", ..." } else { "" },
+                    ));
+                    None
+                }
+            }
         });
     if let Some(id) = block_id {
         let bid = BlockId(id);

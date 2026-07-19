@@ -2772,8 +2772,33 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     egui::Area::new(egui::Id::new("voxel_chat"))
                         .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -90.0])
                         .show(ctx, |ui| {
-                            for (line, age, mention) in &chat_lines {
-                                let alpha = ((10.0 - age) / 2.0).clamp(0.0, 1.0);
+                            // W346: pin the wrap width. An egui Area
+                            // sizes itself from LAST frame's content,
+                            // so a short first line locked the whole
+                            // log into a sliver and long command
+                            // output wrapped into a vertical strip
+                            // of fragments (the console report).
+                            ui.set_max_width(
+                                (ctx.content_rect().width() * 0.5)
+                                    .clamp(320.0, 820.0),
+                            );
+                            // W346: while the console is OPEN, show
+                            // the recent history opaque (last 14
+                            // lines) - command output used to fade
+                            // away mid-read after 10 s.
+                            let skip = if chat_open {
+                                chat_lines.len().saturating_sub(14)
+                            } else {
+                                0
+                            };
+                            for (line, age, mention) in
+                                chat_lines.iter().skip(skip)
+                            {
+                                let alpha = if chat_open {
+                                    1.0
+                                } else {
+                                    ((10.0 - age) / 2.0).clamp(0.0, 1.0)
+                                };
                                 if alpha <= 0.0 {
                                     continue;
                                 }
@@ -3174,12 +3199,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             }
         });
 
-        // Drop chat lines older than `CHAT_FADE_SECS`. Done after
-        // the render pass so the egui closure had a chance to
-        // display them one last frame.
-        vx.chat_log.retain(|(t, _)| {
-            chat_now.saturating_duration_since(*t).as_secs_f32() < CHAT_FADE_SECS
-        });
+        // W346: keep a HISTORY instead of deleting lines at the 10 s
+        // fade - the open console shows the tail opaque, the closed
+        // HUD still only paints lines younger than CHAT_FADE_SECS.
+        let _ = CHAT_FADE_SECS;
+        if vx.chat_log.len() > CHAT_LOG_MAX {
+            let drop = vx.chat_log.len() - CHAT_LOG_MAX;
+            vx.chat_log.drain(0..drop);
+        }
         // Send the chat line if the user pressed Enter.
         if chat_send_now {
             let text = vx.chat_input.trim().to_string();

@@ -55,12 +55,44 @@ pub(crate) fn cmd_time(
         let hh = hours.floor() as i32;
         let mm = ((hours - hh as f32) * 60.0) as i32;
         lines.push(format!("Current time: {hh:02}:{mm:02}"));
-    } else if let Ok(hour) = arg.parse::<f32>() {
-        let h = hour.rem_euclid(24.0);
-        voxel.day_time = DAY_LENGTH_S * (h / 24.0);
-        lines.push(format!("Time set to {:.1}h.", h));
-    } else {
-        lines.push(format!("Cannot parse hour: {arg}"));
+        return true;
+    }
+    // W346: accept the MC forms too - `/time set day`, `/time set
+    // 13000`, bare keywords, and MC tick values (0..24000, where
+    // tick 0 = 06:00). A bare number <= 24 still means hours.
+    let rest = arg
+        .strip_prefix("set")
+        .map(str::trim)
+        .unwrap_or(arg);
+    let keyword_h = match rest.to_ascii_lowercase().as_str() {
+        "day" | "morning" => Some(7.0f32),
+        "noon" | "midday" => Some(12.0),
+        "sunset" | "dusk" => Some(18.0),
+        "night" => Some(19.0),
+        "midnight" => Some(0.0),
+        "sunrise" | "dawn" => Some(6.0),
+        _ => None,
+    };
+    let parsed_h = keyword_h.or_else(|| {
+        rest.parse::<f32>().ok().map(|v| {
+            if v > 24.0 {
+                // MC ticks: 0 = 06:00, 6000 = noon, 18000 = midnight.
+                (v.rem_euclid(24000.0) / 1000.0 + 6.0).rem_euclid(24.0)
+            } else {
+                v.rem_euclid(24.0)
+            }
+        })
+    });
+    match parsed_h {
+        Some(h) => {
+            voxel.day_time = DAY_LENGTH_S * (h / 24.0);
+            lines.push(format!("Time set to {:.1}h.", h));
+        }
+        None => {
+            lines.push(format!(
+                "Usage: /time [set] <0-24 | ticks | day|noon|night|midnight|sunrise|sunset> (got: {rest})"
+            ));
+        }
     }
     true
 }
@@ -774,3 +806,55 @@ pub(crate) fn cmd_tree(
     true
 }
 
+
+#[cfg(test)]
+mod w346_tests {
+    use crate::DAY_LENGTH_S;
+
+    fn hour_of(v: &crate::Voxel) -> f32 {
+        (v.day_time / DAY_LENGTH_S).rem_euclid(1.0) * 24.0
+    }
+
+    /// W346: /time takes the MC forms - `set day`, bare keywords,
+    /// tick values (0 ticks = 06:00) - besides the plain hour.
+    #[test]
+    fn time_accepts_mc_forms() {
+        let mut v = crate::Voxel::new();
+        assert!(crate::chat::dispatch(&mut v, "/time set day"));
+        assert!((hour_of(&v) - 7.0).abs() < 0.05, "{}", hour_of(&v));
+        assert!(crate::chat::dispatch(&mut v, "/time midnight"));
+        assert!(hour_of(&v) < 0.05 || hour_of(&v) > 23.95);
+        // 13000 ticks -> (13 + 6) % 24 = 19:00.
+        assert!(crate::chat::dispatch(&mut v, "/time set 13000"));
+        assert!((hour_of(&v) - 19.0).abs() < 0.05, "{}", hour_of(&v));
+        // Plain hour still works.
+        assert!(crate::chat::dispatch(&mut v, "/time 12"));
+        assert!((hour_of(&v) - 12.0).abs() < 0.05);
+        // Garbage answers with usage, not silence.
+        assert!(crate::chat::dispatch(&mut v, "/time whenever"));
+        assert!(
+            v.chat_log
+                .iter()
+                .any(|(_, l)| l.starts_with("Usage: /time")),
+        );
+    }
+
+    /// W346: /give resolves a unique substring and lists candidates
+    /// on an ambiguous one.
+    #[test]
+    fn give_fuzzy_matches() {
+        let mut v = crate::Voxel::new();
+        assert!(crate::chat::dispatch(&mut v, "/give diamond_pickax 1"));
+        assert!(
+            v.chat_log.iter().any(|(_, l)| l.starts_with("Gave 1 x")),
+            "unique substring must resolve: {:?}",
+            v.chat_log.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>(),
+        );
+        v.chat_log.clear();
+        assert!(crate::chat::dispatch(&mut v, "/give _stairs"));
+        assert!(
+            v.chat_log.iter().any(|(_, l)| l.contains("matches:")),
+            "ambiguous prefix lists candidates",
+        );
+    }
+}

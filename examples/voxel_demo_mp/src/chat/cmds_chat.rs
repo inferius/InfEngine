@@ -20,27 +20,40 @@ pub(crate) fn cmd_help(
     // Split into themed sections so the
     // chat log shows them line by line
     // instead of one ugly wrap.
+    // W346: the list drifted far behind the dispatcher - every
+    // routed command shows up here now, still grouped in short
+    // lines so the log stays readable.
     lines.push(
-        "Chat: /help /players /clear /me /w /wave /shrug /dance"
+        "Chat: /help /players /clear /me /w /wave /shrug /dance".to_string(),
+    );
+    lines.push(
+        "Player: /spawn /tp /tppos /home /sethome /setspawn /spawnpoint /pos /face /jump /stuck"
             .to_string(),
     );
     lines.push(
-        "Player: /spawn /tp /tppos /home /sethome /setspawn /pos /stuck /heal /kill /stats /uptime /version"
+        "Player 2: /heal /kill /stats /uptime /version /fov /gamemode (/gm /gms /gmc) /fly /godmode"
             .to_string(),
     );
     lines.push(
-        "Creative: /give /clearinventory /resetinventory /fly /godmode /freezetime"
+        "Creative: /give /giveall /tool /restock /clearinv /resetinv /blob /freezetime"
             .to_string(),
     );
     lines.push(
-        "World: /day /night /time /sleep /weather /seed /setblock /fill /explode /worldgen /clearedits /rd /chunkinfo"
+        "World: /day /night /time /sleep /weather /seed /setblock /fill /explode /tree /worldgen /clearedits"
             .to_string(),
     );
     lines.push(
-        "Host MP: /summon /kick /announce /mute /unmute /save /horde /spawnmob /killmobs /dmg"
+        "View: /rd /lod /dim /chunkinfo /grid /debug /biome /findbiome /find /randomtp"
             .to_string(),
     );
-    lines.push("Misc: /fw /recipe /randomtp /biome /findbiome".to_string());
+    lines.push(
+        "Host MP: /summon /spawnmob /horde /killmobs /mobcap /dmg /healall /kick /announce /mute /unmute"
+            .to_string(),
+    );
+    lines.push(
+        "Host 2: /save /lock /motd /serverinfo /setname /whois /plugins /listblocks /mobs /recipe /fw"
+            .to_string(),
+    );
     false
 }
 
