@@ -4,10 +4,12 @@
 //! the fog curtain; VD 40 at full resolution is ~105k chunks and
 //! render-bound (~45-55 FPS extrapolated, [[mc-worldgen-perf-plan]]).
 //! This module adds a second ring of cheap SURFACE SHELLS: one tile
-//! per chunk column (16x16), built worker-side from the cached
-//! column data (`mc_floor_at` / `mc_surface_block_at`, W314 shared
-//! core cache) WITHOUT generating, lighting or storing the full
-//! chunk column. A tile is a greedy heightmap mesh: merged top
+//! per chunk column (16x16). W335: heights come from the PRELIMINARY
+//! surface spline (bilinear-smoothed /4 grid) + biome surface
+//! blocks - no column stack, no carve, no aquifer - so a tile costs
+//! microseconds instead of a ~22 ms ColumnCore build (which also
+//! thrashed the W314 shared cache the streaming frontier relies
+//! on). A tile is a greedy heightmap mesh: merged top
 //! quads + vertical skirts at height steps, textured from the real
 //! block atlas (grass/sand/stone top + side tiles), plus a
 //! translucent biome-tinted water sheet over sub-sea columns.
@@ -212,38 +214,66 @@ fn face_tile(pack: &ResourcePack, block: u16, face: BlockFace) -> [f32; 4] {
         .unwrap_or([0.0, 0.0, 0.0078125, 0.0078125])
 }
 
-/// Build one LOD tile. Pure + worker-safe: all terrain queries go
-/// through the W314 cached column data (cheap after first touch).
+/// Build one LOD tile. Pure + worker-safe: terrain height comes
+/// from the preliminary surface spline, blocks from the biome
+/// painter - never the column stack (W335).
 pub(crate) fn build_lod_tile(job: &LodTileJob) -> LodTileResult {
     let [tx, tz] = job.key;
     let ctx = &job.ctx;
     let pack = &job.pack;
 
+    // W335: heights come from the PRELIMINARY surface spline (the
+    // same source LOD2 uses), NOT the full column stack. The old
+    // mc_floor_at path forced a ~22 ms ColumnCore build per
+    // never-streamed tile - a 64-chunk ring is ~10k tiles (minutes
+    // of worker time = the "LOD is slow to fill" report) AND those
+    // far cores cycled the shared W314 cache, evicting the streaming
+    // frontier's entries (a big slice of the avg_deco replays). The
+    // spline's native /4 grid gets bilinear smoothing so shells stay
+    // un-terraced; carver cuts vanish from the far silhouette, which
+    // is invisible from 500+ blocks away.
+    let seed = ctx.effective_seed();
+    let ow = mcgen::terrain::overworld_for(seed);
+    let gx0 = (tx * CS - 1).div_euclid(4);
+    let gz0 = (tz * CS - 1).div_euclid(4);
+    let mut grid = [[0f32; 7]; 7];
+    for (iz, row) in grid.iter_mut().enumerate() {
+        for (ix, cell) in row.iter_mut().enumerate() {
+            *cell = ow.preliminary_surface(
+                (gx0 + ix as i32) * 4,
+                (gz0 + iz as i32) * 4,
+            ) as f32;
+        }
+    }
+    // Grid points sit on absolute world coords, so shared borders
+    // interpolate identically on both neighbouring tiles (no cracks).
+    let sample = |wx: i32, wz: i32| -> i32 {
+        let (qx, rx) = (wx.div_euclid(4), wx.rem_euclid(4) as f32 / 4.0);
+        let (qz, rz) = (wz.div_euclid(4), wz.rem_euclid(4) as f32 / 4.0);
+        let (ix, iz) = ((qx - gx0) as usize, (qz - gz0) as usize);
+        let a = grid[iz][ix] + (grid[iz][ix + 1] - grid[iz][ix]) * rx;
+        let b = grid[iz + 1][ix] + (grid[iz + 1][ix + 1] - grid[iz + 1][ix]) * rx;
+        (a + (b - a) * rz).round() as i32
+    };
     // 18x18 height sample: the 1-column border feeds edge skirts so
     // tile seams close against neighbouring tiles.
     let mut h = [[0i32; 18]; 18];
     for (dz, row) in h.iter_mut().enumerate() {
         for (dx, cell) in row.iter_mut().enumerate() {
-            let wx = tx * CS + dx as i32 - 1;
-            let wz = tz * CS + dz as i32 - 1;
-            *cell = mcgen::terrain::mc_floor_at(ctx, wx, wz);
+            *cell = sample(tx * CS + dx as i32 - 1, tz * CS + dz as i32 - 1);
         }
     }
-    // Inner 16x16 top-block ids.
+    // Inner 16x16 top-block ids from the biome surface block (same
+    // painter LOD2 uses - snow/sand/grass by climate, no core).
     let mut top = [[0u16; 16]; 16];
     for (z, row) in top.iter_mut().enumerate() {
         for (x, cell) in row.iter_mut().enumerate() {
             let wx = tx * CS + x as i32;
             let wz = tz * CS + z as i32;
             let hy = h[z + 1][x + 1];
-            let mut b = mcgen::terrain::mc_surface_block_at(ctx, wx, wz);
-            if b == 0 {
-                b = mcgen::terrain::mc_painted_block_at(ctx, wx, hy, wz);
-            }
-            if b == 0 {
-                b = crate::block::STONE_ID;
-            }
-            *cell = b;
+            let mc = mcgen::terrain::mc_full_biome_at(ctx, wx, wz);
+            *cell =
+                crate::worldgen::climate::surface_block(mc.to_engine(), hy).0;
         }
     }
 
@@ -898,12 +928,15 @@ mod tests {
                     }
                     let sites =
                         crate::worldgen::mcgen::trees::lod_tree_sites(&ctx, tx, tz);
+                    // W335: gate like the builder (preliminary
+                    // surface), with margin over the bilinear delta.
+                    let ow = crate::worldgen::mcgen::terrain::overworld_for(
+                        ctx.effective_seed(),
+                    );
                     let dry = sites
                         .iter()
                         .filter(|s| {
-                            crate::worldgen::mcgen::terrain::mc_floor_at(
-                                &ctx, s.wx, s.wz,
-                            ) >= SEA_LEVEL
+                            ow.preliminary_surface(s.wx, s.wz) >= SEA_LEVEL + 4
                         })
                         .count();
                     if dry < 3 {
@@ -951,12 +984,14 @@ mod tests {
                     if tx.abs().max(tz.abs()) != r {
                         continue;
                     }
+                    // W335: probe the same surface the builder
+                    // samples (margin covers the bilinear delta).
+                    let ow = crate::worldgen::mcgen::terrain::overworld_for(
+                        ctx.effective_seed(),
+                    );
                     let deep = (0..16).all(|i| {
-                        crate::worldgen::mcgen::terrain::mc_floor_at(
-                            &ctx,
-                            tx * 16 + i,
-                            tz * 16 + 8,
-                        ) < SEA_LEVEL - 2
+                        ow.preliminary_surface(tx * 16 + i, tz * 16 + 8)
+                            < SEA_LEVEL - 4
                     });
                     if !deep {
                         continue;
@@ -1023,7 +1058,7 @@ mod tests {
         // Find a deep far tile via the same preliminary surface the
         // builder samples, then require its water sheet.
         let ow = crate::worldgen::mcgen::terrain::overworld_for(
-            ctx.base_seed,
+            ctx.effective_seed(),
         );
         let span = LOD2_TILE_CHUNKS * CS;
         for r in 0..16i32 {

@@ -186,7 +186,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             // far scenery only filled in after stopping. A 2/frame
             // trickle keeps real chunks dominant; the full 16/frame
             // burst still applies once the queue is idle.
-            let cap = if vx.pending_chunks.is_empty() { 16 } else { 2 };
+            // W335: tiles are preliminary-surface replays now
+            // (microseconds each), so the idle drain can be generous.
+            let cap = if vx.pending_chunks.is_empty() { 64 } else { 2 };
             let mut sent = 0usize;
             while sent < cap {
                 let Some(pending) = vx.lod_pending.pop() else { break };
