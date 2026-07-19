@@ -302,6 +302,10 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/flower_pot" | "flower_pot" => Some(build_flower_pot()),
         "block/decorated_pot" | "decorated_pot" => Some(build_decorated_pot()),
         "block/iron_chain" | "iron_chain" => Some(build_cross("iron_chain")),
+        // W331: entity-rendered decor plates.
+        "block/wall_sign" | "wall_sign" => Some(build_wall_sign()),
+        "block/wall_banner" | "wall_banner" => Some(build_wall_banner()),
+        "block/skeleton_skull" | "skeleton_skull" => Some(build_skeleton_skull()),
         // W294: farmland shares the 15/16 geometry with its own top.
         "block/farmland_moist" | "farmland_moist" | "block/farmland"
         | "farmland" => Some(build_farmland()),
@@ -393,6 +397,22 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     // W323: chain fallback (the real pack uses template_chain JSON).
     if crate::block::block_type(id).is_some_and(|b| b.name == "iron_chain") {
         return Some("block/iron_chain");
+    }
+    // W331: wall signs + wall banners + the skull are entity-rendered
+    // in MC (element-less models), so the hand-built plates/boxes ARE
+    // the primary path.
+    if crate::block::block_type(id)
+        .is_some_and(|b| b.name.ends_with("_wall_sign"))
+    {
+        return Some("block/wall_sign");
+    }
+    if crate::block::block_type(id)
+        .is_some_and(|b| b.name.ends_with("_wall_banner"))
+    {
+        return Some("block/wall_banner");
+    }
+    if crate::block::block_type(id).is_some_and(|b| b.name == "skeleton_skull") {
+        return Some("block/skeleton_skull");
     }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -888,6 +908,78 @@ pub(crate) fn build_decorated_pot() -> BlockModel {
                 south: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
                 west: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
                 east: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W331: a wall-mounted sign plate - 12x8x2 board against the +Z
+/// face (the mesher rotates via the recorded facing where present;
+/// unrotated it still reads as a sign). Uses the block's own side
+/// texture (#side resolves to the planks family).
+pub(crate) fn build_wall_sign() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [2.0, 4.0, 14.0],
+            to: [14.0, 12.0, 16.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([2.0, 14.0, 14.0, 16.0], "#side", None)),
+                up: Some(uv_face([2.0, 0.0, 14.0, 2.0], "#side", None)),
+                north: Some(uv_face([2.0, 4.0, 14.0, 12.0], "#side", None)),
+                south: Some(uv_face([2.0, 4.0, 14.0, 12.0], "#side", None)),
+                west: Some(uv_face([14.0, 4.0, 16.0, 12.0], "#side", None)),
+                east: Some(uv_face([0.0, 4.0, 2.0, 12.0], "#side", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W331: a hanging wall banner - a thin full-height cloth sheet on
+/// the +Z face, coloured by the block's wool texture.
+pub(crate) fn build_wall_banner() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [1.0, 0.0, 14.5],
+            to: [15.0, 14.0, 15.5],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([1.0, 15.0, 15.0, 16.0], "#side", None)),
+                up: Some(uv_face([1.0, 0.0, 15.0, 1.0], "#side", None)),
+                north: Some(uv_face([1.0, 1.0, 15.0, 15.0], "#side", None)),
+                south: Some(uv_face([1.0, 1.0, 15.0, 15.0], "#side", None)),
+                west: Some(uv_face([15.0, 1.0, 16.0, 15.0], "#side", None)),
+                east: Some(uv_face([0.0, 1.0, 1.0, 15.0], "#side", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
+/// W331: a skull pedestal box - 8x8x8 sitting on the floor centre,
+/// bone-toned from the block's tiles (the real skeleton-head UV
+/// unwrap needs the entity sheet in the atlas - follow-up).
+pub(crate) fn build_skeleton_skull() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [4.0, 0.0, 4.0],
+            to: [12.0, 8.0, 12.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([4.0, 4.0, 12.0, 12.0], "#bottom", Some(CubeFace::Down))),
+                up: Some(uv_face([4.0, 4.0, 12.0, 12.0], "#top", None)),
+                north: Some(uv_face([4.0, 8.0, 12.0, 16.0], "#side", None)),
+                south: Some(uv_face([4.0, 8.0, 12.0, 16.0], "#side", None)),
+                west: Some(uv_face([4.0, 8.0, 12.0, 16.0], "#side", None)),
+                east: Some(uv_face([4.0, 8.0, 12.0, 16.0], "#side", None)),
             },
         }],
         textures: HashMap::new(),

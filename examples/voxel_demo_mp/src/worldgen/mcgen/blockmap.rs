@@ -124,31 +124,15 @@ const RENAMES: &[(&str, &str)] = &[
 /// blockmap test pins the full-village unmapped set to this list so
 /// a template update can't silently grow the gap.
 pub(crate) const KNOWN_SKIPS: &[&str] = &[
-    "bell",
     "brown_wall_banner",
     "campfire",
-    "composter",
-    "oak_wall_sign",
-    "spruce_wall_sign",
-    "water_cauldron",
     // W251 outpost decoration.
-    "white_wall_banner",
     // W259 mansion decoration.
-    "attached_melon_stem",
-    "attached_pumpkin_stem",
-    "black_wall_banner",
-    "cauldron",
-    "gray_wall_banner",
-    "light_gray_wall_banner",
-    "tnt",
     // W261 ancient city decoration (the redstone lab's piston head,
     // the skull piles).
-    "piston_head",
-    "skeleton_skull",
     // W263 trial chambers decoration (archaeology pots, tripwire
     // traps, dripstone, hanging chains).
-    "tripwire",
-    "tripwire_hook",
+    "tnt",
 ];
 
 fn log_unmapped(name: &str) {
@@ -173,6 +157,10 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
         // drops them and the marker handlers clear the cell - air
         // matches the placed result (the igloo chest marker).
         "structure_block" => return Mapped::Id(0),
+        // W331: the tripwire string is a near-invisible trap line -
+        // air beats a magenta placeholder until a real string model
+        // lands (the hooks themselves DO map).
+        "tripwire" => return Mapped::Id(0),
         // Two-cell plants: the engine splits them into two ids.
         "tall_grass" => {
             let ours = match state.prop("half") {
@@ -219,6 +207,11 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
     }
     if let Some(id) = registry_id(name) {
         return Mapped::Id(id);
+    }
+    // W331: filled cauldron states collapse onto the empty cauldron
+    // (the water fill overlay needs the level-aware model).
+    if name == "water_cauldron" || name == "lava_cauldron" {
+        return registry_id("cauldron").map(Mapped::Id).unwrap_or(Mapped::Keep);
     }
     if let Some((_, ours)) = RENAMES.iter().find(|(mc, _)| *mc == name)
         && let Some(id) = registry_id(ours)

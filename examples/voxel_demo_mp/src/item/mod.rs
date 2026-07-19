@@ -2651,6 +2651,21 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 962, name: "pointed_dripstone", display: Some("Pointed Dripstone"), places: Some(962), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 963, name: "decorated_pot", display: Some("Decorated Pot"), places: Some(963), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 964, name: "iron_chain", display: Some("Chain"), places: Some(964), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W331: second known-missing batch.
+    ItemType { id: 965, name: "composter", display: Some("Composter"), places: Some(965), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 966, name: "bell", display: Some("Bell"), places: Some(966), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 967, name: "cauldron", display: Some("Cauldron"), places: Some(967), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 968, name: "piston_head", display: Some("Piston Head"), places: Some(968), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 969, name: "tripwire_hook", display: Some("Tripwire Hook"), places: Some(969), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 970, name: "oak_wall_sign", display: Some("Oak Sign"), places: Some(970), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 971, name: "spruce_wall_sign", display: Some("Spruce Sign"), places: Some(971), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 972, name: "white_wall_banner", display: Some("White Banner"), places: Some(972), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 973, name: "black_wall_banner", display: Some("Black Banner"), places: Some(973), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 974, name: "gray_wall_banner", display: Some("Gray Banner"), places: Some(974), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 975, name: "light_gray_wall_banner", display: Some("Light Gray Banner"), places: Some(975), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 976, name: "skeleton_skull", display: Some("Skeleton Skull"), places: Some(976), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 977, name: "attached_melon_stem", display: Some("Attached Melon Stem"), places: Some(977), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 978, name: "attached_pumpkin_stem", display: Some("Attached Pumpkin Stem"), places: Some(978), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
