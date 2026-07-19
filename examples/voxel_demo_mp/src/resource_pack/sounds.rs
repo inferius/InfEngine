@@ -260,6 +260,14 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/horse/say", "entity.horse.ambient"),
     ("mob/horse/hurt", "entity.horse.hurt"),
     ("mob/horse/death", "entity.horse.death"),
+    // W327: ghast (moans carry across the nether).
+    ("mob/ghast/say", "entity.ghast.ambient"),
+    ("mob/ghast/hurt", "entity.ghast.hurt"),
+    ("mob/ghast/death", "entity.ghast.death"),
+    // W327: magma cube (squishy hops).
+    ("mob/magma_cube/say", "entity.magma_cube.squish"),
+    ("mob/magma_cube/hurt", "entity.magma_cube.hurt"),
+    ("mob/magma_cube/death", "entity.magma_cube.death"),
     // W302: villager (the classic hrmm).
     ("mob/villager/say", "entity.villager.ambient"),
     ("mob/villager/hurt", "entity.villager.hurt"),

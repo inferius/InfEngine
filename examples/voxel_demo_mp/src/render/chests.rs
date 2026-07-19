@@ -102,7 +102,7 @@ fn bake_chest(
     }
     // The chest base sits on the ground by construction (base box
     // spans MC y -10..0 -> world 0..10/16).
-    BakedModel { bones, ground_offset: 0.0 }
+    BakedModel { bones, ground_offset: 0.0, model_scale: 1.0 }
 }
 
 /// One chest cube with the chest-sheet UV conventions (see

@@ -495,6 +495,10 @@ pub(crate) struct MobMeshes {
     pub(crate) iron_golem_model: Option<crate::entity_model::BakedModel>,
     /// W322 - horse (universal `AbstractEquineModel` data).
     pub(crate) horse_model: Option<crate::entity_model::BakedModel>,
+    /// W327 - ghast (universal `GhastModel` data, scale 4.5).
+    pub(crate) ghast_model: Option<crate::entity_model::BakedModel>,
+    /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
+    pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -1026,6 +1030,42 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "horse entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Ghast (64x32, entity/ghast subdir) --------------------------------
+    for root in &entity_roots {
+        let p = root.join("ghast").join("ghast.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.ghast_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::ghast::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "ghast entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Magma cube (64x64, entity/slime subdir) ---------------------------
+    for root in &entity_roots {
+        let p = root.join("slime").join("magmacube.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.magma_cube_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::magma_cube::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "magma cube entity texture bound (universal model)"
             );
             break;
         }

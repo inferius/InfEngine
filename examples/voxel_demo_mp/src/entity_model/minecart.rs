@@ -56,4 +56,4 @@ const BONES: &[Bone] = &[
     },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0 };

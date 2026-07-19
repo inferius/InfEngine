@@ -125,7 +125,13 @@ pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3],
 /// True for hostile kinds in the H.3 pool. Mirrors
 /// `MobKind::is_hostile` but consumes the raw u8 the pool stores.
 fn is_hostile_kind(kind: u8) -> bool {
-    matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+    matches!(
+        kind,
+        KIND_ZOMBIE
+            | KIND_SKELETON
+            | KIND_SPIDER
+            | super::kinds::KIND_MAGMA_CUBE
+    )
 }
 
 /// W145: mint one mob from a spawn egg at `pos` (clicked-cell
@@ -207,6 +213,10 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
         x if x == super::kinds::KIND_HORSE => 22.0,
+        // W327: Ghast.createAttributes MAX_HEALTH 10.
+        x if x == super::kinds::KIND_GHAST => 10.0,
+        // W327: magma cube size 2 -> size*size = 4 HP.
+        x if x == super::kinds::KIND_MAGMA_CUBE => 4.0,
         KIND_SPIDER => 12.0,
         KIND_CHICKEN => 4.0,
         KIND_PIG => 10.0,
@@ -256,14 +266,14 @@ pub(crate) fn pick_kind_for(
             );
         });
         let roll = rng.next_f32() * 152.0;
-        // W300: the real nether_wastes pool - zombified piglin 100 /
-        // ghast 50 / magma cube 2. The ghast + magma slots SKIP
-        // until those mobs are ported (missing mob > wrong mob; the
-        // overworld zombie/skeleton stand-ins are gone).
+        // W300/W327: the real nether_wastes pool - zombified piglin
+        // 100 / ghast 50 / magma cube 2, all three ported now.
         return if roll < 100.0 {
             Some(super::kinds::KIND_ZOMBIFIED_PIGLIN)
+        } else if roll < 150.0 {
+            Some(super::kinds::KIND_GHAST)
         } else {
-            None
+            Some(super::kinds::KIND_MAGMA_CUBE)
         };
     }
     let biome = biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed);

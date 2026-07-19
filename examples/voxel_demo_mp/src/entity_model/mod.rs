@@ -36,8 +36,10 @@ pub(crate) mod cat;
 pub(crate) mod chest;
 pub(crate) mod chicken;
 pub(crate) mod cow;
+pub(crate) mod ghast;
 pub(crate) mod horse;
 pub(crate) mod iron_golem;
+pub(crate) mod magma_cube;
 pub(crate) mod minecart;
 pub(crate) mod pig;
 pub(crate) mod piglin;
@@ -118,6 +120,11 @@ pub(crate) struct Bone {
 /// 64x64 in modern ones - same `texOffs`, different normalization).
 pub(crate) struct EntityModel {
     pub bones: &'static [Bone],
+    /// W327: MC `MeshTransformer.scaling(..)` - a whole-model scale
+    /// applied AFTER the UV unwrap (box sizes keep driving the
+    /// texture rects; only world-space geometry grows). 1.0 for
+    /// most mobs; the ghast ships 4.5, the magma cube 2.0.
+    pub scale: f32,
 }
 
 /// A bone's baked mesh handle + the source bone (for its transform).
@@ -131,6 +138,9 @@ pub(crate) struct BakedModel {
     pub bones: Vec<BakedBone>,
     /// World-space lift so the lowest cube (feet) sits at `pos.y`.
     pub ground_offset: f32,
+    /// W327: the model's whole-body scale (EntityModel::scale),
+    /// folded into the MC->world flip matrix at draw time.
+    pub model_scale: f32,
 }
 
 /// Per-frame animation pose for a bone, layered on top of its default
@@ -186,7 +196,13 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
             }
         }
     }
-    BakedModel { bones, ground_offset: -lowest_world_y }
+    BakedModel {
+        bones,
+        // W327: the ground scan ran in unscaled MC space; the
+        // model-level scale grows the world extent linearly.
+        ground_offset: -lowest_world_y * model.scale,
+        model_scale: model.scale,
+    }
 }
 
 /// W162: a bone's own local transform in MC pixel space:
@@ -418,7 +434,9 @@ pub(crate) fn bone_matrix(
     // Entity placement: translate to world pos (feet on ground), yaw.
     let place = Mat4::from_translation(world_pos + Vec3::new(0.0, ground_offset, 0.0))
         * Mat4::from_rotation_y(yaw);
-    // MC -> engine: flip X + Y, scale 1/16.
+    // MC -> engine: flip X + Y, scale 1/16. (Model-level scale is a
+    // draw_with_root concern - this legacy helper serves 1.0-scale
+    // paths only.)
     let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
     // Bone pose in MC pixels: move to pivot, then rotate about it.
     let rx = bone.rotation[0] + pose.extra_rotation[0];
@@ -480,7 +498,11 @@ pub(crate) fn draw_with_root(
     tint: [f32; 4],
     mut pose_for: impl FnMut(&str) -> BonePose,
 ) {
-    let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
+    // W327: fold the model-level scale into the MC->world flip so
+    // every bone transform (pivots included, still in MC pixels)
+    // scales uniformly.
+    let s = MODEL_SCALE * baked.model_scale;
+    let flip = Mat4::from_scale(Vec3::new(-s, -s, s));
     // Cache each bone's local matrix (pose included) once, indexed
     // by position so the parent walk is a cheap slice lookup.
     let locals: Vec<Mat4> = baked
@@ -622,7 +644,8 @@ mod tests {
     /// would be back-face culled.
     #[test]
     fn flip_preserves_winding() {
-        let flip = Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
+        let flip =
+            Mat4::from_scale(Vec3::new(-MODEL_SCALE, -MODEL_SCALE, MODEL_SCALE));
         assert!(flip.determinant() > 0.0, "flip det must be positive");
     }
 

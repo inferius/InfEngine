@@ -121,7 +121,15 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
 /// spider all share the stub chase + melee path in H.3; H.8 splits
 /// skeleton off into a ranged-bow goal.
 fn kind_is_hostile(kind: u8) -> bool {
-    matches!(kind, KIND_ZOMBIE | KIND_SKELETON | KIND_SPIDER)
+    // W327: the magma cube joins the melee chasers (MC deals its
+    // contact damage through the same attack path).
+    matches!(
+        kind,
+        KIND_ZOMBIE
+            | KIND_SKELETON
+            | KIND_SPIDER
+            | super::kinds::KIND_MAGMA_CUBE
+    )
 }
 
 /// W147 - MC `LookAtPlayerGoal` port. While a player is within 8
@@ -425,6 +433,21 @@ fn step_one(
                 }
             }
         }
+        // W327: the magma cube moves the same hop-only way (MC
+        // Slime.MoveHelper jumps every jumpDelay), just heavier
+        // and rarer than the rabbit.
+        if m.kind == super::kinds::KIND_MAGMA_CUBE {
+            let grounded = m.vy == 0.0;
+            if grounded {
+                if m.hop_cd <= 0.0 {
+                    m.vy = 5.2;
+                    m.hop_cd = 0.6 + rng.next_f32() * 1.0;
+                } else {
+                    vx = 0.0;
+                    vz = 0.0;
+                }
+            }
+        }
         // Axis-resolved collision against world voxels so
         // the sheep can't walk into trees / walls.
         let step_x = vx * dt;
@@ -591,6 +614,12 @@ fn step_one(
                 m.vy = 0.0;
             }
             _ => {
+                // W327: the ghast FLOATS - MC ghasts ignore gravity
+                // entirely (RandomFloatAroundGoal steers in 3D; our
+                // v1 keeps the current altitude and wanders).
+                if m.kind == super::kinds::KIND_GHAST {
+                    m.vy = 0.0;
+                } else {
                 m.vy -= 32.0 * dt;
                 if m.kind == super::kinds::KIND_CHICKEN {
                     m.vy = m.vy.max(-2.0);
@@ -602,6 +631,7 @@ fn step_one(
                 {
                     m.pos[1] = g;
                     m.vy = 0.0;
+                }
                 }
             }
         }

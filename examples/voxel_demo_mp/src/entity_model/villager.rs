@@ -49,4 +49,4 @@ const BONES: &[Bone] = &[
     Bone { parent: None, name: "villager_leg_l", pivot: [2.0, 12.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: LEG_L },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0 };
