@@ -552,8 +552,14 @@ impl WorkerPool {
                                     // W321: pure column-data replay -
                                     // the W314 shared core cache makes
                                     // repeat columns cheap; no chunk is
-                                    // generated or stored.
-                                    let res = crate::lod::build_lod_tile(&job);
+                                    // generated or stored. W333: level 2
+                                    // samples the preliminary surface
+                                    // only (microseconds a tile).
+                                    let res = if job.level == 2 {
+                                        crate::lod::build_lod2_tile(&job)
+                                    } else {
+                                        crate::lod::build_lod_tile(&job)
+                                    };
                                     if res_tx
                                         .send(WorkerResult::LodTile(res))
                                         .is_err()

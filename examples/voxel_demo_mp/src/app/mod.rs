@@ -124,6 +124,11 @@ pub(crate) struct Voxel {
     pub(crate) lod_pending: BinaryHeap<crate::lod::PendingLodTile>,
     /// W321: dedup set for `lod_pending` + in-flight tiles.
     pub(crate) lod_pending_set: HashSet<[i32; 2]>,
+    /// W333: FAR shells (level 2, 4x4-chunk tiles keyed by tile
+    /// coordinate = chunk / 4).
+    pub(crate) lod2_meshes: HashMap<[i32; 2], crate::lod::LodTile>,
+    pub(crate) lod2_pending: BinaryHeap<crate::lod::PendingLodTile>,
+    pub(crate) lod2_pending_set: HashSet<[i32; 2]>,
     /// W28.1: Chunks queued for generation, ordered closest-first by
     /// XZ distance from the player. Replaces VecDeque so workers
     /// always receive the most relevant chunks first.
@@ -1266,6 +1271,9 @@ pub(crate) struct Settings {
     /// `view_distance`). 0 disables the ring; values at or below
     /// `view_distance` also effectively disable it.
     pub(crate) lod_distance: u8,
+    /// W333: FAR ring radius in chunks (preliminary-surface tiles
+    /// beyond `lod_distance`, up to 256). 0 disables it.
+    pub(crate) lod2_distance: u8,
 }
 
 impl Default for Settings {
@@ -1283,6 +1291,7 @@ impl Default for Settings {
             language: "en_us".to_string(),
             ui_scale: 1.0,
             lod_distance: crate::lod::LOD_DISTANCE_DEFAULT,
+            lod2_distance: crate::lod::LOD2_DISTANCE_DEFAULT,
         }
     }
 }

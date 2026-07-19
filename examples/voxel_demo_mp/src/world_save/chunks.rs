@@ -169,6 +169,13 @@ pub(crate) fn chunk_path(slug: &str, dim: &str, coord: [i32; 3]) -> PathBuf {
     chunk_path_under(&world_dir(slug), dim, coord)
 }
 
+/// W333: cheap existence probe for the unload-persist filter (a
+/// chunk whose file is already on disk and carries no runtime edits
+/// does not need a rewrite).
+pub(crate) fn chunk_file_exists(slug: &str, dim: &str, coord: [i32; 3]) -> bool {
+    chunk_path(slug, dim, coord).is_file()
+}
+
 /// Same as `chunk_path` but rooted at an explicit base path. Used
 /// by tests + the future hosted-server tooling that drives saves
 /// out of a non-default directory.

@@ -43,11 +43,23 @@ const WATER_SURFACE: f32 = 62.9;
 /// full-res geometry always wins the depth test while both exist.
 const SHELL_SINK: f32 = 1.0 / 16.0;
 
+/// W333: LOD2 tile span in chunks (one far tile = 4x4 chunk
+/// columns sampled every 4 blocks from the preliminary surface).
+pub(crate) const LOD2_TILE_CHUNKS: i32 = 4;
+/// Hard cap for the far ring radius (chunks).
+pub(crate) const LOD2_DISTANCE_MAX: i32 = 256;
+/// Default far ring radius (chunks; 0 = off).
+pub(crate) const LOD2_DISTANCE_DEFAULT: u8 = 128;
+
 /// Job payload for `workers::Job::LodTile` - everything the worker
 /// needs to build one tile off-thread.
 pub(crate) struct LodTileJob {
-    /// Chunk-column key `[cx, cz]`.
+    /// Tile key: chunk column `[cx, cz]` for level 1, a 4x4-chunk
+    /// tile coordinate for level 2 (world chunk = key * 4).
     pub(crate) key: [i32; 2],
+    /// 1 = near shell (per-column, real floors, trees, water),
+    /// 2 = far shell (preliminary-surface heightmap, 4-block texels).
+    pub(crate) level: u8,
     pub(crate) ctx: WorldgenCtx,
     pub(crate) pack: Arc<ResourcePack>,
     pub(crate) dim: String,
@@ -56,6 +68,7 @@ pub(crate) struct LodTileJob {
 /// Finished tile geometry, shipped back over the worker channel.
 pub(crate) struct LodTileResult {
     pub(crate) key: [i32; 2],
+    pub(crate) level: u8,
     pub(crate) dim: String,
     pub(crate) y_min: f32,
     pub(crate) y_max: f32,
@@ -420,6 +433,146 @@ pub(crate) fn build_lod_tile(job: &LodTileJob) -> LodTileResult {
     }
     LodTileResult {
         key: job.key,
+        level: 1,
+        dim: job.dim.clone(),
+        y_min,
+        y_max,
+        opaque: (ov, oi),
+        water: (wv, wi),
+        water_tint,
+    }
+}
+
+/// W333: build one FAR shell tile (level 2). Covers
+/// `LOD2_TILE_CHUNKS`^2 chunk columns sampled every 4 blocks from
+/// the overworld PRELIMINARY surface spline - no column data, no
+/// carve, no aquifer: a sample costs microseconds, so the 256-chunk
+/// horizon stays cheap to build. Texels are 4x4 blocks textured
+/// with the biome surface block; sub-sea texels take the water
+/// sheet. No trees at this range.
+pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
+    const STEP: i32 = 4;
+    const N: usize = (LOD2_TILE_CHUNKS as usize * 16) / STEP as usize;
+    let [tx, tz] = job.key;
+    let ctx = &job.ctx;
+    let pack = &job.pack;
+    let seed = ctx.effective_seed();
+    let ow = mcgen::terrain::overworld_for(seed);
+    let base_x = tx * LOD2_TILE_CHUNKS * CS;
+    let base_z = tz * LOD2_TILE_CHUNKS * CS;
+
+    // (N+2)^2 height samples: a 1-texel border feeds edge skirts.
+    let mut h = [[0i32; N + 2]; N + 2];
+    for (iz, row) in h.iter_mut().enumerate() {
+        for (ix, cell) in row.iter_mut().enumerate() {
+            let wx = base_x + (ix as i32 - 1) * STEP;
+            let wz = base_z + (iz as i32 - 1) * STEP;
+            *cell = ow.preliminary_surface(wx, wz);
+        }
+    }
+    let mut ov: Vec<MeshVertex> = Vec::new();
+    let mut oi: Vec<u32> = Vec::new();
+    let mut wv: Vec<MeshVertex> = Vec::new();
+    let mut wi: Vec<u32> = Vec::new();
+    let mut y_min = f32::MAX;
+    let mut y_max = f32::MIN;
+    let water_tile = face_tile(pack, crate::block::WATER_ID, BlockFace::Top);
+    let water_slot = pack
+        .block_face_ref(crate::block::WATER_ID, BlockFace::Top)
+        .map(|t| pack.anim_slot_for_ref(t) as u32)
+        .unwrap_or(0);
+    let wy = WATER_SURFACE - SHELL_SINK;
+    for iz in 0..N {
+        for ix in 0..N {
+            let hy = h[iz + 1][ix + 1];
+            let wx = base_x + ix as i32 * STEP;
+            let wz = base_z + iz as i32 * STEP;
+            let x0 = wx as f32;
+            let z0 = wz as f32;
+            let mc = mcgen::terrain::mc_full_biome_at(ctx, wx + 2, wz + 2);
+            let block =
+                crate::worldgen::climate::surface_block(mc.to_engine(), hy).0;
+            let tile = face_tile(pack, block, BlockFace::Top);
+            let anim = (block as u32) << 8;
+            let y = (hy + 1) as f32 - SHELL_SINK;
+            y_min = y_min.min(y);
+            y_max = y_max.max(y);
+            let sp = STEP as f32;
+            push_quad(
+                &mut ov,
+                &mut oi,
+                [
+                    [x0, y, z0],
+                    [x0 + sp, y, z0],
+                    [x0 + sp, y, z0 + sp],
+                    [x0, y, z0 + sp],
+                ],
+                [[0.0, 0.0], [sp, 0.0], [sp, sp], [0.0, sp]],
+                [0.0, 1.0, 0.0],
+                tile,
+                anim,
+            );
+            let side_tile = face_tile(pack, block, BlockFace::Sides);
+            let neighbours: [(i32, i32, [f32; 3]); 4] = [
+                (0, -1, [0.0, 0.0, -1.0]),
+                (0, 1, [0.0, 0.0, 1.0]),
+                (-1, 0, [-1.0, 0.0, 0.0]),
+                (1, 0, [1.0, 0.0, 0.0]),
+            ];
+            for (ndx, ndz, normal) in neighbours {
+                let nh = h[(iz as i32 + 1 + ndz) as usize]
+                    [(ix as i32 + 1 + ndx) as usize];
+                if nh >= hy {
+                    continue;
+                }
+                let bottom_y = (nh + 1) as f32 - SHELL_SINK;
+                y_min = y_min.min(bottom_y);
+                let mut seg_top = y;
+                while seg_top > bottom_y {
+                    let seg_bot = (seg_top - 16.0).max(bottom_y);
+                    let hh = seg_top - seg_bot;
+                    let (corners, quad_uv) = skirt_quad_w(
+                        x0, z0, seg_top, seg_bot, hh, ndx, ndz, sp,
+                    );
+                    push_quad(
+                        &mut ov, &mut oi, corners, quad_uv, normal,
+                        side_tile, anim,
+                    );
+                    seg_top = seg_bot;
+                }
+            }
+            if hy < SEA_LEVEL {
+                y_max = y_max.max(wy);
+                push_quad(
+                    &mut wv,
+                    &mut wi,
+                    [
+                        [x0, wy, z0],
+                        [x0 + sp, wy, z0],
+                        [x0 + sp, wy, z0 + sp],
+                        [x0, wy, z0 + sp],
+                    ],
+                    [[0.0, 0.0], [sp, 0.0], [sp, sp], [0.0, sp]],
+                    [0.0, 1.0, 0.0],
+                    water_tile,
+                    water_slot,
+                );
+            }
+        }
+    }
+    let mcb = mcgen::terrain::mc_full_biome_at(
+        ctx,
+        base_x + LOD2_TILE_CHUNKS * 8,
+        base_z + LOD2_TILE_CHUNKS * 8,
+    );
+    let water_tint = mcgen::colors::water_color(mcb);
+    if y_min > y_max {
+        y_min = 0.0;
+        y_max = 0.0;
+    }
+    LodTileResult {
+        key: job.key,
+        level: 2,
         dim: job.dim.clone(),
         y_min,
         y_max,
@@ -442,8 +595,23 @@ fn skirt_quad(
     ndx: i32,
     ndz: i32,
 ) -> ([[f32; 3]; 4], [[f32; 2]; 4]) {
-    let x1 = x0 + 1.0;
-    let z1 = z0 + 1.0;
+    skirt_quad_w(x0, z0, seg_top, seg_bot, hh, ndx, ndz, 1.0)
+}
+
+/// W333: width-parametrised skirt (LOD2 texels are 4 blocks wide).
+#[allow(clippy::too_many_arguments)]
+fn skirt_quad_w(
+    x0: f32,
+    z0: f32,
+    seg_top: f32,
+    seg_bot: f32,
+    hh: f32,
+    ndx: i32,
+    ndz: i32,
+    w: f32,
+) -> ([[f32; 3]; 4], [[f32; 2]; 4]) {
+    let x1 = x0 + w;
+    let z1 = z0 + w;
     // W325: corner order follows the greedy mesher's per-face tables
     // (CCW viewed from the OUTWARD normal, triangles [0,2,1][0,3,2]).
     // The first cut had every sheet wound inside-out, so skirts
@@ -459,7 +627,7 @@ fn skirt_quad(
                 [x0, seg_top, z0],
                 [x0, seg_bot, z0],
             ],
-            [[0.0, hh], [0.0, 0.0], [1.0, 0.0], [1.0, hh]],
+            [[0.0, hh], [0.0, 0.0], [w, 0.0], [w, hh]],
         ),
         // +Z edge, outward normal +Z.
         (0, 1) => (
@@ -469,7 +637,7 @@ fn skirt_quad(
                 [x1, seg_top, z1],
                 [x1, seg_bot, z1],
             ],
-            [[0.0, hh], [0.0, 0.0], [1.0, 0.0], [1.0, hh]],
+            [[0.0, hh], [0.0, 0.0], [w, 0.0], [w, hh]],
         ),
         // -X edge, outward normal -X.
         (-1, 0) => (
@@ -479,7 +647,7 @@ fn skirt_quad(
                 [x0, seg_bot, z1],
                 [x0, seg_bot, z0],
             ],
-            [[0.0, 0.0], [1.0, 0.0], [1.0, hh], [0.0, hh]],
+            [[0.0, 0.0], [w, 0.0], [w, hh], [0.0, hh]],
         ),
         // +X edge, outward normal +X.
         _ => (
@@ -489,7 +657,7 @@ fn skirt_quad(
                 [x1, seg_top, z1],
                 [x1, seg_top, z0],
             ],
-            [[0.0, hh], [1.0, hh], [1.0, 0.0], [0.0, 0.0]],
+            [[0.0, hh], [w, hh], [w, 0.0], [0.0, 0.0]],
         ),
     }
 }
@@ -514,6 +682,39 @@ pub(crate) fn queue_lod_draws(
             t.y_max + 1.0,
             min.z + CS as f32,
         );
+        if !frustum.is_aabb_visible(min, max) {
+            continue;
+        }
+        if let Some(hm) = t.opaque {
+            renderer.queue_chunk_draw(hm, model, [1.0, 1.0, 1.0, 1.0], 0.0, 0.5);
+        }
+        if let Some(hw) = t.water {
+            renderer.queue_chunk_draw(
+                hw,
+                model,
+                [t.water_tint[0], t.water_tint[1], t.water_tint[2], 0.72],
+                0.0,
+                1.0,
+            );
+        }
+    }
+}
+
+/// W333: queue the FAR ring (4x4-chunk tiles, 64-block AABBs).
+pub(crate) fn queue_lod2_draws(
+    renderer: &mut Renderer,
+    tiles: &HashMap<[i32; 2], LodTile>,
+    frustum: &crate::frustum::Frustum,
+) {
+    let model = glam::Mat4::IDENTITY.to_cols_array();
+    let span = (LOD2_TILE_CHUNKS * CS) as f32;
+    for (key, t) in tiles {
+        let min = glam::Vec3::new(
+            (key[0] * LOD2_TILE_CHUNKS * CS) as f32,
+            t.y_min - 1.0,
+            (key[1] * LOD2_TILE_CHUNKS * CS) as f32,
+        );
+        let max = glam::Vec3::new(min.x + span, t.y_max + 1.0, min.z + span);
         if !frustum.is_aabb_visible(min, max) {
             continue;
         }
@@ -582,6 +783,7 @@ mod tests {
         );
         let job = LodTileJob {
             key: [3, -2],
+            level: 1,
             ctx: crate::worldgen::WorldgenCtx {
                 base_seed: 1337,
                 dim: "overworld".to_string(),
@@ -709,6 +911,7 @@ mod tests {
                     }
                     let res = build_lod_tile(&LodTileJob {
                         key: [tx, tz],
+                        level: 1,
                         ctx,
                         pack,
                         dim: "overworld".to_string(),
@@ -760,6 +963,7 @@ mod tests {
                     }
                     let res = build_lod_tile(&LodTileJob {
                         key: [tx, tz],
+                        level: 1,
                         ctx,
                         pack,
                         dim: "overworld".to_string(),
@@ -782,6 +986,77 @@ mod tests {
             }
         }
         panic!("no ocean tile found within 24 tiles of origin for seed");
+    }
+
+    #[test]
+    fn w333_far_tile_builds_from_preliminary_surface() {
+        // Level-2 tiles must come back as whole quads inside the
+        // world Y range without touching column data, and a mostly
+        // sub-sea far tile must still carry a water sheet.
+        let pack = std::sync::Arc::new(
+            crate::resource_pack::ResourcePack::load(),
+        );
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 2120129009,
+            dim: "overworld".to_string(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        let land = build_lod2_tile(&LodTileJob {
+            key: [0, 0],
+            level: 2,
+            ctx: ctx.clone(),
+            pack: std::sync::Arc::clone(&pack),
+            dim: "overworld".to_string(),
+        });
+        assert_eq!(land.level, 2);
+        assert!(!land.opaque.0.is_empty(), "far shell has geometry");
+        assert_eq!(land.opaque.0.len() % 4, 0, "whole quads");
+        assert_eq!(land.opaque.1.len(), land.opaque.0.len() / 4 * 6);
+        assert!(
+            land.y_min >= -64.0
+                && land.y_max <= 320.0
+                && land.y_min <= land.y_max,
+            "y range sane: {} {}",
+            land.y_min,
+            land.y_max,
+        );
+        // Find a deep far tile via the same preliminary surface the
+        // builder samples, then require its water sheet.
+        let ow = crate::worldgen::mcgen::terrain::overworld_for(
+            ctx.base_seed,
+        );
+        let span = LOD2_TILE_CHUNKS * CS;
+        for r in 0..16i32 {
+            for tz in -r..=r {
+                for tx in -r..=r {
+                    if tx.abs().max(tz.abs()) != r {
+                        continue;
+                    }
+                    let deep = (0..span / 4).all(|i| {
+                        ow.preliminary_surface(
+                            tx * span + i * 4,
+                            tz * span + span / 2,
+                        ) < SEA_LEVEL - 2
+                    });
+                    if !deep {
+                        continue;
+                    }
+                    let res = build_lod2_tile(&LodTileJob {
+                        key: [tx, tz],
+                        level: 2,
+                        ctx,
+                        pack,
+                        dim: "overworld".to_string(),
+                    });
+                    assert!(
+                        !res.water.0.is_empty(),
+                        "deep far tile [{tx},{tz}] must carry water",
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("no deep far tile found within 16 tiles for seed");
     }
 
     #[test]

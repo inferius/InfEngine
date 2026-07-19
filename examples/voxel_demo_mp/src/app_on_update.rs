@@ -1739,7 +1739,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         };
         // W321: with an active LOD ring the pop-in fog curtain moves
         // out to the LOD edge - the shells ARE the far scenery.
-        let fog_distance_chunks = if vx.settings.lod_distance
+        let mut fog_distance_chunks = if vx.settings.lod_distance
             > vx.settings.view_distance
             && !vx.lod_meshes.is_empty()
         {
@@ -1747,6 +1747,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             vx.settings.view_distance
         };
+        // W333: the far ring pushes the curtain out again.
+        if vx.settings.lod2_distance > fog_distance_chunks
+            && !vx.lod2_meshes.is_empty()
+        {
+            fog_distance_chunks = vx.settings.lod2_distance;
+        }
         let _sky = crate::render::sky::apply_tint_and_fog(
             renderer,
             sun_dir,
@@ -2023,6 +2029,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W321: far surface shells (own AABB cull per tile).
         if !vx.lod_meshes.is_empty() {
             crate::lod::queue_lod_draws(renderer, &vx.lod_meshes, &frustum);
+        }
+        // W333: the FAR ring (4x4-chunk tiles).
+        if !vx.lod2_meshes.is_empty() {
+            crate::lod::queue_lod2_draws(renderer, &vx.lod2_meshes, &frustum);
         }
         DIAG_DRAWQ_US.fetch_add(_drawq_t.elapsed().as_micros() as u64, DiagOrd::Relaxed);
         // Wire outline previewing the next action. The highlight

@@ -543,21 +543,34 @@ pub(crate) fn cmd_lod(
 ) -> bool {
     if arg.is_empty() {
         lines.push(format!(
-            "LOD distance: {} (view {})",
-            voxel.settings.lod_distance, voxel.settings.view_distance
+            "LOD near {} / far {} (view {})",
+            voxel.settings.lod_distance,
+            voxel.settings.lod2_distance,
+            voxel.settings.view_distance
         ));
-    } else if let Ok(v) = arg.parse::<u8>() {
-        voxel.settings.lod_distance =
-            v.min(crate::lod::LOD_DISTANCE_MAX as u8);
-        voxel.save_config();
-        // Force the ring rescan even while standing still.
-        voxel.last_stream_origin = None;
-        lines.push(format!(
-            "LOD distance set to {}.",
-            voxel.settings.lod_distance
-        ));
-    } else {
-        lines.push(format!("Cannot parse distance: {arg}"));
+        return true;
+    }
+    // W333: `/lod <near> [far]`.
+    let mut parts = arg.split_whitespace();
+    let near = parts.next().and_then(|t| t.parse::<u8>().ok());
+    let far = parts.next().and_then(|t| t.parse::<u8>().ok());
+    match near {
+        Some(v) => {
+            voxel.settings.lod_distance =
+                v.min(crate::lod::LOD_DISTANCE_MAX as u8);
+            if let Some(f) = far {
+                voxel.settings.lod2_distance =
+                    f.min(crate::lod::LOD2_DISTANCE_MAX as u8);
+            }
+            voxel.save_config();
+            // Force the ring rescan even while standing still.
+            voxel.last_stream_origin = None;
+            lines.push(format!(
+                "LOD set to near {} / far {}.",
+                voxel.settings.lod_distance, voxel.settings.lod2_distance
+            ));
+        }
+        None => lines.push(format!("Cannot parse distance: {arg}")),
     }
     true
 }

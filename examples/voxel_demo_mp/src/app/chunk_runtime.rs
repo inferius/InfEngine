@@ -36,6 +36,14 @@ impl Voxel {
                     renderer.remove_chunk_mesh(h);
                 }
             }
+            for (_k, t) in self.lod2_meshes.drain() {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
         }
         for cc in coords {
             self.world.remove_chunk(cc);
@@ -45,6 +53,8 @@ impl Voxel {
         self.in_flight_chunks.clear();
         self.lod_pending.clear();
         self.lod_pending_set.clear();
+        self.lod2_pending.clear();
+        self.lod2_pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         // W198.13: force the streamer to re-run its queue + unload scan

@@ -161,7 +161,7 @@ thread_local! {
 }
 
 /// The assembled overworld for `seed`, built once per thread.
-fn overworld_for(seed: u32) -> Rc<Overworld> {
+pub(crate) fn overworld_for(seed: u32) -> Rc<Overworld> {
     OW_CACHE.with(|c| {
         let mut slot = c.borrow_mut();
         match slot.as_ref() {

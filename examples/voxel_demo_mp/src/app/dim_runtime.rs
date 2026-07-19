@@ -203,9 +203,19 @@ impl Voxel {
                     renderer.remove_chunk_mesh(h);
                 }
             }
+            for (_k, t) in self.lod2_meshes.drain() {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
         }
         self.lod_pending.clear();
         self.lod_pending_set.clear();
+        self.lod2_pending.clear();
+        self.lod2_pending_set.clear();
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's
         // freshly-swapped block grid so the next frame's mesh
