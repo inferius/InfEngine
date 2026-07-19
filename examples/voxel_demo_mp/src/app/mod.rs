@@ -832,6 +832,11 @@ pub(crate) struct Voxel {
     pub(crate) stonecutter_open: Option<[i32; 3]>,
     /// W319: villager the trade panel is open against (mob id).
     pub(crate) trade_open: Option<u32>,
+    /// W341: session cache of claimed professions (mob id ->
+    /// workstation-derived profession). Save persistence is a
+    /// follow-up (MobSave field).
+    pub(crate) mob_professions:
+        std::collections::HashMap<u32, &'static str>,
     pub(crate) stonecutter_input: Option<(u16, u8)>,
     /// W50.5: per-brewing-stand 5-slot container state, keyed by
     /// world voxel coords. Parallel to `furnaces`. Inserted on

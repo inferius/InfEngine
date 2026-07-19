@@ -901,6 +901,16 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         {
             vx.trade_open = Some(mid);
             trade_opened = true;
+            // W341: claim the profession from the nearest
+            // workstation once, then keep it for the session.
+            if !vx.mob_professions.contains_key(&mid)
+                && let Some(mp) =
+                    vx.mobs.iter().find(|m| m.id == mid).map(|m| m.pos)
+            {
+                let prof =
+                    crate::trades::profession_near(&vx.world, mp, mid);
+                vx.mob_professions.insert(mid, prof);
+            }
         }
         // Block place: RMB single click stays instant; no mining.
         if !fed

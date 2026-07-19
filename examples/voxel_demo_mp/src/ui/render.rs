@@ -660,7 +660,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let trade_open_id = vx.trade_open;
         let mut trade_open_local = trade_open_id.is_some();
         let trade_profession: &'static str = trade_open_id
-            .map(crate::trades::profession_for)
+            .map(|id| {
+                // W341: workstation-claimed profession wins; the
+                // stable hash covers villagers with no job site.
+                vx.mob_professions
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| crate::trades::profession_for(id))
+            })
             .unwrap_or("");
         let mut trade_buy: Option<usize> = None;
         let stonecutter_open_pos = vx.stonecutter_open;

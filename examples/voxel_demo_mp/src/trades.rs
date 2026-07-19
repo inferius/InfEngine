@@ -223,6 +223,60 @@ pub(crate) fn profession_for(mob_id: u32) -> &'static str {
     PROFESSIONS[(h % PROFESSIONS.len() as u64) as usize]
 }
 
+/// W341: MC PoiTypes -> VillagerProfession. A villager claims the
+/// job of the nearest workstation block; the table is the vanilla
+/// acquirable-job-site list.
+const WORKSTATIONS: &[(u16, &str)] = &[
+    (562, "armorer"),       // blast_furnace
+    (561, "butcher"),       // smoker
+    (559, "cartographer"),  // cartography_table
+    (566, "cleric"),        // brewing_stand
+    (965, "farmer"),        // composter
+    (749, "fisherman"),     // barrel
+    (558, "fletcher"),      // fletching_table
+    (967, "leatherworker"), // cauldron
+    (560, "librarian"),     // lectern
+    (564, "mason"),         // stonecutter
+    (565, "shepherd"),      // loom
+    (557, "toolsmith"),     // smithing_table
+    (563, "weaponsmith"),   // grindstone
+];
+
+/// W341: resolve a villager's profession from the NEAREST
+/// workstation block within the MC job-search reach (+-8 xz, +-4 y
+/// of the villager - vanilla's POI scan is villager-centred), with
+/// the stable hash as the no-workstation fallback. One-shot scan at
+/// trade-open; the caller caches per mob id.
+pub(crate) fn profession_near(
+    world: &infengine_voxel::World,
+    pos: [f32; 3],
+    mob_id: u32,
+) -> &'static str {
+    let (cx, cy, cz) = (
+        pos[0].floor() as i32,
+        pos[1].floor() as i32,
+        pos[2].floor() as i32,
+    );
+    let mut best: Option<(&'static str, i32)> = None;
+    for y in (cy - 4)..=(cy + 4) {
+        for x in (cx - 8)..=(cx + 8) {
+            for z in (cz - 8)..=(cz + 8) {
+                let id = world.get([x, y, z]).0;
+                let Some((_, prof)) =
+                    WORKSTATIONS.iter().find(|(w, _)| *w == id)
+                else {
+                    continue;
+                };
+                let d2 = (x - cx).pow(2) + (y - cy).pow(2) + (z - cz).pow(2);
+                if best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((prof, d2));
+                }
+            }
+        }
+    }
+    best.map(|(p, _)| p).unwrap_or_else(|| profession_for(mob_id))
+}
+
 /// Offers for one profession, table order (tier 1 first).
 pub(crate) fn trades_for(profession: &str) -> impl Iterator<Item = &'static TradeDef> {
     TRADES.iter().filter(move |t| t.profession == profession)
@@ -292,6 +346,26 @@ mod tests {
             assert!(PROFESSIONS.contains(&t.profession));
             assert!(t.want_n >= 1 && t.give_n >= 1);
         }
+    }
+
+    /// W341: a composter next to the villager claims the farmer
+    /// job; with no workstation the hash fallback answers.
+    #[test]
+    fn w341_workstation_claims_profession() {
+        let mut w = infengine_voxel::World::new();
+        w.insert_chunk([0, 0, 0], infengine_voxel::Chunk::filled(
+            infengine_voxel::BlockId(0),
+        ));
+        assert_eq!(
+            profession_near(&w, [4.5, 4.0, 4.5], 7),
+            profession_for(7),
+            "no workstation -> hash fallback",
+        );
+        w.set([6, 4, 4], infengine_voxel::BlockId(965)); // composter
+        assert_eq!(profession_near(&w, [4.5, 4.0, 4.5], 7), "farmer");
+        // A closer lectern outranks the composter.
+        w.set([5, 4, 4], infengine_voxel::BlockId(560));
+        assert_eq!(profession_near(&w, [4.5, 4.0, 4.5], 7), "librarian");
     }
 
     #[test]

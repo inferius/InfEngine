@@ -132,6 +132,7 @@ impl Voxel {
         // W171: stonecutter is client-side; drop its input on reset.
         self.stonecutter_open = None;
         self.trade_open = None;
+        self.mob_professions.clear();
         self.stonecutter_input = None;
         // W50.5: brewing stand maps cleared on world reset.
         self.brewing_stands.clear();
