@@ -252,6 +252,14 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/cat/say", "entity.cat.ambient"),
     ("mob/cat/hurt", "entity.cat.hurt"),
     ("mob/cat/death", "entity.cat.death"),
+    // W322: iron golem has NO ambient voice in MC - say stays
+    // unmapped on purpose (sfx_at misses silently, W56.1 opt-out).
+    ("mob/iron_golem/hurt", "entity.iron_golem.hurt"),
+    ("mob/iron_golem/death", "entity.iron_golem.death"),
+    // W322: horse.
+    ("mob/horse/say", "entity.horse.ambient"),
+    ("mob/horse/hurt", "entity.horse.hurt"),
+    ("mob/horse/death", "entity.horse.death"),
     // W302: villager (the classic hrmm).
     ("mob/villager/say", "entity.villager.ambient"),
     ("mob/villager/hurt", "entity.villager.hurt"),

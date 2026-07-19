@@ -50,6 +50,9 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Villager => ("villager", "villager"),
         // W315: tabby is the pack default cat variant.
         MobKind::Cat => ("cat", "cat_tabby"),
+        // W322: golem + the brown default horse variant.
+        MobKind::IronGolem => ("iron_golem", "iron_golem"),
+        MobKind::Horse => ("horse", "horse_brown"),
     }
 }
 
@@ -120,6 +123,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) zombified_piglin: Option<PathBuf>,
     pub(crate) villager: Option<PathBuf>,
     pub(crate) cat: Option<PathBuf>,
+    pub(crate) iron_golem: Option<PathBuf>,
+    pub(crate) horse: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -138,6 +143,8 @@ impl MobSkinSet {
             zombified_piglin: mob_skin_path(assets_root, MobKind::ZombifiedPiglin),
             villager: mob_skin_path(assets_root, MobKind::Villager),
             cat: mob_skin_path(assets_root, MobKind::Cat),
+            iron_golem: mob_skin_path(assets_root, MobKind::IronGolem),
+            horse: mob_skin_path(assets_root, MobKind::Horse),
         }
     }
 
@@ -156,6 +163,8 @@ impl MobSkinSet {
             MobKind::ZombifiedPiglin => &self.zombified_piglin,
             MobKind::Villager => &self.villager,
             MobKind::Cat => &self.cat,
+            MobKind::IronGolem => &self.iron_golem,
+            MobKind::Horse => &self.horse,
         };
         opt.as_deref()
     }

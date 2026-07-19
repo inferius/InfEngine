@@ -141,6 +141,9 @@ fn mc_speed_tables_pin() {
     assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_VILLAGER), 2.0);
     // W315: cat attr 0.3.
     assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_CAT), 3.0);
+    // W322: golem attr 0.25; horse averaged attr ~0.225.
+    assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_IRON_GOLEM), 2.5);
+    assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_HORSE), 2.25);
     assert_eq!(kind_panic_mult(KIND_COW), 2.0);
     assert_eq!(kind_panic_mult(KIND_CHICKEN), 1.4);
     assert_eq!(kind_panic_mult(KIND_SHEEP), 1.25);

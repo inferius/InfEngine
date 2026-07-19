@@ -491,6 +491,10 @@ pub(crate) struct MobMeshes {
     pub(crate) villager_model: Option<crate::entity_model::BakedModel>,
     /// W315 - cat (universal `AdultFelineModel` data).
     pub(crate) cat_model: Option<crate::entity_model::BakedModel>,
+    /// W322 - iron golem (universal `IronGolemModel` data).
+    pub(crate) iron_golem_model: Option<crate::entity_model::BakedModel>,
+    /// W322 - horse (universal `AbstractEquineModel` data).
+    pub(crate) horse_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -985,6 +989,43 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "cat entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Iron golem (128x128, entity/iron_golem subdir) --------------------
+    for root in &entity_roots {
+        let p = root.join("iron_golem").join("iron_golem.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.iron_golem_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::iron_golem::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "iron golem entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Horse (64x64, entity/horse subdir) --------------------------------
+    // W322: brown default (variant rolls are a follow-up).
+    for root in &entity_roots {
+        let p = root.join("horse").join("horse_brown.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.horse_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::horse::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "horse entity texture bound (universal model)"
             );
             break;
         }

@@ -66,6 +66,12 @@ pub(crate) fn advance(anim: &mut MobAnim, pos: [f32; 3], dt: f32) {
     anim.limb_pos += anim.limb_amount * ticks;
 }
 
+/// MC `Mth.triangleWave(f, g)`: a -1..1 sawtooth-triangle with
+/// period `g`, used by the iron golem's stride.
+fn triangle_wave(f: f32, g: f32) -> f32 {
+    ((f.rem_euclid(g) - g * 0.5).abs() - g * 0.25) / (g * 0.25)
+}
+
 /// Wrap an angle to (-PI, PI].
 pub(crate) fn wrap_angle(a: f32) -> f32 {
     let mut a = a.rem_euclid(std::f32::consts::TAU);
@@ -93,6 +99,32 @@ pub(crate) fn pose_for_bone(
         // (`*_fur_head` matches too - the sheep wool follows.)
         rot[0] = head_pitch;
         rot[1] = -head_yaw_delta;
+    } else if let Some(rest) = name.strip_prefix("golem_") {
+        // W322: IronGolemModel.setupAnim - triangle-wave stride at
+        // period 13 on the RAW limb position (no 0.6662 factor),
+        // arms counter-swinging with the -0.2 forward lean.
+        let t = triangle_wave(limb_pos, 13.0);
+        match rest {
+            "arm_r" => rot[0] = (-0.2 + 1.5 * t) * amount,
+            "arm_l" => rot[0] = (-0.2 - 1.5 * t) * amount,
+            "leg_r" => rot[0] = -1.5 * t * amount,
+            "leg_l" => rot[0] = 1.5 * t * amount,
+            _ => {}
+        }
+    } else if let Some(rest) = name.strip_prefix("horse_") {
+        // W322: AbstractEquineModel.setupAnim walking terms (the
+        // standing/eating layers are follow-ups): front legs swing
+        // at 0.8 amplitude, hind legs counter-phase at 0.5, and the
+        // tail lifts with stride speed on top of its PI/6 rest.
+        let lift = (swing + pi).cos();
+        match rest {
+            "leg_lf" => rot[0] = lift * 0.8 * amount,
+            "leg_rf" => rot[0] = -lift * 0.8 * amount,
+            "leg_lh" => rot[0] = -lift * 0.5 * amount,
+            "leg_rh" => rot[0] = lift * 0.5 * amount,
+            "tail" => rot[0] = amount * 0.75,
+            _ => {}
+        }
     } else if name.ends_with("_leg_rf") || name.ends_with("_leg_lh") {
         // Quadruped gait: diagonal pairs share a phase, the
         // front-right runs opposite the hind-right.
