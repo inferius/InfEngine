@@ -41,6 +41,16 @@ pub(crate) struct MobAnim {
     pub(crate) limb_amount: f32,
     /// Last observed world position (None right after spawn).
     pub(crate) last_pos: Option<[f32; 3]>,
+    /// W336: MC `ageInTicks` - accumulated lifetime, drives ambient
+    /// sways (ghast tentacles).
+    pub(crate) age_ticks: f32,
+    /// W336: MC `Slime.squish` (magma stretch). Chases
+    /// `squish_target` at 0.5/tick.
+    pub(crate) squish: f32,
+    pub(crate) squish_target: f32,
+    /// Blocks-per-tick vertical speed last frame, for the
+    /// leave-ground / land event detection.
+    last_vy: f32,
 }
 
 /// Advance the walk state from the newly observed `pos`. Mirrors
@@ -52,18 +62,60 @@ pub(crate) fn advance(anim: &mut MobAnim, pos: [f32; 3], dt: f32) {
     if ticks <= 0.0 {
         return;
     }
-    let target = match anim.last_pos {
+    let (target, vy) = match anim.last_pos {
         Some(prev) => {
             let dx = pos[0] - prev[0];
             let dz = pos[2] - prev[2];
             let per_tick = (dx * dx + dz * dz).sqrt() / ticks.max(1e-3);
-            (per_tick * 4.0).min(1.0)
+            ((per_tick * 4.0).min(1.0), (pos[1] - prev[1]) / ticks.max(1e-3))
         }
-        None => 0.0,
+        None => (0.0, 0.0),
     };
     anim.last_pos = Some(pos);
     anim.limb_amount += (target - anim.limb_amount) * (0.4 * ticks).min(1.0);
     anim.limb_pos += anim.limb_amount * ticks;
+    anim.age_ticks += ticks;
+    // W336: MC Slime.tick squish drive, in tick order: lerp toward
+    // the target (0.5/tick), THEN the ground events re-arm it, THEN
+    // it decays (0.6/tick). Events come from observed vertical
+    // motion so the host sim and 10 Hz remote snapshots both work:
+    // leaving the ground arms the stretch (+1), stopping a fall
+    // squashes (-0.5).
+    anim.squish += (anim.squish_target - anim.squish) * (1.0 - 0.5f32.powf(ticks));
+    if anim.last_vy <= 0.02 && vy > 0.08 {
+        anim.squish_target = 1.0;
+    } else if anim.last_vy < -0.04 && vy >= -0.01 {
+        anim.squish_target = -0.5;
+    }
+    anim.squish_target *= 0.6f32.powf(ticks);
+    anim.last_vy = vy;
+}
+
+/// W336: time/state-driven ambient poses (no walk input). Returns
+/// None for bones the walk-driven `pose_for_bone` handles.
+pub(crate) fn ambient_pose(
+    name: &str,
+    age_ticks: f32,
+    squish: f32,
+) -> Option<BonePose> {
+    if let Some(i) = name.strip_prefix("ghast_tentacle_") {
+        let i = i.parse::<u32>().ok()? as f32;
+        // GhastModel.animateTentacles: xRot = 0.2*sin(age*0.3+i)+0.4
+        // (the 0.4 rest pitch is baked in the bone table).
+        return Some(BonePose {
+            extra_rotation: [0.2 * (age_ticks * 0.3 + i).sin(), 0.0, 0.0],
+            ..Default::default()
+        });
+    }
+    if let Some(i) = name.strip_prefix("magma_cube_") {
+        let i = i.parse::<u32>().ok()? as f32;
+        // MagmaCubeModel.setupAnim: cube[i].y = -(4-i)*max(0,squish)*1.7.
+        return Some(BonePose {
+            extra_offset: [0.0, -(4.0 - i) * squish.max(0.0) * 1.7, 0.0],
+            ..Default::default()
+        });
+    }
+    None
 }
 
 /// MC `Mth.triangleWave(f, g)`: a -1..1 sawtooth-triangle with
@@ -151,7 +203,7 @@ pub(crate) fn pose_for_bone(
             rot[0] = swing.cos() * ARM_AMP * amount;
         }
     }
-    BonePose { extra_rotation: rot }
+    BonePose { extra_rotation: rot, ..Default::default() }
 }
 
 /// Spider leg sway (`SpiderModel.setupAnim`): per-pair yaw sweep +
@@ -178,7 +230,7 @@ pub(crate) fn spider_leg_pose(name: &str, limb_pos: f32, amount: f32) -> BonePos
     let mut rot = [0.0f32; 3];
     rot[1] = if right { sweep } else { -sweep };
     rot[2] = if right { lift } else { -lift };
-    BonePose { extra_rotation: rot }
+    BonePose { extra_rotation: rot, ..Default::default() }
 }
 
 /// Head pose helper for the render layer: takes the broadcast
@@ -320,6 +372,49 @@ mod model_coverage {
 mod tests {
     use super::*;
     use glam::Vec3;
+
+    /// W336: ghast tentacle sway pins the MC formula (rest pitch is
+    /// baked in the bone table, so the pose is only the sin term) and
+    /// magma segments spread by -(4-i)*max(0,squish)*1.7.
+    #[test]
+    fn w336_ambient_poses_match_mc() {
+        let p = ambient_pose("ghast_tentacle_2", 10.0, 0.0).unwrap();
+        let want = 0.2 * (10.0f32 * 0.3 + 2.0).sin();
+        assert!((p.extra_rotation[0] - want).abs() < 1e-6);
+        // Segment 0 rises 6.8 px at full stretch, segment 7 drops 5.1.
+        let s0 = ambient_pose("magma_cube_0", 0.0, 1.0).unwrap();
+        assert!((s0.extra_offset[1] + 6.8).abs() < 1e-4, "{}", s0.extra_offset[1]);
+        let s7 = ambient_pose("magma_cube_7", 0.0, 1.0).unwrap();
+        assert!((s7.extra_offset[1] - 5.1).abs() < 1e-4);
+        // Land squash clamps at 0 (MC max(0, squish)).
+        let sq = ambient_pose("magma_cube_0", 0.0, -0.5).unwrap();
+        assert_eq!(sq.extra_offset[1], 0.0);
+        // Walk-driven bones stay with pose_for_bone.
+        assert!(ambient_pose("cow_head", 0.0, 0.0).is_none());
+    }
+
+    /// W336: the squish state machine - a hop arms the stretch and it
+    /// decays back MC-style (target *= 0.6/tick, squish chases 0.5).
+    #[test]
+    fn w336_squish_armed_by_hop_then_decays() {
+        let mut a = MobAnim::default();
+        // Grounded baseline.
+        advance(&mut a, [0.0, 10.0, 0.0], 0.05);
+        advance(&mut a, [0.0, 10.0, 0.0], 0.05);
+        assert!(a.squish.abs() < 1e-3);
+        // Hop start: strong upward motion arms the target.
+        advance(&mut a, [0.0, 10.25, 0.0], 0.05);
+        assert!(a.squish_target > 0.3, "{}", a.squish_target);
+        // A few frames later the squish itself has risen...
+        advance(&mut a, [0.0, 10.5, 0.0], 0.05);
+        let peak = a.squish;
+        assert!(peak > 0.15, "{peak}");
+        // ...and with no further events it decays away.
+        for _ in 0..40 {
+            advance(&mut a, [0.0, 10.5, 0.0], 0.05);
+        }
+        assert!(a.squish < peak * 0.2, "{} vs {peak}", a.squish);
+    }
 
     /// Engine yaw of a world direction (matches mob yaw convention).
     fn yaw_of(v: Vec3) -> f32 {

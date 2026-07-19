@@ -9,8 +9,8 @@
 //! deterministic, so the lengths below are those exact rolls
 //! (`random.nextInt(7) + 8` nine times): 8 13 9 11 11 10 12 9 12.
 //! MC's setupAnim sways each tentacle around a 0.4 rad rest pitch
-//! (`0.2*sin(age*0.3+i)+0.4`); the rest pitch is baked here and the
-//! time-driven sway is a follow-up (needs a clock in the pose path).
+//! (`0.2*sin(age*0.3+i)+0.4`); the rest pitch is baked here and
+//! W336's `ambient_pose` layers the time-driven sway on top.
 
 use super::{Bone, EntityModel, McCube};
 

@@ -144,10 +144,10 @@ pub fn draw_remote_mobs(
                 // universal closure serves every kind: bone-name
                 // suffixes route legs/arms/head, spider legs get
                 // their dedicated sway.
-                let (limb_pos, limb_amount) = {
+                let (limb_pos, limb_amount, age_ticks, squish) = {
                     let a = mob_anim.entry(mob.id).or_default();
                     crate::entity_model::animation::advance(a, mob.pos, dt);
-                    (a.limb_pos, a.limb_amount)
+                    (a.limb_pos, a.limb_amount, a.age_ticks, a.squish)
                 };
                 let (look_pitch, look_delta) =
                     crate::entity_model::animation::head_pose(
@@ -160,6 +160,13 @@ pub fn draw_remote_mobs(
                         crate::entity_model::animation::spider_leg_pose(
                             name, limb_pos, limb_amount,
                         )
+                    } else if let Some(p) =
+                        crate::entity_model::animation::ambient_pose(
+                            name, age_ticks, squish,
+                        )
+                    {
+                        // W336: ghast tentacle sway + magma squish.
+                        p
                     } else {
                         crate::entity_model::animation::pose_for_bone(
                             name, limb_pos, limb_amount, look_pitch, look_delta,

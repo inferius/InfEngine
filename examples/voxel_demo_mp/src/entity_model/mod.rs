@@ -157,6 +157,9 @@ pub(crate) struct BakedModel {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct BonePose {
     pub extra_rotation: [f32; 3],
+    /// W336: MC-pixel translation added to the pivot (ModelPart
+    /// x/y/z pose writes - the magma cube squish spread).
+    pub extra_offset: [f32; 3],
 }
 
 /// Build the engine meshes for an entity model and bind `img` as the
@@ -216,11 +219,11 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
 /// W162: a bone's own local transform in MC pixel space:
 /// `translate(pivot) * rotate(rotation + pose.extra)`. The parent
 /// chain is composed on top of this by `draw` / `default_accumulated`.
-fn bone_local(pivot: [f32; 3], rotation: [f32; 3], extra: [f32; 3]) -> Mat4 {
-    let rx = rotation[0] + extra[0];
-    let ry = rotation[1] + extra[1];
-    let rz = rotation[2] + extra[2];
-    Mat4::from_translation(Vec3::from(pivot))
+fn bone_local(pivot: [f32; 3], rotation: [f32; 3], pose: &BonePose) -> Mat4 {
+    let rx = rotation[0] + pose.extra_rotation[0];
+    let ry = rotation[1] + pose.extra_rotation[1];
+    let rz = rotation[2] + pose.extra_rotation[2];
+    Mat4::from_translation(Vec3::from(pivot) + Vec3::from(pose.extra_offset))
         * Mat4::from_quat(Quat::from_euler(glam::EulerRot::ZYX, rz, ry, rx))
 }
 
@@ -229,7 +232,7 @@ fn bone_local(pivot: [f32; 3], rotation: [f32; 3], extra: [f32; 3]) -> Mat4 {
 /// ground-offset scan in `bake`. Parent lookup is by name over the
 /// model's flat bone list; a missing / cyclic parent stops the walk.
 fn default_accumulated(all: &[Bone], bone: &Bone) -> Mat4 {
-    let mut acc = bone_local(bone.pivot, bone.rotation, [0.0; 3]);
+    let mut acc = bone_local(bone.pivot, bone.rotation, &BonePose::default());
     let mut parent = bone.parent;
     let mut guard = 0;
     while let Some(pn) = parent {
@@ -239,7 +242,7 @@ fn default_accumulated(all: &[Bone], bone: &Bone) -> Mat4 {
         }
         match all.iter().find(|b| b.name == pn) {
             Some(p) => {
-                acc = bone_local(p.pivot, p.rotation, [0.0; 3]) * acc;
+                acc = bone_local(p.pivot, p.rotation, &BonePose::default()) * acc;
                 parent = p.parent;
             }
             None => break,
@@ -463,8 +466,9 @@ pub(crate) fn bone_matrix(
     let rx = bone.rotation[0] + pose.extra_rotation[0];
     let ry = bone.rotation[1] + pose.extra_rotation[1];
     let rz = bone.rotation[2] + pose.extra_rotation[2];
-    let bone_xform = Mat4::from_translation(Vec3::from(bone.pivot))
-        * Mat4::from_quat(Quat::from_euler(glam::EulerRot::ZYX, rz, ry, rx));
+    let bone_xform =
+        Mat4::from_translation(Vec3::from(bone.pivot) + Vec3::from(pose.extra_offset))
+            * Mat4::from_quat(Quat::from_euler(glam::EulerRot::ZYX, rz, ry, rx));
     place * flip * bone_xform
 }
 
@@ -531,7 +535,7 @@ pub(crate) fn draw_with_root(
         .iter()
         .map(|bb| {
             let p = pose_for(bb.bone.name);
-            bone_local(bb.bone.pivot, bb.bone.rotation, p.extra_rotation)
+            bone_local(bb.bone.pivot, bb.bone.rotation, &p)
         })
         .collect();
     for (i, bb) in baked.bones.iter().enumerate() {
@@ -734,7 +738,7 @@ mod tests {
             rotation: [0.3, -0.4, 0.5], cubes: &[],
         }];
         let acc = default_accumulated(&model, &model[0]);
-        let own = bone_local([1.0, 2.0, 3.0], [0.3, -0.4, 0.5], [0.0; 3]);
+        let own = bone_local([1.0, 2.0, 3.0], [0.3, -0.4, 0.5], &BonePose::default());
         assert!(same_xform(acc, own, 1e-5), "root acc must equal its own local");
     }
 
@@ -746,7 +750,7 @@ mod tests {
         for b in super::zombie::MODEL.bones {
             assert!(b.parent.is_none(), "zombie is a flat model");
             let acc = default_accumulated(super::zombie::MODEL.bones, b);
-            let own = bone_local(b.pivot, b.rotation, [0.0; 3]);
+            let own = bone_local(b.pivot, b.rotation, &BonePose::default());
             assert!(same_xform(acc, own, 1e-5), "{} drifted under W162", b.name);
         }
     }
@@ -769,8 +773,8 @@ mod tests {
         ];
         let acc = default_accumulated(&model, &model[1]);
         // Composition order matches MC: parent first, then child.
-        let expected = bone_local([0.0, 10.0, 0.0], [FRAC_PI_2, 0.0, 0.0], [0.0; 3])
-            * bone_local([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], [0.0; 3]);
+        let expected = bone_local([0.0, 10.0, 0.0], [FRAC_PI_2, 0.0, 0.0], &BonePose::default())
+            * bone_local([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], &BonePose::default());
         assert!(same_xform(acc, expected, 1e-4), "child != parent_local * child_local");
         // Tangible: the child's own origin lands at (0, 5, 0).
         let origin = acc.transform_point3(Vec3::ZERO);
@@ -789,7 +793,7 @@ mod tests {
             pivot: [2.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: &[],
         }];
         let acc = default_accumulated(&model, &model[0]);
-        let own = bone_local([2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0; 3]);
+        let own = bone_local([2.0, 0.0, 0.0], [0.0, 0.0, 0.0], &BonePose::default());
         assert!(same_xform(acc, own, 1e-5), "orphan bone must not panic / loop");
     }
 }

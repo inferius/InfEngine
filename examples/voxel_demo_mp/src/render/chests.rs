@@ -325,7 +325,10 @@ pub(crate) fn draw_chests(
             [1.0, 1.0, 1.0, 1.0],
             |bone| {
                 if bone == "chest_lid" {
-                    BonePose { extra_rotation: [-angle, 0.0, 0.0] }
+                    BonePose {
+                        extra_rotation: [-angle, 0.0, 0.0],
+                        ..Default::default()
+                    }
                 } else {
                     BonePose::default()
                 }
