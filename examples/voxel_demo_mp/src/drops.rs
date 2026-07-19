@@ -207,31 +207,77 @@ pub(crate) fn merge_stacks_pass(
     drops: &mut Vec<DropItem>,
     cfg: &PickupConfig,
 ) -> Vec<u32> {
-    let r2 = cfg.merge_radius * cfg.merge_radius;
     let mut removed: Vec<u32> = Vec::new();
-    let mut i = 0;
-    while i < drops.len() {
-        let mut j = i + 1;
-        while j < drops.len() {
-            let mergeable = drops[i].block == drops[j].block && {
-                let dx = drops[i].pos[0] - drops[j].pos[0];
-                let dy = drops[i].pos[1] - drops[j].pos[1];
-                let dz = drops[i].pos[2] - drops[j].pos[2];
-                dx * dx + dy * dy + dz * dz <= r2
-            };
-            if mergeable {
-                let combined = drops[i].count as u16 + drops[j].count as u16;
-                if combined <= STACK_MAX as u16 {
-                    drops[i].count = combined as u8;
-                    removed.push(drops[j].id);
-                    drops.swap_remove(j);
-                    // The swapped-in element re-checks at the same j.
-                    continue;
+    if drops.len() < 2 {
+        return removed;
+    }
+    // W326: spatial hash instead of the flat O(N^2) pair sweep. The
+    // sweep ran EVERY 50 ms tick even with nothing to merge, and
+    // once leaf decay littered the frontier with thousands of drops
+    // it burned 6-16 ms per tick (the walking-stutter log). Cells
+    // are merge_radius-sized, so any mergeable pair sits in the
+    // same or an adjacent cell - each drop compares against a
+    // handful of neighbours and the pass is O(N).
+    let r2 = cfg.merge_radius * cfg.merge_radius;
+    let cell = cfg.merge_radius.max(0.25);
+    let key = |p: &[f32; 3]| -> [i32; 3] {
+        [
+            (p[0] / cell).floor() as i32,
+            (p[1] / cell).floor() as i32,
+            (p[2] / cell).floor() as i32,
+        ]
+    };
+    let mut grid: std::collections::HashMap<[i32; 3], Vec<usize>> =
+        std::collections::HashMap::with_capacity(drops.len());
+    for (i, d) in drops.iter().enumerate() {
+        grid.entry(key(&d.pos)).or_default().push(i);
+    }
+    let mut dead = vec![false; drops.len()];
+    for i in 0..drops.len() {
+        if dead[i] {
+            continue;
+        }
+        let base = key(&drops[i].pos);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(cellv) =
+                        grid.get(&[base[0] + dx, base[1] + dy, base[2] + dz])
+                    else {
+                        continue;
+                    };
+                    for &j in cellv {
+                        if j <= i || dead[j] || dead[i] {
+                            continue;
+                        }
+                        if drops[i].block != drops[j].block {
+                            continue;
+                        }
+                        let ddx = drops[i].pos[0] - drops[j].pos[0];
+                        let ddy = drops[i].pos[1] - drops[j].pos[1];
+                        let ddz = drops[i].pos[2] - drops[j].pos[2];
+                        if ddx * ddx + ddy * ddy + ddz * ddz > r2 {
+                            continue;
+                        }
+                        let combined =
+                            drops[i].count as u16 + drops[j].count as u16;
+                        if combined <= STACK_MAX as u16 {
+                            drops[i].count = combined as u8;
+                            removed.push(drops[j].id);
+                            dead[j] = true;
+                        }
+                    }
                 }
             }
-            j += 1;
         }
-        i += 1;
+    }
+    if !removed.is_empty() {
+        let mut idx = 0;
+        drops.retain(|_| {
+            let keep = !dead[idx];
+            idx += 1;
+            keep
+        });
     }
     removed
 }
@@ -382,8 +428,21 @@ pub(crate) fn tick_physics(voxel: &mut Voxel, dt: f32) {
     let cfg = PickupConfig::DEFAULT;
 
     // ---- Per-frame visuals: gravity + ground rest + bob. ----
+    // W326: far drops SLEEP - no gravity integration and, more
+    // importantly, no per-frame world.get. With thousands of decay
+    // drops loaded this loop alone was milliseconds of HashMap
+    // probes per frame; anything past the sim radius is not
+    // visible at item scale and settles the moment the player
+    // approaches (MC's entity ticking range behaviour).
+    const DROP_SIM_RADIUS: f32 = 48.0;
+    let sim_r2 = DROP_SIM_RADIUS * DROP_SIM_RADIUS;
     for drop in voxel.dropped_items.iter_mut() {
         drop.age += dt;
+        let far_dx = drop.pos[0] - player_pos.x;
+        let far_dz = drop.pos[2] - player_pos.z;
+        if far_dx * far_dx + far_dz * far_dz > sim_r2 {
+            continue;
+        }
         let below_vy = (drop.pos[1] - 0.2).floor() as i32;
         let below = [
             drop.pos[0].floor() as i32,
@@ -680,6 +739,68 @@ mod tests {
         ];
         let merged = maybe_merge_stacks(&mut drops, &cfg);
         assert!(merged.is_none());
+        assert_eq!(drops.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod w326_tests {
+    use super::*;
+    use crate::inventory::STACK_MAX;
+
+    fn mint(id: u32, block: u16, pos: [f32; 3]) -> DropItem {
+        let cfg = PickupConfig::DEFAULT;
+        DropItem {
+            id,
+            block,
+            pos,
+            vel: [0.0; 3],
+            age: 0.0,
+            count: 1,
+            age_ticks: 0,
+            pickup_delay_ticks: cfg.pickup_delay_ticks,
+        }
+    }
+
+    /// The spatial-hash merge must behave like the old pair sweep:
+    /// clustered triplets collapse into stacks, far drops stay, and
+    /// pairs straddling a hash-cell boundary still merge (adjacent
+    /// cells are probed). 3000 drops keep it honest at the scale
+    /// that made the O(N^2) sweep burn 6-16 ms per tick.
+    #[test]
+    fn w326_bucketed_merge_matches_pair_sweep_semantics() {
+        let cfg = PickupConfig::DEFAULT;
+        let mut drops: Vec<DropItem> = Vec::new();
+        for t in 0..1000u32 {
+            let bx = t as f32 * 10.0;
+            for k in 0..3u32 {
+                drops.push(mint(t * 3 + k, 1, [bx + k as f32 * 0.1, 64.0, 0.0]));
+            }
+        }
+        // A pair exactly straddling a cell boundary (cell = 0.5).
+        drops.push(mint(90_000, 2, [0.45, 10.0, 0.0]));
+        drops.push(mint(90_001, 2, [0.55, 10.0, 0.0]));
+        let removed = merge_stacks_pass(&mut drops, &cfg);
+        assert_eq!(removed.len(), 2001, "2 per triplet + the boundary pair");
+        assert_eq!(drops.len(), 1001);
+        assert!(
+            drops.iter().filter(|d| d.block == 1).all(|d| d.count == 3),
+            "each triplet collapses into one stack of 3",
+        );
+        let pair = drops.iter().find(|d| d.block == 2).unwrap();
+        assert_eq!(pair.count, 2, "cross-cell pair merged");
+    }
+
+    /// Stacks at the cap must NOT merge (same rule as the old sweep).
+    #[test]
+    fn w326_merge_respects_stack_cap() {
+        let cfg = PickupConfig::DEFAULT;
+        let mut a = mint(1, 1, [0.0, 0.0, 0.0]);
+        a.count = STACK_MAX;
+        let b = mint(2, 1, [0.1, 0.0, 0.0]);
+        let mut drops = vec![a, b];
+        let removed = merge_stacks_pass(&mut drops, &cfg);
+        assert!(removed.is_empty());
         assert_eq!(drops.len(), 2);
     }
 }

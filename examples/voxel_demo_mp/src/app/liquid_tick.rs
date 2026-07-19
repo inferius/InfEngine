@@ -711,12 +711,27 @@ impl Voxel {
         if !dirty.is_empty() {
             // W198.12: enqueue the touched chunks for an INCREMENTAL liquid
             // remesh (no global O(all-liquids) scan - that periodic scan was
-            // the turning judder). Block remesh still goes via rebuild_chunks.
+            // the turning judder).
             for &cc in &dirty {
                 self.enqueue_liquid_remesh(cc);
             }
-            let coords: Vec<ChunkCoord> = dirty.into_iter().collect();
-            self.rebuild_chunks(&coords);
+            // W326: the BLOCK remesh goes through the deferred queue
+            // instead of a synchronous rebuild_chunks. The sync call
+            // cloned chunk + halo snapshots for every touched chunk
+            // right here on the main thread, OUTSIDE the 4 ms liquid
+            // budget - a frontier settle storm made the `liquids`
+            // phase spike to 18 ms per tick (the walking-stutter
+            // log). The liquid surface itself updates immediately via
+            // the incremental liquid remesh above; the chunk-grid
+            // remesh (face culling at air<->water boundaries) can
+            // trail by a few frames unnoticed.
+            for cc in dirty {
+                if self.world.chunk(cc).is_some()
+                    && self.pending_remesh_set.insert(cc)
+                {
+                    self.pending_remesh.push_back(cc);
+                }
+            }
         }
     }
 

@@ -821,10 +821,25 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     vx.stream_delivered = delivered_iter.collect();
 
     // Drain deferred neighbour re-meshes.
+    // W326: scale the per-frame cap with the backlog. The fixed
+    // 64/frame + 2 ms guard let the queue ratchet to 7000+ during a
+    // walking lighting churn (every frontier Lit queues neighbour
+    // remeshes) - visible as chunks holding stale light for many
+    // seconds. A deep queue now drains up to 4x as many per frame
+    // with a matching time guard; the small steady-state cost is
+    // unchanged when the queue is short.
     let _remesh_t = std::time::Instant::now();
     let mut remesh_done = 0;
-    while remesh_done < REMESH_DEFERRED_PER_FRAME
-        && _remesh_t.elapsed().as_micros() < 2_000
+    let q_len = vx.pending_remesh.len();
+    let (remesh_cap, remesh_budget_us) = if q_len > 2048 {
+        (REMESH_DEFERRED_PER_FRAME * 4, 6_000)
+    } else if q_len > 512 {
+        (REMESH_DEFERRED_PER_FRAME * 2, 4_000)
+    } else {
+        (REMESH_DEFERRED_PER_FRAME, 2_000)
+    };
+    while remesh_done < remesh_cap
+        && _remesh_t.elapsed().as_micros() < remesh_budget_us
     {
         let Some(coord) = vx.pending_remesh.pop_front() else {
             break;

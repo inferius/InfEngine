@@ -162,6 +162,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 remesh_q = vx.pending_remesh.len(),
                 light_jobs = vx.pending_lighting_jobs,
                 falling = vx.falling_pending.len(),
+                drops = vx.dropped_items.len(),
                 py = vx.player_pos.y,
                 vy = vx.player_vel.y,
                 render_ms = (rend_us / f) as f32 / 1000.0,
@@ -1831,7 +1832,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // the emitter point-light push, `tail` decor + drops.
         {
             let _ms_tail = _pr_t.elapsed().as_secs_f32() * 1000.0;
-            if _ms_tail > 30.0 {
+            // W326: threshold 30 -> 10 ms - the walking log showed
+            // sustained 12-21 ms pre_render spikes that never tripped
+            // this probe, so the split stayed invisible.
+            if _ms_tail > 10.0 {
                 tracing::warn!(
                     total_ms = _ms_tail,
                     light_tick_ms = _ms_light_tick,
