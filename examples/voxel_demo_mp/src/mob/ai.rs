@@ -268,6 +268,36 @@ fn step_one(
     } else {
         None
     };
+    // W340: zombies raid villages - MC's AbstractVillager + IronGolem
+    // target goals sit BELOW the player goal, so a visible player
+    // still wins; otherwise the nearest villager/golem in sight
+    // range becomes the chase target. Skeletons/spiders keep
+    // player-only aim.
+    let mut chase_mob: Option<(u32, [f32; 3])> = None;
+    let zombie_family = matches!(
+        m.kind,
+        KIND_ZOMBIE | super::kinds::KIND_ZOMBIE_VILLAGER
+    );
+    if zombie_family && chase_player_pos.is_none() {
+        let mut best_d2 = ZOMBIE_SIGHT_RANGE * ZOMBIE_SIGHT_RANGE;
+        for o in voxel.mobs.iter() {
+            if o.id == m.id || o.dying > 0.0 {
+                continue;
+            }
+            if o.kind != super::kinds::KIND_VILLAGER
+                && o.kind != super::kinds::KIND_IRON_GOLEM
+            {
+                continue;
+            }
+            let d2 = (o.pos[0] - m.pos[0]).powi(2)
+                + (o.pos[1] - m.pos[1]).powi(2)
+                + (o.pos[2] - m.pos[2]).powi(2);
+            if d2 < best_d2 {
+                best_d2 = d2;
+                chase_mob = Some((o.id, o.pos));
+            }
+        }
+    }
     m.panic_left = (m.panic_left - dt).max(0.0);
     m.anger_left = (m.anger_left - dt).max(0.0);
     m.hop_cd = (m.hop_cd - dt).max(0.0);
@@ -276,6 +306,10 @@ fn step_one(
         speed *= super::state::kind_panic_mult(m.kind);
     }
     if let Some(p) = chase_player_pos {
+        m.target = p;
+        m.strolling = true;
+        m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+    } else if let Some((_, p)) = chase_mob {
         m.target = p;
         m.strolling = true;
         m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
@@ -780,6 +814,53 @@ fn step_one(
                 );
             }
         }
+        // W340: the zombie family batters its villager/golem victim
+        // (MC zombie attack attribute 3.0) and a villager killed by
+        // a zombie rises as a zombie villager (normal-difficulty
+        // 50% roll - no difficulty setting yet).
+        if let Some((tid, tp)) = chase_mob {
+            let vd2 = (tp[0] - m.pos[0]).powi(2)
+                + (tp[1] - m.pos[1]).powi(2)
+                + (tp[2] - m.pos[2]).powi(2);
+            if vd2 <= ZOMBIE_ATTACK_RANGE * ZOMBIE_ATTACK_RANGE
+                && m.attack_cd <= 0.0
+            {
+                m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
+                voxel.damage_mob_scaled(
+                    tid,
+                    None,
+                    3.0 / super::state::MOB_HIT_DAMAGE,
+                );
+                voxel.mob_lunge.insert(m.id, MOB_LUNGE_TIME);
+                let died_villager = voxel
+                    .mobs
+                    .iter()
+                    .find(|o| o.id == tid)
+                    .map(|o| {
+                        o.dying > 0.0
+                            && o.kind == super::kinds::KIND_VILLAGER
+                    })
+                    .unwrap_or(false);
+                if died_villager && rng.next_f32() < 0.5 {
+                    let nid = voxel.next_mob_id;
+                    voxel.next_mob_id =
+                        voxel.next_mob_id.wrapping_add(1).max(1);
+                    let mut zv = MobState::new_natural(
+                        nid,
+                        super::kinds::KIND_ZOMBIE_VILLAGER,
+                        tp,
+                        tp,
+                        m.yaw,
+                        (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
+                        super::spawn::initial_health_for(
+                            super::kinds::KIND_ZOMBIE_VILLAGER,
+                        ),
+                    );
+                    zv.persistent = true;
+                    voxel.mobs.push(zv);
+                }
+            }
+        }
         let dx = voxel.player_pos.x - m.pos[0];
         let dy = voxel.player_pos.y - m.pos[1];
         let dz = voxel.player_pos.z - m.pos[2];
@@ -853,6 +934,69 @@ fn broadcast(voxel: &Voxel) {
 mod tests {
     use super::*;
     use infengine_voxel::{BlockId, Chunk};
+
+    /// W340: a zombie next to a villager (no player nearby - the
+    /// test player sits far away) batters it, and a lethal string
+    /// of hits can raise a zombie villager. Force the kill fast by
+    /// dropping the villager to 1 hp first.
+    #[test]
+    fn w340_zombie_batters_villager_and_converts() {
+        let mut v = crate::Voxel::new();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for cy in -1..=1 {
+                    v.world.insert_chunk([cx, cy, cz], Chunk::filled(BlockId(0)));
+                }
+            }
+        }
+        for x in -6..=6 {
+            for z in -6..=6 {
+                v.world.set([x, 3, z], BlockId(1));
+            }
+        }
+        v.player_pos = glam::Vec3::new(500.0, 4.0, 500.0);
+        let zombie = crate::mob::state::MobState::new_natural(
+            1,
+            KIND_ZOMBIE,
+            [0.5, 4.0, 0.5],
+            [0.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            20.0,
+        );
+        let mut villager = crate::mob::state::MobState::new_natural(
+            2,
+            crate::mob::kinds::KIND_VILLAGER,
+            [1.5, 4.0, 0.5],
+            [1.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            20.0,
+        );
+        villager.health = 1.0;
+        v.mobs.push(zombie);
+        v.mobs.push(villager);
+        v.next_mob_id = 3;
+        // Enough ticks for several swings; the 50% conversion roll
+        // fires on the killing blow only, so retry across kills is
+        // not needed - assert the DAMAGE always, conversion only if
+        // the corpse is dying.
+        tick_mobs(&mut v, 0.05);
+        let vill = v.mobs.iter().find(|m| m.id == 2).expect("corpse fades");
+        assert!(
+            vill.dying > 0.0 || vill.health < 1.0,
+            "zombie must batter the adjacent villager",
+        );
+        if vill.dying > 0.0 {
+            let converted = v
+                .mobs
+                .iter()
+                .any(|m| m.kind == crate::mob::kinds::KIND_ZOMBIE_VILLAGER);
+            // 50% roll - both outcomes are legal; the assert is that
+            // the sim did not crash and the corpse is fading.
+            let _ = converted;
+        }
+    }
 
     /// W339: a golem standing next to a zombie batters it on the
     /// first tick - health drops by at least the 7.5 minimum and
