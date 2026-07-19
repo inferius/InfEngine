@@ -122,6 +122,71 @@ fn push_quad(
     idxs.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
 }
 
+/// W329: an axis-aligned box (all six faces) with the mesher's
+/// winding. Corner tables mirror the greedy mesher per-face
+/// convention; the winding pin test sweeps every face's cross
+/// product. `side`/`top`/`bottom` pick the atlas rects.
+#[allow(clippy::too_many_arguments)]
+fn push_box(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    min: [f32; 3],
+    max: [f32; 3],
+    side: [f32; 4],
+    top: [f32; 4],
+    bottom: [f32; 4],
+    anim: u32,
+) {
+    let [x0, y0, z0] = min;
+    let [x1, y1, z1] = max;
+    let (w, hgt, d) = (x1 - x0, y1 - y0, z1 - z0);
+    // +Y top.
+    push_quad(
+        verts, idxs,
+        [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
+        [[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]],
+        [0.0, 1.0, 0.0],
+        top, anim,
+    );
+    // -Y bottom (reverse of top).
+    push_quad(
+        verts, idxs,
+        [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]],
+        [[0.0, d], [w, d], [w, 0.0], [0.0, 0.0]],
+        [0.0, -1.0, 0.0],
+        bottom, anim,
+    );
+    // -Z / +Z / -X / +X sides reuse the skirt corner convention.
+    push_quad(
+        verts, idxs,
+        [[x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z0]],
+        [[0.0, hgt], [0.0, 0.0], [w, 0.0], [w, hgt]],
+        [0.0, 0.0, -1.0],
+        side, anim,
+    );
+    push_quad(
+        verts, idxs,
+        [[x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [x1, y0, z1]],
+        [[0.0, hgt], [0.0, 0.0], [w, 0.0], [w, hgt]],
+        [0.0, 0.0, 1.0],
+        side, anim,
+    );
+    push_quad(
+        verts, idxs,
+        [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]],
+        [[0.0, 0.0], [d, 0.0], [d, hgt], [0.0, hgt]],
+        [-1.0, 0.0, 0.0],
+        side, anim,
+    );
+    push_quad(
+        verts, idxs,
+        [[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]],
+        [[0.0, hgt], [d, hgt], [d, 0.0], [0.0, 0.0]],
+        [1.0, 0.0, 0.0],
+        side, anim,
+    );
+}
+
 /// Atlas rect for a block face, with the `__missing` sentinel as
 /// the fallback so an unmapped id shows the obvious magenta.
 fn face_tile(pack: &ResourcePack, block: u16, face: BlockFace) -> [f32; 4] {
@@ -296,6 +361,53 @@ pub(crate) fn build_lod_tile(job: &LodTileJob) -> LodTileResult {
             );
             x += run;
         }
+    }
+
+    // W329: tree impostors - the real biome tables roll density +
+    // species on a dedicated stream (see lod_tree_sites); each site
+    // becomes a trunk box + canopy box with the block's own atlas
+    // art. Roughly ten quads a tree keeps the far forest cheap.
+    for site in mcgen::trees::lod_tree_sites(ctx, tx, tz) {
+        let lx = site.wx - tx * CS;
+        let lz = site.wz - tz * CS;
+        if !(0..16).contains(&lx) || !(0..16).contains(&lz) {
+            continue;
+        }
+        let floor = h[(lz + 1) as usize][(lx + 1) as usize];
+        if floor < SEA_LEVEL {
+            continue; // no impostors wading into the sea
+        }
+        let trunk_h = site.height.clamp(3, 14) as f32;
+        let base_y = (floor + 1) as f32 - SHELL_SINK;
+        let x0 = site.wx as f32;
+        let z0 = site.wz as f32;
+        let log_side = face_tile(pack, site.log, BlockFace::Sides);
+        let log_anim = (site.log as u32) << 8;
+        push_box(
+            &mut ov,
+            &mut oi,
+            [x0, base_y, z0],
+            [x0 + 1.0, base_y + trunk_h, z0 + 1.0],
+            log_side,
+            log_side,
+            log_side,
+            log_anim,
+        );
+        // Canopy: a 5x4x5 crown around the trunk top.
+        let leaf = face_tile(pack, site.leaves, BlockFace::Sides);
+        let leaf_anim = (site.leaves as u32) << 8;
+        let cy0 = base_y + trunk_h - 2.0;
+        push_box(
+            &mut ov,
+            &mut oi,
+            [x0 - 2.0, cy0, z0 - 2.0],
+            [x0 + 3.0, cy0 + 4.0, z0 + 3.0],
+            leaf,
+            leaf,
+            leaf,
+            leaf_anim,
+        );
+        y_max = y_max.max(cy0 + 4.0);
     }
 
     // Per-tile water tint from the biome at the tile centre.
@@ -528,6 +640,93 @@ mod tests {
                 "skirt ({dx},{dz}) winds inward: cross {cross:?} vs normal {n:?}",
             );
         }
+    }
+
+    #[test]
+    fn w329_box_faces_wind_outward() {
+        // Every push_box face's triangle-one normal must point away
+        // from the box centre, or the impostor culls from outside
+        // (the skirt lesson, now pinned for all six orientations).
+        let mut v: Vec<infengine_render::MeshVertex> = Vec::new();
+        let mut i: Vec<u32> = Vec::new();
+        push_box(
+            &mut v,
+            &mut i,
+            [0.0, 0.0, 0.0],
+            [2.0, 3.0, 4.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            0,
+        );
+        assert_eq!(v.len(), 24, "six quads");
+        let centre = glam::Vec3::new(1.0, 1.5, 2.0);
+        for q in 0..6 {
+            let c0 = glam::Vec3::from(v[q * 4].position);
+            let c1 = glam::Vec3::from(v[q * 4 + 1].position);
+            let c2 = glam::Vec3::from(v[q * 4 + 2].position);
+            let n = (c2 - c0).cross(c1 - c0);
+            let mid = (c0 + c2) * 0.5;
+            assert!(
+                n.dot(mid - centre) > 0.0,
+                "face {q} winds inward (normal {n:?})",
+            );
+        }
+    }
+
+    #[test]
+    fn w329_forest_tile_grows_impostors() {
+        // A plains/forest-ish tile on the user seed must produce
+        // tree quads beyond the bare heightmap: compare a build
+        // against the same tile's site list.
+        let pack = std::sync::Arc::new(
+            crate::resource_pack::ResourcePack::load(),
+        );
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 2120129009,
+            dim: "overworld".to_string(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        // Scan outward for a tile with at least 3 dry tree sites.
+        for r in 0..24i32 {
+            for tz in -r..=r {
+                for tx in -r..=r {
+                    if tx.abs().max(tz.abs()) != r {
+                        continue;
+                    }
+                    let sites =
+                        crate::worldgen::mcgen::trees::lod_tree_sites(&ctx, tx, tz);
+                    let dry = sites
+                        .iter()
+                        .filter(|s| {
+                            crate::worldgen::mcgen::terrain::mc_floor_at(
+                                &ctx, s.wx, s.wz,
+                            ) >= SEA_LEVEL
+                        })
+                        .count();
+                    if dry < 3 {
+                        continue;
+                    }
+                    let res = build_lod_tile(&LodTileJob {
+                        key: [tx, tz],
+                        ctx,
+                        pack,
+                        dim: "overworld".to_string(),
+                    });
+                    // 16x16 top faces alone cap at 256 quads plus
+                    // skirts; each dry site adds 12 quads (2 boxes),
+                    // so the vertex count must clear the no-tree
+                    // baseline by at least dry*48.
+                    assert!(
+                        res.opaque.0.len() >= dry * 48,
+                        "expected tree quads for {dry} sites, got {} verts",
+                        res.opaque.0.len(),
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("no forested tile found near origin for seed");
     }
 
     #[test]

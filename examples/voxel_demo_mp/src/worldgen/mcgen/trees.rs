@@ -2039,3 +2039,61 @@ mod tests {
         panic!("no trees found: logs={logs} leaves={leaves}");
     }
 }
+
+/// W329: one far-LOD tree impostor site.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LodTreeSite {
+    pub(crate) wx: i32,
+    pub(crate) wz: i32,
+    /// Log block id (trunk texture source).
+    pub(crate) log: u16,
+    /// Leaves block id (canopy texture source).
+    pub(crate) leaves: u16,
+    /// Trunk height roll (base + rand parts, MC's height formula).
+    pub(crate) height: i32,
+}
+
+/// W329: deterministic tree-impostor sites for one chunk column.
+/// Rolls the REAL biome tree tables (count distribution + species
+/// weights + height providers) on a dedicated seed stream, so the
+/// far LOD shows the right forest density and species mix. The
+/// positions are NOT the exact full-res trees - matching them 1:1
+/// would require replaying every shape roll the growers consume -
+/// but at LOD distances the composition is what reads, and today's
+/// alternative is a completely bare shell.
+pub(crate) fn lod_tree_sites(ctx: &WorldgenCtx, scx: i32, scz: i32) -> Vec<LodTreeSite> {
+    let cs = CHUNK_SIZE as i32;
+    let seed = ctx.effective_seed();
+    let mut out = Vec::new();
+    let mut rng =
+        SplitMix64::new(stream_seed(seed, scx, scz, SALT_TREES ^ 0x4C4F_4400));
+    let mc = super::terrain::mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+    let Some(root) = tree_root_for(mc) else {
+        return out;
+    };
+    let bt = biome_trees(root);
+    let tries = sample_count(&bt.count_dist, &mut rng);
+    for _ in 0..tries {
+        let rx = (rng.next_u64() % 16) as i32;
+        let rz = (rng.next_u64() % 16) as i32;
+        let Some(pick) = select_tree(bt, &mut rng) else {
+            continue;
+        };
+        let Pick::Tree(def) = pick else {
+            continue; // fallen logs are ground clutter - skip at LOD
+        };
+        let ra = def.height_rand_a.max(0) as u64 + 1;
+        let rb = def.height_rand_b.max(0) as u64 + 1;
+        let height = def.base_height
+            + (rng.next_u64() % ra) as i32
+            + (rng.next_u64() % rb) as i32;
+        out.push(LodTreeSite {
+            wx: scx * cs + rx,
+            wz: scz * cs + rz,
+            log: def.log,
+            leaves: def.leaves,
+            height,
+        });
+    }
+    out
+}
