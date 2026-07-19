@@ -256,6 +256,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     // unmapped on purpose (sfx_at misses silently, W56.1 opt-out).
     ("mob/iron_golem/hurt", "entity.iron_golem.hurt"),
     ("mob/iron_golem/death", "entity.iron_golem.death"),
+    // W339: the defense swing.
+    ("mob/iron_golem/attack", "entity.iron_golem.attack"),
     // W322: horse.
     ("mob/horse/say", "entity.horse.ambient"),
     ("mob/horse/hurt", "entity.horse.hurt"),

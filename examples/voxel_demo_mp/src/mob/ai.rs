@@ -637,6 +637,47 @@ fn step_one(
             }
         }
     }
+    // W339: iron golem village defense - MC DefendVillageTargetGoal
+    // + MeleeAttackGoal: hunt the nearest hostile within 16 blocks;
+    // at arm's reach deal attackDamage/2 + rand(attackDamage)
+    // (attribute 15 -> 7.5..21.5 hp) and launch the victim 0.4 b/t
+    // upward, on the melee cadence. The arm-raise anim rides the
+    // shared lunge timer for now.
+    if m.kind == super::kinds::KIND_IRON_GOLEM {
+        let mut best: Option<([f32; 3], u32, f32)> = None;
+        for o in voxel.mobs.iter() {
+            if o.id != m.id && kind_is_hostile(o.kind) && o.dying <= 0.0 {
+                let d2 = (o.pos[0] - m.pos[0]).powi(2)
+                    + (o.pos[1] - m.pos[1]).powi(2)
+                    + (o.pos[2] - m.pos[2]).powi(2);
+                if d2 < 16.0 * 16.0 && best.is_none_or(|(_, _, bd)| d2 < bd) {
+                    best = Some((o.pos, o.id, d2));
+                }
+            }
+        }
+        m.attack_cd = (m.attack_cd - dt).max(0.0);
+        if let Some((tp, tid, d2)) = best {
+            m.target = tp;
+            m.strolling = true;
+            m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
+            if d2 <= 2.5 * 2.5 && m.attack_cd <= 0.0 {
+                m.attack_cd = 1.0;
+                let dmg = 7.5 + rng.next_f32() * 15.0;
+                voxel.damage_mob_scaled(
+                    tid,
+                    None,
+                    dmg / super::state::MOB_HIT_DAMAGE,
+                );
+                if let Some(v) = voxel.mobs.iter_mut().find(|o| o.id == tid) {
+                    // IronGolem.doHurtTarget: +0.4 b/t upward.
+                    v.vy = 8.0;
+                    v.pos[1] += 0.05;
+                }
+                voxel.mob_lunge.insert(m.id, MOB_LUNGE_TIME);
+                voxel.sfx_at("mob/iron_golem/attack", m.pos, |_, _| {});
+            }
+        }
+    }
     // W337: GhastShootFireballGoal - a player within 64 blocks and
     // line of sight starts the 1 s charge, then a LargeFireball
     // flies and the next shot waits 3 s (MC chargeTime 20 with the
@@ -805,5 +846,59 @@ fn broadcast(voxel: &Voxel) {
                 server.broadcast_bytes("vx.mob", buf);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infengine_voxel::{BlockId, Chunk};
+
+    /// W339: a golem standing next to a zombie batters it on the
+    /// first tick - health drops by at least the 7.5 minimum and
+    /// the victim gets the 0.4 b/t upward launch.
+    #[test]
+    fn w339_golem_batters_adjacent_zombie() {
+        let mut v = crate::Voxel::new();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for cy in -1..=1 {
+                    v.world.insert_chunk([cx, cy, cz], Chunk::filled(BlockId(0)));
+                }
+            }
+        }
+        for x in -6..=6 {
+            for z in -6..=6 {
+                v.world.set([x, 3, z], BlockId(1));
+            }
+        }
+        let golem = crate::mob::state::MobState::new_natural(
+            1,
+            super::super::kinds::KIND_IRON_GOLEM,
+            [0.5, 4.0, 0.5],
+            [0.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            100.0,
+        );
+        let zombie = crate::mob::state::MobState::new_natural(
+            2,
+            KIND_ZOMBIE,
+            [1.5, 4.0, 0.5],
+            [1.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            20.0,
+        );
+        v.mobs.push(golem);
+        v.mobs.push(zombie);
+        tick_mobs(&mut v, 0.05);
+        let z = v.mobs.iter().find(|m| m.id == 2).expect("zombie alive");
+        assert!(
+            z.health <= 20.0 - 7.5 + 1e-3,
+            "golem must batter the zombie (health {})",
+            z.health,
+        );
+        assert!(z.vy > 6.0, "victim launched upward (vy {})", z.vy);
     }
 }
