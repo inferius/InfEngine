@@ -86,7 +86,13 @@ pub(crate) struct McCol {
 /// POST-carve state the feature stage anchors to (MC updates heightmaps
 /// on every carver setBlock - anchoring features to the fill made
 /// seagrass float over carver-cut seabeds).
-pub(crate) struct McColumnData {
+/// W314: the EXPENSIVE, immutable per-column payload - shared
+/// ACROSS worker threads via a global cache (each of the 8 workers
+/// used to rebuild its own copy of every frontier-neighbour column
+/// probed by disks / lakes / monster rooms: ~25 ms each, 8x over).
+/// Everything here is plain data (Send + Sync); the mutable aquifer
+/// stays per-thread in `McColumnData`.
+pub(crate) struct ColumnCore {
     cols: [[McCol; CHUNK_SIZE]; CHUNK_SIZE],
     solid: Box<SolidBits>,
     /// Post-carve solidity (the carver dry-run mask).
@@ -94,10 +100,21 @@ pub(crate) struct McColumnData {
     /// Post-carve topmost-solid per column (OCEAN_FLOOR heightmap).
     floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
     cells: CellLattices,
+}
+
+pub(crate) struct McColumnData {
+    core: std::sync::Arc<ColumnCore>,
     aquifer: RefCell<Aquifer>,
 }
 
-impl McColumnData {
+impl std::ops::Deref for McColumnData {
+    type Target = ColumnCore;
+    fn deref(&self) -> &ColumnCore {
+        &self.core
+    }
+}
+
+impl ColumnCore {
     fn is_solid(&self, lx: usize, y: i32, lz: usize) -> bool {
         if !(BITS_MIN_Y..=BITS_MAX_Y).contains(&y) {
             return false;
@@ -161,7 +178,7 @@ fn overworld_for(seed: u32) -> Rc<Overworld> {
 /// the full solidity scan of the interpolated field
 /// (`min_y..=LATTICE_TOP` per column), per-column tops + biomes, and
 /// a fresh aquifer.
-fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
+fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> ColumnCore {
     debug_assert_eq!(ow.min_y, BITS_MIN_Y, "solidity bitsets sized for min_y -64");
     let cs = CHUNK_SIZE as i32;
     let ox = cx * cs;
@@ -201,7 +218,39 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> McColumnData {
             floor[lx][lz] = top_set_bit(&solid_pc[lx][lz]);
         }
     }
-    McColumnData { cols, solid, solid_pc, floor, cells, aquifer: RefCell::new(aquifer) }
+    drop(aquifer);
+    ColumnCore { cols, solid, solid_pc, floor, cells }
+}
+
+/// W314: the cross-worker core cache. RwLock HashMap of Arc cores -
+/// a frontier column probed by one worker's feature pass is reused
+/// by every other worker (and by the column's own later gen job)
+/// instead of each thread rebuilding it (~25 ms a copy). Cap 4096
+/// (~270 MB worst case at ~130 KB per core) with wholesale clear
+/// like the thread-local caches; a VD-14 ring is ~850 columns.
+type CoreCacheMap = HashMap<(i32, i32, u32), std::sync::Arc<ColumnCore>>;
+static CORE_CACHE: std::sync::LazyLock<std::sync::RwLock<CoreCacheMap>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+
+fn column_core_cached(
+    ow: &Overworld,
+    cx: i32,
+    cz: i32,
+    seed: u32,
+) -> std::sync::Arc<ColumnCore> {
+    if let Ok(map) = CORE_CACHE.read()
+        && let Some(hit) = map.get(&(cx, cz, seed))
+    {
+        return hit.clone();
+    }
+    let core = std::sync::Arc::new(column_data(ow, cx, cz, seed));
+    if let Ok(mut map) = CORE_CACHE.write() {
+        if map.len() > 2048 {
+            map.clear();
+        }
+        map.insert((cx, cz, seed), core.clone());
+    }
+    core
 }
 
 /// Highest set bit of a column bitset, as a world Y (`BITS_MIN_Y`
@@ -221,7 +270,15 @@ fn column_data_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Rc<McColum
         if let Some(col) = c.borrow().get(&(cx, cz, seed)) {
             return col.clone();
         }
-        let col = Rc::new(column_data(ow, cx, cz, seed));
+        // W314: the heavy core comes from the CROSS-WORKER cache;
+        // only the cheap per-thread aquifer is minted fresh.
+        let core = column_core_cached(ow, cx, cz, seed);
+        let cs = CHUNK_SIZE as i32;
+        let aquifer = Aquifer::new(ow, seed, cx * cs, cz * cs);
+        let col = Rc::new(McColumnData {
+            core,
+            aquifer: RefCell::new(aquifer),
+        });
         let mut map = c.borrow_mut();
         // Bound the cache: a streaming player visits new columns
         // constantly, so drop the lot once it grows large rather than
@@ -779,7 +836,10 @@ mod tests {
         let ow = build_overworld(0);
         for &(cx, cz) in &[(0, 0), (3, -2), (10, 10)] {
             let data = column_data(&ow, cx, cz, 0);
-            let mut aq = data.aquifer.borrow_mut();
+            // W314: column_data returns the shared CORE; mint the
+            // per-probe aquifer alongside.
+            let cs_i = CHUNK_SIZE as i32;
+            let mut aq = Aquifer::new(&ow, 0, cx * cs_i, cz * cs_i);
             println!("\n== chunk column ({cx},{cz}), skip_above_y={} ==", aq.skip_above_y());
             for band in [(0, 16), (16, 32), (32, 48), (48, 63), (63, 90), (90, 130)] {
                 let (mut solid, mut air, mut water, mut sealed) = (0u32, 0u32, 0u32, 0u32);
