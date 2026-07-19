@@ -221,9 +221,16 @@ pub(crate) fn map_state(state: &PaletteState) -> Mapped {
         }
         _ => {}
     }
-    // Door upper halves: the engine door is anchored at the lower
-    // cell; writing the upper one would double the model.
+    // Door upper halves: W311 - write the SAME door id as the lower
+    // cell (the door.rs design note: upper halves share the id). The
+    // old Mapped::Keep left the upper cell as terrain AIR, so every
+    // template door was a half-door with a hole on top (the acacia
+    // village-door screenshot). The mesher renders the upper cell as
+    // the top panel by inheriting the lower cell's facing.
     if name.ends_with("_door") && state.prop("half") == Some("upper") {
+        if let Some(id) = registry_id(name) {
+            return Mapped::Id(id);
+        }
         return Mapped::Keep;
     }
     if let Some(id) = registry_id(name) {
@@ -296,9 +303,11 @@ mod tests {
             map_state(&st("minecraft:tall_grass", &[("half", "upper")])),
             Mapped::Id(759),
         );
+        // W311: the upper half writes the SAME door id as the lower
+        // (the old Keep left a hole above every template door).
         assert_eq!(
             map_state(&st("minecraft:oak_door", &[("half", "upper")])),
-            Mapped::Keep
+            map_state(&st("minecraft:oak_door", &[("half", "lower")])),
         );
         assert!(matches!(
             map_state(&st("minecraft:oak_door", &[("half", "lower")])),

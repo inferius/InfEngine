@@ -13,6 +13,8 @@ pub(crate) fn draw(
     ctx: &mut MenuContext<'_>,
     actions: &mut Vec<MenuAction>,
 ) {
+    // W311: entry snapshot for the instant-apply diff below.
+    let options_at_entry = ctx.options.clone();
     ui.vertical_centered(|ui| {
         ui.add_space(20.0);
         ui.heading("Moznosti");
@@ -124,6 +126,13 @@ pub(crate) fn draw(
         }
     });
 
+    // W311: MC-style instant apply - any change commits right away,
+    // so Zpet without Pouzit no longer silently discards edits.
+    if *ctx.options != options_at_entry {
+        actions.push(MenuAction::ApplyOptions {
+            snapshot: ctx.options.clone(),
+        });
+    }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if shared::big_button(ui, "Pouzit", true) {

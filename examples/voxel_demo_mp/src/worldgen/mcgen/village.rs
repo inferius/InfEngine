@@ -447,7 +447,11 @@ pub(crate) fn carve_layout(
             let wy = if piece.terrain_matching {
                 // GravityProcessor(WORLD_SURFACE_WG, -1): the local
                 // y=0 layer replaces each column's turf block.
-                mc_floor_at(ctx, wx, wz) + cell.pos[1]
+                // W311: WORLD_SURFACE_WG counts WATER as surface -
+                // clamping at the sea top keeps shore pieces on the
+                // water line instead of draping to the seabed (the
+                // half-submerged village report).
+                mc_floor_at(ctx, wx, wz).max(crate::worldgen::climate::SEA_LEVEL - 1) + cell.pos[1]
             } else {
                 piece.position[1] + rp[1]
             };
@@ -501,7 +505,7 @@ pub(crate) fn carve_layout(
             let wx = piece.position[0] + rp[0];
             let wz = piece.position[2] + rp[2];
             let wy = if piece.terrain_matching {
-                mc_floor_at(ctx, wx, wz) + ent.block_pos[1]
+                mc_floor_at(ctx, wx, wz).max(crate::worldgen::climate::SEA_LEVEL - 1) + ent.block_pos[1]
             } else {
                 piece.position[1] + rp[1]
             };
@@ -536,7 +540,7 @@ pub(crate) fn carve_layout(
                 let wx = piece.position[0] + rp[0];
                 let wz = piece.position[2] + rp[2];
                 let wy = if piece.terrain_matching {
-                    mc_floor_at(ctx, wx, wz) + cell.pos[1]
+                    mc_floor_at(ctx, wx, wz).max(crate::worldgen::climate::SEA_LEVEL - 1) + cell.pos[1]
                 } else {
                     piece.position[1] + rp[1]
                 };
@@ -575,7 +579,7 @@ pub(crate) fn carve_layout(
                     if wx < cube.x0 || wx > cube.x1 || wz < cube.z0 || wz > cube.z1 {
                         continue;
                     }
-                    let ground = mc_floor_at(ctx, wx, wz);
+                    let ground = mc_floor_at(ctx, wx, wz).max(crate::worldgen::climate::SEA_LEVEL - 1);
                     if ground >= foot.y0 || foot.y0 - ground > FOUNDATION_MAX {
                         continue;
                     }

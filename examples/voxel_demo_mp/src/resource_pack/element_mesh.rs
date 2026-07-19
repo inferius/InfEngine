@@ -284,18 +284,38 @@ pub(crate) fn emit_wall_torch(
     let corner = |du: f32, dv: f32, top: f32| -> [f32; 3] {
         (base + w_s * du + w_f * dv + h * top).into()
     };
+    // W311: the MC template_torch UV SUBRECTS. The first cut mapped
+    // the FULL 16x16 torch tile onto every 2-px face - the whole
+    // texture smeared across the stick and the mostly-transparent
+    // top face read as a floating blob (the user's broken-torch
+    // screenshots). Vanilla samples the stick columns only:
+    // sides [7,6..9,16], top [7,6..9,8], bottom [7,13..9,15].
+    let sub = |x0: f32, y0: f32, x1: f32, y1: f32| -> [f32; 4] {
+        let w = tile[2] - tile[0];
+        let hgt = tile[3] - tile[1];
+        [
+            tile[0] + w * x0 / 16.0,
+            tile[1] + hgt * y0 / 16.0,
+            tile[0] + w * x1 / 16.0,
+            tile[1] + hgt * y1 / 16.0,
+        ]
+    };
+    let side_uv = sub(7.0, 6.0, 9.0, 16.0);
+    let top_uv = sub(7.0, 6.0, 9.0, 8.0);
+    let bottom_uv = sub(7.0, 13.0, 9.0, 15.0);
     // Same face/winding layout as emit_cuboid, with s/nf/axis
     // standing in for the x/z/y axes of the sheared box.
-    let quads: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        (s.into(), [corner(1.0, -1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, 1.0, 1.0), corner(1.0, -1.0, 1.0)]),
-        ((-s).into(), [corner(-1.0, 1.0, 0.0), corner(-1.0, -1.0, 0.0), corner(-1.0, -1.0, 1.0), corner(-1.0, 1.0, 1.0)]),
-        (axis.into(), [corner(-1.0, -1.0, 1.0), corner(1.0, -1.0, 1.0), corner(1.0, 1.0, 1.0), corner(-1.0, 1.0, 1.0)]),
-        ((-axis).into(), [corner(-1.0, 1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, -1.0, 0.0), corner(-1.0, -1.0, 0.0)]),
-        (nf.into(), [corner(1.0, 1.0, 0.0), corner(-1.0, 1.0, 0.0), corner(-1.0, 1.0, 1.0), corner(1.0, 1.0, 1.0)]),
-        ((-nf).into(), [corner(-1.0, -1.0, 0.0), corner(1.0, -1.0, 0.0), corner(1.0, -1.0, 1.0), corner(-1.0, -1.0, 1.0)]),
+    type TorchQuad = ([f32; 3], [[f32; 3]; 4], [f32; 4]);
+    let quads: [TorchQuad; 6] = [
+        (s.into(), [corner(1.0, -1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, 1.0, 1.0), corner(1.0, -1.0, 1.0)], side_uv),
+        ((-s).into(), [corner(-1.0, 1.0, 0.0), corner(-1.0, -1.0, 0.0), corner(-1.0, -1.0, 1.0), corner(-1.0, 1.0, 1.0)], side_uv),
+        (axis.into(), [corner(-1.0, -1.0, 1.0), corner(1.0, -1.0, 1.0), corner(1.0, 1.0, 1.0), corner(-1.0, 1.0, 1.0)], top_uv),
+        ((-axis).into(), [corner(-1.0, 1.0, 0.0), corner(1.0, 1.0, 0.0), corner(1.0, -1.0, 0.0), corner(-1.0, -1.0, 0.0)], bottom_uv),
+        (nf.into(), [corner(1.0, 1.0, 0.0), corner(-1.0, 1.0, 0.0), corner(-1.0, 1.0, 1.0), corner(1.0, 1.0, 1.0)], side_uv),
+        ((-nf).into(), [corner(-1.0, -1.0, 0.0), corner(1.0, -1.0, 0.0), corner(1.0, -1.0, 1.0), corner(-1.0, -1.0, 1.0)], side_uv),
     ];
-    for (normal, corners) in quads {
-        infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
+    for (normal, corners, uv) in quads {
+        infengine_voxel::emit_element_quad(verts, idxs, corners, normal, uv, light, 0);
     }
 }
 

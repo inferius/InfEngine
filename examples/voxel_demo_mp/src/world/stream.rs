@@ -925,7 +925,9 @@ fn rescan_chunk_radius(
     vx.torch_positions.retain(|p| in_keep(p));
     // W282: portal swirl cells follow their chunks out (the scan
     // re-adds them on stream-in).
-    vx.portal_positions.retain(|p| in_keep(p));
+    // W311: portals are NOT distance-pruned - the round-trip link
+    // search (128-block MC POI radius) must see portals whose chunks
+    // streamed out. The set stays tiny (a few cells per frame built).
     vx.torch_orient.retain(|p, _| in_keep(p));
     vx.fires.retain(|p, _| in_keep(p));
     vx.snow_positions.retain(|p, _| in_keep(p));

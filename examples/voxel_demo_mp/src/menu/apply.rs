@@ -21,6 +21,27 @@ use crate::worldgen::WorldGen;
 pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
     match action {
         MenuAction::SwitchScreen(target) => {
+            // W311: entering Options re-syncs the snapshot from the
+            // LIVE settings. The startup-time snapshot went stale the
+            // moment anything else (the in-game ESC panel, a config
+            // load) changed a setting - and Pouzit then REVERTED
+            // those changes (the user's "settings won't hold" report).
+            if matches!(target, menu::MenuScreen::Options) {
+                let o = &mut vx.menu.options;
+                o.view_distance = vx.settings.view_distance;
+                o.fov_deg = vx.fov_y_rad.to_degrees();
+                o.mouse_sensitivity = vx.settings.mouse_sensitivity;
+                o.show_fps = vx.settings.show_fps;
+                o.head_bob = vx.settings.head_bob;
+                o.invert_mouse_y = vx.settings.invert_mouse_y;
+                o.invert_wheel = vx.settings.invert_wheel;
+                o.ui_scale = vx.settings.ui_scale;
+                o.lock_cursor = vx.settings.lock_cursor;
+                o.hide_cursor = vx.settings.hide_cursor;
+                o.language = vx.settings.language.clone();
+                o.player_name = vx.player_name.clone();
+                o.master_addr = vx.master_addr.clone();
+            }
             // W21.1: pick a fresh splash line when the user
             // returns to the Main screen from a sub-screen.
             let arriving_main = matches!(target, menu::MenuScreen::Main);

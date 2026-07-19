@@ -341,17 +341,46 @@ impl Voxel {
         // (move chunks/entities to the parking maps + load the
         // target dim's state).
         self.switch_dim(target_dim);
+        // W311: MC portal LINKING first - find the nearest existing
+        // portal within the target dim's POI radius (128 overworld,
+        // 16 nether) in the persistent swirl index. The old path only
+        // probed a 16-block cube around the scaled dest, so a round
+        // trip often built a SECOND portal far from the original
+        // instead of linking back to it (the user's "came out
+        // somewhere completely different" report).
+        let poi_r: i64 = if target_dim == dim::NETHER { 16 } else { 128 };
+        let linked: Option<[i32; 3]> = self
+            .portal_positions
+            .iter()
+            .map(|p| {
+                let dx = (p[0] - dest[0]) as i64;
+                let dz = (p[2] - dest[2]) as i64;
+                (*p, dx * dx + dz * dz)
+            })
+            .filter(|(_, d2)| *d2 <= poi_r * poi_r)
+            .min_by_key(|(_, d2)| *d2)
+            .map(|(p, _)| p);
         // W155: generate REAL terrain at the arrival column before
         // any portal hunt. The old path inserted EMPTY chunks
         // (void), clamped the frame to y<=100 mid-air and the
         // player fell out of the sky; the empty shells also
         // permanently shadowed worldgen for those coords.
-        let arrival_region = self.ensure_generated_chunks_around(dest);
+        let arrival_region =
+            self.ensure_generated_chunks_around(linked.unwrap_or(dest));
         // Ground-snap the portal: first open spot with a solid
         // floor, scanning down from the dest height band. W282:
         // searches a growing ring of columns (up to 8 blocks out)
         // like MC's candidate scan - a single-column miss used to
         // drop to the mid-shelf fallback and hang the frame in air.
+        let cfg = bincode::config::standard();
+        let mut edits: Vec<[i32; 3]> = Vec::new();
+        let frame_hint;
+        let spawn = if let Some(s) = linked {
+            // W311: linked to an EXISTING portal - arrive inside it
+            // like MC; nothing to build, no platform stamping.
+            frame_hint = s;
+            s
+        } else {
         let mut target = Self::portal_ground_spot(&self.world, dest);
         // W298: sink the frame onto the REAL floor when the picked
         // spot hovers a few blocks above it - the netherrack platform
@@ -373,19 +402,20 @@ impl Voxel {
             }
         }
         // Find or build a return portal at the scaled coord.
-        let cfg = bincode::config::standard();
-        let mut edits: Vec<[i32; 3]> = Vec::new();
-        let spawn = block::portal::ensure_return_portal(
+        frame_hint = target;
+        block::portal::ensure_return_portal(
             &mut self.world,
             target,
             Some(&mut edits),
-        );
+        )
+        };
         // W159: GUARANTEE a solid platform + clear pocket at the
         // arrival, then re-mesh it. The surface scan can miss in
         // lava-sea / all-air columns, which is how the portal ended
         // up floating and the player fell. A dim-appropriate floor
         // under the frame footprint + a cleared 3-tall pocket makes
         // every arrival stand on solid ground like MC's platform.
+        if linked.is_none() {
         let base_y = spawn[1];
         if target_dim == dim::NETHER {
             // MC builds a netherrack platform + cleared pocket in the
@@ -447,6 +477,7 @@ impl Voxel {
                 }
             }
         }
+        }
         // W299: index the arrival curtain into the swirl render list.
         // `build_minimal_portal` writes via `world.set` (untracked) and
         // the sync gen path never emitter-scanned, so both a freshly
@@ -475,7 +506,7 @@ impl Voxel {
             let mut hot: Vec<infengine_voxel::ChunkCoord> = Vec::new();
             for c in Self::affected_chunks(spawn)
                 .into_iter()
-                .chain(Self::affected_chunks(target))
+                .chain(Self::affected_chunks(frame_hint))
             {
                 if !hot.contains(&c) {
                     hot.push(c);

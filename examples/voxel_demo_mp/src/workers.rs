@@ -747,6 +747,10 @@ pub(crate) fn mesh_chunk_in_worker(
         // open per lower half). Handled here so the static west-edge
         // `door_lower` model never runs for doors.
         if crate::block::door::is_door_block(block.0) {
+            // W311: an upper door cell has no doors-map row of its
+            // own - inherit the LOWER cell's facing/open so both
+            // halves swing together (template doors write the same
+            // id into both cells now).
             let wp = [
                 world_origin[0] + lx,
                 world_origin[1] + ly,
