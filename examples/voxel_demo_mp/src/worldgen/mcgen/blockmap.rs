@@ -124,15 +124,12 @@ const RENAMES: &[(&str, &str)] = &[
 /// blockmap test pins the full-village unmapped set to this list so
 /// a template update can't silently grow the gap.
 pub(crate) const KNOWN_SKIPS: &[&str] = &[
-    "brown_wall_banner",
-    "campfire",
     // W251 outpost decoration.
     // W259 mansion decoration.
     // W261 ancient city decoration (the redstone lab's piston head,
     // the skull piles).
     // W263 trial chambers decoration (archaeology pots, tripwire
     // traps, dripstone, hanging chains).
-    "tnt",
 ];
 
 fn log_unmapped(name: &str) {
