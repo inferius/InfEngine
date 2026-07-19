@@ -167,9 +167,15 @@ pub(crate) struct FireStep {
 /// fire; returns `None` otherwise. Pure on the world; caller
 /// commits.
 #[allow(dead_code)] // wired up by Q.4e flint+steel + Q.4d lava ignite
+/// W312: both fire family ids (MC BaseFireBlock: SOUL fire over
+/// soul sand / soul soil, regular fire elsewhere).
+pub(crate) fn is_fire_id(id: u16) -> bool {
+    id == FIRE_ID || id == crate::block::SOUL_FIRE_ID
+}
+
 pub(crate) fn try_ignite_block(world: &World, pos: [i32; 3]) -> Option<u8> {
     let here = world.get(pos);
-    if here.0 == FIRE_ID {
+    if is_fire_id(here.0) {
         return None;
     }
     if !here.is_air() {

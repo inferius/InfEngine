@@ -60,10 +60,13 @@ pub(crate) fn apply_fire_step(vx: &mut crate::Voxel, step: crate::block::fire::F
         let mut chunk_set: HashSet<ChunkCoord> = HashSet::new();
         // Extinguish first - clears the world block + fires entry.
         for pos in &step.extinguish {
-            if vx.world.get(*pos).0 != block::FIRE_ID {
+            if !block::fire::is_fire_id(vx.world.get(*pos).0) {
                 continue;
             }
-            vx.world.set(*pos, BlockId::AIR);
+            // W312: tracked write - the untracked set skipped the
+            // lighting-dirty path, so a dying fire left its baked
+            // glow behind (and a lit one never glowed at all).
+            vx.world_set_tracked(*pos, BlockId::AIR);
             vx.fires.remove(pos);
             for c in crate::Voxel::affected_chunks(*pos) {
                 chunk_set.insert(c);
@@ -77,14 +80,14 @@ pub(crate) fn apply_fire_step(vx: &mut crate::Voxel, step: crate::block::fire::F
             }
             // Don't drop the consumed block (MC: burned blocks
             // don't drop items).
-            vx.world.set(*pos, BlockId::AIR);
+            vx.world_set_tracked(*pos, BlockId::AIR);
             for c in crate::Voxel::affected_chunks(*pos) {
                 chunk_set.insert(c);
             }
         }
         // Age bumps - update fires map only; world stays FIRE_ID.
         for (pos, age) in &step.age_bump {
-            if vx.world.get(*pos).0 != block::FIRE_ID {
+            if !block::fire::is_fire_id(vx.world.get(*pos).0) {
                 continue;
             }
             vx.fires.insert(*pos, *age);
@@ -96,7 +99,7 @@ pub(crate) fn apply_fire_step(vx: &mut crate::Voxel, step: crate::block::fire::F
             // Defensive: don't overwrite an already-set fire with
             // a stale ignite entry.
             let here = vx.world.get(*pos);
-            if here.0 == block::FIRE_ID {
+            if block::fire::is_fire_id(here.0) {
                 // Already burning - just refresh age.
                 vx.fires.insert(*pos, *age);
                 continue;
@@ -109,7 +112,18 @@ pub(crate) fn apply_fire_step(vx: &mut crate::Voxel, step: crate::block::fire::F
             {
                 continue;
             }
-            vx.world.set(*pos, BlockId(block::FIRE_ID));
+            // W312: MC BaseFireBlock.getState - SOUL fire over soul
+            // sand / soul soil (light 10, blue), regular fire
+            // elsewhere. Tracked write bakes the light.
+            let below = vx.world.get([pos[0], pos[1] - 1, pos[2]]).0;
+            let fire_id = if below == crate::block::SOUL_SAND_ID
+                || below == crate::block::SOUL_SOIL_ID
+            {
+                crate::block::SOUL_FIRE_ID
+            } else {
+                block::FIRE_ID
+            };
+            vx.world_set_tracked(*pos, BlockId(fire_id));
             vx.fires.insert(*pos, *age);
             for c in crate::Voxel::affected_chunks(*pos) {
                 chunk_set.insert(c);

@@ -729,28 +729,6 @@ impl Voxel {
         region
     }
 
-    /// W155: first Y (scanning down from the upper nether band)
-    /// whose cell + the two above are open with a fully-occluding
-    /// floor below - where a portal frame can stand. Falls back to
-    /// a mid-height shelf when the column is all solid / all air.
-    fn portal_ground_in_column(
-        world: &infengine_voxel::World,
-        x: i32,
-        z: i32,
-        start: i32,
-    ) -> Option<i32> {
-        for y in (6..=start).rev() {
-            let below = world.get([x, y - 1, z]);
-            let open = world.get([x, y, z]).is_air()
-                && world.get([x, y + 1, z]).is_air()
-                && world.get([x, y + 2, z]).is_air();
-            if open && crate::block::block_fully_occludes(below) {
-                return Some(y);
-            }
-        }
-        None
-    }
-
     /// W282: the ground snap searches a REGION like MC's
     /// createPortal candidate scan, not just the exact dest column.
     /// A single-column miss (cavern / lava-sea shaft) used to fall
@@ -763,29 +741,44 @@ impl Voxel {
         world: &infengine_voxel::World,
         dest: [i32; 3],
     ) -> [i32; 3] {
-        let start = dest[1].clamp(40, 100);
-        if let Some(y) =
-            Self::portal_ground_in_column(world, dest[0], dest[2], start)
-        {
-            return [dest[0], y, dest[2]];
-        }
-        // W306: 8 -> 16 - MC's createPortal scans 16 blocks out.
-        for r in 1..=16i32 {
-            for dx in -r..=r {
-                for dz in -r..=r {
-                    if dx.abs().max(dz.abs()) != r {
+        // W312: MC findClosestPortalPosition semantics - score EVERY
+        // valid pocket (3-tall air over a fully-occluding floor) in
+        // the 16-radius region by squared distance to the scaled
+        // dest, and take the closest. The old first-hit scan walked
+        // ONE band downward per column, so it regularly picked a
+        // high terrace shelf far above the ground - the recurring
+        // floating-frame reports. MC never floats because distance
+        // scoring prefers the pocket nearest the source portal's Y.
+        let y_lo = (dest[1] - 48).max(6);
+        let y_hi = (dest[1] + 48).min(crate::WORLD_MAX_Y - 4);
+        let mut best: Option<([i32; 3], i64)> = None;
+        for dx in -16i32..=16 {
+            for dz in -16i32..=16 {
+                let (x, z) = (dest[0] + dx, dest[2] + dz);
+                for y in y_lo..=y_hi {
+                    let open = world.get([x, y, z]).is_air()
+                        && world.get([x, y + 1, z]).is_air()
+                        && world.get([x, y + 2, z]).is_air();
+                    if !open {
                         continue;
                     }
-                    if let Some(y) = Self::portal_ground_in_column(
-                        world,
-                        dest[0] + dx,
-                        dest[2] + dz,
-                        start,
+                    if !crate::block::block_fully_occludes(
+                        world.get([x, y - 1, z]),
                     ) {
-                        return [dest[0] + dx, y, dest[2] + dz];
+                        continue;
+                    }
+                    let dy = (y - dest[1]) as i64;
+                    let d2 = (dx as i64 * dx as i64)
+                        + dy * dy
+                        + (dz as i64 * dz as i64);
+                    if best.map(|(_, b)| d2 < b).unwrap_or(true) {
+                        best = Some(([x, y, z], d2));
                     }
                 }
             }
+        }
+        if let Some((p, _)) = best {
+            return p;
         }
         // W306: no valid dry column anywhere (mid-ocean / all-air).
         // The old fixed y=48 shelf put the frame UNDER the ocean (the
