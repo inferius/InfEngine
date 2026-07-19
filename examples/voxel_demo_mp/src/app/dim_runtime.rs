@@ -194,7 +194,18 @@ impl Voxel {
             self.liquid_remesh_backlog.clear();
             // W284: water tint is biome-derived = per-dim.
             self.water_tint_cache.clear();
+            // W321: LOD shells are per-dim scenery.
+            for (_k, t) in self.lod_meshes.drain() {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
         }
+        self.lod_pending.clear();
+        self.lod_pending_set.clear();
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's
         // freshly-swapped block grid so the next frame's mesh

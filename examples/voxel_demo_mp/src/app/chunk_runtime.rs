@@ -27,6 +27,15 @@ impl Voxel {
                     renderer.remove_mesh(h);
                 }
             }
+            // W321: drop the far-shell ring with the world.
+            for (_k, t) in self.lod_meshes.drain() {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
         }
         for cc in coords {
             self.world.remove_chunk(cc);
@@ -34,6 +43,8 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.in_flight_chunks.clear();
+        self.lod_pending.clear();
+        self.lod_pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         // W198.13: force the streamer to re-run its queue + unload scan

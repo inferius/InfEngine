@@ -73,7 +73,11 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     // place no longer pays ~30k HashMap lookups + a full iter_chunks()
     // pass every frame. Dispatch + delivery + remesh below still run
     // every frame to keep draining the existing queues.
-    let origin = (player_chunk[0], player_chunk[2], cy_min, cy_max, view_dist);
+    // W321: the LOD radius is part of the key so a slider change
+    // re-runs the ring scan without needing a boundary crossing.
+    let lod_key = vx.settings.lod_distance as i32;
+    let origin =
+        (player_chunk[0], player_chunk[2], cy_min, cy_max, view_dist, lod_key);
     if vx.last_stream_origin != Some(origin) {
         vx.last_stream_origin = Some(origin);
         rescan_chunk_radius(vx, player_chunk, view_dist, unload_dist, cy_min, cy_max);
@@ -165,6 +169,42 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
 
     _ms_dispatch = _t.elapsed().as_secs_f32() * 1000.0;
 
+    // W321: dispatch far LOD shells only when the full-res queue is
+    // idle - real chunks always win the workers. Tiles are pure
+    // column-data replays (mcgen only), so the ring is gated to the
+    // MC overworld profile.
+    if let Some(pool) = vx.workers.as_ref()
+        && vx.pending_chunks.is_empty()
+        && !vx.lod_pending.is_empty()
+    {
+        let ctx = vx.current_worldgen_ctx();
+        if ctx.profile == crate::worldgen::WorldGen::Mc {
+            let pack_arc = Arc::clone(&vx.resource_pack);
+            let mut sent = 0usize;
+            while sent < 16 {
+                let Some(pending) = vx.lod_pending.pop() else { break };
+                let key = pending.key;
+                // Stale heap entries (tile arrived / ring moved).
+                if !vx.lod_pending_set.contains(&key)
+                    || vx.lod_meshes.contains_key(&key)
+                {
+                    continue;
+                }
+                let job = Job::LodTile(crate::lod::LodTileJob {
+                    key,
+                    ctx: ctx.clone(),
+                    pack: Arc::clone(&pack_arc),
+                    dim: vx.current_dim.clone(),
+                });
+                if pool.req_tx.send(job).is_err() {
+                    vx.lod_pending.push(pending);
+                    break;
+                }
+                sent += 1;
+            }
+        }
+    }
+
     // Drain finished results from the workers.
     let _t = std::time::Instant::now();
     let (_results_cap, budget_ms) = vx.current_results_budget();
@@ -196,6 +236,8 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         WorkerResult::Lit { .. } => 0u8,
         WorkerResult::Remeshed { .. } => 1,
         WorkerResult::Generated { .. } => 2,
+        // W321: shells are pure decoration - always after real chunks.
+        WorkerResult::LodTile(_) => 3,
     });
     // W106: apply the per-frame time budget to PROCESSING (the GPU mesh
     // uploads), which is what the budget always intended (see the
@@ -225,6 +267,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 _n_lit += 1;
                 "lit"
             }
+            WorkerResult::LodTile(_) => "lod",
         };
         match result {
             WorkerResult::Generated {
@@ -700,6 +743,62 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 );
                 vx.pending_lighting_jobs = vx.pending_lighting_jobs.saturating_sub(1);
             }
+            WorkerResult::LodTile(res) => {
+                // W321: far surface shell finished. The pending set
+                // doubles as the in-flight marker.
+                vx.lod_pending_set.remove(&res.key);
+                if res.dim != vx.current_dim {
+                    continue;
+                }
+                // Beyond the (possibly changed) LOD ring, or inside a
+                // column that already has full-res meshes: drop it.
+                let lod_dist = (vx.settings.lod_distance as i32)
+                    .min(crate::lod::LOD_DISTANCE_MAX);
+                let dx = res.key[0] - player_chunk[0];
+                let dz = res.key[1] - player_chunk[2];
+                if dx * dx + dz * dz > (lod_dist + 2) * (lod_dist + 2) {
+                    continue;
+                }
+                let Some(renderer) = vx.renderer.as_mut() else {
+                    continue;
+                };
+                // Replacing an existing tile frees the old meshes.
+                if let Some(old) = vx.lod_meshes.remove(&res.key) {
+                    if let Some(h) = old.opaque {
+                        renderer.remove_chunk_mesh(h);
+                    }
+                    if let Some(h) = old.water {
+                        renderer.remove_chunk_mesh(h);
+                    }
+                }
+                let [cx, cz] = res.key;
+                let opaque = (!res.opaque.0.is_empty()).then(|| {
+                    renderer.create_chunk_mesh(
+                        &format!("voxel_lod_{cx}_{cz}"),
+                        &res.opaque.0,
+                        &res.opaque.1,
+                    )
+                });
+                let water = (!res.water.0.is_empty()).then(|| {
+                    let h = renderer.create_chunk_mesh(
+                        &format!("voxel_lod_{cx}_{cz}_w"),
+                        &res.water.0,
+                        &res.water.1,
+                    );
+                    renderer.set_chunk_mesh_layer(h, 2);
+                    h
+                });
+                vx.lod_meshes.insert(
+                    res.key,
+                    crate::lod::LodTile {
+                        opaque,
+                        water,
+                        y_min: res.y_min,
+                        y_max: res.y_max,
+                        water_tint: res.water_tint,
+                    },
+                );
+            }
         }
         // W233: see _result_t above.
         {
@@ -815,6 +914,9 @@ fn rescan_chunk_radius(
         }
     }
     _ms_queue = _t.elapsed().as_secs_f32() * 1000.0;
+    // W321: maintain the far LOD ring on the same boundary-cross
+    // cadence (must run BEFORE the to_unload early-return below).
+    rescan_lod_ring(vx, player_chunk, view_dist, cy_min, cy_max);
     let _t = std::time::Instant::now();
 
     // Unload chunks beyond the keep radius.
@@ -970,5 +1072,103 @@ fn rescan_chunk_radius(
             unloaded = to_unload.len(),
             "W232: slow chunk-radius rescan"
         );
+    }
+}
+
+/// W321: queue missing LOD shells in the `view_dist..=lod_dist`
+/// ring, drop shells that scrolled out of it, and evict shells whose
+/// column now has full-res meshes. Runs only on chunk-boundary
+/// crossings (caller is `rescan_chunk_radius`). A disabled ring
+/// (`lod_distance` <= view distance, or a non-MC worldgen profile)
+/// clears any leftover state.
+fn rescan_lod_ring(
+    vx: &mut Voxel,
+    player_chunk: [i32; 3],
+    view_dist: i32,
+    cy_min: i32,
+    cy_max: i32,
+) {
+    let lod_dist = (vx.settings.lod_distance as i32)
+        .min(crate::lod::LOD_DISTANCE_MAX);
+    let mc = vx.current_worldgen_ctx().profile == crate::worldgen::WorldGen::Mc;
+    if lod_dist <= view_dist || !mc {
+        if !vx.lod_meshes.is_empty() || !vx.lod_pending.is_empty() {
+            let Voxel {
+                renderer,
+                lod_meshes,
+                lod_pending,
+                lod_pending_set,
+                ..
+            } = vx;
+            crate::lod::clear_lod_state(
+                renderer.as_mut(),
+                lod_meshes,
+                lod_pending,
+                lod_pending_set,
+            );
+        }
+        return;
+    }
+    let view_sq = view_dist * view_dist;
+    let lod_sq = lod_dist * lod_dist;
+    // Queue missing tiles in the ring band.
+    for dz in -lod_dist..=lod_dist {
+        for dx in -lod_dist..=lod_dist {
+            let dist_sq = dx * dx + dz * dz;
+            if dist_sq <= view_sq || dist_sq > lod_sq {
+                continue;
+            }
+            let key = [player_chunk[0] + dx, player_chunk[2] + dz];
+            if !vx.lod_meshes.contains_key(&key)
+                && vx.lod_pending_set.insert(key)
+            {
+                vx.lod_pending.push(crate::lod::PendingLodTile {
+                    neg_dist_sq: -dist_sq,
+                    key,
+                });
+            }
+        }
+    }
+    // Drop pending entries that scrolled out of the ring (their
+    // stale heap entries skip at dispatch via this set).
+    vx.lod_pending_set.retain(|k| {
+        let dx = k[0] - player_chunk[0];
+        let dz = k[1] - player_chunk[2];
+        let d = dx * dx + dz * dz;
+        d > view_sq && d <= lod_sq
+    });
+    // Unload shells: out past the ring hysteresis, or superseded by
+    // full-res meshes anywhere in their column.
+    let keep_sq = (lod_dist + 2) * (lod_dist + 2);
+    let mut drop_keys: Vec<[i32; 2]> = Vec::new();
+    for k in vx.lod_meshes.keys() {
+        let dx = k[0] - player_chunk[0];
+        let dz = k[1] - player_chunk[2];
+        let d = dx * dx + dz * dz;
+        if d > keep_sq {
+            drop_keys.push(*k);
+            continue;
+        }
+        if d <= view_sq {
+            let covered = (cy_min..=cy_max)
+                .any(|cy| vx.chunk_meshes.contains_key(&[k[0], cy, k[1]]));
+            if covered {
+                drop_keys.push(*k);
+            }
+        }
+    }
+    if !drop_keys.is_empty()
+        && let Some(renderer) = vx.renderer.as_mut()
+    {
+        for k in drop_keys {
+            if let Some(t) = vx.lod_meshes.remove(&k) {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
+        }
     }
 }

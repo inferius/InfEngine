@@ -149,6 +149,8 @@ mod wave29_tests;
 // tolerates dead_code on the module until then.
 #[allow(dead_code)]
 mod lighting;
+// W321 - distance LOD: far surface-shell tiles beyond view distance.
+mod lod;
 // W242 - MC loot tables (chest loot rollers; first user is the
 // monster-room dungeon chest).
 mod loot;

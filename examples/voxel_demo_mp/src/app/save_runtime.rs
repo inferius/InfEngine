@@ -161,6 +161,7 @@ impl Voxel {
         let _ = writeln!(text, "lock_cursor={}", self.settings.lock_cursor);
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
         let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
+        let _ = writeln!(text, "lod_distance={}", self.settings.lod_distance);
         let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
         let _ = writeln!(
             text,
@@ -271,6 +272,12 @@ impl Voxel {
                         let v = if v == 4 { 12 } else { v };
                         self.settings.view_distance =
                             v.clamp(2, VIEW_DISTANCE_MAX as u8);
+                    }
+                }
+                "lod_distance" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        self.settings.lod_distance =
+                            v.min(crate::lod::LOD_DISTANCE_MAX as u8);
                     }
                 }
                 "head_bob" => {

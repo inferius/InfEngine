@@ -43,6 +43,14 @@ pub(crate) fn draw(
             .text("Render distance (chunky)"),
     );
     ui.add(
+        Slider::new(
+            &mut ctx.options.lod_distance,
+            0..=crate::lod::LOD_DISTANCE_MAX as u8,
+        )
+        .step_by(1.0)
+        .text("LOD distance (chunky, 0 = vyp)"),
+    );
+    ui.add(
         Slider::new(&mut ctx.options.fov_deg, 30.0..=120.0)
             .step_by(1.0)
             .text("FOV (stupne)"),

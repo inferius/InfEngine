@@ -378,6 +378,7 @@ fn options_clamp_view_distance_to_max() {
         player_name: "test".into(),
         master_addr: String::new(),
         view_distance: 200,
+        lod_distance: 0,
         fov_deg: 60.0,
         mouse_sensitivity: 1.0,
         show_fps: false,

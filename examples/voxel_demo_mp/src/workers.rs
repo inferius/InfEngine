@@ -548,6 +548,19 @@ impl WorkerPool {
                                         return;
                                     }
                                 }
+                                Job::LodTile(job) => {
+                                    // W321: pure column-data replay -
+                                    // the W314 shared core cache makes
+                                    // repeat columns cheap; no chunk is
+                                    // generated or stored.
+                                    let res = crate::lod::build_lod_tile(&job);
+                                    if res_tx
+                                        .send(WorkerResult::LodTile(res))
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
                             }
                         }
                     })
@@ -1150,6 +1163,9 @@ pub(crate) enum WorkerResult {
         /// in-flight counter, its grids are just discarded).
         dim: String,
     },
+    /// W321: one far surface-shell tile (see `lod.rs`). Carries its
+    /// dim like every other result so a dim switch drops it.
+    LodTile(crate::lod::LodTileResult),
 }
 
 /// W25 / W27: a single unit of work sent to a worker thread.
@@ -1164,6 +1180,9 @@ pub(crate) enum Job {
     /// W27: lighting BFS over an owned snapshot of affected chunks +
     /// their face-neighbours. No worldgen, no mesh.
     Lighting(LightingJob),
+    /// W321: build one far surface-shell tile from cached column
+    /// data (no chunk gen / lighting / storage).
+    LodTile(crate::lod::LodTileJob),
 }
 
 /// W27: lighting BFS job. The main thread clones the affected chunks

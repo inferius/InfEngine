@@ -9,6 +9,7 @@ fn fresh_options() -> OptionsSnapshot {
         player_name: "Tester".to_string(),
         master_addr: "127.0.0.1:6000".to_string(),
         view_distance: 6,
+        lod_distance: 0,
         fov_deg: 75.0,
         mouse_sensitivity: 0.6,
         show_fps: true,

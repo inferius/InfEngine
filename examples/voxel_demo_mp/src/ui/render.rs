@@ -995,6 +995,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         .step_by(1.0)
                         .text("Render distance (chunks)"),
                     );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut settings_edit.lod_distance,
+                            0..=crate::lod::LOD_DISTANCE_MAX as u8,
+                        )
+                        .step_by(1.0)
+                        .text("LOD distance (chunks, 0 = off)"),
+                    );
                     ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
                     ui.checkbox(
                         &mut settings_edit.lock_cursor,
@@ -1375,6 +1383,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 )
                                 .step_by(1.0)
                                 .text("Render distance"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut settings_edit.lod_distance,
+                                    0..=crate::lod::LOD_DISTANCE_MAX as u8,
+                                )
+                                .step_by(1.0)
+                                .text("LOD distance"),
                             );
                             ui.add(
                                 egui::Slider::new(

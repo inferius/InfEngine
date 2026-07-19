@@ -533,6 +533,35 @@ pub(crate) fn cmd_rd(
     true
 }
 
+/// W321: `/lod` - print or set the far LOD ring radius in chunks.
+/// 0 disables the shells; values above the view distance grow the
+/// visible horizon (the fog curtain follows the LOD edge).
+pub(crate) fn cmd_lod(
+    voxel: &mut Voxel,
+    arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
+    if arg.is_empty() {
+        lines.push(format!(
+            "LOD distance: {} (view {})",
+            voxel.settings.lod_distance, voxel.settings.view_distance
+        ));
+    } else if let Ok(v) = arg.parse::<u8>() {
+        voxel.settings.lod_distance =
+            v.min(crate::lod::LOD_DISTANCE_MAX as u8);
+        voxel.save_config();
+        // Force the ring rescan even while standing still.
+        voxel.last_stream_origin = None;
+        lines.push(format!(
+            "LOD distance set to {}.",
+            voxel.settings.lod_distance
+        ));
+    } else {
+        lines.push(format!("Cannot parse distance: {arg}"));
+    }
+    true
+}
+
 /// `/worldgen` (alias `/gen`). Print or switch the worldgen
 /// mode (host-only).
 pub(crate) fn cmd_worldgen(

@@ -117,6 +117,13 @@ pub(crate) struct Voxel {
     /// of a single chunk's meshes is O(1) instead of O(n) where n is
     /// the total number of entries across all chunks.
     pub(crate) chunk_meshes: HashMap<ChunkCoord, Vec<(BlockId, MeshHandle)>>,
+    /// W321: far surface-shell tiles keyed by chunk column `[cx, cz]`
+    /// (the LOD ring between `view_distance` and `lod_distance`).
+    pub(crate) lod_meshes: HashMap<[i32; 2], crate::lod::LodTile>,
+    /// W321: LOD tiles queued for a worker, closest-first.
+    pub(crate) lod_pending: BinaryHeap<crate::lod::PendingLodTile>,
+    /// W321: dedup set for `lod_pending` + in-flight tiles.
+    pub(crate) lod_pending_set: HashSet<[i32; 2]>,
     /// W28.1: Chunks queued for generation, ordered closest-first by
     /// XZ distance from the player. Replaces VecDeque so workers
     /// always receive the most relevant chunks first.
@@ -152,7 +159,7 @@ pub(crate) struct Voxel {
     /// turns in place (the residual turning judder after W198.12).
     /// Dispatch + delivery + remesh still run every frame to keep
     /// draining the existing queues.
-    pub(crate) last_stream_origin: Option<(i32, i32, i32, i32, i32)>,
+    pub(crate) last_stream_origin: Option<(i32, i32, i32, i32, i32, i32)>,
     /// Worker pool the streaming code dispatches generation to. CPU-
     /// heavy `generate_chunk` + `chunk_mesh` run on the workers; the
     /// main thread only does the GPU buffer upload + neighbour
@@ -1255,6 +1262,10 @@ pub(crate) struct Settings {
     /// 1.0 keeps the platform-native size, 2.0 doubles every
     /// panel/font (the 4K-monitor fix). Clamped to 0.5..=3.0.
     pub(crate) ui_scale: f32,
+    /// W321: LOD ring radius in chunks (far surface shells beyond
+    /// `view_distance`). 0 disables the ring; values at or below
+    /// `view_distance` also effectively disable it.
+    pub(crate) lod_distance: u8,
 }
 
 impl Default for Settings {
@@ -1271,6 +1282,7 @@ impl Default for Settings {
             mc_assets_path: None,
             language: "en_us".to_string(),
             ui_scale: 1.0,
+            lod_distance: crate::lod::LOD_DISTANCE_DEFAULT,
         }
     }
 }

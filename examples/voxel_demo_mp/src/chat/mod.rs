@@ -289,6 +289,10 @@ pub(crate) fn dispatch_as(
                 handled_locally |=
                     cmds_world::cmd_rd(voxel, arg, &mut local_lines);
             }
+            "lod" => {
+                handled_locally |=
+                    cmds_world::cmd_lod(voxel, arg, &mut local_lines);
+            }
             "mobcap" => {
                 handled_locally |= cmds_host::cmd_mobcap(
                     voxel,
