@@ -32,6 +32,8 @@ pub fn draw_remote_mobs(
     sheep_head_mesh: Option<MeshHandle>,
     mob_meshes: &MobMeshes,
     mob_hurt_flash: &HashMap<u32, f32>,
+    // W343: per-creeper swell seconds (flash + inflate).
+    mob_swell: &HashMap<u32, f32>,
     mob_dying: &HashMap<u32, f32>,
     mob_lunge: &HashMap<u32, f32>,
     day_time: f32,
@@ -475,6 +477,64 @@ pub fn draw_remote_mobs(
                     }
 
                     // ---- Zombie villager (W330) -------------------------
+                    // ---- Creeper (W343) ---------------------------------
+                    k if k == crate::mob::kinds::KIND_CREEPER => {
+                        // Swell: vanilla white flash alternates every
+                        // 2 ticks; the body inflates toward the pop.
+                        let swell = mob_swell
+                            .get(&mob.id)
+                            .copied()
+                            .unwrap_or(0.0);
+                        let flash = swell > 0.0
+                            && ((swell * 10.0) as i32) % 2 == 0;
+                        let tint = if flash {
+                            [2.2f32, 2.2, 2.2, 1.0]
+                        } else {
+                            [1.0, 1.0, 1.0, 1.0]
+                        };
+                        let inflate = 1.0 + swell * 0.18;
+                        if let Some(baked) = &mob_meshes.creeper_model {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale * inflate,
+                                apply_tint(tint),
+                                mob_pose,
+                            );
+                        } else {
+                            let green = [0.30f32, 0.65, 0.25, 1.0];
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.6, 1.6, 0.5) * inflate,
+                                body_rot,
+                                Vec3::new(
+                                    base_x,
+                                    mob.pos[1] + 0.85 - death_sink + walk_bob,
+                                    base_z,
+                                ),
+                            );
+                            renderer.draw_mesh_pbr(
+                                player_cube,
+                                body.to_cols_array(),
+                                apply_tint(if flash {
+                                    [1.8, 1.8, 1.8, 1.0]
+                                } else {
+                                    green
+                                }),
+                                0.0,
+                                0.9,
+                            );
+                        }
+                    }
+
                     KIND_ZOMBIE_VILLAGER => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         if let Some(baked) = &mob_meshes.zombie_villager_model {

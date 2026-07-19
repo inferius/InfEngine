@@ -259,7 +259,11 @@ fn step_one(
     //  - RandomStrollGoal: otherwise mobs IDLE, and with chance
     //    1/120 per tick pick a stroll target within a 10-block
     //    square (MC WaterAvoidingRandomStrollGoal interval).
-    let chase_player_pos: Option<[f32; 3]> = if kind_is_hostile(m.kind) {
+    let chase_player_pos: Option<[f32; 3]> = if kind_is_hostile(m.kind)
+        // W343: creepers stalk players but deal NO touch damage -
+        // they share the chase, never the melee arm.
+        || m.kind == super::kinds::KIND_CREEPER
+    {
         voxel.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
     } else if m.kind == KIND_ZOMBIFIED_PIGLIN && m.anger_left > 0.0 {
         // W300: NeutralMob anger - an angered zombified piglin hunts
@@ -671,6 +675,61 @@ fn step_one(
             }
         }
     }
+    // W343: SwellGoal + explodeCreeper. Within 3 blocks with line
+    // of sight the fuse arms (hiss); it keeps burning until the
+    // player is past 7 blocks or hidden, then unwinds. 30 ticks
+    // (1.5 s) of swell detonates the vanilla radius-3 MOB blast -
+    // no drops, the creeper simply ceases to be.
+    if m.kind == super::kinds::KIND_CREEPER && m.dying <= 0.0 {
+        let swell0 = voxel.mob_swell.get(&m.id).copied().unwrap_or(0.0);
+        let mut dir = -1.0f32;
+        if let Some(p) = chase_player_pos {
+            let d2 = (p[0] - m.pos[0]).powi(2)
+                + (p[1] - m.pos[1]).powi(2)
+                + (p[2] - m.pos[2]).powi(2);
+            let arm_r2 = if swell0 > 0.0 { 49.0 } else { 9.0 };
+            if d2 < arm_r2 {
+                let eye = glam::Vec3::new(m.pos[0], m.pos[1] + 1.2, m.pos[2]);
+                let tgt = glam::Vec3::new(p[0], p[1] - 0.3, p[2]);
+                let to = tgt - eye;
+                let dist = to.length();
+                let los = dist <= 1e-3
+                    || infengine_voxel::raycast_with(
+                        &voxel.world,
+                        eye,
+                        to / dist.max(1e-3),
+                        dist,
+                        |b| {
+                            !b.is_air()
+                                && crate::block::block_fully_occludes(b)
+                        },
+                    )
+                    .is_none();
+                if los {
+                    dir = 1.0;
+                }
+            }
+        }
+        let swell = (swell0 + dir * dt).clamp(0.0, 1.5);
+        if dir > 0.0 && swell0 <= 0.0 && swell > 0.0 {
+            voxel.sfx_at("mob/creeper/fuse", m.pos, |_, _| {});
+        }
+        if swell > 0.0 {
+            // SwellGoal.start stops navigation - hold still.
+            m.target = m.pos;
+            m.strolling = false;
+            voxel.mob_swell.insert(m.id, swell);
+        } else {
+            voxel.mob_swell.remove(&m.id);
+        }
+        if swell >= 1.5 {
+            let c = glam::Vec3::new(m.pos[0], m.pos[1] + 0.85, m.pos[2]);
+            voxel.mob_swell.remove(&m.id);
+            to_remove.push(m.id);
+            crate::explosion::explode(voxel, c, 3.0, false);
+            return m;
+        }
+    }
     // W339: iron golem village defense - MC DefendVillageTargetGoal
     // + MeleeAttackGoal: hunt the nearest hostile within 16 blocks;
     // at arm's reach deal attackDamage/2 + rand(attackDamage)
@@ -897,6 +956,7 @@ fn evict(voxel: &mut Voxel, to_remove: &[u32]) {
         voxel.mob_step_timers.remove(id);
         voxel.mob_say_timers.remove(id);
         voxel.mob_last_xz.remove(id);
+        voxel.mob_swell.remove(id);
         if let NetRole::Server { server, .. } = &voxel.net {
             let cfg = bincode::config::standard();
             if let Ok(buf) = bincode::serde::encode_to_vec(*id, cfg) {
@@ -934,6 +994,51 @@ fn broadcast(voxel: &Voxel) {
 mod tests {
     use super::*;
     use infengine_voxel::{BlockId, Chunk};
+
+    /// W343: a creeper beside the player swells for 1.5 s, then
+    /// detonates the radius-3 blast - the mob vanishes (no corpse,
+    /// no drops) and the dirt floor craters.
+    #[test]
+    fn w343_creeper_swells_and_detonates() {
+        let mut v = crate::Voxel::new();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for cy in -1..=1 {
+                    v.world.insert_chunk([cx, cy, cz], Chunk::filled(BlockId(0)));
+                }
+            }
+        }
+        for x in -8..=8 {
+            for z in -8..=8 {
+                v.world.set([x, 3, z], BlockId(2)); // dirt
+            }
+        }
+        v.player_pos = glam::Vec3::new(2.5, 5.6, 0.5);
+        let creeper = crate::mob::state::MobState::new_natural(
+            1,
+            crate::mob::kinds::KIND_CREEPER,
+            [0.5, 4.0, 0.5],
+            [0.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            20.0,
+        );
+        v.mobs.push(creeper);
+        v.next_mob_id = 2;
+        for _ in 0..12 {
+            tick_mobs(&mut v, 0.2);
+        }
+        assert!(
+            !v.mobs.iter().any(|m| m.id == 1),
+            "creeper must detonate away",
+        );
+        assert!(v.mob_swell.is_empty(), "swell entry cleaned");
+        let dirt_gone = (-3..=3)
+            .flat_map(|x| (-3..=3).map(move |z| (x, z)))
+            .filter(|&(x, z)| v.world.get([x, 3, z]).is_air())
+            .count();
+        assert!(dirt_gone > 0, "the blast must crater the floor");
+    }
 
     /// W340: a zombie next to a villager (no player nearby - the
     /// test player sits far away) batters it, and a lethal string

@@ -162,6 +162,8 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         k if k == KIND_HORSE => 2.25,
         // W327: ghast drifts slowly (MC flies at ~0.06/tick bursts).
         k if k == KIND_GHAST => 1.2,
+        // W343: Creeper.createAttributes MOVEMENT_SPEED 0.25.
+        k if k == KIND_CREEPER => 2.5,
         // W327: magma cube ground speed attr 0.3 (slime family).
         k if k == KIND_MAGMA_CUBE => 3.0,
         // W330: zombie family attr 0.23.

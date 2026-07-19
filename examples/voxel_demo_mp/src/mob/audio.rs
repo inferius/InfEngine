@@ -51,6 +51,9 @@ pub(crate) fn mob_sound_stem(kind: u8) -> &'static str {
         x if x == crate::mob::kinds::KIND_ZOMBIE_VILLAGER => {
             "mob/zombie_villager"
         }
+        // W343: creepers have NO ambient say in MC - the stem only
+        // resolves hurt/death (the say key misses quietly).
+        x if x == crate::mob::kinds::KIND_CREEPER => "mob/creeper",
         _ => "mob/sheep",
     }
 }

@@ -21,7 +21,7 @@ use crate::worldgen::Biome;
 
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
-    KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
+    KIND_CREEPER, KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -48,13 +48,13 @@ const PLAINS_DAY: &[(u8, u32)] = &[
     (KIND_RABBIT, 3),
 ];
 const PLAINS_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30)];
+    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
 // W162: the desert is a classic rabbit biome (gold/desert variant).
 const DESERT_DAY: &[(u8, u32)] =
     &[(KIND_CHICKEN, 2), (KIND_COW, 1), (KIND_RABBIT, 4)];
 const DESERT_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 50), (KIND_SKELETON, 80), (KIND_SPIDER, 20)];
+    &[(KIND_ZOMBIE, 50), (KIND_SKELETON, 80), (KIND_SPIDER, 20), (KIND_CREEPER, 50)];
 
 // W158: MC forest pools carry wolves (weight 5).
 const FOREST_DAY: &[(u8, u32)] = &[
@@ -65,7 +65,7 @@ const FOREST_DAY: &[(u8, u32)] = &[
     (KIND_WOLF, 5),
 ];
 const FOREST_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30)];
+    &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
 // W158: the taiga is the wolf's home biome in MC (weight 8).
 const TAIGA_DAY: &[(u8, u32)] = &[
@@ -75,27 +75,27 @@ const TAIGA_DAY: &[(u8, u32)] = &[
     (KIND_WOLF, 8),
     (KIND_RABBIT, 4),
 ];
-const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40)];
+const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
 
 // W161: snowy tundra is the polar bear's home (MC: frozen biomes).
 // W162: snowy rabbits (white variant) roam the same tundra.
 const TUNDRA_DAY: &[(u8, u32)] =
     &[(KIND_SHEEP, 2), (KIND_POLAR_BEAR, 5), (KIND_RABBIT, 4)];
-const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40)];
+const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
 
 const JUNGLE_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 8), (KIND_PIG, 6)];
 const JUNGLE_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30)];
+    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
 const SWAMP_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 2)];
-const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20)];
+const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20), (KIND_CREEPER, 40)];
 
 const SAVANNA_DAY: &[(u8, u32)] = &[(KIND_COW, 6), (KIND_SHEEP, 4)];
 const SAVANNA_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30)];
+    &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
 const MOUNTAIN_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2)];
-const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40)];
+const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
 
 /// Look up the active spawn pool for `biome`. Returns the static
 /// pool struct; the spawner pulls the right list (day / night) at
@@ -188,7 +188,10 @@ mod tests {
             .night
             .iter()
             .filter(|(k, _)| {
-                *k == KIND_ZOMBIE || *k == KIND_SKELETON || *k == KIND_SPIDER
+                *k == KIND_ZOMBIE
+                    || *k == KIND_SKELETON
+                    || *k == KIND_SPIDER
+                    || *k == KIND_CREEPER
             })
             .map(|(_, w)| *w)
             .sum();

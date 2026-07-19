@@ -198,6 +198,11 @@ fn mob_loot(kind: u8, seed: u32) -> Vec<(u16, u8)> {
         KIND_ZOMBIE => vec![(293, one_or_two)],
         KIND_SKELETON => vec![(294, one_or_two), (643, zero_to_two)],
         KIND_SPIDER => vec![(301, zero_to_two)],
+        // W343: creeper drops gunpowder (a blast leaves nothing -
+        // the AI removes the mob without the kill path).
+        k if k == crate::mob::kinds::KIND_CREEPER => {
+            vec![(299, zero_to_two)]
+        }
         // Sheep (and any other passive default): wool + meat.
         _ => vec![(11, 1 + ((seed & 0x3) as u8) % 3), (12, one_or_two)],
     }

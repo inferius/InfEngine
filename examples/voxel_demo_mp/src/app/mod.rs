@@ -902,6 +902,9 @@ pub(crate) struct Voxel {
     pub(crate) arrows: Vec<crate::projectile::Arrow>,
     /// W140: monotonic arrow id source (host).
     pub(crate) next_arrow_id: u32,
+    /// W343: per-creeper swell seconds (0..1.5); render reads the
+    /// flash/inflate from here, the AI owns the state machine.
+    pub(crate) mob_swell: std::collections::HashMap<u32, f32>,
     /// W338: live primed TNT (host authoritative).
     pub(crate) primed_tnt: Vec<crate::tnt::PrimedTnt>,
     pub(crate) next_tnt_id: u32,

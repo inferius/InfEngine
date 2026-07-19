@@ -271,6 +271,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/ghast/fireball", "entity.ghast.shoot"),
     ("explosion", "entity.generic.explode"),
     ("tnt/primed", "entity.tnt.primed"),
+    // W343: creeper fuse + hurt/death (no ambient in vanilla).
+    ("mob/creeper/fuse", "entity.creeper.primed"),
+    ("mob/creeper/hurt", "entity.creeper.hurt"),
+    ("mob/creeper/death", "entity.creeper.death"),
     // W327: magma cube (squishy hops).
     ("mob/magma_cube/say", "entity.magma_cube.squish"),
     ("mob/magma_cube/hurt", "entity.magma_cube.hurt"),

@@ -116,6 +116,7 @@ impl Voxel {
         self.remote_mobs.clear();
         self.mob_anim.clear();
         self.mob_hurt_flash.clear();
+        self.mob_swell.clear();
         self.mob_dying.clear();
         self.mob_lunge.clear();
         self.arrows.clear();

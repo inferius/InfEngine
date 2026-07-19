@@ -1927,6 +1927,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.sheep_head_mesh,
             &vx.mob_meshes,
             &vx.mob_hurt_flash,
+            &vx.mob_swell,
             &vx.mob_dying,
             &vx.mob_lunge,
             vx.day_time,

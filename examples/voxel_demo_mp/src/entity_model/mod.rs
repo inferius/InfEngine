@@ -36,6 +36,7 @@ pub(crate) mod cat;
 pub(crate) mod chest;
 pub(crate) mod chicken;
 pub(crate) mod cow;
+pub(crate) mod creeper;
 pub(crate) mod ghast;
 pub(crate) mod horse;
 pub(crate) mod iron_golem;

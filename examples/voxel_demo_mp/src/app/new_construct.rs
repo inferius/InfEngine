@@ -340,6 +340,7 @@ impl Voxel {
             fireballs: Vec::new(),
             next_fireball_id: 1,
             remote_fireballs: std::collections::HashMap::new(),
+            mob_swell: std::collections::HashMap::new(),
             primed_tnt: Vec::new(),
             next_tnt_id: 1,
             remote_tnt: std::collections::HashMap::new(),

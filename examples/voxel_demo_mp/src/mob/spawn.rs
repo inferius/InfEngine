@@ -202,6 +202,9 @@ pub(crate) fn mint_structure_mob(
 /// Initial HP for a freshly spawned mob. Pulled out so the place
 /// site + the wire-init match stay in sync.
 pub(crate) fn initial_health_for(kind: u8) -> f32 {
+    if kind == crate::mob::kinds::KIND_CREEPER {
+        return 20.0; // W343: Creeper.createAttributes MAX_HEALTH 20.
+    }
     match kind {
         KIND_ZOMBIE | KIND_SKELETON => ZOMBIE_MAX_HEALTH,
         // W300: ZombifiedPiglin.createAttributes MAX_HEALTH 20.

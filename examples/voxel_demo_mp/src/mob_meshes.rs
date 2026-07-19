@@ -499,6 +499,8 @@ pub(crate) struct MobMeshes {
     pub(crate) ghast_model: Option<crate::entity_model::BakedModel>,
     /// W330 - zombie villager (villager mesh, zombie skin).
     pub(crate) zombie_villager_model: Option<crate::entity_model::BakedModel>,
+    /// W343: creeper (CreeperModel verbatim).
+    pub(crate) creeper_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1068,6 +1070,24 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "ghast entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Creeper (64x32) ---------------------------------------------------
+    for root in &entity_roots {
+        let p = root.join("creeper").join("creeper.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.creeper_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::creeper::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "creeper entity texture bound (universal model)"
             );
             break;
         }
