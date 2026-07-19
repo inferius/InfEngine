@@ -332,44 +332,50 @@ fn skirt_quad(
 ) -> ([[f32; 3]; 4], [[f32; 2]; 4]) {
     let x1 = x0 + 1.0;
     let z1 = z0 + 1.0;
+    // W325: corner order follows the greedy mesher's per-face tables
+    // (CCW viewed from the OUTWARD normal, triangles [0,2,1][0,3,2]).
+    // The first cut had every sheet wound inside-out, so skirts
+    // back-face-culled from outside and the terrain read as hollow
+    // ("see-through at the terrace steps" report). Verified by
+    // cross-product per face.
     match (ndx, ndz) {
-        // -Z edge, normal faces -Z: CCW from -Z looking toward +Z.
+        // -Z edge, outward normal -Z.
         (0, -1) => (
             [
                 [x1, seg_bot, z0],
-                [x0, seg_bot, z0],
-                [x0, seg_top, z0],
                 [x1, seg_top, z0],
+                [x0, seg_top, z0],
+                [x0, seg_bot, z0],
             ],
-            [[0.0, hh], [1.0, hh], [1.0, 0.0], [0.0, 0.0]],
+            [[0.0, hh], [0.0, 0.0], [1.0, 0.0], [1.0, hh]],
         ),
-        // +Z edge, normal +Z.
+        // +Z edge, outward normal +Z.
         (0, 1) => (
             [
                 [x0, seg_bot, z1],
-                [x1, seg_bot, z1],
-                [x1, seg_top, z1],
                 [x0, seg_top, z1],
+                [x1, seg_top, z1],
+                [x1, seg_bot, z1],
             ],
-            [[0.0, hh], [1.0, hh], [1.0, 0.0], [0.0, 0.0]],
+            [[0.0, hh], [0.0, 0.0], [1.0, 0.0], [1.0, hh]],
         ),
-        // -X edge, normal -X.
+        // -X edge, outward normal -X.
         (-1, 0) => (
             [
-                [x0, seg_bot, z0],
-                [x0, seg_bot, z1],
-                [x0, seg_top, z1],
                 [x0, seg_top, z0],
+                [x0, seg_top, z1],
+                [x0, seg_bot, z1],
+                [x0, seg_bot, z0],
             ],
-            [[0.0, hh], [1.0, hh], [1.0, 0.0], [0.0, 0.0]],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, hh], [0.0, hh]],
         ),
-        // +X edge, normal +X.
+        // +X edge, outward normal +X.
         _ => (
             [
-                [x0, seg_bot, z1],
-                [x0, seg_bot, z0],
-                [x0, seg_top, z0],
-                [x0, seg_top, z1],
+                [x1, seg_bot, z0],
+                [x1, seg_bot, z1],
+                [x1, seg_top, z1],
+                [x1, seg_top, z0],
             ],
             [[0.0, hh], [1.0, hh], [1.0, 0.0], [0.0, 0.0]],
         ),
@@ -495,6 +501,88 @@ mod tests {
             frac < 1e-4 || (1.0 - frac) < 1e-4,
             "top face y {y0} not on a sunk block boundary",
         );
+    }
+
+    #[test]
+    fn w325_skirt_windings_face_outward() {
+        // The [0,2,1][0,3,2] index pattern means triangle one is
+        // (c0, c2, c1); its geometric normal (c2-c0)x(c1-c0) must
+        // point along the OUTWARD face normal or back-face culling
+        // hides the sheet from outside (the W321 "hollow terraces"
+        // report - every skirt was wound inside-out).
+        let cases = [
+            ((0i32, -1i32), [0.0f32, 0.0, -1.0]),
+            ((0, 1), [0.0, 0.0, 1.0]),
+            ((-1, 0), [-1.0, 0.0, 0.0]),
+            ((1, 0), [1.0, 0.0, 0.0]),
+        ];
+        for ((dx, dz), n) in cases {
+            let (c, _uv) = skirt_quad(0.0, 0.0, 10.0, 4.0, 6.0, dx, dz);
+            let a = glam::Vec3::from(c[0]);
+            let b = glam::Vec3::from(c[2]);
+            let d = glam::Vec3::from(c[1]);
+            let cross = (b - a).cross(d - a);
+            let dot = cross.dot(glam::Vec3::from(n));
+            assert!(
+                dot > 0.0,
+                "skirt ({dx},{dz}) winds inward: cross {cross:?} vs normal {n:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn w325_ocean_tile_gets_a_water_sheet() {
+        // Walk tiles outward from the origin until one is mostly
+        // sub-sea, then require a translucent water sheet with the
+        // biome tint. Guards the whole water path in build_lod_tile.
+        let pack = std::sync::Arc::new(
+            crate::resource_pack::ResourcePack::load(),
+        );
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: 2120129009,
+            dim: "overworld".to_string(),
+            profile: crate::worldgen::WorldGen::Mc,
+        };
+        for r in 0..24i32 {
+            for tz in -r..=r {
+                for tx in -r..=r {
+                    if tx.abs().max(tz.abs()) != r {
+                        continue;
+                    }
+                    let deep = (0..16).all(|i| {
+                        crate::worldgen::mcgen::terrain::mc_floor_at(
+                            &ctx,
+                            tx * 16 + i,
+                            tz * 16 + 8,
+                        ) < SEA_LEVEL - 2
+                    });
+                    if !deep {
+                        continue;
+                    }
+                    let res = build_lod_tile(&LodTileJob {
+                        key: [tx, tz],
+                        ctx,
+                        pack,
+                        dim: "overworld".to_string(),
+                    });
+                    assert!(
+                        !res.water.0.is_empty(),
+                        "sub-sea tile [{tx},{tz}] must carry a water sheet",
+                    );
+                    assert!(
+                        res.water_tint.iter().any(|c| *c > 0.05),
+                        "water tint must not be black: {:?}",
+                        res.water_tint,
+                    );
+                    assert!(
+                        (res.y_max - (WATER_SURFACE - SHELL_SINK)).abs() < 1e-3,
+                        "water sheet must raise y_max to the surface",
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("no ocean tile found within 24 tiles of origin for seed");
     }
 
     #[test]
