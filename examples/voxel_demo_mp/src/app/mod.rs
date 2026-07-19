@@ -811,6 +811,8 @@ pub(crate) struct Voxel {
     /// the interaction stays simple: click an inventory item to load
     /// the input, click a cut to craft.
     pub(crate) stonecutter_open: Option<[i32; 3]>,
+    /// W319: villager the trade panel is open against (mob id).
+    pub(crate) trade_open: Option<u32>,
     pub(crate) stonecutter_input: Option<(u16, u8)>,
     /// W50.5: per-brewing-stand 5-slot container state, keyed by
     /// world voxel coords. Parallel to `furnaces`. Inserted on

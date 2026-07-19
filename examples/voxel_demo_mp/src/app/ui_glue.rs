@@ -24,6 +24,7 @@ impl Voxel {
             || self.brewing_open.is_some()
             // W171: stonecutter panel.
             || self.stonecutter_open.is_some()
+            || self.trade_open.is_some()
     }
 
     pub(crate) fn apply_cursor_settings(&self, window: &EngineWindow) {

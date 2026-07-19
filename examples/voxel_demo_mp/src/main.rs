@@ -86,6 +86,10 @@ mod container;
 // both query this module. Phase C.4 ships the seed entries.
 #[allow(dead_code)]
 mod smelting;
+// W319 - villager trades (generated 1:1 from the MC villager_trade
+// data JSONs; the trade panel + RMB-on-villager open live in ui/ +
+// app_on_update).
+mod trades;
 mod chat;
 // Phase F: per-dim runtime parking maps + the active-dim swap
 // helper. Some items inside the module land their first call site

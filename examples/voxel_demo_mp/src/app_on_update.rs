@@ -235,6 +235,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         vx.close_brewing_ui();
                     } else if vx.stonecutter_open.is_some() {
                         vx.close_stonecutter_ui();
+                    } else if vx.trade_open.is_some() {
+                        vx.trade_open = None;
                     } else if vx.creative_tab.open {
                         // W20.3: ESC closes the creative tab (same as E).
                         vx.creative_tab.close();
@@ -881,10 +883,25 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::minecart::mount(vx, cart_id);
             cart_mounted = true;
         }
+        // W319: RMB on a villager opens the trade panel (MC
+        // interact). Runs before the block cascade so aiming at a
+        // villager never places a block through them.
+        let mut trade_opened = false;
+        if rmb
+            && !vx.any_panel_open()
+            && let Some(mid) = attack_mob
+            && vx.mobs.iter().any(|m| {
+                m.id == mid && m.kind == crate::mob::kinds::KIND_VILLAGER
+            })
+        {
+            vx.trade_open = Some(mid);
+            trade_opened = true;
+        }
         // Block place: RMB single click stays instant; no mining.
         if !fed
             && !bucket_scooped
             && !cart_mounted
+            && !trade_opened
             && !vx.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = vx.target

@@ -642,6 +642,27 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // W171: stonecutter snapshot (client-side, like the crafting
         // table). The panel mutates the input + reports a clicked cut;
         // reconciled with vx after the egui closure.
+        // W319: auto-close the trade panel when the villager left
+        // (despawn / walked beyond reach ~6 blocks).
+        if let Some(mid) = vx.trade_open {
+            let near = vx.mobs.iter().any(|m| {
+                m.id == mid && {
+                    let dx = m.pos[0] - vx.player_pos.x;
+                    let dy = m.pos[1] - vx.player_pos.y;
+                    let dz = m.pos[2] - vx.player_pos.z;
+                    dx * dx + dy * dy + dz * dz <= 6.0 * 6.0
+                }
+            });
+            if !near {
+                vx.trade_open = None;
+            }
+        }
+        let trade_open_id = vx.trade_open;
+        let mut trade_open_local = trade_open_id.is_some();
+        let trade_profession: &'static str = trade_open_id
+            .map(crate::trades::profession_for)
+            .unwrap_or("");
+        let mut trade_buy: Option<usize> = None;
         let stonecutter_open_pos = vx.stonecutter_open;
         let mut stonecutter_open_local = stonecutter_open_pos.is_some();
         let mut stonecutter_input_local = vx.stonecutter_input;
@@ -2268,6 +2289,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     );
                 }
 
+                // W319: villager trade panel.
+                if trade_open_local {
+                    ui::trade_panel::render(
+                        ui::trade_panel::TradePanelInputs {
+                            ctx,
+                            profession: trade_profession,
+                            inv_view: &inv_plain_snapshot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut trade_open_local,
+                            trade_out: &mut trade_buy,
+                        },
+                    );
+                }
+
                 // W50.5: brewing stand panel.
                 if let Some(stand) = &brewing_snapshot {
                     ui::brewing_panel::render(
@@ -3356,6 +3392,50 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             //    (or spawn as drops when the inv is full).
             if !crafting_table_open_local {
                 vx.close_crafting_table_ui();
+            }
+        }
+        // W319: trade apply - verify BOTH costs first, then pay and
+        // receive on the inv snapshot, copy back, sync close.
+        if trade_open_id.is_some() {
+            if let Some(i) = trade_buy
+                && let Some(t) =
+                    crate::trades::trades_for(trade_profession).nth(i)
+            {
+                let can = crate::trades::count_items(
+                    &inv_plain_snapshot,
+                    t.want,
+                ) >= t.want_n as u32
+                    && t.want2.is_none_or(|(id2, n2)| {
+                        crate::trades::count_items(&inv_plain_snapshot, id2)
+                            >= n2 as u32
+                    });
+                if can {
+                    crate::trades::take_items(
+                        &mut inv_plain_snapshot,
+                        t.want,
+                        t.want_n as u32,
+                    );
+                    if let Some((id2, n2)) = t.want2 {
+                        crate::trades::take_items(
+                            &mut inv_plain_snapshot,
+                            id2,
+                            n2 as u32,
+                        );
+                    }
+                    ui::stonecutter_panel::give_to_inv(
+                        &mut inv_plain_snapshot,
+                        (t.give, t.give_n),
+                    );
+                    for (si, slot) in inv_plain_snapshot.iter().enumerate() {
+                        if si >= vx.inventory.len() {
+                            break;
+                        }
+                        vx.inventory[si] = slot.map(|(b, c)| (BlockId(b), c));
+                    }
+                }
+            }
+            if !trade_open_local {
+                vx.trade_open = None;
             }
         }
         // W171: stonecutter apply. Sync the input back, run the
