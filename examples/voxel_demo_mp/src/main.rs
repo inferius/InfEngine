@@ -357,7 +357,10 @@ const RESULTS_BUDGET_MS: u64 = 6;
 // when the next chunk loads" the user reported. 16/frame spreads the same
 // wave over more frames (chunks light up as a gentle sweep, no stall);
 // the 24-worker pool still meshes them just as fast.
-const REMESH_DEFERRED_PER_FRAME: usize = 16;
+// W313: 16 -> 64 with a 2 ms time guard in the drain - a lighting
+// wave pushes hundreds of remeshes and 16/frame left a 2.3k queue
+// (dark-vs-lit chunk seams for minutes in the user's nether log).
+const REMESH_DEFERRED_PER_FRAME: usize = 64;
 /// Minimum number of background worker threads generating + meshing
 /// chunks. The actual worker count is picked at startup via
 /// `pick_worker_count()` which reads `std::thread::available_parallelism`

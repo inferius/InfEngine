@@ -724,7 +724,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     // Drain deferred neighbour re-meshes.
     let _remesh_t = std::time::Instant::now();
     let mut remesh_done = 0;
-    while remesh_done < REMESH_DEFERRED_PER_FRAME {
+    while remesh_done < REMESH_DEFERRED_PER_FRAME
+        && _remesh_t.elapsed().as_micros() < 2_000
+    {
         let Some(coord) = vx.pending_remesh.pop_front() else {
             break;
         };

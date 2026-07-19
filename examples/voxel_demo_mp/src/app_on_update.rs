@@ -1760,6 +1760,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         crate::render::decor::draw(
             renderer,
             decor_cube,
+            &vx.world,
             &vx.snow_positions,
             &vx.portal_positions,
             &vx.fires,

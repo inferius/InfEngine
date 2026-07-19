@@ -24,6 +24,7 @@ use crate::block::{block_type, LAVA_ID, WATER_ID};
 pub(crate) fn draw(
     renderer: &mut Renderer,
     player_cube: infengine_render::MeshHandle,
+    world: &infengine_voxel::World,
     snow_positions: &std::collections::HashMap<[i32; 3], u8>,
     portal_positions: &std::collections::HashSet<[i32; 3]>,
     fires: &std::collections::HashMap<[i32; 3], u8>,
@@ -173,10 +174,20 @@ pub(crate) fn draw(
                 let phase_f =
                     (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 let flicker = (time * 6.0 + phase_f).sin();
+                // W313: SOUL fire renders blue (MC soul_fire art).
+                // The block id decides; the shared orange fire_0
+                // mesh gets a cyan-heavy tint until a dedicated
+                // soul_fire_0 effect mesh bakes.
+                let soul = world.get(*p).0 == crate::block::SOUL_FIRE_ID;
                 // W153: the REAL fire_0 texture when baked - flicker
                 // pulses brightness on top of the MC art.
                 if let Some(mesh) = effects.fire {
                     let pulse = 0.9 + 0.1 * flicker;
+                    let tint = if soul {
+                        [0.25 * pulse, 0.85 * pulse, 1.0 * pulse, 1.0]
+                    } else {
+                        [pulse, pulse, pulse, 1.0]
+                    };
                     let m = Mat4::from_translation(Vec3::new(
                         cx,
                         p[1] as f32,
@@ -185,19 +196,28 @@ pub(crate) fn draw(
                     renderer.draw_mesh_pbr(
                         mesh,
                         m.to_cols_array(),
-                        [pulse, pulse, pulse, 1.0],
+                        tint,
                         0.0,
                         0.9,
                     );
                     continue;
                 }
                 let intensity = (0.85 + 0.15 * flicker).clamp(0.5, 1.05);
-                let orange = [
-                    1.0 * intensity,
-                    0.55 * intensity,
-                    0.15 * intensity,
-                    0.92,
-                ];
+                let orange = if soul {
+                    [
+                        0.20 * intensity,
+                        0.75 * intensity,
+                        1.0 * intensity,
+                        0.92,
+                    ]
+                } else {
+                    [
+                        1.0 * intensity,
+                        0.55 * intensity,
+                        0.15 * intensity,
+                        0.92,
+                    ]
+                };
                 // Crossed pair of thin panels so the flame reads
                 // from any angle. Matches the portal pattern; a
                 // future wave swaps these for two billboard sprites

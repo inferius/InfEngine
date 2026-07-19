@@ -580,6 +580,24 @@ impl Voxel {
             guard += 1;
         }
         self.player_vel = glam::Vec3::ZERO;
+        // W313: re-key the pending-chunk heap against the ARRIVAL
+        // position. The neg_dist_sq keys were computed at enqueue
+        // time (pre-teleport player), so the post-portal stream
+        // popped far chunks first and the ground under the player
+        // loaded LAST (the "I stand in air while the world loads a
+        // km away" report).
+        {
+            let cs = infengine_voxel::CHUNK_SIZE as i32;
+            let pcx = (self.player_pos.x.floor() as i32).div_euclid(cs);
+            let pcz = (self.player_pos.z.floor() as i32).div_euclid(cs);
+            let old = std::mem::take(&mut self.pending_chunks);
+            for mut p in old.into_iter() {
+                let dx = (p.coord[0] - pcx) as i64;
+                let dz = (p.coord[2] - pcz) as i64;
+                p.neg_dist_sq = -(dx * dx + dz * dz);
+                self.pending_chunks.push(p);
+            }
+        }
         self.portal_in_ticks = 0;
         self.portal_cooldown_ticks = block::portal::PORTAL_COOLDOWN_TICKS;
         // W156: MC plays the travel whoosh on arrival.
