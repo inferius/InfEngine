@@ -489,6 +489,8 @@ pub(crate) struct MobMeshes {
     pub(crate) zombified_piglin_model: Option<crate::entity_model::BakedModel>,
     /// W302 - villager (universal `VillagerModel` data).
     pub(crate) villager_model: Option<crate::entity_model::BakedModel>,
+    /// W315 - cat (universal `AdultFelineModel` data).
+    pub(crate) cat_model: Option<crate::entity_model::BakedModel>,
 
     // ---- Chicken -----------------------------------------------------------
     pub(crate) chicken_head: Option<MeshHandle>,
@@ -963,6 +965,26 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "villager entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Cat (64x32, entity/cat subdir) ------------------------------------
+    // W315: tabby default (MC CatSpawner rolls variants; per-anchor
+    // variant selection is a follow-up).
+    for root in &entity_roots {
+        let p = root.join("cat").join("cat_tabby.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.cat_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::cat::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "cat entity texture bound (universal model)"
             );
             break;
         }

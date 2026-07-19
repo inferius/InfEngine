@@ -48,6 +48,8 @@ pub(crate) enum MobKind {
     ZombifiedPiglin = 10,
     /// W302 - villager (structure-spawned; villages are alive).
     Villager = 11,
+    /// W315 - cat (village template entities; strolls, no taming yet).
+    Cat = 12,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -69,6 +71,7 @@ impl MobKind {
             9 => MobKind::Rabbit,
             10 => MobKind::ZombifiedPiglin,
             11 => MobKind::Villager,
+            12 => MobKind::Cat,
             _ => MobKind::Sheep,
         }
     }
@@ -111,6 +114,9 @@ impl MobKind {
                 // (trades/schedules are follow-ups). Structure-spawned
                 // only; the natural-spawn pools never pick it.
                 | MobKind::Villager
+                // W315: cat strolls like an animal (taming/sitting
+                // are follow-ups; village cats just live there).
+                | MobKind::Cat
         )
     }
 
@@ -129,6 +135,7 @@ impl MobKind {
             MobKind::Rabbit => "rabbit",
             MobKind::ZombifiedPiglin => "zombified_piglin",
             MobKind::Villager => "villager",
+            MobKind::Cat => "cat",
         }
     }
 }
@@ -142,6 +149,8 @@ pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
     match kind {
         // W302: MC villager 0.6 x 1.95.
         KIND_VILLAGER => (0.3, 0.975, 0.3, 0.975),
+        // W315: MC cat 0.6 x 0.7.
+        KIND_CAT => (0.3, 0.35, 0.3, 0.35),
         KIND_ZOMBIE | KIND_SKELETON | KIND_ZOMBIFIED_PIGLIN => (0.45, 1.0, 0.45, 1.0),
         KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
         KIND_PIG => (0.6, 0.55, 0.45, 0.45),
@@ -172,6 +181,7 @@ pub(crate) const KIND_POLAR_BEAR: u8 = MobKind::PolarBear as u8;
 pub(crate) const KIND_RABBIT: u8 = MobKind::Rabbit as u8;
 pub(crate) const KIND_ZOMBIFIED_PIGLIN: u8 = MobKind::ZombifiedPiglin as u8;
 pub(crate) const KIND_VILLAGER: u8 = MobKind::Villager as u8;
+pub(crate) const KIND_CAT: u8 = MobKind::Cat as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -234,10 +244,11 @@ mod tests {
         assert_eq!(MobKind::from_u8(7), MobKind::Wolf);
         assert_eq!(MobKind::from_u8(8), MobKind::PolarBear);
         assert_eq!(MobKind::from_u8(9), MobKind::Rabbit);
-        // W300: 10 = ZombifiedPiglin. W302: 11 = Villager.
+        // W300: 10 = ZombifiedPiglin. W302: 11 = Villager. W315: 12 = Cat.
         assert_eq!(MobKind::from_u8(10), MobKind::ZombifiedPiglin);
         assert_eq!(MobKind::from_u8(11), MobKind::Villager);
-        for raw in [12u8, 100, 255] {
+        assert_eq!(MobKind::from_u8(12), MobKind::Cat);
+        for raw in [13u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

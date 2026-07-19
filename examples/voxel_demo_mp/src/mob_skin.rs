@@ -48,6 +48,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::ZombifiedPiglin => ("piglin", "zombified_piglin"),
         // W302: base villager skin (type/profession layers later).
         MobKind::Villager => ("villager", "villager"),
+        // W315: tabby is the pack default cat variant.
+        MobKind::Cat => ("cat", "cat_tabby"),
     }
 }
 
@@ -117,6 +119,7 @@ pub(crate) struct MobSkinSet {
     pub(crate) rabbit: Option<PathBuf>,
     pub(crate) zombified_piglin: Option<PathBuf>,
     pub(crate) villager: Option<PathBuf>,
+    pub(crate) cat: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -134,6 +137,7 @@ impl MobSkinSet {
             rabbit: mob_skin_path(assets_root, MobKind::Rabbit),
             zombified_piglin: mob_skin_path(assets_root, MobKind::ZombifiedPiglin),
             villager: mob_skin_path(assets_root, MobKind::Villager),
+            cat: mob_skin_path(assets_root, MobKind::Cat),
         }
     }
 
@@ -151,6 +155,7 @@ impl MobSkinSet {
             MobKind::Rabbit => &self.rabbit,
             MobKind::ZombifiedPiglin => &self.zombified_piglin,
             MobKind::Villager => &self.villager,
+            MobKind::Cat => &self.cat,
         };
         opt.as_deref()
     }

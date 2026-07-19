@@ -43,6 +43,7 @@ pub(crate) fn mob_sound_stem(kind: u8) -> &'static str {
             "mob/zombified_piglin"
         }
         x if x == crate::mob::kinds::KIND_VILLAGER => "mob/villager",
+        x if x == crate::mob::kinds::KIND_CAT => "mob/cat",
         _ => "mob/sheep",
     }
 }

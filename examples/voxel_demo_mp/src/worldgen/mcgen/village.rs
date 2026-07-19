@@ -113,6 +113,7 @@ fn entity_kind_for(id: &str) -> Option<u8> {
         "sheep" => 0,     // MobKind::Sheep
         "chicken" => 2,   // MobKind::Chicken
         "rabbit" => 9,    // MobKind::Rabbit
+        "cat" => 12,      // MobKind::Cat (W315)
         _ => {
             static SKIPPED: std::sync::Once = std::sync::Once::new();
             SKIPPED.call_once(|| {

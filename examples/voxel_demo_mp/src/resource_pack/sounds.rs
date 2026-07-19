@@ -248,6 +248,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/sheep/death", "entity.sheep.death"),
     // W55.4 - per-mob ambient + step + hurt + death events.
     ("mob/zombie/say", "entity.zombie.ambient"),
+    // W315: cat (stray meows for the village prowlers).
+    ("mob/cat/say", "entity.cat.ambient"),
+    ("mob/cat/hurt", "entity.cat.hurt"),
+    ("mob/cat/death", "entity.cat.death"),
     // W302: villager (the classic hrmm).
     ("mob/villager/say", "entity.villager.ambient"),
     ("mob/villager/hurt", "entity.villager.hurt"),

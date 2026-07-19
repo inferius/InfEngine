@@ -154,6 +154,8 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         // W302: villager attr 0.5 x the 0.4 stroll speedModifier
         // (VillagerGoalPackages) - vanilla villagers AMBLE at 0.2.
         k if k == KIND_VILLAGER => 2.0,
+        // W315: Cat.createAttributes MOVEMENT_SPEED 0.3.
+        k if k == KIND_CAT => 3.0,
         k if k == KIND_SKELETON => 2.5,     // attr 0.25
         k if k == KIND_SPIDER => 3.0,       // attr 0.30
         _ => 2.3,
