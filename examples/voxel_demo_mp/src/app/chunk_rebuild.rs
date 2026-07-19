@@ -53,6 +53,24 @@ impl Voxel {
         out
     }
 
+    /// W316: snow-layer heights for one chunk (the mesher slabs
+    /// them; missing entries default to 1 layer).
+    pub(crate) fn snow_state_snapshot(
+        &self,
+        coord: ChunkCoord,
+    ) -> std::collections::HashMap<[i32; 3], u8> {
+        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        let mut out = std::collections::HashMap::new();
+        for (&pos, &layers) in &self.snow_positions {
+            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
+                == coord
+            {
+                out.insert(pos, layers);
+            }
+        }
+        out
+    }
+
     /// W279: stair orientation snapshot for one chunk (template
     /// placements recorded in `stair_states`).
     pub(crate) fn stair_state_snapshot(
@@ -287,6 +305,7 @@ impl Voxel {
                 doors: self.door_state_snapshot(coord),
                 rails: self.rail_state_snapshot(coord),
                 stairs: self.stair_state_snapshot(coord),
+                snow: self.snow_state_snapshot(coord),
                 dim: self.current_dim.clone(),
             });
             // If the send fails the pool is shutting down; ignore.

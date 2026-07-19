@@ -372,6 +372,10 @@ impl WorkerPool {
                                     // the W279 template states stand in.
                                     let _prof_t2 = std::time::Instant::now();
                                     let no_rails = std::collections::HashMap::new();
+                                    // W316: fresh worldgen snow is
+                                    // always 1 layer - the mesher
+                                    // defaults on a missing entry.
+                                    let no_snow = std::collections::HashMap::new();
                                     let submeshes = mesh_chunk_in_worker(
                                         &chunk,
                                         coord,
@@ -380,6 +384,7 @@ impl WorkerPool {
                                         &gen_doors,
                                         &no_rails,
                                         &gen_stairs,
+                                        &no_snow,
                                     );
                                     let _prof_mesh_us =
                                         _prof_t2.elapsed().as_micros() as u64;
@@ -431,6 +436,7 @@ impl WorkerPool {
                                         &rj.doors,
                                         &rj.rails,
                                         &rj.stairs,
+                                        &rj.snow,
                                     );
                                     if res_tx
                                         .send(WorkerResult::Remeshed {
@@ -594,6 +600,7 @@ impl Drop for WorkerPool {
 /// Replicates the closure setup in `Voxel::build_lit_submeshes` but
 /// captures `pack` + `halo` instead of `&self.resource_pack` /
 /// `&self.lighting`. Safe to call from any thread.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mesh_chunk_in_worker(
     chunk: &Chunk,
     coord: ChunkCoord,
@@ -602,6 +609,8 @@ pub(crate) fn mesh_chunk_in_worker(
     doors: &std::collections::HashMap<[i32; 3], (u8, bool)>,
     rails: &std::collections::HashMap<[i32; 3], u8>,
     stairs: &std::collections::HashMap<[i32; 3], u8>,
+    // W316: snow-layer heights (id 15 cells; missing = 1 layer).
+    snow: &std::collections::HashMap<[i32; 3], u8>,
 ) -> Vec<infengine_voxel::ChunkSubmesh> {
     let origin = World::chunk_world_origin(coord);
     let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -692,6 +701,21 @@ pub(crate) fn mesh_chunk_in_worker(
             resource_pack::element_mesh::emit_trapdoor(
                 verts, idxs, voxel_origin, block.0, facing, open, pack,
                 light,
+            );
+            return true;
+        }
+        // W316: snow layers mesh as a thin slab (the per-cell decor
+        // draw was thousands of draw calls per frame in snow biomes).
+        if block.0 == 15 {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let layers = snow.get(&wp).copied().unwrap_or(1);
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_snow_layer(
+                verts, idxs, voxel_origin, layers, pack, light,
             );
             return true;
         }
@@ -1211,6 +1235,8 @@ pub(crate) struct RemeshJob {
     /// discard stale results (a second edit arrived before this one
     /// returned).
     pub(crate) revision: u64,
+    /// W316: snow-layer heights for cells in this chunk (id 15).
+    pub(crate) snow: std::collections::HashMap<[i32; 3], u8>,
     /// W125: door state snapshot for doors intersecting this chunk:
     /// LOWER-half world pos -> (facing, open). The worker can't see
     /// `Voxel::door_open` / `door_facing`, so the dispatcher bakes

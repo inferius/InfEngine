@@ -204,6 +204,47 @@ pub(crate) fn emit_stairs(
     emit_cuboid(verts, idxs, rlo, rhi, tile, light);
 }
 
+/// W316 - snow layer slab (MC snow block, `layers` x 2px tall).
+/// Meshes INTO the chunk like stairs - the old per-cell decor draw
+/// was one draw call per snow cell per frame (a snowy view distance
+/// = thousands of calls = the 10 ms render while standing still).
+/// No bottom face: the slab sits flush on the ground plane.
+pub(crate) fn emit_snow_layer(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    layers: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let tile = pack
+        .block_face_ref(15, super::BlockFace::Top)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(infengine_voxel::BlockId(15), [0, 1, 0])
+        });
+    let h = (layers.clamp(1, 8) as f32) * 2.0 / 16.0;
+    let lo = [origin.x, origin.y, origin.z];
+    let hi = [origin.x + 1.0, origin.y + h, origin.z + 1.0];
+    let c = |xh: bool, yh: bool, zh: bool| -> [f32; 3] {
+        [
+            if xh { hi[0] } else { lo[0] },
+            if yh { hi[1] } else { lo[1] },
+            if zh { hi[2] } else { lo[2] },
+        ]
+    };
+    let faces: [([f32; 3], [[f32; 3]; 4]); 5] = [
+        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
+        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
+        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
+    ];
+    for (normal, corners) in faces {
+        infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
+    }
+}
+
 /// W167 - emit one axis-aligned cuboid (all 6 faces, full tile) in
 /// world coords. Shared by the fence-gate parts.
 fn emit_cuboid(

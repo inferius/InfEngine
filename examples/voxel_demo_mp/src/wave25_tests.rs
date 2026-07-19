@@ -65,6 +65,7 @@ fn remesh_job_has_revision_field() {
         doors: std::collections::HashMap::new(),
         rails: std::collections::HashMap::new(),
         stairs: std::collections::HashMap::new(),
+        snow: std::collections::HashMap::new(),
         dim: "overworld".to_string(),
     };
     assert_eq!(rj.revision, 7);

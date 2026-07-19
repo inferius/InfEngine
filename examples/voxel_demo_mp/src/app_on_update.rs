@@ -1761,7 +1761,6 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             renderer,
             decor_cube,
             &vx.world,
-            &vx.snow_positions,
             &vx.portal_positions,
             &vx.fires,
             &vx.liquid_mesh_handles,

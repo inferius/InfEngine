@@ -25,7 +25,6 @@ pub(crate) fn draw(
     renderer: &mut Renderer,
     player_cube: infengine_render::MeshHandle,
     world: &infengine_voxel::World,
-    snow_positions: &std::collections::HashMap<[i32; 3], u8>,
     portal_positions: &std::collections::HashSet<[i32; 3]>,
     fires: &std::collections::HashMap<[i32; 3], u8>,
     liquid_mesh_handles: &crate::app::LiquidMeshes,
@@ -34,30 +33,11 @@ pub(crate) fn draw(
     effects: &crate::render::effect_meshes::EffectMeshes,
 ) {
     let _ = (block_type, LAVA_ID, WATER_ID); // silence unused on stripped paths
-        // Snow layers: thin 1x0.12x1 slab covering the bottom
-        // of the voxel cell. Atlas-tinted near-white so it
-        // contrasts with whatever sits below.
-        if !snow_positions.is_empty() {
-            let cube = player_cube;
-            for (p, layers) in snow_positions.iter() {
-                let cx = p[0] as f32 + 0.5;
-                let cy = p[1] as f32;
-                let cz = p[2] as f32 + 0.5;
-                let h = (*layers as f32 / 8.0).clamp(0.06, 1.0);
-                let slab = Mat4::from_scale_rotation_translation(
-                    Vec3::new(1.0, h, 1.0),
-                    glam::Quat::IDENTITY,
-                    Vec3::new(cx, cy + h * 0.5, cz),
-                );
-                renderer.draw_mesh_pbr(
-                    cube,
-                    slab.to_cols_array(),
-                    [0.97, 0.98, 1.0, 1.0],
-                    0.0,
-                    0.9,
-                );
-            }
-        }
+        // W316: snow layers moved INTO the chunk mesh (workers.rs
+        // emit_snow_layer) - the per-cell decor draw here was one
+        // draw call per snow cell per frame, which in a snowy view
+        // distance meant thousands of calls (~7 ms of the standing
+        // render time in the user's frozen_river log).
         // W5.2a: animated portal swirl. Each `PORTAL_ID` voxel
         // draws as two thin quads (one Z-aligned, one X-aligned)
         // tinted procedurally so the panel reads as a swirling

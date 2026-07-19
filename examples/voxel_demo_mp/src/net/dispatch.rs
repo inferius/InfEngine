@@ -759,6 +759,9 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for (v, layers) in snow_updates {
             vx.snow_positions.insert(v, layers.clamp(1, 8));
+            // W316: layers render from the chunk mesh now.
+            let coords = crate::Voxel::affected_chunks(v);
+            vx.rebuild_chunks(&coords);
         }
         for (v, orient) in torch_orient_updates {
             vx.torch_orient.insert(v, orient);
