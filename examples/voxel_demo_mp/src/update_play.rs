@@ -825,6 +825,31 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             }
         }
         app.was_in_water = in_water;
+        // W324: MC suspends entity physics inside unloaded chunks.
+        // Without this, any arrival in not-yet-streamed terrain (the
+        // load-time embedded fallback to spawn, a void-death respawn,
+        // /tppos, a portal race) let the player FREE-FALL through the
+        // missing world - collision reads air for absent chunks - and
+        // wedge inside the terrain once the column generated around
+        // them (the fell-through-the-world-after-load report). Freeze
+        // velocity + hold position until the player's own chunk
+        // streams in; the probe cy clamps into the world's vertical
+        // span so hovering above the build limit (or dropping below
+        // it into the void) keeps simulating off the loaded column.
+        {
+            let cs = CHUNK_SIZE as i32;
+            let (cy_min, cy_max) = app.vertical_chunk_range();
+            let probe_cc = [
+                (app.player_pos.x.floor() as i32).div_euclid(cs),
+                (app.player_pos.y.floor() as i32)
+                    .div_euclid(cs)
+                    .clamp(cy_min, cy_max),
+                (app.player_pos.z.floor() as i32).div_euclid(cs),
+            ];
+            if app.world.chunk(probe_cc).is_none() {
+                app.player_vel = Vec3::ZERO;
+            }
+        }
         // Axis-resolved voxel AABB collision.
         let was_grounded = app.grounded;
         let delta = app.player_vel * dt;

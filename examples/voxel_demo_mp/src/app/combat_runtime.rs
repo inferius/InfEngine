@@ -61,9 +61,20 @@ impl Voxel {
     pub(crate) fn capsule_embedded(&self, pos: Vec3) -> bool {
         let bx = pos.x.floor() as i32;
         let bz = pos.z.floor() as i32;
-        let feet_y = (pos.y - PLAYER_HEIGHT).floor() as i32;
+        // W324: probe the HEAD cells only - MC `isInWall` semantics
+        // (suffocation at eye level). A player standing on a
+        // partial-height cell (snow layer, slab) is saved with their
+        // feet - and even their waist, the body spans two cells -
+        // fractionally inside blocks, and the old feet-to-head probe
+        // read that as "buried in the ground". The load-time
+        // fallback then teleported a perfectly fine player to the
+        // spawn column (outside the freshly generated ring -> the
+        // fell-through-the-world-after-load chain). Eye-level keeps
+        // the genuinely-buried detection: anyone actually entombed
+        // has their head inside a block too.
+        let eye_y = (pos.y - 0.15).floor() as i32;
         let head_y = pos.y.floor() as i32;
-        (feet_y..=head_y).any(|y| {
+        (eye_y..=head_y).any(|y| {
             let b = self.world.get([bx, y, bz]);
             !b.is_air() && !crate::block::block_is_aabb_passable(b)
         })

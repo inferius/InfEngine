@@ -630,3 +630,120 @@ fn simulate_live_save_liquid_settle() {
     }
     println!("last tick fired {} cells: {:?}", last_fired.len(), &last_fired[..last_fired.len().min(40)]);
 }
+
+/// W324 diag: print the terrain column under the saved player pose -
+/// disk chunk if present, live worldgen otherwise. Confirms whether
+/// the ground the player should stand on actually exists in the
+/// current build (fall-through-world reports).
+///
+///     DUMP_SLUG=test-mc-21 cargo test -p voxel_demo_mp --release \
+///         --bin voxel_demo_mp dump_ground_under_saved_player -- --ignored --nocapture
+#[test]
+#[ignore]
+#[allow(clippy::print_stdout)]
+fn dump_ground_under_saved_player() {
+    let slug = std::env::var("DUMP_SLUG").unwrap_or_else(|_| "test-mc-21".into());
+    let Ok(Some(player)) =
+        crate::world_save::players::read_player(&slug, "host")
+    else {
+        println!("no host player save for slug {slug}");
+        return;
+    };
+    let world_meta = match crate::world_save::world_json::read_world(&slug) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("no world.json: {e}");
+            return;
+        }
+    };
+    let seed = world_meta.seed;
+    println!(
+        "player pos {:?} yaw {:.2} dim {:?} seed {seed}",
+        player.pos, player.yaw, player.last_dimension,
+    );
+    let dim = player.last_dimension.clone();
+    let ctx = crate::worldgen::WorldgenCtx {
+        base_seed: seed,
+        dim: dim.clone(),
+        profile: crate::worldgen::WorldGen::Mc,
+    };
+    let cs = infengine_voxel::CHUNK_SIZE as i32;
+    // DUMP_POS=x,y,z overrides the probe point (defaults to the
+    // saved player pose).
+    let over: Option<[f32; 3]> = std::env::var("DUMP_POS").ok().and_then(|v| {
+        let p: Vec<f32> =
+            v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        (p.len() == 3).then(|| [p[0], p[1], p[2]])
+    });
+    let probe = over.unwrap_or(player.pos);
+    let wx = probe[0].floor() as i32;
+    let wz = probe[2].floor() as i32;
+    let py = probe[1];
+    println!(
+        "mc_floor_at({wx},{wz}) = {}",
+        crate::worldgen::mcgen::terrain::mc_floor_at(&ctx, wx, wz)
+    );
+    // Walk the vertical column +-24 blocks around the player.
+    let y_lo = (py as i32 - 24).max(-64);
+    let y_hi = (py as i32 + 8).min(319);
+    let mut cache: std::collections::HashMap<[i32; 3], infengine_voxel::Chunk> =
+        Default::default();
+    for y in (y_lo..=y_hi).rev() {
+        let cc = [wx.div_euclid(cs), y.div_euclid(cs), wz.div_euclid(cs)];
+        let chunk = cache.entry(cc).or_insert_with(|| {
+            match crate::world_save::chunks::read_chunk(&slug, &dim, cc) {
+                Ok(Some(payload)) => {
+                    println!("  chunk {cc:?}: FROM DISK");
+                    payload.voxels.into_chunk().expect("chunk decode")
+                }
+                _ => {
+                    println!("  chunk {cc:?}: generated");
+                    crate::worldgen::generate_chunk_at_ctx(cc, &ctx)
+                }
+            }
+        });
+        let b = chunk
+            .get(
+                wx.rem_euclid(cs) as usize,
+                y.rem_euclid(cs) as usize,
+                wz.rem_euclid(cs) as usize,
+            );
+        let name = crate::block::block_type(b.0)
+            .map(|t| t.name)
+            .unwrap_or("?");
+        let marker = if (y as f32) <= py && py < y as f32 + 1.0 {
+            " <-- player"
+        } else {
+            ""
+        };
+        println!("y {y:4}: id {:4} {name}{marker}", b.0);
+    }
+}
+
+/// W324 diag: run the real load_world on a slug headless and report
+/// the outcome + where the player lands. Repro for the
+/// fell-through-world-after-load report.
+///
+///     DUMP_SLUG=test-mc-21 cargo test -p voxel_demo_mp --release \
+///         --bin voxel_demo_mp load_world_headless_repro -- --ignored --nocapture
+#[test]
+#[ignore]
+#[allow(clippy::print_stdout)]
+fn load_world_headless_repro() {
+    let slug = std::env::var("DUMP_SLUG").unwrap_or_else(|_| "test-mc-21".into());
+    let mut v = crate::Voxel::new();
+    match crate::world_save::load_world(&mut v, &slug) {
+        Ok(_loaded) => {
+            println!(
+                "load_world OK: live_chunks={} player_pos={:?} dim={} embedded={}",
+                v.world.iter_chunks().count(),
+                v.player_pos,
+                v.current_dim,
+                v.capsule_embedded(v.player_pos),
+            );
+        }
+        Err(e) => {
+            println!("load_world FAILED: kind={:?} err={e}", e.kind());
+        }
+    }
+}

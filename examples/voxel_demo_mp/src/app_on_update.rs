@@ -1260,6 +1260,19 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         // solid ground, fall back to the surface spawn resolved
                         // above instead of leaving the player stuck in the terrain.
                         if vx.capsule_embedded(vx.player_pos) {
+                            // W324: loud breadcrumb - this fallback can
+                            // land OUTSIDE the freshly generated ring
+                            // (the spawn column), which used to mean a
+                            // silent fall through ungenerated terrain.
+                            // The update_play unloaded-chunk physics
+                            // freeze now holds the player until the
+                            // column streams in, but the relocation
+                            // itself should never pass unnoticed.
+                            tracing::warn!(
+                                saved_pos = ?vx.player_pos,
+                                fallback = ?spawn,
+                                "W324: saved player pose is buried - relocating to spawn",
+                            );
                             vx.player_pos = spawn;
                             vx.player_vel = Vec3::ZERO;
                             vx.fall_start_y = None;

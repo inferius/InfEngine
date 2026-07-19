@@ -106,3 +106,58 @@ fn long_run_with_loop_off_does_not_accumulate_inventory() {
     let fired = run_n_ticks(false, true, true, 6000);
     assert_eq!(fired, 0);
 }
+
+// ---------------------------------------------------------------------------
+// W324 - fell-through-world-after-load regression pins.
+// ---------------------------------------------------------------------------
+
+/// Standing on a snow layer keeps the feet FRACTIONALLY inside the
+/// snow cell (partial-height block). That must NOT read as buried:
+/// the old feet-level probe did, and the load-time fallback then
+/// teleported the player to the spawn column outside the generated
+/// ring (the fall-through chain).
+#[test]
+fn w324_standing_on_snow_layer_is_not_embedded() {
+    let mut v = crate::Voxel::new();
+    // World.set never auto-creates chunks - seed empty ones first.
+    for cx in -1..=0 {
+        for cz in -1..=0 {
+            v.world
+                .insert_chunk([cx, 4, cz], infengine_voxel::Chunk::filled(infengine_voxel::BlockId(0)));
+        }
+    }
+    // Ground at y=72, snow layer cell at y=73.
+    for x in -1..=1 {
+        for z in -1..=1 {
+            v.world.set([x, 72, z], infengine_voxel::BlockId(1));
+            v.world.set([x, 73, z], infengine_voxel::BlockId(15));
+        }
+    }
+    // Saved head-height pose of a player standing on the layer:
+    // feet at 73.01 (inside the snow cell), head at 74.71.
+    let pos = glam::Vec3::new(0.5, 74.71, 0.5);
+    assert!(
+        !v.capsule_embedded(pos),
+        "feet fractionally inside a snow layer must not count as buried",
+    );
+}
+
+/// A player whose head sits inside solid blocks IS embedded - the
+/// eye-level probe must keep detecting the genuinely buried case
+/// (that is what the spawn fallback exists for).
+#[test]
+fn w324_fully_buried_player_is_embedded() {
+    let mut v = crate::Voxel::new();
+    for cy in 3..=5 {
+        v.world
+            .insert_chunk([0, cy, 0], infengine_voxel::Chunk::filled(infengine_voxel::BlockId(0)));
+    }
+    for y in 60..=80 {
+        v.world.set([0, y, 0], infengine_voxel::BlockId(96));
+    }
+    let pos = glam::Vec3::new(0.5, 74.71, 0.5);
+    assert!(
+        v.capsule_embedded(pos),
+        "a head inside deepslate must still read as buried",
+    );
+}
