@@ -225,12 +225,23 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> ColumnCore {
 /// W314: the cross-worker core cache. RwLock HashMap of Arc cores -
 /// a frontier column probed by one worker's feature pass is reused
 /// by every other worker (and by the column's own later gen job)
-/// instead of each thread rebuilding it (~25 ms a copy). Cap 4096
-/// (~270 MB worst case at ~130 KB per core) with wholesale clear
-/// like the thread-local caches; a VD-14 ring is ~850 columns.
-type CoreCacheMap = HashMap<(i32, i32, u32), std::sync::Arc<ColumnCore>>;
+/// instead of each thread rebuilding it (~25 ms a copy).
+///
+/// W328: eviction is FIFO-halving, not a wholesale clear. The old
+/// `clear()` at cap nuked the ENTIRE working set the moment travel
+/// pushed the map past 2048 - every disk/lake/monster-room probe
+/// then rebuilt its 3x3 neighbourhood cold again, which is exactly
+/// the 10-13 ms avg_deco the walking logs showed. Values carry an
+/// insert sequence; on overflow the oldest half leaves and the
+/// active frontier stays warm. Cap 3072 (~30 KB a core = ~90 MB
+/// worst case; a VD-14 ring is ~850 columns).
+type CoreCacheMap =
+    HashMap<(i32, i32, u32), (std::sync::Arc<ColumnCore>, u64)>;
 static CORE_CACHE: std::sync::LazyLock<std::sync::RwLock<CoreCacheMap>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+static CORE_CACHE_SEQ: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+const CORE_CACHE_CAP: usize = 3072;
 
 fn column_core_cached(
     ow: &Overworld,
@@ -239,16 +250,24 @@ fn column_core_cached(
     seed: u32,
 ) -> std::sync::Arc<ColumnCore> {
     if let Ok(map) = CORE_CACHE.read()
-        && let Some(hit) = map.get(&(cx, cz, seed))
+        && let Some((hit, _)) = map.get(&(cx, cz, seed))
     {
         return hit.clone();
     }
     let core = std::sync::Arc::new(column_data(ow, cx, cz, seed));
     if let Ok(mut map) = CORE_CACHE.write() {
-        if map.len() > 2048 {
-            map.clear();
+        if map.len() >= CORE_CACHE_CAP {
+            // Drop the oldest-inserted half (median split on the
+            // sequence). One O(n) pass over ~3k entries, only on
+            // overflow - never on the hot lookup path.
+            let mut seqs: Vec<u64> = map.values().map(|(_, s)| *s).collect();
+            seqs.sort_unstable();
+            let cut = seqs[seqs.len() / 2];
+            map.retain(|_, (_, s)| *s >= cut);
         }
-        map.insert((cx, cz, seed), core.clone());
+        let seq = CORE_CACHE_SEQ
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        map.insert((cx, cz, seed), (core.clone(), seq));
     }
     core
 }
