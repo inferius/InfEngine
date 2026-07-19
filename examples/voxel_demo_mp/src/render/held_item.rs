@@ -105,15 +105,8 @@ pub(crate) fn draw_held_item(
     swing: f32,
     equip: f32,
 ) {
-    let held = match cache.get(&item_id) {
-        Some(h) => *h,
-        None => {
-            let built = build_held_mesh(renderer, tex_root, item_id);
-            cache.insert(item_id, built);
-            built
-        }
-    };
-    let Some(held) = held else {
+    let Some(held) = held_mesh_for(renderer, cache, tex_root, item_id)
+    else {
         return;
     };
 
@@ -183,6 +176,24 @@ fn held_local_transform(is_block: bool, swing: f32, equip: f32) -> Mat4 {
 // ----------------------------------------------------------------
 // Mesh construction.
 // ----------------------------------------------------------------
+
+/// W338: cache-or-build lookup shared by the viewmodel and any
+/// world-space block-cube user (the primed TNT render).
+pub(crate) fn held_mesh_for(
+    renderer: &mut Renderer,
+    cache: &mut HeldMeshCache,
+    tex_root: Option<&Path>,
+    item_id: u16,
+) -> Option<HeldMesh> {
+    match cache.get(&item_id) {
+        Some(h) => *h,
+        None => {
+            let built = build_held_mesh(renderer, tex_root, item_id);
+            cache.insert(item_id, built);
+            built
+        }
+    }
+}
 
 fn build_held_mesh(
     renderer: &mut Renderer,

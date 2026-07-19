@@ -268,6 +268,7 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/ghast/charge", "entity.ghast.warn"),
     ("mob/ghast/fireball", "entity.ghast.shoot"),
     ("explosion", "entity.generic.explode"),
+    ("tnt/primed", "entity.tnt.primed"),
     // W327: magma cube (squishy hops).
     ("mob/magma_cube/say", "entity.magma_cube.squish"),
     ("mob/magma_cube/hurt", "entity.magma_cube.hurt"),

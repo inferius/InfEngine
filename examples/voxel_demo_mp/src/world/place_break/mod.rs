@@ -141,6 +141,9 @@ pub enum RmbAction {
     /// W164: right-click on a note block - cycle its pitch one step
     /// (25 steps, F#3..F#5) and play the note.
     PlayNoteBlock,
+    /// W338: flint+steel on a TNT block - swaps it for the primed
+    /// entity (4 s fuse, then the power-4 blast).
+    IgniteTnt,
     /// Right-click on a bed voxel (id 35) - tries to skip the
     /// night.
     SleepBed,
@@ -269,6 +272,11 @@ pub fn classify_rmb_action(
     // 3. Held-item-driven branches: flint+steel and buckets.
     if let Some(h) = held_id {
         if h == FLINT_AND_STEEL_ID {
+            // W338: flint+steel on a TNT block primes it instead of
+            // hunting for a portal frame.
+            if target_id == crate::block::TNT_ID {
+                return RmbAction::IgniteTnt;
+            }
             return RmbAction::IgnitePortal;
         }
         if matches!(h, BUCKET_EMPTY_ID | BUCKET_WATER_ID | BUCKET_LAVA_ID) {

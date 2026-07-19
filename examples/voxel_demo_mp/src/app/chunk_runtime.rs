@@ -150,6 +150,8 @@ impl Voxel {
         self.remote_arrows.clear();
         self.fireballs.clear();
         self.remote_fireballs.clear();
+        self.primed_tnt.clear();
+        self.remote_tnt.clear();
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into

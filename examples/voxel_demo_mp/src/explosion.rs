@@ -138,6 +138,21 @@ pub(crate) fn explode(vx: &mut Voxel, center: Vec3, power: f32, fire: bool) {
             continue;
         }
         vx.world_set_tracked(*voxel, BlockId::AIR);
+        // W338: TNT caught in a blast primes with the short vanilla
+        // fuse (10 + rand 20 ticks) instead of dropping.
+        if b.0 == crate::block::TNT_ID {
+            let fuse = 0.5 + (rng.next_f64() as f32) * 1.0;
+            crate::tnt::spawn_primed(
+                vx,
+                Vec3::new(
+                    voxel[0] as f32 + 0.5,
+                    voxel[1] as f32,
+                    voxel[2] as f32 + 0.5,
+                ),
+                fuse,
+            );
+            continue;
+        }
         if (rng.next_f64() as f32) < drop_chance {
             vx.spawn_drop(b, *voxel);
         }

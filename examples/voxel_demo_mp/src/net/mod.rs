@@ -148,6 +148,15 @@ pub(crate) struct FireballMsg {
     pub(crate) vel: [f32; 3],
 }
 
+/// W338: snapshot of one primed TNT. `vx.tnt` per tick,
+/// `vx.tnt_remove` (id) on detonation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct TntMsg {
+    pub(crate) id: u32,
+    pub(crate) pos: [f32; 3],
+    pub(crate) fuse: f32,
+}
+
 /// Server -> all clients: a damage / death event for one mob.
 /// Lets every client play the same hurt flash + sound regardless
 /// of whether they were the attacker.
@@ -572,6 +581,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub arrow_updates: &'a mut Vec<ArrowMsg>,
     pub fireball_updates: &'a mut Vec<FireballMsg>,
     pub fireball_removals: &'a mut Vec<u32>,
+    pub tnt_updates: &'a mut Vec<TntMsg>,
+    pub tnt_removals: &'a mut Vec<u32>,
     pub arrow_removals: &'a mut Vec<u32>,
     pub player_removals: &'a mut Vec<u32>,
     pub interp_updates: &'a mut Vec<PlayerMsg>,
@@ -751,6 +762,20 @@ pub(crate) fn process_client_inbox(
                     bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
                 {
                     ctx.fireball_removals.push(id);
+                }
+            }
+            "vx.tnt" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<TntMsg, _>(&data, cfg)
+                {
+                    ctx.tnt_updates.push(m);
+                }
+            }
+            "vx.tnt_remove" => {
+                if let Ok((id, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    ctx.tnt_removals.push(id);
                 }
             }
             "vx.player_remove" => {

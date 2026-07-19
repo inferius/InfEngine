@@ -897,6 +897,12 @@ pub(crate) struct Voxel {
     pub(crate) arrows: Vec<crate::projectile::Arrow>,
     /// W140: monotonic arrow id source (host).
     pub(crate) next_arrow_id: u32,
+    /// W338: live primed TNT (host authoritative).
+    pub(crate) primed_tnt: Vec<crate::tnt::PrimedTnt>,
+    pub(crate) next_tnt_id: u32,
+    /// W338: client-side view of the host's TNT snapshots.
+    pub(crate) remote_tnt:
+        std::collections::HashMap<u32, crate::net::TntMsg>,
     /// W337: live ghast fireballs (host authoritative).
     pub(crate) fireballs: Vec<crate::projectile::Fireball>,
     pub(crate) next_fireball_id: u32,

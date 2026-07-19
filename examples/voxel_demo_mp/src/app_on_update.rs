@@ -622,6 +622,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::projectile::tick_arrows(vx, dt);
             // W337: ghast fireballs (impact = power-1 explosion).
             crate::projectile::tick_fireballs(vx, dt);
+            // W338: primed TNT fuses.
+            crate::tnt::tick(vx, dt);
             let _ms = _t.elapsed().as_secs_f32() * 1000.0;
             if _ms > 3.0 {
                 tracing::warn!(ms = _ms, phase = "minecart+arrows", "W230: slow world-tick phase");
@@ -1053,6 +1055,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 // W47.13i: bed sleep (day-phase gated; host bumps
                 // clock, client asks host).
                 crate::world::place_break::try_sleep_bed(vx);
+            } else if predicted == RmbAction::IgniteTnt {
+                // W338: prime the clicked TNT block.
+                crate::tnt::ignite_block(vx, hit.voxel);
             } else if predicted == RmbAction::IgnitePortal {
                 // W47.13g: flint+steel ignite (portal frame or fire
                 // drop) + durability consume + pending flag clear.
@@ -1982,6 +1987,23 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.fireballs,
             &vx.remote_fireballs,
         );
+        // W338: primed TNT blocks (flashing, about to pop).
+        {
+            let tnt_tex_root = if vx.resource_pack.is_placeholder() {
+                None
+            } else {
+                Some(vx.resource_pack.source.join("textures"))
+            };
+            let primed = std::mem::take(&mut vx.primed_tnt);
+            crate::tnt::draw(
+                renderer,
+                &mut vx.held_mesh_cache,
+                tnt_tex_root.as_deref(),
+                &primed,
+                &vx.remote_tnt,
+            );
+            vx.primed_tnt = primed;
+        }
         // Render any live debris particles before the world cubes
         // so chunk faces draw on top when a particle ends up
         // inside a block.

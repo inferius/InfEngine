@@ -96,6 +96,8 @@ pub(crate) const FLINT_AND_STEEL_MAX_USES: u16 = 64;
 /// extinguish / support failure.
 #[allow(dead_code)] // wired up by Q.4c fire tick + Q.4d/e ignite
 pub(crate) const FIRE_ID: u16 = 49;
+/// W338: the TNT block (flint+steel primes it).
+pub(crate) const TNT_ID: u16 = 981;
 
 // ---------------------------------------------------------------
 // W11.3 - Emitter + cosmetic block ids.
