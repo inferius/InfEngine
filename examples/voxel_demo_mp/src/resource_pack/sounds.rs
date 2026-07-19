@@ -268,6 +268,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/magma_cube/say", "entity.magma_cube.squish"),
     ("mob/magma_cube/hurt", "entity.magma_cube.hurt"),
     ("mob/magma_cube/death", "entity.magma_cube.death"),
+    // W330: zombie villager.
+    ("mob/zombie_villager/say", "entity.zombie_villager.ambient"),
+    ("mob/zombie_villager/hurt", "entity.zombie_villager.hurt"),
+    ("mob/zombie_villager/death", "entity.zombie_villager.death"),
     // W302: villager (the classic hrmm).
     ("mob/villager/say", "entity.villager.ambient"),
     ("mob/villager/hurt", "entity.villager.hurt"),

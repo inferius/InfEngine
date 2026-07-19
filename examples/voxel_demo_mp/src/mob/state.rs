@@ -164,6 +164,8 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         k if k == KIND_GHAST => 1.2,
         // W327: magma cube ground speed attr 0.3 (slime family).
         k if k == KIND_MAGMA_CUBE => 3.0,
+        // W330: zombie family attr 0.23.
+        k if k == KIND_ZOMBIE_VILLAGER => 2.3,
         k if k == KIND_SKELETON => 2.5,     // attr 0.25
         k if k == KIND_SPIDER => 3.0,       // attr 0.30
         _ => 2.3,

@@ -147,6 +147,11 @@ fn mc_speed_tables_pin() {
     // W327: ghast drifts; magma cube slime attr 0.3.
     assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_GHAST), 1.2);
     assert_eq!(kind_walk_speed(crate::mob::kinds::KIND_MAGMA_CUBE), 3.0);
+    // W330: zombie family attr 0.23.
+    assert_eq!(
+        kind_walk_speed(crate::mob::kinds::KIND_ZOMBIE_VILLAGER),
+        2.3
+    );
     assert_eq!(kind_panic_mult(KIND_COW), 2.0);
     assert_eq!(kind_panic_mult(KIND_CHICKEN), 1.4);
     assert_eq!(kind_panic_mult(KIND_SHEEP), 1.25);

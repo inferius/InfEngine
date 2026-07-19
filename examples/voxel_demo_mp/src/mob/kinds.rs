@@ -58,6 +58,9 @@ pub(crate) enum MobKind {
     Ghast = 15,
     /// W327 - magma cube (nether hopper, contact damage via melee).
     MagmaCube = 16,
+    /// W330 - zombie villager (zombie-village template entities;
+    /// curing is a follow-up).
+    ZombieVillager = 17,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -84,6 +87,7 @@ impl MobKind {
             14 => MobKind::Horse,
             15 => MobKind::Ghast,
             16 => MobKind::MagmaCube,
+            17 => MobKind::ZombieVillager,
             _ => MobKind::Sheep,
         }
     }
@@ -160,6 +164,7 @@ impl MobKind {
             MobKind::Horse => "horse",
             MobKind::Ghast => "ghast",
             MobKind::MagmaCube => "magma_cube",
+            MobKind::ZombieVillager => "zombie_villager",
         }
     }
 }
@@ -183,6 +188,8 @@ pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
         KIND_GHAST => (2.0, 2.0, 2.0, 2.0),
         // W327: MC magma cube size 2 = 1.02 x 1.02.
         KIND_MAGMA_CUBE => (0.51, 0.51, 0.51, 0.51),
+        // W330: zombie villager = villager frame (0.6 x 1.95).
+        KIND_ZOMBIE_VILLAGER => (0.3, 0.975, 0.3, 0.975),
         KIND_ZOMBIE | KIND_SKELETON | KIND_ZOMBIFIED_PIGLIN => (0.45, 1.0, 0.45, 1.0),
         KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
         KIND_PIG => (0.6, 0.55, 0.45, 0.45),
@@ -218,6 +225,7 @@ pub(crate) const KIND_IRON_GOLEM: u8 = MobKind::IronGolem as u8;
 pub(crate) const KIND_HORSE: u8 = MobKind::Horse as u8;
 pub(crate) const KIND_GHAST: u8 = MobKind::Ghast as u8;
 pub(crate) const KIND_MAGMA_CUBE: u8 = MobKind::MagmaCube as u8;
+pub(crate) const KIND_ZOMBIE_VILLAGER: u8 = MobKind::ZombieVillager as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -290,7 +298,9 @@ mod tests {
         // W327: 15 = Ghast, 16 = MagmaCube.
         assert_eq!(MobKind::from_u8(15), MobKind::Ghast);
         assert_eq!(MobKind::from_u8(16), MobKind::MagmaCube);
-        for raw in [17u8, 100, 255] {
+        // W330: 17 = ZombieVillager.
+        assert_eq!(MobKind::from_u8(17), MobKind::ZombieVillager);
+        for raw in [18u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

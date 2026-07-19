@@ -16,7 +16,7 @@ use crate::mob::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP, KIND_SKELETON,
     KIND_CAT, KIND_GHAST, KIND_HORSE, KIND_IRON_GOLEM, KIND_MAGMA_CUBE,
     KIND_SPIDER, KIND_VILLAGER, KIND_WOLF, KIND_ZOMBIE,
-    KIND_ZOMBIFIED_PIGLIN,
+    KIND_ZOMBIE_VILLAGER, KIND_ZOMBIFIED_PIGLIN,
 };
 use crate::mob::state::{MOB_DEATH_FADE, MOB_LUNGE_TIME};
 use crate::mob_meshes::MobMeshes;
@@ -464,6 +464,35 @@ pub fn draw_remote_mobs(
                                 Vec3::new(1.5, 1.0, 0.7), body_rot,
                                 Vec3::new(base_x, mob.pos[1] + 1.0 - death_sink + walk_bob, base_z));
                             renderer.draw_mesh_pbr(player_cube, body.to_cols_array(), apply_tint(coat), 0.0, 0.9);
+                        }
+                    }
+
+                    // ---- Zombie villager (W330) -------------------------
+                    KIND_ZOMBIE_VILLAGER => {
+                        let white = [1.0f32, 1.0, 1.0, 1.0];
+                        if let Some(baked) = &mob_meshes.zombie_villager_model {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw = mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint(white),
+                                mob_pose,
+                            );
+                        } else {
+                            // Fallback: mossy-green tall silhouette.
+                            let moss = [0.35f32, 0.5, 0.3, 1.0];
+                            let body = Mat4::from_scale_rotation_translation(
+                                Vec3::new(0.6, 1.9, 0.5), body_rot,
+                                Vec3::new(base_x, mob.pos[1] + 0.95 - death_sink + walk_bob, base_z));
+                            renderer.draw_mesh_pbr(player_cube, body.to_cols_array(), apply_tint(moss), 0.0, 0.9);
                         }
                     }
 

@@ -497,6 +497,8 @@ pub(crate) struct MobMeshes {
     pub(crate) horse_model: Option<crate::entity_model::BakedModel>,
     /// W327 - ghast (universal `GhastModel` data, scale 4.5).
     pub(crate) ghast_model: Option<crate::entity_model::BakedModel>,
+    /// W330 - zombie villager (villager mesh, zombie skin).
+    pub(crate) zombie_villager_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1030,6 +1032,24 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "horse entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Zombie villager (villager mesh + zombie_villager skin) ------------
+    for root in &entity_roots {
+        let p = root.join("zombie_villager").join("zombie_villager.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.zombie_villager_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::villager::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "zombie villager entity texture bound (villager mesh)"
             );
             break;
         }

@@ -129,6 +129,7 @@ fn kind_is_hostile(kind: u8) -> bool {
             | KIND_SKELETON
             | KIND_SPIDER
             | super::kinds::KIND_MAGMA_CUBE
+            | super::kinds::KIND_ZOMBIE_VILLAGER
     )
 }
 

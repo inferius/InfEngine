@@ -131,6 +131,7 @@ fn is_hostile_kind(kind: u8) -> bool {
             | KIND_SKELETON
             | KIND_SPIDER
             | super::kinds::KIND_MAGMA_CUBE
+            | super::kinds::KIND_ZOMBIE_VILLAGER
     )
 }
 
@@ -217,6 +218,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_GHAST => 10.0,
         // W327: magma cube size 2 -> size*size = 4 HP.
         x if x == super::kinds::KIND_MAGMA_CUBE => 4.0,
+        // W330: Zombie.createAttributes MAX_HEALTH 20.
+        x if x == super::kinds::KIND_ZOMBIE_VILLAGER => 20.0,
         KIND_SPIDER => 12.0,
         KIND_CHICKEN => 4.0,
         KIND_PIG => 10.0,
