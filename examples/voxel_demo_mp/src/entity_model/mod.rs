@@ -125,6 +125,14 @@ pub(crate) struct EntityModel {
     /// texture rects; only world-space geometry grows). 1.0 for
     /// most mobs; the ghast ships 4.5, the magma cube 2.0.
     pub scale: f32,
+    /// W327: the MC `LayerDefinition.create(mesh, W, H)` texture
+    /// grid the model's texOffs values live in. `None` = normalize
+    /// UVs by the loaded file's own dimensions (correct whenever
+    /// the pack ships the sheet at grid size, which every mob so
+    /// far did). `Some` pins the grid so an HD sheet (the 26.1.2
+    /// ghast ships 128x64 art on a 64x32 grid) still maps texOffs
+    /// proportionally.
+    pub tex_grid: Option<(u32, u32)>,
 }
 
 /// A bone's baked mesh handle + the source bone (for its transform).
@@ -171,7 +179,7 @@ pub(crate) fn bake(r: &mut Renderer, model: &EntityModel, img: &image::RgbaImage
     let mut bones = Vec::with_capacity(model.bones.len());
     let mut lowest_world_y = 0.0_f32;
     for bone in model.bones {
-        let (verts, indices) = bake_bone(bone, img);
+        let (verts, indices) = bake_bone(bone, img, model.tex_grid);
         let mesh = r.create_mesh(bone.name, &verts, &indices);
         r.bind_mesh_albedo_arc(mesh, albedo.clone());
         bones.push(BakedBone { bone: *bone, mesh });
@@ -242,11 +250,15 @@ fn default_accumulated(all: &[Bone], bone: &Bone) -> Mat4 {
 
 /// Bake one bone's cubes into a single mesh, expressed in bone-local MC
 /// pixels (cube coords as-is; the bone pivot is applied at draw time).
-fn bake_bone(bone: &Bone, img: &image::RgbaImage) -> (Vec<MeshVertex>, Vec<u32>) {
+fn bake_bone(
+    bone: &Bone,
+    img: &image::RgbaImage,
+    tex_grid: Option<(u32, u32)>,
+) -> (Vec<MeshVertex>, Vec<u32>) {
     let mut verts: Vec<MeshVertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     for cube in bone.cubes {
-        append_cube(&mut verts, &mut indices, cube, img);
+        append_cube(&mut verts, &mut indices, cube, img, tex_grid);
     }
     (verts, indices)
 }
@@ -305,8 +317,17 @@ fn append_cube(
     indices: &mut Vec<u32>,
     cube: &McCube,
     img: &image::RgbaImage,
+    tex_grid: Option<(u32, u32)>,
 ) {
-    let (tex_w, tex_h) = (img.width(), img.height());
+    // W327: texOffs live in the model's LayerDefinition grid. UVs
+    // normalize by that grid; the alpha scan below maps grid pixels
+    // to FILE pixels through px_scale (an HD sheet is an integer
+    // upscale of the grid).
+    let (tex_w, tex_h) = tex_grid.unwrap_or((img.width(), img.height()));
+    let px_scale = (
+        img.width() as f32 / tex_w as f32,
+        img.height() as f32 / tex_h as f32,
+    );
     let g = cube.inflate;
     let [ox, oy, oz] = cube.origin;
     let [sx, sy, sz] = cube.size;
@@ -374,7 +395,7 @@ fn append_cube(
         [[x1, y1, z0], [x0, y1, z0], [x0, y0, z0], [x1, y0, z0]],
         [0.0, 0.0, -1.0],
         [uv(fa, sv1), uv(fb, sv1), uv(fb, sv0), uv(fa, sv0)],
-        face_cover(img, f_u0, f_u1, sv0, sv1),
+        face_cover(img, f_u0 * px_scale.0, f_u1 * px_scale.0, sv0 * px_scale.1, sv1 * px_scale.1),
     );
     // Back face (MC +Z).
     let (ba, bb) = mu(b_u0, b_u1);
@@ -382,7 +403,7 @@ fn append_cube(
         [[x0, y1, z1], [x1, y1, z1], [x1, y0, z1], [x0, y0, z1]],
         [0.0, 0.0, 1.0],
         [uv(ba, sv1), uv(bb, sv1), uv(bb, sv0), uv(ba, sv0)],
-        face_cover(img, b_u0, b_u1, sv0, sv1),
+        face_cover(img, b_u0 * px_scale.0, b_u1 * px_scale.0, sv0 * px_scale.1, sv1 * px_scale.1),
     );
     // Right face (MC +X).
     let (ra, rb) = mu(r_u0, r_u1);
@@ -390,7 +411,7 @@ fn append_cube(
         [[x1, y1, z1], [x1, y1, z0], [x1, y0, z0], [x1, y0, z1]],
         [1.0, 0.0, 0.0],
         [uv(ra, sv1), uv(rb, sv1), uv(rb, sv0), uv(ra, sv0)],
-        face_cover(img, r_u0, r_u1, sv0, sv1),
+        face_cover(img, r_u0 * px_scale.0, r_u1 * px_scale.0, sv0 * px_scale.1, sv1 * px_scale.1),
     );
     // Left face (MC -X).
     let (la, lb) = mu(l_u0, l_u1);
@@ -398,7 +419,7 @@ fn append_cube(
         [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]],
         [-1.0, 0.0, 0.0],
         [uv(la, sv1), uv(lb, sv1), uv(lb, sv0), uv(la, sv0)],
-        face_cover(img, l_u0, l_u1, sv0, sv1),
+        face_cover(img, l_u0 * px_scale.0, l_u1 * px_scale.0, sv0 * px_scale.1, sv1 * px_scale.1),
     );
     // Top face (MC -Y = up).
     let (ta, tb) = mu(t_u0, t_u1);
@@ -406,7 +427,7 @@ fn append_cube(
         [[x1, y0, z1], [x1, y0, z0], [x0, y0, z0], [x0, y0, z1]],
         [0.0, -1.0, 0.0],
         [uv(ta, tv1), uv(tb, tv1), uv(tb, tv0), uv(ta, tv0)],
-        face_cover(img, t_u0, t_u1, tv0, tv1),
+        face_cover(img, t_u0 * px_scale.0, t_u1 * px_scale.0, tv0 * px_scale.1, tv1 * px_scale.1),
     );
     // Bottom face (MC +Y).
     let (bta, btb) = mu(bt_u0, bt_u1);
@@ -414,7 +435,7 @@ fn append_cube(
         [[x0, y1, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1]],
         [0.0, 1.0, 0.0],
         [uv(bta, tv1), uv(btb, tv1), uv(btb, tv0), uv(bta, tv0)],
-        face_cover(img, bt_u0, bt_u1, tv0, tv1),
+        face_cover(img, bt_u0 * px_scale.0, bt_u1 * px_scale.0, tv0 * px_scale.1, tv1 * px_scale.1),
     );
 }
 
@@ -576,7 +597,7 @@ mod tests {
         let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64), None);
         assert_eq!(v.len(), 24, "6 faces * 4 verts");
         assert_eq!(i.len(), 36, "6 faces * 2 tris");
 
@@ -605,7 +626,7 @@ mod tests {
         let cube = McCube::new([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0, 0]);
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64), None);
         // (x0,y0,z0)=(-4,-4,-6), (x1,y1,z1)=(4,4,0).
         let all = |f: &[MeshVertex], axis: usize, val: f32| {
             f.iter().all(|vt| (vt.position[axis] - val).abs() < 1e-4)
@@ -664,7 +685,7 @@ mod tests {
         }
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, &img);
+        append_cube(&mut v, &mut i, &cube, &img, None);
         // Only the back face survives: 4 verts, 2 windings = 12 indices.
         assert_eq!(v.len(), 4, "5 fully-transparent faces dropped");
         assert_eq!(i.len(), 12, "mixed face = front + reverse winding");
@@ -679,7 +700,7 @@ mod tests {
         let cube = McCube::new([0.0, 0.0, 0.0], [4.0, 4.0, 4.0], [0, 0]);
         let mut v = Vec::new();
         let mut i = Vec::new();
-        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64));
+        append_cube(&mut v, &mut i, &cube, &opaque_sheet(64, 64), None);
         assert_eq!(v.len(), 24);
         assert_eq!(i.len(), 36);
     }

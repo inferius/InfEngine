@@ -30,7 +30,7 @@ const BONES: &[Bone] = &[
     Bone { parent: None, name: "sheep_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: LEG },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0 };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0, tex_grid: None };
 
 // ---- W139: SheepFurModel (the wool overlay) ----------------------
 
@@ -50,4 +50,4 @@ const FUR_BONES: &[Bone] = &[
     Bone { parent: None, name: "sheep_fur_leg_lf", pivot: [3.0, 12.0, -7.0], rotation: [0.0, 0.0, 0.0], cubes: FUR_LEG },
 ];
 
-pub(crate) const FUR_MODEL: EntityModel = EntityModel { bones: FUR_BONES, scale: 1.0 };
+pub(crate) const FUR_MODEL: EntityModel = EntityModel { bones: FUR_BONES, scale: 1.0, tex_grid: None };

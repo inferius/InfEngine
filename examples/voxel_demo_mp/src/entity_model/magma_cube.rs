@@ -27,4 +27,4 @@ const BONES: &[Bone] = &[
     Bone { parent: None, name: "magma_core", pivot: [0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0], cubes: CORE },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 2.0 };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 2.0, tex_grid: None };

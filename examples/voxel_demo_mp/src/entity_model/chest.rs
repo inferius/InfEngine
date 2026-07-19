@@ -40,7 +40,7 @@ const BONES: &[Bone] = &[
     Bone { parent: None, name: "chest_lid", pivot: [0.0, -9.0, 7.0], rotation: [0.0, 0.0, 0.0], cubes: LID },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0 };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 1.0, tex_grid: None };
 
 // --- Double-chest halves (normal_left.png / normal_right.png) ------
 //
@@ -75,7 +75,7 @@ const BONES_EXT_NEG: &[Bone] = &[
 
 /// Half whose 15-wide box extends toward local +X (world +X at
 /// yaw 0). Bakes with `normal_left.png`.
-pub(crate) const MODEL_EXT_POS: EntityModel = EntityModel { bones: BONES_EXT_POS, scale: 1.0 };
+pub(crate) const MODEL_EXT_POS: EntityModel = EntityModel { bones: BONES_EXT_POS, scale: 1.0, tex_grid: None };
 
 /// Half extending toward local -X. Bakes with `normal_right.png`.
-pub(crate) const MODEL_EXT_NEG: EntityModel = EntityModel { bones: BONES_EXT_NEG, scale: 1.0 };
+pub(crate) const MODEL_EXT_NEG: EntityModel = EntityModel { bones: BONES_EXT_NEG, scale: 1.0, tex_grid: None };

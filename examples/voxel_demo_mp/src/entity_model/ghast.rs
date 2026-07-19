@@ -45,4 +45,4 @@ const BONES: &[Bone] = &[
     Bone { parent: None, name: "ghast_tentacle_8", pivot: [6.25, 24.6, 5.0], rotation: TENTACLE_REST, cubes: T8 },
 ];
 
-pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 4.5 };
+pub(crate) const MODEL: EntityModel = EntityModel { bones: BONES, scale: 4.5, tex_grid: Some((64, 32)) };
