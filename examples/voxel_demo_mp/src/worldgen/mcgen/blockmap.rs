@@ -94,6 +94,9 @@ const RENAMES: &[(&str, &str)] = &[
     // plain chests until the trap mechanic exists.
     ("redstone_wire", "redstone_dust"),
     ("infested_cobblestone", "cobble"),
+    // W342: the deepslate lookalike (ore_infested below y 0 - the
+    // W202 registry-skip log line).
+    ("infested_deepslate", "deepslate"),
     ("trapped_chest", "chest"),
     // W263 trial chambers: waxed copper states collapse onto the
     // canonical rows (identical textures; no weathering tick), and
