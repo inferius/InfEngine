@@ -75,6 +75,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // W140: arrow snapshots / removals (client).
         let mut arrow_updates: Vec<crate::net::ArrowMsg> = Vec::new();
         let mut arrow_removals: Vec<u32> = Vec::new();
+        let mut fireball_updates: Vec<crate::net::FireballMsg> = Vec::new();
+        let mut fireball_removals: Vec<u32> = Vec::new();
         let mut player_removals: Vec<u32> = Vec::new();
         // Pose updates collected this tick. Folded into the
         // smoothing buffer (`remote_interp`) after the net match
@@ -550,6 +552,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         cart_removals: &mut cart_removals,
                         arrow_updates: &mut arrow_updates,
                         arrow_removals: &mut arrow_removals,
+                        fireball_updates: &mut fireball_updates,
+                        fireball_removals: &mut fireball_removals,
                         player_removals: &mut player_removals,
                         interp_updates: &mut interp_updates,
                         pvp_self_damage: &mut pvp_self_damage,
@@ -710,6 +714,13 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for id in arrow_removals {
             vx.remote_arrows.remove(&id);
+        }
+        // W337: same fold for ghast fireballs.
+        for m in fireball_updates {
+            vx.remote_fireballs.insert(m.id, m);
+        }
+        for id in fireball_removals {
+            vx.remote_fireballs.remove(&id);
         }
         // Fold incoming pose updates into the interpolation buffer
         // so the render path can lerp toward each new snapshot

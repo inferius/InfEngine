@@ -620,6 +620,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::minecart::tick_all(vx, dt);
             // W140: arrow ballistics + hits + host snapshot stream.
             crate::projectile::tick_arrows(vx, dt);
+            // W337: ghast fireballs (impact = power-1 explosion).
+            crate::projectile::tick_fireballs(vx, dt);
             let _ms = _t.elapsed().as_secs_f32() * 1000.0;
             if _ms > 3.0 {
                 tracing::warn!(ms = _ms, phase = "minecart+arrows", "W230: slow world-tick phase");
@@ -1972,6 +1974,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.arrow_meshes,
             &vx.arrows,
             &vx.remote_arrows,
+        );
+        // W337: ghast fireballs in flight.
+        render::projectiles::draw_fireballs(
+            renderer,
+            &vx.arrow_meshes,
+            &vx.fireballs,
+            &vx.remote_fireballs,
         );
         // Render any live debris particles before the world cubes
         // so chunk faces draw on top when a particle ends up

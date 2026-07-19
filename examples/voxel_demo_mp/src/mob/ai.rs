@@ -637,6 +637,59 @@ fn step_one(
             }
         }
     }
+    // W337: GhastShootFireballGoal - a player within 64 blocks and
+    // line of sight starts the 1 s charge, then a LargeFireball
+    // flies and the next shot waits 3 s (MC chargeTime 20 with the
+    // -40 reset). attack_cd carries the cadence; the warn moan
+    // fires crossing the 0.5 s mark (MC chargeTime == 10).
+    if m.kind == super::kinds::KIND_GHAST {
+        let prev_cd = m.attack_cd;
+        m.attack_cd = (m.attack_cd - dt).max(0.0);
+        if let Some(p) = voxel.nearest_player_pos(m.pos, 64.0) {
+            let eye = glam::Vec3::new(m.pos[0], m.pos[1] + 2.0, m.pos[2]);
+            let tgt = glam::Vec3::new(p[0], p[1] - 0.3, p[2]);
+            let to = tgt - eye;
+            let dist = to.length();
+            let los = dist > 1e-3
+                && infengine_voxel::raycast_with(
+                    &voxel.world,
+                    eye,
+                    to / dist,
+                    dist,
+                    |b| !b.is_air() && crate::block::block_fully_occludes(b),
+                )
+                .is_none();
+            if los {
+                if prev_cd > 0.5 && m.attack_cd <= 0.5 {
+                    voxel.sfx_at(
+                        "mob/ghast/charge",
+                        [eye.x, eye.y, eye.z],
+                        |_, _| {},
+                    );
+                }
+                if m.attack_cd <= 0.0 {
+                    m.attack_cd = 3.0;
+                    // MC: spawn 4 blocks toward the look direction,
+                    // half a block above the body midline.
+                    let dirh =
+                        glam::Vec3::new(to.x, 0.0, to.z).normalize_or_zero();
+                    let muzzle =
+                        eye + dirh * 4.0 + glam::Vec3::new(0.0, 0.5, 0.0);
+                    let dir = (tgt - muzzle).normalize_or_zero();
+                    crate::projectile::spawn_fireball(voxel, muzzle, dir);
+                    voxel.sfx_at(
+                        "mob/ghast/fireball",
+                        [eye.x, eye.y, eye.z],
+                        |_, _| {},
+                    );
+                }
+            } else if m.attack_cd <= 0.0 {
+                // Blocked at the trigger: re-check shortly (MC decays
+                // its charge counter instead; the cadence matches).
+                m.attack_cd = 0.35;
+            }
+        }
+    }
     // Hostile touch damage: zombies + skeletons + spiders all
     // share the stub melee path. Decrement attack cooldown each
     // frame; when in range of the host + cooldown expired,

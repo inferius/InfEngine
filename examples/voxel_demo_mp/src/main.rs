@@ -166,6 +166,7 @@ mod mining;
 mod mob;
 mod player;
 // W140 - arrow projectiles (skeleton ranged attack).
+mod explosion;
 mod projectile;
 // Wave 7: Rust-dylib plugin host. Loads `<exec_dir>/plugins/*.{dll,so,dylib}`
 // at startup (overrideable via `INFENGINE_PLUGIN_DIR`). The same C-ABI

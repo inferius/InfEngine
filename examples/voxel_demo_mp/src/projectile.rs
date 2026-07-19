@@ -16,7 +16,7 @@ use glam::Vec3;
 use infengine_voxel::raycast_with;
 
 use crate::Voxel;
-use crate::net::{ArrowMsg, DamageMsg, NetRole};
+use crate::net::{ArrowMsg, DamageMsg, FireballMsg, NetRole};
 
 /// MC projectile gravity: 0.05 blocks/tick^2 at 20 TPS.
 pub(crate) const ARROW_GRAVITY: f32 = 20.0;
@@ -30,6 +30,174 @@ const ARROW_LIFETIME_S: f32 = 60.0;
 const ARROW_STUCK_S: f32 = 10.0;
 /// MC skeleton bow muzzle speed: 1.6 blocks/tick.
 pub(crate) const SKELETON_ARROW_SPEED: f32 = 32.0;
+
+/// W337: MC `AbstractHurtingProjectile` acceleration - 0.1 b/t^2
+/// along the fixed power vector (40 b/s^2), no gravity.
+const FIREBALL_ACCEL: f32 = 40.0;
+/// Per-tick inertia (terminal speed 1.9 b/t = 38 b/s).
+const FIREBALL_INERTIA_PER_TICK: f32 = 0.95;
+/// `LargeFireball.onHitEntity` direct damage.
+const FIREBALL_DIRECT_DAMAGE: f32 = 6.0;
+/// Safety cap - vanilla fireballs fly forever; a lost one despawns.
+const FIREBALL_LIFETIME_S: f32 = 15.0;
+
+/// W337: one live ghast fireball (host side).
+#[derive(Debug, Clone)]
+pub(crate) struct Fireball {
+    pub(crate) id: u32,
+    pub(crate) pos: Vec3,
+    pub(crate) vel: Vec3,
+    /// Constant acceleration (the MC power vector, b/s^2).
+    pub(crate) accel: Vec3,
+    pub(crate) age: f32,
+}
+
+/// Spawn a large fireball on the host + let the tick stream it.
+/// `dir` must be normalized (the ghast's aim vector).
+pub(crate) fn spawn_fireball(vx: &mut Voxel, origin: Vec3, dir: Vec3) {
+    let id = vx.next_fireball_id;
+    vx.next_fireball_id = vx.next_fireball_id.wrapping_add(1).max(1);
+    vx.fireballs.push(Fireball {
+        id,
+        pos: origin,
+        vel: dir * 2.0,
+        accel: dir * FIREBALL_ACCEL,
+        age: 0.0,
+    });
+}
+
+/// W337: fireball flight + impact (host only). Mirrors the arrow
+/// tick's segment tests; any hit detonates a power-1 MOB explosion
+/// with fire (`LargeFireball.onHit`), and a direct body hit adds
+/// the 6.0 contact damage first.
+pub(crate) fn tick_fireballs(vx: &mut Voxel, dt: f32) {
+    if matches!(vx.net, NetRole::Client { .. }) {
+        return;
+    }
+    if vx.fireballs.is_empty() {
+        return;
+    }
+    let mut removed: Vec<u32> = Vec::new();
+    let mut host_hits = 0u32;
+    let mut remote_hits: Vec<u32> = Vec::new();
+    let mut blasts: Vec<Vec3> = Vec::new();
+    {
+        let world = &vx.world;
+        let mut targets: Vec<(Option<u32>, Vec3)> = Vec::new();
+        if !vx.game_mode.is_creative() {
+            targets.push((None, vx.player_pos));
+        }
+        if let NetRole::Server { poses, .. } = &vx.net {
+            for p in poses.values() {
+                if p.id != 0 {
+                    targets.push((Some(p.id), Vec3::from(p.pos)));
+                }
+            }
+        }
+        for f in vx.fireballs.iter_mut() {
+            f.age += dt;
+            if f.age > FIREBALL_LIFETIME_S {
+                removed.push(f.id);
+                continue;
+            }
+            f.vel += f.accel * dt;
+            f.vel *= FIREBALL_INERTIA_PER_TICK.powf(dt * 20.0);
+            let step = f.vel * dt;
+            let len = step.length();
+            if len <= 1e-6 {
+                continue;
+            }
+            let dir = step / len;
+            let mut hit_player: Option<(Option<u32>, f32)> = None;
+            for (pid, eye) in &targets {
+                let bmin = *eye - Vec3::new(0.4, 1.8, 0.4);
+                let bmax = *eye + Vec3::new(0.4, 0.1, 0.4);
+                if let Some((t_in, t_out)) =
+                    crate::world::targeting::ray_aabb(f.pos, dir, bmin, bmax)
+                    && t_out >= 0.0
+                    && t_in <= len
+                    && hit_player.is_none_or(|(_, bt)| t_in.max(0.0) < bt)
+                {
+                    hit_player = Some((*pid, t_in.max(0.0)));
+                }
+            }
+            let solid = |b: infengine_voxel::BlockId| -> bool {
+                !b.is_air() && crate::block::block_fully_occludes(b)
+            };
+            let block_hit = raycast_with(world, f.pos, dir, len, solid);
+            let block_t = block_hit.map(|h| {
+                let c = Vec3::new(
+                    h.voxel[0] as f32 + 0.5,
+                    h.voxel[1] as f32 + 0.5,
+                    h.voxel[2] as f32 + 0.5,
+                );
+                (c - f.pos).length()
+            });
+            match (hit_player, block_t) {
+                (Some((pid, pt)), bt) if bt.is_none_or(|b| pt <= b) => {
+                    match pid {
+                        None => host_hits += 1,
+                        Some(id) => remote_hits.push(id),
+                    }
+                    blasts.push(f.pos + dir * pt);
+                    removed.push(f.id);
+                }
+                (_, Some(bt)) => {
+                    // Detonate just shy of the face it struck.
+                    blasts.push(f.pos + dir * (bt - 0.5).max(0.0));
+                    removed.push(f.id);
+                }
+                _ => {
+                    f.pos += step;
+                }
+            }
+        }
+    }
+    for _ in 0..host_hits {
+        vx.apply_player_damage(FIREBALL_DIRECT_DAMAGE);
+    }
+    if let NetRole::Server { server, .. } = &vx.net {
+        let cfg = bincode::config::standard();
+        for id in remote_hits {
+            if let Ok(buf) = bincode::serde::encode_to_vec(
+                DamageMsg {
+                    amount: FIREBALL_DIRECT_DAMAGE,
+                },
+                cfg,
+            ) {
+                server.send_bytes_to_client(id, "vx.damage", buf);
+            }
+        }
+    }
+    if !removed.is_empty() {
+        vx.fireballs.retain(|f| !removed.contains(&f.id));
+        if let NetRole::Server { server, .. } = &vx.net {
+            let cfg = bincode::config::standard();
+            for id in &removed {
+                if let Ok(buf) = bincode::serde::encode_to_vec(*id, cfg) {
+                    server.broadcast_bytes("vx.fireball_remove", buf);
+                }
+            }
+        }
+    }
+    // The explosions LAST - they re-borrow the world mutably.
+    for c in blasts {
+        crate::explosion::explode(vx, c, 1.0, true);
+    }
+    if let NetRole::Server { server, .. } = &vx.net {
+        let cfg = bincode::config::standard();
+        for f in &vx.fireballs {
+            let msg = FireballMsg {
+                id: f.id,
+                pos: [f.pos.x, f.pos.y, f.pos.z],
+                vel: [f.vel.x, f.vel.y, f.vel.z],
+            };
+            if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                server.broadcast_bytes("vx.fireball", buf);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Arrow {

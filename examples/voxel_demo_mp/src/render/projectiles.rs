@@ -13,6 +13,9 @@ use infengine_render::{MeshHandle, MeshVertex, Renderer};
 #[derive(Default)]
 pub(crate) struct ArrowMeshes {
     pub(crate) mesh: Option<MeshHandle>,
+    /// W337: crossed-quad large fireball (the fire_charge sprite,
+    /// MC FireballRenderer's billboard at ~1 block).
+    pub(crate) fireball: Option<MeshHandle>,
 }
 
 impl ArrowMeshes {
@@ -76,8 +79,69 @@ pub(crate) fn load_arrow_meshes(
     let mesh = r.create_mesh("voxel_demo_mp::arrow", &verts, &idxs);
     r.bind_mesh_albedo_arc(mesh, albedo);
     out.mesh = Some(mesh);
+    // W337: the ghast fireball - crossed unit quads with the
+    // item/fire_charge.png sprite (what MC's ItemEntityRenderer
+    // shows for a large fireball at gameplay distance).
+    let fp = dir
+        .parent()
+        .map(|p| p.join("item").join("fire_charge.png"));
+    if let Some(fp) = fp
+        && let Ok(img) = image::open(&fp)
+    {
+        let img = img.to_rgba8();
+        let albedo = r.make_mesh_albedo(img.width(), img.height(), &img);
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        let mut quad = |corners: [[f32; 3]; 4], normal: [f32; 3]| {
+            let base = verts.len() as u32;
+            let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+            for i in 0..4 {
+                verts.push(
+                    MeshVertex::new(corners[i], normal)
+                        .with_uv(uvs[i])
+                        .with_light(0.0, 1.0),
+                );
+            }
+            idxs.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            idxs.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        };
+        const S: f32 = 0.5;
+        quad(
+            [[-S, -S, 0.0], [S, -S, 0.0], [S, S, 0.0], [-S, S, 0.0]],
+            [0.0, 0.0, 1.0],
+        );
+        quad(
+            [[0.0, -S, -S], [0.0, -S, S], [0.0, S, S], [0.0, S, -S]],
+            [1.0, 0.0, 0.0],
+        );
+        let mesh = r.create_mesh("voxel_demo_mp::fireball", &verts, &idxs);
+        r.bind_mesh_albedo_arc(mesh, albedo);
+        out.fireball = Some(mesh);
+    }
     tracing::info!("arrow projectile mesh baked");
     out
+}
+
+/// Draw every live fireball. Crossed quads read from any angle, so
+/// no per-frame billboarding is needed.
+pub(crate) fn draw_fireballs(
+    r: &mut Renderer,
+    meshes: &ArrowMeshes,
+    fireballs: &[crate::projectile::Fireball],
+    remote: &std::collections::HashMap<u32, crate::net::FireballMsg>,
+) {
+    let Some(mesh) = meshes.fireball else { return };
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+    let mut draw = |pos: Vec3| {
+        let m = Mat4::from_translation(pos);
+        r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9);
+    };
+    for f in fireballs {
+        draw(f.pos);
+    }
+    for msg in remote.values() {
+        draw(Vec3::from(msg.pos));
+    }
 }
 
 /// Orient the arrow along `vel`: yaw from the horizontal heading,

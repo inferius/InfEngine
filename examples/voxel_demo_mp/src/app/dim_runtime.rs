@@ -120,6 +120,8 @@ impl Voxel {
         self.mob_lunge.clear();
         self.arrows.clear();
         self.remote_arrows.clear();
+        self.fireballs.clear();
+        self.remote_fireballs.clear();
         self.bubbles.clear();
 
         // Pull the target dim's state out (mint empty if first

@@ -897,6 +897,12 @@ pub(crate) struct Voxel {
     pub(crate) arrows: Vec<crate::projectile::Arrow>,
     /// W140: monotonic arrow id source (host).
     pub(crate) next_arrow_id: u32,
+    /// W337: live ghast fireballs (host authoritative).
+    pub(crate) fireballs: Vec<crate::projectile::Fireball>,
+    pub(crate) next_fireball_id: u32,
+    /// W337: client-side view of the host's fireball snapshots.
+    pub(crate) remote_fireballs:
+        std::collections::HashMap<u32, crate::net::FireballMsg>,
     /// W140: client-side view of the host's arrow snapshots.
     pub(crate) remote_arrows: std::collections::HashMap<u32, crate::net::ArrowMsg>,
     /// W140: baked arrow mesh.

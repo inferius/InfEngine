@@ -148,6 +148,8 @@ impl Voxel {
         // W140: arrows are ephemeral - drop them with the world.
         self.arrows.clear();
         self.remote_arrows.clear();
+        self.fireballs.clear();
+        self.remote_fireballs.clear();
     }
 
     /// Close the chest UI. Drops the cursor-held stack back into

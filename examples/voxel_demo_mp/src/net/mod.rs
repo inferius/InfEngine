@@ -138,6 +138,16 @@ pub(crate) struct ArrowMsg {
     pub(crate) vel: [f32; 3],
 }
 
+/// W337: snapshot of one host-side ghast fireball. Same lifecycle
+/// as `ArrowMsg`: `vx.fireball` per tick, `vx.fireball_remove` (id)
+/// on impact/despawn.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct FireballMsg {
+    pub(crate) id: u32,
+    pub(crate) pos: [f32; 3],
+    pub(crate) vel: [f32; 3],
+}
+
 /// Server -> all clients: a damage / death event for one mob.
 /// Lets every client play the same hurt flash + sound regardless
 /// of whether they were the attacker.
@@ -560,6 +570,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub cart_removals: &'a mut Vec<u32>,
     /// W140: arrow snapshots + removals from the host.
     pub arrow_updates: &'a mut Vec<ArrowMsg>,
+    pub fireball_updates: &'a mut Vec<FireballMsg>,
+    pub fireball_removals: &'a mut Vec<u32>,
     pub arrow_removals: &'a mut Vec<u32>,
     pub player_removals: &'a mut Vec<u32>,
     pub interp_updates: &'a mut Vec<PlayerMsg>,
@@ -725,6 +737,20 @@ pub(crate) fn process_client_inbox(
                     bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
                 {
                     ctx.arrow_removals.push(id);
+                }
+            }
+            "vx.fireball" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<FireballMsg, _>(&data, cfg)
+                {
+                    ctx.fireball_updates.push(m);
+                }
+            }
+            "vx.fireball_remove" => {
+                if let Ok((id, _)) =
+                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
+                {
+                    ctx.fireball_removals.push(id);
                 }
             }
             "vx.player_remove" => {
