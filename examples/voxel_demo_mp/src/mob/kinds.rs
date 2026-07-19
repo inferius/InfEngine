@@ -63,6 +63,8 @@ pub(crate) enum MobKind {
     ZombieVillager = 17,
     /// W343 - creeper (swell + the W337 explosion, radius 3).
     Creeper = 18,
+    /// W344 - donkey (equine + panniers; village stables).
+    Donkey = 19,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -91,6 +93,7 @@ impl MobKind {
             16 => MobKind::MagmaCube,
             17 => MobKind::ZombieVillager,
             18 => MobKind::Creeper,
+            19 => MobKind::Donkey,
             _ => MobKind::Sheep,
         }
     }
@@ -136,6 +139,9 @@ impl MobKind {
                 // W315: cat strolls like an animal (taming/sitting
                 // are follow-ups; village cats just live there).
                 | MobKind::Cat
+                // W344: donkey grazes like the horse (riding/taming
+                // are follow-ups).
+                | MobKind::Donkey
                 // W322: golem is neutral (mob defense is a follow-up)
                 // and the horse is a plain animal until riding lands.
                 | MobKind::IronGolem
@@ -169,6 +175,7 @@ impl MobKind {
             MobKind::MagmaCube => "magma_cube",
             MobKind::ZombieVillager => "zombie_villager",
             MobKind::Creeper => "creeper",
+            MobKind::Donkey => "donkey",
         }
     }
 }
@@ -196,6 +203,8 @@ pub(crate) fn hitbox_for(kind: u8) -> (f32, f32, f32, f32) {
         KIND_ZOMBIE_VILLAGER => (0.3, 0.975, 0.3, 0.975),
         // W343: MC creeper 0.6 x 1.7.
         KIND_CREEPER => (0.3, 0.85, 0.3, 0.85),
+        // W344: MC donkey 1.3965 x 1.5.
+        KIND_DONKEY => (0.7, 0.75, 0.7, 0.75),
         KIND_ZOMBIE | KIND_SKELETON | KIND_ZOMBIFIED_PIGLIN => (0.45, 1.0, 0.45, 1.0),
         KIND_CHICKEN => (0.28, 0.45, 0.28, 0.35),
         KIND_PIG => (0.6, 0.55, 0.45, 0.45),
@@ -233,6 +242,7 @@ pub(crate) const KIND_GHAST: u8 = MobKind::Ghast as u8;
 pub(crate) const KIND_MAGMA_CUBE: u8 = MobKind::MagmaCube as u8;
 pub(crate) const KIND_ZOMBIE_VILLAGER: u8 = MobKind::ZombieVillager as u8;
 pub(crate) const KIND_CREEPER: u8 = MobKind::Creeper as u8;
+pub(crate) const KIND_DONKEY: u8 = MobKind::Donkey as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -305,11 +315,12 @@ mod tests {
         // W327: 15 = Ghast, 16 = MagmaCube.
         assert_eq!(MobKind::from_u8(15), MobKind::Ghast);
         assert_eq!(MobKind::from_u8(16), MobKind::MagmaCube);
-        // W343: 18 = Creeper.
+        // W343: 18 = Creeper. W344: 19 = Donkey.
         assert_eq!(MobKind::from_u8(18), MobKind::Creeper);
+        assert_eq!(MobKind::from_u8(19), MobKind::Donkey);
         // W330: 17 = ZombieVillager.
         assert_eq!(MobKind::from_u8(17), MobKind::ZombieVillager);
-        for raw in [19u8, 100, 255] {
+        for raw in [20u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

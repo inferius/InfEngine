@@ -15,22 +15,22 @@ use super::{Bone, EntityModel, McCube};
 
 const FRAC_PI_6: f32 = std::f32::consts::FRAC_PI_6;
 
-const BODY: &[McCube] =
+pub(super) const BODY: &[McCube] =
     &[McCube::new([-5.0, -8.0, -17.0], [10.0, 10.0, 22.0], [0, 32]).inflated(0.05)];
-const NECK: &[McCube] = &[McCube::new([-2.05, -6.0, -2.0], [4.0, 12.0, 7.0], [0, 35])];
-const SKULL: &[McCube] = &[McCube::new([-3.0, -11.0, -2.0], [6.0, 5.0, 7.0], [0, 13])];
-const MANE: &[McCube] = &[McCube::new([-1.0, -11.0, 5.01], [2.0, 16.0, 2.0], [56, 36])];
-const MOUTH: &[McCube] = &[McCube::new([-2.0, -11.0, -7.0], [4.0, 5.0, 5.0], [0, 25])];
+pub(super) const NECK: &[McCube] = &[McCube::new([-2.05, -6.0, -2.0], [4.0, 12.0, 7.0], [0, 35])];
+pub(super) const SKULL: &[McCube] = &[McCube::new([-3.0, -11.0, -2.0], [6.0, 5.0, 7.0], [0, 13])];
+pub(super) const MANE: &[McCube] = &[McCube::new([-1.0, -11.0, 5.01], [2.0, 16.0, 2.0], [56, 36])];
+pub(super) const MOUTH: &[McCube] = &[McCube::new([-2.0, -11.0, -7.0], [4.0, 5.0, 5.0], [0, 25])];
 const EAR_L: &[McCube] =
     &[McCube::new([0.55, -13.0, 4.0], [2.0, 3.0, 1.0], [19, 16]).inflated(-0.001)];
 const EAR_R: &[McCube] =
     &[McCube::new([-2.55, -13.0, 4.0], [2.0, 3.0, 1.0], [19, 16]).inflated(-0.001)];
-const TAIL: &[McCube] = &[McCube::new([-1.5, 0.0, 0.0], [3.0, 14.0, 4.0], [42, 36])];
-const LEG_HIND_R: &[McCube] = &[McCube::new([-1.0, -1.01, -1.0], [4.0, 11.0, 4.0], [48, 21])];
-const LEG_HIND_L: &[McCube] =
+pub(super) const TAIL: &[McCube] = &[McCube::new([-1.5, 0.0, 0.0], [3.0, 14.0, 4.0], [42, 36])];
+pub(super) const LEG_HIND_R: &[McCube] = &[McCube::new([-1.0, -1.01, -1.0], [4.0, 11.0, 4.0], [48, 21])];
+pub(super) const LEG_HIND_L: &[McCube] =
     &[McCube::new([-3.0, -1.01, -1.0], [4.0, 11.0, 4.0], [48, 21]).mirrored()];
-const LEG_FRONT_R: &[McCube] = &[McCube::new([-1.0, -1.01, -1.9], [4.0, 11.0, 4.0], [48, 21])];
-const LEG_FRONT_L: &[McCube] =
+pub(super) const LEG_FRONT_R: &[McCube] = &[McCube::new([-1.0, -1.01, -1.9], [4.0, 11.0, 4.0], [48, 21])];
+pub(super) const LEG_FRONT_L: &[McCube] =
     &[McCube::new([-3.0, -1.01, -1.9], [4.0, 11.0, 4.0], [48, 21]).mirrored()];
 
 const BONES: &[Bone] = &[

@@ -21,7 +21,8 @@ use crate::worldgen::Biome;
 
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
-    KIND_CREEPER, KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
+    KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
+    KIND_ZOMBIE,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -46,6 +47,7 @@ const PLAINS_DAY: &[(u8, u32)] = &[
     (KIND_PIG, 4),
     (KIND_SHEEP, 4),
     (KIND_RABBIT, 3),
+    (KIND_DONKEY, 1),
 ];
 const PLAINS_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
@@ -90,7 +92,8 @@ const JUNGLE_NIGHT: &[(u8, u32)] =
 const SWAMP_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 2)];
 const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20), (KIND_CREEPER, 40)];
 
-const SAVANNA_DAY: &[(u8, u32)] = &[(KIND_COW, 6), (KIND_SHEEP, 4)];
+const SAVANNA_DAY: &[(u8, u32)] =
+    &[(KIND_COW, 6), (KIND_SHEEP, 4), (KIND_DONKEY, 1)];
 const SAVANNA_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
@@ -181,6 +184,8 @@ mod tests {
                     || *k == KIND_SHEEP
                     // W162: rabbit is a passive day spawner too.
                     || *k == KIND_RABBIT
+                    // W344: donkey too.
+                    || *k == KIND_DONKEY
             })
             .map(|(_, w)| *w)
             .sum();

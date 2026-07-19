@@ -217,6 +217,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
         x if x == super::kinds::KIND_HORSE => 22.0,
+        // W344: donkey generateMaxHealth averages ~22 like the horse.
+        x if x == super::kinds::KIND_DONKEY => 22.0,
         // W327: Ghast.createAttributes MAX_HEALTH 10.
         x if x == super::kinds::KIND_GHAST => 10.0,
         // W327: magma cube size 2 -> size*size = 4 HP.

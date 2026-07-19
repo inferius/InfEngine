@@ -275,6 +275,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/creeper/fuse", "entity.creeper.primed"),
     ("mob/creeper/hurt", "entity.creeper.hurt"),
     ("mob/creeper/death", "entity.creeper.death"),
+    // W344: donkey.
+    ("mob/donkey/say", "entity.donkey.ambient"),
+    ("mob/donkey/hurt", "entity.donkey.hurt"),
+    ("mob/donkey/death", "entity.donkey.death"),
     // W327: magma cube (squishy hops).
     ("mob/magma_cube/say", "entity.magma_cube.squish"),
     ("mob/magma_cube/hurt", "entity.magma_cube.hurt"),

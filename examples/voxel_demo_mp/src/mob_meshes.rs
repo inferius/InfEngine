@@ -501,6 +501,8 @@ pub(crate) struct MobMeshes {
     pub(crate) zombie_villager_model: Option<crate::entity_model::BakedModel>,
     /// W343: creeper (CreeperModel verbatim).
     pub(crate) creeper_model: Option<crate::entity_model::BakedModel>,
+    /// W344: donkey (DonkeyModel - equine + panniers, scale 0.87).
+    pub(crate) donkey_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1070,6 +1072,24 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "ghast entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Donkey (64x64, entity/horse subdir) -------------------------------
+    for root in &entity_roots {
+        let p = root.join("horse").join("donkey.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.donkey_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::donkey::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "donkey entity texture bound (universal model)"
             );
             break;
         }

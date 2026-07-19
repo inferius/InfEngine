@@ -116,6 +116,7 @@ fn entity_kind_for(id: &str) -> Option<u8> {
         "cat" => 12,      // MobKind::Cat (W315)
         "iron_golem" => 13, // MobKind::IronGolem (W322)
         "horse" => 14,    // MobKind::Horse (W322)
+        "donkey" => 19,   // MobKind::Donkey (W344)
         "zombie_villager" => 17, // MobKind::ZombieVillager (W330)
         _ => {
             static SKIPPED: std::sync::Once = std::sync::Once::new();

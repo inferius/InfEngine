@@ -60,6 +60,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::ZombieVillager => ("zombie_villager", "zombie_villager"),
         // W343.
         MobKind::Creeper => ("creeper", "creeper"),
+        // W344: MC ships the donkey under entity/horse/.
+        MobKind::Donkey => ("horse", "donkey"),
     }
 }
 
@@ -136,6 +138,7 @@ pub(crate) struct MobSkinSet {
     pub(crate) magma_cube: Option<PathBuf>,
     pub(crate) zombie_villager: Option<PathBuf>,
     pub(crate) creeper: Option<PathBuf>,
+    pub(crate) donkey: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -160,6 +163,7 @@ impl MobSkinSet {
             magma_cube: mob_skin_path(assets_root, MobKind::MagmaCube),
             zombie_villager: mob_skin_path(assets_root, MobKind::ZombieVillager),
             creeper: mob_skin_path(assets_root, MobKind::Creeper),
+            donkey: mob_skin_path(assets_root, MobKind::Donkey),
         }
     }
 
@@ -184,6 +188,7 @@ impl MobSkinSet {
             MobKind::MagmaCube => &self.magma_cube,
             MobKind::ZombieVillager => &self.zombie_villager,
             MobKind::Creeper => &self.creeper,
+            MobKind::Donkey => &self.donkey,
         };
         opt.as_deref()
     }

@@ -448,9 +448,18 @@ pub fn draw_remote_mobs(
                     }
 
                     // ---- Horse (W322) -----------------------------------
-                    KIND_HORSE => {
+                    k if k == KIND_HORSE
+                        || k == crate::mob::kinds::KIND_DONKEY =>
+                    {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
-                        if let Some(baked) = &mob_meshes.horse_model {
+                        // W344: the donkey shares the equine arm -
+                        // same bone names, its own baked mesh.
+                        let equine = if k == KIND_HORSE {
+                            &mob_meshes.horse_model
+                        } else {
+                            &mob_meshes.donkey_model
+                        };
+                        if let Some(baked) = equine {
                             let pos = Vec3::new(
                                 base_x,
                                 mob.pos[1] - death_sink,
