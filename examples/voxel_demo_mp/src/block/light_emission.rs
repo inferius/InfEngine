@@ -190,6 +190,10 @@ fn engine_id_to_mc_name(id: u16) -> Option<&'static str> {
     };
     match id {
         TORCH_ID => Some("torch"),
+        // W312: the portal curtain glows light 11 like MC - the id
+        // was missing from this map, so lit portals baked NO light
+        // (the user's 'portal should glow' report).
+        crate::block::PORTAL_ID => Some("nether_portal"),
         GLOWSTONE_ID => Some("glowstone"),
         LAVA_ID => Some("lava"),
         FIRE_ID => Some("fire"),
@@ -365,6 +369,8 @@ mod tests {
     #[test]
     fn nether_portal_emits_11() {
         assert_eq!(emission_by_mc_name("nether_portal"), 11);
+        // W312: the ENGINE id resolves too (the map row was missing).
+        assert_eq!(light_emission_for_id(crate::block::PORTAL_ID), 11);
     }
 
     #[test]
