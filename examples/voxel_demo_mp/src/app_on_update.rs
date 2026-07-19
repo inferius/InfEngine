@@ -675,6 +675,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 forward,
                 6.0,
                 |b| !b.is_air() && !block_is_ray_passable(b),
+                // W347: snow layers pick with their real height
+                // (layers/8) instead of the full cube.
+                |p, b| {
+                    (b.0 == 15).then(|| {
+                        vx.snow_positions.get(&p).copied().unwrap_or(1)
+                            as f32
+                            / 8.0
+                    })
+                },
             )
         } else {
             None
@@ -697,6 +706,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 forward,
                 6.0,
                 |b| !b.is_air() && !block_is_liquid(b),
+                |p, b| {
+                    (b.0 == 15).then(|| {
+                        vx.snow_positions.get(&p).copied().unwrap_or(1)
+                            as f32
+                            / 8.0
+                    })
+                },
             )
         } else {
             None

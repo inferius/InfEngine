@@ -58,12 +58,16 @@ pub(crate) fn ray_aabb(
 
 /// Targeting raycast with thin-shape awareness (see module docs).
 /// `is_blocked` matches the predicate handed to `raycast_with`.
+/// W347: `flat_height` reports a reduced pick-box height for PARTIAL
+/// blocks beyond the built-in rails (snow layers: layers/8) - None
+/// keeps the full cube.
 pub(crate) fn raycast_target(
     world: &World,
     origin: Vec3,
     dir: Vec3,
     max_dist: f32,
     is_blocked: impl Fn(infengine_voxel::BlockId) -> bool,
+    flat_height: impl Fn([i32; 3], infengine_voxel::BlockId) -> Option<f32>,
 ) -> Option<RayHit> {
     let dir = dir.normalize_or_zero();
     if dir == Vec3::ZERO {
@@ -76,16 +80,21 @@ pub(crate) fn raycast_target(
     for _ in 0..8 {
         let hit = raycast_with(world, o, dir, remaining, &is_blocked)?;
         let b = world.get(hit.voxel);
-        if !crate::block::rail::is_rail_block(b.0) {
+        let pick_h = if crate::block::rail::is_rail_block(b.0) {
+            Some(RAIL_PICK_HEIGHT)
+        } else {
+            flat_height(hit.voxel, b)
+        };
+        let Some(pick_h) = pick_h else {
             return Some(hit);
-        }
-        // Intersect with the rail's REAL flat box.
+        };
+        // Intersect with the block's REAL flat box.
         let bmin = Vec3::new(
             hit.voxel[0] as f32,
             hit.voxel[1] as f32,
             hit.voxel[2] as f32,
         );
-        let bmax = bmin + Vec3::new(1.0, RAIL_PICK_HEIGHT, 1.0);
+        let bmax = bmin + Vec3::new(1.0, pick_h, 1.0);
         if let Some((t_in, _)) = ray_aabb(o, dir, bmin, bmax)
             && t_in >= 0.0
             && t_in <= remaining
@@ -136,7 +145,7 @@ mod tests {
         // far floor: must NOT pick the rail cell.
         let origin = Vec3::new(4.5, 5.6, 4.5);
         let dir = Vec3::new(1.0, -0.18, 0.0);
-        let hit = raycast_target(&w, origin, dir, 16.0, blocked).expect("hit");
+        let hit = raycast_target(&w, origin, dir, 16.0, blocked, |_, _| None).expect("hit");
         assert_ne!(hit.voxel, [8, 4, 4], "rail must not block the graze");
         assert_eq!(hit.voxel[1], 3, "should land on the floor beyond");
         assert!(hit.voxel[0] > 8, "beyond the rail, got {:?}", hit.voxel);
@@ -148,7 +157,7 @@ mod tests {
         // Aim almost straight down at the rail.
         let origin = Vec3::new(8.5, 7.0, 4.5);
         let dir = Vec3::new(0.05, -1.0, 0.0);
-        let hit = raycast_target(&w, origin, dir, 8.0, blocked).expect("hit");
+        let hit = raycast_target(&w, origin, dir, 8.0, blocked, |_, _| None).expect("hit");
         assert_eq!(hit.voxel, [8, 4, 4], "steep aim hits the rail itself");
     }
 
@@ -160,7 +169,45 @@ mod tests {
         w.set([12, 5, 4], infengine_voxel::BlockId(1));
         let origin = Vec3::new(4.5, 5.5, 4.5);
         let dir = Vec3::new(1.0, 0.0, 0.0);
-        let hit = raycast_target(&w, origin, dir, 16.0, blocked).expect("hit");
+        let hit = raycast_target(&w, origin, dir, 16.0, blocked, |_, _| None).expect("hit");
         assert_eq!(hit.voxel, [12, 5, 4], "the wall blocks like always");
+    }
+}
+
+#[cfg(test)]
+mod w347_tests {
+    use super::*;
+    use infengine_voxel::{BlockId, Chunk, World};
+
+    /// W347: a 2-layer snow cell (pick box 0.25 high) must not
+    /// swallow a ray grazing over it - the ray reaches the floor
+    /// beyond, exactly like the rail case. Aiming INTO the layer
+    /// still picks the snow cell.
+    #[test]
+    fn snow_layer_pick_box_is_thin() {
+        let mut w = World::default();
+        w.insert_chunk([0, 0, 0], Chunk::empty());
+        w.insert_chunk([1, 0, 0], Chunk::empty());
+        for x in 0..32 {
+            w.set([x, 3, 4], BlockId(3));
+        }
+        w.set([8, 4, 4], BlockId(15)); // snow layer cell
+        let snow_h = |p: [i32; 3], b: BlockId| {
+            (b.0 == 15).then_some(if p == [8, 4, 4] { 0.25 } else { 0.125 })
+        };
+        let blocked = |b: BlockId| !b.is_air();
+        // Graze over the layer toward far floor.
+        let origin = Vec3::new(4.5, 5.6, 4.5);
+        let dir = Vec3::new(1.0, -0.18, 0.0);
+        let hit = raycast_target(&w, origin, dir, 16.0, blocked, snow_h)
+            .expect("hit");
+        assert_ne!(hit.voxel, [8, 4, 4], "thin snow must not block the graze");
+        assert_eq!(hit.voxel[1], 3, "ray lands on the floor beyond");
+        // Aim down into the layer itself.
+        let origin = Vec3::new(8.5, 6.0, 4.5);
+        let dir = Vec3::new(0.0, -1.0, 0.0);
+        let hit = raycast_target(&w, origin, dir, 8.0, blocked, snow_h)
+            .expect("hit");
+        assert_eq!(hit.voxel, [8, 4, 4], "direct aim picks the snow");
     }
 }
