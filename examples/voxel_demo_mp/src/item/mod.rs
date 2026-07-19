@@ -2634,6 +2634,23 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 946, name: "wooden_axe", display: Some("Wooden Axe"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
     ItemType { id: 947, name: "ward_armor_trim_smithing_template", display: Some("Smithing Template"), places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
     ItemType { id: 948, name: "wild_armor_trim_smithing_template", display: Some("Smithing Template"), places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    // W323: flower-pot family + dripstone + decorated pot + chain.
+    ItemType { id: 949, name: "flower_pot", display: Some("Flower Pot"), places: Some(949), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 950, name: "potted_dead_bush", display: Some("Potted Dead Bush"), places: Some(950), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 951, name: "potted_cactus", display: Some("Potted Cactus"), places: Some(951), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 952, name: "potted_dandelion", display: Some("Potted Dandelion"), places: Some(952), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 953, name: "potted_poppy", display: Some("Potted Poppy"), places: Some(953), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 954, name: "potted_spruce_sapling", display: Some("Potted Spruce Sapling"), places: Some(954), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 955, name: "potted_allium", display: Some("Potted Allium"), places: Some(955), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 956, name: "potted_azure_bluet", display: Some("Potted Azure Bluet"), places: Some(956), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 957, name: "potted_birch_sapling", display: Some("Potted Birch Sapling"), places: Some(957), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 958, name: "potted_blue_orchid", display: Some("Potted Blue Orchid"), places: Some(958), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 959, name: "potted_oxeye_daisy", display: Some("Potted Oxeye Daisy"), places: Some(959), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 960, name: "potted_red_tulip", display: Some("Potted Red Tulip"), places: Some(960), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 961, name: "potted_white_tulip", display: Some("Potted White Tulip"), places: Some(961), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 962, name: "pointed_dripstone", display: Some("Pointed Dripstone"), places: Some(962), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 963, name: "decorated_pot", display: Some("Decorated Pot"), places: Some(963), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 964, name: "iron_chain", display: Some("Chain"), places: Some(964), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

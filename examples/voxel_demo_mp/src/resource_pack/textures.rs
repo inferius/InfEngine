@@ -68,6 +68,24 @@ pub(crate) fn load_atlas(root: &Path) -> Option<AtlasOutput> {
     scan_dir(&tex_root.join("block"), &mut entries, false, false);
     scan_dir(&tex_root.join("item"), &mut entries, true, false);
     scan_dir(&tex_root.join("particle"), &mut entries, false, true);
+    // W323: the decorated pot's art lives under textures/entity (MC
+    // renders it as a block entity). Pull just its two sheets into
+    // the block atlas so the hand-built box model can sample them.
+    for stem in ["decorated_pot_side", "decorated_pot_base"] {
+        let p = tex_root
+            .join("entity")
+            .join("decorated_pot")
+            .join(format!("{stem}.png"));
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            entries.push(PackEntry {
+                key: TextureKey::Block(stem.to_string()),
+                img,
+                anim: super::mcmeta::McMetaAnim::default(),
+                is_item: false,
+                is_particle: false,
+            });
+        }
+    }
     if entries.is_empty() {
         return None;
     }

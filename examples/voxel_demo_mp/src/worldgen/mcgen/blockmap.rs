@@ -129,11 +129,6 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "campfire",
     "composter",
     "oak_wall_sign",
-    "potted_cactus",
-    "potted_dandelion",
-    "potted_dead_bush",
-    "potted_poppy",
-    "potted_spruce_sapling",
     "spruce_wall_sign",
     "water_cauldron",
     // W251 outpost decoration.
@@ -145,13 +140,6 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "cauldron",
     "gray_wall_banner",
     "light_gray_wall_banner",
-    "potted_allium",
-    "potted_azure_bluet",
-    "potted_birch_sapling",
-    "potted_blue_orchid",
-    "potted_oxeye_daisy",
-    "potted_red_tulip",
-    "potted_white_tulip",
     "tnt",
     // W261 ancient city decoration (the redstone lab's piston head,
     // the skull piles).
@@ -159,10 +147,6 @@ pub(crate) const KNOWN_SKIPS: &[&str] = &[
     "skeleton_skull",
     // W263 trial chambers decoration (archaeology pots, tripwire
     // traps, dripstone, hanging chains).
-    "decorated_pot",
-    "flower_pot",
-    "iron_chain",
-    "pointed_dripstone",
     "tripwire",
     "tripwire_hook",
 ];

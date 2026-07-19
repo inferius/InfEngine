@@ -298,6 +298,10 @@ pub(crate) fn lookup(name: &str) -> Option<BlockModel> {
         "block/soul_torch" | "soul_torch" => Some(build_soul_torch()),
         "block/wall_torch" | "wall_torch" => Some(build_wall_torch()),
         "block/dirt_path" | "dirt_path" => Some(build_dirt_path()),
+        // W323: pot family fallback + the entity-rendered decorated pot.
+        "block/flower_pot" | "flower_pot" => Some(build_flower_pot()),
+        "block/decorated_pot" | "decorated_pot" => Some(build_decorated_pot()),
+        "block/iron_chain" | "iron_chain" => Some(build_cross("iron_chain")),
         // W294: farmland shares the 15/16 geometry with its own top.
         "block/farmland_moist" | "farmland_moist" | "block/farmland"
         | "farmland" => Some(build_farmland()),
@@ -372,6 +376,23 @@ pub(crate) fn name_for_block(id: u16) -> Option<&'static str> {
     // W294: farmland - the moist variant (see the crop tick).
     if crate::block::block_type(id).is_some_and(|b| b.name == "farmland") {
         return Some("block/farmland_moist");
+    }
+    // W323: the flower-pot family. The real pack resolves each id via
+    // its own blockstate JSON (flower_pot_cross parents); this entry
+    // is the placeholder fallback - an empty hand-built pot.
+    if crate::block::block_type(id).is_some_and(|b| {
+        b.name == "flower_pot" || b.name.starts_with("potted_")
+    }) {
+        return Some("block/flower_pot");
+    }
+    // W323: decorated pot is entity-rendered in MC (element-less
+    // model), so the hand-built box is the PRIMARY path.
+    if crate::block::block_type(id).is_some_and(|b| b.name == "decorated_pot") {
+        return Some("block/decorated_pot");
+    }
+    // W323: chain fallback (the real pack uses template_chain JSON).
+    if crate::block::block_type(id).is_some_and(|b| b.name == "iron_chain") {
+        return Some("block/iron_chain");
     }
     match id {
         x if x == TORCH_ID => Some("block/torch"),
@@ -808,6 +829,72 @@ pub(crate) fn build_slab_top() -> BlockModel {
 /// block's own `#top/#side/#bottom` so every wool colour (+ moss
 /// carpet) resolves its own texture; the side strip samples the
 /// bottom 1px of the tile.
+/// W323: the empty flower pot - the four 1px walls + the dirt fill
+/// from MC `block/flower_pot.json`, literal texture names. Used as
+/// the placeholder fallback for the whole potted_* family (the real
+/// pack renders each plant via its own JSON).
+pub(crate) fn build_flower_pot() -> BlockModel {
+    let wall = |from: [f32; 3], to: [f32; 3]| ModelElement {
+        from,
+        to,
+        rotation: None,
+        shade: true,
+        faces: ElementFaces {
+            down: Some(uv_face([5.0, 5.0, 6.0, 11.0], "flower_pot", Some(CubeFace::Down))),
+            up: Some(uv_face([5.0, 5.0, 6.0, 11.0], "flower_pot", None)),
+            north: Some(uv_face([5.0, 10.0, 11.0, 16.0], "flower_pot", None)),
+            south: Some(uv_face([5.0, 10.0, 11.0, 16.0], "flower_pot", None)),
+            west: Some(uv_face([5.0, 10.0, 11.0, 16.0], "flower_pot", None)),
+            east: Some(uv_face([5.0, 10.0, 11.0, 16.0], "flower_pot", None)),
+        },
+    };
+    BlockModel {
+        elements: vec![
+            wall([5.0, 0.0, 5.0], [6.0, 6.0, 11.0]),
+            wall([10.0, 0.0, 5.0], [11.0, 6.0, 11.0]),
+            wall([6.0, 0.0, 5.0], [10.0, 6.0, 6.0]),
+            wall([6.0, 0.0, 10.0], [10.0, 6.0, 11.0]),
+            // Dirt fill.
+            ModelElement {
+                from: [6.0, 0.0, 6.0],
+                to: [10.0, 4.0, 10.0],
+                rotation: None,
+                shade: true,
+                faces: ElementFaces {
+                    up: Some(uv_face([6.0, 6.0, 10.0, 10.0], "dirt", None)),
+                    ..Default::default()
+                },
+            },
+        ],
+        textures: HashMap::new(),
+        ambient_occlusion: false,
+    }
+}
+
+/// W323: decorated pot - MC renders it as a block entity, so this
+/// 14/16 box with the entity-atlas side/base art IS the primary
+/// path (resolve_for_cache falls through on the element-less JSON).
+pub(crate) fn build_decorated_pot() -> BlockModel {
+    BlockModel {
+        elements: vec![ModelElement {
+            from: [1.0, 0.0, 1.0],
+            to: [15.0, 16.0, 15.0],
+            rotation: None,
+            shade: true,
+            faces: ElementFaces {
+                down: Some(uv_face([0.0, 0.0, 14.0, 14.0], "decorated_pot_base", Some(CubeFace::Down))),
+                up: Some(uv_face([0.0, 0.0, 14.0, 14.0], "decorated_pot_base", None)),
+                north: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
+                south: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
+                west: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
+                east: Some(uv_face([1.0, 0.0, 15.0, 16.0], "decorated_pot_side", None)),
+            },
+        }],
+        textures: HashMap::new(),
+        ambient_occlusion: true,
+    }
+}
+
 pub(crate) fn build_carpet() -> BlockModel {
     BlockModel {
         elements: vec![ModelElement {
