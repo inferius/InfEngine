@@ -53,16 +53,25 @@ impl WorkerPool {
             let req_rx = req_rx.clone();
             let light_rx = light_rx.clone();
             let res_tx = res_tx.clone();
+            // W334: only ~a quarter of the pool is light-first. W304
+            // gave EVERY worker lighting-lane priority, so a saturated
+            // lighting queue (streaming keeps it at the in-flight cap)
+            // pulled the WHOLE pool into flood-fills while chunk
+            // generation sat still - the "I outfly the world loading"
+            // report. A dedicated light-first subset keeps W304's
+            // no-starvation guarantee; every worker still services
+            // both lanes whenever its preferred one is empty.
+            let light_first = i < num_workers.div_ceil(4);
             threads.push(
                 thread::Builder::new()
                     .name(format!("voxel_worker_{i}"))
                     .spawn(move || {
                         loop {
                             // W28.10: crossbeam recv() blocks without
-                            // Mutex. W304: lighting lane first - a
-                            // waiting lighting segment always beats
-                            // the gen/remesh backlog.
-                            let job = match light_rx.try_recv() {
+                            // Mutex.
+                            let preferred =
+                                if light_first { &light_rx } else { &req_rx };
+                            let job = match preferred.try_recv() {
                                 Ok(j) => j,
                                 Err(_) => {
                                     crossbeam_channel::select! {

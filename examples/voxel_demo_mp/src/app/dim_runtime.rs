@@ -252,6 +252,7 @@ impl Voxel {
         // world would light garbage. rebuild_all_lighting above
         // already re-seeds the new dim.
         self.pending_lighting_segments.clear();
+        self.pending_lighting_chunks.clear();
         // Open UIs reference position-keyed containers that
         // belong to the parked dim. Close them on switch so the
         // player doesn't see a stale chest panel.

@@ -418,7 +418,14 @@ impl Voxel {
         // budget in current_results_budget); the instant the player
         // moves we drop back so travel never stutters.
         let v = self.player_vel;
-        let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0;
+        // W334: "stationary" also requires an idle stream. W324
+        // zeroes player_vel whenever the player's own chunk is not
+        // loaded - exactly the flying-ahead-of-the-frontier case - so
+        // velocity alone promoted the big 12 ms drain budget DURING
+        // flight (the liqmesh 10-15 ms log spikes). While generation
+        // is busy the small budget applies regardless of speed.
+        let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0
+            && self.pending_chunks.is_empty();
         let (drain_cap, budget_ms) = if stationary { (48, 12) } else { (16, 4) };
         let drain = LIQUID_CHUNKS_PER_FRAME
             .max(self.liquid_remesh_backlog.len() / 8)

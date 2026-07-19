@@ -78,6 +78,7 @@ impl Voxel {
         // W237: queued-but-undispatched lighting segments belong to
         // the old world's coords - drop them with the job counter.
         self.pending_lighting_segments.clear();
+        self.pending_lighting_chunks.clear();
         self.snow_positions.clear();
         self.torch_positions.clear();
         self.emitter_positions.clear();

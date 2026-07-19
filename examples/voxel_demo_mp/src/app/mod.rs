@@ -544,7 +544,14 @@ pub(crate) struct Voxel {
     /// `drain_lighting_segments` spends at most a small time budget
     /// per tick and the rest waits here.
     pub(crate) pending_lighting_segments:
-        std::collections::VecDeque<Vec<ChunkCoord>>,
+        std::collections::VecDeque<(i32, i32)>,
+    /// W334: per queued 2x2-column key, the union of chunks awaiting
+    /// a lighting flood. Streaming delivers a column's chunks across
+    /// many ticks; merging repeat marks into the queued segment stops
+    /// the same area being re-flooded once per delivery (a large part
+    /// of the pinned light_jobs=24 saturation).
+    pub(crate) pending_lighting_chunks:
+        std::collections::HashMap<(i32, i32), Vec<ChunkCoord>>,
     /// Seconds since the last heartbeat thump. Drives the low-HP
     /// audio cue: fires more rapidly the closer the player is to
     /// dying. Stays at 0 above the threshold.

@@ -411,8 +411,20 @@ impl Voxel {
         // batch in one call was the recurring 26-45 ms pre_render
         // spike while streaming. Whatever doesn't fit this frame's
         // budget stays queued for the next tick.
-        for (_, seg) in segments {
-            self.pending_lighting_segments.push_back(seg);
+        //
+        // W334: coalesce into any segment already queued for the same
+        // column key instead of queueing a duplicate flood.
+        for (key, seg) in segments {
+            let queued = self.pending_lighting_chunks.contains_key(&key);
+            let e = self.pending_lighting_chunks.entry(key).or_default();
+            for cc in seg {
+                if !e.contains(&cc) {
+                    e.push(cc);
+                }
+            }
+            if !queued {
+                self.pending_lighting_segments.push_back(key);
+            }
         }
         self.drain_lighting_segments();
     }
@@ -428,7 +440,7 @@ impl Voxel {
         };
         let budget = std::time::Duration::from_millis(4);
         let start = std::time::Instant::now();
-        while let Some(seg) = {
+        while let Some(key) = {
             if self.pending_lighting_jobs >= MAX_INFLIGHT_LIGHTING_JOBS
                 || start.elapsed() >= budget
             {
@@ -437,6 +449,10 @@ impl Voxel {
                 self.pending_lighting_segments.pop_front()
             }
         } {
+            let Some(seg) = self.pending_lighting_chunks.remove(&key)
+            else {
+                continue;
+            };
             // Snapshot: segment chunks + face-neighbours (BFS frontier
             // correctness at chunk edges), cloned off the live world.
             let mut snap_entries: Map<ChunkCoord, Chunk> = Map::new();
@@ -666,5 +682,26 @@ impl Voxel {
             );
         }
         affected
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// W334: repeat marks of the same 2x2 chunk column must merge
+    /// into ONE queued segment (union of chunks, no duplicates).
+    /// Streaming delivers a column across many ticks; before the
+    /// coalescing every delivery queued a fresh flood of the same
+    /// area and the lighting lane sat pinned at the in-flight cap.
+    #[test]
+    fn w334_lighting_segments_coalesce_per_column() {
+        let mut v = crate::Voxel::new();
+        v.dispatch_lighting_segments(vec![[0, 0, 0], [1, 0, 0]]);
+        v.dispatch_lighting_segments(vec![[0, 1, 0], [0, 0, 0]]);
+        assert_eq!(v.pending_lighting_segments.len(), 1);
+        let seg = v.pending_lighting_chunks.get(&(0, 0)).unwrap();
+        assert_eq!(seg.len(), 3, "union without duplicates: {seg:?}");
+        // A different column queues separately.
+        v.dispatch_lighting_segments(vec![[2, 0, 0]]);
+        assert_eq!(v.pending_lighting_segments.len(), 2);
     }
 }

@@ -243,6 +243,7 @@ impl Voxel {
             random_tick_accum: 0.0,
             load_state_applied: false,
             pending_lighting_segments: std::collections::VecDeque::new(),
+            pending_lighting_chunks: std::collections::HashMap::new(),
             heartbeat_accum: 0.0,
             cactus_damage_accum: 0.0,
             fly_mode: false,
