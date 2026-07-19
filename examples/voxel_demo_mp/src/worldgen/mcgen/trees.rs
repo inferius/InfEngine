@@ -1785,20 +1785,24 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 // W227 grove: spruce/pine_on_snow carry a
                 // block_predicate_filter for a SNOW floor instead
                 // (grove surfaces are snow_block).
-                let (flx, fly, flz) = (wx - origin[0], floor - origin[1], wz - origin[2]);
-                if (0..cs).contains(&flx)
-                    && (0..cs).contains(&fly)
-                    && (0..cs).contains(&flz)
-                {
-                    let cell = chunk.get(flx as usize, fly as usize, flz as usize).0;
-                    let floor_ok = if bt.name == "trees_grove" {
-                        crate::block::block_type(cell).is_some_and(|b| b.name == "snow_block")
-                    } else {
-                        floor_supports_tree(cell)
-                    };
-                    if !floor_ok {
-                        continue;
-                    }
+                // W317: the floor gate must be CHUNK-INDEPENDENT.
+                // The old check only ran when the floor cell sat in
+                // the CURRENT chunk - a rejected try then skipped the
+                // shape rng that accepting slices consumed, so every
+                // vertical slice of the source chunk drifted onto
+                // DIFFERENT trees (the sliced/floating spruce
+                // screenshot). The surface-rule block is
+                // deterministic per column: every replay agrees and
+                // the rng stream stays in lockstep.
+                let surf = super::terrain::mc_surface_block_at(ctx, wx, wz);
+                let floor_ok = if bt.name == "trees_grove" {
+                    crate::block::block_type(surf)
+                        .is_some_and(|b| b.name == "snow_block")
+                } else {
+                    floor_supports_tree(surf)
+                };
+                if !floor_ok {
+                    continue;
                 }
                 // W285: never root a tree inside a village/outpost
                 // piece (docx img30 trees-through-houses). The

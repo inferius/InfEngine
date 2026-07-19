@@ -162,13 +162,14 @@ pub(crate) fn block_skips_chunk_mesh(b: BlockId) -> bool {
     // invisible (regression W60.1).
     //
     // Current dedicated-pass-only ids:
-    //   15 = snow layer (snow_positions HashMap)
+    //   (15 = snow layer LEFT this list in W316 - the slab meshes
+    //   into the chunk now; keeping it here made snow invisible)
     //   36 = water (liquid_mesh_handles)
     //   37 = lava (liquid_mesh_handles)
     //   47 = portal (portal_positions HashSet)
     //   49 = fire (fires HashMap)
     //   56 = soul_fire (fires HashMap)
-    matches!(b.0, 15 | 36 | 37 | 47 | 49 | 56)
+    matches!(b.0, 36 | 37 | 47 | 49 | 56)
 }
 
 /// Block can be displaced by RMB-placement (the placed block

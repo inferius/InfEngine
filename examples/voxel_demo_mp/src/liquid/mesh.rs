@@ -215,6 +215,9 @@ pub(crate) fn side_open(
     nb.is_air()
         || block_is_aabb_passable(nb)
         || block_skips_chunk_mesh(nb)
+        // W317: snow left the skip list (it meshes as a thin slab
+        // now) but still does not occlude its cell - keep the face.
+        || nb.0 == 15
 }
 
 /// "Bottom face is open": emit the bottom face for a liquid cell
@@ -241,6 +244,9 @@ pub(crate) fn bottom_open(
     nb.is_air()
         || block_is_aabb_passable(nb)
         || block_skips_chunk_mesh(nb)
+        // W317: snow left the skip list (it meshes as a thin slab
+        // now) but still does not occlude its cell - keep the face.
+        || nb.0 == 15
 }
 
 /// Append one quad to `verts` / `idx`. Corners must be CCW from

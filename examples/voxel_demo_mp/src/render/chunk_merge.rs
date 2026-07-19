@@ -109,7 +109,11 @@ mod tests {
     /// block_skips_chunk_mesh for the full id list).
     #[test]
     fn skip_blocks_are_dropped() {
-        let merged = merge_submeshes(vec![sub(15, 4)]);
+        // W317: snow (15) meshes into the chunk now - water (36)
+        // stays a dedicated-pass block and pins the drop path.
+        let merged = merge_submeshes(vec![sub(36, 4)]);
         assert!(merged.is_empty());
+        let kept = merge_submeshes(vec![sub(15, 4)]);
+        assert_eq!(kept.len(), 1, "snow submeshes merge in");
     }
 }

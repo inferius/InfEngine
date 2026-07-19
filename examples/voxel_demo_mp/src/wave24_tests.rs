@@ -111,3 +111,42 @@ fn worker_result_remeshed_has_revision_and_submeshes() {
         dim: "overworld".to_string(),
     };
 }
+
+/// W316: a lone snow-layer cell (id 15) must emit the slab geometry
+/// (5 faces x 4 verts = 20) - the invisible-snow regression check.
+#[test]
+fn snow_layer_cell_emits_slab() {
+    use crate::lighting::HaloLighting;
+    use crate::resource_pack;
+    use infengine_voxel::BlockId;
+    let mut chunk = infengine_voxel::Chunk::empty();
+    chunk.set(4, 4, 4, BlockId(15));
+    let pack = resource_pack::ResourcePack::load();
+    let halo = HaloLighting {
+        own: None,
+        px: None,
+        nx: None,
+        pz: None,
+        nz: None,
+        py: None,
+        ny: None,
+    };
+    let no_doors = std::collections::HashMap::new();
+    let no_rails = std::collections::HashMap::new();
+    let subs = crate::workers::mesh_chunk_in_worker(
+        &chunk,
+        [0, 0, 0],
+        &pack,
+        &halo,
+        &no_doors,
+        &no_rails,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
+    let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
+    assert_eq!(
+        total_verts, 20,
+        "snow slab must emit 5 quads (got {total_verts} verts from {} submeshes)",
+        subs.len()
+    );
+}
