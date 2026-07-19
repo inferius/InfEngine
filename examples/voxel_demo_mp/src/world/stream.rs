@@ -187,8 +187,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             // trickle keeps real chunks dominant; the full 16/frame
             // burst still applies once the queue is idle.
             // W335: tiles are preliminary-surface replays now
-            // (microseconds each), so the idle drain can be generous.
-            let cap = if vx.pending_chunks.is_empty() { 64 } else { 2 };
+            // (microseconds each), so the idle drain can be generous
+            // - and W345 raises the busy trickle too (a tile costs
+            // the workers next to nothing vs a chunk column).
+            let cap = if vx.pending_chunks.is_empty() { 64 } else { 8 };
             let mut sent = 0usize;
             while sent < cap {
                 let Some(pending) = vx.lod_pending.pop() else { break };
@@ -657,14 +659,21 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         vx.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                     }
                 }
+                // W345: neighbour re-mesh is OVERDRAW CLEANUP, not
+                // correctness - the mesher emits boundary faces
+                // against missing neighbours (nothing is ever
+                // revealed by a new chunk, and light seams flow
+                // through the Lit pipeline + W275 diff). Streaming
+                // used to triple the mesh+upload volume with these;
+                // now they wait for an idle stream.
                 for n in [
                     [cc[0] - 1, cc[1], cc[2]],
                     [cc[0] + 1, cc[1], cc[2]],
                     [cc[0], cc[1], cc[2] - 1],
                     [cc[0], cc[1], cc[2] + 1],
                 ] {
-                    if vx.world.chunk(n).is_some() && vx.pending_remesh_set.insert(n) {
-                        vx.pending_remesh.push_back(n);
+                    if vx.world.chunk(n).is_some() && vx.pending_seam_set.insert(n) {
+                        vx.pending_seam_remesh.push_back(n);
                     }
                 }
                 let cs = CHUNK_SIZE as i32;
@@ -913,6 +922,31 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         }
         vx.rebuild_chunks(&[coord]);
         remesh_done += 1;
+    }
+    // W345: seam-cleanup drain - ONLY while the stream is idle
+    // (no queued gen, no carried results, remesh queue quiet), a
+    // few per frame. Culls the hidden boundary faces + fixes seam
+    // AO that streaming deliberately skipped.
+    if vx.pending_chunks.is_empty()
+        && vx.stream_delivered.is_empty()
+        && vx.pending_remesh.len() < 32
+    {
+        let mut seam_done = 0usize;
+        while seam_done < 8 {
+            let Some(coord) = vx.pending_seam_remesh.pop_front() else {
+                break;
+            };
+            vx.pending_seam_set.remove(&coord);
+            if vx.world.chunk(coord).is_none() {
+                continue;
+            }
+            // Route through the normal queue so the budget +
+            // dedup logic stays in one place.
+            if vx.pending_remesh_set.insert(coord) {
+                vx.pending_remesh.push_back(coord);
+            }
+            seam_done += 1;
+        }
     }
     // W233: the remesh drain dispatches snapshots (chunk + halo
     // clones) to the workers - name it if it blows up.

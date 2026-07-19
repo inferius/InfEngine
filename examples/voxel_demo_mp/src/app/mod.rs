@@ -149,6 +149,17 @@ pub(crate) struct Voxel {
     /// bounded slice (REMESH_DEFERRED_PER_FRAME) is drained each
     /// frame so the cost is spread out rather than spiking.
     pub(crate) pending_remesh: VecDeque<ChunkCoord>,
+    /// W345: LOW-priority seam cleanup. A freshly streamed chunk
+    /// used to queue its 4 loaded horizontal neighbours into
+    /// `pending_remesh` immediately - but the mesher emits boundary
+    /// faces CONSERVATIVELY against missing neighbours (no holes
+    /// ever appear), so that remesh only culls hidden faces and
+    /// refreshes seam AO. During a flight it multiplied every mesh
+    /// build + GPU upload ~2-3x and was a large slice of the "world
+    /// loads too slowly" wall. The cleanup now waits here and only
+    /// drains while the stream is idle.
+    pub(crate) pending_seam_remesh: VecDeque<ChunkCoord>,
+    pub(crate) pending_seam_set: HashSet<ChunkCoord>,
     /// W23.3c: mirror set for pending_remesh. Allows O(1) dedup so
     /// the same coord is never enqueued twice even when multiple
     /// arriving chunks list it as a neighbour. Cleared in sync with

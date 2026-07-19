@@ -57,6 +57,8 @@ impl Voxel {
         self.lod2_pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        self.pending_seam_remesh.clear();
+        self.pending_seam_set.clear();
         // W198.13: force the streamer to re-run its queue + unload scan
         // on the next frame (player_chunk may be numerically unchanged
         // but the loaded set is now empty / freshly built).
@@ -297,6 +299,8 @@ impl Voxel {
         self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
+        self.pending_seam_remesh.clear();
+        self.pending_seam_set.clear();
         // W236: fresh world entry - the Finalising step must apply
         // persisted state (load_server_state) exactly once again.
         self.load_state_applied = false;
@@ -387,7 +391,9 @@ impl Voxel {
     #[inline]
     pub(crate) fn current_results_budget(&self) -> (usize, u64) {
         if matches!(self.state, AppState::Loading { .. }) {
-            return (32, 8);
+            // W345: behind a loading screen there is no frame to
+            // protect - spend big and get the player in fast.
+            return (256, 24);
         }
         // W198.17: streamed chunks arrive mesh-complete (the worker does
         // gen+mesh+light in one job), so how fast a freshly-entered area
@@ -401,10 +407,26 @@ impl Voxel {
         // cause a travel stutter.
         let v = self.player_vel;
         let speed_sq = v.x * v.x + v.y * v.y + v.z * v.z;
-        if speed_sq < 4.0 {
-            (RESULTS_PER_FRAME * 2, 12)
+        // W345: scale the budget with the carried backlog. A deep
+        // stream_delivered queue means the workers outran the
+        // uploads - the old flat 6 ms cap made the WORLD the
+        // laggard ("I outfly the loading"); spending up to 14 ms
+        // while a burst is queued clears it in a few frames and
+        // still holds ~70 FPS during the burst.
+        let carry = self.stream_delivered.len() as u64;
+        let boost = if carry > 1024 {
+            8
+        } else if carry > 512 {
+            6
+        } else if carry > 128 {
+            4
         } else {
-            (RESULTS_PER_FRAME, RESULTS_BUDGET_MS)
+            0
+        };
+        if speed_sq < 4.0 {
+            (RESULTS_PER_FRAME * 2, 12 + boost.min(6))
+        } else {
+            (RESULTS_PER_FRAME, RESULTS_BUDGET_MS + boost)
         }
     }
 
@@ -469,6 +491,45 @@ impl Voxel {
 mod build_world_tests {
     use crate::Voxel;
     use infengine_voxel::CHUNK_SIZE;
+
+    /// W345: the upload budget scales with the carried result
+    /// backlog - a deep queue must buy a bigger frame slice so the
+    /// world catches up instead of trickling at the flat 6 ms.
+    #[test]
+    fn w345_results_budget_scales_with_backlog() {
+        let mut v = Voxel::new();
+        v.state = crate::ui::AppState::Playing;
+        v.player_vel = glam::Vec3::new(10.0, 0.0, 0.0);
+        let (_, base) = v.current_results_budget();
+        for _ in 0..600 {
+            v.stream_delivered.push(crate::workers::WorkerResult::LodTile(
+                crate::lod::LodTileResult {
+                    key: [0, 0],
+                    level: 1,
+                    dim: String::new(),
+                    y_min: 0.0,
+                    y_max: 0.0,
+                    opaque: (Vec::new(), Vec::new()),
+                    water: (Vec::new(), Vec::new()),
+                    water_tint: [0.0; 3],
+                },
+            ));
+        }
+        let (_, boosted) = v.current_results_budget();
+        assert!(
+            boosted >= base + 6,
+            "600-deep carry must boost the budget ({base} -> {boosted})",
+        );
+        // The loading screen spends big unconditionally.
+        v.state = crate::ui::AppState::Loading {
+            target_chunks: 1,
+            loaded_chunks: 0,
+            phase: crate::ui::LoadingPhase::GeneratingChunks,
+            started_at: std::time::Instant::now(),
+        };
+        let (_, loading) = v.current_results_budget();
+        assert!(loading >= 20, "loading budget {loading}");
+    }
 
     /// W249: the initial ring centres on the PLAYER's chunk (a saved
     /// world's pose is pre-applied by enter_world), and the queue
