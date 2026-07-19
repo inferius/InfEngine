@@ -129,11 +129,12 @@ fn mesh_vertex_light_clamps_out_of_range() {
     assert!((l[1] - 1.0).abs() < 1e-4, "sky clamped to 1, got {}", l[1]);
 }
 
-/// anim_id clamps at 32.
+/// anim_id clamps at the shared MAX_ANIM_SLOTS cap (W320: 128).
 #[test]
 fn mesh_vertex_anim_id_clamps_at_32() {
-    let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(50);
-    assert_eq!(v.anim_id, 32);
+    let max = infengine_render::MAX_ANIM_SLOTS as u32;
+    let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max + 18);
+    assert_eq!(v.anim_id, max);
 }
 
 /// Struct size check. W30.1 extended MeshVertex from 28 to 40 bytes by

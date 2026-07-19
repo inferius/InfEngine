@@ -155,15 +155,22 @@ pub(crate) fn draw(
                     (phase as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 let flicker = (time * 6.0 + phase_f).sin();
                 // W313: SOUL fire renders blue (MC soul_fire art).
-                // The block id decides; the shared orange fire_0
-                // mesh gets a cyan-heavy tint until a dedicated
-                // soul_fire_0 effect mesh bakes.
+                // W320: it has its OWN mesh now (real soul_fire_0
+                // strip); the cyan tint over the orange fire_0 mesh
+                // survives only as the fallback when that bake
+                // failed. Both meshes carry tile-anim slots, so the
+                // mcmeta strip animates on the GPU - the flicker
+                // pulse stays as a subtle brightness ripple.
                 let soul = world.get(*p).0 == crate::block::SOUL_FIRE_ID;
-                // W153: the REAL fire_0 texture when baked - flicker
-                // pulses brightness on top of the MC art.
-                if let Some(mesh) = effects.fire {
+                let flame_mesh = if soul {
+                    effects.soul_fire.or(effects.fire)
+                } else {
+                    effects.fire
+                };
+                if let Some(mesh) = flame_mesh {
                     let pulse = 0.9 + 0.1 * flicker;
-                    let tint = if soul {
+                    let tint = if soul && effects.soul_fire.is_none() {
+                        // Legacy cyan approximation over fire_0.
                         [0.25 * pulse, 0.85 * pulse, 1.0 * pulse, 1.0]
                     } else {
                         [pulse, pulse, pulse, 1.0]

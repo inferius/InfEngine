@@ -147,7 +147,7 @@ pub(crate) struct ResourcePack {
     /// Atlas RGBA pixels (4 bytes per pixel, row-major).
     pub(crate) atlas_rgba: Vec<u8>,
     /// Wave 9.y: animation registry. Built from every animated
-    /// `TextureRef` after the atlas lands - holds up to 32 slots
+    /// `TextureRef` after the atlas lands - holds up to 128 slots
     /// keyed by `(v0, v_step, frame_count, frametime_ms)`. The
     /// renderer's `TileAnimsUniform` is filled from this; the
     /// chunk mesher looks up each tile's slot via

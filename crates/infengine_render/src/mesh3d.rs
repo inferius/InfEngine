@@ -183,12 +183,13 @@ impl MeshVertex {
     }
 
     /// Wave 9.y: tag this vertex with an animation slot id. `0`
-    /// means static (no UV scroll); `1..=32` references an entry
-    /// in the shader's `tile_anim` uniform array. Slots outside
-    /// `0..=32` are clamped because the uniform array is statically
-    /// sized.
+    /// means static (no UV scroll); `1..=MAX_ANIM_SLOTS` references
+    /// an entry in the shader's `tile_anim` uniform array. Slots
+    /// outside that range are clamped because the uniform array is
+    /// statically sized. (W320: cap raised 32 -> 128 for headroom
+    /// over the full MC animated-strip roster.)
     pub fn with_anim_id(mut self, slot: u32) -> Self {
-        self.anim_id = slot.min(32);
+        self.anim_id = slot.min(crate::tile_anims::MAX_ANIM_SLOTS as u32);
         self
     }
 
@@ -1370,14 +1371,15 @@ mod tests {
 
     #[test]
     fn with_anim_id_clamps_to_max_slot() {
-        // The shader's tile_anim array has 32 entries. Slot ids
-        // above 32 clamp to 32 so they never index out of bounds.
+        // W320: the shader's tile_anim array has 128 entries. Slot
+        // ids above the cap clamp so they never index out of bounds.
+        let max = crate::tile_anims::MAX_ANIM_SLOTS as u32;
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(5);
         assert_eq!(v.anim_id, 5);
-        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(32);
-        assert_eq!(v.anim_id, 32);
-        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(99);
-        assert_eq!(v.anim_id, 32);
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max);
+        assert_eq!(v.anim_id, max);
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max + 67);
+        assert_eq!(v.anim_id, max);
     }
 
     #[test]

@@ -7,9 +7,14 @@
 //! this module exposes the GPU side - a 32-entry uniform array
 //! the shader reads when a vertex's `anim_id != 0`.
 //!
-//! Layout: 32 entries, each 16 bytes. Total uniform = 512 bytes,
+//! Layout: 128 entries, each 16 bytes. Total uniform = 2048 bytes,
 //! comfortably under the 64KiB minimum guarantee + small enough
-//! to upload from a `bytemuck` slice every frame.
+//! to upload from a `bytemuck` slice every frame. (W320: 32 -> 128.
+//! The MC pack ships ~102 animated strips; the registry dedups by
+//! (v0, v_step, frames, frametime) so today that collapses to ~22
+//! live slots, but the unique-key count depends on the atlas shelf
+//! layout - 128 gives headroom so a repack can never overflow into
+//! silently-static tiles.)
 //!
 //! Per-entry fields mirror the CPU-side `AnimSlot`:
 //! - `frame_count` - frames in the strip (>= 2 for animated tiles).
@@ -32,8 +37,9 @@ use bytemuck::{Pod, Zeroable};
 
 /// Hard cap on simultaneously-animated tiles in flight. Matches
 /// `resource_pack::anim_registry::MAX_ANIM_SLOTS` - bump both
-/// values together if you raise it.
-pub const MAX_ANIM_SLOTS: usize = 32;
+/// values together if you raise it (plus the WGSL
+/// `array<TileAnim, N>` size in `mesh3d.wgsl`).
+pub const MAX_ANIM_SLOTS: usize = 128;
 
 /// One animated-tile descriptor as the shader sees it. 16 bytes,
 /// `repr(C)` so the binary layout matches WGSL's struct rules.
@@ -60,7 +66,7 @@ impl Default for TileAnimEntry {
     }
 }
 
-/// Full 32-entry uniform body. Always 512 bytes. The renderer
+/// Full 128-entry uniform body. Always 2048 bytes. The renderer
 /// uploads one of these per frame; unused slots stay zeroed so
 /// the shader's `frame_count <= 1` branch returns the static UV
 /// unchanged.
@@ -232,17 +238,17 @@ mod tests {
 
     #[test]
     fn entry_layout_is_16_bytes() {
-        // Critical: WGSL's `array<TileAnim, 32>` requires the
+        // Critical: WGSL's `array<TileAnim, 128>` requires the
         // element stride to be 16 bytes. If a field shifts, the
         // GPU reads the wrong bytes for every slot.
         assert_eq!(std::mem::size_of::<TileAnimEntry>(), 16);
     }
 
     #[test]
-    fn uniform_total_is_512_bytes() {
-        // 32 slots * 16 bytes = 512 bytes. The renderer's bind
-        // group expects this exact size.
-        assert_eq!(std::mem::size_of::<TileAnimsUniform>(), 512);
+    fn uniform_total_is_2048_bytes() {
+        // W320: 128 slots * 16 bytes = 2048 bytes. The renderer's
+        // bind group expects this exact size.
+        assert_eq!(std::mem::size_of::<TileAnimsUniform>(), 2048);
     }
 
     #[test]
@@ -285,7 +291,7 @@ mod tests {
         assert!(!u.set(0, e));
         // Slots beyond MAX_ANIM_SLOTS are silently dropped.
         assert!(!u.set((MAX_ANIM_SLOTS as u32) + 1, e));
-        assert!(!u.set(99, e));
+        assert!(!u.set((MAX_ANIM_SLOTS as u32) + 67, e));
         // Boundary: slot == MAX_ANIM_SLOTS lands.
         assert!(u.set(MAX_ANIM_SLOTS as u32, e));
         assert_eq!(u.entries[MAX_ANIM_SLOTS - 1], e);
@@ -298,7 +304,7 @@ mod tests {
         // sure the derives stay applied.
         let entries = [TileAnimEntry::default(); MAX_ANIM_SLOTS];
         let bytes: &[u8] = bytemuck::cast_slice(&entries);
-        assert_eq!(bytes.len(), 512);
+        assert_eq!(bytes.len(), MAX_ANIM_SLOTS * 16);
     }
 
     #[test]

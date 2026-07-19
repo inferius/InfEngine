@@ -61,8 +61,9 @@ struct LightsUniform {
 // Wave 9.y: per-tile animation table. The fragment shader picks
 // `entries[anim_id - 1]` when a vertex's `anim_id != 0` and
 // scrolls UV.v through the frame strip. Slot 0 is the static
-// sentinel ("do not scroll") so the array is sized for 32 live
-// animations + the index math stays 1-based.
+// sentinel ("do not scroll") so the array is sized for 128 live
+// animations + the index math stays 1-based. (W320: 32 -> 128,
+// keep in sync with tile_anims::MAX_ANIM_SLOTS.)
 struct TileAnim {
     frame_count: u32,
     frametime_ms: u32,
@@ -71,7 +72,7 @@ struct TileAnim {
 };
 
 struct TileAnimsUniform {
-    entries: array<TileAnim, 32>,
+    entries: array<TileAnim, 128>,
 };
 
 @group(4) @binding(0) var<uniform> tile_anims: TileAnimsUniform;

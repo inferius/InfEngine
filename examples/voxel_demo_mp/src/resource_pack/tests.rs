@@ -505,3 +505,44 @@ fn icon_uv_front_equals_icon_uv_for_top_normal() {
     assert_eq!(pack.icon_uv_front(b), pack.icon_uv_for(b, [0, 1, 0]),
         "icon_uv_front must be a shorthand for icon_uv_for with [0,1,0]");
 }
+
+/// W320 pin: the real MC pack ships ~102 animated block strips.
+/// The registry dedups by (v0, v_step, frames, frametime), so when
+/// strips share an atlas shelf row they share a slot (~22 live
+/// slots today) - but the unique-key count depends entirely on the
+/// shelf layout. This test models the worst case (every strip on
+/// its own row): with the old 32-slot cap the late registrations
+/// silently fell back to static; with the 128 cap every strip must
+/// land a slot, including the tiles the effect meshes + liquids
+/// rely on.
+#[test]
+fn w320_full_mc_roster_of_animated_strips_all_get_slots() {
+    let mut textures: HashMap<TextureKey, TextureRef> = HashMap::new();
+    let mut names: Vec<String> = (0..97).map(|i| format!("aa_filler_{i:02}")).collect();
+    for key in ["fire_0", "soul_fire_0", "nether_portal", "water_still", "lava_still"] {
+        names.push(key.to_string());
+    }
+    assert_eq!(names.len(), 102);
+    for (i, name) in names.iter().enumerate() {
+        // Distinct v0 per strip mirrors distinct atlas rows.
+        let v0 = i as f32 / 256.0;
+        textures.insert(
+            TextureKey::Block(name.clone()),
+            TextureRef {
+                atlas_uv: [0.0, v0, 0.0625, v0 + 1.0 / 256.0],
+                frames: 32,
+                frametime_ms: 50,
+                interpolate: false,
+            },
+        );
+    }
+    let (reg, slots) = build_anim_index(&textures);
+    assert_eq!(reg.len(), 102, "every strip must land a live slot");
+    for key in ["fire_0", "soul_fire_0", "nether_portal", "water_still", "lava_still"] {
+        let slot = slots.get(&TextureKey::Block(key.to_string())).copied();
+        assert!(
+            slot.is_some_and(|s| s != 0),
+            "{key} must have a non-static anim slot, got {slot:?}",
+        );
+    }
+}

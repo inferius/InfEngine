@@ -40,13 +40,16 @@ use std::collections::HashMap;
 use super::TextureRef;
 
 /// Hard upper bound on simultaneously-animated tiles. Matches the
-/// shader's fixed-size `tile_anim` uniform array - bump both
-/// values together if you raise it. Today's MC asset roster ships
-/// fewer than 10 animated textures (water_still, water_flow,
-/// lava_still, lava_flow, fire_0, fire_1, command_block_back,
-/// magma, prismarine_*, sea_lantern, soul_fire_0, soul_fire_1),
-/// so 32 has comfortable headroom.
-pub(crate) const MAX_ANIM_SLOTS: usize = 32;
+/// shader's fixed-size `tile_anim` uniform array
+/// (`infengine_render::MAX_ANIM_SLOTS` + the WGSL array size) -
+/// bump all three together if you raise it. W320: 32 -> 128. The
+/// real MC pack ships ~102 animated block strips (fire, portal,
+/// water, lava, campfire, kelp, sea lantern, stems, ...); the
+/// dedup key below collapses them to ~22 live slots today, but
+/// that count is a function of the atlas shelf layout (same-row
+/// strips share v0), so 128 keeps a future repack from silently
+/// overflowing into static tiles.
+pub(crate) const MAX_ANIM_SLOTS: usize = 128;
 
 /// Sentinel slot meaning "static texture, no animation". The
 /// shader's `tile_anim` lookup branches on `slot > 0` so this
@@ -285,15 +288,17 @@ mod tests {
     }
 
     #[test]
-    fn tile_anim_registry_caps_at_32() {
+    fn tile_anim_registry_caps_at_max() {
         let mut reg = AnimRegistry::new();
-        // Register 32 distinct animated tiles - all succeed.
-        for i in 0..32u32 {
+        // Register MAX_ANIM_SLOTS distinct animated tiles - all
+        // succeed. W320: the cap is 128 so the full MC pack roster
+        // (~102 strips) fits without overflow.
+        for i in 0..MAX_ANIM_SLOTS as u32 {
             let tex = animated_ref(i as f32 / 1000.0, 0.0625, 4, 100);
             assert_ne!(reg.register(&tex), STATIC_SLOT, "slot {i}");
         }
         assert_eq!(reg.len(), MAX_ANIM_SLOTS);
-        // 33rd registration falls back to STATIC_SLOT.
+        // One past the cap falls back to STATIC_SLOT.
         let tex = animated_ref(99.0, 0.0625, 4, 100);
         assert_eq!(reg.register(&tex), STATIC_SLOT);
         // The cap holds.
