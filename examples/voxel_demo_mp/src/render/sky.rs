@@ -151,7 +151,15 @@ pub(crate) fn apply_tint_and_fog(
     // The old (vd-2)*16 .. vd*16*0.95 spherical smoothstep wrapped the
     // whole world in a milk wall at the view edge - THE biggest
     // "doesn't look like MC" offender at low view distances.
-    renderer.set_fog(0.0, 1024.0, dark);
+    //
+    // W351: SCALE the haze with the visible horizon. MC's fixed 1024
+    // was tuned for a 512-block max view; with the LOD2 ring the
+    // horizon sits at up to 4080 blocks and a fixed 1024 fogged the
+    // whole far ring into invisibility (the "LOD 2 is useless, the
+    // fog hides it" report). rd_blocks * 2 reproduces MC's exact
+    // ratio at VD 32 (512 * 2 = 1024) and keeps the same fog factor
+    // at the horizon whatever the ring radius.
+    renderer.set_fog(0.0, (rd_blocks * 2.0).max(1024.0), dark);
     sky
 }
 

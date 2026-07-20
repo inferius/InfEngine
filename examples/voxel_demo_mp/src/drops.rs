@@ -203,9 +203,26 @@ pub(crate) const MAGNET_PER_TICK_FRAC: f32 = 0.25;
 /// W318: one full merge sweep - every same-id pair within the merge
 /// radius collapses, without restarting the scan per merge. Returns
 /// the removed drop ids (for the despawn broadcast).
+/// Unrestricted sweep - the tick path uses the near-gated variant;
+/// tests exercise this one.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn merge_stacks_pass(
     drops: &mut Vec<DropItem>,
     cfg: &PickupConfig,
+) -> Vec<u32> {
+    merge_stacks_pass_near(drops, cfg, None)
+}
+
+/// W351: the merge sweep, optionally restricted to drops within
+/// `near` = (player_pos, radius^2). A saved leaf-decay storm left
+/// thousands of SLEEPING far drops; hashing every one of them each
+/// 50 ms tick (SipHash per [i32;3] key + allocs) was the constant
+/// 5-12 ms "drops" phase. Sleeping drops cannot move, so they cannot
+/// newly merge - only the awake set needs the pass.
+pub(crate) fn merge_stacks_pass_near(
+    drops: &mut Vec<DropItem>,
+    cfg: &PickupConfig,
+    near: Option<(glam::Vec3, f32)>,
 ) -> Vec<u32> {
     let mut removed: Vec<u32> = Vec::new();
     if drops.len() < 2 {
@@ -230,6 +247,13 @@ pub(crate) fn merge_stacks_pass(
     let mut grid: std::collections::HashMap<[i32; 3], Vec<usize>> =
         std::collections::HashMap::with_capacity(drops.len());
     for (i, d) in drops.iter().enumerate() {
+        if let Some((pp, r2)) = near {
+            let dx = d.pos[0] - pp.x;
+            let dz = d.pos[2] - pp.z;
+            if dx * dx + dz * dz > r2 {
+                continue;
+            }
+        }
         grid.entry(key(&d.pos)).or_default().push(i);
     }
     let mut dead = vec![false; drops.len()];
@@ -342,7 +366,13 @@ pub(crate) fn step_logical_tick(
     // scratch after every single merge, so a mining burst (a tree's
     // worth of drops) went quadratic-times-merges and the `drops`
     // phase pinned at 10-14 ms per frame (the user's FPS-drop log).
-    let merged_ids: Vec<u32> = merge_stacks_pass(drops, cfg);
+    // W351: only the awake set can merge (see merge_stacks_pass_near).
+    const MERGE_SIM_RADIUS: f32 = 48.0;
+    let merged_ids: Vec<u32> = merge_stacks_pass_near(
+        drops,
+        cfg,
+        Some((player_pos, MERGE_SIM_RADIUS * MERGE_SIM_RADIUS)),
+    );
 
     let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
     for (i, drop) in drops.iter_mut().enumerate() {
@@ -373,7 +403,14 @@ pub(crate) fn step_logical_tick(
         let dx = player_pos.x - drop.pos[0];
         let dy = chest_y - drop.pos[1];
         let dz = player_pos.z - drop.pos[2];
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        // W351: a sleeping far drop pays two multiplies, not a sqrt
+        // - with thousands of stormed drops loaded the per-tick
+        // magnet math alone was visible in the profile.
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if d2 > MERGE_SIM_RADIUS * MERGE_SIM_RADIUS {
+            continue;
+        }
+        let dist = d2.sqrt();
 
         if dist <= DROP_COLLECT_RADIUS {
             picked_meta.push((i, (drop.block, drop.count)));
@@ -657,12 +694,30 @@ mod tests {
             mint_drop(2, 7, [0.1, 0.0, 0.0]),
         ];
         // step_logical_tick runs the merge pass first; one tick
-        // is enough.
+        // is enough. W351: the pass only covers the AWAKE set, so
+        // the player stands nearby.
         let (_, _, merged) =
-            step_logical_tick(&mut drops, Vec3::new(100.0, 100.0, 100.0), &cfg, true);
+            step_logical_tick(&mut drops, Vec3::new(5.0, 0.0, 5.0), &cfg, true);
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].count, 2);
         assert_eq!(merged.len(), 1);
+    }
+
+    /// W351: SLEEPING far drops skip the merge sweep entirely - a
+    /// saved decay storm must not re-hash thousands of static drops
+    /// every tick. They still age (despawn covers the cleanup).
+    #[test]
+    fn far_sleeping_drops_skip_merge() {
+        let cfg = PickupConfig::DEFAULT;
+        let mut drops = vec![
+            mint_drop(1, 7, [0.0, 0.0, 0.0]),
+            mint_drop(2, 7, [0.1, 0.0, 0.0]),
+        ];
+        let (_, _, merged) =
+            step_logical_tick(&mut drops, Vec3::new(200.0, 0.0, 200.0), &cfg, true);
+        assert_eq!(drops.len(), 2, "far pair stays unmerged");
+        assert!(merged.is_empty());
+        assert!(drops.iter().all(|d| d.age_ticks == 1), "still ages");
     }
 
     #[test]

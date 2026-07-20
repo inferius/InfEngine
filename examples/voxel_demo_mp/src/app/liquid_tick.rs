@@ -431,7 +431,10 @@ impl Voxel {
         let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0
             && self.pending_chunks.is_empty()
             && self.pending_remesh.len() < 2048;
-        let (drain_cap, budget_ms) = if stationary { (48, 12) } else { (16, 4) };
+        // W351: 12 -> 8 ms - the stationary catch-up stacked with
+        // the boosted upload budget + light ticks into visible
+        // hitches while watching the world fill in.
+        let (drain_cap, budget_ms) = if stationary { (48, 8) } else { (16, 4) };
         let drain = LIQUID_CHUNKS_PER_FRAME
             .max(self.liquid_remesh_backlog.len() / 8)
             .min(drain_cap);
