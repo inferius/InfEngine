@@ -414,6 +414,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // and briefly after arrival, so the transport reads as an
         // effect instead of a silent cut. Warm ramps 0..1 over the
         // 4 s trigger; the arrival fade reuses the cooldown timer.
+        // W355: MC-style in-wall screen effect. When the camera
+        // (eye) voxel is a fully-occluding block - clipping the head
+        // into a ceiling, a piston push, a closing door - vanilla
+        // covers the view with a dark block-texture overlay instead
+        // of letting the player see through the world (the R17
+        // "head goes through the block and you can see through it").
+        let eye_in_wall = {
+            let p = vx.player_pos;
+            let v = [
+                p.x.floor() as i32,
+                (p.y - 0.05).floor() as i32,
+                p.z.floor() as i32,
+            ];
+            crate::block::block_fully_occludes(vx.world.get(v))
+        };
         let portal_overlay = {
             let warm = vx.portal_in_ticks as f32
                 / crate::block::portal::PORTAL_TRIGGER_TICKS as f32;
@@ -1040,6 +1055,20 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 });
             }
             AppState::Playing => {
+                // W355: in-wall blackout UNDER the HUD (background
+                // order) - the world is hidden, the HUD stays, same
+                // as vanilla's inside-a-block overlay.
+                if eye_in_wall {
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Background,
+                        egui::Id::new("inwall_overlay"),
+                    ));
+                    painter.rect_filled(
+                        ctx.viewport_rect(),
+                        0.0,
+                        egui::Color32::from_black_alpha(242),
+                    );
+                }
                 // W298: full-screen portal vignette (see the strength
                 // snapshot above). Foreground order = over the HUD,
                 // like vanilla's nausea/portal overlay.
