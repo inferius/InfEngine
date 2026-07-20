@@ -237,6 +237,7 @@ impl Voxel {
             rain_sfx_accum: 0.0,
             underwater_was: false,
             underwater_sfx_accum: 0.0,
+            underwater_loop: None,
             // First cave sting is eligible a couple of minutes in;
             // re-rolls randomised after each fire.
             cave_sfx_in: 150.0,

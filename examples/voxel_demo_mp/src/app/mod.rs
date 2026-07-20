@@ -541,6 +541,10 @@ pub(crate) struct Voxel {
     /// W123: seconds until the next `ambient.underwater.loop`
     /// segment refires while the camera stays submerged.
     pub(crate) underwater_sfx_accum: f32,
+    /// W354: the running underwater ambience loop; stopped (with a
+    /// fade) the moment the eye surfaces. The old periodic one-shot
+    /// kept ringing for the rest of the long sample after surfacing.
+    pub(crate) underwater_loop: Option<infengine_audio::ActiveSound>,
     /// W123: seconds until the next eligible `ambient.cave` sting
     /// (rolls only while the player is in a dark underground spot).
     pub(crate) cave_sfx_in: f32,

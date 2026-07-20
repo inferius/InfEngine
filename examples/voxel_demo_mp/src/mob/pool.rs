@@ -41,29 +41,33 @@ pub(crate) struct BiomeSpawnPool {
 const EMPTY: &[(u8, u32)] = &[];
 
 // W162: rabbits roam plains, deserts and snowy/taiga biomes in MC.
+// W354: vanilla common-farm weights (sheep 12 / pig 10 /
+// chicken 10 / cow 8); the rabbit stays for the meadow biomes this
+// bucket also covers.
 const PLAINS_DAY: &[(u8, u32)] = &[
-    (KIND_CHICKEN, 8),
-    (KIND_COW, 4),
-    (KIND_PIG, 4),
-    (KIND_SHEEP, 4),
-    (KIND_RABBIT, 3),
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 10),
+    (KIND_COW, 8),
+    (KIND_RABBIT, 2),
     (KIND_DONKEY, 1),
 ];
 const PLAINS_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
 // W162: the desert is a classic rabbit biome (gold/desert variant).
-const DESERT_DAY: &[(u8, u32)] =
-    &[(KIND_CHICKEN, 2), (KIND_COW, 1), (KIND_RABBIT, 4)];
+// W354: vanilla deserts spawn NO farm animals - rabbit only (the
+// R17 "cows and chickens in the desert" report).
+const DESERT_DAY: &[(u8, u32)] = &[(KIND_RABBIT, 4)];
 const DESERT_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 50), (KIND_SKELETON, 80), (KIND_SPIDER, 20), (KIND_CREEPER, 50)];
 
 // W158: MC forest pools carry wolves (weight 5).
 const FOREST_DAY: &[(u8, u32)] = &[
-    (KIND_CHICKEN, 6),
-    (KIND_COW, 4),
-    (KIND_PIG, 4),
-    (KIND_SHEEP, 8),
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 10),
+    (KIND_COW, 8),
     (KIND_WOLF, 5),
 ];
 const FOREST_NIGHT: &[(u8, u32)] =
@@ -71,9 +75,10 @@ const FOREST_NIGHT: &[(u8, u32)] =
 
 // W158: the taiga is the wolf's home biome in MC (weight 8).
 const TAIGA_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 4),
-    (KIND_PIG, 2),
-    (KIND_COW, 2),
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 10),
+    (KIND_COW, 8),
     (KIND_WOLF, 8),
     (KIND_RABBIT, 4),
 ];
@@ -81,23 +86,46 @@ const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIN
 
 // W161: snowy tundra is the polar bear's home (MC: frozen biomes).
 // W162: snowy rabbits (white variant) roam the same tundra.
+// W354: vanilla snowy plains carry NO sheep - rabbit 10 + polar
+// bear 1.
 const TUNDRA_DAY: &[(u8, u32)] =
-    &[(KIND_SHEEP, 2), (KIND_POLAR_BEAR, 5), (KIND_RABBIT, 4)];
+    &[(KIND_RABBIT, 10), (KIND_POLAR_BEAR, 1)];
 const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
 
-const JUNGLE_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 8), (KIND_PIG, 6)];
+// W354: vanilla jungles run the common farm list PLUS an extra
+// chicken entry (10 + 10).
+const JUNGLE_DAY: &[(u8, u32)] = &[
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 20),
+    (KIND_COW, 8),
+];
 const JUNGLE_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
-const SWAMP_DAY: &[(u8, u32)] = &[(KIND_CHICKEN, 2)];
+// W354: vanilla swamps spawn no farm animals (slime / frog only,
+// neither ported yet).
+const SWAMP_DAY: &[(u8, u32)] = EMPTY;
 const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20), (KIND_CREEPER, 40)];
 
-const SAVANNA_DAY: &[(u8, u32)] =
-    &[(KIND_COW, 6), (KIND_SHEEP, 4), (KIND_DONKEY, 1)];
+const SAVANNA_DAY: &[(u8, u32)] = &[
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 10),
+    (KIND_COW, 8),
+    (KIND_DONKEY, 1),
+];
 const SAVANNA_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
 
-const MOUNTAIN_DAY: &[(u8, u32)] = &[(KIND_SHEEP, 2)];
+// W354: windswept hills run the common farm list + llama (not
+// ported).
+const MOUNTAIN_DAY: &[(u8, u32)] = &[
+    (KIND_SHEEP, 12),
+    (KIND_PIG, 10),
+    (KIND_CHICKEN, 10),
+    (KIND_COW, 8),
+];
 const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
 
 /// Look up the active spawn pool for `biome`. Returns the static
@@ -301,25 +329,15 @@ mod tests {
     }
 
     #[test]
-    fn forest_has_more_sheep_than_plains() {
-        // Sanity guard for the biome-flavour tables: forest biome
-        // should bias more strongly toward sheep than plains does
-        // (more trees -> more wool farms).
+    fn forest_carries_wolves_plains_does_not() {
+        // W354: the vanilla common-farm weights are IDENTICAL across
+        // forest and plains (sheep 12 / pig 10 / chicken 10 / cow 8),
+        // so the old more-sheep-in-forest pin no longer holds. The
+        // biome flavour that DOES distinguish them in MC is the wolf.
         let f = pool_for(Biome::Forest);
         let p = pool_for(Biome::Plains);
-        let f_sheep: u32 = f
-            .day
-            .iter()
-            .filter(|(k, _)| *k == KIND_SHEEP)
-            .map(|(_, w)| *w)
-            .sum();
-        let p_sheep: u32 = p
-            .day
-            .iter()
-            .filter(|(k, _)| *k == KIND_SHEEP)
-            .map(|(_, w)| *w)
-            .sum();
-        assert!(f_sheep > p_sheep, "{} > {}", f_sheep, p_sheep);
+        assert!(f.day.iter().any(|(k, _)| *k == KIND_WOLF));
+        assert!(!p.day.iter().any(|(k, _)| *k == KIND_WOLF));
     }
 
     #[test]

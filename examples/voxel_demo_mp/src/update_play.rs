@@ -735,7 +735,13 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 && liquid.block_id == crate::block::WATER_ID
                 && app.flow_sfx_accum <= 0.0
             {
-                app.flow_sfx_accum = 0.55;
+                // W354: MC fires block.water.ambient sparsely
+                // (client animateTick, 1/64 a tick per cell) - the
+                // fixed 0.55 s refire here was a constant burble
+                // (the R17 "water sound plays too often"). 3-8 s
+                // with a tick-derived jitter.
+                app.flow_sfx_accum =
+                    3.0 + ((app.net_tick % 500) as f32) * 0.01;
                 let center = [
                     foot[0] as f32 + 0.5,
                     foot[1] as f32 + 0.5,

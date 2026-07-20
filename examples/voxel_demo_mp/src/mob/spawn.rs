@@ -284,7 +284,23 @@ pub(crate) fn pick_kind_for(
             Some(super::kinds::KIND_MAGMA_CUBE)
         };
     }
-    let biome = biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed);
+    // W354: the pool biome comes from the ACTIVE worldgen. The old
+    // call always sampled the legacy noise biome map - under the Mc
+    // profile that map has nothing to do with the generated world,
+    // so cows and chickens spawned in deserts (the R17 report).
+    let biome = {
+        let ctx = voxel.current_worldgen_ctx();
+        if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+            mc_biome_to_pool(
+                crate::worldgen::mcgen::terrain::mc_full_biome_at(
+                    &ctx, wpos[0], wpos[2],
+                )
+                .name(),
+            )
+        } else {
+            biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed)
+        }
+    };
     let pool = pool_for(biome);
     let active = if is_night { pool.night } else { pool.day };
     let candidate = weighted_pick(active, rng.next_f32())?;
@@ -400,6 +416,52 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
     // Defensive: if every attempt bailed without spawning, leave
     // next_mob_id untouched (try_spawn_one already preserved it).
     let _ = before;
+}
+
+/// W354: MC biome name -> spawn-pool bucket. Substring matching over
+/// the vanilla biome ids; order matters (snowy_taiga is a TAIGA, not
+/// a tundra).
+pub(crate) fn mc_biome_to_pool(name: &str) -> crate::worldgen::Biome {
+    use crate::worldgen::Biome;
+    let n = name;
+    if n.contains("snowy_taiga") || n.contains("taiga") {
+        return Biome::Taiga;
+    }
+    if n.contains("snowy")
+        || n.contains("frozen")
+        || n.contains("grove")
+        || n.contains("ice")
+        || n.contains("peaks")
+    {
+        return Biome::Tundra;
+    }
+    if n.contains("desert") || n.contains("badlands") {
+        return Biome::Desert;
+    }
+    if n.contains("jungle") || n.contains("bamboo") {
+        return Biome::Jungle;
+    }
+    if n.contains("swamp") || n.contains("mangrove") {
+        return Biome::Swamp;
+    }
+    if n.contains("savanna") {
+        return Biome::Savanna;
+    }
+    if n.contains("beach")
+        || n.contains("shore")
+        || n.contains("river")
+        || n.contains("ocean")
+        || n.contains("mushroom")
+    {
+        return Biome::Beach;
+    }
+    if n.contains("windswept") || n.contains("stony") {
+        return Biome::Mountain;
+    }
+    if n.contains("forest") || n.contains("cherry") {
+        return Biome::Forest;
+    }
+    Biome::Plains
 }
 
 #[cfg(test)]

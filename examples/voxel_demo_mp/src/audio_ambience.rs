@@ -19,10 +19,6 @@ use crate::game_mode::GameMode;
 use crate::worldgen::climate::SEA_LEVEL;
 use infengine_voxel::CHUNK_SIZE;
 
-/// Seconds between `ambient.underwater.loop` refires while
-/// submerged. The loop file is a long bed; a slight overlap at the
-/// boundary blends fine.
-const UNDERWATER_LOOP_PERIOD: f32 = 11.0;
 
 /// Cave-sting re-roll window (seconds). MC's mood algorithm lands
 /// around one sting per few minutes of dark-cave time.
@@ -66,12 +62,23 @@ pub(crate) fn tick(vx: &mut Voxel, dt: f32) {
         }
         vx.underwater_was = underwater;
         vx.underwater_sfx_accum = 0.0;
-    }
-    if underwater {
-        vx.underwater_sfx_accum -= dt;
-        if vx.underwater_sfx_accum <= 0.0 {
-            vx.underwater_sfx_accum = UNDERWATER_LOOP_PERIOD;
-            vx.sfx_at("ambient/underwater", pos, |_, _| {});
+        // W354: the ambience is a stoppable LOOP now. Start it on
+        // submerge, fade it out on surface - the old periodic
+        // one-shot let the long sample ring for tens of seconds
+        // after the player left the water (the R17 report).
+        if underwater {
+            if vx.underwater_loop.is_none()
+                && let Some(audio) = vx.audio.as_mut()
+            {
+                vx.underwater_loop = vx.audio_bank.play_looped(
+                    audio,
+                    "ambient/underwater",
+                    vx.net_tick,
+                    0.55,
+                );
+            }
+        } else if let Some(mut h) = vx.underwater_loop.take() {
+            h.stop(0.8);
         }
     }
 

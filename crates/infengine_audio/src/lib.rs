@@ -101,6 +101,26 @@ impl AudioSystem {
         decode_sound(path)
     }
 
+    /// W354: play `sound` as an ENDLESS LOOP at linear `gain`,
+    /// returning a handle the caller can stop (with a fade) later.
+    /// Built for the underwater ambience: the one-shot path let the
+    /// long sample keep playing for tens of seconds after the player
+    /// surfaced.
+    pub fn play_sound_looped(
+        &mut self,
+        sound: &Sound,
+        gain: f32,
+    ) -> Result<ActiveSound, AudioError> {
+        let g = gain.clamp(0.0, 1.5);
+        let db = if g <= 1e-3 { -60.0 } else { 20.0 * g.log10() };
+        let mut data = sound.data.clone();
+        data.settings = data
+            .settings
+            .volume(kira::Decibels::from(db))
+            .loop_region(0.0..);
+        Ok(ActiveSound(self.manager.play(data)?))
+    }
+
     /// Play a previously loaded `Sound` once at default volume.
     pub fn play_sound(&mut self, sound: &Sound) -> Result<(), AudioError> {
         self.manager.play(sound.data.clone())?;
@@ -229,6 +249,27 @@ impl AudioSystem {
 /// The bank is decoupled from `AudioSystem` so it can be built on
 /// a background thread or shared across audio frontends. Playback
 /// methods take a `&mut AudioSystem` to keep mutation explicit.
+/// W354: a playing sound the caller can stop later. Wraps kira's
+/// handle; dropping the struct leaves the sound playing out (stop
+/// explicitly for loops).
+pub struct ActiveSound(kira::sound::static_sound::StaticSoundHandle);
+
+impl std::fmt::Debug for ActiveSound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ActiveSound")
+    }
+}
+
+impl ActiveSound {
+    /// Fade out over `fade_s` seconds, then stop.
+    pub fn stop(&mut self, fade_s: f32) {
+        self.0.stop(kira::Tween {
+            duration: std::time::Duration::from_secs_f32(fade_s.max(0.0)),
+            ..Default::default()
+        });
+    }
+}
+
 #[derive(Default)]
 pub struct AudioBank {
     variants: HashMap<String, Vec<Sound>>,
@@ -297,6 +338,23 @@ impl AudioBank {
     /// True when the bank has at least one variant for `key`.
     pub fn has(&self, key: &str) -> bool {
         self.variants.get(key).is_some_and(|v| !v.is_empty())
+    }
+
+    /// W354: like `play`, but looped - returns the stoppable
+    /// handle (`None` on unknown/empty key or backend error).
+    pub fn play_looped(
+        &self,
+        audio: &mut AudioSystem,
+        key: &str,
+        seed: u64,
+        gain: f32,
+    ) -> Option<ActiveSound> {
+        let variants = self.variants.get(key)?;
+        if variants.is_empty() {
+            return None;
+        }
+        let idx = (seed as usize) % variants.len();
+        audio.play_sound_looped(&variants[idx], gain).ok()
     }
 
     /// Pick + play a variant of `key`. `seed` selects which one
