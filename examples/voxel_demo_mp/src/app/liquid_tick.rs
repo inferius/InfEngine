@@ -763,6 +763,54 @@ impl Voxel {
     ) {
         let liquid_id = liquid.block_id;
         let delay = liquid.tick_period.max(1) as u64;
+        // W356: MC ticks fluids only in loaded chunks. At the
+        // streaming frontier `liquid_plan_cell` read unloaded
+        // neighbour chunks as AIR, so edge water spread into the
+        // void and re-settled once the real chunk arrived - an
+        // endless frontier settle loop that kept `liq_backlog`
+        // cycling 0 -> ~1600 and the liquid remesh burning
+        // 10-25 ms/frame for minutes after every load (R18 log).
+        // Defer the cell until its face-neighbour chunks exist; it
+        // re-schedules itself, so it settles as soon as the
+        // frontier catches up.
+        {
+            let cs = CHUNK_SIZE as i32;
+            let (cy_min, cy_max) = self.vertical_chunk_range();
+            let base = [
+                pos[0].div_euclid(cs),
+                pos[1].div_euclid(cs),
+                pos[2].div_euclid(cs),
+            ];
+            let mut neighbours_loaded = true;
+            for n in [
+                [pos[0] - 1, pos[1], pos[2]],
+                [pos[0] + 1, pos[1], pos[2]],
+                [pos[0], pos[1] - 1, pos[2]],
+                [pos[0], pos[1] + 1, pos[2]],
+                [pos[0], pos[1], pos[2] - 1],
+                [pos[0], pos[1], pos[2] + 1],
+            ] {
+                let cc = [
+                    n[0].div_euclid(cs),
+                    n[1].div_euclid(cs),
+                    n[2].div_euclid(cs),
+                ];
+                // Own chunk is loaded (world.get just returned the
+                // liquid); outside the vertical span nothing can
+                // ever load, so both count as present.
+                if cc == base || cc[1] < cy_min || cc[1] > cy_max {
+                    continue;
+                }
+                if self.world.chunk(cc).is_none() {
+                    neighbours_loaded = false;
+                    break;
+                }
+            }
+            if !neighbours_loaded {
+                self.liquid_schedule.schedule(pos, now + delay * 4);
+                return;
+            }
+        }
         // Build the per-cell plan against the current world snapshot.
         let mut plan = LiquidPlanStep::default();
         let mut updates: std::collections::HashMap<[i32; 3], (u8, bool)> =

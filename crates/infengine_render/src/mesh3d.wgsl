@@ -261,11 +261,13 @@ fn sample_shadow(world_pos: vec3<f32>, n_dot_l: f32) -> f32 {
         return 1.0;
     }
     // Slope-scaled bias on top of the pipeline depth bias.
-    // W355: halved (0.0008 -> 0.0004) - stacked with the pipeline
-    // bias it detached shadows from block feet, leaving a bright
-    // seam between the wall and its shadow on the ground (the R17
-    // screenshot). PCF 3x3 keeps acne in check at the lower bias.
-    let bias = max(0.0004 * (1.0 - n_dot_l), 0.0001);
+    // W356: the W355 halving (0.0008 -> 0.0004, pipeline 2/2.0 ->
+    // 1/1.5) REVERTED - at low sun angles the smaller bias floods
+    // whole faces with shadow acne and the world reads near-black
+    // in full daylight (the R18 "totally dark" report). The R17
+    // bright contact seam needs normal-offset sampling, not a
+    // smaller bias.
+    let bias = max(0.0008 * (1.0 - n_dot_l), 0.0002);
     let depth = proj.z - bias;
     // PCF 3x3.
     let texel = 1.0 / 2048.0;

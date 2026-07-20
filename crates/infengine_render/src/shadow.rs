@@ -265,10 +265,11 @@ impl ShadowPass {
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    // W355: 2/2.0 -> 1/1.5 - see the shader-side
-                    // bias note (contact-shadow gap).
-                    constant: 1,
-                    slope_scale: 1.5,
+                    // W356: back to 2/2.0 - the W355 1/1.5 halving
+                    // caused world-wide daytime acne darkness (see
+                    // the shader-side bias note).
+                    constant: 2,
+                    slope_scale: 2.0,
                     clamp: 0.0,
                 },
             }),

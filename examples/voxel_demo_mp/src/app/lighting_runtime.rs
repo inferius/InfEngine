@@ -379,7 +379,7 @@ impl Voxel {
     /// 200-600 ms while the other 23 idled, and the generator outran
     /// the lighting frontier at high view distance.
     ///
-    /// Segments are 4x4-chunk-column XZ buckets (full vertical range),
+    /// Segments are single-chunk-column XZ buckets (full vertical range),
     /// each shipped with its own face-neighbour snapshot halo. Segment
     /// boundaries have the same conservative semantics the old batch
     /// boundaries already had (a job only writes its own affected set;
@@ -397,11 +397,20 @@ impl Voxel {
         // batches (= big remesh waves). 2x2 caps a job at <=64
         // chunks, quarters its latency, and spreads the same work
         // across the 24-worker pool.
+        //
+        // W356: 2x2 -> 1x1 columns. The world is 24 chunks tall now
+        // (-64..319), so a 2x2 bucket was 96 own chunks and the R18
+        // log showed single BFS jobs at block_ms 202 / sky_ms
+        // 557-723 (total 760-905 ms!) - one job parked a worker for
+        // ~a second and its Lit batch landed as a giant remesh
+        // wave. A single column caps a job at 24 own chunks (~4x
+        // less flood volume) and lets the pool overlap 4x more
+        // jobs.
         let mut segments: std::collections::BTreeMap<(i32, i32), Vec<ChunkCoord>> =
             std::collections::BTreeMap::new();
         for cc in affected {
             segments
-                .entry((cc[0].div_euclid(2), cc[2].div_euclid(2)))
+                .entry((cc[0], cc[2]))
                 .or_default()
                 .push(cc);
         }
@@ -719,14 +728,18 @@ mod tests {
     #[test]
     fn w334_lighting_segments_coalesce_per_column() {
         let mut v = crate::Voxel::new();
+        // W356: segments are 1x1 chunk columns now - [0,_,0] and
+        // [1,_,0] are DIFFERENT segments (the old 2x2 bucket merged
+        // them and produced 96-chunk ~0.8 s BFS jobs on the 24-tall
+        // world).
         v.dispatch_lighting_segments(vec![[0, 0, 0], [1, 0, 0]]);
         v.dispatch_lighting_segments(vec![[0, 1, 0], [0, 0, 0]]);
-        assert_eq!(v.pending_lighting_segments.len(), 1);
+        assert_eq!(v.pending_lighting_segments.len(), 2);
         let seg = v.pending_lighting_chunks.get(&(0, 0)).unwrap();
-        assert_eq!(seg.len(), 3, "union without duplicates: {seg:?}");
+        assert_eq!(seg.len(), 2, "union without duplicates: {seg:?}");
         // A different column queues separately.
         v.dispatch_lighting_segments(vec![[2, 0, 0]]);
-        assert_eq!(v.pending_lighting_segments.len(), 2);
+        assert_eq!(v.pending_lighting_segments.len(), 3);
     }
 }
 

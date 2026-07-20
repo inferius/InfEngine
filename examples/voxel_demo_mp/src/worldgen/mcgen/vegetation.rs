@@ -909,6 +909,21 @@ fn place_plant(
     if !floor_ok {
         return;
     }
+    // W356: never sprout inside a structure interior. The floor
+    // check reads real chunk cells, and a desert pyramid's treasure
+    // pit floor is the original desert SAND - a dead bush could
+    // legally root inside the pitch-black chamber (the R18 "two
+    // crossed planes" report: an unlit bush cross, the targeting
+    // ray passing through it to the cut sandstone behind it). MC
+    // places vegetation via the WORLD_SURFACE heightmap, which
+    // structures update; our terrain heightmap cannot see them, so
+    // probe the deterministic structure boxes instead.
+    if super::village::pos_in_village(ctx, [wx, wy - 1, wz])
+        || super::outpost::pos_in_outpost(ctx, [wx, wy - 1, wz])
+        || super::pyramid::pos_in_desert_pyramid(ctx, [wx, wy - 1, wz])
+    {
+        return;
+    }
     let mut set_if_air = |y: i32, id: u16| -> bool {
         let ly = y - origin[1];
         if !(0..cs).contains(&ly) {
