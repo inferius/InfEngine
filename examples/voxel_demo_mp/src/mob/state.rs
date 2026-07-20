@@ -91,6 +91,12 @@ pub(crate) struct MobState {
     /// 20 min). 0 = adult. Babies render at half scale, follow the
     /// nearest adult of their kind, and can't breed or be tempted.
     pub(crate) baby_left: f32,
+    /// W348: MC `AbstractHorse` tame flag (rider control vs the
+    /// RunAroundLikeCrazy buck loop). Persisted (entities v4).
+    pub(crate) tamed: bool,
+    /// W348: MC temper 0..100 - each buck adds 5, the tame roll is
+    /// rand(100) < temper. Persisted (entities v4).
+    pub(crate) temper: u8,
 }
 
 impl MobState {
@@ -130,6 +136,8 @@ impl MobState {
             strolling: false,
             hop_cd: 0.0,
             baby_left: 0.0,
+            tamed: false,
+            temper: 0,
         }
     }
 }

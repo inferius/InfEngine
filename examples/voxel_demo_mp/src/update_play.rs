@@ -150,8 +150,10 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         // in app_on_update pins the player each frame. Everything
         // past the motion block (ambience, breath, splash, walk
         // distance) still runs.
-        let riding = app.riding_cart.is_some();
-        if riding {
+        let riding_cart_now = app.riding_cart.is_some();
+        let riding_mob_now = app.riding_mob.is_some();
+        let riding = riding_cart_now || riding_mob_now;
+        if riding_cart_now {
             let mut thrust = 0.0_f32;
             if input_active {
                 if ctx.input.is_pressed(Key::W) {
@@ -167,6 +169,46 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 }
             }
             app.cart_input = thrust;
+            app.player_vel = Vec3::ZERO;
+            app.grounded = true;
+            app.fall_start_y = None;
+            app.sprinting = false;
+        }
+        // W348: riding a horse - WASD becomes the mount's input
+        // (MC getRiddenInput: backing rows at x0.25, sideways at
+        // x0.5), Space jumps, Shift dismounts on the spot. The mob
+        // tick consumes riding_wish/riding_jump and the rider is
+        // pinned to the mount after mob physics.
+        if riding_mob_now {
+            let mut f = 0.0f32;
+            let mut s = 0.0f32;
+            if input_active {
+                if ctx.input.is_pressed(Key::W) {
+                    f += 1.0;
+                }
+                if ctx.input.is_pressed(Key::S) {
+                    f -= 1.0;
+                }
+                if ctx.input.is_pressed(Key::A) {
+                    s -= 1.0;
+                }
+                if ctx.input.is_pressed(Key::D) {
+                    s += 1.0;
+                }
+                if ctx.input.is_pressed(Key::Space) {
+                    app.riding_jump = true;
+                }
+                if ctx.input.is_pressed(Key::ShiftLeft)
+                    || ctx.input.is_pressed(Key::ShiftRight)
+                {
+                    app.riding_mob = None;
+                }
+            }
+            if f < 0.0 {
+                f *= 0.25;
+            }
+            s *= 0.5;
+            app.riding_wish = [f, s];
             app.player_vel = Vec3::ZERO;
             app.grounded = true;
             app.fall_start_y = None;

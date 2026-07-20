@@ -53,7 +53,7 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 ///   dedup - villages stay populated exactly once) + per-mob
 ///   `persistent` / `baby_left` (villagers + pen animals survive
 ///   reload as non-despawning; babies keep growing).
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 3;
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 4;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
@@ -169,6 +169,10 @@ pub(crate) struct MobSave {
     /// W302 (v3): seconds of babyhood left (0 = adult). Was runtime
     /// only before v3 - babies reloaded as adults.
     pub baby_left: f32,
+    /// W348 (v4): MC `AbstractHorse` tame flag.
+    pub tamed: bool,
+    /// W348 (v4): MC temper 0..100 (the taming ladder).
+    pub temper: u8,
     // Future fields go here - with a version bump + migration arrow
     // (bincode is positional; `#[serde(default)]` does NOT cover it).
 }
@@ -451,9 +455,9 @@ struct DimensionEntitiesV2 {
 }
 
 impl MobSaveV2 {
-    /// Lift to the current shape with the v3 defaults.
-    fn lift(self) -> MobSave {
-        MobSave {
+    /// Lift to the FROZEN v3 shape with the v3 defaults.
+    fn lift(self) -> MobSaveV3 {
+        MobSaveV3 {
             id: self.id,
             kind: self.kind,
             pos: self.pos,
@@ -463,6 +467,54 @@ impl MobSaveV2 {
             age_seconds: self.age_seconds,
             persistent: false,
             baby_left: 0.0,
+        }
+    }
+}
+
+/// W348: the v3 on-disk mob shape (pre-`tamed`/`temper`), frozen so
+/// the 2 -> 3 and 3 -> 4 arrows keep decoding/encoding true v3 bytes
+/// while the live struct evolves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct MobSaveV3 {
+    id: u32,
+    kind: u8,
+    pos: [f32; 3],
+    yaw: f32,
+    vel: [f32; 3],
+    health: f32,
+    age_seconds: f32,
+    persistent: bool,
+    baby_left: f32,
+}
+
+/// W348: the v3 on-disk dimension shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionEntitiesV3 {
+    format_version: u32,
+    mobs: Vec<MobSaveV3>,
+    drops: Vec<DropSave>,
+    next_mob_id: u32,
+    next_drop_id: u32,
+    carts: Vec<CartSave>,
+    next_cart_id: u32,
+    structure_mob_anchors: Vec<[i32; 3]>,
+}
+
+impl MobSaveV3 {
+    /// Lift to the current shape with the v4 defaults.
+    fn lift(self) -> MobSave {
+        MobSave {
+            id: self.id,
+            kind: self.kind,
+            pos: self.pos,
+            yaw: self.yaw,
+            vel: self.vel,
+            health: self.health,
+            age_seconds: self.age_seconds,
+            persistent: self.persistent,
+            baby_left: self.baby_left,
+            tamed: false,
+            temper: 0,
         }
     }
 }
@@ -572,7 +624,10 @@ pub(crate) fn entities_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v2, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV2, _>(&raw_v2, cfg)
         .map_err(|err| invalid(format!("entities v2 payload decode failed: {err}")))?;
-    let v3 = DimensionEntities {
+    // W348: emit the TRUE (frozen) v3 shape - encoding the current
+    // (v4) struct under a v3 tag would break the chained 3 -> 4
+    // arrow, exactly like the v1 -> v2 precedent.
+    let v3 = DimensionEntitiesV3 {
         format_version: 3,
         mobs: v2.mobs.into_iter().map(MobSaveV2::lift).collect(),
         drops: v2.drops,
@@ -595,6 +650,70 @@ pub(crate) fn entities_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v3);
     out.extend_from_slice(&uncompressed_len_v3.to_le_bytes());
     out.extend_from_slice(&body_v3);
+    Ok(out)
+}
+
+/// W348: one-step v3 -> v4 migration arrow. Decodes the frozen v3
+/// shape and lifts every mob with `tamed: false` / `temper: 0`
+/// (horse taming persistence). Same envelope walk as its siblings.
+pub(crate) fn entities_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("entities v3 envelope truncated"));
+    }
+    if &bytes[..4] != ENTITIES_MAGIC {
+        return Err(invalid("entities v3 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 3 {
+        return Err(invalid(format!(
+            "entities_v3_to_v4 expected v3, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v3: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("entities v3 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown entities v3 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v3, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV3, _>(&raw_v3, cfg)
+        .map_err(|err| invalid(format!("entities v3 payload decode failed: {err}")))?;
+    let v4 = DimensionEntities {
+        format_version: 4,
+        mobs: v3.mobs.into_iter().map(MobSaveV3::lift).collect(),
+        drops: v3.drops,
+        next_mob_id: v3.next_mob_id,
+        next_drop_id: v3.next_drop_id,
+        carts: v3.carts,
+        next_cart_id: v3.next_cart_id,
+        structure_mob_anchors: v3.structure_mob_anchors,
+    };
+    let raw_v4 = bincode::serde::encode_to_vec(&v4, cfg)
+        .map_err(|err| invalid(format!("entities v4 payload encode failed: {err}")))?;
+    let uncompressed_len_v4 = raw_v4.len() as u64;
+    let (kind_v4, body_v4): (u8, Vec<u8>) = match zstd::encode_all(&raw_v4[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v4.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v4),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v4.len() + 17);
+    out.extend_from_slice(ENTITIES_MAGIC);
+    out.extend_from_slice(&4u32.to_le_bytes());
+    out.push(kind_v4);
+    out.extend_from_slice(&uncompressed_len_v4.to_le_bytes());
+    out.extend_from_slice(&body_v4);
     Ok(out)
 }
 
@@ -640,7 +759,8 @@ mod tests {
             COMP_NONE => out[17..].to_vec(),
             _ => decode_zstd(&out[17..], len).unwrap(),
         };
-        let (v3, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+        // W348: the arrow emits the FROZEN v3 shape now.
+        let (v3, _) = bincode::serde::decode_from_slice::<DimensionEntitiesV3, _>(
             &body, cfg,
         )
         .unwrap();
@@ -650,6 +770,58 @@ mod tests {
         assert!(!v3.mobs[0].persistent);
         assert_eq!(v3.mobs[0].baby_left, 0.0);
         assert!(v3.structure_mob_anchors.is_empty());
+    }
+
+    /// W348: a hand-built v3 envelope lifts through the 3 -> 4
+    /// arrow with tamed=false / temper=0 on every mob.
+    #[test]
+    fn entities_v3_to_v4_lifts_tame_fields() {
+        let cfg = bincode::config::standard();
+        let v3 = DimensionEntitiesV3 {
+            format_version: 3,
+            mobs: vec![MobSaveV3 {
+                id: 9,
+                kind: 14,
+                pos: [1.0, 70.0, -2.0],
+                yaw: 0.0,
+                vel: [0.0; 3],
+                health: 22.0,
+                age_seconds: 0.0,
+                persistent: true,
+                baby_left: 0.0,
+            }],
+            drops: Vec::new(),
+            next_mob_id: 10,
+            next_drop_id: 1,
+            carts: Vec::new(),
+            next_cart_id: 1,
+            structure_mob_anchors: vec![[1, 2, 3]],
+        };
+        let raw = bincode::serde::encode_to_vec(&v3, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let out = entities_v3_to_v4(&bytes).expect("arrow lifts");
+        assert_eq!(u32::from_le_bytes([out[4], out[5], out[6], out[7]]), 4);
+        let kind = out[8];
+        let len = u64::from_le_bytes(out[9..17].try_into().unwrap()) as usize;
+        let body: Vec<u8> = match kind {
+            COMP_NONE => out[17..].to_vec(),
+            _ => decode_zstd(&out[17..], len).unwrap(),
+        };
+        let (v4, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+            &body, cfg,
+        )
+        .unwrap();
+        assert_eq!(v4.format_version, 4);
+        assert_eq!(v4.mobs.len(), 1);
+        assert!(!v4.mobs[0].tamed);
+        assert_eq!(v4.mobs[0].temper, 0);
+        assert!(v4.mobs[0].persistent, "v3 fields carry through");
+        assert_eq!(v4.structure_mob_anchors, vec![[1, 2, 3]]);
     }
 
     #[test]

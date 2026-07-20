@@ -63,6 +63,32 @@ pub(crate) fn tick_mobs(voxel: &mut Voxel, dt: f32) {
     if voxel.mob_tick_accum > MOB_TICK_DT {
         voxel.mob_tick_accum = 0.0;
     }
+    pin_rider(voxel);
+}
+
+/// W348: glue the rider to the mount every FRAME, lerping the 20 Hz
+/// mob step with the same prev->cur fraction the renderer uses (a
+/// raw 20 Hz camera pin visibly judders at high FPS). Mirrors the
+/// minecart pin; update_play zeroed the walk velocity already.
+fn pin_rider(voxel: &mut Voxel) {
+    let Some(id) = voxel.riding_mob else { return };
+    match voxel.mobs.iter().find(|m| m.id == id) {
+        Some(h) if h.dying <= 0.0 => {
+            let t = (voxel.mob_tick_accum / MOB_TICK_DT).clamp(0.0, 1.0);
+            let prev =
+                voxel.mob_prev_pos.get(&h.id).copied().unwrap_or(h.pos);
+            let eye = super::riding::rider_eye(h.kind);
+            voxel.player_pos = glam::Vec3::new(
+                prev[0] + (h.pos[0] - prev[0]) * t,
+                prev[1] + (h.pos[1] - prev[1]) * t + eye,
+                prev[2] + (h.pos[2] - prev[2]) * t,
+            );
+            voxel.player_vel = glam::Vec3::ZERO;
+            voxel.grounded = true;
+            voxel.fall_start_y = None;
+        }
+        _ => voxel.riding_mob = None,
+    }
 }
 
 /// One fixed-timestep mob AI tick (the former per-frame body): HP regen,
@@ -396,6 +422,80 @@ fn step_one(
                     // Close enough: stand still, face the food.
                     m.strolling = false;
                     m.target = m.pos;
+                }
+            }
+        }
+    }
+    // W348: a ridden horse/donkey overrides every goal above.
+    // TAMED: the rider steers (MC tickRidden - yaw copies the
+    // rider, input pre-scaled in update_play, speed = the per-horse
+    // MOVEMENT_SPEED attribute, Space jumps by JUMP_STRENGTH).
+    // UNTAMED: RunAroundLikeCrazyGoal verbatim - sprint to random
+    // nearby points at 1.2x; each tick has a 1/50 chance to roll
+    // rand(100) < temper -> tame, else temper += 5 and the rider
+    // is thrown with the angry bray.
+    if voxel.riding_mob == Some(m.id) && m.dying <= 0.0 {
+        if m.tamed {
+            let yaw = voxel.player_yaw;
+            let (f, s) = (voxel.riding_wish[0], voxel.riding_wish[1]);
+            let (fx, fz) = (yaw.cos(), -yaw.sin());
+            let (rx, rz) = (yaw.sin(), yaw.cos());
+            let wx = fx * f + rx * s;
+            let wz = fz * f + rz * s;
+            m.yaw = crate::entity_model::animation::wrap_angle(yaw);
+            // Input magnitude scales the gallop (backing crawls
+            // at the 0.25 factor update_play already applied).
+            speed = super::riding::riding_speed(m.kind, m.id)
+                * f.abs().max(s.abs()).min(1.0);
+            if wx * wx + wz * wz > 1e-4 {
+                m.strolling = true;
+                m.target =
+                    [m.pos[0] + wx * 8.0, m.pos[1], m.pos[2] + wz * 8.0];
+                m.retarget_at = (day_time + 30.0).rem_euclid(DAY_LENGTH_S);
+            } else {
+                m.strolling = false;
+                m.target = m.pos;
+            }
+            if voxel.riding_jump && m.vy == 0.0 {
+                m.vy = super::riding::jump_power(m.kind, m.id);
+                if m.kind == super::kinds::KIND_HORSE {
+                    voxel.sfx_at("mob/horse/jump", m.pos, |_, _| {});
+                }
+            }
+            voxel.riding_jump = false;
+        } else {
+            speed = super::riding::riding_speed(m.kind, m.id) * 1.2;
+            let arrived = {
+                let ddx = m.target[0] - m.pos[0];
+                let ddz = m.target[2] - m.pos[2];
+                ddx * ddx + ddz * ddz < 1.0
+            };
+            if !m.strolling || arrived {
+                m.strolling = true;
+                m.target = [
+                    m.pos[0] + (rng.next_f32() * 2.0 - 1.0) * 5.0,
+                    m.pos[1],
+                    m.pos[2] + (rng.next_f32() * 2.0 - 1.0) * 5.0,
+                ];
+                m.retarget_at = (day_time + 5.0).rem_euclid(DAY_LENGTH_S);
+            }
+            if rng.next_f32() < (dt * 20.0) / 50.0 {
+                let roll = (rng.next_f32() * 100.0) as u8;
+                if super::riding::tame_roll(m.temper, roll) {
+                    m.tamed = true;
+                    voxel.chat_log.push((
+                        std::time::Instant::now(),
+                        "* tamed".to_string(),
+                    ));
+                } else {
+                    m.temper = (m.temper + 5).min(100);
+                    voxel.riding_mob = None;
+                    let stem = if m.kind == super::kinds::KIND_DONKEY {
+                        "mob/donkey/angry"
+                    } else {
+                        "mob/horse/angry"
+                    };
+                    voxel.sfx_at(stem, m.pos, |_, _| {});
                 }
             }
         }
@@ -1101,6 +1201,94 @@ mod tests {
             // the sim did not crash and the corpse is fading.
             let _ = converted;
         }
+    }
+
+    /// W348: a tamed ridden horse follows the rider's forward wish
+    /// and the rider stays pinned to the saddle; an untamed mount
+    /// with temper 0 always throws the rider (and the buck raises
+    /// temper by the vanilla +5).
+    #[test]
+    fn w348_riding_steers_and_untamed_bucks() {
+        let mut v = crate::Voxel::new();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for cy in -1..=1 {
+                    v.world.insert_chunk([cx, cy, cz], Chunk::filled(BlockId(0)));
+                }
+            }
+        }
+        for x in -14..=14 {
+            for z in -14..=14 {
+                v.world.set([x, 3, z], BlockId(1));
+            }
+        }
+        let mut horse = crate::mob::state::MobState::new_natural(
+            1,
+            super::super::kinds::KIND_HORSE,
+            [0.5, 4.0, 0.5],
+            [0.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            22.0,
+        );
+        horse.tamed = true;
+        horse.persistent = true;
+        v.mobs.push(horse);
+        v.riding_mob = Some(1);
+        v.riding_wish = [1.0, 0.0];
+        v.player_yaw = 0.0; // forward = +X
+        for _ in 0..40 {
+            v.net_tick = v.net_tick.wrapping_add(1);
+            tick_mobs(&mut v, 0.05);
+        }
+        let h = v.mobs.iter().find(|m| m.id == 1).unwrap();
+        assert!(h.pos[0] > 3.0, "steered forward, x = {}", h.pos[0]);
+        let eye = crate::mob::riding::rider_eye(h.kind);
+        let d = (v.player_pos
+            - glam::Vec3::new(h.pos[0], h.pos[1] + eye, h.pos[2]))
+        .length();
+        assert!(d < 1.5, "rider pinned to the saddle (d = {d})");
+
+        // Untamed: temper 0 -> the crazy-run roll always ejects.
+        let mut v2 = crate::Voxel::new();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for cy in -1..=1 {
+                    v2.world
+                        .insert_chunk([cx, cy, cz], Chunk::filled(BlockId(0)));
+                }
+            }
+        }
+        for x in -14..=14 {
+            for z in -14..=14 {
+                v2.world.set([x, 3, z], BlockId(1));
+            }
+        }
+        let mut wild = crate::mob::state::MobState::new_natural(
+            2,
+            super::super::kinds::KIND_HORSE,
+            [0.5, 4.0, 0.5],
+            [0.5, 4.0, 0.5],
+            0.0,
+            0.0,
+            22.0,
+        );
+        wild.persistent = true;
+        v2.mobs.push(wild);
+        v2.riding_mob = Some(2);
+        for _ in 0..400 {
+            // net_tick seeds the per-tick rng in game (advanced by
+            // the net dispatch each frame); step it here too.
+            v2.net_tick = v2.net_tick.wrapping_add(1);
+            tick_mobs(&mut v2, 0.05);
+            if v2.riding_mob.is_none() {
+                break;
+            }
+        }
+        assert!(v2.riding_mob.is_none(), "temper-0 mount must buck");
+        let w = v2.mobs.iter().find(|m| m.id == 2).unwrap();
+        assert!(w.temper >= 5, "buck raises temper (got {})", w.temper);
+        assert!(!w.tamed);
     }
 
     /// W339: a golem standing next to a zombie batters it on the

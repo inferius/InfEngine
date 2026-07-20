@@ -145,6 +145,8 @@ impl Voxel {
         self.carts.clear();
         self.remote_carts.clear();
         self.riding_cart = None;
+        self.riding_mob = None;
+        self.riding_jump = false;
         self.cart_input = 0.0;
         self.cart_dismount_pending = false;
         self.cart_net_accum = 0.0;

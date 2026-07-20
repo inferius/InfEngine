@@ -904,6 +904,32 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::minecart::mount(vx, cart_id);
             cart_mounted = true;
         }
+        // W348: RMB on an adult horse/donkey mounts it (MC
+        // doPlayerRide - the rider's rotation snaps to the mount).
+        // Host/offline only, like the cart; client riding is the
+        // same MP follow-up.
+        if rmb
+            && !fed
+            && !bucket_scooped
+            && !cart_mounted
+            && !vx.any_panel_open()
+            && vx.riding_mob.is_none()
+            && vx.riding_cart.is_none()
+            && !matches!(vx.net, NetRole::Client { .. })
+            && let Some(mid) = attack_mob
+            && let Some(h) = vx.mobs.iter().find(|m| {
+                m.id == mid
+                    && crate::mob::riding::is_rideable(m.kind)
+                    && m.baby_left <= 0.0
+                    && m.dying <= 0.0
+            })
+        {
+            vx.player_yaw = h.yaw;
+            vx.riding_mob = Some(mid);
+            vx.riding_wish = [0.0, 0.0];
+            vx.riding_jump = false;
+            vx.rmb_pending = false;
+        }
         // W319: RMB on a villager opens the trade panel (MC
         // interact). Runs before the block cascade so aiming at a
         // villager never places a block through them.

@@ -37,6 +37,8 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             age_seconds: 0.0,
             persistent: m.persistent,
             baby_left: m.baby_left,
+            tamed: m.tamed,
+            temper: m.temper,
         })
         .collect();
     // Deterministic order keeps identical saves byte-identical.
@@ -90,6 +92,7 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
     voxel.carts.clear();
     voxel.remote_carts.clear();
     voxel.riding_cart = None;
+    voxel.riding_mob = None;
     for m in entities.mobs {
         // Drop mobs with zero / negative health - they were dead on
         // last save and the runtime would only despawn them again.
@@ -108,6 +111,9 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         // W302 (v3): persistence + babyhood survive reload.
         mob.persistent = m.persistent;
         mob.baby_left = m.baby_left;
+        // W348 (v4): tame state survives reload.
+        mob.tamed = m.tamed;
+        mob.temper = m.temper;
         voxel.mobs.push(mob);
     }
     // W302: the spawned-anchor set (v2 saves migrate with an empty

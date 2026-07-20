@@ -252,6 +252,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         3,
         super::entities::entities_v2_to_v3,
     );
+    // W348: entities v3 -> v4 adds per-mob tamed/temper (horse
+    // taming survives reload).
+    reg.register(
+        SaveKind::Entities,
+        3,
+        4,
+        super::entities::entities_v3_to_v4,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

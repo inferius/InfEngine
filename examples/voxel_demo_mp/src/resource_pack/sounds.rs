@@ -258,6 +258,10 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/iron_golem/death", "entity.iron_golem.death"),
     // W339: the defense swing.
     ("mob/iron_golem/attack", "entity.iron_golem.attack"),
+    // W348: riding + taming.
+    ("mob/horse/angry", "entity.horse.angry"),
+    ("mob/horse/jump", "entity.horse.jump"),
+    ("mob/donkey/angry", "entity.donkey.angry"),
     // W322: horse.
     ("mob/horse/say", "entity.horse.ambient"),
     ("mob/horse/hurt", "entity.horse.hurt"),

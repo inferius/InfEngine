@@ -916,6 +916,14 @@ pub(crate) struct Voxel {
     /// W343: per-creeper swell seconds (0..1.5); render reads the
     /// flash/inflate from here, the AI owns the state machine.
     pub(crate) mob_swell: std::collections::HashMap<u32, f32>,
+    /// W348: mob id the local player is riding (horse/donkey;
+    /// host/offline only - client mount is an MP follow-up).
+    pub(crate) riding_mob: Option<u32>,
+    /// W348: rider input in mount-local space [forward, strafe],
+    /// already MC-scaled (back rows x0.25, sideways x0.5).
+    pub(crate) riding_wish: [f32; 2],
+    /// W348: space held - the AI consumes it on ground contact.
+    pub(crate) riding_jump: bool,
     /// W338: live primed TNT (host authoritative).
     pub(crate) primed_tnt: Vec<crate::tnt::PrimedTnt>,
     pub(crate) next_tnt_id: u32,
