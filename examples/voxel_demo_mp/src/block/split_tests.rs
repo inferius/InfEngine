@@ -71,3 +71,15 @@ fn flag_helpers_still_resolve() {
     assert!(super::block_is_liquid(BlockId(LAVA_ID)));
     assert!(!super::block_is_aabb_passable(BlockId(1))); // stone
 }
+
+/// W357: AIR (id 0) has NO `BLOCK_TYPES` row, so the unknown-id
+/// fallback in `block_is_opaque` makes `block_fully_occludes(air)`
+/// return TRUE. Every caller of the predicate MUST air-guard first -
+/// the W355 in-wall overlay didn't and tinted the whole game ~95%
+/// black (R18). Pin the trap: if a future air registry row flips
+/// this to false, the guards can be revisited consciously.
+#[test]
+fn w357_air_fully_occludes_is_a_trap() {
+    assert!(BlockId(0).is_air());
+    assert!(super::block_fully_occludes(BlockId(0)));
+}

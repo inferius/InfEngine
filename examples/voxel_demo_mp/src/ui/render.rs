@@ -427,7 +427,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 (p.y - 0.05).floor() as i32,
                 p.z.floor() as i32,
             ];
-            crate::block::block_fully_occludes(vx.world.get(v))
+            let b = vx.world.get(v);
+            // W357: AIR (id 0) has no registry row, so
+            // `block_fully_occludes` falls into `block_is_opaque`'s
+            // unknown-id `unwrap_or(true)` fallback - the overlay
+            // was ON for the entire game whenever the eye sat in
+            // plain air (= always), tinting the whole world ~95%
+            // black (the R18 "totally dark even in full daylight,
+            // menu looks brighter" report - the overlay only draws
+            // in the Playing state, never over menus).
+            !b.is_air() && crate::block::block_fully_occludes(b)
         };
         let portal_overlay = {
             let warm = vx.portal_in_ticks as f32
