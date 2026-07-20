@@ -37,6 +37,7 @@ impl Voxel {
             splash_sfx_cooldown: 0.0,
             chunk_meshes: HashMap::new(),
             disk_backed: HashSet::new(),
+            chest_render_positions: HashSet::new(),
             lod_meshes: HashMap::new(),
             lod_pending: BinaryHeap::new(),
             lod_pending_set: HashSet::new(),

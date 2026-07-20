@@ -255,6 +255,11 @@ pub(crate) fn draw_chests(
     // ender chests, hoppers all live there). Only CHEST_ID positions
     // render the chest entity model - the rest draw as their own cube.
     world: &infengine_voxel::World,
+    // W353: chest BLOCK positions from the worldgen scan + placement.
+    // A worldgen chest has no container until first opened, so
+    // rendering from the container store alone left structure chests
+    // invisible.
+    known: &std::collections::HashSet<[i32; 3]>,
 ) {
     if !meshes.loaded() {
         return;
@@ -266,7 +271,12 @@ pub(crate) fn draw_chests(
     let is_open = |p: [i32; 3]| -> bool {
         open_local == Some(p) || viewers.contains_key(&p)
     };
-    for (&pos, _) in chests.iter() {
+    let mut seen: std::collections::HashSet<[i32; 3]> =
+        std::collections::HashSet::new();
+    for pos in known.iter().copied().chain(chests.keys().copied()) {
+        if !seen.insert(pos) {
+            continue;
+        }
         // W172: skip barrels / ender chests / hoppers - they share the
         // store but render as their own cube, not a chest entity.
         if !is_chest(pos) {

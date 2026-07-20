@@ -449,10 +449,12 @@ impl Voxel {
                 self.pending_lighting_segments.pop_front()
             }
         } {
+            let seg_t0 = std::time::Instant::now();
             let Some(seg) = self.pending_lighting_chunks.remove(&key)
             else {
                 continue;
             };
+            let _seg_probe = SegProbe { t0: seg_t0, chunks: seg.len() };
             // Snapshot: segment chunks + face-neighbours (BFS frontier
             // correctness at chunk edges), cloned off the live world.
             let mut snap_entries: Map<ChunkCoord, Chunk> = Map::new();
@@ -685,6 +687,28 @@ impl Voxel {
     }
 }
 
+/// W353: one lighting-segment dispatch probe - the R17 log showed
+/// 20-50 ms `light_tick` spikes with no attribution. If a SINGLE
+/// segment snapshot+dispatch exceeds the drain budget, this names
+/// the culprit (segment chunk count) in the log.
+struct SegProbe {
+    t0: std::time::Instant,
+    chunks: usize,
+}
+
+impl Drop for SegProbe {
+    fn drop(&mut self) {
+        let ms = self.t0.elapsed().as_secs_f32() * 1000.0;
+        if ms > 8.0 {
+            tracing::warn!(
+                ms,
+                chunks = self.chunks,
+                "W353: slow lighting-segment dispatch",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// W334: repeat marks of the same 2x2 chunk column must merge
@@ -705,3 +729,4 @@ mod tests {
         assert_eq!(v.pending_lighting_segments.len(), 2);
     }
 }
+

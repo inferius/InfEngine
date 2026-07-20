@@ -304,6 +304,12 @@ pub(crate) fn apply_block_break(
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
         }
+        // W353: drop the render-set entry with the block (the
+        // container may not even exist for an unopened worldgen
+        // chest).
+        if broken.0 == CHEST_ID {
+            vx.chest_render_positions.remove(&voxel);
+        }
         // Chest break: drain contents as drops, drop the container.
         // W169/W170/W172: barrel + ender chest + hopper share the
         // chest store.

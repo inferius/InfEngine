@@ -131,6 +131,13 @@ pub(crate) struct Voxel {
     /// gets ONE redundant write on its first unload, then lands
     /// here. Cleared on world/dim switch.
     pub(crate) disk_backed: std::collections::HashSet<ChunkCoord>,
+    /// W353: every CHEST_ID block position in the loaded world, fed
+    /// by the worker side-effect scan (gen AND disk-load paths) plus
+    /// player placement. `draw_chests` renders from this set - the
+    /// old source was the CONTAINER store, and a worldgen chest only
+    /// mints its container lazily, so structure chests were
+    /// invisible until first opened (the R17 report).
+    pub(crate) chest_render_positions: std::collections::HashSet<[i32; 3]>,
     /// W321: dedup set for `lod_pending` + in-flight tiles.
     pub(crate) lod_pending_set: HashSet<[i32; 2]>,
     /// W333: FAR shells (level 2, 4x4-chunk tiles keyed by tile

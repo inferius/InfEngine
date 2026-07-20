@@ -348,6 +348,8 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             needs_rail_remesh = true;
                         }
                         ChunkSideEffect::DungeonChest { pos: wv, table } => {
+                            // W353: the render set - see draw_chests.
+                            vx.chest_render_positions.insert(*wv);
                             // W242: mint the structure chest ONCE with a
                             // seed+position-deterministic loot roll. A
                             // container that already exists (saved world,
@@ -867,6 +869,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         water,
                         y_min: res.y_min,
                         y_max: res.y_max,
+                        y_surface: res.y_surface,
                         water_tint: res.water_tint,
                     },
                 );
@@ -1161,6 +1164,7 @@ fn rescan_chunk_radius(
     vx.torch_orient.retain(|p, _| in_keep(p));
     vx.fires.retain(|p, _| in_keep(p));
     vx.snow_positions.retain(|p, _| in_keep(p));
+    vx.chest_render_positions.retain(|p| in_keep(p));
     vx.liquid_positions.retain(|p| in_keep(p));
     vx.liquid_level.retain(|p, _| in_keep(p));
     // W198.15: the lava subset was never pruned on unload, leaving
@@ -1345,7 +1349,7 @@ fn rescan_lod_ring(
     // full-res meshes anywhere in their column.
     let keep_sq = (lod_dist + 2) * (lod_dist + 2);
     let mut drop_keys: Vec<[i32; 2]> = Vec::new();
-    for k in vx.lod_meshes.keys() {
+    for (k, t) in vx.lod_meshes.iter() {
         let dx = k[0] - player_chunk[0];
         let dz = k[1] - player_chunk[2];
         let d = dx * dx + dz * dz;
@@ -1354,8 +1358,19 @@ fn rescan_lod_ring(
             continue;
         }
         if d <= view_sq {
-            let covered = (cy_min..=cy_max)
-                .any(|cy| vx.chunk_meshes.contains_key(&[k[0], cy, k[1]]));
+            // W353: release the shell only once the SURFACE chunk of
+            // the column has a full-res mesh. "Any chunk meshed"
+            // dropped the shell when a cave slice arrived first and
+            // the visible terrain blinked out for a beat (the R17
+            // "remove the LOD only after the real surface shows").
+            let scy = (t.y_surface.floor() as i32)
+                .div_euclid(infengine_voxel::CHUNK_SIZE as i32)
+                .clamp(cy_min, cy_max);
+            let covered =
+                vx.chunk_meshes.contains_key(&[k[0], scy, k[1]])
+                    || (cy_min..=cy_max).all(|cy| {
+                        vx.chunk_meshes.contains_key(&[k[0], cy, k[1]])
+                    });
             if covered {
                 drop_keys.push(*k);
             }

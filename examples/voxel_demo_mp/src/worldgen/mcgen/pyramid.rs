@@ -425,9 +425,15 @@ fn carve(w: &mut dyn ShaftWorld, p: &Pyramid, rng: &mut SplitMix64) {
     boxed(w, p, (8, -8, 8), (12, -1, 12), SANDSTONE, SANDSTONE, false);
     boxed(w, p, (9, -11, 9), (11, -1, 11), 0, 0, false);
     put(w, p, 10, -11, 10, plate);
-    // MC rings the floor below with TNT (generateBox 9,-13,9 ->
-    // 11,-13,11); no TNT block exists yet, so the trap stays a dud
-    // pit - deliberately NOT substituted.
+    // W353: the TNT trap under the pit floor - MC generateBox
+    // 9,-13,9 -> 11,-13,11 (TNT exists since W338, ending the old
+    // dud-pit note). Stepping on the plate still needs a redstone
+    // hookup follow-up; the blocks match vanilla now.
+    for tx in 9..=11 {
+        for tz in 9..=11 {
+            put(w, p, tx, -13, tz, crate::block::TNT_ID);
+        }
+    }
     for (ax, az, bx, bz) in [(8, 10, 7, 10), (12, 10, 13, 10), (10, 8, 10, 7), (10, 12, 10, 13)] {
         put(w, p, ax, -11, az, 0);
         put(w, p, ax, -10, az, 0);

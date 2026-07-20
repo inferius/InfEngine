@@ -316,6 +316,7 @@ pub(crate) fn apply_block_place(
     }
     // Chest place: empty 27-slot container.
     if block.0 == CHEST_ID {
+        vx.chest_render_positions.insert(target_voxel);
         vx.chests
             .entry(target_voxel)
             .or_insert_with(block::chest::new_chest);

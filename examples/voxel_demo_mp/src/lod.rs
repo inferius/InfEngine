@@ -77,6 +77,12 @@ pub(crate) struct LodTileResult {
     pub(crate) dim: String,
     pub(crate) y_min: f32,
     pub(crate) y_max: f32,
+    /// W353: highest TERRAIN floor in the tile (impostor canopies
+    /// push y_max above it). The full-res handover keys on the chunk
+    /// containing this height: dropping the shell when the FIRST
+    /// chunk of the column meshed (often a cave slice) left the
+    /// surface bare for a beat.
+    pub(crate) y_surface: f32,
     pub(crate) opaque: (Vec<MeshVertex>, Vec<u32>),
     pub(crate) water: (Vec<MeshVertex>, Vec<u32>),
     pub(crate) water_tint: [f32; 3],
@@ -88,6 +94,8 @@ pub(crate) struct LodTile {
     pub(crate) water: Option<MeshHandle>,
     pub(crate) y_min: f32,
     pub(crate) y_max: f32,
+    /// W353: see `LodTileResult::y_surface`.
+    pub(crate) y_surface: f32,
     pub(crate) water_tint: [f32; 3],
 }
 
@@ -442,12 +450,19 @@ pub(crate) fn build_lod_tile(job: &LodTileJob) -> LodTileResult {
         y_min = 0.0;
         y_max = 0.0;
     }
+    let y_surface = h
+        .iter()
+        .flatten()
+        .copied()
+        .max()
+        .unwrap_or(0) as f32;
     LodTileResult {
         key: job.key,
         level: 1,
         dim: job.dim.clone(),
         y_min,
         y_max,
+        y_surface,
         opaque: (ov, oi),
         water: (wv, wi),
         water_tint,
@@ -587,6 +602,8 @@ pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
         dim: job.dim.clone(),
         y_min,
         y_max,
+        // Far ring: geometry is bare terrain, y_max IS the surface.
+        y_surface: y_max,
         opaque: (ov, oi),
         water: (wv, wi),
         water_tint,

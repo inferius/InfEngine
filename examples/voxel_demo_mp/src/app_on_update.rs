@@ -2018,6 +2018,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.player_pos,
             dt,
             &vx.world,
+            &vx.chest_render_positions,
         );
         // W134: minecart entities (local sim + remote snapshots).
         render::minecarts::draw_minecarts(
