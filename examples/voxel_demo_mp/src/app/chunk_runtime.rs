@@ -50,6 +50,8 @@ impl Voxel {
         }
         self.pending_chunks.clear();
         self.pending_set.clear();
+        self.pending_unload.clear();
+        self.unload_retain_due = false;
         self.in_flight_chunks.clear();
         self.lod_pending.clear();
         self.lod_pending_set.clear();
@@ -300,6 +302,8 @@ impl Voxel {
         // Clear any stale queue from a previous session.
         self.pending_chunks.clear();
         self.pending_set.clear();
+        self.pending_unload.clear();
+        self.unload_retain_due = false;
         self.in_flight_chunks.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();

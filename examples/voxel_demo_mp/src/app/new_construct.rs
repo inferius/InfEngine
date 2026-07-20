@@ -46,6 +46,8 @@ impl Voxel {
             lod2_pending_set: HashSet::new(),
             pending_chunks: BinaryHeap::new(),
             pending_set: HashSet::new(),
+            pending_unload: Vec::new(),
+            unload_retain_due: false,
             in_flight_chunks: HashSet::new(),
             pending_remesh: VecDeque::new(),
             pending_remesh_set: HashSet::new(),

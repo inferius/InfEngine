@@ -83,6 +83,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         vx.last_stream_origin = Some(origin);
         rescan_chunk_radius(vx, player_chunk, view_dist, unload_dist, cy_min, cy_max);
     }
+    // W359: retire a bounded slice of the pending unload set each
+    // frame (no-op when empty).
+    drain_unload_batch(vx, player_chunk, unload_dist, cy_min, cy_max);
 
     // Dispatch pending chunks to the worker pool.
     //
@@ -1001,7 +1004,6 @@ fn rescan_chunk_radius(
     cy_min: i32,
     cy_max: i32,
 ) {
-    let cs = CHUNK_SIZE as i32;
     // W232: sub-phase probe. The W198.16 hitch line blamed
     // "stream 111ms" on chunk crossings while travelling without
     // saying which part - name it (queue scan / unload collect /
@@ -1048,13 +1050,126 @@ fn rescan_chunk_radius(
         })
         .collect();
     _ms_collect = _t.elapsed().as_secs_f32() * 1000.0;
-    if to_unload.is_empty() {
+    // W359: COLLECT only. The retire work (mesh removal, save
+    // payload, world removal, side-map retains) moves to the
+    // per-frame `drain_unload_batch` - a ~700-chunk edge crossing
+    // used to pay queue + collect + mesh + payload + retain in ONE
+    // frame (8-23 ms in the R19 log, the travel FPS dips). Replacing
+    // the list (not appending) also self-heals: chunks that came
+    // back inside the keep ring simply drop off it.
+    let mut pending: Vec<ChunkCoord> = to_unload.into_iter().collect();
+    pending.sort_unstable_by_key(|c| {
+        let dx = c[0] - player_chunk[0];
+        let dz = c[2] - player_chunk[2];
+        dx * dx + dz * dz
+    });
+    vx.unload_retain_due = vx.unload_retain_due || !pending.is_empty();
+    vx.pending_unload = pending;
+    let _ms_all = _t_all.elapsed().as_secs_f32() * 1000.0;
+    if _ms_all > 5.0 {
+        tracing::warn!(
+            total_ms = _ms_all,
+            queue_ms = _ms_queue,
+            collect_ms = _ms_collect,
+            pending_unload = vx.pending_unload.len(),
+            "W232: slow chunk-radius rescan"
+        );
+    }
+}
+
+/// W359: retire up to a batch of pending unloads this frame (mesh
+/// and liquid-mesh removal, the async save payload, the world map
+/// removal); once the queue is empty, run the box-based side-map
+/// retain sweep exactly once per crossing. Every phase that used to
+/// stack into the boundary-cross frame now lands in its own bounded
+/// slice.
+fn drain_unload_batch(
+    vx: &mut Voxel,
+    player_chunk: [i32; 3],
+    unload_dist: i32,
+    cy_min: i32,
+    cy_max: i32,
+) {
+    let cs = CHUNK_SIZE as i32;
+    if vx.pending_unload.is_empty() {
+        if !vx.unload_retain_due {
+            return;
+        }
+        // Retain pass: prune side maps against the keep box. Runs in
+        // its own frame after the last batch so its 2-8 ms (whole-map
+        // sweeps over up to ~1M liquid cells) never stacks on the
+        // mesh/payload work.
+        vx.unload_retain_due = false;
+        let _t = std::time::Instant::now();
+        let min_bx = (player_chunk[0] - unload_dist) * cs;
+        let max_bx = (player_chunk[0] + unload_dist) * cs + (cs - 1);
+        let min_bz = (player_chunk[2] - unload_dist) * cs;
+        let max_bz = (player_chunk[2] + unload_dist) * cs + (cs - 1);
+        let in_keep = move |p: &[i32; 3]| {
+            p[0] >= min_bx
+                && p[0] <= max_bx
+                && p[2] >= min_bz
+                && p[2] <= max_bz
+        };
+        vx.emitter_positions.retain(|p, _| in_keep(p));
+        vx.torch_positions.retain(|p| in_keep(p));
+        // W282: portal swirl cells follow their chunks out (the scan
+        // re-adds them on stream-in).
+        // W311: portals are NOT distance-pruned - the round-trip link
+        // search (128-block MC POI radius) must see portals whose
+        // chunks streamed out. The set stays tiny.
+        vx.torch_orient.retain(|p, _| in_keep(p));
+        vx.fires.retain(|p, _| in_keep(p));
+        vx.snow_positions.retain(|p, _| in_keep(p));
+        vx.chest_render_positions.retain(|p| in_keep(p));
+        vx.liquid_positions.retain(|p| in_keep(p));
+        vx.liquid_level.retain(|p, _| in_keep(p));
+        // W198.15/W267: lava subset is column-keyed - drop whole
+        // columns outside the keep rect.
+        let min_cx = player_chunk[0] - unload_dist;
+        let max_cx = player_chunk[0] + unload_dist;
+        let min_cz = player_chunk[2] - unload_dist;
+        let max_cz = player_chunk[2] + unload_dist;
+        vx.lava_columns.retain(|c, _| {
+            c[0] >= min_cx && c[0] <= max_cx && c[1] >= min_cz && c[1] <= max_cz
+        });
+        // W242.2: spawner index + tick state follow their chunks out;
+        // the worker scan re-adds them on stream-in.
+        vx.spawner_positions.retain(|p| in_keep(p));
+        vx.spawner_states.retain(|p, _| in_keep(p));
+        vx.spawner_kinds.retain(|p, _| in_keep(p));
+        vx.spawner_spin.retain(|p, _| in_keep(p));
+        let _ms = _t.elapsed().as_secs_f32() * 1000.0;
+        if _ms > 5.0 {
+            tracing::warn!(ms = _ms, "W359: slow unload retain pass");
+        }
+        return;
+    }
+    const UNLOAD_BATCH: usize = 192;
+    let _t_all = std::time::Instant::now();
+    let mut batch: Vec<ChunkCoord> = Vec::with_capacity(UNLOAD_BATCH);
+    while batch.len() < UNLOAD_BATCH {
+        let Some(cc) = vx.pending_unload.pop() else {
+            break;
+        };
+        // The player may have turned around since the collect -
+        // anything back inside the keep ring stays loaded.
+        let dx = (cc[0] - player_chunk[0]).abs();
+        let dz = (cc[2] - player_chunk[2]).abs();
+        let out = dx > unload_dist
+            || dz > unload_dist
+            || cc[1] < cy_min - 1
+            || cc[1] > cy_max + 1;
+        if out && vx.world.chunk(cc).is_some() {
+            batch.push(cc);
+        }
+    }
+    if batch.is_empty() {
         return;
     }
     let _t = std::time::Instant::now();
-
     let renderer = vx.renderer.as_mut().expect("renderer ready");
-    for cc in &to_unload {
+    for cc in &batch {
         if let Some(subs) = vx.chunk_meshes.remove(cc) {
             for (_block, handle) in subs {
                 renderer.remove_chunk_mesh(handle);
@@ -1069,27 +1184,20 @@ fn rescan_chunk_radius(
         vx.liquid_chunk_sig.remove(cc);
         vx.liquid_remesh_backlog.remove(cc);
     }
-    _ms_mesh = _t.elapsed().as_secs_f32() * 1000.0;
+    let _ms_mesh = _t.elapsed().as_secs_f32() * 1000.0;
     let _t = std::time::Instant::now();
     // Persist edits to disk on a background thread.
     if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)
         && let Some(slug) = vx.current_world_slug.clone()
     {
         let dim = vx.current_dim.clone();
-        // W333: persist EVERY unloaded chunk, not just dirty ones.
-        // The W250 dirty-only rule made a RETURN flight regenerate
-        // the whole ring from scratch (~13 ms a chunk on a worker)
-        // while MC just reads its region files back (~0.1 ms) - the
-        // user's "I outfly the world loading" report. The workers'
-        // W46.25 disk-first path already prefers the saved file, so
-        // writing everything turns revisits into disk reads. Writes
-        // compress + land on the detached unload_writer thread; only
-        // the payload snapshot happens here.
+        // W333: persist EVERY unloaded chunk, not just dirty ones -
+        // the workers' W46.25 disk-first path turns revisits into
+        // disk reads instead of regeneration.
         // W350: the known-on-disk SET replaces the per-chunk file
-        // stat - ~700 stats per rescan cost 50-135 ms on the main
-        // thread at the world edge (Windows stat + AV latency), the
-        // R14 "extreme drops while generating" hitches.
-        let dirty_unload: std::collections::HashSet<ChunkCoord> = to_unload
+        // stat (~700 stats per rescan cost 50-135 ms on the main
+        // thread at the world edge).
+        let dirty_unload: std::collections::HashSet<ChunkCoord> = batch
             .iter()
             .filter(|cc| {
                 vx.world.dirty().contains(*cc)
@@ -1103,9 +1211,7 @@ fn rescan_chunk_radius(
         for cc in &dirty_unload {
             vx.world.clear_dirty_chunk(*cc);
         }
-        // W233: ONE pass per side map for the whole batch (the
-        // per-chunk build_chunk_payload scanned every side map per
-        // chunk = O(unloaded x map), ~18 ms per crossing at VD 12).
+        // W233: ONE pass per side map for the whole batch.
         let payloads = world_save::runtime::build_chunk_payloads(vx, &dirty_unload);
         if !payloads.is_empty() {
             std::thread::Builder::new()
@@ -1127,80 +1233,19 @@ fn rescan_chunk_radius(
                 .ok();
         }
     }
-    // Prune side maps for unloaded chunk volumes.
-    //
-    // W198.15: ONE pass per map, not one per unloaded chunk. The old
-    // loop ran a full `retain()` for EVERY chunk in `to_unload`, i.e.
-    // O(unloaded * all_positions) - a multi-million-op main-thread
-    // spike, the travel judder.
-    _ms_payload = _t.elapsed().as_secs_f32() * 1000.0;
-    let _t = std::time::Instant::now();
-    // W232: prune side maps against the KEEP BOX, not the `to_unload`
-    // set. A cell belongs to an unloaded volume iff its chunk sits
-    // outside the keep ring (the maps only ever hold cells of loaded
-    // chunks, and any stale outside-the-box leftovers SHOULD go too),
-    // so the per-entry test is four integer compares in block space -
-    // no div_euclid, no [i32;3] SipHash, no HashSet probe. The old
-    // `to_unload.contains(&chunk_of(p))` closures cost 24-42 ms per
-    // chunk-boundary crossing over ocean (8 maps x up to 1.3M liquid
-    // entries) = the user's "streaming causes frame drops".
-    let min_bx = (player_chunk[0] - unload_dist) * cs;
-    let max_bx = (player_chunk[0] + unload_dist) * cs + (cs - 1);
-    let min_bz = (player_chunk[2] - unload_dist) * cs;
-    let max_bz = (player_chunk[2] + unload_dist) * cs + (cs - 1);
-    let in_keep = move |p: &[i32; 3]| {
-        p[0] >= min_bx
-            && p[0] <= max_bx
-            && p[2] >= min_bz
-            && p[2] <= max_bz
-    };
-    vx.emitter_positions.retain(|p, _| in_keep(p));
-    vx.torch_positions.retain(|p| in_keep(p));
-    // W282: portal swirl cells follow their chunks out (the scan
-    // re-adds them on stream-in).
-    // W311: portals are NOT distance-pruned - the round-trip link
-    // search (128-block MC POI radius) must see portals whose chunks
-    // streamed out. The set stays tiny (a few cells per frame built).
-    vx.torch_orient.retain(|p, _| in_keep(p));
-    vx.fires.retain(|p, _| in_keep(p));
-    vx.snow_positions.retain(|p, _| in_keep(p));
-    vx.chest_render_positions.retain(|p| in_keep(p));
-    vx.liquid_positions.retain(|p| in_keep(p));
-    vx.liquid_level.retain(|p, _| in_keep(p));
-    // W198.15: the lava subset was never pruned on unload, leaving
-    // stale entries for unloaded chunks. W267: column-keyed - drop
-    // whole columns outside the keep rect (the fire tick still
-    // re-validates surviving entries).
-    let min_cx = player_chunk[0] - unload_dist;
-    let max_cx = player_chunk[0] + unload_dist;
-    let min_cz = player_chunk[2] - unload_dist;
-    let max_cz = player_chunk[2] + unload_dist;
-    vx.lava_columns.retain(|c, _| {
-        c[0] >= min_cx && c[0] <= max_cx && c[1] >= min_cz && c[1] <= max_cz
-    });
-    // W242.2: spawner index + tick state follow their chunks out; the
-    // worker scan re-adds the positions when the chunk streams back
-    // (the delay countdown restarts, like a freshly-loaded MC chunk
-    // whose block entity re-inits from defaults when NBT is absent).
-    vx.spawner_positions.retain(|p| in_keep(p));
-    vx.spawner_states.retain(|p, _| in_keep(p));
-    vx.spawner_kinds.retain(|p, _| in_keep(p));
-    vx.spawner_spin.retain(|p, _| in_keep(p));
-    for cc in &to_unload {
+    let _ms_payload = _t.elapsed().as_secs_f32() * 1000.0;
+    for cc in &batch {
         vx.world.remove_chunk(*cc);
     }
-    let _ms_retain = _t.elapsed().as_secs_f32() * 1000.0;
     let _ms_all = _t_all.elapsed().as_secs_f32() * 1000.0;
     if _ms_all > 5.0 {
         tracing::warn!(
             total_ms = _ms_all,
-            queue_ms = _ms_queue,
-            collect_ms = _ms_collect,
             mesh_ms = _ms_mesh,
             payload_ms = _ms_payload,
-            retain_ms = _ms_retain,
-            unloaded = to_unload.len(),
-            "W232: slow chunk-radius rescan"
+            batch = batch.len(),
+            remaining = vx.pending_unload.len(),
+            "W359: slow unload drain"
         );
     }
 }
