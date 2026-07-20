@@ -131,6 +131,32 @@ pub(crate) fn water() -> &'static Liquid {
 pub(crate) fn lava() -> &'static Liquid {
     &LIQUIDS[1]
 }
+/// W358: the mesher's cached reader must agree with `World::get`
+/// everywhere - across chunk borders, in absent chunks, and on
+/// repeated reads that exercise the parity slots.
+#[test]
+fn w358_cached_world_matches_world_get() {
+    use crate::liquid::mesh::{BlockRead, CachedWorld};
+    let mut w = World::new();
+    w.insert_chunk([0, 0, 0], Chunk::empty());
+    w.insert_chunk([-1, 0, 0], Chunk::empty());
+    w.set([0, 5, 5], BlockId(WATER_ID));
+    w.set([-1, 5, 5], BlockId(1));
+    w.set([15, 15, 15], BlockId(WATER_ID));
+    let c = CachedWorld::new(&w);
+    for p in [
+        [0, 5, 5],
+        [-1, 5, 5],
+        [15, 15, 15],
+        [16, 5, 5],   // absent chunk -> air
+        [0, -1, 5],   // absent chunk below
+        [0, 5, 5],    // repeat: cached slot
+        [-1, 5, 5],   // repeat: neighbour slot intact
+    ] {
+        assert_eq!(BlockRead::get(&c, p), World::get(&w, p), "at {p:?}");
+    }
+}
+
 fn mk_world() -> World {
     // Single chunk at the origin so coords [0..16) on each axis are
     // writable.

@@ -66,27 +66,6 @@ impl Voxel {
         }
     }
 
-    pub(crate) fn liquid_corner_height(
-        &self,
-        vx: i32,
-        vy: i32,
-        vz: i32,
-        cx: i32,
-        cz: i32,
-        liquid_id: u16,
-    ) -> f32 {
-        liquid_corner_height_at(
-            &self.world,
-            &self.liquid_level,
-            vx,
-            vy,
-            vz,
-            cx,
-            cz,
-            liquid_id,
-        )
-    }
-
     /// Rebuild the combined water mesh when the dirty flag is
     /// set. One handle covers every visible water voxel: top
     /// face uses per-corner heights computed from the depth map,
@@ -98,10 +77,12 @@ impl Voxel {
     /// extracted verbatim from the old whole-world loop.
     fn emit_liquid_cell(
         &self,
+        w: &crate::liquid::mesh::CachedWorld,
         p: [i32; 3],
         buckets: &mut HashMap<u16, (Vec<MeshVertex>, Vec<u32>)>,
     ) {
-        let block = self.world.get(p);
+        use crate::liquid::mesh::BlockRead;
+        let block = w.get(p);
         // W203: waterlogged plant cells ARE water for the liquid mesh -
         // they emit water faces exactly like a water cell (so the sea
         // surface stays continuous over a kelp tip and the body has no
@@ -118,10 +99,11 @@ impl Voxel {
         let vx = p[0];
         let vy = p[1];
         let vz = p[2];
-        let h00 = self.liquid_corner_height(vx, vy, vz, 0, 0, liquid_id);
-        let h10 = self.liquid_corner_height(vx, vy, vz, 1, 0, liquid_id);
-        let h11 = self.liquid_corner_height(vx, vy, vz, 1, 1, liquid_id);
-        let h01 = self.liquid_corner_height(vx, vy, vz, 0, 1, liquid_id);
+        let lv = &self.liquid_level;
+        let h00 = liquid_corner_height_at(w, lv, vx, vy, vz, 0, 0, liquid_id);
+        let h10 = liquid_corner_height_at(w, lv, vx, vy, vz, 1, 0, liquid_id);
+        let h11 = liquid_corner_height_at(w, lv, vx, vy, vz, 1, 1, liquid_id);
+        let h01 = liquid_corner_height_at(w, lv, vx, vy, vz, 0, 1, liquid_id);
         let fx = vx as f32;
         let fy = vy as f32;
         let fz = vz as f32;
@@ -157,7 +139,7 @@ impl Voxel {
             // were opaque (the patchy surface from above).
             while d <= DEPTH_FULL
                 && crate::liquid::counts_as_liquid(
-                    self.world.get([vx, vy - d, vz]).0,
+                    w.get([vx, vy - d, vz]).0,
                     liquid_id,
                 )
             {
@@ -173,7 +155,7 @@ impl Voxel {
         // the solid's bottom face - visible as floating water sheets
         // from below, z-fight shimmer while swimming (the user's
         // screenshot 1).
-        let above = self.world.get([vx, vy + 1, vz]);
+        let above = w.get([vx, vy + 1, vz]);
         let above_same = crate::liquid::counts_as_liquid(above.0, liquid_id);
         let above_occludes = !above.is_air() && crate::block::block_is_opaque(above);
         if !above_same && !above_occludes {
@@ -186,7 +168,7 @@ impl Voxel {
         }
         // Side faces: only when the in-plane neighbour is open (air /
         // passable). Same-liquid cancels (shared face is interior).
-        if side_open(&self.world, vx - 1, vy, vz, liquid_id) {
+        if side_open(w, vx - 1, vy, vz, liquid_id) {
             push_quad_flow(
                 vertices,
                 indices,
@@ -200,7 +182,7 @@ impl Voxel {
                 depth,
             );
         }
-        if side_open(&self.world, vx + 1, vy, vz, liquid_id) {
+        if side_open(w, vx + 1, vy, vz, liquid_id) {
             push_quad_flow(
                 vertices,
                 indices,
@@ -214,7 +196,7 @@ impl Voxel {
                 depth,
             );
         }
-        if side_open(&self.world, vx, vy, vz - 1, liquid_id) {
+        if side_open(w, vx, vy, vz - 1, liquid_id) {
             push_quad_flow(
                 vertices,
                 indices,
@@ -228,7 +210,7 @@ impl Voxel {
                 depth,
             );
         }
-        if side_open(&self.world, vx, vy, vz + 1, liquid_id) {
+        if side_open(w, vx, vy, vz + 1, liquid_id) {
             push_quad_flow(
                 vertices,
                 indices,
@@ -245,7 +227,7 @@ impl Voxel {
         // Bottom face: only when the cell below is open (air / passable) -
         // MC's shouldRenderFace(DOWN) gate, so a cliff-edge water cell
         // shows its underside rather than sky.
-        if bottom_open(&self.world, vx, vy - 1, vz, liquid_id) {
+        if bottom_open(w, vx, vy - 1, vz, liquid_id) {
             push_quad_flow(
                 vertices,
                 indices,
@@ -465,6 +447,11 @@ impl Voxel {
         // removed as it's processed).
         let drain_budget = std::time::Duration::from_millis(budget_ms);
         let drain_start = std::time::Instant::now();
+        // W358: one chunk-pointer cache for the whole drain - the
+        // world cannot change mid-pass (no set_block below), and the
+        // mesher's neighbour reads all hit the home chunk or a face
+        // neighbour (parity slots, no eviction fights).
+        let wcache = crate::liquid::mesh::CachedWorld::new(&self.world);
         for cc in to_mesh {
             if drain_start.elapsed() >= drain_budget {
                 break;
@@ -531,7 +518,7 @@ impl Voxel {
                                     continue;
                                 }
                             }
-                            self.emit_liquid_cell([bx + lx, by + ly, bz + lz], &mut buckets);
+                            self.emit_liquid_cell(&wcache, [bx + lx, by + ly, bz + lz], &mut buckets);
                         }
                     }
                 }

@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use infengine_render::MeshVertex;
-use infengine_voxel::World;
+use infengine_voxel::{BlockId, Chunk, World, CHUNK_SIZE};
 
 use crate::block::{
     block_is_aabb_passable, block_is_washable, block_is_waterlogged,
@@ -27,13 +27,87 @@ pub(crate) fn counts_as_liquid(id: u16, liquid_id: u16) -> bool {
         || (liquid_id == crate::block::WATER_ID && block_is_waterlogged(id))
 }
 
+/// W358: read-only cell access for the liquid mesher. `World::get`
+/// is a chunk-HashMap lookup per call, and `emit_liquid_cell` makes
+/// ~20-40 of them per liquid cell (four corner heights, the depth
+/// walk, six face gates) - a shore chunk with ~2k liquid cells paid
+/// 40-60k hashes per rebuild, the sustained 7-11 ms `liqmesh`
+/// pre-render frames while moving near water (the R19 FPS-drop
+/// log). The mesher now reads through `CachedWorld`, which memoizes
+/// chunk pointers; plain `World` keeps the trait impl so the sim
+/// and the unit tests are unchanged.
+pub(crate) trait BlockRead {
+    fn get(&self, p: [i32; 3]) -> BlockId;
+}
+
+impl BlockRead for World {
+    #[inline]
+    fn get(&self, p: [i32; 3]) -> BlockId {
+        World::get(self, p)
+    }
+}
+
+/// Tiny direct-mapped chunk-pointer cache. The slot index is the
+/// chunk-coord parity on each axis, so a face neighbour on ANY axis
+/// lands in a different slot and never evicts the home chunk - the
+/// exact access pattern of the mesher's neighbour reads. Interior
+/// mutability keeps the mesher's `&self` reads free of plumbing.
+/// Valid for one rebuild pass: holding `&World` borrows the world
+/// immutably, so entries cannot go stale while it exists.
+pub(crate) struct CachedWorld<'a> {
+    world: &'a World,
+    slots: [std::cell::Cell<([i32; 3], Option<&'a Chunk>)>; 8],
+}
+
+impl<'a> CachedWorld<'a> {
+    pub(crate) fn new(world: &'a World) -> Self {
+        Self {
+            world,
+            slots: std::array::from_fn(|_| {
+                std::cell::Cell::new(([i32::MAX, i32::MAX, i32::MAX], None))
+            }),
+        }
+    }
+}
+
+impl BlockRead for CachedWorld<'_> {
+    #[inline]
+    fn get(&self, p: [i32; 3]) -> BlockId {
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            p[0].div_euclid(cs),
+            p[1].div_euclid(cs),
+            p[2].div_euclid(cs),
+        ];
+        let idx =
+            ((cc[0] & 1) | ((cc[1] & 1) << 1) | ((cc[2] & 1) << 2)) as usize;
+        let slot = &self.slots[idx];
+        let (scc, sch) = slot.get();
+        let chunk = if scc == cc {
+            sch
+        } else {
+            let ch = self.world.chunk(cc);
+            slot.set((cc, ch));
+            ch
+        };
+        match chunk {
+            Some(c) => c.get(
+                p[0].rem_euclid(cs) as usize,
+                p[1].rem_euclid(cs) as usize,
+                p[2].rem_euclid(cs) as usize,
+            ),
+            None => BlockId::AIR,
+        }
+    }
+}
+
 /// Y position of the top of a liquid voxel's slope ramp. Returns 1.0
 /// (full cube) for sources, for cells with the same liquid directly
 /// above (column), and for the falling marker (`level = 8`); else
 /// linearly interpolates from 1/9 (level 7, weakest flow) up to 7/9
 /// (level 1, strongest flow). Air / solid cells return 0.0.
-pub(crate) fn liquid_surface_height_at(
-    world: &World,
+pub(crate) fn liquid_surface_height_at<W: BlockRead>(
+    world: &W,
     level_map: &HashMap<[i32; 3], u8>,
     pos: [i32; 3],
     liquid_id: u16,
@@ -60,8 +134,8 @@ pub(crate) fn liquid_surface_height_at(
 /// snaps the corner to 1.0 (column lock - mirrors MC's
 /// `getHeight() == 1` when `hasSameAbove`).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn liquid_corner_height_at(
-    world: &World,
+pub(crate) fn liquid_corner_height_at<W: BlockRead>(
+    world: &W,
     level_map: &HashMap<[i32; 3], u8>,
     vx: i32,
     vy: i32,
@@ -199,8 +273,8 @@ pub(crate) fn distance_to_drop_at(
 /// Extracted out of the mesh build loop so a unit test can verify
 /// face emission against synthetic worlds without spinning up a
 /// renderer.
-pub(crate) fn side_open(
-    world: &World,
+pub(crate) fn side_open<W: BlockRead>(
+    world: &W,
     nx: i32,
     ny: i32,
     nz: i32,
@@ -229,8 +303,8 @@ pub(crate) fn side_open(
 ///
 /// MC's `LiquidBlockRenderer.tesselate` emits a bottom face in
 /// the same situation (`shouldRenderFace(level, pos.below(), DOWN)`).
-pub(crate) fn bottom_open(
-    world: &World,
+pub(crate) fn bottom_open<W: BlockRead>(
+    world: &W,
     nx: i32,
     ny: i32,
     nz: i32,
