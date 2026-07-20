@@ -258,6 +258,9 @@ impl Voxel {
         // already re-seeds the new dim.
         self.pending_lighting_segments.clear();
         self.pending_lighting_chunks.clear();
+        // W350: chunk files are per-dim - the arriving dim starts
+        // with an empty known-on-disk set.
+        self.disk_backed.clear();
         // Open UIs reference position-keyed containers that
         // belong to the parked dim. Close them on switch so the
         // player doesn't see a stale chest panel.

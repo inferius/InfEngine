@@ -424,8 +424,13 @@ impl Voxel {
         // velocity alone promoted the big 12 ms drain budget DURING
         // flight (the liqmesh 10-15 ms log spikes). While generation
         // is busy the small budget applies regardless of speed.
+        // W350: also require a quiet remesh queue - standing still
+        // while the frontier catches up stacked this 12 ms drain on
+        // top of the upload + lighting budgets (the R14 35 FPS dips
+        // with remesh_q ~5000).
         let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0
-            && self.pending_chunks.is_empty();
+            && self.pending_chunks.is_empty()
+            && self.pending_remesh.len() < 2048;
         let (drain_cap, budget_ms) = if stationary { (48, 12) } else { (16, 4) };
         let drain = LIQUID_CHUNKS_PER_FRAME
             .max(self.liquid_remesh_backlog.len() / 8)

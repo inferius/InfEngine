@@ -58,6 +58,7 @@ impl Voxel {
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         self.pending_seam_remesh.clear();
+        self.disk_backed.clear();
         self.pending_seam_set.clear();
         // W198.13: force the streamer to re-run its queue + unload scan
         // on the next frame (player_chunk may be numerically unchanged
@@ -302,6 +303,7 @@ impl Voxel {
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         self.pending_seam_remesh.clear();
+        self.disk_backed.clear();
         self.pending_seam_set.clear();
         // W236: fresh world entry - the Finalising step must apply
         // persisted state (load_server_state) exactly once again.

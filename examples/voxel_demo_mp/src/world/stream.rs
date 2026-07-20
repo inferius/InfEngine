@@ -1082,18 +1082,21 @@ fn rescan_chunk_radius(
         // writing everything turns revisits into disk reads. Writes
         // compress + land on the detached unload_writer thread; only
         // the payload snapshot happens here.
+        // W350: the known-on-disk SET replaces the per-chunk file
+        // stat - ~700 stats per rescan cost 50-135 ms on the main
+        // thread at the world edge (Windows stat + AV latency), the
+        // R14 "extreme drops while generating" hitches.
         let dirty_unload: std::collections::HashSet<ChunkCoord> = to_unload
             .iter()
             .filter(|cc| {
-                // Skip chunks whose file already exists AND that have
-                // no runtime edits - their bytes on disk are current.
                 vx.world.dirty().contains(*cc)
-                    || !world_save::chunks::chunk_file_exists(
-                        &slug, &dim, **cc,
-                    )
+                    || !vx.disk_backed.contains(*cc)
             })
             .copied()
             .collect();
+        for cc in &dirty_unload {
+            vx.disk_backed.insert(*cc);
+        }
         for cc in &dirty_unload {
             vx.world.clear_dirty_chunk(*cc);
         }

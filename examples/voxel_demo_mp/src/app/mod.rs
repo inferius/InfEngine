@@ -122,6 +122,15 @@ pub(crate) struct Voxel {
     pub(crate) lod_meshes: HashMap<[i32; 2], crate::lod::LodTile>,
     /// W321: LOD tiles queued for a worker, closest-first.
     pub(crate) lod_pending: BinaryHeap<crate::lod::PendingLodTile>,
+    /// W350: chunk coords whose file in THIS dim's save is known
+    /// to exist (written this session, or written by the unload
+    /// path once). Replaces the per-chunk `chunk_file_exists` stat
+    /// in the unload filter - ~700 filesystem stats per rescan were
+    /// 50-135 ms main-thread hitches at the world edge (the
+    /// payload_ms in W232). A disk-loaded chunk not in this set
+    /// gets ONE redundant write on its first unload, then lands
+    /// here. Cleared on world/dim switch.
+    pub(crate) disk_backed: std::collections::HashSet<ChunkCoord>,
     /// W321: dedup set for `lod_pending` + in-flight tiles.
     pub(crate) lod_pending_set: HashSet<[i32; 2]>,
     /// W333: FAR shells (level 2, 4x4-chunk tiles keyed by tile

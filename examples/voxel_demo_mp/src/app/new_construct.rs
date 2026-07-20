@@ -36,6 +36,7 @@ impl Voxel {
             portal_tick_accum: 0.0,
             splash_sfx_cooldown: 0.0,
             chunk_meshes: HashMap::new(),
+            disk_backed: HashSet::new(),
             lod_meshes: HashMap::new(),
             lod_pending: BinaryHeap::new(),
             lod_pending_set: HashSet::new(),

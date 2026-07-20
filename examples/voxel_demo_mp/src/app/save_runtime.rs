@@ -162,7 +162,10 @@ impl Voxel {
         let _ = writeln!(text, "hide_cursor={}", self.settings.hide_cursor);
         let _ = writeln!(text, "view_distance={}", self.settings.view_distance);
         let _ = writeln!(text, "lod_distance={}", self.settings.lod_distance);
-        let _ = writeln!(text, "lod2_distance={}", self.settings.lod2_distance);
+        // W350: v2 key - the W349 overflow wrote 0 into every
+        // config under the old key; reads heal old-key zeros to the
+        // default while the v2 key persists an explicit 0 (off).
+        let _ = writeln!(text, "lod2_distance_v2={}", self.settings.lod2_distance);
         let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
         let _ = writeln!(
             text,
@@ -282,6 +285,18 @@ impl Voxel {
                     }
                 }
                 "lod2_distance" => {
+                    // W350: legacy key - every existing config holds a
+                    // bug-zero here (W349 overflow), heal it to the
+                    // default; real values pass through.
+                    if let Ok(v) = value.parse::<u8>() {
+                        self.settings.lod2_distance = if v == 0 {
+                            crate::lod::LOD2_DISTANCE_DEFAULT
+                        } else {
+                            v.min(crate::lod::LOD2_DISTANCE_MAX as u8)
+                        };
+                    }
+                }
+                "lod2_distance_v2" => {
                     if let Ok(v) = value.parse::<u8>() {
                         self.settings.lod2_distance =
                             v.min(crate::lod::LOD2_DISTANCE_MAX as u8);

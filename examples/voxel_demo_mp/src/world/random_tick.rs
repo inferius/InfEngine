@@ -307,6 +307,24 @@ fn log_supported(world: &infengine_voxel::World, start: [i32; 3]) -> bool {
             if is_log_block(id) {
                 return true;
             }
+            // W350: an UNLOADED neighbour reads as air, but the trunk
+            // may live in that missing chunk - border trees at the
+            // streaming frontier decayed en masse (thousands of
+            // sapling/apple drops raining at the world edge, the R14
+            // drops=6800 storm + 10-15 ms drop ticks). Unknown counts
+            // as supported; a later random tick re-checks once the
+            // chunk is in.
+            if id == 0 {
+                let cs = infengine_voxel::CHUNK_SIZE as i32;
+                let cc = [
+                    n[0].div_euclid(cs),
+                    n[1].div_euclid(cs),
+                    n[2].div_euclid(cs),
+                ];
+                if world.chunk(cc).is_none() {
+                    return true;
+                }
+            }
             if depth < 5 && is_leaf_block(id) && seen.insert(n) {
                 queue.push_back((n, depth + 1));
             }
@@ -446,6 +464,31 @@ mod tests {
         // Offset (0,0,0) targets the grass itself - no spread.
         let rng = rng_for_offset(0, 0, 0);
         assert_eq!(grass_tick(&w, [5, 10, 5], rng), None);
+    }
+
+    /// W350: a leaf whose support search touches an UNLOADED chunk
+    /// must survive - the trunk may live there (border trees at the
+    /// streaming frontier caused mass decay + drop storms). Once the
+    /// neighbour chunk is loaded and holds no log, decay resumes.
+    #[test]
+    fn leaf_at_unloaded_border_survives() {
+        let mut w = infengine_voxel::World::default();
+        w.insert_chunk([0, 0, 0], infengine_voxel::Chunk::empty());
+        let leaf = crate::block::LEAVES_ID;
+        // Leaf on the +X border; its neighbour cell [16,..] sits in
+        // the MISSING chunk [1,0,0].
+        w.set([15, 8, 8], infengine_voxel::BlockId(leaf));
+        assert!(
+            log_supported(&w, [15, 8, 8]),
+            "unloaded neighbour counts as support",
+        );
+        // Loading an all-air neighbour removes the doubt: no log
+        // anywhere reachable -> decay.
+        w.insert_chunk([1, 0, 0], infengine_voxel::Chunk::empty());
+        assert!(
+            !log_supported(&w, [15, 8, 8]),
+            "loaded airy neighbourhood decays",
+        );
     }
 
     /// W303: the MC distance rule - a log ADJACENT to the leaf (or
