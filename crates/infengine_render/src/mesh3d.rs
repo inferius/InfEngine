@@ -188,8 +188,18 @@ impl MeshVertex {
     /// outside that range are clamped because the uniform array is
     /// statically sized. (W320: cap raised 32 -> 128 for headroom
     /// over the full MC animated-strip roster.)
-    pub fn with_anim_id(mut self, slot: u32) -> Self {
-        self.anim_id = slot.min(crate::tile_anims::MAX_ANIM_SLOTS as u32);
+    pub fn with_anim_id(mut self, packed: u32) -> Self {
+        // W352: the word is PACKED since W240 - low 8 bits = anim
+        // slot, high bits = block id (the fragment shader tints
+        // chunk faces with `block_params[anim_id >> 8].color`).
+        // The old `.min(MAX_ANIM_SLOTS)` clamp silently destroyed
+        // the block id for every builder caller: the LOD tree
+        // impostors lost their leaf/log block colour and rendered
+        // the raw greyscale atlas tile (the "grey trees in the
+        // LOD" report). The shader masks the slot (`& 0xFF`)
+        // before indexing the anim table, so no clamp is needed
+        // for bounds safety.
+        self.anim_id = packed;
         self
     }
 
@@ -1370,16 +1380,17 @@ mod tests {
     }
 
     #[test]
-    fn with_anim_id_clamps_to_max_slot() {
-        // W320: the shader's tile_anim array has 128 entries. Slot
-        // ids above the cap clamp so they never index out of bounds.
-        let max = crate::tile_anims::MAX_ANIM_SLOTS as u32;
+    fn with_anim_id_passes_packed_word_through() {
+        // W352: the word packs `block_id << 8 | anim_slot`. The
+        // builder must NOT clamp it - the old MAX_ANIM_SLOTS clamp
+        // erased the block id and the LOD impostors rendered grey
+        // (untinted) foliage. The shader masks the slot before
+        // indexing the anim table, so bounds stay safe.
         let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(5);
         assert_eq!(v.anim_id, 5);
-        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max);
-        assert_eq!(v.anim_id, max);
-        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max + 67);
-        assert_eq!(v.anim_id, max);
+        let packed = (20u32 << 8) | 3;
+        let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(packed);
+        assert_eq!(v.anim_id, packed);
     }
 
     #[test]

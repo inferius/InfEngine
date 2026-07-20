@@ -873,22 +873,30 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         // /tppos, a portal race) let the player FREE-FALL through the
         // missing world - collision reads air for absent chunks - and
         // wedge inside the terrain once the column generated around
-        // them (the fell-through-the-world-after-load report). Freeze
-        // velocity + hold position until the player's own chunk
-        // streams in; the probe cy clamps into the world's vertical
-        // span so hovering above the build limit (or dropping below
-        // it into the void) keeps simulating off the loaded column.
+        // them (the fell-through-the-world-after-load report).
+        //
+        // W352: probe the COLUMN, not just the chunk at the feet.
+        // Flying high above the terrain the player's own chunk is
+        // pure air - the LOD-handover unload can evict exactly those
+        // and the old probe froze the player in mid-air PERMANENTLY
+        // (the R16 "can only turn, cannot move" wedge): the column
+        // never re-queued because its terrain chunks stayed loaded.
+        // Any loaded chunk in the column means the terrain is in and
+        // collision is trustworthy - absent chunks above it read as
+        // air, which is exactly what they are.
         {
             let cs = CHUNK_SIZE as i32;
             let (cy_min, cy_max) = app.vertical_chunk_range();
-            let probe_cc = [
-                (app.player_pos.x.floor() as i32).div_euclid(cs),
-                (app.player_pos.y.floor() as i32)
-                    .div_euclid(cs)
-                    .clamp(cy_min, cy_max),
-                (app.player_pos.z.floor() as i32).div_euclid(cs),
-            ];
-            if app.world.chunk(probe_cc).is_none() {
+            let pcx = (app.player_pos.x.floor() as i32).div_euclid(cs);
+            let pcz = (app.player_pos.z.floor() as i32).div_euclid(cs);
+            let pcy = (app.player_pos.y.floor() as i32)
+                .div_euclid(cs)
+                .clamp(cy_min, cy_max);
+            let own = app.world.chunk([pcx, pcy, pcz]).is_some();
+            let column_loaded = own
+                || (cy_min..=cy_max)
+                    .any(|cy| app.world.chunk([pcx, cy, pcz]).is_some());
+            if !column_loaded {
                 app.player_vel = Vec3::ZERO;
             }
         }

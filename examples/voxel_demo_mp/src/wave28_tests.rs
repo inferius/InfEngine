@@ -132,9 +132,12 @@ fn mesh_vertex_light_clamps_out_of_range() {
 /// anim_id clamps at the shared MAX_ANIM_SLOTS cap (W320: 128).
 #[test]
 fn mesh_vertex_anim_id_clamps_at_32() {
+    // W352: the builder passes the PACKED word (block_id << 8 | slot)
+    // through unchanged - the old clamp erased the block id and the
+    // LOD impostors lost their block colours. Name kept for history.
     let max = infengine_render::MAX_ANIM_SLOTS as u32;
     let v = MeshVertex::new([0.0; 3], [0.0; 3]).with_anim_id(max + 18);
-    assert_eq!(v.anim_id, max);
+    assert_eq!(v.anim_id, max + 18);
 }
 
 /// Struct size check. W30.1 extended MeshVertex from 28 to 40 bytes by
