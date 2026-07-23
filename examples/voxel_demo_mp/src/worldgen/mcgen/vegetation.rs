@@ -800,9 +800,19 @@ fn snow_supporting(id: u16) -> bool {
     if id == 0 || crate::block::block_is_watery(id) {
         return false;
     }
+    // W363: MC `SnowLayerBlock.canSurvive` needs a sturdy FULL top
+    // face - fences, walls, stairs, slabs and panes shed snow (the
+    // "snow on fences/stairs looks weird" R20 report). Leaves are
+    // MC's explicit exception so canopies still collect snow.
+    // `block_fully_occludes` is exactly the full-cube predicate
+    // (the id 0 fallback trap is guarded above - see W357).
     let b = BlockId(id);
-    !crate::block::block_is_aabb_passable(b)
-        && !crate::block::block_skips_chunk_mesh(b)
+    crate::block::block_fully_occludes(b)
+        || crate::block::block_type(id).is_some_and(|bt| {
+            // The legacy oak row is plain "leaves"; every other
+            // species uses the "<wood>_leaves" convention.
+            bt.name == "leaves" || bt.name.ends_with("_leaves")
+        })
 }
 
 fn dirt_floor(id: u16) -> bool {
@@ -1144,6 +1154,16 @@ pub(crate) fn place_freeze_top_layer(
             if snow_supporting(below)
                 && cold_enough_to_snow(mc, wx, wy, wz)
                 && chunk.get(lx as usize, snow_ly as usize, lz as usize).is_air()
+                // W363: the top scan is CHUNK-SLICE local, so the
+                // floor of a structure room reads as "the exposed
+                // top" (the roof lives in a higher slice) and got a
+                // snow blanket INDOORS (the "snow inside a tower"
+                // R20 report). The deterministic structure boxes
+                // know better - skip cells inside them; roofs sit
+                // on the box top, so the cell ABOVE a roof is
+                // outside the box and still collects snow.
+                && !super::village::pos_in_village(ctx, [wx, wy, wz])
+                && !super::outpost::pos_in_outpost(ctx, [wx, wy, wz])
             {
                 chunk.set(lx as usize, snow_ly as usize, lz as usize, BlockId(SNOW_LAYER));
             }
@@ -1166,6 +1186,26 @@ mod tests {
             PatchKind::Simple(p) => p,
             PatchKind::Selector(_) => panic!("{}: expected a simple patch", def.name),
         }
+    }
+
+    #[test]
+    fn w363_snow_survives_only_on_full_tops_and_leaves() {
+        use super::super::blockmap::registry_id;
+        // Full cubes carry snow.
+        assert!(snow_supporting(1)); // stone
+        assert!(snow_supporting(3)); // grass block
+        // Leaves are MC's explicit exception - both the legacy
+        // "leaves" row (id 6) and the per-species names.
+        assert!(snow_supporting(6));
+        let birch = registry_id("birch_leaves").expect("birch_leaves id");
+        assert!(snow_supporting(birch));
+        // Partial shapes shed it.
+        let fence = registry_id("oak_fence").expect("oak_fence id");
+        assert!(!snow_supporting(fence));
+        let stairs = registry_id("oak_stairs").expect("oak_stairs id");
+        assert!(!snow_supporting(stairs));
+        // Air / water never.
+        assert!(!snow_supporting(0));
     }
 
     #[test]
