@@ -961,6 +961,9 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // (ice + snow blanket) as the LAST step, exactly MC's step order -
     // snow must land on the finished canopy.
     super::vegetation::place_vegetation(chunk, coord, ctx, origin);
+    // W371: cave-biome dressing (lush + dripstone) - underground
+    // only, independent of the surface steps above.
+    super::cave_deco::place_cave_deco(chunk, coord, ctx, origin);
     super::vegetation::place_freeze_top_layer(chunk, coord, ctx, origin);
 
     // Whole chunk above sea level -> no aquatic flora can place.

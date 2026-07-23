@@ -67,6 +67,13 @@ pub(crate) struct Overworld {
     biome_memo: RefCell<HashMap<(i32, i32), McBiome>>,
 }
 
+/// W371: the two decorated underground biomes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaveKind {
+    Lush,
+    Dripstone,
+}
+
 impl Overworld {
     /// MC terrain density at a world block, FULL RESOLUTION (the
     /// `interpolated` wrappers evaluate their subtree directly). Kept
@@ -164,6 +171,26 @@ impl Overworld {
         }
         memo.insert((x, z), b);
         b
+    }
+
+    /// W371: the underground biome at a block, or `None` for a
+    /// plain cave. MC `OverworldBiomeBuilder.addUndergroundBiomes`:
+    /// depth in (0.2, 0.9); LUSH at the wettest humidity band,
+    /// DRIPSTONE at deep-inland continentalness. Deep dark keeps its
+    /// dedicated probe (`is_deep_dark_region`).
+    pub(crate) fn cave_kind_at(&self, x: i32, y: i32, z: i32) -> Option<CaveKind> {
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        let d = self.depth.eval(fx, fy, fz);
+        if !(0.2..=0.9).contains(&d) {
+            return None;
+        }
+        if self.vegetation.eval(fx, 0.0, fz) >= 0.7 {
+            return Some(CaveKind::Lush);
+        }
+        if self.continents.eval(fx, 0.0, fz) >= 0.8 {
+            return Some(CaveKind::Dripstone);
+        }
+        None
     }
 
     /// W229.2: the raw climate sample `(temperature, vegetation,
