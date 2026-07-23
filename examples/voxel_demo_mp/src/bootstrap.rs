@@ -176,6 +176,11 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             r,
             mc_entity_dir.as_deref(),
         );
+        // W366: bed block-entity meshes (16 dye sheets).
+        vx.bed_meshes = crate::render::beds::load_bed_meshes(
+            r,
+            mc_entity_dir.as_deref(),
+        );
         // W134: minecart entity mesh from the same entity dir.
         vx.minecart_meshes =
             crate::render::minecarts::load_minecart_meshes(

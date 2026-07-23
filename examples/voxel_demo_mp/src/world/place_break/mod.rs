@@ -166,7 +166,6 @@ pub enum RmbAction {
 
 /// Bed block id. There is no const in `block::ids` yet; magic
 /// number documented here so the classifier stays self-contained.
-const BED_ID: u16 = 35;
 
 /// W47.13c: pick the winning RMB action.
 ///
@@ -258,7 +257,10 @@ pub fn classify_rmb_action(
     {
         return RmbAction::ToggleDoor;
     }
-    if target_id == BED_ID {
+    // W366: every bed (legacy + 16 dyed) sleeps - the dyed beds
+    // (template-placed) previously fell through to block placement,
+    // the R20 "cannot sleep" report.
+    if crate::block::is_bed_block(target_id) {
         return RmbAction::SleepBed;
     }
     // W67.1: lever toggles its redstone power state.
@@ -424,8 +426,19 @@ mod tests {
 
     #[test]
     fn bed_target_routes_to_sleep() {
+        // Legacy bed (35) and the dyed run (576..=591) all sleep -
+        // W366: the dyed beds previously fell through to placement
+        // (the R20 "cannot sleep in a village bed" report).
         assert_eq!(
-            classify_rmb_action(true, BED_ID, None, 0, false, true),
+            classify_rmb_action(true, 35, None, 0, false, true),
+            RmbAction::SleepBed,
+        );
+        assert_eq!(
+            classify_rmb_action(true, 580, None, 0, false, true),
+            RmbAction::SleepBed,
+        );
+        assert_eq!(
+            classify_rmb_action(true, 591, None, 0, false, true),
             RmbAction::SleepBed,
         );
     }

@@ -343,7 +343,7 @@ impl WorkerPool {
                                             // per-pos orientation map with
                                             // stairs (the mesher branches
                                             // by block id).
-                                            0 | 5 => {
+                                            0 | 5 | 6 => {
                                                 gen_stairs.insert(o.pos, o.state);
                                             }
                                             // Doors, trapdoors + fence
@@ -700,6 +700,21 @@ pub(crate) fn mesh_chunk_in_worker(
         // The chunk mesh emits nothing for its cell.
         if block.0 == crate::block::CHEST_ID {
             return true;
+        }
+        // W366: bed cells with a recorded state render as block
+        // entities (render::beds) - no chunk geometry, exactly the
+        // chest pattern. Stateless bed cells (pre-W366 saves) keep
+        // the legacy wool-cube path below.
+        if crate::block::is_bed_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            if stairs.contains_key(&wp) {
+                return true;
+            }
+            return false;
         }
         // W365: pillar blocks with a recorded horizontal axis emit
         // the rotated column (end-grain on the axis faces, bark

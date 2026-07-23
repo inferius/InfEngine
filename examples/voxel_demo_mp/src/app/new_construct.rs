@@ -304,6 +304,8 @@ impl Voxel {
             chest_facing: HashMap::new(),
             chest_lid_anim: HashMap::new(),
             chest_meshes: crate::render::chests::ChestMeshes::default(),
+            bed_meshes: crate::render::beds::BedMeshes::default(),
+            bed_states: HashMap::new(),
             chest_open: None,
             chest_viewers: HashMap::new(),
             furnace_viewers: HashMap::new(),

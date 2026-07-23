@@ -2067,6 +2067,15 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.world,
             &vx.chest_render_positions,
         );
+        // W366: bed block entities (real entity/bed sheets,
+        // head/foot pieces, per-color).
+        render::beds::draw_beds(
+            renderer,
+            &vx.bed_meshes,
+            &vx.bed_states,
+            &vx.world,
+            vx.player_pos,
+        );
         // W134: minecart entities (local sim + remote snapshots).
         render::minecarts::draw_minecarts(
             renderer,

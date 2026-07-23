@@ -183,6 +183,27 @@ fn record_oriented(
     // name (from the palette, BEFORE the blockmap folds wall_torch
     // into the plain torch id) is the only trace of wall-ness.
     let is_wall_torch = state.name.ends_with("wall_torch");
+    // W366: beds carry part (head/foot) + facing. MC's FACING
+    // points from the foot toward the head; the head cell sits at
+    // `foot + facing`.
+    if crate::block::is_bed_block(id) {
+        let Some(f) = state.prop("facing").and_then(facing_code) else {
+            return;
+        };
+        let facing = (f + rot) % 4;
+        let head = state.prop("part") == Some("head");
+        let stt = facing
+            | if head { crate::block::BED_HEAD_BIT } else { 0 };
+        CARVE_ORIENTED.with(|c| {
+            c.borrow_mut().push(CarvedOriented {
+                pos,
+                kind: 6,
+                state: stt,
+                open: false,
+            })
+        });
+        return;
+    }
     // W365: pillar blocks (logs/wood/stems) carry an `axis` prop -
     // village house beams and floors were all rendering with the
     // vertical grain (the engine had no axis state at all).

@@ -132,6 +132,22 @@ pub(crate) fn play_note_block(vx: &mut crate::Voxel, pos: [i32; 3]) {
 pub(crate) fn try_sleep_bed(vx: &mut crate::Voxel) {
     use crate::DAY_LENGTH_S;
     use crate::net::NetRole;
+    // W366: clicking a bed sets the respawn point whatever the time
+    // of day (MC: "Respawn point set" even when sleeping fails).
+    // Spawn floats above the bed cell; safe_spawn settles on death.
+    if let Some(hit) = vx.target
+        && crate::block::is_bed_block(vx.world.get(hit.voxel).0)
+    {
+        let p = hit.voxel;
+        let new_spawn = [p[0] as f32 + 0.5, p[1] as f32 + 2.6, p[2] as f32 + 0.5];
+        if vx.spawn_pos != Some(new_spawn) {
+            vx.spawn_pos = Some(new_spawn);
+            vx.chat_log.push((
+                std::time::Instant::now(),
+                "Respawn point set".to_string(),
+            ));
+        }
+    }
     let phase = (vx.day_time / DAY_LENGTH_S).rem_euclid(1.0);
     let elev = (phase * std::f32::consts::TAU).sin();
     let is_night = elev < -0.05;

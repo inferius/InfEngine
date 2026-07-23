@@ -86,6 +86,16 @@ impl Voxel {
                 out.insert(pos, state);
             }
         }
+        // W366: bed states fold into the same per-pos orientation
+        // snapshot - the mesher only asks "does this bed cell have
+        // a state?" to skip its chunk geometry.
+        for (&pos, &state) in &self.bed_states {
+            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
+                == coord
+            {
+                out.insert(pos, state);
+            }
+        }
         out
     }
 

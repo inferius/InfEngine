@@ -799,6 +799,13 @@ pub(crate) struct Voxel {
     pub(crate) chest_lid_anim: HashMap<[i32; 3], f32>,
     /// W126: baked chest entity meshes (normal + double halves).
     pub(crate) chest_meshes: crate::render::chests::ChestMeshes,
+    /// W366: baked bed head/foot models per dye color.
+    pub(crate) bed_meshes: crate::render::beds::BedMeshes,
+    /// W366: bed piece states - facing bits 0-1 (foot -> head
+    /// direction), bit 2 = head half. Fed by template carve (kind 6)
+    /// and player placement; cells without a row fall back to the
+    /// legacy wool cube in the chunk mesh.
+    pub(crate) bed_states: HashMap<[i32; 3], u8>,
     /// Position of the chest the player has open. `None` means no
     /// chest UI is visible. Set by an RMB-on-chest interaction +
     /// cleared by ESC / walking too far / opening another panel.

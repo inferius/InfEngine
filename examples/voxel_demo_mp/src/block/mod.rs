@@ -210,6 +210,18 @@ pub(crate) fn block_is_opaque(b: BlockId) -> bool {
 /// inset gap showed through to the void/sky instead of the sand. The
 /// chunk mesher's face-cull predicate uses THIS; lighting keeps using
 /// `block_is_opaque` (cactus still blocks light, MC-style).
+/// W366: any bed block - the legacy `bed` (35) + the 16 dyed beds
+/// (576..=591). They render as block entities (render::beds) and
+/// share the RMB sleep action.
+pub(crate) fn is_bed_block(id: u16) -> bool {
+    id == 35 || (576..=591).contains(&id)
+}
+
+/// W366: bit 2 of the bed state byte marks the HEAD half (bits 0-1
+/// carry the foot->head facing). Lives here so the lib-side carve
+/// (worldgen) and the bin-side renderer share one definition.
+pub(crate) const BED_HEAD_BIT: u8 = 4;
+
 /// W365: MC `RotatedPillarBlock` family - blocks whose model is a
 /// `cube_column` with an `axis` state (logs, stripped logs, wood,
 /// nether stems/hyphae). The axis rides the per-pos orientation

@@ -751,6 +751,10 @@ impl Voxel {
                             0 | 5 => {
                                 self.stair_states.insert(o.pos, o.state);
                             }
+                            // W366: bed piece state.
+                            6 => {
+                                self.bed_states.insert(o.pos, o.state);
+                            }
                             // W288: wall torch -> place-pipeline
                             // orient codes (see the stream drain arm).
                             4 => {

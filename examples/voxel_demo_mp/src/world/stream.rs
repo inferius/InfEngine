@@ -556,6 +556,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 0 | 5 => {
                                     vx.stair_states.insert(*pos, *state);
                                 }
+                                // W366: bed piece state.
+                                6 => {
+                                    vx.bed_states.insert(*pos, *state);
+                                }
                                 // W288: wall torches land in the same
                                 // orient map player placements use
                                 // (facing 0..3 -> the place-pipeline
