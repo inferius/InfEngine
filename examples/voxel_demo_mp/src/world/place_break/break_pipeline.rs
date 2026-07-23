@@ -101,6 +101,53 @@ pub(crate) fn apply_block_break(
         // pillar axis) with the block.
         vx.stair_states.remove(&voxel);
     }
+    // W367: breaking either bed half removes BOTH (MC BedBlock).
+    // The partner sits along the state's facing: a FOOT looks
+    // toward the head (+facing), a HEAD back toward the foot. One
+    // bed item drops (from the half actually mined); the partner
+    // clears silently.
+    if crate::block::is_bed_block(broken.0) {
+        let sib = vx.bed_states.get(&voxel).map(|&st| {
+            let d: [i32; 2] = match st & 3 {
+                0 => [1, 0],
+                1 => [0, 1],
+                2 => [-1, 0],
+                _ => [0, -1],
+            };
+            if st & crate::block::BED_HEAD_BIT != 0 {
+                [voxel[0] - d[0], voxel[1], voxel[2] - d[1]]
+            } else {
+                [voxel[0] + d[0], voxel[1], voxel[2] + d[1]]
+            }
+        });
+        vx.bed_states.remove(&voxel);
+        if let Some(sib) = sib
+            && crate::block::is_bed_block(vx.world.get(sib).0)
+        {
+            vx.bed_states.remove(&sib);
+            vx.world_set_tracked(sib, BlockId::AIR);
+            vx.rebuild_chunks(&Voxel::affected_chunks(sib));
+            let sib_edit = EditMsg {
+                x: sib[0],
+                y: sib[1],
+                z: sib[2],
+                block: 0,
+            };
+            match &mut vx.net {
+                NetRole::Offline => {}
+                NetRole::Server { server, .. } => {
+                    let cfg = bincode::config::standard();
+                    if let Ok(buf) = bincode::serde::encode_to_vec(sib_edit, cfg) {
+                        server.broadcast_bytes("vx.edit", buf);
+                    }
+                    vx.edit_history.push(sib_edit);
+                }
+                NetRole::Client { pending_edits, .. } => {
+                    pending_edits.push(sib_edit);
+                }
+            }
+        }
+    }
     // W143: a broken rail drops its stored shape; neighbours keep
     // theirs (MC: removal never re-bends the rest of the line).
     if crate::block::rail::is_rail_block(broken.0) {

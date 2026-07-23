@@ -164,9 +164,6 @@ pub enum RmbAction {
     PlaceBlock,
 }
 
-/// Bed block id. There is no const in `block::ids` yet; magic
-/// number documented here so the classifier stays self-contained.
-
 /// W47.13c: pick the winning RMB action.
 ///
 /// `rmb` is the edge-triggered click; if false the result is

@@ -111,6 +111,29 @@ pub(crate) fn apply_block_place(
         ]);
         below.is_air() || !crate::block::block_fully_occludes(below)
     };
+    // W367: a bed occupies TWO cells - the head goes one cell
+    // along the player's look facing (MC BedBlock: head at
+    // pos.relative(facing)). MC refuses the whole placement when
+    // the head cell is taken, so reject up front (no partial foot).
+    let bed_head_blocked = crate::block::is_bed_block(block.0) && {
+        let f = crate::block::door::facing_from_look(
+            vx.player_yaw.cos(),
+            -vx.player_yaw.sin(),
+        );
+        let d: [i32; 2] = match f {
+            0 => [1, 0],
+            1 => [0, 1],
+            2 => [-1, 0],
+            _ => [0, -1],
+        };
+        !vx.world
+            .get([
+                target_voxel[0] + d[0],
+                target_voxel[1],
+                target_voxel[2] + d[1],
+            ])
+            .is_air()
+    };
     // Auto-switch torch -> wall_torch on horizontal placements.
     let placed_block = if hit.normal[1] == 0 {
         match block.0 {
@@ -121,7 +144,7 @@ pub(crate) fn apply_block_place(
     } else {
         block
     };
-    if overlaps || torch_unsupported || occupied || rail_unsupported {
+    if overlaps || torch_unsupported || occupied || rail_unsupported || bed_head_blocked {
         // W127: reject reasons at debug level - "I clicked and
         // nothing happened" reports are undiagnosable without this.
         tracing::debug!(
@@ -131,6 +154,7 @@ pub(crate) fn apply_block_place(
             occupied,
             torch_unsupported,
             rail_unsupported,
+            bed_head_blocked,
             "block place rejected",
         );
         return;
@@ -320,6 +344,52 @@ pub(crate) fn apply_block_place(
                 NetRole::Client { pending_edits, .. } => {
                     pending_edits.push(upper_edit);
                 }
+            }
+        }
+    }
+    // W367: place the bed's HEAD half + record both piece states
+    // (the reject above guarantees the cell is free). The foot cell
+    // re-meshes so its wool-cube fallback swaps to the entity render
+    // now that a state exists.
+    if crate::block::is_bed_block(placed_block.0) {
+        let f = crate::block::door::facing_from_look(
+            vx.player_yaw.cos(),
+            -vx.player_yaw.sin(),
+        );
+        let d: [i32; 2] = match f {
+            0 => [1, 0],
+            1 => [0, 1],
+            2 => [-1, 0],
+            _ => [0, -1],
+        };
+        let head_pos = [
+            target_voxel[0] + d[0],
+            target_voxel[1],
+            target_voxel[2] + d[1],
+        ];
+        vx.world_set_tracked(head_pos, placed_block);
+        vx.bed_states.insert(target_voxel, f);
+        vx.bed_states
+            .insert(head_pos, f | crate::block::BED_HEAD_BIT);
+        vx.rebuild_chunks(&Voxel::affected_chunks(head_pos));
+        vx.rebuild_chunks(&Voxel::affected_chunks(target_voxel));
+        let head_edit = EditMsg {
+            x: head_pos[0],
+            y: head_pos[1],
+            z: head_pos[2],
+            block: placed_block.0,
+        };
+        match &mut vx.net {
+            NetRole::Offline => {}
+            NetRole::Server { server, .. } => {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(head_edit, cfg) {
+                    server.broadcast_bytes("vx.edit", buf);
+                }
+                vx.edit_history.push(head_edit);
+            }
+            NetRole::Client { pending_edits, .. } => {
+                pending_edits.push(head_edit);
             }
         }
     }
