@@ -97,6 +97,9 @@ pub(crate) fn apply_block_break(
     {
         vx.door_open.remove(&voxel);
         vx.door_facing.remove(&voxel);
+        // W365: drop any per-pos orientation byte (stairs facing or
+        // pillar axis) with the block.
+        vx.stair_states.remove(&voxel);
     }
     // W143: a broken rail drops its stored shape; neighbours keep
     // theirs (MC: removal never re-bends the rest of the line).

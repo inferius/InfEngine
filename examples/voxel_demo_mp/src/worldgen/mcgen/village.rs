@@ -66,7 +66,8 @@ const FOUNDATION_MAX: i32 = 12;
 
 /// One oriented template placement (world pos + kind + state byte +
 /// open flag). Kinds: 0 = stairs, 1 = door (lower half), 2 =
-/// trapdoor, 3 = fence gate.
+/// trapdoor, 3 = fence gate, 4 = wall torch, 5 = pillar axis
+/// (W365: state 1 = X, 2 = Z).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CarvedOriented {
     pub(crate) pos: [i32; 3],
@@ -138,6 +139,20 @@ pub(crate) fn take_carved_oriented() -> Vec<CarvedOriented> {
     CARVE_ORIENTED.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
+/// W365: record a horizontal pillar axis from a non-template gen
+/// path (the fallen-tree trunks). Same thread-local + side-effect
+/// ride as the template carve.
+pub(crate) fn record_pillar(pos: [i32; 3], axis: u8) {
+    CARVE_ORIENTED.with(|c| {
+        c.borrow_mut().push(CarvedOriented {
+            pos,
+            kind: 5,
+            state: axis,
+            open: false,
+        })
+    });
+}
+
 /// MC facing prop -> engine facing code (0=+X east, 1=+Z south,
 /// 2=-X west, 3=-Z north - the door/torch convention).
 fn facing_code(name: &str) -> Option<u8> {
@@ -168,6 +183,27 @@ fn record_oriented(
     // name (from the palette, BEFORE the blockmap folds wall_torch
     // into the plain torch id) is the only trace of wall-ness.
     let is_wall_torch = state.name.ends_with("wall_torch");
+    // W365: pillar blocks (logs/wood/stems) carry an `axis` prop -
+    // village house beams and floors were all rendering with the
+    // vertical grain (the engine had no axis state at all).
+    if crate::block::is_pillar_block(id) {
+        let ax = match state.prop("axis") {
+            Some("x") => 1u8,
+            Some("z") => 2,
+            _ => return, // y (or absent) = the default upright column
+        };
+        // A CW quarter turn maps +X -> +Z: odd rotations swap axes.
+        let ax = if rot % 2 == 1 { 3 - ax } else { ax };
+        CARVE_ORIENTED.with(|c| {
+            c.borrow_mut().push(CarvedOriented {
+                pos,
+                kind: 5,
+                state: ax,
+                open: false,
+            })
+        });
+        return;
+    }
     if !(is_stairs || is_door || is_trap || is_gate || is_wall_torch) {
         return;
     }

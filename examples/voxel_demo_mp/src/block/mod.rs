@@ -210,6 +210,20 @@ pub(crate) fn block_is_opaque(b: BlockId) -> bool {
 /// inset gap showed through to the void/sky instead of the sand. The
 /// chunk mesher's face-cull predicate uses THIS; lighting keeps using
 /// `block_is_opaque` (cactus still blocks light, MC-style).
+/// W365: MC `RotatedPillarBlock` family - blocks whose model is a
+/// `cube_column` with an `axis` state (logs, stripped logs, wood,
+/// nether stems/hyphae). The axis rides the per-pos orientation
+/// byte map (`stair_states`, 1 = X / 2 = Z; Y needs no record).
+pub(crate) fn is_pillar_block(id: u16) -> bool {
+    block_type(id).is_some_and(|bt| {
+        bt.name == "log"
+            || bt.name.ends_with("_log")
+            || bt.name.ends_with("_wood")
+            || bt.name.ends_with("_stem")
+            || bt.name.ends_with("_hyphae")
+    })
+}
+
 pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
     if b.0 == CACTUS_ID {
         return false;

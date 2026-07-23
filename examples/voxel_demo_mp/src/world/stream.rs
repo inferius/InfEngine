@@ -551,7 +551,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             // door facing/open state the mesher +
                             // toggles already read.
                             match kind {
-                                0 => {
+                                // W365: kind 5 = pillar axis, same
+                                // per-pos orientation map as stairs.
+                                0 | 5 => {
                                     vx.stair_states.insert(*pos, *state);
                                 }
                                 // W288: wall torches land in the same

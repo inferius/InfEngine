@@ -225,6 +225,22 @@ pub(crate) fn apply_block_place(
     // other door variant (W48 birch/spruce/jungle/...) reuses the
     // same id for both halves since we don't ship per-variant
     // upper ids yet.
+    // W365: pillar blocks take their axis from the CLICKED face
+    // (MC RotatedPillarBlock.getStateForPlacement) - click a wall
+    // and the log lies toward you, click the ground and it stands
+    // up. Only horizontal axes need a record.
+    if crate::block::is_pillar_block(placed_block.0) {
+        let ax = if hit.normal[0] != 0 {
+            1u8
+        } else if hit.normal[2] != 0 {
+            2
+        } else {
+            0
+        };
+        if ax != 0 {
+            vx.stair_states.insert(target_voxel, ax);
+        }
+    }
     if crate::block::door::is_door_block(placed_block.0)
         || crate::block::door::is_trapdoor_block(placed_block.0)
         // W167: fence gates store facing too (door-style, horizontal).

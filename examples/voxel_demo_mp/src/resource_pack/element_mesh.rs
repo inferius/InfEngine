@@ -158,6 +158,89 @@ pub(crate) fn emit_trapdoor(
 /// = facing (bits 0-1, door convention 0=+X..3=-Z) | TRAPDOOR_TOP_BIT
 /// for `half=top` (upside-down stairs hang the slab from the ceiling
 /// and drop the riser to the floor half).
+/// W365: MC `RotatedPillarBlock` with a HORIZONTAL axis (1 = X,
+/// 2 = Z). End-grain (`BlockFace::Top`) goes on the two faces the
+/// axis exits through; every other face shows the bark rotated 90
+/// degrees so the grain runs along the axis. UV rotation rides the
+/// corner ordering: `emit_element_quad` assigns UVs to corners in a
+/// fixed order, so cycling the corner array by one turns the
+/// texture a quarter without touching the UV code.
+pub(crate) fn emit_pillar(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    axis: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let end = pack
+        .block_face_ref(block_id, super::BlockFace::Top)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [0, 1, 0],
+            )
+        });
+    let bark = pack
+        .block_face_ref(block_id, super::BlockFace::Sides)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [1, 0, 0],
+            )
+        });
+    let o = [origin.x, origin.y, origin.z];
+    let c = |xh: bool, yh: bool, zh: bool| -> [f32; 3] {
+        [
+            o[0] + if xh { 1.0 } else { 0.0 },
+            o[1] + if yh { 1.0 } else { 0.0 },
+            o[2] + if zh { 1.0 } else { 0.0 },
+        ]
+    };
+    // The six cube faces in emit_cuboid's corner order (CCW from
+    // outside, UVs bottom-left -> BR -> TR -> TL).
+    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
+        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
+        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
+        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
+    ];
+    for (normal, corners) in faces {
+        let on_axis = match axis {
+            1 => normal[0] != 0.0,
+            _ => normal[2] != 0.0,
+        };
+        if on_axis {
+            infengine_voxel::emit_element_quad(
+                verts, idxs, corners, normal, end, light, 0,
+            );
+            continue;
+        }
+        // Bark face, grain along the axis: rotate the texture a
+        // quarter turn by cycling the corner order. Horizontal
+        // faces (top/bottom) only need the turn when the axis runs
+        // across their default U direction.
+        let needs_turn = if normal[1] != 0.0 {
+            axis == 2
+        } else {
+            true
+        };
+        let corners = if needs_turn {
+            [corners[1], corners[2], corners[3], corners[0]]
+        } else {
+            corners
+        };
+        infengine_voxel::emit_element_quad(
+            verts, idxs, corners, normal, bark, light, 0,
+        );
+    }
+}
+
 pub(crate) fn emit_stairs(
     verts: &mut Vec<MeshVertex>,
     idxs: &mut Vec<u32>,

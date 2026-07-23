@@ -747,7 +747,8 @@ impl Voxel {
                     for o in crate::worldgen::mcgen::village::take_carved_oriented()
                     {
                         match o.kind {
-                            0 => {
+                            // W365: kind 5 = pillar axis.
+                            0 | 5 => {
                                 self.stair_states.insert(o.pos, o.state);
                             }
                             // W288: wall torch -> place-pipeline

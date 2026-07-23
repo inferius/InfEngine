@@ -1734,8 +1734,13 @@ fn place_fallen(
             return;
         }
     }
+    // W365: the trunk lies along `dir` - record the pillar axis so
+    // the mesher turns the grain (the "fallen tree has the wrong
+    // rotation" R20 report). The stump stays an upright column.
+    let axis = if dir[0] != 0 { 1u8 } else { 2 };
     for i in 0..log_length {
         set_log(chunk, origin, sx + dir[0] * i, sy, sz + dir[1] * i, def.log);
+        super::village::record_pillar([sx + dir[0] * i, sy, sz + dir[1] * i], axis);
     }
 }
 

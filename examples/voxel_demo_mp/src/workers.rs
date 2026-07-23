@@ -339,7 +339,11 @@ impl WorkerPool {
                                     > = std::collections::HashMap::new();
                                     for o in &oriented {
                                         match o.kind {
-                                            0 => {
+                                            // W365: pillar axes share the
+                                            // per-pos orientation map with
+                                            // stairs (the mesher branches
+                                            // by block id).
+                                            0 | 5 => {
                                                 gen_stairs.insert(o.pos, o.state);
                                             }
                                             // Doors, trapdoors + fence
@@ -696,6 +700,27 @@ pub(crate) fn mesh_chunk_in_worker(
         // The chunk mesh emits nothing for its cell.
         if block.0 == crate::block::CHEST_ID {
             return true;
+        }
+        // W365: pillar blocks with a recorded horizontal axis emit
+        // the rotated column (end-grain on the axis faces, bark
+        // rotated along it). No record = plain upright cube via the
+        // greedy path.
+        if crate::block::is_pillar_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            if let Some(&ax) = stairs.get(&wp)
+                && (ax == 1 || ax == 2)
+            {
+                let light = halo.lookup(coord, wp);
+                resource_pack::element_mesh::emit_pillar(
+                    verts, idxs, voxel_origin, block.0, ax, pack, light,
+                );
+                return true;
+            }
+            return false;
         }
         // W279: stairs with a recorded orientation (template
         // placements) emit the rotated two-box shape; stairs without
