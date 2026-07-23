@@ -1064,6 +1064,17 @@ fn rescan_chunk_radius(
         dx * dx + dz * dz
     });
     vx.unload_retain_due = vx.unload_retain_due || !pending.is_empty();
+    // W360: snapshot the side-map cells for the WHOLE pending set
+    // now (one fixed-cost pass per crossing); the drain pulls
+    // per-chunk vectors out of it instead of rescanning the maps.
+    if !pending.is_empty()
+        && matches!(vx.net, NetRole::Server { .. } | NetRole::Offline)
+    {
+        let set: std::collections::HashSet<ChunkCoord> =
+            pending.iter().copied().collect();
+        vx.pending_unload_side =
+            world_save::runtime::build_unload_side_buckets(vx, &set);
+    }
     vx.pending_unload = pending;
     let _ms_all = _t_all.elapsed().as_secs_f32() * 1000.0;
     if _ms_all > 5.0 {
@@ -1145,7 +1156,12 @@ fn drain_unload_batch(
         }
         return;
     }
-    const UNLOAD_BATCH: usize = 192;
+    // W360: 192 -> 96. Even with the side buckets cached, the
+    // per-chunk RLE snapshot (`ChunkVoxels::from_chunk`) is the
+    // remaining drain cost (~25 us each); 96 keeps the payload
+    // slice ~2.5 ms and a full ring still retires in a handful of
+    // frames.
+    const UNLOAD_BATCH: usize = 96;
     let _t_all = std::time::Instant::now();
     let mut batch: Vec<ChunkCoord> = Vec::with_capacity(UNLOAD_BATCH);
     while batch.len() < UNLOAD_BATCH {
@@ -1211,8 +1227,15 @@ fn drain_unload_batch(
         for cc in &dirty_unload {
             vx.world.clear_dirty_chunk(*cc);
         }
-        // W233: ONE pass per side map for the whole batch.
-        let payloads = world_save::runtime::build_chunk_payloads(vx, &dirty_unload);
+        // W233/W360: side-map cells come from the crossing-time
+        // snapshot - O(batch) here, no whole-map scans.
+        let mut side = std::mem::take(&mut vx.pending_unload_side);
+        let payloads = world_save::runtime::build_chunk_payloads_from(
+            vx,
+            &dirty_unload,
+            &mut side,
+        );
+        vx.pending_unload_side = side;
         if !payloads.is_empty() {
             std::thread::Builder::new()
                 .name("voxel_demo_mp::unload_writer".to_string())

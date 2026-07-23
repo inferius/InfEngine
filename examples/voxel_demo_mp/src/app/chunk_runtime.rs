@@ -51,6 +51,7 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.pending_unload.clear();
+        self.pending_unload_side = Default::default();
         self.unload_retain_due = false;
         self.in_flight_chunks.clear();
         self.lod_pending.clear();
@@ -303,6 +304,7 @@ impl Voxel {
         self.pending_chunks.clear();
         self.pending_set.clear();
         self.pending_unload.clear();
+        self.pending_unload_side = Default::default();
         self.unload_retain_due = false;
         self.in_flight_chunks.clear();
         self.pending_remesh.clear();

@@ -422,11 +422,23 @@ pub(crate) fn build_chunk_payload(
 /// W232 rescan probe). Here each side map is walked ONCE, bucketing
 /// entries by their owning chunk, then payloads assemble from the
 /// buckets - O(map + unloaded).
-pub(crate) fn build_chunk_payloads(
+/// W360: per-chunk side-map cells (liquid levels / torch orient /
+/// snow layers) snapshotted for chunks awaiting unload. Built ONCE
+/// per boundary crossing for the whole pending set - the per-batch
+/// rebuild scanned every entry of every side map each drain call
+/// (snow alone is hundreds of thousands of cells in a snowy biome),
+/// the 5-64 ms `W359 payload_ms` spikes in the R20 log.
+#[derive(Debug, Default)]
+pub(crate) struct UnloadSideBuckets {
+    pub(crate) liq: std::collections::HashMap<infengine_voxel::ChunkCoord, Vec<([u8; 3], u8)>>,
+    pub(crate) tor: std::collections::HashMap<infengine_voxel::ChunkCoord, Vec<([u8; 3], u8)>>,
+    pub(crate) snow: std::collections::HashMap<infengine_voxel::ChunkCoord, Vec<([u8; 3], u8)>>,
+}
+
+pub(crate) fn build_unload_side_buckets(
     voxel: &Voxel,
     coords: &std::collections::HashSet<infengine_voxel::ChunkCoord>,
-) -> Vec<super::chunks::ChunkPayload> {
-    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+) -> UnloadSideBuckets {
     use std::collections::HashMap;
     let cs = infengine_voxel::CHUNK_SIZE as i32;
     let chunk_of = |p: &[i32; 3]| {
@@ -450,9 +462,23 @@ pub(crate) fn build_chunk_payloads(
         }
         out
     };
-    let mut liq = bucket(&voxel.liquid_level);
-    let mut tor = bucket(&voxel.torch_orient);
-    let mut snow = bucket(&voxel.snow_positions);
+    UnloadSideBuckets {
+        liq: bucket(&voxel.liquid_level),
+        tor: bucket(&voxel.torch_orient),
+        snow: bucket(&voxel.snow_positions),
+    }
+}
+
+/// Build payloads for `coords`, pulling the side-map cells out of the
+/// pre-snapshotted buckets (O(batch), no whole-map scans). The tiny
+/// staleness window (a border cell edited between the crossing and
+/// the drain) matches MC's snapshot-at-unload semantics.
+pub(crate) fn build_chunk_payloads_from(
+    voxel: &Voxel,
+    coords: &std::collections::HashSet<infengine_voxel::ChunkCoord>,
+    side: &mut UnloadSideBuckets,
+) -> Vec<super::chunks::ChunkPayload> {
+    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
     coords
         .iter()
         .filter_map(|cc| {
@@ -461,13 +487,14 @@ pub(crate) fn build_chunk_payloads(
                 format_version: CHUNK_PAYLOAD_VERSION,
                 coord: *cc,
                 voxels: ChunkVoxels::from_chunk(chunk),
-                liquid_levels: liq.remove(cc).unwrap_or_default(),
-                torch_orient: tor.remove(cc).unwrap_or_default(),
-                snow_layers: snow.remove(cc).unwrap_or_default(),
+                liquid_levels: side.liq.remove(cc).unwrap_or_default(),
+                torch_orient: side.tor.remove(cc).unwrap_or_default(),
+                snow_layers: side.snow.remove(cc).unwrap_or_default(),
             })
         })
         .collect()
 }
+
 
 /// W46.28: write a pre-built payload to disk. Pure I/O - safe to
 /// call from a background thread because it takes only owned data.

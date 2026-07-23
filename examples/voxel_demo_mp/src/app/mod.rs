@@ -162,6 +162,10 @@ pub(crate) struct Voxel {
     /// empties (the retains are box-based whole-map sweeps - one per
     /// crossing, in their own frame).
     pub(crate) unload_retain_due: bool,
+    /// W360: side-map cells of the pending unload set, snapshotted
+    /// once at the crossing so the per-frame drain never rescans the
+    /// whole snow/liquid/torch maps (5-64 ms payload spikes, R20).
+    pub(crate) pending_unload_side: crate::world_save::runtime::UnloadSideBuckets,
     /// W239: coords already handed to a worker inside a COLUMN batch
     /// job and not yet delivered. The dispatch loop batches every
     /// queued chunk of a column into one job (so the expensive
