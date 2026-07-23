@@ -676,13 +676,37 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 6.0,
                 |b| !b.is_air() && !block_is_ray_passable(b),
                 // W347: snow layers pick with their real height
-                // (layers/8) instead of the full cube.
+                // (layers/8). W362: doors pick with their 3/16
+                // panel - an OPEN door lets the ray through the
+                // doorway to the block behind (clicking it no
+                // longer toggles the door), while the panel slab
+                // itself stays clickable to close it.
                 |p, b| {
-                    (b.0 == 15).then(|| {
-                        vx.snow_positions.get(&p).copied().unwrap_or(1)
+                    if b.0 == 15 {
+                        let h = vx.snow_positions.get(&p).copied().unwrap_or(1)
                             as f32
-                            / 8.0
-                    })
+                            / 8.0;
+                        return Some(([0.0, 0.0, 0.0], [1.0, h, 1.0]));
+                    }
+                    if crate::block::door::is_door_block(b.0) {
+                        let below = [p[0], p[1] - 1, p[2]];
+                        let lower = if vx.door_facing.contains_key(&p)
+                            || !vx.door_facing.contains_key(&below)
+                        {
+                            p
+                        } else {
+                            below
+                        };
+                        let facing =
+                            vx.door_facing.get(&lower).copied().unwrap_or(0);
+                        let edge = if vx.door_open.contains(&lower) {
+                            crate::block::door::open_edge(facing)
+                        } else {
+                            crate::block::door::closed_edge(facing)
+                        };
+                        return Some(crate::block::door::panel_box(edge));
+                    }
+                    None
                 },
             )
         } else {
@@ -706,12 +730,35 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 forward,
                 6.0,
                 |b| !b.is_air() && !block_is_liquid(b),
+                // W362: same snow + door panel boxes as the aim
+                // ray so an open door is minable only through its
+                // panel.
                 |p, b| {
-                    (b.0 == 15).then(|| {
-                        vx.snow_positions.get(&p).copied().unwrap_or(1)
+                    if b.0 == 15 {
+                        let h = vx.snow_positions.get(&p).copied().unwrap_or(1)
                             as f32
-                            / 8.0
-                    })
+                            / 8.0;
+                        return Some(([0.0, 0.0, 0.0], [1.0, h, 1.0]));
+                    }
+                    if crate::block::door::is_door_block(b.0) {
+                        let below = [p[0], p[1] - 1, p[2]];
+                        let lower = if vx.door_facing.contains_key(&p)
+                            || !vx.door_facing.contains_key(&below)
+                        {
+                            p
+                        } else {
+                            below
+                        };
+                        let facing =
+                            vx.door_facing.get(&lower).copied().unwrap_or(0);
+                        let edge = if vx.door_open.contains(&lower) {
+                            crate::block::door::open_edge(facing)
+                        } else {
+                            crate::block::door::closed_edge(facing)
+                        };
+                        return Some(crate::block::door::panel_box(edge));
+                    }
+                    None
                 },
             )
         } else {

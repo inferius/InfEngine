@@ -722,9 +722,15 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 77, name: "oak_door", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
-        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
-        sides: TileSpec { col: 0, row: 2, files: &["door_oak_lower.png", "oak_planks.png"], keep_alpha: true },
+        // W362: `door_oak_lower.png` is the PRE-1.13 texture name -
+        // the 26.1.2 pack ships `oak_door_bottom/top.png`, so the old
+        // name always fell through to the planks fallback (the
+        // "doors do not look like doors" R20 report). The panel
+        // emitter samples Top for the upper half, Bottom for the
+        // lower.
+        top: TileSpec { col: 0, row: 2, files: &["oak_door_top.png", "oak_planks.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_door_bottom.png", "oak_planks.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_door_bottom.png", "oak_planks.png"], keep_alpha: true },
     },
     // Oak door (upper half). Cite: `models/block/oak_door_top.json`.
     // Manual placement only in W12.2 - the chat /setblock places one
@@ -732,17 +738,17 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     BlockType {
         id: 78, name: "oak_door_upper", color: [0.78, 0.60, 0.36], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
-        bottom: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
-        sides: TileSpec { col: 0, row: 2, files: &["door_oak_upper.png", "oak_planks.png"], keep_alpha: true },
+        top: TileSpec { col: 0, row: 2, files: &["oak_door_top.png", "oak_planks.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 2, files: &["oak_door_top.png", "oak_planks.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 2, files: &["oak_door_top.png", "oak_planks.png"], keep_alpha: true },
     },
     // Iron door (lower half). Cite: `models/block/iron_door_bottom.json`.
     BlockType {
         id: 79, name: "iron_door", color: [0.80, 0.80, 0.85], transparent: true,
         flags: F_DEDICATED_RENDER,
-        top: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
-        bottom: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
-        sides: TileSpec { col: 0, row: 0, files: &["door_iron_lower.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        top: TileSpec { col: 0, row: 0, files: &["iron_door_top.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        bottom: TileSpec { col: 0, row: 0, files: &["iron_door_bottom.png", "iron_ore.png", "stone.png"], keep_alpha: true },
+        sides: TileSpec { col: 0, row: 0, files: &["iron_door_bottom.png", "iron_ore.png", "stone.png"], keep_alpha: true },
     },
     // Glass pane. Cite: `models/block/glass_pane_post.json` - thin
     // 2x2 centre post + 4 connection arms.
