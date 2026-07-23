@@ -218,5 +218,10 @@ pub(crate) fn draw_slot_widget_with_durability(
         );
         painter.rect_filled(fill_rect, 1.0, egui::Color32::from_rgb(r, g, 0));
     }
+    // W364: hover tooltip with the item name (the SlotIcon has
+    // carried it since W5 - it was just never shown; R20 request).
+    if let Some((_, _, _, name)) = slot {
+        return resp.on_hover_text(name);
+    }
     resp
 }

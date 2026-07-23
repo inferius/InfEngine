@@ -246,6 +246,10 @@ fn draw_one_slot(
         egui::Stroke::new(1.0, egui::Color32::from_gray(120))
     };
     painter.rect_stroke(rect, 4.0, outline, egui::StrokeKind::Inside);
+    // W364: item-name hover tooltip (R20 request).
+    if let Some((id, _)) = slot {
+        return resp.on_hover_text(crate::item::item_display_name(id));
+    }
     resp
 }
 
