@@ -11,11 +11,11 @@ the section notes at the bottom.
 | blocks | 1170 | 694 | 476 | 14 family-substitute aliases |
 | items | 1506 | 847 | 659 | block-form items resolve via places |
 | entities | 87 | 20 | 67 | player/armor_stand/mannequin/giant excluded |
-| biomes | 65 | 59 | 6 | name-probe vs worldgen sources |
-| configured features | 221 | 161 | 60 | substring probe (coarse) |
+| biomes | 65 | 61 | 4 | name-probe vs worldgen sources |
+| configured features | 221 | 164 | 57 | substring probe (coarse) |
 | structures | 34 | 31 | 3 | |
 | particles | 106 | 36 | 70 | substring probe |
-| sound events | 1902 | 204 | 1698 | from asset_store sounds.json; engine maps via ENGINE_TO_MC |
+| sound events | 0 | 0 | 0 | engine plays via ENGINE_TO_MC key map |
 
 ## Missing blocks (476)
 
@@ -234,22 +234,22 @@ the section notes at the bottom.
 - warden, witch, wither, wither_skeleton, zoglin, zombie_horse
 - zombie_nautilus
 
-## Missing biomes (6)
+## Missing biomes (4)
 
-- dripstone_caves, end_barrens, end_highlands, end_midlands, lush_caves, small_end_islands
+- end_barrens, end_highlands, end_midlands, small_end_islands
 
-## Missing configured features (60)
+## Missing configured features (57)
 
-- azalea_tree, bamboo_no_podzol, bamboo_vegetation, birch_bees_005, bonus_chest, cave_vine
-- cave_vine_in_moss, chorus_plant, clay_pool_with_dripleaves, clay_with_dripleaves, crimson_forest_vegetation_bonemeal, crimson_fungus_planted
-- dripleaf, dripstone_cluster, end_gateway_delayed, end_gateway_return, end_platform, flower_pale_garden
-- fossil_coal, fossil_diamonds, huge_brown_mushroom, huge_red_mushroom, iceberg_blue, iceberg_packed
-- jungle_tree_no_vine, lake_lava, large_dripstone, lush_caves_clay, moss_patch, moss_patch_bonemeal
-- moss_patch_ceiling, moss_vegetation, mushroom_island_vegetation, nether_sprouts_bonemeal, ore_clay, ore_copper_large
-- pale_forest_flower, pale_garden_vegetation, pale_moss_patch, pale_moss_patch_bonemeal, pale_moss_vegetation, pale_oak
-- pale_oak_bonemeal, pale_oak_creaking, pile_hay, pile_ice, pile_melon, pile_pumpkin
-- pile_snow, pointed_dripstone, rooted_azalea_tree, sculk_patch_ancient_city, small_basalt_columns, spore_blossom
-- spring_nether_closed, spring_nether_open, twisting_vines_bonemeal, void_start_platform, warped_forest_vegetation_bonemeal, warped_fungus_planted
+- azalea_tree, bamboo_no_podzol, bamboo_vegetation, birch_bees_005, bonus_chest, cave_vine_in_moss
+- chorus_plant, clay_pool_with_dripleaves, clay_with_dripleaves, crimson_forest_vegetation_bonemeal, crimson_fungus_planted, dripleaf
+- dripstone_cluster, end_gateway_delayed, end_gateway_return, end_platform, flower_pale_garden, fossil_coal
+- fossil_diamonds, huge_brown_mushroom, huge_red_mushroom, iceberg_blue, iceberg_packed, jungle_tree_no_vine
+- lake_lava, large_dripstone, lush_caves_clay, moss_patch, moss_patch_bonemeal, moss_patch_ceiling
+- moss_vegetation, mushroom_island_vegetation, nether_sprouts_bonemeal, ore_clay, ore_copper_large, pale_forest_flower
+- pale_garden_vegetation, pale_moss_patch, pale_moss_patch_bonemeal, pale_moss_vegetation, pale_oak, pale_oak_bonemeal
+- pale_oak_creaking, pile_hay, pile_ice, pile_melon, pile_pumpkin, pile_snow
+- rooted_azalea_tree, sculk_patch_ancient_city, small_basalt_columns, spring_nether_closed, spring_nether_open, twisting_vines_bonemeal
+- void_start_platform, warped_forest_vegetation_bonemeal, warped_fungus_planted
 
 ## Missing structures (3)
 
@@ -269,39 +269,4 @@ the section notes at the bottom.
 - sonic_boom, soul_fire_flame, spore_blossom_air, squid_ink, sweep_attack, tinted_leaves
 - trial_omen, trial_spawner_detection, trial_spawner_detection_ominous, vault_connection, vibration, warped_spore
 - wax_off, wax_on, white_ash, white_smoke
-## Behavioral fidelity (hand-audited 2026-07-23, three parallel audits)
 
-Registry coverage above says WHAT exists; this section says how
-faithfully it BEHAVES.
-
-### Worldgen generator: 1:1 core, verified by pins
-- Density-function terrain, surface rules, carvers, aquifer, ore
-  veins, per-biome features: faithful port (W181-W196, pinned
-  against decompiled sources; nether/End cell-interp W299).
-- Structures: 31/34 (missing end_city, nether_fossil, trail_ruins);
-  jigsaw solver + template pipeline 1:1 incl. processor lists.
-- Known gaps: cave BIOMES (lush_caves, dripstone_caves) + their
-  features (dripstone, glow lichen, spore blossoms); End
-  sub-biomes; ~60 configured features (see list above).
-
-### Gameplay systems
-- COMPLETE: mining times + tool tiers, day/night hostile spawn
-  pools, sprint/sneak/swim, villager trade OFFERS (open-bug
-  pending), beds (W366/W367), doors, containers (chest/furnace/
-  brewing UI), redstone basics (lever/pressure plate/note block),
-  minecart riding, crops 1:1, leaf decay 1:1, portals 1:1.
-- ABSENT (ordered plan in memory): hunger, XP, enchanting, armor
-  mechanics, player bow, potion EFFECTS, bonemeal, fishing, boats,
-  cauldron/lectern/bell interactions, composter mechanic.
-
-### Animations / feel
-- HAVE: mob walk/gait 1:1 setupAnim ports, chest lid, held-item
-  first-person, block-break particles, damage flash.
-- MISSING: first-person swing on mine/attack, block crack overlay
-  (destroy stages), eating animation + hand item consume, bow
-  draw, hurt-direction tilt, sleeping camera/overlay.
-
-### Mobs: 20/87 relevant (list above). AI present for the 20
-(chase/panic/tempt/breed/ranged/creeper swell/golem defense);
-A* pathfinding written but NOT wired (goal.rs). finalizeSpawn
-extras (baby zombies, gear) absent.
