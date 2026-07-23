@@ -547,43 +547,73 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             vx.chat_input.clear();
         }
 
-        // F = eat. Consumes one meat block (id 12) from anywhere in
-        // the inventory + restores 4 HP. No-op when at full health
-        // or when the player has no meat. Gated on Playing state +
-        // no overlay so the F key doesn't fire while the menu eats
-        // text input.
+        // F = eat (HOLD, W370). MC ItemUseAnimation: food takes 1.6 s
+        // of held use - chew sounds pace the hold, the item consumes
+        // + heals ON COMPLETION, releasing F cancels with nothing
+        // spent. (Direct HP heal stands in until the hunger system
+        // lands - tracked in the parity matrix.)
         let f_now = ctx.input.is_pressed(Key::F);
         let f_just = f_now && !vx.f_prev;
         vx.f_prev = f_now;
-        if f_just
-            && matches!(vx.state, AppState::Playing)
+        let eat_ctx_ok = matches!(vx.state, AppState::Playing)
             && !vx.inventory_open
             && !vx.mp_menu_open
             && !vx.chat_open
-            && !egui_kb
+            && !egui_kb;
+        if f_just
+            && eat_ctx_ok
+            && vx.eating.is_none()
             && vx.player_health < PLAYER_MAX_HEALTH
+            && vx
+                .inventory
+                .iter()
+                .any(|s| matches!(s, Some((b, _)) if *b == BlockId(12)))
         {
-            // Find first slot holding meat (offline / host path).
-            let mut ate = false;
-            for slot in vx.inventory.iter_mut() {
-                if let Some((b, c)) = slot.as_mut()
-                    && *b == BlockId(12)
-                {
-                    *c = c.saturating_sub(1);
-                    if *c == 0 {
-                        *slot = None;
-                    }
-                    ate = true;
-                    break;
+            vx.eating = Some((12, 0.0));
+        }
+        if let Some((food, t0)) = vx.eating {
+            const EAT_DURATION: f32 = 1.6;
+            const CHEW_PERIOD: f32 = 0.28;
+            if !f_now || !eat_ctx_ok {
+                vx.eating = None;
+            } else {
+                let t1 = t0 + dt;
+                if (t1 / CHEW_PERIOD) as u32 != (t0 / CHEW_PERIOD) as u32 {
+                    let pos = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
+                    vx.sfx_at("eat", pos, |a, g| {
+                        let _ = a.play_thud(280.0, 0.15 * g);
+                    });
                 }
-            }
-            if ate {
-                vx.player_health =
-                    (vx.player_health + 4.0).min(PLAYER_MAX_HEALTH);
-                let pos = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
-                vx.sfx_at("eat", pos, |a, g| {
-                    let _ = a.play_thud(280.0, 0.18 * g);
-                });
+                if t1 >= EAT_DURATION {
+                    // Consume + heal; the slot may have vanished
+                    // mid-chew (drop, MP take) - then nothing happens.
+                    let mut ate = false;
+                    for slot in vx.inventory.iter_mut() {
+                        if let Some((b, c)) = slot.as_mut()
+                            && *b == BlockId(food)
+                        {
+                            *c = c.saturating_sub(1);
+                            if *c == 0 {
+                                *slot = None;
+                            }
+                            ate = true;
+                            break;
+                        }
+                    }
+                    if ate {
+                        vx.player_health =
+                            (vx.player_health + 4.0).min(PLAYER_MAX_HEALTH);
+                        let pos =
+                            [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
+                        // MC finishes a meal with the burp.
+                        vx.sfx_at("burp", pos, |a, g| {
+                            let _ = a.play_thud(180.0, 0.2 * g);
+                        });
+                    }
+                    vx.eating = None;
+                } else {
+                    vx.eating = Some((food, t1));
+                }
             }
         }
 
@@ -2332,6 +2362,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 let (cam_pos, cam_tgt) = (cam.position, cam.target);
                 let (swing, equip) =
                     (vx.held_anim.swing_progress, vx.held_anim.equip_progress);
+                // W370: eating progress drives the chew viewmodel.
+                let eat = vx
+                    .eating
+                    .map(|(_, t)| (t / 1.6).min(1.0))
+                    .unwrap_or(0.0);
                 let tex_root = if vx.resource_pack.is_placeholder() {
                     None
                 } else {
@@ -2346,6 +2381,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     cam_tgt,
                     swing,
                     equip,
+                    eat,
                 );
             }
         }

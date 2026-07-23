@@ -72,6 +72,7 @@ impl Voxel {
             esc_prev: false,
             e_prev: false,
             f_prev: false,
+            eating: None,
             // W10.3: double-tap-Space detector starts idle. The
             // first Space press kicks off the timer.
             space_prev: false,

@@ -104,6 +104,7 @@ pub(crate) fn draw_held_item(
     cam_target: Vec3,
     swing: f32,
     equip: f32,
+    eat: f32,
 ) {
     let Some(held) = held_mesh_for(renderer, cache, tex_root, item_id)
     else {
@@ -130,7 +131,8 @@ pub(crate) fn draw_held_item(
         cam_pos.extend(1.0),
     );
 
-    let model = cam_basis * held_local_transform(held.is_block, swing, equip);
+    let model =
+        cam_basis * held_local_transform(held.is_block, swing, equip, eat);
     // Matte: the viewmodel reads its tint as plain albedo. Held items
     // pick up the scene lighting roughly via their camera world pos.
     renderer.draw_mesh_viewmodel(held.mesh, model.to_cols_array(), [1.0; 4], 0.0, 0.85);
@@ -143,7 +145,7 @@ pub(crate) fn draw_held_item(
 /// screen with the shared camera (MC's raw arm offsets assume a wider
 /// hand projection). The swing uses MC's easing curves
 /// (`sin(swing^2 * PI)` jab + `sin(sqrt(swing) * PI)` arc).
-fn held_local_transform(is_block: bool, swing: f32, equip: f32) -> Mat4 {
+fn held_local_transform(is_block: bool, swing: f32, equip: f32, eat: f32) -> Mat4 {
     use std::f32::consts::PI;
     let (base, display) = if is_block {
         (
@@ -170,7 +172,22 @@ fn held_local_transform(is_block: bool, swing: f32, equip: f32) -> Mat4 {
     let swing_xform = Mat4::from_translation(Vec3::new(0.0, -f1 * 0.18, f * 0.12))
         * Mat4::from_rotation_x(-f1 * 1.3)
         * Mat4::from_rotation_z(f1 * 0.35);
-    arm * swing_xform * display
+    // W370: eating - the item rides up toward the mouth (quick ramp)
+    // and chews with a fast small bounce, MC's eat transform in
+    // spirit (`ItemInHandRenderer.applyEatTransform`).
+    let eat_xform = if eat > 0.0 {
+        let ramp = (eat * 6.0).min(1.0);
+        let chew = (eat * 30.0).sin() * 0.03 * ramp;
+        Mat4::from_translation(Vec3::new(
+            -0.30 * ramp,
+            0.16 * ramp + chew,
+            -0.06 * ramp,
+        )) * Mat4::from_rotation_z(0.55 * ramp)
+            * Mat4::from_rotation_x(0.35 * ramp)
+    } else {
+        Mat4::IDENTITY
+    };
+    arm * swing_xform * eat_xform * display
 }
 
 // ----------------------------------------------------------------

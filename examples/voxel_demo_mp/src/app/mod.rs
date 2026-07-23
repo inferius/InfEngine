@@ -259,6 +259,9 @@ pub(crate) struct Voxel {
     /// Previous-frame state of the F key. Rising edge consumes
     /// one piece of food from the inventory + restores HP.
     pub(crate) f_prev: bool,
+    /// W370: active eating session - (food block id, seconds
+    /// elapsed). MC use-duration 1.6 s; releasing F cancels.
+    pub(crate) eating: Option<(u16, f32)>,
     /// W10.3: previous-frame state of the Space key. Rising-edge
     /// detection is the cheap way to count discrete press events
     /// for the double-tap fly toggle (the jump path already uses
