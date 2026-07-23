@@ -444,7 +444,43 @@ pub(crate) fn sweep_aabb(
     pos: Vec3,
     delta: Vec3,
 ) -> (Vec3, bool, bool) {
-    sweep_aabb_with_doors(world, snow, &HashSet::new(), pos, delta)
+    sweep_aabb_with_doors(world, snow, &HashSet::new(), pos, delta, false)
+}
+
+/// W361: MC `maxUpStep` - a grounded mover walking into a ledge no
+/// taller than this climbs it without jumping (stairs, slabs, snow
+/// stacks). 0.6 clears a half-block step and never a full block,
+/// exactly vanilla.
+const STEP_UP: f32 = 0.6;
+
+/// W361: try to resolve a horizontal collision by stepping up.
+/// Returns the stepped position (already settled back down onto the
+/// obstacle top) or None when the ledge is too tall / headroom is
+/// missing. `candidate` is the blocked horizontal move at the
+/// ORIGINAL height.
+fn try_step_up(
+    world: &World,
+    snow: &HashMap<[i32; 3], u8>,
+    door_open: &HashSet<[i32; 3]>,
+    candidate: Vec3,
+) -> Option<Vec3> {
+    let lifted = Vec3::new(candidate.x, candidate.y + STEP_UP, candidate.z);
+    if aabb_intersects_solid_with_doors(world, snow, door_open, lifted) {
+        return None;
+    }
+    // Settle back down onto the step top so the climb lands exactly
+    // on the surface instead of leaving a 0.6 hop for gravity to
+    // close (visible as a bounce). 0.05 granularity over the full
+    // step height.
+    let mut settled = lifted;
+    for _ in 0..12 {
+        let probe = Vec3::new(settled.x, settled.y - 0.05, settled.z);
+        if aabb_intersects_solid_with_doors(world, snow, door_open, probe) {
+            break;
+        }
+        settled = probe;
+    }
+    Some(settled)
 }
 
 /// W63.1 - sweep_aabb with the open-door set threaded through so
@@ -457,15 +493,25 @@ pub(crate) fn sweep_aabb_with_doors(
     door_open: &HashSet<[i32; 3]>,
     pos: Vec3,
     delta: Vec3,
+    grounded: bool,
 ) -> (Vec3, bool, bool) {
     let mut new_pos = pos;
     let mut hit_floor = false;
     let mut hit_ceiling = false;
+    // W361: step-up only applies to a grounded walker moving flat or
+    // falling (a jumper already clears the ledge; MC gates on
+    // onGround the same way).
+    let can_step = grounded && delta.y <= 0.0;
 
     // X axis.
     let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
     if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
-        if delta.x > 0.0 {
+        if let Some(stepped) = can_step
+            .then(|| try_step_up(world, snow, door_open, candidate))
+            .flatten()
+        {
+            new_pos = stepped;
+        } else if delta.x > 0.0 {
             let wall = (candidate.x + PLAYER_RADIUS).floor();
             new_pos.x = wall - PLAYER_RADIUS - COLLISION_EPSILON;
         } else if delta.x < 0.0 {
@@ -495,7 +541,12 @@ pub(crate) fn sweep_aabb_with_doors(
     // Z axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
     if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
-        if delta.z > 0.0 {
+        if let Some(stepped) = can_step
+            .then(|| try_step_up(world, snow, door_open, candidate))
+            .flatten()
+        {
+            new_pos = stepped;
+        } else if delta.z > 0.0 {
             let wall = (candidate.z + PLAYER_RADIUS).floor();
             new_pos.z = wall - PLAYER_RADIUS - COLLISION_EPSILON;
         } else if delta.z < 0.0 {

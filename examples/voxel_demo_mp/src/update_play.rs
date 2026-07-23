@@ -915,6 +915,10 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             &app.door_open,
             app.player_pos,
             delta,
+            // W361: stairs/slabs climb like MC (maxUpStep 0.6); fly
+            // mode keeps the plain sweep so hovering along a wall
+            // does not ratchet upward.
+            app.grounded && !app.fly_mode,
         );
         app.player_pos = new_pos;
         if hit_floor {
