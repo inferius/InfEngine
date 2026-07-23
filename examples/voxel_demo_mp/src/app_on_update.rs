@@ -2067,6 +2067,25 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.world,
             &vx.chest_render_positions,
         );
+        // W369: crack overlay follows the mining session (MC
+        // destroy_stage_0..9 - the visible mining progress).
+        {
+            let mining = vx
+                .mining
+                .as_ref()
+                .map(|m| (m.voxel, m.progress, m.total));
+            let tex_root = if vx.resource_pack.is_placeholder() {
+                None
+            } else {
+                Some(vx.resource_pack.source.join("textures"))
+            };
+            crate::render::break_overlay::update_break_overlay(
+                renderer,
+                &mut vx.break_overlay,
+                mining,
+                tex_root.as_deref(),
+            );
+        }
         // W366: bed block entities (real entity/bed sheets,
         // head/foot pieces, per-color).
         render::beds::draw_beds(

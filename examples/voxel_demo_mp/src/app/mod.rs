@@ -801,6 +801,8 @@ pub(crate) struct Voxel {
     pub(crate) chest_meshes: crate::render::chests::ChestMeshes,
     /// W366: baked bed head/foot models per dye color.
     pub(crate) bed_meshes: crate::render::beds::BedMeshes,
+    /// W369: crack overlay for the active mining session.
+    pub(crate) break_overlay: crate::render::break_overlay::BreakOverlay,
     /// W366: bed piece states - facing bits 0-1 (foot -> head
     /// direction), bit 2 = head half. Fed by template carve (kind 6)
     /// and player placement; cells without a row fall back to the
