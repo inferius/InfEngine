@@ -12,7 +12,7 @@ the section notes at the bottom.
 | items | 1506 | 850 | 656 | block-form items resolve via places |
 | entities | 87 | 20 | 67 | player/armor_stand/mannequin/giant excluded |
 | biomes | 65 | 61 | 4 | name-probe vs worldgen sources |
-| configured features | 221 | 167 | 54 | substring probe (coarse) |
+| configured features | 221 | 169 | 52 | substring probe (coarse) |
 | structures | 34 | 31 | 3 | |
 | particles | 106 | 36 | 70 | substring probe |
 | sound events | 0 | 0 | 0 | engine plays via ENGINE_TO_MC key map |
@@ -237,17 +237,17 @@ the section notes at the bottom.
 
 - end_barrens, end_highlands, end_midlands, small_end_islands
 
-## Missing configured features (54)
+## Missing configured features (52)
 
 - azalea_tree, bamboo_no_podzol, bamboo_vegetation, birch_bees_005, bonus_chest, cave_vine_in_moss
 - chorus_plant, clay_pool_with_dripleaves, clay_with_dripleaves, crimson_forest_vegetation_bonemeal, crimson_fungus_planted, dripleaf
 - dripstone_cluster, end_gateway_delayed, end_gateway_return, end_platform, flower_pale_garden, fossil_coal
-- fossil_diamonds, iceberg_blue, iceberg_packed, jungle_tree_no_vine, lake_lava, large_dripstone
-- lush_caves_clay, moss_patch, moss_patch_bonemeal, moss_patch_ceiling, moss_vegetation, nether_sprouts_bonemeal
-- ore_clay, ore_copper_large, pale_forest_flower, pale_garden_vegetation, pale_moss_patch, pale_moss_patch_bonemeal
-- pale_moss_vegetation, pale_oak, pale_oak_bonemeal, pale_oak_creaking, pile_hay, pile_ice
-- pile_melon, pile_pumpkin, pile_snow, rooted_azalea_tree, sculk_patch_ancient_city, small_basalt_columns
-- spring_nether_closed, spring_nether_open, twisting_vines_bonemeal, void_start_platform, warped_forest_vegetation_bonemeal, warped_fungus_planted
+- fossil_diamonds, jungle_tree_no_vine, lake_lava, large_dripstone, lush_caves_clay, moss_patch
+- moss_patch_bonemeal, moss_patch_ceiling, moss_vegetation, nether_sprouts_bonemeal, ore_clay, ore_copper_large
+- pale_forest_flower, pale_garden_vegetation, pale_moss_patch, pale_moss_patch_bonemeal, pale_moss_vegetation, pale_oak
+- pale_oak_bonemeal, pale_oak_creaking, pile_hay, pile_ice, pile_melon, pile_pumpkin
+- pile_snow, rooted_azalea_tree, sculk_patch_ancient_city, small_basalt_columns, spring_nether_closed, spring_nether_open
+- twisting_vines_bonemeal, void_start_platform, warped_forest_vegetation_bonemeal, warped_fungus_planted
 
 ## Missing structures (3)
 
