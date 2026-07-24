@@ -8,16 +8,16 @@ the section notes at the bottom.
 
 | domain | vanilla | covered | missing | notes |
 |--------|---------|---------|---------|-------|
-| blocks | 1170 | 697 | 473 | 14 family-substitute aliases |
-| items | 1506 | 850 | 656 | block-form items resolve via places |
+| blocks | 1170 | 698 | 472 | 14 family-substitute aliases |
+| items | 1506 | 851 | 655 | block-form items resolve via places |
 | entities | 87 | 20 | 67 | player/armor_stand/mannequin/giant excluded |
 | biomes | 65 | 61 | 4 | name-probe vs worldgen sources |
-| configured features | 221 | 169 | 52 | substring probe (coarse) |
+| configured features | 221 | 171 | 50 | substring probe (coarse) |
 | structures | 34 | 31 | 3 | |
 | particles | 106 | 36 | 70 | substring probe |
 | sound events | 0 | 0 | 0 | engine plays via ENGINE_TO_MC key map |
 
-## Missing blocks (473)
+## Missing blocks (472)
 
 - acacia_button, acacia_hanging_sign, acacia_shelf, acacia_sign, acacia_wall_hanging_sign, acacia_wall_sign
 - air, andesite_slab, andesite_stairs, azalea_leaves, bamboo_block, bamboo_button
@@ -42,62 +42,62 @@ the section notes at the bottom.
 - dead_brain_coral_wall_fan, dead_bubble_coral, dead_bubble_coral_block, dead_bubble_coral_fan, dead_bubble_coral_wall_fan, dead_fire_coral
 - dead_fire_coral_block, dead_fire_coral_fan, dead_fire_coral_wall_fan, dead_horn_coral, dead_horn_coral_block, dead_horn_coral_fan
 - dead_horn_coral_wall_fan, dead_tube_coral, dead_tube_coral_block, dead_tube_coral_fan, dead_tube_coral_wall_fan, dragon_head
-- dragon_wall_head, dried_ghast, dripstone_block, end_gateway, end_portal, end_stone_brick_stairs
-- exposed_chiseled_copper, exposed_copper_bars, exposed_copper_bulb, exposed_copper_chain, exposed_copper_chest, exposed_copper_door
-- exposed_copper_golem_statue, exposed_copper_grate, exposed_copper_lantern, exposed_copper_trapdoor, exposed_cut_copper, exposed_cut_copper_slab
-- exposed_cut_copper_stairs, exposed_lightning_rod, fire_coral_wall_fan, flowering_azalea_leaves, frogspawn, frosted_ice
-- glow_item_frame, golden_dandelion, granite_slab, gray_banner, gray_candle_cake, gray_shulker_box
-- green_banner, green_candle_cake, green_shulker_box, green_wall_banner, heavy_core, horn_coral_wall_fan
-- infested_cracked_stone_bricks, iron_ore, item_frame, jigsaw, jungle_hanging_sign, jungle_pressure_plate
-- jungle_shelf, jungle_sign, jungle_wall_hanging_sign, jungle_wall_sign, jungle_wood, large_amethyst_bud
-- large_fern, lava_cauldron, light, light_blue_banner, light_blue_candle_cake, light_blue_shulker_box
-- light_blue_wall_banner, light_gray_banner, light_gray_candle_cake, light_gray_shulker_box, lightning_rod, lime_banner
-- lime_candle_cake, lime_shulker_box, lime_wall_banner, magenta_banner, magenta_candle_cake, magenta_shulker_box
-- magenta_wall_banner, mangrove_button, mangrove_fence, mangrove_fence_gate, mangrove_hanging_sign, mangrove_pressure_plate
-- mangrove_shelf, mangrove_sign, mangrove_wall_hanging_sign, mangrove_wall_sign, medium_amethyst_bud, moving_piston
-- mud_brick_slab, mud_brick_stairs, mud_brick_wall, nether_portal, netherite_block, oak_hanging_sign
-- oak_shelf, oak_sign, oak_wall_hanging_sign, oak_wood, ochre_froglight, open_eyeblossom
-- orange_banner, orange_candle_cake, orange_shulker_box, orange_wall_banner, oxidized_copper_bars, oxidized_copper_bulb
-- oxidized_copper_chain, oxidized_copper_chest, oxidized_copper_golem_statue, oxidized_copper_lantern, oxidized_lightning_rod, pale_hanging_moss
-- pale_moss_block, pale_moss_carpet, pale_oak_button, pale_oak_door, pale_oak_fence, pale_oak_fence_gate
-- pale_oak_hanging_sign, pale_oak_leaves, pale_oak_log, pale_oak_planks, pale_oak_pressure_plate, pale_oak_sapling
-- pale_oak_shelf, pale_oak_sign, pale_oak_slab, pale_oak_stairs, pale_oak_trapdoor, pale_oak_wall_hanging_sign
-- pale_oak_wall_sign, pale_oak_wood, pearlescent_froglight, petrified_oak_slab, piglin_head, piglin_wall_head
-- pink_banner, pink_candle_cake, pink_shulker_box, pink_wall_banner, pitcher_crop, player_head
-- player_wall_head, polished_andesite_slab, polished_andesite_stairs, polished_blackstone_brick_slab, polished_blackstone_brick_wall, polished_blackstone_button
-- polished_blackstone_pressure_plate, polished_blackstone_slab, polished_blackstone_stairs, polished_blackstone_wall, polished_diorite_slab, polished_diorite_stairs
-- polished_granite_slab, polished_tuff_stairs, polished_tuff_wall, potted_acacia_sapling, potted_azalea_bush, potted_bamboo
-- potted_brown_mushroom, potted_cherry_sapling, potted_closed_eyeblossom, potted_cornflower, potted_crimson_fungus, potted_crimson_roots
-- potted_dark_oak_sapling, potted_fern, potted_flowering_azalea_bush, potted_golden_dandelion, potted_jungle_sapling, potted_lily_of_the_valley
-- potted_mangrove_propagule, potted_oak_sapling, potted_open_eyeblossom, potted_orange_tulip, potted_pale_oak_sapling, potted_pink_tulip
-- potted_red_mushroom, potted_torchflower, potted_warped_fungus, potted_warped_roots, potted_wither_rose, powder_snow_cauldron
-- prismarine_brick_slab, prismarine_brick_stairs, prismarine_slab, prismarine_stairs, prismarine_wall, purple_banner
-- purple_candle_cake, purple_shulker_box, purple_wall_banner, purpur_slab, purpur_stairs, quartz_bricks
-- quartz_pillar, quartz_slab, quartz_stairs, red_banner, red_candle_cake, red_nether_brick_slab
-- red_nether_brick_stairs, red_nether_brick_wall, red_shulker_box, red_wall_banner, repeating_command_block, resin_block
-- resin_brick_slab, resin_brick_stairs, resin_brick_wall, resin_bricks, resin_clump, rooted_dirt
-- shulker_box, skeleton_wall_skull, small_amethyst_bud, smooth_quartz_stairs, smooth_red_sandstone_slab, smooth_red_sandstone_stairs
-- sniffer_egg, soul_campfire, spruce_button, spruce_hanging_sign, spruce_shelf, spruce_sign
-- spruce_wall_hanging_sign, stripped_acacia_wood, stripped_bamboo_block, stripped_birch_log, stripped_birch_wood, stripped_cherry_log
-- stripped_cherry_wood, stripped_crimson_hyphae, stripped_crimson_stem, stripped_dark_oak_log, stripped_dark_oak_wood, stripped_jungle_log
-- stripped_jungle_wood, stripped_mangrove_log, stripped_mangrove_wood, stripped_pale_oak_log, stripped_pale_oak_wood, stripped_warped_hyphae
-- stripped_warped_stem, structure_block, structure_void, suspicious_gravel, suspicious_sand, tall_grass
-- tall_seagrass, test_block, test_instance_block, tinted_glass, torchflower_crop, tripwire
-- tube_coral_wall_fan, tuff_brick_slab, tuff_brick_stairs, tuff_brick_wall, tuff_slab, tuff_stairs
-- tuff_wall, turtle_egg, twisting_vines_plant, verdant_froglight, void_air, warped_button
-- warped_fence, warped_fence_gate, warped_hanging_sign, warped_pressure_plate, warped_shelf, warped_sign
-- warped_slab, warped_stairs, warped_wall_hanging_sign, warped_wall_sign, water_cauldron, waxed_copper_bars
-- waxed_copper_chain, waxed_copper_chest, waxed_copper_golem_statue, waxed_copper_lantern, waxed_exposed_chiseled_copper, waxed_exposed_copper_bars
-- waxed_exposed_copper_bulb, waxed_exposed_copper_chain, waxed_exposed_copper_chest, waxed_exposed_copper_door, waxed_exposed_copper_golem_statue, waxed_exposed_copper_grate
-- waxed_exposed_copper_lantern, waxed_exposed_copper_trapdoor, waxed_exposed_cut_copper, waxed_exposed_cut_copper_slab, waxed_exposed_cut_copper_stairs, waxed_exposed_lightning_rod
-- waxed_lightning_rod, waxed_oxidized_copper_bars, waxed_oxidized_copper_chain, waxed_oxidized_copper_chest, waxed_oxidized_copper_golem_statue, waxed_oxidized_copper_lantern
-- waxed_oxidized_lightning_rod, waxed_weathered_chiseled_copper, waxed_weathered_copper_bars, waxed_weathered_copper_bulb, waxed_weathered_copper_chain, waxed_weathered_copper_chest
-- waxed_weathered_copper_door, waxed_weathered_copper_golem_statue, waxed_weathered_copper_grate, waxed_weathered_copper_lantern, waxed_weathered_copper_trapdoor, waxed_weathered_cut_copper
-- waxed_weathered_cut_copper_slab, waxed_weathered_cut_copper_stairs, waxed_weathered_lightning_rod, weathered_chiseled_copper, weathered_copper_bars, weathered_copper_bulb
-- weathered_copper_chain, weathered_copper_chest, weathered_copper_door, weathered_copper_golem_statue, weathered_copper_grate, weathered_copper_lantern
-- weathered_copper_trapdoor, weathered_cut_copper, weathered_cut_copper_slab, weathered_cut_copper_stairs, weathered_lightning_rod, weeping_vines_plant
-- white_banner, white_candle_cake, white_shulker_box, wither_skeleton_skull, wither_skeleton_wall_skull, yellow_banner
-- yellow_candle_cake, yellow_shulker_box, yellow_wall_banner, zombie_head, zombie_wall_head
+- dragon_wall_head, dried_ghast, end_gateway, end_portal, end_stone_brick_stairs, exposed_chiseled_copper
+- exposed_copper_bars, exposed_copper_bulb, exposed_copper_chain, exposed_copper_chest, exposed_copper_door, exposed_copper_golem_statue
+- exposed_copper_grate, exposed_copper_lantern, exposed_copper_trapdoor, exposed_cut_copper, exposed_cut_copper_slab, exposed_cut_copper_stairs
+- exposed_lightning_rod, fire_coral_wall_fan, flowering_azalea_leaves, frogspawn, frosted_ice, glow_item_frame
+- golden_dandelion, granite_slab, gray_banner, gray_candle_cake, gray_shulker_box, green_banner
+- green_candle_cake, green_shulker_box, green_wall_banner, heavy_core, horn_coral_wall_fan, infested_cracked_stone_bricks
+- iron_ore, item_frame, jigsaw, jungle_hanging_sign, jungle_pressure_plate, jungle_shelf
+- jungle_sign, jungle_wall_hanging_sign, jungle_wall_sign, jungle_wood, large_amethyst_bud, large_fern
+- lava_cauldron, light, light_blue_banner, light_blue_candle_cake, light_blue_shulker_box, light_blue_wall_banner
+- light_gray_banner, light_gray_candle_cake, light_gray_shulker_box, lightning_rod, lime_banner, lime_candle_cake
+- lime_shulker_box, lime_wall_banner, magenta_banner, magenta_candle_cake, magenta_shulker_box, magenta_wall_banner
+- mangrove_button, mangrove_fence, mangrove_fence_gate, mangrove_hanging_sign, mangrove_pressure_plate, mangrove_shelf
+- mangrove_sign, mangrove_wall_hanging_sign, mangrove_wall_sign, medium_amethyst_bud, moving_piston, mud_brick_slab
+- mud_brick_stairs, mud_brick_wall, nether_portal, netherite_block, oak_hanging_sign, oak_shelf
+- oak_sign, oak_wall_hanging_sign, oak_wood, ochre_froglight, open_eyeblossom, orange_banner
+- orange_candle_cake, orange_shulker_box, orange_wall_banner, oxidized_copper_bars, oxidized_copper_bulb, oxidized_copper_chain
+- oxidized_copper_chest, oxidized_copper_golem_statue, oxidized_copper_lantern, oxidized_lightning_rod, pale_hanging_moss, pale_moss_block
+- pale_moss_carpet, pale_oak_button, pale_oak_door, pale_oak_fence, pale_oak_fence_gate, pale_oak_hanging_sign
+- pale_oak_leaves, pale_oak_log, pale_oak_planks, pale_oak_pressure_plate, pale_oak_sapling, pale_oak_shelf
+- pale_oak_sign, pale_oak_slab, pale_oak_stairs, pale_oak_trapdoor, pale_oak_wall_hanging_sign, pale_oak_wall_sign
+- pale_oak_wood, pearlescent_froglight, petrified_oak_slab, piglin_head, piglin_wall_head, pink_banner
+- pink_candle_cake, pink_shulker_box, pink_wall_banner, pitcher_crop, player_head, player_wall_head
+- polished_andesite_slab, polished_andesite_stairs, polished_blackstone_brick_slab, polished_blackstone_brick_wall, polished_blackstone_button, polished_blackstone_pressure_plate
+- polished_blackstone_slab, polished_blackstone_stairs, polished_blackstone_wall, polished_diorite_slab, polished_diorite_stairs, polished_granite_slab
+- polished_tuff_stairs, polished_tuff_wall, potted_acacia_sapling, potted_azalea_bush, potted_bamboo, potted_brown_mushroom
+- potted_cherry_sapling, potted_closed_eyeblossom, potted_cornflower, potted_crimson_fungus, potted_crimson_roots, potted_dark_oak_sapling
+- potted_fern, potted_flowering_azalea_bush, potted_golden_dandelion, potted_jungle_sapling, potted_lily_of_the_valley, potted_mangrove_propagule
+- potted_oak_sapling, potted_open_eyeblossom, potted_orange_tulip, potted_pale_oak_sapling, potted_pink_tulip, potted_red_mushroom
+- potted_torchflower, potted_warped_fungus, potted_warped_roots, potted_wither_rose, powder_snow_cauldron, prismarine_brick_slab
+- prismarine_brick_stairs, prismarine_slab, prismarine_stairs, prismarine_wall, purple_banner, purple_candle_cake
+- purple_shulker_box, purple_wall_banner, purpur_slab, purpur_stairs, quartz_bricks, quartz_pillar
+- quartz_slab, quartz_stairs, red_banner, red_candle_cake, red_nether_brick_slab, red_nether_brick_stairs
+- red_nether_brick_wall, red_shulker_box, red_wall_banner, repeating_command_block, resin_block, resin_brick_slab
+- resin_brick_stairs, resin_brick_wall, resin_bricks, resin_clump, rooted_dirt, shulker_box
+- skeleton_wall_skull, small_amethyst_bud, smooth_quartz_stairs, smooth_red_sandstone_slab, smooth_red_sandstone_stairs, sniffer_egg
+- soul_campfire, spruce_button, spruce_hanging_sign, spruce_shelf, spruce_sign, spruce_wall_hanging_sign
+- stripped_acacia_wood, stripped_bamboo_block, stripped_birch_log, stripped_birch_wood, stripped_cherry_log, stripped_cherry_wood
+- stripped_crimson_hyphae, stripped_crimson_stem, stripped_dark_oak_log, stripped_dark_oak_wood, stripped_jungle_log, stripped_jungle_wood
+- stripped_mangrove_log, stripped_mangrove_wood, stripped_pale_oak_log, stripped_pale_oak_wood, stripped_warped_hyphae, stripped_warped_stem
+- structure_block, structure_void, suspicious_gravel, suspicious_sand, tall_grass, tall_seagrass
+- test_block, test_instance_block, tinted_glass, torchflower_crop, tripwire, tube_coral_wall_fan
+- tuff_brick_slab, tuff_brick_stairs, tuff_brick_wall, tuff_slab, tuff_stairs, tuff_wall
+- turtle_egg, twisting_vines_plant, verdant_froglight, void_air, warped_button, warped_fence
+- warped_fence_gate, warped_hanging_sign, warped_pressure_plate, warped_shelf, warped_sign, warped_slab
+- warped_stairs, warped_wall_hanging_sign, warped_wall_sign, water_cauldron, waxed_copper_bars, waxed_copper_chain
+- waxed_copper_chest, waxed_copper_golem_statue, waxed_copper_lantern, waxed_exposed_chiseled_copper, waxed_exposed_copper_bars, waxed_exposed_copper_bulb
+- waxed_exposed_copper_chain, waxed_exposed_copper_chest, waxed_exposed_copper_door, waxed_exposed_copper_golem_statue, waxed_exposed_copper_grate, waxed_exposed_copper_lantern
+- waxed_exposed_copper_trapdoor, waxed_exposed_cut_copper, waxed_exposed_cut_copper_slab, waxed_exposed_cut_copper_stairs, waxed_exposed_lightning_rod, waxed_lightning_rod
+- waxed_oxidized_copper_bars, waxed_oxidized_copper_chain, waxed_oxidized_copper_chest, waxed_oxidized_copper_golem_statue, waxed_oxidized_copper_lantern, waxed_oxidized_lightning_rod
+- waxed_weathered_chiseled_copper, waxed_weathered_copper_bars, waxed_weathered_copper_bulb, waxed_weathered_copper_chain, waxed_weathered_copper_chest, waxed_weathered_copper_door
+- waxed_weathered_copper_golem_statue, waxed_weathered_copper_grate, waxed_weathered_copper_lantern, waxed_weathered_copper_trapdoor, waxed_weathered_cut_copper, waxed_weathered_cut_copper_slab
+- waxed_weathered_cut_copper_stairs, waxed_weathered_lightning_rod, weathered_chiseled_copper, weathered_copper_bars, weathered_copper_bulb, weathered_copper_chain
+- weathered_copper_chest, weathered_copper_door, weathered_copper_golem_statue, weathered_copper_grate, weathered_copper_lantern, weathered_copper_trapdoor
+- weathered_cut_copper, weathered_cut_copper_slab, weathered_cut_copper_stairs, weathered_lightning_rod, weeping_vines_plant, white_banner
+- white_candle_cake, white_shulker_box, wither_skeleton_skull, wither_skeleton_wall_skull, yellow_banner, yellow_candle_cake
+- yellow_shulker_box, yellow_wall_banner, zombie_head, zombie_wall_head
 
 ## Family-substitute block aliases (render as a cousin) (14)
 
@@ -105,7 +105,7 @@ the section notes at the bottom.
 - mangrove_wood -> mangrove_log, oak_log -> wood, powder_snow -> snow_block, redstone_wire -> redstone_dust, spruce_pressure_plate -> oak_pressure_plate, spruce_wood -> spruce_log
 - stripped_oak_log -> wood, stripped_spruce_wood -> spruce_log
 
-## Missing items (656)
+## Missing items (655)
 
 - acacia_boat, acacia_button, acacia_chest_boat, acacia_hanging_sign, acacia_shelf, acacia_sign
 - air, allay_spawn_egg, andesite_slab, andesite_stairs, angler_pottery_sherd, archer_pottery_sherd
@@ -138,85 +138,85 @@ the section notes at the bottom.
 - dead_bubble_coral, dead_bubble_coral_block, dead_bubble_coral_fan, dead_fire_coral, dead_fire_coral_block, dead_fire_coral_fan
 - dead_horn_coral, dead_horn_coral_block, dead_horn_coral_fan, dead_tube_coral, dead_tube_coral_block, dead_tube_coral_fan
 - debug_stick, dolphin_spawn_egg, donkey_spawn_egg, dragon_breath, dragon_head, dried_ghast
-- dripstone_block, drowned_spawn_egg, egg, elder_guardian_spawn_egg, elytra, enchanted_book
-- end_crystal, end_stone_brick_stairs, ender_dragon_spawn_egg, ender_eye, enderman_spawn_egg, endermite_spawn_egg
-- evoker_spawn_egg, explorer_pottery_sherd, exposed_chiseled_copper, exposed_copper_bars, exposed_copper_bulb, exposed_copper_chain
-- exposed_copper_chest, exposed_copper_door, exposed_copper_golem_statue, exposed_copper_grate, exposed_copper_lantern, exposed_copper_trapdoor
-- exposed_cut_copper, exposed_cut_copper_slab, exposed_cut_copper_stairs, exposed_lightning_rod, field_masoned_banner_pattern, filled_map
-- firework_rocket, firework_star, flow_armor_trim_smithing_template, flow_banner_pattern, flow_pottery_sherd, flower_banner_pattern
-- flowering_azalea_leaves, fox_spawn_egg, friend_pottery_sherd, frog_spawn_egg, frogspawn, furnace_minecart
-- ghast_spawn_egg, glass_bottle, globe_banner_pattern, glow_item_frame, glow_squid_spawn_egg, goat_spawn_egg
-- golden_dandelion, golden_spear, granite_slab, gray_banner, gray_bundle, gray_harness
-- gray_shulker_box, green_banner, green_bundle, green_harness, green_shulker_box, guardian_spawn_egg
-- guster_banner_pattern, guster_pottery_sherd, happy_ghast_spawn_egg, heart_pottery_sherd, heartbreak_pottery_sherd, heavy_core
-- hoglin_spawn_egg, honey_bottle, honeycomb, hopper_minecart, horse_spawn_egg, host_armor_trim_smithing_template
-- howl_pottery_sherd, husk_spawn_egg, infested_cracked_stone_bricks, iron_golem_spawn_egg, iron_ore, iron_shovel
-- item_frame, jigsaw, jungle_boat, jungle_chest_boat, jungle_hanging_sign, jungle_pressure_plate
-- jungle_shelf, jungle_sign, jungle_wood, knowledge_book, large_amethyst_bud, large_fern
-- lead, leather_horse_armor, light, light_blue_banner, light_blue_bundle, light_blue_harness
-- light_blue_shulker_box, light_gray_banner, light_gray_bundle, light_gray_harness, light_gray_shulker_box, lightning_rod
-- lime_banner, lime_bundle, lime_harness, lime_shulker_box, lingering_potion, llama_spawn_egg
-- mace, magenta_banner, magenta_bundle, magenta_harness, magenta_shulker_box, magma_cube_spawn_egg
-- mangrove_boat, mangrove_button, mangrove_chest_boat, mangrove_fence, mangrove_fence_gate, mangrove_hanging_sign
-- mangrove_pressure_plate, mangrove_shelf, mangrove_sign, medium_amethyst_bud, miner_pottery_sherd, mojang_banner_pattern
-- mooshroom_spawn_egg, mourner_pottery_sherd, mud_brick_slab, mud_brick_stairs, mud_brick_wall, mule_spawn_egg
-- music_disc_11, music_disc_5, music_disc_blocks, music_disc_chirp, music_disc_creator, music_disc_creator_music_box
-- music_disc_far, music_disc_lava_chicken, music_disc_mall, music_disc_mellohi, music_disc_precipice, music_disc_relic
-- music_disc_stal, music_disc_strad, music_disc_tears, music_disc_wait, music_disc_ward, mutton
-- nautilus_spawn_egg, nether_brick, nether_star, netherite_axe, netherite_block, netherite_boots
-- netherite_chestplate, netherite_helmet, netherite_hoe, netherite_horse_armor, netherite_leggings, netherite_nautilus_armor
-- netherite_pickaxe, netherite_shovel, netherite_spear, netherite_sword, oak_boat, oak_chest_boat
-- oak_hanging_sign, oak_shelf, oak_sign, oak_wood, ocelot_spawn_egg, ochre_froglight
-- ominous_bottle, ominous_trial_key, open_eyeblossom, orange_banner, orange_bundle, orange_harness
-- orange_shulker_box, oxidized_copper_bars, oxidized_copper_bulb, oxidized_copper_chain, oxidized_copper_chest, oxidized_copper_golem_statue
-- oxidized_copper_lantern, oxidized_lightning_rod, painting, pale_hanging_moss, pale_moss_block, pale_moss_carpet
-- pale_oak_boat, pale_oak_button, pale_oak_chest_boat, pale_oak_door, pale_oak_fence, pale_oak_fence_gate
-- pale_oak_hanging_sign, pale_oak_leaves, pale_oak_log, pale_oak_planks, pale_oak_pressure_plate, pale_oak_sapling
-- pale_oak_shelf, pale_oak_sign, pale_oak_slab, pale_oak_stairs, pale_oak_trapdoor, pale_oak_wood
-- panda_spawn_egg, parched_spawn_egg, parrot_spawn_egg, pearlescent_froglight, petrified_oak_slab, phantom_membrane
-- phantom_spawn_egg, piglin_brute_spawn_egg, piglin_head, piglin_spawn_egg, pillager_spawn_egg, pink_banner
-- pink_bundle, pink_harness, pink_shulker_box, pitcher_pod, player_head, plenty_pottery_sherd
-- polished_andesite_slab, polished_andesite_stairs, polished_blackstone_brick_slab, polished_blackstone_brick_wall, polished_blackstone_button, polished_blackstone_pressure_plate
-- polished_blackstone_slab, polished_blackstone_stairs, polished_blackstone_wall, polished_diorite_slab, polished_diorite_stairs, polished_granite_slab
-- polished_tuff_stairs, polished_tuff_wall, popped_chorus_fruit, powder_snow_bucket, prismarine_brick_slab, prismarine_brick_stairs
-- prismarine_slab, prismarine_stairs, prismarine_wall, prize_pottery_sherd, pufferfish, pufferfish_bucket
-- pufferfish_spawn_egg, purple_banner, purple_bundle, purple_harness, purple_shulker_box, purpur_slab
-- purpur_stairs, quartz_bricks, quartz_pillar, quartz_slab, quartz_stairs, rabbit
-- rabbit_foot, rabbit_hide, rabbit_stew, raiser_armor_trim_smithing_template, ravager_spawn_egg, recovery_compass
-- red_banner, red_bundle, red_harness, red_nether_brick_slab, red_nether_brick_stairs, red_nether_brick_wall
-- red_shulker_box, redstone, repeating_command_block, resin_block, resin_brick, resin_brick_slab
-- resin_brick_stairs, resin_brick_wall, resin_bricks, rooted_dirt, salmon, salmon_bucket
-- salmon_spawn_egg, scrape_pottery_sherd, shaper_armor_trim_smithing_template, sheaf_pottery_sherd, shelter_pottery_sherd, shulker_box
-- shulker_shell, shulker_spawn_egg, silverfish_spawn_egg, skeleton_horse_spawn_egg, skull_banner_pattern, skull_pottery_sherd
-- slime_spawn_egg, small_amethyst_bud, smooth_quartz_stairs, smooth_red_sandstone_slab, smooth_red_sandstone_stairs, sniffer_egg
-- sniffer_spawn_egg, snort_pottery_sherd, snow_golem_spawn_egg, snowball, soul_campfire, spire_armor_trim_smithing_template
-- splash_potion, spruce_boat, spruce_button, spruce_chest_boat, spruce_hanging_sign, spruce_shelf
-- spruce_sign, spyglass, squid_spawn_egg, stone_shovel, stone_sword, stray_spawn_egg
-- strider_spawn_egg, stripped_acacia_wood, stripped_bamboo_block, stripped_birch_log, stripped_birch_wood, stripped_cherry_log
-- stripped_cherry_wood, stripped_crimson_hyphae, stripped_crimson_stem, stripped_dark_oak_log, stripped_dark_oak_wood, stripped_jungle_log
-- stripped_jungle_wood, stripped_mangrove_log, stripped_mangrove_wood, stripped_pale_oak_log, stripped_pale_oak_wood, stripped_warped_hyphae
-- stripped_warped_stem, structure_block, structure_void, suspicious_gravel, suspicious_sand, sweet_berries
-- tadpole_bucket, tadpole_spawn_egg, tall_grass, test_block, test_instance_block, tide_armor_trim_smithing_template
-- tinted_glass, tnt_minecart, torchflower_seeds, totem_of_undying, trader_llama_spawn_egg, trident
-- tropical_fish, tropical_fish_bucket, tropical_fish_spawn_egg, tuff_brick_slab, tuff_brick_stairs, tuff_brick_wall
-- tuff_slab, tuff_stairs, tuff_wall, turtle_egg, turtle_helmet, turtle_scute
-- turtle_spawn_egg, verdant_froglight, vex_spawn_egg, villager_spawn_egg, vindicator_spawn_egg, wandering_trader_spawn_egg
-- warden_spawn_egg, warped_button, warped_fence, warped_fence_gate, warped_fungus_on_a_stick, warped_hanging_sign
-- warped_pressure_plate, warped_shelf, warped_sign, warped_slab, warped_stairs, waxed_copper_bars
-- waxed_copper_chain, waxed_copper_chest, waxed_copper_golem_statue, waxed_copper_lantern, waxed_exposed_chiseled_copper, waxed_exposed_copper_bars
-- waxed_exposed_copper_bulb, waxed_exposed_copper_chain, waxed_exposed_copper_chest, waxed_exposed_copper_door, waxed_exposed_copper_golem_statue, waxed_exposed_copper_grate
-- waxed_exposed_copper_lantern, waxed_exposed_copper_trapdoor, waxed_exposed_cut_copper, waxed_exposed_cut_copper_slab, waxed_exposed_cut_copper_stairs, waxed_exposed_lightning_rod
-- waxed_lightning_rod, waxed_oxidized_copper_bars, waxed_oxidized_copper_chain, waxed_oxidized_copper_chest, waxed_oxidized_copper_golem_statue, waxed_oxidized_copper_lantern
-- waxed_oxidized_lightning_rod, waxed_weathered_chiseled_copper, waxed_weathered_copper_bars, waxed_weathered_copper_bulb, waxed_weathered_copper_chain, waxed_weathered_copper_chest
-- waxed_weathered_copper_door, waxed_weathered_copper_golem_statue, waxed_weathered_copper_grate, waxed_weathered_copper_lantern, waxed_weathered_copper_trapdoor, waxed_weathered_cut_copper
-- waxed_weathered_cut_copper_slab, waxed_weathered_cut_copper_stairs, waxed_weathered_lightning_rod, wayfinder_armor_trim_smithing_template, weathered_chiseled_copper, weathered_copper_bars
-- weathered_copper_bulb, weathered_copper_chain, weathered_copper_chest, weathered_copper_door, weathered_copper_golem_statue, weathered_copper_grate
-- weathered_copper_lantern, weathered_copper_trapdoor, weathered_cut_copper, weathered_cut_copper_slab, weathered_cut_copper_stairs, weathered_lightning_rod
-- white_banner, white_bundle, white_harness, white_shulker_box, wind_charge, witch_spawn_egg
-- wither_skeleton_skull, wither_skeleton_spawn_egg, wither_spawn_egg, wolf_armor, wooden_pickaxe, wooden_shovel
-- wooden_spear, wooden_sword, writable_book, written_book, yellow_banner, yellow_bundle
-- yellow_harness, yellow_shulker_box, zoglin_spawn_egg, zombie_head, zombie_horse_spawn_egg, zombie_nautilus_spawn_egg
-- zombie_villager_spawn_egg, zombified_piglin_spawn_egg
+- drowned_spawn_egg, egg, elder_guardian_spawn_egg, elytra, enchanted_book, end_crystal
+- end_stone_brick_stairs, ender_dragon_spawn_egg, ender_eye, enderman_spawn_egg, endermite_spawn_egg, evoker_spawn_egg
+- explorer_pottery_sherd, exposed_chiseled_copper, exposed_copper_bars, exposed_copper_bulb, exposed_copper_chain, exposed_copper_chest
+- exposed_copper_door, exposed_copper_golem_statue, exposed_copper_grate, exposed_copper_lantern, exposed_copper_trapdoor, exposed_cut_copper
+- exposed_cut_copper_slab, exposed_cut_copper_stairs, exposed_lightning_rod, field_masoned_banner_pattern, filled_map, firework_rocket
+- firework_star, flow_armor_trim_smithing_template, flow_banner_pattern, flow_pottery_sherd, flower_banner_pattern, flowering_azalea_leaves
+- fox_spawn_egg, friend_pottery_sherd, frog_spawn_egg, frogspawn, furnace_minecart, ghast_spawn_egg
+- glass_bottle, globe_banner_pattern, glow_item_frame, glow_squid_spawn_egg, goat_spawn_egg, golden_dandelion
+- golden_spear, granite_slab, gray_banner, gray_bundle, gray_harness, gray_shulker_box
+- green_banner, green_bundle, green_harness, green_shulker_box, guardian_spawn_egg, guster_banner_pattern
+- guster_pottery_sherd, happy_ghast_spawn_egg, heart_pottery_sherd, heartbreak_pottery_sherd, heavy_core, hoglin_spawn_egg
+- honey_bottle, honeycomb, hopper_minecart, horse_spawn_egg, host_armor_trim_smithing_template, howl_pottery_sherd
+- husk_spawn_egg, infested_cracked_stone_bricks, iron_golem_spawn_egg, iron_ore, iron_shovel, item_frame
+- jigsaw, jungle_boat, jungle_chest_boat, jungle_hanging_sign, jungle_pressure_plate, jungle_shelf
+- jungle_sign, jungle_wood, knowledge_book, large_amethyst_bud, large_fern, lead
+- leather_horse_armor, light, light_blue_banner, light_blue_bundle, light_blue_harness, light_blue_shulker_box
+- light_gray_banner, light_gray_bundle, light_gray_harness, light_gray_shulker_box, lightning_rod, lime_banner
+- lime_bundle, lime_harness, lime_shulker_box, lingering_potion, llama_spawn_egg, mace
+- magenta_banner, magenta_bundle, magenta_harness, magenta_shulker_box, magma_cube_spawn_egg, mangrove_boat
+- mangrove_button, mangrove_chest_boat, mangrove_fence, mangrove_fence_gate, mangrove_hanging_sign, mangrove_pressure_plate
+- mangrove_shelf, mangrove_sign, medium_amethyst_bud, miner_pottery_sherd, mojang_banner_pattern, mooshroom_spawn_egg
+- mourner_pottery_sherd, mud_brick_slab, mud_brick_stairs, mud_brick_wall, mule_spawn_egg, music_disc_11
+- music_disc_5, music_disc_blocks, music_disc_chirp, music_disc_creator, music_disc_creator_music_box, music_disc_far
+- music_disc_lava_chicken, music_disc_mall, music_disc_mellohi, music_disc_precipice, music_disc_relic, music_disc_stal
+- music_disc_strad, music_disc_tears, music_disc_wait, music_disc_ward, mutton, nautilus_spawn_egg
+- nether_brick, nether_star, netherite_axe, netherite_block, netherite_boots, netherite_chestplate
+- netherite_helmet, netherite_hoe, netherite_horse_armor, netherite_leggings, netherite_nautilus_armor, netherite_pickaxe
+- netherite_shovel, netherite_spear, netherite_sword, oak_boat, oak_chest_boat, oak_hanging_sign
+- oak_shelf, oak_sign, oak_wood, ocelot_spawn_egg, ochre_froglight, ominous_bottle
+- ominous_trial_key, open_eyeblossom, orange_banner, orange_bundle, orange_harness, orange_shulker_box
+- oxidized_copper_bars, oxidized_copper_bulb, oxidized_copper_chain, oxidized_copper_chest, oxidized_copper_golem_statue, oxidized_copper_lantern
+- oxidized_lightning_rod, painting, pale_hanging_moss, pale_moss_block, pale_moss_carpet, pale_oak_boat
+- pale_oak_button, pale_oak_chest_boat, pale_oak_door, pale_oak_fence, pale_oak_fence_gate, pale_oak_hanging_sign
+- pale_oak_leaves, pale_oak_log, pale_oak_planks, pale_oak_pressure_plate, pale_oak_sapling, pale_oak_shelf
+- pale_oak_sign, pale_oak_slab, pale_oak_stairs, pale_oak_trapdoor, pale_oak_wood, panda_spawn_egg
+- parched_spawn_egg, parrot_spawn_egg, pearlescent_froglight, petrified_oak_slab, phantom_membrane, phantom_spawn_egg
+- piglin_brute_spawn_egg, piglin_head, piglin_spawn_egg, pillager_spawn_egg, pink_banner, pink_bundle
+- pink_harness, pink_shulker_box, pitcher_pod, player_head, plenty_pottery_sherd, polished_andesite_slab
+- polished_andesite_stairs, polished_blackstone_brick_slab, polished_blackstone_brick_wall, polished_blackstone_button, polished_blackstone_pressure_plate, polished_blackstone_slab
+- polished_blackstone_stairs, polished_blackstone_wall, polished_diorite_slab, polished_diorite_stairs, polished_granite_slab, polished_tuff_stairs
+- polished_tuff_wall, popped_chorus_fruit, powder_snow_bucket, prismarine_brick_slab, prismarine_brick_stairs, prismarine_slab
+- prismarine_stairs, prismarine_wall, prize_pottery_sherd, pufferfish, pufferfish_bucket, pufferfish_spawn_egg
+- purple_banner, purple_bundle, purple_harness, purple_shulker_box, purpur_slab, purpur_stairs
+- quartz_bricks, quartz_pillar, quartz_slab, quartz_stairs, rabbit, rabbit_foot
+- rabbit_hide, rabbit_stew, raiser_armor_trim_smithing_template, ravager_spawn_egg, recovery_compass, red_banner
+- red_bundle, red_harness, red_nether_brick_slab, red_nether_brick_stairs, red_nether_brick_wall, red_shulker_box
+- redstone, repeating_command_block, resin_block, resin_brick, resin_brick_slab, resin_brick_stairs
+- resin_brick_wall, resin_bricks, rooted_dirt, salmon, salmon_bucket, salmon_spawn_egg
+- scrape_pottery_sherd, shaper_armor_trim_smithing_template, sheaf_pottery_sherd, shelter_pottery_sherd, shulker_box, shulker_shell
+- shulker_spawn_egg, silverfish_spawn_egg, skeleton_horse_spawn_egg, skull_banner_pattern, skull_pottery_sherd, slime_spawn_egg
+- small_amethyst_bud, smooth_quartz_stairs, smooth_red_sandstone_slab, smooth_red_sandstone_stairs, sniffer_egg, sniffer_spawn_egg
+- snort_pottery_sherd, snow_golem_spawn_egg, snowball, soul_campfire, spire_armor_trim_smithing_template, splash_potion
+- spruce_boat, spruce_button, spruce_chest_boat, spruce_hanging_sign, spruce_shelf, spruce_sign
+- spyglass, squid_spawn_egg, stone_shovel, stone_sword, stray_spawn_egg, strider_spawn_egg
+- stripped_acacia_wood, stripped_bamboo_block, stripped_birch_log, stripped_birch_wood, stripped_cherry_log, stripped_cherry_wood
+- stripped_crimson_hyphae, stripped_crimson_stem, stripped_dark_oak_log, stripped_dark_oak_wood, stripped_jungle_log, stripped_jungle_wood
+- stripped_mangrove_log, stripped_mangrove_wood, stripped_pale_oak_log, stripped_pale_oak_wood, stripped_warped_hyphae, stripped_warped_stem
+- structure_block, structure_void, suspicious_gravel, suspicious_sand, sweet_berries, tadpole_bucket
+- tadpole_spawn_egg, tall_grass, test_block, test_instance_block, tide_armor_trim_smithing_template, tinted_glass
+- tnt_minecart, torchflower_seeds, totem_of_undying, trader_llama_spawn_egg, trident, tropical_fish
+- tropical_fish_bucket, tropical_fish_spawn_egg, tuff_brick_slab, tuff_brick_stairs, tuff_brick_wall, tuff_slab
+- tuff_stairs, tuff_wall, turtle_egg, turtle_helmet, turtle_scute, turtle_spawn_egg
+- verdant_froglight, vex_spawn_egg, villager_spawn_egg, vindicator_spawn_egg, wandering_trader_spawn_egg, warden_spawn_egg
+- warped_button, warped_fence, warped_fence_gate, warped_fungus_on_a_stick, warped_hanging_sign, warped_pressure_plate
+- warped_shelf, warped_sign, warped_slab, warped_stairs, waxed_copper_bars, waxed_copper_chain
+- waxed_copper_chest, waxed_copper_golem_statue, waxed_copper_lantern, waxed_exposed_chiseled_copper, waxed_exposed_copper_bars, waxed_exposed_copper_bulb
+- waxed_exposed_copper_chain, waxed_exposed_copper_chest, waxed_exposed_copper_door, waxed_exposed_copper_golem_statue, waxed_exposed_copper_grate, waxed_exposed_copper_lantern
+- waxed_exposed_copper_trapdoor, waxed_exposed_cut_copper, waxed_exposed_cut_copper_slab, waxed_exposed_cut_copper_stairs, waxed_exposed_lightning_rod, waxed_lightning_rod
+- waxed_oxidized_copper_bars, waxed_oxidized_copper_chain, waxed_oxidized_copper_chest, waxed_oxidized_copper_golem_statue, waxed_oxidized_copper_lantern, waxed_oxidized_lightning_rod
+- waxed_weathered_chiseled_copper, waxed_weathered_copper_bars, waxed_weathered_copper_bulb, waxed_weathered_copper_chain, waxed_weathered_copper_chest, waxed_weathered_copper_door
+- waxed_weathered_copper_golem_statue, waxed_weathered_copper_grate, waxed_weathered_copper_lantern, waxed_weathered_copper_trapdoor, waxed_weathered_cut_copper, waxed_weathered_cut_copper_slab
+- waxed_weathered_cut_copper_stairs, waxed_weathered_lightning_rod, wayfinder_armor_trim_smithing_template, weathered_chiseled_copper, weathered_copper_bars, weathered_copper_bulb
+- weathered_copper_chain, weathered_copper_chest, weathered_copper_door, weathered_copper_golem_statue, weathered_copper_grate, weathered_copper_lantern
+- weathered_copper_trapdoor, weathered_cut_copper, weathered_cut_copper_slab, weathered_cut_copper_stairs, weathered_lightning_rod, white_banner
+- white_bundle, white_harness, white_shulker_box, wind_charge, witch_spawn_egg, wither_skeleton_skull
+- wither_skeleton_spawn_egg, wither_spawn_egg, wolf_armor, wooden_pickaxe, wooden_shovel, wooden_spear
+- wooden_sword, writable_book, written_book, yellow_banner, yellow_bundle, yellow_harness
+- yellow_shulker_box, zoglin_spawn_egg, zombie_head, zombie_horse_spawn_egg, zombie_nautilus_spawn_egg, zombie_villager_spawn_egg
+- zombified_piglin_spawn_egg
 
 ## Missing entities (67)
 
@@ -237,17 +237,17 @@ the section notes at the bottom.
 
 - end_barrens, end_highlands, end_midlands, small_end_islands
 
-## Missing configured features (52)
+## Missing configured features (50)
 
 - azalea_tree, bamboo_no_podzol, bamboo_vegetation, birch_bees_005, bonus_chest, cave_vine_in_moss
 - chorus_plant, clay_pool_with_dripleaves, clay_with_dripleaves, crimson_forest_vegetation_bonemeal, crimson_fungus_planted, dripleaf
-- dripstone_cluster, end_gateway_delayed, end_gateway_return, end_platform, flower_pale_garden, fossil_coal
-- fossil_diamonds, jungle_tree_no_vine, lake_lava, large_dripstone, lush_caves_clay, moss_patch
-- moss_patch_bonemeal, moss_patch_ceiling, moss_vegetation, nether_sprouts_bonemeal, ore_clay, ore_copper_large
-- pale_forest_flower, pale_garden_vegetation, pale_moss_patch, pale_moss_patch_bonemeal, pale_moss_vegetation, pale_oak
-- pale_oak_bonemeal, pale_oak_creaking, pile_hay, pile_ice, pile_melon, pile_pumpkin
-- pile_snow, rooted_azalea_tree, sculk_patch_ancient_city, small_basalt_columns, spring_nether_closed, spring_nether_open
-- twisting_vines_bonemeal, void_start_platform, warped_forest_vegetation_bonemeal, warped_fungus_planted
+- end_gateway_delayed, end_gateway_return, end_platform, flower_pale_garden, fossil_coal, fossil_diamonds
+- jungle_tree_no_vine, lake_lava, lush_caves_clay, moss_patch, moss_patch_bonemeal, moss_patch_ceiling
+- moss_vegetation, nether_sprouts_bonemeal, ore_clay, ore_copper_large, pale_forest_flower, pale_garden_vegetation
+- pale_moss_patch, pale_moss_patch_bonemeal, pale_moss_vegetation, pale_oak, pale_oak_bonemeal, pale_oak_creaking
+- pile_hay, pile_ice, pile_melon, pile_pumpkin, pile_snow, rooted_azalea_tree
+- sculk_patch_ancient_city, small_basalt_columns, spring_nether_closed, spring_nether_open, twisting_vines_bonemeal, void_start_platform
+- warped_forest_vegetation_bonemeal, warped_fungus_planted
 
 ## Missing structures (3)
 
