@@ -85,6 +85,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Phantom => ("", "phantom"),
         MobKind::Bat => ("", "bat"),
         MobKind::Mooshroom => ("cow", "red_mooshroom"),
+        MobKind::Squid => ("squid", "squid"),
+        MobKind::GlowSquid => ("glow_squid", "glow_squid"),
     }
 }
 
@@ -181,6 +183,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) phantom: Option<PathBuf>,
     pub(crate) bat: Option<PathBuf>,
     pub(crate) mooshroom: Option<PathBuf>,
+    pub(crate) squid: Option<PathBuf>,
+    pub(crate) glow_squid: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -225,6 +229,8 @@ impl MobSkinSet {
             phantom: mob_skin_path(assets_root, MobKind::Phantom),
             bat: mob_skin_path(assets_root, MobKind::Bat),
             mooshroom: mob_skin_path(assets_root, MobKind::Mooshroom),
+            squid: mob_skin_path(assets_root, MobKind::Squid),
+            glow_squid: mob_skin_path(assets_root, MobKind::GlowSquid),
         }
     }
 
@@ -269,6 +275,8 @@ impl MobSkinSet {
             MobKind::Phantom => &self.phantom,
             MobKind::Bat => &self.bat,
             MobKind::Mooshroom => &self.mooshroom,
+            MobKind::Squid => &self.squid,
+            MobKind::GlowSquid => &self.glow_squid,
         };
         opt.as_deref()
     }

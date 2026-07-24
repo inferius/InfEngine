@@ -572,6 +572,49 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Squid + glow squid (W388) ----------------------
+                    k if k == crate::mob::kinds::KIND_SQUID
+                        || k == crate::mob::kinds::KIND_GLOW_SQUID =>
+                    {
+                        let glow = k == crate::mob::kinds::KIND_GLOW_SQUID;
+                        let baked = if glow {
+                            mob_meshes.glow_squid_model.as_ref()
+                        } else {
+                            mob_meshes.squid_model.as_ref()
+                        };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            // Glow squids are emissive in MC - skip
+                            // the cave-darkness modulation, keep the
+                            // hurt flash.
+                            let tint = if glow {
+                                [
+                                    1.0 * (1.0 - hurt_flash) + hurt_flash,
+                                    1.0 - 0.75 * hurt_flash,
+                                    1.0 - 0.75 * hurt_flash,
+                                    1.0,
+                                ]
+                            } else {
+                                apply_tint([1.0, 1.0, 1.0, 1.0])
+                            };
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                tint,
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Phantom / bat / mooshroom (W382) ---------------
                     k if k == crate::mob::kinds::KIND_PHANTOM
                         || k == crate::mob::kinds::KIND_BAT

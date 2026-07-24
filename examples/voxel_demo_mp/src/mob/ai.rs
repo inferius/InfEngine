@@ -806,6 +806,10 @@ fn step_one(
                     || m.kind == super::kinds::KIND_PHANTOM
                     || m.kind == super::kinds::KIND_GUARDIAN
                     || m.kind == super::kinds::KIND_ELDER_GUARDIAN
+                    // W388: squids drift in place (swim goals are a
+                    // follow-up with the water-mob movement pass).
+                    || m.kind == super::kinds::KIND_SQUID
+                    || m.kind == super::kinds::KIND_GLOW_SQUID
                 {
                     // W375: hover flyers hold their altitude.
                     m.vy = 0.0;

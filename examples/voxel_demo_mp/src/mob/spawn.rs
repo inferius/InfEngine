@@ -240,6 +240,9 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_PHANTOM => 20.0,
         x if x == super::kinds::KIND_BAT => 6.0,
         x if x == super::kinds::KIND_MOOSHROOM => 10.0,
+        // W388: Squid + GlowSquid 10.
+        x if x == super::kinds::KIND_SQUID => 10.0,
+        x if x == super::kinds::KIND_GLOW_SQUID => 10.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
@@ -363,6 +366,33 @@ pub(crate) fn pick_kind_for(
                     super::pool::MUSHROOM_DAY
                 };
                 return weighted_pick(active, rng.next_f32());
+            }
+            // W388: oceans run their own pool. The spawn pos sits
+            // one above the ocean FLOOR (mc_floor_at = top solid),
+            // i.e. submerged - exactly where squid belong. Aquatic
+            // kinds swap the grass/light gates for a water check;
+            // the drowned keeps the hostile dark gate.
+            if mc.name().contains("ocean") {
+                let active = if is_night {
+                    super::pool::OCEAN_NIGHT
+                } else {
+                    super::pool::OCEAN_DAY
+                };
+                let k = weighted_pick(active, rng.next_f32())?;
+                let aquatic = k == super::kinds::KIND_SQUID
+                    || k == super::kinds::KIND_GLOW_SQUID;
+                if aquatic {
+                    if voxel.world.get(wpos).0 != crate::block::WATER_ID {
+                        return None;
+                    }
+                    return Some(k);
+                }
+                if is_hostile_kind(k)
+                    && !is_dark_enough_for_hostile(voxel, wpos)
+                {
+                    return None;
+                }
+                return Some(k);
             }
             mc_biome_to_pool(
                 crate::worldgen::mcgen::terrain::mc_full_biome_at(

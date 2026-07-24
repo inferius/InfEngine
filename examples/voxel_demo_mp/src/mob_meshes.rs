@@ -517,6 +517,9 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W388: squid + glow squid (shared mesh, two sheets).
+    pub(crate) squid_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) glow_squid_model: Option<crate::entity_model::BakedModel>,
     /// W382: phantom / bat / mooshroom (cow mesh).
     pub(crate) phantom_model: Option<crate::entity_model::BakedModel>,
     pub(crate) bat_model: Option<crate::entity_model::BakedModel>,
@@ -1190,6 +1193,27 @@ pub fn load_non_sheep_mob_meshes(
                     _ => mm.stray_model = Some(baked),
                 }
                 info!(file, "variant entity texture bound (reskin)");
+                break;
+            }
+        }
+    }
+
+    // ---- Squid + glow squid (W388) -----------------------------------------
+    for (sub, glow) in [("squid", false), ("glow_squid", true)] {
+        for root in &entity_roots {
+            let p = root.join(sub).join(format!("{sub}.png"));
+            if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+                let baked = crate::entity_model::bake(
+                    r,
+                    &crate::entity_model::squid::MODEL,
+                    &img,
+                );
+                if glow {
+                    mm.glow_squid_model = Some(baked);
+                } else {
+                    mm.squid_model = Some(baked);
+                }
+                info!(sheet = sub, "squid entity texture bound");
                 break;
             }
         }

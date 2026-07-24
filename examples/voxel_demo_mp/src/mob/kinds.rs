@@ -100,6 +100,9 @@ pub(crate) enum MobKind {
     Phantom = 36,
     Bat = 37,
     Mooshroom = 38,
+    /// W388 - squid + glow squid (ocean water spawns).
+    Squid = 39,
+    GlowSquid = 40,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -230,6 +233,8 @@ impl MobKind {
             MobKind::Phantom => "phantom",
             MobKind::Bat => "bat",
             MobKind::Mooshroom => "mooshroom",
+            MobKind::Squid => "squid",
+            MobKind::GlowSquid => "glow_squid",
         }
     }
 }
@@ -316,6 +321,8 @@ pub(crate) const KIND_SILVERFISH: u8 = MobKind::Silverfish as u8;
 pub(crate) const KIND_PHANTOM: u8 = MobKind::Phantom as u8;
 pub(crate) const KIND_BAT: u8 = MobKind::Bat as u8;
 pub(crate) const KIND_MOOSHROOM: u8 = MobKind::Mooshroom as u8;
+pub(crate) const KIND_SQUID: u8 = MobKind::Squid as u8;
+pub(crate) const KIND_GLOW_SQUID: u8 = MobKind::GlowSquid as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

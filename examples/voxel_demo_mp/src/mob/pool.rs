@@ -20,6 +20,7 @@
 use crate::worldgen::Biome;
 
 use super::kinds::{
+    KIND_SQUID, KIND_GLOW_SQUID,
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
     KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
@@ -114,6 +115,13 @@ const JUNGLE_NIGHT: &[(u8, u32)] =
 // creature in the MC pool) and stay hostile-free at night.
 pub(crate) const MUSHROOM_DAY: &[(u8, u32)] = &[(KIND_MOOSHROOM, 8)];
 pub(crate) const MUSHROOM_NIGHT: &[(u8, u32)] = &[];
+
+// W388: oceans - squid pods by day; glow squids surface at night
+// (their MC underground-water spawn is a follow-up) alongside the
+// drowned.
+pub(crate) const OCEAN_DAY: &[(u8, u32)] = &[(KIND_SQUID, 8)];
+pub(crate) const OCEAN_NIGHT: &[(u8, u32)] =
+    &[(KIND_SQUID, 4), (KIND_GLOW_SQUID, 4), (KIND_DROWNED, 30)];
 
 const SWAMP_DAY: &[(u8, u32)] = EMPTY;
 // W376: swamp nights grow slimes (surface slime spawning is a

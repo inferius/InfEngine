@@ -150,6 +150,19 @@ pub(crate) fn ambient_pose(
             ..Default::default()
         });
     }
+    if let Some(i) = name.strip_prefix("squid_tentacle_") {
+        // W388: idle swim sway - each tentacle leads the next by a
+        // step, curling outward (rough SquidModel tentacleAngle).
+        let i = i.parse::<u32>().ok()? as f32;
+        return Some(BonePose {
+            extra_rotation: [
+                0.15 + 0.2 * (age_ticks * 0.35 + i * 0.7).sin(),
+                0.0,
+                0.0,
+            ],
+            ..Default::default()
+        });
+    }
     if let Some(i) = name.strip_prefix("ghast_tentacle_") {
         let i = i.parse::<u32>().ok()? as f32;
         // GhastModel.animateTentacles: xRot = 0.2*sin(age*0.3+i)+0.4
