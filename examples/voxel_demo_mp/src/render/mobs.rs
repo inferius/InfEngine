@@ -572,6 +572,40 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Enderman / cave spider / silverfish (W381) -----
+                    k if k == crate::mob::kinds::KIND_ENDERMAN
+                        || k == crate::mob::kinds::KIND_CAVE_SPIDER
+                        || k == crate::mob::kinds::KIND_SILVERFISH =>
+                    {
+                        let (baked, scale_mul) =
+                            if k == crate::mob::kinds::KIND_ENDERMAN {
+                                (mob_meshes.enderman_model.as_ref(), 1.0)
+                            } else if k == crate::mob::kinds::KIND_CAVE_SPIDER {
+                                // MC cave spiders are 0.7x spiders.
+                                (mob_meshes.cave_spider_model.as_ref(), 0.7)
+                            } else {
+                                (mob_meshes.silverfish_model.as_ref(), 1.0)
+                            };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale * scale_mul,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Guardian family (W380) -------------------------
                     k if k == crate::mob::kinds::KIND_GUARDIAN
                         || k == crate::mob::kinds::KIND_ELDER_GUARDIAN =>

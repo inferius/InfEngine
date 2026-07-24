@@ -22,7 +22,7 @@ use crate::worldgen::Biome;
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
-    KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY,
+    KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -53,7 +53,7 @@ const PLAINS_DAY: &[(u8, u32)] = &[
     (KIND_DONKEY, 1),
 ];
 const PLAINS_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
+    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
 
 // W162: the desert is a classic rabbit biome (gold/desert variant).
 // W354: vanilla deserts spawn NO farm animals - rabbit only (the
@@ -63,7 +63,7 @@ const DESERT_DAY: &[(u8, u32)] = &[(KIND_RABBIT, 4)];
 // skeletons for strays, and the swamp nights raise drowned near
 // water (MC per-biome monster overrides).
 const DESERT_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 10), (KIND_HUSK, 70), (KIND_SKELETON, 80), (KIND_SPIDER, 20), (KIND_CREEPER, 50)];
+    &[(KIND_ZOMBIE, 10), (KIND_HUSK, 70), (KIND_SKELETON, 80), (KIND_SPIDER, 20), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
 
 // W158: MC forest pools carry wolves (weight 5).
 const FOREST_DAY: &[(u8, u32)] = &[
@@ -74,7 +74,7 @@ const FOREST_DAY: &[(u8, u32)] = &[
     (KIND_WOLF, 5),
 ];
 const FOREST_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
+    &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
 
 // W158: the taiga is the wolf's home biome in MC (weight 8).
 const TAIGA_DAY: &[(u8, u32)] = &[
@@ -85,7 +85,7 @@ const TAIGA_DAY: &[(u8, u32)] = &[
     (KIND_WOLF, 8),
     (KIND_RABBIT, 4),
 ];
-const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
+const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
 
 // W161: snowy tundra is the polar bear's home (MC: frozen biomes).
 // W162: snowy rabbits (white variant) roam the same tundra.
@@ -93,7 +93,7 @@ const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIN
 // bear 1.
 const TUNDRA_DAY: &[(u8, u32)] =
     &[(KIND_RABBIT, 10), (KIND_POLAR_BEAR, 1)];
-const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 8), (KIND_STRAY, 64), (KIND_CREEPER, 40)];
+const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 8), (KIND_STRAY, 64), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
 
 // W354: vanilla jungles run the common farm list PLUS an extra
 // chicken entry (10 + 10).
@@ -104,14 +104,14 @@ const JUNGLE_DAY: &[(u8, u32)] = &[
     (KIND_COW, 8),
 ];
 const JUNGLE_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
+    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
 
 // W354: vanilla swamps spawn no farm animals (slime / frog only,
 // neither ported yet).
 const SWAMP_DAY: &[(u8, u32)] = EMPTY;
 // W376: swamp nights grow slimes (surface slime spawning is a
 // swamp signature; the witch stays hut-resident, not pooled).
-const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_DROWNED, 30), (KIND_SKELETON, 20), (KIND_CREEPER, 40), (KIND_SLIME, 30)];
+const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_DROWNED, 30), (KIND_SKELETON, 20), (KIND_CREEPER, 40), (KIND_SLIME, 30), (KIND_ENDERMAN, 10)];
 
 const SAVANNA_DAY: &[(u8, u32)] = &[
     (KIND_SHEEP, 12),
@@ -121,7 +121,7 @@ const SAVANNA_DAY: &[(u8, u32)] = &[
     (KIND_DONKEY, 1),
 ];
 const SAVANNA_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50)];
+    &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
 
 // W354: windswept hills run the common farm list + llama (not
 // ported).
@@ -131,7 +131,7 @@ const MOUNTAIN_DAY: &[(u8, u32)] = &[
     (KIND_CHICKEN, 10),
     (KIND_COW, 8),
 ];
-const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40)];
+const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
 
 /// Look up the active spawn pool for `biome`. Returns the static
 /// pool struct; the spawner pulls the right list (day / night) at
@@ -230,6 +230,9 @@ mod tests {
                     || *k == KIND_SKELETON
                     || *k == KIND_SPIDER
                     || *k == KIND_CREEPER
+                    // W381: the enderman haunts every overworld
+                    // night pool at MC weight 10.
+                    || *k == KIND_ENDERMAN
             })
             .map(|(_, w)| *w)
             .sum();

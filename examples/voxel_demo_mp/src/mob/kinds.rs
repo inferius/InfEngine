@@ -89,6 +89,12 @@ pub(crate) enum MobKind {
     /// W380 - guardian + elder (monument structure override).
     Guardian = 31,
     ElderGuardian = 32,
+    /// W381 - enderman (night surface, 3 blocks tall).
+    Enderman = 33,
+    /// W381 - cave spider (mineshaft spawner; spider mesh 0.7x).
+    CaveSpider = 34,
+    /// W381 - silverfish (stronghold spawner).
+    Silverfish = 35,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -213,6 +219,9 @@ impl MobKind {
             MobKind::WitherSkeleton => "wither_skeleton",
             MobKind::Guardian => "guardian",
             MobKind::ElderGuardian => "elder_guardian",
+            MobKind::Enderman => "enderman",
+            MobKind::CaveSpider => "cave_spider",
+            MobKind::Silverfish => "silverfish",
         }
     }
 }
@@ -293,6 +302,9 @@ pub(crate) const KIND_BLAZE: u8 = MobKind::Blaze as u8;
 pub(crate) const KIND_WITHER_SKELETON: u8 = MobKind::WitherSkeleton as u8;
 pub(crate) const KIND_GUARDIAN: u8 = MobKind::Guardian as u8;
 pub(crate) const KIND_ELDER_GUARDIAN: u8 = MobKind::ElderGuardian as u8;
+pub(crate) const KIND_ENDERMAN: u8 = MobKind::Enderman as u8;
+pub(crate) const KIND_CAVE_SPIDER: u8 = MobKind::CaveSpider as u8;
+pub(crate) const KIND_SILVERFISH: u8 = MobKind::Silverfish as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

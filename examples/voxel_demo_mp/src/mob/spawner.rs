@@ -106,26 +106,14 @@ pub(crate) fn spawner_entity_kind(eff_seed: u32, pos: [i32; 3]) -> u8 {
 /// pure dungeon table, never to this probe.
 pub(crate) fn spawner_entity_kind_at(ctx: &crate::worldgen::WorldgenCtx, pos: [i32; 3]) -> u8 {
     if crate::worldgen::mcgen::mineshaft::pos_in_mineshaft_corridor(ctx, pos) {
-        static LOGGED: std::sync::Once = std::sync::Once::new();
-        LOGGED.call_once(|| {
-            tracing::info!(
-                "W243: mineshaft spawners use SPIDER as the cave-spider \
-                 stand-in until the mob is ported"
-            );
-        });
-        return KIND_SPIDER;
+        // W243/W381: the corridor spawners hold real cave spiders
+        // now (the plain-spider stand-in retired with the port).
+        return crate::mob::kinds::KIND_CAVE_SPIDER;
     }
-    // W256: the stronghold portal room holds a SILVERFISH spawner in
-    // MC - the spider stands in until the mob exists.
+    // W256/W381: the stronghold portal room holds real silverfish
+    // now (the spider stand-in retired with the port).
     if crate::worldgen::mcgen::stronghold::is_portal_spawner(ctx, pos) {
-        static LOGGED: std::sync::Once = std::sync::Once::new();
-        LOGGED.call_once(|| {
-            tracing::info!(
-                "W256: stronghold portal spawners use SPIDER as the \
-                 silverfish stand-in until the mob is ported"
-            );
-        });
-        return KIND_SPIDER;
+        return crate::mob::kinds::KIND_SILVERFISH;
     }
     // W271/W379: the fortress monster throne holds a BLAZE spawner
     // - the real mob now (the skeleton stand-in retired with the

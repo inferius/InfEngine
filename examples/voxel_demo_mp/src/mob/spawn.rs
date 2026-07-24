@@ -232,6 +232,10 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         // W380: Guardian 30, ElderGuardian 80.
         x if x == super::kinds::KIND_GUARDIAN => 30.0,
         x if x == super::kinds::KIND_ELDER_GUARDIAN => 80.0,
+        // W381: Enderman 40, CaveSpider 12, Silverfish 8.
+        x if x == super::kinds::KIND_ENDERMAN => 40.0,
+        x if x == super::kinds::KIND_CAVE_SPIDER => 12.0,
+        x if x == super::kinds::KIND_SILVERFISH => 8.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.

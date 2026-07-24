@@ -176,6 +176,11 @@ fn kind_is_hostile(kind: u8) -> bool {
             // W380: guardians (laser beam is a follow-up).
             | super::kinds::KIND_GUARDIAN
             | super::kinds::KIND_ELDER_GUARDIAN
+            // W381: enderman (teleport-on-hit is a follow-up) +
+            // the two spawner natives.
+            | super::kinds::KIND_ENDERMAN
+            | super::kinds::KIND_CAVE_SPIDER
+            | super::kinds::KIND_SILVERFISH
     )
 }
 
