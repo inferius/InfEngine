@@ -10,7 +10,7 @@ the section notes at the bottom.
 |--------|---------|---------|---------|-------|
 | blocks | 1170 | 698 | 472 | 14 family-substitute aliases |
 | items | 1506 | 852 | 654 | block-form items resolve via places |
-| entities | 87 | 21 | 66 | player/armor_stand/mannequin/giant excluded |
+| entities | 87 | 23 | 64 | player/armor_stand/mannequin/giant excluded |
 | biomes | 65 | 61 | 4 | name-probe vs worldgen sources |
 | configured features | 221 | 171 | 50 | substring probe (coarse) |
 | structures | 34 | 31 | 3 | |
@@ -217,7 +217,7 @@ the section notes at the bottom.
 - writable_book, written_book, yellow_banner, yellow_bundle, yellow_harness, yellow_shulker_box
 - zoglin_spawn_egg, zombie_head, zombie_horse_spawn_egg, zombie_nautilus_spawn_egg, zombie_villager_spawn_egg, zombified_piglin_spawn_egg
 
-## Missing entities (66)
+## Missing entities (64)
 
 - allay, armadillo, axolotl, bat, blaze, bogged
 - breeze, camel, camel_husk, cave_spider, cod, copper_golem
@@ -226,10 +226,10 @@ the section notes at the bottom.
 - guardian, happy_ghast, hoglin, husk, llama, mooshroom
 - mule, nautilus, ocelot, panda, parched, parrot
 - phantom, piglin, piglin_brute, pillager, pufferfish, ravager
-- salmon, shulker, silverfish, skeleton_horse, slime, sniffer
-- snow_golem, squid, stray, strider, tadpole, trader_llama
-- tropical_fish, turtle, vex, vindicator, wandering_trader, warden
-- witch, wither, wither_skeleton, zoglin, zombie_horse, zombie_nautilus
+- salmon, shulker, silverfish, skeleton_horse, sniffer, snow_golem
+- squid, stray, strider, tadpole, trader_llama, tropical_fish
+- turtle, vex, vindicator, wandering_trader, warden, wither
+- wither_skeleton, zoglin, zombie_horse, zombie_nautilus
 
 ## Missing biomes (4)
 
