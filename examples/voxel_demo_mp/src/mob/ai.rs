@@ -785,16 +785,29 @@ fn step_one(
                 // W327: the ghast FLOATS - MC ghasts ignore gravity
                 // entirely (RandomFloatAroundGoal steers in 3D; our
                 // v1 keeps the current altitude and wanders).
-                if m.kind == super::kinds::KIND_GHAST
-                    || m.kind == super::kinds::KIND_BEE
+                if m.kind == super::kinds::KIND_BEE
+                    || m.kind == super::kinds::KIND_BAT
+                {
+                    // W386: bees hug the surface line (MC bees
+                    // wander near the ground and flowers - the R22
+                    // report had one cruising sky-high). Ease toward
+                    // ~2.5 blocks above the floor; bats share the
+                    // hold so cave flights stay near the tunnel
+                    // floor instead of pinning to spawn altitude.
+                    if let Some(g) = ground {
+                        let dy = (g + 2.5) - m.pos[1];
+                        m.vy = (dy * 1.5).clamp(-3.0, 3.0);
+                        m.pos[1] += m.vy * dt;
+                    } else {
+                        m.vy = 0.0;
+                    }
+                } else if m.kind == super::kinds::KIND_GHAST
                     || m.kind == super::kinds::KIND_BLAZE
                     || m.kind == super::kinds::KIND_PHANTOM
-                    || m.kind == super::kinds::KIND_BAT
                     || m.kind == super::kinds::KIND_GUARDIAN
                     || m.kind == super::kinds::KIND_ELDER_GUARDIAN
                 {
-                    // W375: bees hover (MC bees fly; the wander goal
-                    // keeps them near their spawn altitude).
+                    // W375: hover flyers hold their altitude.
                     m.vy = 0.0;
                 } else {
                 m.vy -= 32.0 * dt;

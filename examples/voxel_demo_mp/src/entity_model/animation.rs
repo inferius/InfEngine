@@ -98,6 +98,58 @@ pub(crate) fn ambient_pose(
     age_ticks: f32,
     squish: f32,
 ) -> Option<BonePose> {
+    // W386: wing flaps - MC setupAnim ports (the R22 "bee does
+    // not flap" report). Tick-space matches MC (20 ticks/s).
+    if let Some(side) = name.strip_prefix("bee_wing_") {
+        // BeeModel: zRot = cos(age * 2.1 rad/tick) * PI * 0.15,
+        // right positive / left mirrored.
+        let z = (age_ticks * 2.1).cos() * core::f32::consts::PI * 0.15;
+        let z = if side == "r" { z } else { -z };
+        return Some(BonePose {
+            extra_rotation: [0.0, 0.0, z],
+            ..Default::default()
+        });
+    }
+    if name.starts_with("bee_legs_") {
+        // BeeModel flight pose: legs tucked at PI/4.
+        return Some(BonePose {
+            extra_rotation: [core::f32::consts::FRAC_PI_4, 0.0, 0.0],
+            ..Default::default()
+        });
+    }
+    if name.starts_with("phantom_wing") {
+        // PhantomModel: zRot = cos(flapTime * 7.448 deg) * 16 deg,
+        // left positive / right mirrored; the tip is a child of the
+        // base so its local write doubles the fold exactly like MC.
+        let anim = age_ticks * 0.13;
+        let z = anim.cos() * 16.0_f32.to_radians();
+        let z = if name.ends_with("_r") { -z } else { z };
+        return Some(BonePose {
+            extra_rotation: [0.0, 0.0, z],
+            ..Default::default()
+        });
+    }
+    if name.starts_with("phantom_tail") {
+        // PhantomModel: xRot = -(5 + cos(2*anim)*5) deg on both
+        // tail segments.
+        let anim = age_ticks * 0.13;
+        let x = -(5.0 + (anim * 2.0).cos() * 5.0).to_radians();
+        return Some(BonePose {
+            extra_rotation: [x, 0.0, 0.0],
+            ..Default::default()
+        });
+    }
+    if name.starts_with("bat_wing") {
+        // Bat flight flap (legacy-model formula): yRot =
+        // cos(age * 1.3) * PI * 0.25, mirrored per side - the
+        // vertical wing sheets sweep back and forth.
+        let y = (age_ticks * 1.3).cos() * core::f32::consts::PI * 0.25;
+        let y = if name.ends_with("_r") { y } else { -y };
+        return Some(BonePose {
+            extra_rotation: [0.0, y, 0.0],
+            ..Default::default()
+        });
+    }
     if let Some(i) = name.strip_prefix("ghast_tentacle_") {
         let i = i.parse::<u32>().ok()? as f32;
         // GhastModel.animateTentacles: xRot = 0.2*sin(age*0.3+i)+0.4
