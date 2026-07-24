@@ -67,6 +67,11 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         // next to the magma cube.
         MobKind::Witch => ("", "witch"),
         MobKind::Slime => ("slime", "slime"),
+        // W377: MC ships the zombie variants under entity/zombie/
+        // and the stray under entity/skeleton/.
+        MobKind::Drowned => ("zombie", "drowned"),
+        MobKind::Husk => ("zombie", "husk"),
+        MobKind::Stray => ("skeleton", "stray"),
     }
 }
 
@@ -147,6 +152,9 @@ pub(crate) struct MobSkinSet {
     pub(crate) bee: Option<PathBuf>,
     pub(crate) witch: Option<PathBuf>,
     pub(crate) slime: Option<PathBuf>,
+    pub(crate) drowned: Option<PathBuf>,
+    pub(crate) husk: Option<PathBuf>,
+    pub(crate) stray: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -175,6 +183,9 @@ impl MobSkinSet {
             bee: mob_skin_path(assets_root, MobKind::Bee),
             witch: mob_skin_path(assets_root, MobKind::Witch),
             slime: mob_skin_path(assets_root, MobKind::Slime),
+            drowned: mob_skin_path(assets_root, MobKind::Drowned),
+            husk: mob_skin_path(assets_root, MobKind::Husk),
+            stray: mob_skin_path(assets_root, MobKind::Stray),
         }
     }
 
@@ -203,6 +214,9 @@ impl MobSkinSet {
             MobKind::Bee => &self.bee,
             MobKind::Witch => &self.witch,
             MobKind::Slime => &self.slime,
+            MobKind::Drowned => &self.drowned,
+            MobKind::Husk => &self.husk,
+            MobKind::Stray => &self.stray,
         };
         opt.as_deref()
     }

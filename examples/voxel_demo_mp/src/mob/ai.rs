@@ -160,6 +160,10 @@ fn kind_is_hostile(kind: u8) -> bool {
             // the slime shares the magma-cube contact-damage path.
             | super::kinds::KIND_WITCH
             | super::kinds::KIND_SLIME
+            // W377: zombie/skeleton variants share the base AI.
+            | super::kinds::KIND_DROWNED
+            | super::kinds::KIND_HUSK
+            | super::kinds::KIND_STRAY
     )
 }
 

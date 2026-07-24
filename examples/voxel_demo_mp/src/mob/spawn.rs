@@ -218,6 +218,10 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         // W376: Witch 26; Slime (large) 16.
         x if x == super::kinds::KIND_WITCH => 26.0,
         x if x == super::kinds::KIND_SLIME => 16.0,
+        // W377: zombie/skeleton variants share the base 20 HP.
+        x if x == super::kinds::KIND_DROWNED => 20.0,
+        x if x == super::kinds::KIND_HUSK => 20.0,
+        x if x == super::kinds::KIND_STRAY => 20.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.

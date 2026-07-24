@@ -71,6 +71,12 @@ pub(crate) enum MobKind {
     Witch = 21,
     /// W376 - slime (swamp night surface spawns; magma-cube mesh).
     Slime = 22,
+    /// W377 - drowned (zombie mesh, underwater-green sheet).
+    Drowned = 23,
+    /// W377 - husk (zombie mesh, desert-sand sheet).
+    Husk = 24,
+    /// W377 - stray (skeleton mesh, frost sheet).
+    Stray = 25,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -185,6 +191,9 @@ impl MobKind {
             MobKind::Bee => "bee",
             MobKind::Witch => "witch",
             MobKind::Slime => "slime",
+            MobKind::Drowned => "drowned",
+            MobKind::Husk => "husk",
+            MobKind::Stray => "stray",
         }
     }
 }
@@ -255,6 +264,9 @@ pub(crate) const KIND_DONKEY: u8 = MobKind::Donkey as u8;
 pub(crate) const KIND_BEE: u8 = MobKind::Bee as u8;
 pub(crate) const KIND_WITCH: u8 = MobKind::Witch as u8;
 pub(crate) const KIND_SLIME: u8 = MobKind::Slime as u8;
+pub(crate) const KIND_DROWNED: u8 = MobKind::Drowned as u8;
+pub(crate) const KIND_HUSK: u8 = MobKind::Husk as u8;
+pub(crate) const KIND_STRAY: u8 = MobKind::Stray as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
