@@ -15,9 +15,9 @@
 //!   on mossed ground.
 //!
 //! Chunk-local writes only, deterministic per chunk via the usual
-//! `stream_seed` salt. `cave_vines`/`dripstone_block` blocks are not
-//! in the registry yet - tracked in the parity matrix; the dressing
-//! upgrades in place once they land.
+//! `stream_seed` salt. `dripstone_block` landed in W374 (floors,
+//! ceilings + large columns); `cave_vines` is still pending in the
+//! parity matrix and upgrades the lush dressing once it lands.
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord};
 
@@ -51,6 +51,7 @@ pub(crate) fn place_cave_deco(
     let blossom = block_id_by_name("spore_blossom");
     let azalea = block_id_by_name("azalea");
     let dripstone = block_id_by_name("pointed_dripstone");
+    let drip_rock = block_id_by_name("dripstone_block");
 
     let stoneish = |id: u16| -> bool {
         crate::block::block_type(id).is_some_and(|bt| {
@@ -88,6 +89,57 @@ pub(crate) fn place_cave_deco(
                 let roll = (rng.next_u64() % 1000) as u32;
                 match k {
                     CaveKind::Dripstone => {
+                        // W374: dripstone_block underlay wherever a
+                        // spike roots + bare rock patches + the odd
+                        // large column - the caves read as dripstone
+                        // rock, not spikes on plain stone
+                        // (dripstone_cluster / large_dripstone).
+                        if on_floor
+                            && roll < 340
+                            && let Some(rock) = drip_rock
+                        {
+                            chunk.set(
+                                lx as usize,
+                                (ly - 1) as usize,
+                                lz as usize,
+                                BlockId(rock),
+                            );
+                        }
+                        if under_ceiling
+                            && (600..820).contains(&roll)
+                            && let Some(rock) = drip_rock
+                        {
+                            chunk.set(
+                                lx as usize,
+                                (ly + 1) as usize,
+                                lz as usize,
+                                BlockId(rock),
+                            );
+                        }
+                        if on_floor
+                            && (340..355).contains(&roll)
+                            && let Some(rock) = drip_rock
+                        {
+                            // Large dripstone: a squat column, 3..7
+                            // tall (large_dripstone, simplified to
+                            // its silhouette).
+                            let h = 3 + (rng.next_u64() % 5) as i32;
+                            for i in 0..h {
+                                let y = ly + i;
+                                if y < cs
+                                    && chunk
+                                        .get(lx as usize, y as usize, lz as usize)
+                                        .is_air()
+                                {
+                                    chunk.set(
+                                        lx as usize,
+                                        y as usize,
+                                        lz as usize,
+                                        BlockId(rock),
+                                    );
+                                }
+                            }
+                        }
                         if on_floor && roll < 90 {
                             // Stalagmite 1..3 up.
                             if let Some(id) = dripstone {

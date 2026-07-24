@@ -2673,6 +2673,7 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 982, name: "brown_mushroom_block", display: Some("Brown Mushroom Block"), places: Some(982), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 983, name: "red_mushroom_block", display: Some("Red Mushroom Block"), places: Some(983), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 984, name: "mushroom_stem", display: Some("Mushroom Stem"), places: Some(984), max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    ItemType { id: 985, name: "dripstone_block", display: Some("Dripstone Block"), places: Some(985), max_stack: 64, icon: None, category: ItemCategory::Decoration },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
