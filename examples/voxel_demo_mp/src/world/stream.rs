@@ -1190,7 +1190,11 @@ fn drain_unload_batch(
     // remaining drain cost (~25 us each); 96 keeps the payload
     // slice ~2.5 ms and a full ring still retires in a handful of
     // frames.
-    const UNLOAD_BATCH: usize = 96;
+    // W385: 96 -> 48. The R21 log still showed 11-29 ms payload
+    // slices on structure-heavy unload rings; half the batch keeps
+    // the per-frame cost bounded and a full ring retires only a few
+    // frames later.
+    const UNLOAD_BATCH: usize = 48;
     let _t_all = std::time::Instant::now();
     let mut batch: Vec<ChunkCoord> = Vec::with_capacity(UNLOAD_BATCH);
     while batch.len() < UNLOAD_BATCH {

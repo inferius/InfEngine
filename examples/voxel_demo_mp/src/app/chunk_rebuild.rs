@@ -16,56 +16,120 @@ impl Voxel {
         &self,
         coord: ChunkCoord,
     ) -> std::collections::HashMap<[i32; 3], (u8, bool)> {
-        let cs = infengine_voxel::CHUNK_SIZE as i32;
-        let in_chunk = |p: [i32; 3]| -> bool {
-            [p[0].div_euclid(cs), p[1].div_euclid(cs), p[2].div_euclid(cs)]
-                == coord
-        };
+        // W385: chunk-scan + point lookups. The old form iterated
+        // the WHOLE door_facing / door_open / torch_orient maps per
+        // remesh - O(world) per chunk, and the deferred remesh
+        // drain runs several chunks a frame, so structure-rich
+        // terrain hit 80+ ms drain frames (the R21 choppy-streaming
+        // log). Scanning the 16^3 cells and probing only
+        // dedicated-render ids is O(chunk).
+        let cs = infengine_voxel::CHUNK_SIZE;
         let mut out = std::collections::HashMap::new();
-        for (&pos, &facing) in &self.door_facing {
-            if in_chunk(pos) || in_chunk([pos[0], pos[1] + 1, pos[2]]) {
-                out.insert(pos, (facing, self.door_open.contains(&pos)));
-            }
-        }
-        for &pos in &self.door_open {
-            if !out.contains_key(&pos)
-                && (in_chunk(pos) || in_chunk([pos[0], pos[1] + 1, pos[2]]))
-            {
-                out.insert(pos, (0, true));
-            }
-        }
-        // W288: wall-torch orientation rides in the same snapshot
-        // (cell sets are disjoint from doors). The place-pipeline
-        // orient codes 1..4 (+X/-X/+Z/-Z) map to door-facing 0..3;
-        // orient 0 = floor torch = the static standing model.
-        for (&pos, &orient) in &self.torch_orient {
-            let facing = match orient {
-                1 => 0u8,
-                2 => 2,
-                3 => 1,
-                4 => 3,
-                _ => continue,
-            };
-            if in_chunk(pos) {
-                out.entry(pos).or_insert((facing, false));
+        let Some(chunk) = self.world.chunk(coord) else {
+            return out;
+        };
+        let origin = [
+            coord[0] * cs as i32,
+            coord[1] * cs as i32,
+            coord[2] * cs as i32,
+        ];
+        // Uniform runs make this memo hit nearly always.
+        let mut memo: (u16, bool) = (0, false);
+        for x in 0..cs {
+            for y in 0..cs {
+                for z in 0..cs {
+                    let id = chunk.get(x, y, z).0;
+                    if id == 0 {
+                        continue;
+                    }
+                    if memo.0 != id {
+                        let ded = crate::block::block_type(id)
+                            .map(|bt| {
+                                bt.flags & crate::block::F_DEDICATED_RENDER
+                                    != 0
+                            })
+                            .unwrap_or(false);
+                        memo = (id, ded);
+                    }
+                    if !memo.1 {
+                        continue;
+                    }
+                    let pos = [
+                        origin[0] + x as i32,
+                        origin[1] + y as i32,
+                        origin[2] + z as i32,
+                    ];
+                    // Door halves: the map is keyed by the LOWER
+                    // cell - probe this cell and the one below (an
+                    // upper half whose lower half sits in the chunk
+                    // beneath still needs its entry).
+                    for cand in [pos, [pos[0], pos[1] - 1, pos[2]]] {
+                        if let Some(&facing) = self.door_facing.get(&cand) {
+                            out.insert(
+                                cand,
+                                (facing, self.door_open.contains(&cand)),
+                            );
+                        } else if self.door_open.contains(&cand) {
+                            out.insert(cand, (0, true));
+                        }
+                    }
+                    // W288: wall-torch orientation rides in the same
+                    // snapshot (cell sets are disjoint from doors).
+                    // Orient codes 1..4 (+X/-X/+Z/-Z) map to
+                    // door-facing 0..3; 0 = floor torch.
+                    if let Some(&orient) = self.torch_orient.get(&pos) {
+                        let facing = match orient {
+                            1 => Some(0u8),
+                            2 => Some(2),
+                            3 => Some(1),
+                            4 => Some(3),
+                            _ => None,
+                        };
+                        if let Some(f) = facing {
+                            out.entry(pos).or_insert((f, false));
+                        }
+                    }
+                }
             }
         }
         out
     }
 
     /// W316: snow-layer heights for one chunk (the mesher slabs
-    /// them; missing entries default to 1 layer).
+    /// snow cells by layer count).
     pub(crate) fn snow_state_snapshot(
         &self,
         coord: ChunkCoord,
     ) -> std::collections::HashMap<[i32; 3], u8> {
-        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        // W385: same chunk-scan rewrite as door_state_snapshot -
+        // the whole-map iteration was O(all snow in the world) per
+        // remesh, brutal on tundra terrain.
+        let cs = infengine_voxel::CHUNK_SIZE;
         let mut out = std::collections::HashMap::new();
-        for (&pos, &layers) in &self.snow_positions {
-            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
-                == coord
-            {
-                out.insert(pos, layers);
+        let Some(chunk) = self.world.chunk(coord) else {
+            return out;
+        };
+        let origin = [
+            coord[0] * cs as i32,
+            coord[1] * cs as i32,
+            coord[2] * cs as i32,
+        ];
+        for x in 0..cs {
+            for y in 0..cs {
+                for z in 0..cs {
+                    // Snow layer block only (id 15).
+                    if chunk.get(x, y, z).0 != 15 {
+                        continue;
+                    }
+                    let pos = [
+                        origin[0] + x as i32,
+                        origin[1] + y as i32,
+                        origin[2] + z as i32,
+                    ];
+                    if let Some(&layers) = self.snow_positions.get(&pos) {
+                        out.insert(pos, layers);
+                    }
+                }
             }
         }
         out
@@ -77,31 +141,58 @@ impl Voxel {
         &self,
         coord: ChunkCoord,
     ) -> std::collections::HashMap<[i32; 3], u8> {
-        let cs = infengine_voxel::CHUNK_SIZE as i32;
+        // W385: chunk-scan rewrite (see door_state_snapshot). Beds
+        // fold into the same map (W366) but carry NO dedicated
+        // flag - their emit-skip runs off this map itself - so the
+        // probe filter is dedicated-render OR bed id.
+        let cs = infengine_voxel::CHUNK_SIZE;
         let mut out = std::collections::HashMap::new();
-        for (&pos, &state) in &self.stair_states {
-            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
-                == coord
-            {
-                out.insert(pos, state);
-            }
-        }
-        // W366: bed states fold into the same per-pos orientation
-        // snapshot - the mesher only asks "does this bed cell have
-        // a state?" to skip its chunk geometry.
-        for (&pos, &state) in &self.bed_states {
-            if [pos[0].div_euclid(cs), pos[1].div_euclid(cs), pos[2].div_euclid(cs)]
-                == coord
-            {
-                out.insert(pos, state);
+        let Some(chunk) = self.world.chunk(coord) else {
+            return out;
+        };
+        let origin = [
+            coord[0] * cs as i32,
+            coord[1] * cs as i32,
+            coord[2] * cs as i32,
+        ];
+        let mut memo: (u16, bool) = (0, false);
+        for x in 0..cs {
+            for y in 0..cs {
+                for z in 0..cs {
+                    let id = chunk.get(x, y, z).0;
+                    if id == 0 {
+                        continue;
+                    }
+                    if memo.0 != id {
+                        let probe = crate::block::block_type(id)
+                            .map(|bt| {
+                                bt.flags & crate::block::F_DEDICATED_RENDER
+                                    != 0
+                            })
+                            .unwrap_or(false)
+                            || crate::block::is_bed_block(id);
+                        memo = (id, probe);
+                    }
+                    if !memo.1 {
+                        continue;
+                    }
+                    let pos = [
+                        origin[0] + x as i32,
+                        origin[1] + y as i32,
+                        origin[2] + z as i32,
+                    ];
+                    if let Some(&state) = self.stair_states.get(&pos) {
+                        out.insert(pos, state);
+                    }
+                    if let Some(&state) = self.bed_states.get(&pos) {
+                        out.insert(pos, state);
+                    }
+                }
             }
         }
         out
     }
 
-    /// W127: derive the rail shapes for every rail in `coord`.
-    /// Pure function of the World (cross-chunk neighbours seen),
-    /// computed on the main thread at dispatch time - rails carry
     /// no stored state anywhere.
     pub(crate) fn rail_state_snapshot(
         &self,
