@@ -572,6 +572,38 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Illager family (W378) --------------------------
+                    k if k == crate::mob::kinds::KIND_PILLAGER
+                        || k == crate::mob::kinds::KIND_VINDICATOR
+                        || k == crate::mob::kinds::KIND_EVOKER =>
+                    {
+                        let baked = if k == crate::mob::kinds::KIND_PILLAGER {
+                            mob_meshes.pillager_model.as_ref()
+                        } else if k == crate::mob::kinds::KIND_VINDICATOR {
+                            mob_meshes.vindicator_model.as_ref()
+                        } else {
+                            mob_meshes.evoker_model.as_ref()
+                        };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Zombie/skeleton variants (W377: reskins) -------
                     k if k == crate::mob::kinds::KIND_DROWNED
                         || k == crate::mob::kinds::KIND_HUSK

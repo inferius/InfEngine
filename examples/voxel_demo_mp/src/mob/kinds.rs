@@ -77,6 +77,10 @@ pub(crate) enum MobKind {
     Husk = 24,
     /// W377 - stray (skeleton mesh, frost sheet).
     Stray = 25,
+    /// W378 - illager family (one IllagerModel, three sheets).
+    Pillager = 26,
+    Vindicator = 27,
+    Evoker = 28,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -194,6 +198,9 @@ impl MobKind {
             MobKind::Drowned => "drowned",
             MobKind::Husk => "husk",
             MobKind::Stray => "stray",
+            MobKind::Pillager => "pillager",
+            MobKind::Vindicator => "vindicator",
+            MobKind::Evoker => "evoker",
         }
     }
 }
@@ -267,6 +274,9 @@ pub(crate) const KIND_SLIME: u8 = MobKind::Slime as u8;
 pub(crate) const KIND_DROWNED: u8 = MobKind::Drowned as u8;
 pub(crate) const KIND_HUSK: u8 = MobKind::Husk as u8;
 pub(crate) const KIND_STRAY: u8 = MobKind::Stray as u8;
+pub(crate) const KIND_PILLAGER: u8 = MobKind::Pillager as u8;
+pub(crate) const KIND_VINDICATOR: u8 = MobKind::Vindicator as u8;
+pub(crate) const KIND_EVOKER: u8 = MobKind::Evoker as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

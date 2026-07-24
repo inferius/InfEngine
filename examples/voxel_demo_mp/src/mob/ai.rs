@@ -164,6 +164,11 @@ fn kind_is_hostile(kind: u8) -> bool {
             | super::kinds::KIND_DROWNED
             | super::kinds::KIND_HUSK
             | super::kinds::KIND_STRAY
+            // W378: the illager family melee-chases (the pillager
+            // crossbow + evoker fangs are follow-ups).
+            | super::kinds::KIND_PILLAGER
+            | super::kinds::KIND_VINDICATOR
+            | super::kinds::KIND_EVOKER
     )
 }
 

@@ -72,6 +72,9 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Drowned => ("zombie", "drowned"),
         MobKind::Husk => ("zombie", "husk"),
         MobKind::Stray => ("skeleton", "stray"),
+        MobKind::Pillager => ("illager", "pillager"),
+        MobKind::Vindicator => ("illager", "vindicator"),
+        MobKind::Evoker => ("illager", "evoker"),
     }
 }
 
@@ -155,6 +158,9 @@ pub(crate) struct MobSkinSet {
     pub(crate) drowned: Option<PathBuf>,
     pub(crate) husk: Option<PathBuf>,
     pub(crate) stray: Option<PathBuf>,
+    pub(crate) pillager: Option<PathBuf>,
+    pub(crate) vindicator: Option<PathBuf>,
+    pub(crate) evoker: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -186,6 +192,9 @@ impl MobSkinSet {
             drowned: mob_skin_path(assets_root, MobKind::Drowned),
             husk: mob_skin_path(assets_root, MobKind::Husk),
             stray: mob_skin_path(assets_root, MobKind::Stray),
+            pillager: mob_skin_path(assets_root, MobKind::Pillager),
+            vindicator: mob_skin_path(assets_root, MobKind::Vindicator),
+            evoker: mob_skin_path(assets_root, MobKind::Evoker),
         }
     }
 
@@ -217,6 +226,9 @@ impl MobSkinSet {
             MobKind::Drowned => &self.drowned,
             MobKind::Husk => &self.husk,
             MobKind::Stray => &self.stray,
+            MobKind::Pillager => &self.pillager,
+            MobKind::Vindicator => &self.vindicator,
+            MobKind::Evoker => &self.evoker,
         };
         opt.as_deref()
     }

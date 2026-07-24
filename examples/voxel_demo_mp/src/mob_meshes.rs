@@ -515,6 +515,10 @@ pub(crate) struct MobMeshes {
     pub(crate) husk_model: Option<crate::entity_model::BakedModel>,
     /// W377: stray (skeleton mesh, frost sheet).
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
+    /// W378: illager family (one mesh, three sheets).
+    pub(crate) pillager_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) vindicator_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) evoker_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1171,6 +1175,29 @@ pub fn load_non_sheep_mob_meshes(
                     _ => mm.stray_model = Some(baked),
                 }
                 info!(file, "variant entity texture bound (reskin)");
+                break;
+            }
+        }
+    }
+
+    // ---- Illager family (W378: one IllagerModel, three sheets) -------------
+    for (slot, file) in
+        [(0usize, "pillager.png"), (1, "vindicator.png"), (2, "evoker.png")]
+    {
+        for root in &entity_roots {
+            let p = root.join("illager").join(file);
+            if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+                let baked = crate::entity_model::bake(
+                    r,
+                    &crate::entity_model::illager::MODEL,
+                    &img,
+                );
+                match slot {
+                    0 => mm.pillager_model = Some(baked),
+                    1 => mm.vindicator_model = Some(baked),
+                    _ => mm.evoker_model = Some(baked),
+                }
+                info!(file, "illager entity texture bound");
                 break;
             }
         }

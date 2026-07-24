@@ -38,6 +38,7 @@ pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod bee;
 pub(crate) mod creeper;
+pub(crate) mod illager;
 pub(crate) mod donkey;
 pub(crate) mod ghast;
 pub(crate) mod horse;

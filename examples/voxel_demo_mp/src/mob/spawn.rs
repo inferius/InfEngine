@@ -222,6 +222,10 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_DROWNED => 20.0,
         x if x == super::kinds::KIND_HUSK => 20.0,
         x if x == super::kinds::KIND_STRAY => 20.0,
+        // W378: Pillager/Vindicator 24, Evoker 24.
+        x if x == super::kinds::KIND_PILLAGER => 24.0,
+        x if x == super::kinds::KIND_VINDICATOR => 24.0,
+        x if x == super::kinds::KIND_EVOKER => 24.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
@@ -265,6 +269,25 @@ pub(crate) fn pick_kind_for(
 ) -> Option<u8> {
     let (sun_dir, _sky) = day_night(day_time);
     let is_night = sun_dir.y < 0.0;
+    // W378: structure spawn overrides (MC per-structure monster
+    // pools). The outpost yard breeds pillagers day and night; the
+    // mansion grounds their vindicators + the odd evoker.
+    if matches!(
+        voxel.current_worldgen_ctx().profile,
+        crate::worldgen::WorldGen::Mc
+    ) {
+        let ctx = voxel.current_worldgen_ctx();
+        if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
+            return Some(super::kinds::KIND_PILLAGER);
+        }
+        if crate::worldgen::mcgen::mansion::pos_in_mansion(&ctx, wpos) {
+            return Some(if rng.next_u32().is_multiple_of(5) {
+                super::kinds::KIND_EVOKER
+            } else {
+                super::kinds::KIND_VINDICATOR
+            });
+        }
+    }
     // W298: ceiled dims use the NETHER pool - MC nether_wastes
     // weights (zombified_piglin 100 / ghast 50 / magma_cube 2) with
     // the engine's stand-in kinds until those mobs are ported (same
