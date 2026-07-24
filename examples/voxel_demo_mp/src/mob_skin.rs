@@ -75,6 +75,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Pillager => ("illager", "pillager"),
         MobKind::Vindicator => ("illager", "vindicator"),
         MobKind::Evoker => ("illager", "evoker"),
+        MobKind::Blaze => ("", "blaze"),
+        MobKind::WitherSkeleton => ("skeleton", "wither_skeleton"),
     }
 }
 
@@ -161,6 +163,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) pillager: Option<PathBuf>,
     pub(crate) vindicator: Option<PathBuf>,
     pub(crate) evoker: Option<PathBuf>,
+    pub(crate) blaze: Option<PathBuf>,
+    pub(crate) wither_skeleton: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -195,6 +199,8 @@ impl MobSkinSet {
             pillager: mob_skin_path(assets_root, MobKind::Pillager),
             vindicator: mob_skin_path(assets_root, MobKind::Vindicator),
             evoker: mob_skin_path(assets_root, MobKind::Evoker),
+            blaze: mob_skin_path(assets_root, MobKind::Blaze),
+            wither_skeleton: mob_skin_path(assets_root, MobKind::WitherSkeleton),
         }
     }
 
@@ -229,6 +235,8 @@ impl MobSkinSet {
             MobKind::Pillager => &self.pillager,
             MobKind::Vindicator => &self.vindicator,
             MobKind::Evoker => &self.evoker,
+            MobKind::Blaze => &self.blaze,
+            MobKind::WitherSkeleton => &self.wither_skeleton,
         };
         opt.as_deref()
     }

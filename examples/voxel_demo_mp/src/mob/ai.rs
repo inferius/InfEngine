@@ -169,6 +169,10 @@ fn kind_is_hostile(kind: u8) -> bool {
             | super::kinds::KIND_PILLAGER
             | super::kinds::KIND_VINDICATOR
             | super::kinds::KIND_EVOKER
+            // W379: blaze (melee until fireballs land) + wither
+            // skeleton.
+            | super::kinds::KIND_BLAZE
+            | super::kinds::KIND_WITHER_SKELETON
     )
 }
 
@@ -773,6 +777,7 @@ fn step_one(
                 // v1 keeps the current altitude and wanders).
                 if m.kind == super::kinds::KIND_GHAST
                     || m.kind == super::kinds::KIND_BEE
+                    || m.kind == super::kinds::KIND_BLAZE
                 {
                     // W375: bees hover (MC bees fly; the wander goal
                     // keeps them near their spawn altitude).

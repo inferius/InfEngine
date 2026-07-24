@@ -572,6 +572,40 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Blaze + wither skeleton (W379) -----------------
+                    k if k == crate::mob::kinds::KIND_BLAZE
+                        || k == crate::mob::kinds::KIND_WITHER_SKELETON =>
+                    {
+                        let (baked, scale_mul) =
+                            if k == crate::mob::kinds::KIND_BLAZE {
+                                (mob_meshes.blaze_model.as_ref(), 1.0)
+                            } else {
+                                // MC wither skeletons stand 1.2x tall.
+                                (
+                                    mob_meshes.wither_skeleton_model.as_ref(),
+                                    1.2,
+                                )
+                            };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale * scale_mul,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Illager family (W378) --------------------------
                     k if k == crate::mob::kinds::KIND_PILLAGER
                         || k == crate::mob::kinds::KIND_VINDICATOR

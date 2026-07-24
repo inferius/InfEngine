@@ -226,6 +226,9 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_PILLAGER => 24.0,
         x if x == super::kinds::KIND_VINDICATOR => 24.0,
         x if x == super::kinds::KIND_EVOKER => 24.0,
+        // W379: Blaze 20, WitherSkeleton 20.
+        x if x == super::kinds::KIND_BLAZE => 20.0,
+        x if x == super::kinds::KIND_WITHER_SKELETON => 20.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.

@@ -37,6 +37,7 @@ pub(crate) mod chest;
 pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod bee;
+pub(crate) mod blaze;
 pub(crate) mod creeper;
 pub(crate) mod illager;
 pub(crate) mod donkey;

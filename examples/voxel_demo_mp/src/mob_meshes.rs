@@ -515,6 +515,10 @@ pub(crate) struct MobMeshes {
     pub(crate) husk_model: Option<crate::entity_model::BakedModel>,
     /// W377: stray (skeleton mesh, frost sheet).
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
+    /// W379: blaze (BlazeModel: head + 12 rods).
+    pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W379: wither skeleton (skeleton mesh, sooty sheet).
+    pub(crate) wither_skeleton_model: Option<crate::entity_model::BakedModel>,
     /// W378: illager family (one mesh, three sheets).
     pub(crate) pillager_model: Option<crate::entity_model::BakedModel>,
     pub(crate) vindicator_model: Option<crate::entity_model::BakedModel>,
@@ -1177,6 +1181,34 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Blaze (W379: flat entity/blaze.png) -------------------------------
+    for root in &entity_roots {
+        let p = root.join("blaze.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.blaze_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::blaze::MODEL,
+                &img,
+            ));
+            info!("blaze entity texture bound");
+            break;
+        }
+    }
+
+    // ---- Wither skeleton (W379: skeleton mesh reskin) ----------------------
+    for root in &entity_roots {
+        let p = root.join("skeleton").join("wither_skeleton.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.wither_skeleton_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::skeleton::MODEL,
+                &img,
+            ));
+            info!("wither skeleton entity texture bound (skeleton mesh)");
+            break;
         }
     }
 

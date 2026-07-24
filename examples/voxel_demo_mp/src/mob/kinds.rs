@@ -81,6 +81,11 @@ pub(crate) enum MobKind {
     Pillager = 26,
     Vindicator = 27,
     Evoker = 28,
+    /// W379 - blaze (fortress throne spawner, floats).
+    Blaze = 29,
+    /// W379 - wither skeleton (skeleton mesh, sooty sheet; spawn
+    /// waits on the fortress-interior probe).
+    WitherSkeleton = 30,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -201,6 +206,8 @@ impl MobKind {
             MobKind::Pillager => "pillager",
             MobKind::Vindicator => "vindicator",
             MobKind::Evoker => "evoker",
+            MobKind::Blaze => "blaze",
+            MobKind::WitherSkeleton => "wither_skeleton",
         }
     }
 }
@@ -277,6 +284,8 @@ pub(crate) const KIND_STRAY: u8 = MobKind::Stray as u8;
 pub(crate) const KIND_PILLAGER: u8 = MobKind::Pillager as u8;
 pub(crate) const KIND_VINDICATOR: u8 = MobKind::Vindicator as u8;
 pub(crate) const KIND_EVOKER: u8 = MobKind::Evoker as u8;
+pub(crate) const KIND_BLAZE: u8 = MobKind::Blaze as u8;
+pub(crate) const KIND_WITHER_SKELETON: u8 = MobKind::WitherSkeleton as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
