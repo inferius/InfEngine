@@ -78,6 +78,10 @@ fn containers_roundtrip_single_empty_chest() {
         chests: vec![empty_chest_at([10, 64, -3])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -104,6 +108,10 @@ fn containers_roundtrip_populated_chest() {
         chests: vec![populated_chest_at([0, 65, 0])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -137,6 +145,10 @@ fn containers_roundtrip_multi_chest() {
         ],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -256,6 +268,10 @@ fn containers_recover_from_bak() {
         chests: vec![empty_chest_at([1, 64, 1])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     let second = DimensionContainers {
         doors: Vec::new(),
@@ -267,6 +283,10 @@ fn containers_recover_from_bak() {
         chests: vec![populated_chest_at([1, 64, 1]), empty_chest_at([2, 64, 2])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();
@@ -309,6 +329,10 @@ fn containers_slot_count_is_preserved() {
         chests: vec![double_chest],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
 
@@ -409,6 +433,10 @@ fn containers_full_save_load_through_typed_apis() {
         chests,
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &bundle).unwrap();
 
@@ -443,6 +471,10 @@ fn containers_two_writes_keep_bak() {
         chests: vec![empty_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     let second = DimensionContainers {
         doors: Vec::new(),
@@ -454,6 +486,10 @@ fn containers_two_writes_keep_bak() {
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &first).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, DIM, &second).unwrap();

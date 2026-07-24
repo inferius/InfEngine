@@ -67,6 +67,7 @@ impl Voxel {
             portal_positions: std::mem::take(&mut self.portal_positions),
             torch_orient: std::mem::take(&mut self.torch_orient),
             stair_states: std::mem::take(&mut self.stair_states),
+            bed_states: std::mem::take(&mut self.bed_states),
             snow_positions: std::mem::take(&mut self.snow_positions),
             fires: std::mem::take(&mut self.fires),
             liquid_schedule: std::mem::replace(
@@ -143,6 +144,7 @@ impl Voxel {
         self.portal_positions = target_world.portal_positions;
         self.torch_orient = target_world.torch_orient;
         self.stair_states = target_world.stair_states;
+        self.bed_states = target_world.bed_states;
         self.snow_positions = target_world.snow_positions;
         self.fires = target_world.fires;
         self.liquid_schedule = target_world.liquid_schedule;

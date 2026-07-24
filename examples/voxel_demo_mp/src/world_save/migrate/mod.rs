@@ -236,6 +236,17 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         3,
         super::containers::containers_v2_to_v3,
     );
+    // W387: v5 -> v6 adds the orientation-byte vecs (stairs /
+    // beds / torch orients / spawner kinds). Old saves migrate
+    // with empty vecs - their previously-saved chunks stay
+    // default-oriented once (nothing was recorded), fresh saves
+    // persist the full state.
+    reg.register(
+        SaveKind::Containers,
+        5,
+        6,
+        super::containers::containers_v5_to_v6,
+    );
     // W137: entities v1 -> v2 adds `carts` + `next_cart_id`
     // (minecart persistence). v1 saves migrate with empty carts.
     reg.register(

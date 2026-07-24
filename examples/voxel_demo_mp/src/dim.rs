@@ -137,6 +137,9 @@ pub(crate) struct DimWorld {
     pub torch_orient: HashMap<[i32; 3], u8>,
     /// W279: template stair orientations park with their dim.
     pub stair_states: HashMap<[i32; 3], u8>,
+    /// W387: bed piece states park too - they were the one
+    /// orientation map switch_dim dropped (W366 oversight).
+    pub bed_states: HashMap<[i32; 3], u8>,
     pub snow_positions: HashMap<[i32; 3], u8>,
     /// Per-cell fire age (Q.4b). Parked alongside chests + furnaces
     /// when the dim swaps out.
@@ -186,6 +189,7 @@ impl Default for DimWorld {
             portal_positions: std::collections::HashSet::new(),
             torch_orient: HashMap::new(),
             stair_states: HashMap::new(),
+            bed_states: HashMap::new(),
             snow_positions: HashMap::new(),
             fires: HashMap::new(),
             liquid_schedule: LiquidSchedule::new(),

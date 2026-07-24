@@ -67,6 +67,10 @@ fn containers_roundtrip_fires_v3() {
                 age: 15,
             },
         ],
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -95,6 +99,10 @@ fn containers_roundtrip_chests_furnaces_fires_together() {
             pos: [2, 64, 2],
             age: 12,
         }],
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -140,7 +148,8 @@ fn write_v2_containers_file(
 #[test]
 fn containers_v2_to_v3_migration_round_trip() {
     use super::containers::{
-        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5, read_containers_in_dir_with_registry,
+        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
+        containers_v5_to_v6, read_containers_in_dir_with_registry,
     };
 
     let tmp = TempDir::new().unwrap();
@@ -158,11 +167,13 @@ fn containers_v2_to_v3_migration_round_trip() {
     registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
+    // W387: chain the production 5 -> 6 arrow (live format is v6).
     registry.register(
         SaveKind::Containers,
-        4,
+        5,
         CONTAINERS_FORMAT_VERSION,
-        containers_v4_to_v5,
+        containers_v5_to_v6,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -203,7 +214,8 @@ fn containers_v2_to_v3_migration_via_default_registry() {
 #[test]
 fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     use super::containers::{
-        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5, read_containers_in_dir_with_registry,
+        containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
+        containers_v5_to_v6, read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
     write_v2_containers_file(
@@ -226,11 +238,13 @@ fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
+    // W387: chain the production 5 -> 6 arrow (live format is v6).
     registry.register(
         SaveKind::Containers,
-        4,
+        5,
         CONTAINERS_FORMAT_VERSION,
-        containers_v4_to_v5,
+        containers_v5_to_v6,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -259,6 +273,10 @@ fn fire_save_age_15_round_trips() {
             pos: [0, 0, 0],
             age: 15,
         }],
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -281,6 +299,10 @@ fn fire_save_position_negative_coords_round_trip() {
             pos: [-1000, -64, -1000],
             age: 3,
         }],
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();

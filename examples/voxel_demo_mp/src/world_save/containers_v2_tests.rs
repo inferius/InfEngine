@@ -75,6 +75,10 @@ fn containers_roundtrip_furnaces_v2() {
             populated_furnace_at([-5, 65, 5]),
         ],
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -100,6 +104,10 @@ fn containers_roundtrip_chests_and_furnaces_together() {
         chests: vec![populated_chest_at([0, 64, 0])],
         furnaces: vec![populated_furnace_at([1, 64, 1])],
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, DIM, &original).unwrap();
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
@@ -143,7 +151,8 @@ fn write_v1_containers_file(
 #[test]
 fn containers_v1_to_v2_migration_round_trip() {
     use super::containers::{
-        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
+        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
+        containers_v4_to_v5, containers_v5_to_v6,
         read_containers_in_dir_with_registry,
     };
 
@@ -166,11 +175,14 @@ fn containers_v1_to_v2_migration_round_trip() {
     registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
+    // W387: the live format moved to v6 - chain the production
+    // 5 -> 6 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        4,
+        5,
         CONTAINERS_FORMAT_VERSION,
-        containers_v4_to_v5,
+        containers_v5_to_v6,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -202,7 +214,8 @@ fn containers_v1_to_v2_migration_via_default_registry() {
 #[test]
 fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     use super::containers::{
-        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
+        containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
+        containers_v4_to_v5, containers_v5_to_v6,
         read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
@@ -224,11 +237,14 @@ fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     registry.register(SaveKind::Containers, 3, 4, containers_v3_to_v4);
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
+    registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
+    // W387: the live format moved to v6 - chain the production
+    // 5 -> 6 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        4,
+        5,
         CONTAINERS_FORMAT_VERSION,
-        containers_v4_to_v5,
+        containers_v5_to_v6,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

@@ -115,6 +115,10 @@ fn save_active_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
             brewing_runtimes: &voxel.brewing_runtimes,
             lever_on: &voxel.lever_on,
             rail_shapes: &voxel.rail_shapes,
+            stair_states: &voxel.stair_states,
+            bed_states: &voxel.bed_states,
+            torch_orient: &voxel.torch_orient,
+            spawner_kinds: &voxel.spawner_kinds,
         },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
@@ -189,6 +193,10 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
             brewing_runtimes: &dw.brewing_runtimes,
             lever_on: &dw.lever_on,
             rail_shapes: &dw.rail_shapes,
+            stair_states: &dw.stair_states,
+            bed_states: &dw.bed_states,
+            torch_orient: &dw.torch_orient,
+            spawner_kinds: &dw.spawner_kinds,
         },
     );
     containers::write_containers(slug, dim, &dim_containers)?;
@@ -528,6 +536,20 @@ fn apply_dim_containers_to_maps(
     dw.rail_shapes.clear();
     for r in bundle.rails {
         dw.rail_shapes.insert(r.pos, r.shape & 0x7F);
+    }
+    // W387: orientation bytes into the parked maps (extend, not
+    // clear - see helpers::apply_dimension_containers).
+    for e in bundle.stairs {
+        dw.stair_states.insert(e.pos, e.state);
+    }
+    for e in bundle.beds {
+        dw.bed_states.insert(e.pos, e.state);
+    }
+    for e in bundle.torch_orients {
+        dw.torch_orient.insert(e.pos, e.state);
+    }
+    for e in bundle.spawners {
+        dw.spawner_kinds.insert(e.pos, e.state);
     }
 }
 

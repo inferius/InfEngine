@@ -178,6 +178,10 @@ fn per_dim_containers_files_independent() {
             cook_progress_ms: 200,
         }],
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     let nt = DimensionContainers {
         doors: Vec::new(),
@@ -192,6 +196,10 @@ fn per_dim_containers_files_independent() {
         }],
         furnaces: Vec::new(),
         fires: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
     };
     write_containers_in_dir(tmp.path(), SLUG, "overworld", &ow).unwrap();
     write_containers_in_dir(tmp.path(), SLUG, "nether", &nt).unwrap();

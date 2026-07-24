@@ -27,6 +27,23 @@ pub(in crate::world_save::runtime) struct BlockStateRefs<'a> {
     pub lever_on: &'a HashSet<[i32; 3]>,
     /// W143: stored rail shapes (stateful MC RailState port).
     pub rail_shapes: &'a HashMap<[i32; 3], u8>,
+    /// W387: per-pos orientation bytes (see containers.rs v6).
+    pub stair_states: &'a HashMap<[i32; 3], u8>,
+    pub bed_states: &'a HashMap<[i32; 3], u8>,
+    pub torch_orient: &'a HashMap<[i32; 3], u8>,
+    pub spawner_kinds: &'a HashMap<[i32; 3], u8>,
+}
+
+/// W387: map -> save-vec helper for the per-pos state bytes.
+fn pos_state_vec(
+    map: &HashMap<[i32; 3], u8>,
+) -> Vec<crate::world_save::containers::PosStateSave> {
+    map.iter()
+        .map(|(pos, state)| crate::world_save::containers::PosStateSave {
+            pos: *pos,
+            state: *state,
+        })
+        .collect()
 }
 
 /// Build a `DimensionContainers` snapshot from the chest +
@@ -123,6 +140,12 @@ pub(in crate::world_save::runtime) fn build_dimension_containers_from(
         brewing: brewing_saves,
         levers_on,
         rails: rail_saves,
+        // W387: orientation bytes - the maps disk-loaded chunks
+        // can never re-derive (their worldgen is skipped).
+        stairs: pos_state_vec(block_state.stair_states),
+        beds: pos_state_vec(block_state.bed_states),
+        torch_orients: pos_state_vec(block_state.torch_orient),
+        spawners: pos_state_vec(block_state.spawner_kinds),
     }
 }
 
@@ -221,5 +244,22 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
     voxel.rail_shapes.clear();
     for r in containers_bundle.rails {
         voxel.rail_shapes.insert(r.pos, r.shape & 0x7F);
+    }
+    // W387: orientation bytes back into the runtime maps. NOTE:
+    // extend, do not clear - the initial async build may have
+    // already replayed side effects for freshly-generated chunks
+    // before the save applies, and both sources agree wherever
+    // they overlap (same deterministic worldgen).
+    for e in containers_bundle.stairs {
+        voxel.stair_states.insert(e.pos, e.state);
+    }
+    for e in containers_bundle.beds {
+        voxel.bed_states.insert(e.pos, e.state);
+    }
+    for e in containers_bundle.torch_orients {
+        voxel.torch_orient.insert(e.pos, e.state);
+    }
+    for e in containers_bundle.spawners {
+        voxel.spawner_kinds.insert(e.pos, e.state);
     }
 }
