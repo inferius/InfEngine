@@ -486,6 +486,34 @@ pub fn draw_remote_mobs(
                     }
 
                     // ---- Zombie villager (W330) -------------------------
+                    // ---- Bee (W375) -------------------------------------
+                    k if k == crate::mob::kinds::KIND_BEE => {
+                        if let Some(baked) = &mob_meshes.bee_model {
+                            // Gentle hover bob - bees never sit still.
+                            let bob = (day_time * 6.0
+                                + mob.id as f32)
+                                .sin()
+                                * 0.06;
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink + bob,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                        // No sheet loaded: legacy cube fallback below.
+                    }
                     // ---- Creeper (W343) ---------------------------------
                     k if k == crate::mob::kinds::KIND_CREEPER => {
                         // Swell: vanilla white flash alternates every

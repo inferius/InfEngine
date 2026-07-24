@@ -65,6 +65,8 @@ pub(crate) enum MobKind {
     Creeper = 18,
     /// W344 - donkey (equine + panniers; village stables).
     Donkey = 19,
+    /// W375 - bee (tree bee nests; hovers, stings when hit).
+    Bee = 20,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -176,6 +178,7 @@ impl MobKind {
             MobKind::ZombieVillager => "zombie_villager",
             MobKind::Creeper => "creeper",
             MobKind::Donkey => "donkey",
+            MobKind::Bee => "bee",
         }
     }
 }
@@ -243,6 +246,7 @@ pub(crate) const KIND_MAGMA_CUBE: u8 = MobKind::MagmaCube as u8;
 pub(crate) const KIND_ZOMBIE_VILLAGER: u8 = MobKind::ZombieVillager as u8;
 pub(crate) const KIND_CREEPER: u8 = MobKind::Creeper as u8;
 pub(crate) const KIND_DONKEY: u8 = MobKind::Donkey as u8;
+pub(crate) const KIND_BEE: u8 = MobKind::Bee as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

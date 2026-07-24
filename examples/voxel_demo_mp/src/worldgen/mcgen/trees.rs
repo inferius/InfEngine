@@ -1841,6 +1841,53 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                 match pick {
                     Pick::Tree(def) => {
                         place_tree(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
+                        // W375: bee nests hang on trees - 5% in the
+                        // flower forest, 2% in plains/forest (MC
+                        // BeehiveDecorator rates). The nest sits
+                        // beside the trunk two cells up, facing the
+                        // open air; 2 resident bees mint through the
+                        // CarvedMob pipeline (persistent dedup by
+                        // anchor).
+                        let nest_permille = match mc {
+                            super::biome::McBiome::FlowerForest => 50,
+                            super::biome::McBiome::Plains
+                            | super::biome::McBiome::Forest => 20,
+                            _ => 0,
+                        };
+                        if nest_permille > 0
+                            && (rng.next_u64() % 1000) < nest_permille
+                            && let Some(nest) =
+                                super::features::block_id_by_name("bee_nest")
+                        {
+                            let (nx, ny, nz) = (wx + 1, floor + 2, wz);
+                            let (lx, ly, lz) = (
+                                nx - origin[0],
+                                ny - origin[1],
+                                nz - origin[2],
+                            );
+                            if (0..cs).contains(&lx)
+                                && (0..cs).contains(&ly)
+                                && (0..cs).contains(&lz)
+                                && chunk
+                                    .get(lx as usize, ly as usize, lz as usize)
+                                    .is_air()
+                            {
+                                chunk.set(
+                                    lx as usize,
+                                    ly as usize,
+                                    lz as usize,
+                                    BlockId(nest),
+                                );
+                                super::village::record_mob(
+                                    [nx, ny, nz],
+                                    20, // KIND_BEE (mob is a bin-side module)
+                                );
+                                super::village::record_mob(
+                                    [nx, ny + 1, nz],
+                                    20, // KIND_BEE (mob is a bin-side module)
+                                );
+                            }
+                        }
                     }
                     Pick::Fallen(def) => {
                         place_fallen(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);

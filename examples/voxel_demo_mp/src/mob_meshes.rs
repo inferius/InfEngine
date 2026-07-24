@@ -503,6 +503,8 @@ pub(crate) struct MobMeshes {
     pub(crate) creeper_model: Option<crate::entity_model::BakedModel>,
     /// W344: donkey (DonkeyModel - equine + panniers, scale 0.87).
     pub(crate) donkey_model: Option<crate::entity_model::BakedModel>,
+    /// W375: bee (AdultBeeModel verbatim).
+    pub(crate) bee_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1108,6 +1110,24 @@ pub fn load_non_sheep_mob_meshes(
             info!(
                 texture = format!("{w}x{h}"),
                 "creeper entity texture bound (universal model)"
+            );
+            break;
+        }
+    }
+
+    // ---- Bee (64x64) -------------------------------------------------------
+    for root in &entity_roots {
+        let p = root.join("bee").join("bee.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            let (w, h) = (img.width(), img.height());
+            mm.bee_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::bee::MODEL,
+                &img,
+            ));
+            info!(
+                texture = format!("{w}x{h}"),
+                "bee entity texture bound (universal model)"
             );
             break;
         }

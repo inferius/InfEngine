@@ -142,6 +142,15 @@ pub(crate) fn take_carved_oriented() -> Vec<CarvedOriented> {
 /// W365: record a horizontal pillar axis from a non-template gen
 /// path (the fallen-tree trunks). Same thread-local + side-effect
 /// ride as the template carve.
+/// W375: record a structure-resident mob from any gen path (the
+/// bee-nest bees ride the same CarvedMob -> StructureMob pipeline
+/// as village templates; anchor = dedup key, must be unique).
+pub(crate) fn record_mob(anchor: [i32; 3], kind: u8) {
+    CARVE_MOBS.with(|c| {
+        c.borrow_mut().push(CarvedMob { anchor, kind, baby: false })
+    });
+}
+
 pub(crate) fn record_pillar(pos: [i32; 3], axis: u8) {
     CARVE_ORIENTED.with(|c| {
         c.borrow_mut().push(CarvedOriented {

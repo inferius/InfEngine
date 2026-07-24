@@ -213,6 +213,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_VILLAGER => 20.0,
         // W315: Cat.createAttributes MAX_HEALTH 10.
         x if x == super::kinds::KIND_CAT => 10.0,
+        // W375: Bee.createAttributes MAX_HEALTH 10.
+        x if x == super::kinds::KIND_BEE => 10.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.

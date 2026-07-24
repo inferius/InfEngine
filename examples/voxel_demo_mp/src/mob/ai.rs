@@ -756,7 +756,11 @@ fn step_one(
                 // W327: the ghast FLOATS - MC ghasts ignore gravity
                 // entirely (RandomFloatAroundGoal steers in 3D; our
                 // v1 keeps the current altitude and wanders).
-                if m.kind == super::kinds::KIND_GHAST {
+                if m.kind == super::kinds::KIND_GHAST
+                    || m.kind == super::kinds::KIND_BEE
+                {
+                    // W375: bees hover (MC bees fly; the wander goal
+                    // keeps them near their spawn altitude).
                     m.vy = 0.0;
                 } else {
                 m.vy -= 32.0 * dt;
