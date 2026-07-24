@@ -517,6 +517,9 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W380: guardian family (one mesh; elder = tint sheet + 2.35x).
+    pub(crate) guardian_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) elder_guardian_model: Option<crate::entity_model::BakedModel>,
     /// W379: wither skeleton (skeleton mesh, sooty sheet).
     pub(crate) wither_skeleton_model: Option<crate::entity_model::BakedModel>,
     /// W378: illager family (one mesh, three sheets).
@@ -1179,6 +1182,29 @@ pub fn load_non_sheep_mob_meshes(
                     _ => mm.stray_model = Some(baked),
                 }
                 info!(file, "variant entity texture bound (reskin)");
+                break;
+            }
+        }
+    }
+
+    // ---- Guardian family (W380) --------------------------------------------
+    for (slot, file) in
+        [(0usize, "guardian.png"), (1, "guardian_elder.png")]
+    {
+        for root in &entity_roots {
+            let p = root.join("guardian").join(file);
+            if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+                let baked = crate::entity_model::bake(
+                    r,
+                    &crate::entity_model::guardian::MODEL,
+                    &img,
+                );
+                if slot == 0 {
+                    mm.guardian_model = Some(baked);
+                } else {
+                    mm.elder_guardian_model = Some(baked);
+                }
+                info!(file, "guardian entity texture bound");
                 break;
             }
         }

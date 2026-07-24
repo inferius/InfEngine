@@ -229,6 +229,9 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         // W379: Blaze 20, WitherSkeleton 20.
         x if x == super::kinds::KIND_BLAZE => 20.0,
         x if x == super::kinds::KIND_WITHER_SKELETON => 20.0,
+        // W380: Guardian 30, ElderGuardian 80.
+        x if x == super::kinds::KIND_GUARDIAN => 30.0,
+        x if x == super::kinds::KIND_ELDER_GUARDIAN => 80.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
@@ -282,6 +285,15 @@ pub(crate) fn pick_kind_for(
         let ctx = voxel.current_worldgen_ctx();
         if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
             return Some(super::kinds::KIND_PILLAGER);
+        }
+        // W380: monument waters teem with guardians (1-in-20 an
+        // elder) - the MC monument spawn override.
+        if crate::worldgen::mcgen::monument::pos_in_monument(&ctx, wpos) {
+            return Some(if rng.next_u32().is_multiple_of(20) {
+                super::kinds::KIND_ELDER_GUARDIAN
+            } else {
+                super::kinds::KIND_GUARDIAN
+            });
         }
         if crate::worldgen::mcgen::mansion::pos_in_mansion(&ctx, wpos) {
             return Some(if rng.next_u32().is_multiple_of(5) {

@@ -173,6 +173,9 @@ fn kind_is_hostile(kind: u8) -> bool {
             // skeleton.
             | super::kinds::KIND_BLAZE
             | super::kinds::KIND_WITHER_SKELETON
+            // W380: guardians (laser beam is a follow-up).
+            | super::kinds::KIND_GUARDIAN
+            | super::kinds::KIND_ELDER_GUARDIAN
     )
 }
 
@@ -778,6 +781,8 @@ fn step_one(
                 if m.kind == super::kinds::KIND_GHAST
                     || m.kind == super::kinds::KIND_BEE
                     || m.kind == super::kinds::KIND_BLAZE
+                    || m.kind == super::kinds::KIND_GUARDIAN
+                    || m.kind == super::kinds::KIND_ELDER_GUARDIAN
                 {
                     // W375: bees hover (MC bees fly; the wander goal
                     // keeps them near their spawn altitude).

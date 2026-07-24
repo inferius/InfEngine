@@ -86,6 +86,9 @@ pub(crate) enum MobKind {
     /// W379 - wither skeleton (skeleton mesh, sooty sheet; spawn
     /// waits on the fortress-interior probe).
     WitherSkeleton = 30,
+    /// W380 - guardian + elder (monument structure override).
+    Guardian = 31,
+    ElderGuardian = 32,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -208,6 +211,8 @@ impl MobKind {
             MobKind::Evoker => "evoker",
             MobKind::Blaze => "blaze",
             MobKind::WitherSkeleton => "wither_skeleton",
+            MobKind::Guardian => "guardian",
+            MobKind::ElderGuardian => "elder_guardian",
         }
     }
 }
@@ -286,6 +291,8 @@ pub(crate) const KIND_VINDICATOR: u8 = MobKind::Vindicator as u8;
 pub(crate) const KIND_EVOKER: u8 = MobKind::Evoker as u8;
 pub(crate) const KIND_BLAZE: u8 = MobKind::Blaze as u8;
 pub(crate) const KIND_WITHER_SKELETON: u8 = MobKind::WitherSkeleton as u8;
+pub(crate) const KIND_GUARDIAN: u8 = MobKind::Guardian as u8;
+pub(crate) const KIND_ELDER_GUARDIAN: u8 = MobKind::ElderGuardian as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

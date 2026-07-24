@@ -572,6 +572,40 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Guardian family (W380) -------------------------
+                    k if k == crate::mob::kinds::KIND_GUARDIAN
+                        || k == crate::mob::kinds::KIND_ELDER_GUARDIAN =>
+                    {
+                        let (baked, scale_mul) =
+                            if k == crate::mob::kinds::KIND_GUARDIAN {
+                                (mob_meshes.guardian_model.as_ref(), 1.0)
+                            } else {
+                                // MC elder guardians render at 2.35x.
+                                (
+                                    mob_meshes.elder_guardian_model.as_ref(),
+                                    2.35,
+                                )
+                            };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale * scale_mul,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Blaze + wither skeleton (W379) -----------------
                     k if k == crate::mob::kinds::KIND_BLAZE
                         || k == crate::mob::kinds::KIND_WITHER_SKELETON =>

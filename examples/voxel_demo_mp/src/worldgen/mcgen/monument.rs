@@ -194,6 +194,41 @@ const OPPOSITE: [usize; 6] = [D_UP, D_DOWN, D_SOUTH, D_NORTH, D_EAST, D_WEST];
 // Layout.
 // ----------------------------------------------------------------
 
+/// W380: deterministic membership for the guardian spawn override
+/// (MC OceanMonumentStructure.spawnOverrides) - inside any piece
+/// box of a laid-out monument.
+pub(crate) fn pos_in_monument(
+    ctx: &WorldgenCtx,
+    pos: [i32; 3],
+) -> bool {
+    if !matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return false;
+    }
+    let cs = CHUNK_SIZE as i32;
+    let (ccx, ccz) = (pos[0].div_euclid(cs), pos[2].div_euclid(cs));
+    const REACH: i32 = 4;
+    let seed = ctx.effective_seed();
+    for gx in
+        (ccx - REACH).div_euclid(SPACING)..=(ccx + REACH).div_euclid(SPACING)
+    {
+        for gz in (ccz - REACH).div_euclid(SPACING)
+            ..=(ccz + REACH).div_euclid(SPACING)
+        {
+            let [scx, scz] = triangular_start(seed, gx, gz);
+            if (scx - ccx).abs() > REACH || (scz - ccz).abs() > REACH {
+                continue;
+            }
+            let Some(layout) = layout_for_start(ctx, scx, scz) else {
+                continue;
+            };
+            if layout.pieces.iter().any(|p| p.bb.contains(pos)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn layout_for_start(
     ctx: &WorldgenCtx,
     scx: i32,

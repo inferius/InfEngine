@@ -77,6 +77,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Evoker => ("illager", "evoker"),
         MobKind::Blaze => ("", "blaze"),
         MobKind::WitherSkeleton => ("skeleton", "wither_skeleton"),
+        MobKind::Guardian => ("guardian", "guardian"),
+        MobKind::ElderGuardian => ("guardian", "guardian_elder"),
     }
 }
 
@@ -165,6 +167,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) evoker: Option<PathBuf>,
     pub(crate) blaze: Option<PathBuf>,
     pub(crate) wither_skeleton: Option<PathBuf>,
+    pub(crate) guardian: Option<PathBuf>,
+    pub(crate) elder_guardian: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -201,6 +205,8 @@ impl MobSkinSet {
             evoker: mob_skin_path(assets_root, MobKind::Evoker),
             blaze: mob_skin_path(assets_root, MobKind::Blaze),
             wither_skeleton: mob_skin_path(assets_root, MobKind::WitherSkeleton),
+            guardian: mob_skin_path(assets_root, MobKind::Guardian),
+            elder_guardian: mob_skin_path(assets_root, MobKind::ElderGuardian),
         }
     }
 
@@ -237,6 +243,8 @@ impl MobSkinSet {
             MobKind::Evoker => &self.evoker,
             MobKind::Blaze => &self.blaze,
             MobKind::WitherSkeleton => &self.wither_skeleton,
+            MobKind::Guardian => &self.guardian,
+            MobKind::ElderGuardian => &self.elder_guardian,
         };
         opt.as_deref()
     }

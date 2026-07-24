@@ -39,6 +39,7 @@ pub(crate) mod cow;
 pub(crate) mod bee;
 pub(crate) mod blaze;
 pub(crate) mod creeper;
+pub(crate) mod guardian;
 pub(crate) mod illager;
 pub(crate) mod donkey;
 pub(crate) mod ghast;
