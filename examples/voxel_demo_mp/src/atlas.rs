@@ -192,26 +192,8 @@ pub(crate) fn build_block_atlas() -> (u32, u32, Vec<u8>) {
 // `submerged_liquid_eye`, `submerged_liquid`, and
 // `aabb_intersects_solid` moved to `player.rs`.
 
-/// Approximate face normal from 4 corners (used by the sloped
-/// water top quad where the corner heights differ). Cross product
-/// of two opposing edges - close enough for shading the gentle
-/// slopes the depth ramp produces.
-pub(crate) fn water_face_normal(
-    v0: [f32; 3],
-    v1: [f32; 3],
-    v2: [f32; 3],
-    _v3: [f32; 3],
-) -> [f32; 3] {
-    // W34: explicit upward normal for top face. The water top quad is
-    // always nearly horizontal (corner heights wiggle within [0, 1])
-    // so the outward normal is essentially +Y. Cross-product attempts
-    // gave -Y for the SW,SE,NE corner order (caller convention is CW
-    // from above), and negating that produced an off-look from above
-    // per the user's repeated reports. Force-emit +Y which is the only
-    // physically meaningful outward direction for a water surface.
-    let _ = (v0, v1, v2);
-    [0.0, 1.0, 0.0]
-}
+// `water_face_normal` moved to `liquid::mesh` in W384 (the
+// lib-built worker mesher needs it; this module is bin-side).
 
 
 // `submerged_liquid_eye`, `submerged_liquid`, and

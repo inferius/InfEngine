@@ -54,18 +54,52 @@ impl BlockRead for World {
 /// mutability keeps the mesher's `&self` reads free of plumbing.
 /// Valid for one rebuild pass: holding `&World` borrows the world
 /// immutably, so entries cannot go stale while it exists.
+// W384: the frame-thread mesher is gone; the lib unit tests still
+// exercise this read path.
+#[allow(dead_code)]
 pub(crate) struct CachedWorld<'a> {
     world: &'a World,
     slots: [std::cell::Cell<([i32; 3], Option<&'a Chunk>)>; 8],
 }
 
 impl<'a> CachedWorld<'a> {
+    #[allow(dead_code)]
     pub(crate) fn new(world: &'a World) -> Self {
         Self {
             world,
             slots: std::array::from_fn(|_| {
                 std::cell::Cell::new(([i32::MAX, i32::MAX, i32::MAX], None))
             }),
+        }
+    }
+}
+
+/// W384: owned chunk snapshot for the WORKER-side liquid mesher.
+/// The dispatcher clones the target chunk + its 26 neighbours (the
+/// corner-height reads touch XZ diagonals, the depth walk descends
+/// up to 12 cells) so the worker never borrows the live `World`.
+/// Missing chunks read as air - the snapshot union always covers
+/// every cell a home-chunk emit can reach.
+pub(crate) struct SnapshotWorld {
+    pub(crate) chunks: std::collections::HashMap<[i32; 3], Chunk>,
+}
+
+impl BlockRead for SnapshotWorld {
+    #[inline]
+    fn get(&self, p: [i32; 3]) -> BlockId {
+        let cs = CHUNK_SIZE as i32;
+        let cc = [
+            p[0].div_euclid(cs),
+            p[1].div_euclid(cs),
+            p[2].div_euclid(cs),
+        ];
+        match self.chunks.get(&cc) {
+            Some(c) => c.get(
+                p[0].rem_euclid(cs) as usize,
+                p[1].rem_euclid(cs) as usize,
+                p[2].rem_euclid(cs) as usize,
+            ),
+            None => BlockId::AIR,
         }
     }
 }
@@ -366,4 +400,228 @@ pub(crate) fn push_quad_flow(
         );
     }
     idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// W384: emit the slope-aware quads for ONE liquid cell at `p` into
+/// the per-kind vertex/index buckets. Moved verbatim from
+/// `Voxel::emit_liquid_cell` (app/liquid_tick.rs) and parametrized
+/// over `BlockRead` + owned inputs so the WORKER pool can run it -
+/// the in-place main-thread mesh was the R21 log's sustained
+/// 10-12 ms `liqmesh` pre-render cost while streaming.
+pub(crate) fn emit_liquid_cell<W: BlockRead>(
+    w: &W,
+    levels: &HashMap<[i32; 3], u8>,
+    tex: &HashMap<u16, ([f32; 4], u32)>,
+    p: [i32; 3],
+    buckets: &mut HashMap<u16, (Vec<MeshVertex>, Vec<u32>)>,
+) {
+    let block = w.get(p);
+    // W203: waterlogged plant cells ARE water for the liquid mesh.
+    let liquid_id = if block_is_waterlogged(block.0) {
+        crate::block::WATER_ID
+    } else {
+        block.0
+    };
+    if super::liquid_for(BlockId(liquid_id)).is_none() {
+        return;
+    }
+    let (vertices, indices) = buckets.entry(liquid_id).or_default();
+    let vx = p[0];
+    let vy = p[1];
+    let vz = p[2];
+    let h00 = liquid_corner_height_at(w, levels, vx, vy, vz, 0, 0, liquid_id);
+    let h10 = liquid_corner_height_at(w, levels, vx, vy, vz, 1, 0, liquid_id);
+    let h11 = liquid_corner_height_at(w, levels, vx, vy, vz, 1, 1, liquid_id);
+    let h01 = liquid_corner_height_at(w, levels, vx, vy, vz, 0, 1, liquid_id);
+    let fx = vx as f32;
+    let fy = vy as f32;
+    let fz = vz as f32;
+    // W200: frame-0 atlas rect + tile-anim slot of the MC animated
+    // liquid texture, resolved per liquid id ON THE MAIN THREAD
+    // (ResourcePack is bin-side; this module builds in the lib too).
+    // Missing entry = full-tile UV, the pack-less dev-run fallback.
+    let (tile, anim) = tex
+        .get(&liquid_id)
+        .copied()
+        .unwrap_or(([0.0, 0.0, 1.0, 1.0], 0));
+    // W199: normalized water-column depth for the shader's
+    // depth-based surface opacity.
+    let depth = {
+        const DEPTH_FULL: i32 = 12;
+        let mut d = 1i32;
+        while d <= DEPTH_FULL
+            && counts_as_liquid(w.get([vx, vy - d, vz]).0, liquid_id)
+        {
+            d += 1;
+        }
+        d as f32 / DEPTH_FULL as f32
+    };
+    // Top face - culled under same-liquid AND under a full opaque
+    // block above (W276).
+    let above = w.get([vx, vy + 1, vz]);
+    let above_same = counts_as_liquid(above.0, liquid_id);
+    let above_occludes =
+        !above.is_air() && crate::block::block_is_opaque(above);
+    if !above_same && !above_occludes {
+        let t0 = [fx, fy + h00, fz];
+        let t1 = [fx, fy + h01, fz + 1.0];
+        let t2 = [fx + 1.0, fy + h11, fz + 1.0];
+        let t3 = [fx + 1.0, fy + h10, fz];
+        let normal = water_face_normal(t0, t1, t2, t3);
+        push_quad_flow(
+            vertices, indices, t0, t1, t2, t3, normal, tile, anim, depth,
+        );
+    }
+    if side_open(w, vx - 1, vy, vz, liquid_id) {
+        push_quad_flow(
+            vertices,
+            indices,
+            [fx, fy, fz + 1.0],
+            [fx, fy + h01, fz + 1.0],
+            [fx, fy + h00, fz],
+            [fx, fy, fz],
+            [-1.0, 0.0, 0.0],
+            tile,
+            anim,
+            depth,
+        );
+    }
+    if side_open(w, vx + 1, vy, vz, liquid_id) {
+        push_quad_flow(
+            vertices,
+            indices,
+            [fx + 1.0, fy, fz],
+            [fx + 1.0, fy + h10, fz],
+            [fx + 1.0, fy + h11, fz + 1.0],
+            [fx + 1.0, fy, fz + 1.0],
+            [1.0, 0.0, 0.0],
+            tile,
+            anim,
+            depth,
+        );
+    }
+    if side_open(w, vx, vy, vz - 1, liquid_id) {
+        push_quad_flow(
+            vertices,
+            indices,
+            [fx, fy, fz],
+            [fx, fy + h00, fz],
+            [fx + 1.0, fy + h10, fz],
+            [fx + 1.0, fy, fz],
+            [0.0, 0.0, -1.0],
+            tile,
+            anim,
+            depth,
+        );
+    }
+    if side_open(w, vx, vy, vz + 1, liquid_id) {
+        push_quad_flow(
+            vertices,
+            indices,
+            [fx + 1.0, fy, fz + 1.0],
+            [fx + 1.0, fy + h11, fz + 1.0],
+            [fx, fy + h01, fz + 1.0],
+            [fx, fy, fz + 1.0],
+            [0.0, 0.0, 1.0],
+            tile,
+            anim,
+            depth,
+        );
+    }
+    if bottom_open(w, vx, vy - 1, vz, liquid_id) {
+        push_quad_flow(
+            vertices,
+            indices,
+            [fx, fy, fz],
+            [fx + 1.0, fy, fz],
+            [fx + 1.0, fy, fz + 1.0],
+            [fx, fy, fz + 1.0],
+            [0.0, -1.0, 0.0],
+            tile,
+            anim,
+            depth,
+        );
+    }
+}
+
+/// W384: build the full liquid mesh of one chunk (CPU side) - the
+/// 16^3 scan with the W198.2 raw-array liquid gate and the W198.6
+/// interior-cell skip, exactly the old main-thread loop. Returns
+/// only non-empty buckets.
+pub(crate) fn mesh_liquid_chunk(
+    snap: &SnapshotWorld,
+    levels: &HashMap<[i32; 3], u8>,
+    tex: &HashMap<u16, ([f32; 4], u32)>,
+    cc: [i32; 3],
+) -> Vec<(u16, Vec<MeshVertex>, Vec<u32>)> {
+    let cs = CHUNK_SIZE as i32;
+    let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> =
+        HashMap::new();
+    let (bx, by, bz) = (cc[0] * cs, cc[1] * cs, cc[2] * cs);
+    if let Some(chunk) = snap.chunks.get(&cc) {
+        let cu = cs as usize;
+        for lx in 0..cs {
+            for ly in 0..cs {
+                for lz in 0..cs {
+                    let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
+                    let raw = chunk.get(ux, uy, uz);
+                    let watery = block_is_waterlogged(raw.0);
+                    let id = if watery {
+                        BlockId(crate::block::WATER_ID)
+                    } else {
+                        raw
+                    };
+                    if super::liquid_for(id).is_none() {
+                        continue;
+                    }
+                    let interior = ux > 0
+                        && uy > 0
+                        && uz > 0
+                        && ux < cu - 1
+                        && uy < cu - 1
+                        && uz < cu - 1;
+                    if interior {
+                        let same = |dx: usize, dy: usize, dz: usize| {
+                            counts_as_liquid(chunk.get(dx, dy, dz).0, id.0)
+                        };
+                        if same(ux + 1, uy, uz)
+                            && same(ux - 1, uy, uz)
+                            && same(ux, uy + 1, uz)
+                            && same(ux, uy - 1, uz)
+                            && same(ux, uy, uz + 1)
+                            && same(ux, uy, uz - 1)
+                        {
+                            continue;
+                        }
+                    }
+                    emit_liquid_cell(
+                        snap,
+                        levels,
+                        tex,
+                        [bx + lx, by + ly, bz + lz],
+                        &mut buckets,
+                    );
+                }
+            }
+        }
+    }
+    buckets
+        .into_iter()
+        .filter(|(_, (v, i))| !v.is_empty() && !i.is_empty())
+        .map(|(k, (v, i))| (k, v, i))
+        .collect()
+}
+
+/// Approximate face normal for the sloped water top quad. Moved
+/// from `atlas.rs` (bin-side) in W384 so the lib-built mesher can
+/// use it. See the W34 note: the surface is near-horizontal, the
+/// only physically meaningful outward normal is +Y.
+pub(crate) fn water_face_normal(
+    v0: [f32; 3],
+    v1: [f32; 3],
+    v2: [f32; 3],
+    _v3: [f32; 3],
+) -> [f32; 3] {
+    let _ = (v0, v1, v2);
+    [0.0, 1.0, 0.0]
 }

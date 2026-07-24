@@ -1142,6 +1142,11 @@ pub(crate) struct Voxel {
     /// turquoise, swamp murk), lava stays white (its texture is fully
     /// coloured).
     pub(crate) liquid_mesh_handles: LiquidMeshes,
+    /// W384: worker-meshed liquid chunks in flight - coord ->
+    /// dispatch epoch. A landing result with a stale epoch is
+    /// dropped (the chunk was re-dispatched after a change).
+    pub(crate) liquid_mesh_inflight: HashMap<ChunkCoord, u64>,
+    pub(crate) liquid_mesh_epoch: u64,
     pub(crate) liquid_mesh_dirty: bool,
     /// W111: last-meshed signature per chunk (commutative fold over the
     /// chunk's liquid cell positions + levels). The diff re-meshes only

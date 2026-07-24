@@ -31,9 +31,14 @@ use infengine_voxel::BlockId;
 // Public surface used by `main.rs` and other modules.
 pub(crate) use apply::liquid_apply_plan;
 pub(crate) use merge::liquid_merge_step;
+// W384: `counts_as_liquid` + the emit helpers are consumed inside
+// `mesh` itself now (the worker-side mesher); the sim-facing
+// re-exports below stay for the tests + planner.
+// The BIN side stopped consuming these when the emit moved into
+// `mesh` (W384); the lib planner + tests still do.
+#[allow(unused_imports)]
 pub(crate) use mesh::{
-    bottom_open, counts_as_liquid, liquid_corner_height_at, push_quad_flow,
-    side_open,
+    bottom_open, liquid_corner_height_at, push_quad_flow, side_open,
 };
 // `distance_to_drop_at` and `liquid_plan_step` are used by the
 // test sim only; re-exporting them under `cfg(test)` keeps the

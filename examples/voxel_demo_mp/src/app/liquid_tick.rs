@@ -66,182 +66,9 @@ impl Voxel {
         }
     }
 
-    /// Rebuild the combined water mesh when the dirty flag is
-    /// set. One handle covers every visible water voxel: top
-    /// face uses per-corner heights computed from the depth map,
-    /// side faces drop to y=0 only against air / decorations, and
-    /// the bottom face emits only when there's something the
-    /// player could actually see through the water from below.
-    /// W111: emit the slope-aware quads for ONE liquid cell at `p` into the
-    /// per-kind vertex/index bucket. Shared by the per-chunk rebuild below;
-    /// extracted verbatim from the old whole-world loop.
-    fn emit_liquid_cell(
-        &self,
-        w: &crate::liquid::mesh::CachedWorld,
-        p: [i32; 3],
-        buckets: &mut HashMap<u16, (Vec<MeshVertex>, Vec<u32>)>,
-    ) {
-        use crate::liquid::mesh::BlockRead;
-        let block = w.get(p);
-        // W203: waterlogged plant cells ARE water for the liquid mesh -
-        // they emit water faces exactly like a water cell (so the sea
-        // surface stays continuous over a kelp tip and the body has no
-        // holes), while the plant cross renders via the chunk mesh.
-        let liquid_id = if crate::block::block_is_waterlogged(block.0) {
-            crate::block::WATER_ID
-        } else {
-            block.0
-        };
-        if liquid_for(BlockId(liquid_id)).is_none() {
-            return;
-        }
-        let (vertices, indices) = buckets.entry(liquid_id).or_default();
-        let vx = p[0];
-        let vy = p[1];
-        let vz = p[2];
-        let lv = &self.liquid_level;
-        let h00 = liquid_corner_height_at(w, lv, vx, vy, vz, 0, 0, liquid_id);
-        let h10 = liquid_corner_height_at(w, lv, vx, vy, vz, 1, 0, liquid_id);
-        let h11 = liquid_corner_height_at(w, lv, vx, vy, vz, 1, 1, liquid_id);
-        let h01 = liquid_corner_height_at(w, lv, vx, vy, vz, 0, 1, liquid_id);
-        let fx = vx as f32;
-        let fy = vy as f32;
-        let fz = vz as f32;
-        // W200: resolve the MC animated liquid texture (water_still /
-        // lava_still) once per cell - frame-0 atlas rect + tile-anim slot.
-        // The quads sample it exactly like animated chunk-mesh tiles, so
-        // liquids finally LOOK like MC liquids instead of a flat tinted
-        // plane with a procedural shimmer. Falls back to the pack's
-        // missing-texture sentinel when the pack has no entry (pack-less
-        // dev runs), same policy as the chunk mesher.
-        let (tile, anim) = {
-            let pack = &self.resource_pack;
-            match pack.block_face_ref(liquid_id, crate::resource_pack::BlockFace::Top) {
-                Some(r) => {
-                    (r.atlas_uv, pack.anim_slot_for_ref(r) as u32)
-                }
-                None => (
-                    pack.icon_uv_for(block, [0, 1, 0]),
-                    0,
-                ),
-            }
-        };
-        // W199: water-column depth below this cell, normalized for the
-        // shader's depth-based surface opacity (deep ocean reads opaque so
-        // it isn't see-through to the void; shallow ponds stay translucent).
-        // Walk down counting same-liquid cells, capped at DEPTH_FULL blocks.
-        let depth = {
-            const DEPTH_FULL: i32 = 12;
-            let mut d = 1i32;
-            // W203: the walk continues through waterlogged plant cells -
-            // stopping at a kelp stalk made the water above kelp forests
-            // read "shallow" = translucent while neighbouring columns
-            // were opaque (the patchy surface from above).
-            while d <= DEPTH_FULL
-                && crate::liquid::counts_as_liquid(
-                    w.get([vx, vy - d, vz]).0,
-                    liquid_id,
-                )
-            {
-                d += 1;
-            }
-            d as f32 / DEPTH_FULL as f32
-        };
-        // Top face (CCW from above so the Back-cull keeps it) - only when
-        // the cell above isn't the same liquid (waterlogged counts).
-        // W276: ALSO cull against a full opaque block above (MC's
-        // shouldRenderFace(UP)). Without it every underwater cell under
-        // the seabed/beach emitted a phantom surface quad ~0.11 under
-        // the solid's bottom face - visible as floating water sheets
-        // from below, z-fight shimmer while swimming (the user's
-        // screenshot 1).
-        let above = w.get([vx, vy + 1, vz]);
-        let above_same = crate::liquid::counts_as_liquid(above.0, liquid_id);
-        let above_occludes = !above.is_air() && crate::block::block_is_opaque(above);
-        if !above_same && !above_occludes {
-            let t0 = [fx, fy + h00, fz];
-            let t1 = [fx, fy + h01, fz + 1.0];
-            let t2 = [fx + 1.0, fy + h11, fz + 1.0];
-            let t3 = [fx + 1.0, fy + h10, fz];
-            let normal = water_face_normal(t0, t1, t2, t3);
-            push_quad_flow(vertices, indices, t0, t1, t2, t3, normal, tile, anim, depth);
-        }
-        // Side faces: only when the in-plane neighbour is open (air /
-        // passable). Same-liquid cancels (shared face is interior).
-        if side_open(w, vx - 1, vy, vz, liquid_id) {
-            push_quad_flow(
-                vertices,
-                indices,
-                [fx, fy, fz + 1.0],
-                [fx, fy + h01, fz + 1.0],
-                [fx, fy + h00, fz],
-                [fx, fy, fz],
-                [-1.0, 0.0, 0.0],
-                tile,
-                anim,
-                depth,
-            );
-        }
-        if side_open(w, vx + 1, vy, vz, liquid_id) {
-            push_quad_flow(
-                vertices,
-                indices,
-                [fx + 1.0, fy, fz],
-                [fx + 1.0, fy + h10, fz],
-                [fx + 1.0, fy + h11, fz + 1.0],
-                [fx + 1.0, fy, fz + 1.0],
-                [1.0, 0.0, 0.0],
-                tile,
-                anim,
-                depth,
-            );
-        }
-        if side_open(w, vx, vy, vz - 1, liquid_id) {
-            push_quad_flow(
-                vertices,
-                indices,
-                [fx, fy, fz],
-                [fx, fy + h00, fz],
-                [fx + 1.0, fy + h10, fz],
-                [fx + 1.0, fy, fz],
-                [0.0, 0.0, -1.0],
-                tile,
-                anim,
-                depth,
-            );
-        }
-        if side_open(w, vx, vy, vz + 1, liquid_id) {
-            push_quad_flow(
-                vertices,
-                indices,
-                [fx + 1.0, fy, fz + 1.0],
-                [fx + 1.0, fy + h11, fz + 1.0],
-                [fx, fy + h01, fz + 1.0],
-                [fx, fy, fz + 1.0],
-                [0.0, 0.0, 1.0],
-                tile,
-                anim,
-                depth,
-            );
-        }
-        // Bottom face: only when the cell below is open (air / passable) -
-        // MC's shouldRenderFace(DOWN) gate, so a cliff-edge water cell
-        // shows its underside rather than sky.
-        if bottom_open(w, vx, vy - 1, vz, liquid_id) {
-            push_quad_flow(
-                vertices,
-                indices,
-                [fx, fy, fz],
-                [fx + 1.0, fy, fz],
-                [fx + 1.0, fy, fz + 1.0],
-                [fx, fy, fz + 1.0],
-                [0.0, -1.0, 0.0],
-                tile,
-                anim,
-                depth,
-            );
-        }
-    }
+    // W384: `emit_liquid_cell` moved to `liquid::mesh::emit_liquid_cell`
+    // (parametrized over `BlockRead` + owned inputs) so the worker
+    // pool can run it - see `maybe_rebuild_liquid_mesh` below.
 
     /// W111: PER-CHUNK liquid mesh - replaces the whole-world rebuild and
     /// the W107 throttle workaround. Each rebuild folds an order-independent
@@ -369,61 +196,25 @@ impl Voxel {
         if self.liquid_remesh_backlog.is_empty() {
             return;
         }
-        // Drain a budget of chunks per frame from the backlog - no rescan.
-        // W198.11: lowered 24 -> 8. Meshing a water chunk costs ~1.9ms
-        // (emit does ~10 world.get per exposed cell), so 24/frame was ~45ms
-        // over open ocean - a per-frame stall while flying. 8/frame caps it
-        // to ~15ms and spreads the rest over the next frames (water meshes
-        // trail a touch behind the terrain while moving fast, which the
-        // distance-opaque far water largely hides). The real fix is
-        // chunk-local neighbour access in the liquid mesher (the recurring
-        // HashMap-per-cell pattern); this is the immediate relief.
-        const LIQUID_CHUNKS_PER_FRAME: usize = 8;
-        // W205: adaptive drain. While flying, chunk streaming enqueues up
-        // to ~7 backlog entries per streamed chunk (self + face
-        // neighbours) x ~32 dispatches/frame, so a fixed 8/frame drain
-        // falls ever further behind - the water surface visibly trailed
-        // the terrain at the streaming frontier (kelp standing "dry" on
-        // the edge, the user's cut-off water boundary). Scale the drain
-        // with the backlog (an eighth per frame, capped) so a burst
-        // catches up in a few frames while the steady-state cost stays
-        // at the old 8.
-        // W205.1: cap 64 -> 16. The user's load log showed the 64-chunk
-        // drain costing 17-75 ms/frame in a water-heavy world (each ocean
-        // chunk emit is ~1 ms) - the catch-up must never dominate the
-        // frame. 16/frame still clears a 1200-entry load burst in ~5 s.
-        // W278: while essentially stationary spend a bigger budget -
-        // the user watches the ocean surface fill in, and a 4 ms
-        // trickle took minutes over a VD-32 ocean backlog (~30k+
-        // entries after the initial fill). Standing still a ~12 ms
-        // frame is imperceptible (same policy as the GPU-upload
-        // budget in current_results_budget); the instant the player
-        // moves we drop back so travel never stutters.
+        // W384: the mesh build moved OFF the frame thread. This
+        // function now only picks the nearest backlog chunks, clones
+        // owned snapshots (3x3x3 chunk union + one levels Arc per
+        // frame) and ships a LiquidMesh job; the workers run the
+        // 16^3 emit and the stream drain lands finished buckets
+        // (upload only, sub-ms). The old in-place mesh was the R21
+        // log's sustained 10-12 ms liqmesh pre-render cost during
+        // streaming - the "trhane docitani".
+        if self.workers.is_none() {
+            return;
+        }
         let v = self.player_vel;
-        // W334: "stationary" also requires an idle stream. W324
-        // zeroes player_vel whenever the player's own chunk is not
-        // loaded - exactly the flying-ahead-of-the-frontier case - so
-        // velocity alone promoted the big 12 ms drain budget DURING
-        // flight (the liqmesh 10-15 ms log spikes). While generation
-        // is busy the small budget applies regardless of speed.
-        // W350: also require a quiet remesh queue - standing still
-        // while the frontier catches up stacked this 12 ms drain on
-        // top of the upload + lighting budgets (the R14 35 FPS dips
-        // with remesh_q ~5000).
+        // W334/W350 gating kept: a busy stream or remesh queue
+        // shrinks the batch so dispatch cloning never stacks onto a
+        // loaded frame.
         let stationary = (v.x * v.x + v.y * v.y + v.z * v.z) < 4.0
             && self.pending_chunks.is_empty()
             && self.pending_remesh.len() < 2048;
-        // W351: 12 -> 8 ms - the stationary catch-up stacked with
-        // the boosted upload budget + light ticks into visible
-        // hitches while watching the world fill in.
-        let (drain_cap, budget_ms) = if stationary { (48, 8) } else { (16, 4) };
-        let drain = LIQUID_CHUNKS_PER_FRAME
-            .max(self.liquid_remesh_backlog.len() / 8)
-            .min(drain_cap);
-        // W278: NEAREST-first. The backlog is an unordered HashSet, so
-        // the old `.take(drain)` meshed arbitrary (often distant)
-        // chunks while the water around the player stayed missing.
-        // One O(n) pass keeps the `drain` closest entries.
+        let dispatch_cap: usize = if stationary { 24 } else { 8 };
         let pcx = (self.player_pos.x.floor() as i32).div_euclid(cs);
         let pcz = (self.player_pos.z.floor() as i32).div_euclid(cs);
         let mut to_mesh: Vec<(i32, ChunkCoord)> = self
@@ -434,106 +225,25 @@ impl Voxel {
                 (dx * dx + dz * dz, *cc)
             })
             .collect();
-        if to_mesh.len() > drain {
-            to_mesh.select_nth_unstable_by_key(drain, |(d, _)| *d);
-            to_mesh.truncate(drain);
+        if to_mesh.len() > dispatch_cap {
+            to_mesh.select_nth_unstable_by_key(dispatch_cap, |(d, _)| *d);
+            to_mesh.truncate(dispatch_cap);
         }
         to_mesh.sort_unstable_by_key(|(d, _)| *d);
-        let to_mesh: Vec<ChunkCoord> = to_mesh.into_iter().map(|(_, cc)| cc).collect();
-        // W237: TIME budget on top of the count cap. Ocean chunks
-        // cost ~1.4 ms each to mesh, so a full 16-chunk drain was a
-        // ~22 ms frame while streaming over water (the user's log).
-        // Chunks past the budget stay in the backlog (each is only
-        // removed as it's processed).
-        let drain_budget = std::time::Duration::from_millis(budget_ms);
-        let drain_start = std::time::Instant::now();
-        // W358: one chunk-pointer cache for the whole drain - the
-        // world cannot change mid-pass (no set_block below), and the
-        // mesher's neighbour reads all hit the home chunk or a face
-        // neighbour (parity slots, no eviction fights).
-        let wcache = crate::liquid::mesh::CachedWorld::new(&self.world);
-        for cc in to_mesh {
-            if drain_start.elapsed() >= drain_budget {
-                break;
-            }
+        // ONE flow-level snapshot per frame shared by the batch.
+        // Only flow cells live in the map (sources are absent =
+        // level 0), so a settled ocean clones a near-empty map.
+        let levels = Arc::new(self.liquid_level.clone());
+        self.liquid_mesh_epoch += 1;
+        let epoch = self.liquid_mesh_epoch;
+        let mut coords: Vec<ChunkCoord> = Vec::new();
+        let mut epochs: Vec<u64> = Vec::new();
+        let mut tints: Vec<[f32; 3]> = Vec::new();
+        let mut snapshot: HashMap<ChunkCoord, Chunk> = HashMap::new();
+        for (_, cc) in to_mesh {
             self.liquid_remesh_backlog.remove(&cc);
-            // Per-kind vertex/index pool for THIS chunk only.
-            let mut buckets: HashMap<u16, (Vec<MeshVertex>, Vec<u32>)> = HashMap::new();
-            let bx = cc[0] * cs;
-            let by = cc[1] * cs;
-            let bz = cc[2] * cs;
-            // W198.2: skip non-liquid cells via ONE chunk borrow + local
-            // array reads instead of a `world.get` (HashMap) lookup per
-            // cell. Only actual liquid cells pay emit_liquid_cell's
-            // neighbour scan, so an all-air neighbour chunk (enqueued for
-            // seam re-cull on stream-in) now costs 4096 cheap array reads
-            // rather than 4096 hashmap lookups + emit. The old code's
-            // per-cell world.get over 24 chunks/frame was the bulk of the
-            // "flying over ocean" sim_ms (per-frame main-thread liquid
-            // meshing); this is its dominant term.
-            if let Some(chunk) = self.world.chunk(cc) {
-                let cu = cs as usize;
-                for lx in 0..cs {
-                    for ly in 0..cs {
-                        for lz in 0..cs {
-                            let (ux, uy, uz) = (lx as usize, ly as usize, lz as usize);
-                            let raw = chunk.get(ux, uy, uz);
-                            // W203: waterlogged plant cells emit water
-                            // faces too (the cell IS water in MC terms).
-                            let watery = crate::block::block_is_waterlogged(raw.0);
-                            let id = if watery {
-                                BlockId(crate::block::WATER_ID)
-                            } else {
-                                raw
-                            };
-                            if liquid_for(id).is_none() {
-                                continue;
-                            }
-                            // W198.6: skip cells fully enclosed by the SAME
-                            // liquid - they emit ZERO faces, but emit still
-                            // pays ~10 world.get (HashMap) lookups per cell
-                            // to discover that. For a deep-ocean chunk that's
-                            // nearly every cell (the bulk of liqM over water).
-                            // Only decidable locally for interior cells; border
-                            // cells have cross-chunk neighbours, so emit them.
-                            let interior =
-                                ux > 0 && uy > 0 && uz > 0 && ux < cu - 1 && uy < cu - 1 && uz < cu - 1;
-                            if interior {
-                                // W203: waterlogged neighbours count as the
-                                // same body, so a water cell ringed by kelp
-                                // still skips (and vice versa).
-                                let same = |dx: usize, dy: usize, dz: usize| {
-                                    crate::liquid::counts_as_liquid(
-                                        chunk.get(dx, dy, dz).0,
-                                        id.0,
-                                    )
-                                };
-                                if same(ux + 1, uy, uz)
-                                    && same(ux - 1, uy, uz)
-                                    && same(ux, uy + 1, uz)
-                                    && same(ux, uy - 1, uz)
-                                    && same(ux, uy, uz + 1)
-                                    && same(ux, uy, uz - 1)
-                                {
-                                    continue;
-                                }
-                            }
-                            self.emit_liquid_cell(&wcache, [bx + lx, by + ly, bz + lz], &mut buckets);
-                        }
-                    }
-                }
-            }
-            // W212: the water tint is the chunk's MC biome water colour
-            // (sampled once per rebuild at the chunk centre - warm ocean
-            // turquoise, swamp murk, frozen ocean steel-blue). Non-Mc
-            // profiles keep the BLOCK_TYPES water blue. Lava's texture
-            // is fully coloured, so it always tints white (W200).
-            //
-            // W284: cached per chunk COLUMN. The climate-noise biome
-            // sample is not free, and a busy backlog re-meshes up to 48
-            // chunks per frame - re-deriving the same column colour on
-            // every rebuild was pure waste. Cleared on dim switch /
-            // world reset alongside the other liquid state.
+            let (bx, bz) = (cc[0] * cs, cc[2] * cs);
+            // W212/W284: biome water tint, cached per chunk column.
             let water_tint = match self.water_tint_cache.get(&[cc[0], cc[2]]) {
                 Some(t) => *t,
                 None => {
@@ -554,46 +264,112 @@ impl Voxel {
                     t
                 }
             };
-            let renderer = self.renderer.as_mut().expect("renderer ready");
-            if let Some(old) = self.liquid_mesh_handles.remove(&cc) {
-                for (_, h, _) in old {
-                    renderer.remove_mesh(h);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let nc = [cc[0] + dx, cc[1] + dy, cc[2] + dz];
+                        if !snapshot.contains_key(&nc)
+                            && let Some(ch) = self.world.chunk(nc)
+                        {
+                            snapshot.insert(nc, ch.clone());
+                        }
+                    }
                 }
             }
-            let mut handles = Vec::new();
-            for (liquid_id, (vertices, indices)) in buckets {
-                if vertices.is_empty() || indices.is_empty() {
-                    continue;
-                }
-                let label = format!("voxel_liquid_{}_{}_{}_{liquid_id}", cc[0], cc[1], cc[2]);
-                let h = renderer.create_mesh(&label, &vertices, &indices);
-                // W200: liquids sample the MC animated texture from the
-                // block atlas now - bind it (unbound meshes fall back to
-                // the 1x1 white default = the old flat look).
-                if let Some(a) = self.voxel_atlas.clone() {
-                    renderer.bind_mesh_albedo_arc(h, a);
-                }
-                // W108: water translucent (alpha pipeline, cull_mode=None);
-                // lava opaque. Draw order handled in infengine_render::render().
-                if liquid_id == crate::block::WATER_ID {
-                    renderer.set_mesh_transparent(h, true);
-                }
-                let tint = match liquid_id {
-                    crate::block::WATER_ID => water_tint,
-                    crate::block::LAVA_ID => [1.0, 1.0, 1.0],
-                    other => crate::block::block_type(other)
-                        .map(|bt| bt.color)
-                        .unwrap_or([1.0, 1.0, 1.0]),
-                };
-                handles.push((liquid_id, h, tint));
-            }
-            if handles.is_empty() {
-                self.liquid_mesh_handles.remove(&cc);
-            } else {
-                self.liquid_mesh_handles.insert(cc, handles);
+            self.liquid_mesh_inflight.insert(cc, epoch);
+            coords.push(cc);
+            epochs.push(epoch);
+            tints.push(water_tint);
+        }
+        if coords.is_empty() {
+            return;
+        }
+        // W200 texture refs resolved HERE (ResourcePack is bin-side,
+        // the worker mesher builds in the lib too): liquid id ->
+        // (frame-0 atlas rect, anim slot).
+        let mut tex: HashMap<u16, ([f32; 4], u32)> = HashMap::new();
+        for lid in [crate::block::WATER_ID, crate::block::LAVA_ID] {
+            let e = match self
+                .resource_pack
+                .block_face_ref(lid, crate::resource_pack::BlockFace::Top)
+            {
+                Some(r) => (
+                    r.atlas_uv,
+                    self.resource_pack.anim_slot_for_ref(r) as u32,
+                ),
+                None => (
+                    self.resource_pack.icon_uv_for(BlockId(lid), [0, 1, 0]),
+                    0,
+                ),
+            };
+            tex.insert(lid, e);
+        }
+        let job = crate::workers::Job::LiquidMesh(crate::workers::LiquidMeshJob {
+            coords: coords.clone(),
+            epochs,
+            tints,
+            snapshot,
+            levels,
+            tex,
+            dim: self.current_dim.clone(),
+        });
+        let send_failed = match self.workers.as_ref() {
+            Some(pool) => pool.req_tx.send(job).is_err(),
+            None => true,
+        };
+        if send_failed {
+            for cc in coords {
+                self.liquid_mesh_inflight.remove(&cc);
+                self.liquid_remesh_backlog.insert(cc);
             }
         }
         let _ = block_is_transparent_render;
+    }
+
+    /// W384: land one worker-meshed liquid chunk - swap the GPU
+    /// meshes (create_mesh + bind per non-empty bucket, sub-ms).
+    pub(crate) fn apply_liquid_mesh_result(
+        &mut self,
+        cc: ChunkCoord,
+        buckets: Vec<(u16, Vec<MeshVertex>, Vec<u32>)>,
+        water_tint: [f32; 3],
+    ) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        if let Some(old) = self.liquid_mesh_handles.remove(&cc) {
+            for (_, h, _) in old {
+                renderer.remove_mesh(h);
+            }
+        }
+        let mut handles = Vec::new();
+        for (liquid_id, vertices, indices) in buckets {
+            if vertices.is_empty() || indices.is_empty() {
+                continue;
+            }
+            let label = format!(
+                "voxel_liquid_{}_{}_{}_{liquid_id}",
+                cc[0], cc[1], cc[2]
+            );
+            let h = renderer.create_mesh(&label, &vertices, &indices);
+            if let Some(a) = self.voxel_atlas.clone() {
+                renderer.bind_mesh_albedo_arc(h, a);
+            }
+            if liquid_id == crate::block::WATER_ID {
+                renderer.set_mesh_transparent(h, true);
+            }
+            let tint = match liquid_id {
+                crate::block::WATER_ID => water_tint,
+                crate::block::LAVA_ID => [1.0, 1.0, 1.0],
+                other => crate::block::block_type(other)
+                    .map(|bt| bt.color)
+                    .unwrap_or([1.0, 1.0, 1.0]),
+            };
+            handles.push((liquid_id, h, tint));
+        }
+        if !handles.is_empty() {
+            self.liquid_mesh_handles.insert(cc, handles);
+        }
     }
 
     /// Spawn a fresh drop entity at the voxel centre. Host-only

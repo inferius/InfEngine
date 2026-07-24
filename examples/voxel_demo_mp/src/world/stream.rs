@@ -275,8 +275,11 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
         WorkerResult::Lit { .. } => 0u8,
         WorkerResult::Remeshed { .. } => 1,
         WorkerResult::Generated { .. } => 2,
+        // W384: liquid meshes land before shells - the water surface
+        // trails the terrain otherwise.
+        WorkerResult::LiquidMeshed { .. } => 3,
         // W321: shells are pure decoration - always after real chunks.
-        WorkerResult::LodTile(_) => 3,
+        WorkerResult::LodTile(_) => 4,
     });
     // W106: apply the per-frame time budget to PROCESSING (the GPU mesh
     // uploads), which is what the budget always intended (see the
@@ -307,6 +310,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 "lit"
             }
             WorkerResult::LodTile(_) => "lod",
+            WorkerResult::LiquidMeshed { .. } => "liqmesh",
         };
         match result {
             WorkerResult::Generated {
@@ -796,6 +800,25 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     "W46.30: WorkerResult::Lit applied + remesh queued",
                 );
                 vx.pending_lighting_jobs = vx.pending_lighting_jobs.saturating_sub(1);
+            }
+            WorkerResult::LiquidMeshed {
+                coord,
+                epoch,
+                tint,
+                buckets,
+                dim,
+            } => {
+                // W384: stale-epoch results (chunk re-dispatched
+                // after a liquid change) and dim leftovers drop.
+                if dim != vx.current_dim {
+                    vx.liquid_mesh_inflight.remove(&coord);
+                    continue;
+                }
+                if vx.liquid_mesh_inflight.get(&coord) != Some(&epoch) {
+                    continue;
+                }
+                vx.liquid_mesh_inflight.remove(&coord);
+                vx.apply_liquid_mesh_result(coord, buckets, tint);
             }
             WorkerResult::LodTile(res) => {
                 // W321/W333: a surface shell finished. The pending

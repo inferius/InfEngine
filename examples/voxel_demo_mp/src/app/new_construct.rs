@@ -168,6 +168,8 @@ impl Voxel {
             net: NetRole::Offline,
             player_cube: None,
             liquid_mesh_handles: HashMap::new(),
+            liquid_mesh_inflight: HashMap::new(),
+            liquid_mesh_epoch: 0,
             last_built_worldgen: None,
             dropped_items: Vec::new(),
             next_drop_id: 1,

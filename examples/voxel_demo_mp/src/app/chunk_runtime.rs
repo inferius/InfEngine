@@ -106,6 +106,7 @@ impl Voxel {
         self.liquid_tick_accum = 0.0;
         self.liquid_chunk_sig.clear();
         self.liquid_remesh_backlog.clear();
+        self.liquid_mesh_inflight.clear();
         self.water_tint_cache.clear();
         self.liquid_level.clear();
         self.liquid_positions.clear();

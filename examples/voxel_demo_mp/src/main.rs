@@ -52,10 +52,8 @@ use block::{
 };
 mod liquid;
 use liquid::{
-    LIQUIDS, Liquid, LiquidPlanStep, bottom_open, liquid_apply_plan,
-    liquid_corner_height_at, liquid_for, liquid_merge_step,
-    liquid_plan_cell, push_quad_flow, schedule::LiquidSchedule,
-    side_open,
+    LIQUIDS, Liquid, LiquidPlanStep, liquid_apply_plan, liquid_for,
+    liquid_merge_step, liquid_plan_cell, schedule::LiquidSchedule,
 };
 mod net;
 use net::{
@@ -227,7 +225,7 @@ pub(crate) use workers::{
 };
 // W47.27 - block atlas + day/night helpers.
 mod atlas;
-pub(crate) use atlas::{day_night, flame_emitter, load_block_atlas_from_dir, water_face_normal};
+pub(crate) use atlas::{day_night, flame_emitter, load_block_atlas_from_dir};
 // W47.27 - crafting recipes.
 mod recipes;
 pub(crate) use recipes::{RECIPES, Recipe};

@@ -561,6 +561,39 @@ impl WorkerPool {
                                         return;
                                     }
                                 }
+                                Job::LiquidMesh(job) => {
+                                    // W384: per-chunk emit against the
+                                    // owned snapshot; one result per
+                                    // coord so the main thread lands
+                                    // them incrementally.
+                                    let snap =
+                                        crate::liquid::mesh::SnapshotWorld {
+                                            chunks: job.snapshot,
+                                        };
+                                    for (i, cc) in
+                                        job.coords.iter().enumerate()
+                                    {
+                                        let buckets =
+                                            crate::liquid::mesh::mesh_liquid_chunk(
+                                                &snap,
+                                                &job.levels,
+                                                &job.tex,
+                                                *cc,
+                                            );
+                                        if res_tx
+                                            .send(WorkerResult::LiquidMeshed {
+                                                coord: *cc,
+                                                epoch: job.epochs[i],
+                                                tint: job.tints[i],
+                                                buckets,
+                                                dim: job.dim.clone(),
+                                            })
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                }
                                 Job::LodTile(job) => {
                                     // W321: pure column-data replay -
                                     // the W314 shared core cache makes
@@ -1221,6 +1254,15 @@ pub(crate) enum WorkerResult {
     /// W321: one far surface-shell tile (see `lod.rs`). Carries its
     /// dim like every other result so a dim switch drops it.
     LodTile(crate::lod::LodTileResult),
+    /// W384: CPU-built liquid mesh of one chunk. The main thread
+    /// only uploads (create_mesh + bind, sub-ms).
+    LiquidMeshed {
+        coord: ChunkCoord,
+        epoch: u64,
+        tint: [f32; 3],
+        buckets: Vec<(u16, Vec<infengine_render::MeshVertex>, Vec<u32>)>,
+        dim: String,
+    },
 }
 
 /// W25 / W27: a single unit of work sent to a worker thread.
@@ -1238,6 +1280,30 @@ pub(crate) enum Job {
     /// W321: build one far surface-shell tile from cached column
     /// data (no chunk gen / lighting / storage).
     LodTile(crate::lod::LodTileJob),
+    /// W384: mesh a batch of liquid chunks off-frame (see
+    /// `liquid::mesh::mesh_liquid_chunk`).
+    LiquidMesh(LiquidMeshJob),
+}
+
+/// W384: one liquid-mesh batch. The dispatcher clones the union of
+/// each target chunk's 3x3x3 neighbourhood into `snapshot` (shared
+/// across the batch - neighbours overlap heavily) plus ONE Arc of
+/// the flow-level map per frame, so the worker runs the 16^3 emit
+/// with zero live-world borrows. `epochs` guards staleness: the
+/// main thread drops a landing result whose epoch no longer matches
+/// its `liquid_mesh_inflight` entry (the chunk was re-dispatched).
+pub(crate) struct LiquidMeshJob {
+    pub(crate) coords: Vec<ChunkCoord>,
+    pub(crate) epochs: Vec<u64>,
+    /// Per-coord biome water tint, resolved on the main thread
+    /// (the tint cache lives there).
+    pub(crate) tints: Vec<[f32; 3]>,
+    pub(crate) snapshot: HashMap<ChunkCoord, Chunk>,
+    pub(crate) levels: Arc<HashMap<[i32; 3], u8>>,
+    /// Liquid id -> (frame-0 atlas rect, anim slot), resolved from
+    /// the ResourcePack on the main thread (bin-side type).
+    pub(crate) tex: HashMap<u16, ([f32; 4], u32)>,
+    pub(crate) dim: String,
 }
 
 /// W27: lighting BFS job. The main thread clones the affected chunks
