@@ -37,6 +37,7 @@ pub(crate) mod biome;
 pub(crate) mod blockmap;
 pub(crate) mod cave_deco;
 pub(crate) mod mushrooms;
+pub(crate) mod probe_budget;
 pub(crate) mod buried_treasure;
 pub(crate) mod carver;
 pub(crate) mod cave_features;

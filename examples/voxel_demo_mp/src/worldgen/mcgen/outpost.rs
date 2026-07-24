@@ -114,21 +114,24 @@ fn biome_hosts_outpost(biome: McBiome) -> bool {
 /// Solve (and cache) the outpost layout for a start chunk. `None`
 /// when any placement gate fails (frequency, village exclusion,
 /// biome) or the start pool rolls empty.
+type LayoutCache = HashMap<(u32, i32, i32), Option<Rc<Vec<PlacedPiece>>>>;
+thread_local! {
+    static LAYOUT_CACHE: RefCell<LayoutCache> = RefCell::new(HashMap::new());
+}
+
 pub(crate) fn layout_for_start(
     ctx: &WorldgenCtx,
     scx: i32,
     scz: i32,
 ) -> Option<Rc<Vec<PlacedPiece>>> {
-    type Cache = HashMap<(u32, i32, i32), Option<Rc<Vec<PlacedPiece>>>>;
-    thread_local! {
-        static CACHE: RefCell<Cache> = RefCell::new(HashMap::new());
-    }
     let seed = ctx.effective_seed();
-    if let Some(hit) = CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned()) {
+    if let Some(hit) =
+        LAYOUT_CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned())
+    {
         return hit;
     }
     let built = build_layout(ctx, scx, scz).map(Rc::new);
-    CACHE.with(|c| {
+    LAYOUT_CACHE.with(|c| {
         let mut map = c.borrow_mut();
         if map.len() > 256 {
             map.clear();
@@ -136,6 +139,25 @@ pub(crate) fn layout_for_start(
         map.insert((seed, scx, scz), built.clone());
     });
     built
+}
+
+/// W383: probe-path lookup (see `probe_budget`) - cache hit or one
+/// budgeted cold build; over budget reports absent without caching.
+fn layout_for_probe(
+    ctx: &WorldgenCtx,
+    scx: i32,
+    scz: i32,
+) -> Option<Rc<Vec<PlacedPiece>>> {
+    let seed = ctx.effective_seed();
+    if let Some(hit) =
+        LAYOUT_CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned())
+    {
+        return hit;
+    }
+    if !super::probe_budget::allow_build() {
+        return None;
+    }
+    layout_for_start(ctx, scx, scz)
 }
 
 fn build_layout(ctx: &WorldgenCtx, scx: i32, scz: i32) -> Option<Vec<PlacedPiece>> {
@@ -202,7 +224,7 @@ pub(crate) fn pos_in_outpost(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
             if (scx - ccx).abs() > REACH || (scz - ccz).abs() > REACH {
                 continue;
             }
-            let Some(layout) = layout_for_start(ctx, scx, scz) else {
+            let Some(layout) = layout_for_probe(ctx, scx, scz) else {
                 continue;
             };
             for piece in layout.iter() {

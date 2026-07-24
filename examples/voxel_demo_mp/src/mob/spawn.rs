@@ -291,7 +291,10 @@ pub(crate) fn pick_kind_for(
         crate::worldgen::WorldGen::Mc
     ) {
         let ctx = voxel.current_worldgen_ctx();
-        if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
+        // W383: register this thread for the probe cold-build
+    // budget (worker threads stay exempt).
+    crate::worldgen::mcgen::probe_budget::mark_frame_thread();
+    if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
             return Some(super::kinds::KIND_PILLAGER);
         }
         // W380: monument waters teem with guardians (1-in-20 an

@@ -1167,28 +1167,53 @@ pub(crate) struct Mansion {
     pub(crate) hull: Bb,
 }
 
+type LayoutCache = HashMap<(u32, i32, i32), Option<Rc<Mansion>>>;
+thread_local! {
+    static LAYOUT_CACHE: RefCell<LayoutCache> = RefCell::new(HashMap::new());
+}
+
 pub(crate) fn layout_for_start(
     ctx: &WorldgenCtx,
     scx: i32,
     scz: i32,
 ) -> Option<Rc<Mansion>> {
-    type Cache = HashMap<(u32, i32, i32), Option<Rc<Mansion>>>;
-    thread_local! {
-        static CACHE: RefCell<Cache> = RefCell::new(HashMap::new());
-    }
     let seed = ctx.effective_seed();
-    if let Some(hit) = CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned()) {
+    if let Some(hit) =
+        LAYOUT_CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned())
+    {
         return hit;
     }
     let built = build_layout(ctx, scx, scz).map(Rc::new);
-    CACHE.with(|c| {
+    LAYOUT_CACHE.with(|c| {
         let mut map = c.borrow_mut();
-        if map.len() > 16 {
+        // W383: 16 -> 64. The probe's REACH window sweeps more start
+        // cells than 16 while circling a dark forest; the tiny cap
+        // thrashed the cache and re-ran the expensive gates.
+        if map.len() > 64 {
             map.clear();
         }
         map.insert((seed, scx, scz), built.clone());
     });
     built
+}
+
+/// W383: probe-path lookup (see `probe_budget`) - cache hit or one
+/// budgeted cold build; over budget reports absent without caching.
+fn layout_for_probe(
+    ctx: &WorldgenCtx,
+    scx: i32,
+    scz: i32,
+) -> Option<Rc<Mansion>> {
+    let seed = ctx.effective_seed();
+    if let Some(hit) =
+        LAYOUT_CACHE.with(|c| c.borrow().get(&(seed, scx, scz)).cloned())
+    {
+        return hit;
+    }
+    if !super::probe_budget::allow_build() {
+        return None;
+    }
+    layout_for_start(ctx, scx, scz)
 }
 
 fn build_layout(ctx: &WorldgenCtx, scx: i32, scz: i32) -> Option<Mansion> {
@@ -1390,7 +1415,13 @@ pub(crate) fn pos_in_mansion(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
     for gx in (ccx - REACH).div_euclid(SPACING)..=(ccx + REACH).div_euclid(SPACING) {
         for gz in (ccz - REACH).div_euclid(SPACING)..=(ccz + REACH).div_euclid(SPACING) {
             let [scx, scz] = triangular_start(ctx.effective_seed(), gx, gz);
-            if let Some(m) = layout_for_start(ctx, scx, scz)
+            // W383: distance pre-filter (monument/outpost had it,
+            // mansion did not) - starts beyond REACH cannot contain
+            // `pos`, so never pay their gate cost.
+            if (scx - ccx).abs() > REACH || (scz - ccz).abs() > REACH {
+                continue;
+            }
+            if let Some(m) = layout_for_probe(ctx, scx, scz)
                 && m.hull.contains(pos)
             {
                 return true;
