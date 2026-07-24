@@ -160,6 +160,93 @@ fn target_ids(names: &[&str]) -> HashSet<u16> {
     names.iter().filter_map(|n| block_id_by_name(n)).collect()
 }
 
+/// W373: `IcebergFeature` - packed/blue-ice bergs in the frozen
+/// oceans (`iceberg_packed` at 1-in-16 chunks, `iceberg_blue` at
+/// 1-in-200). Vanilla builds a noise-perturbed double ellipsoid;
+/// this keeps the two lobes (a cap above sea level, a wider keel
+/// below) without the jitter. 3x3 source replay so a berg crosses
+/// chunk borders seamlessly; writes replace only water/air, never
+/// terrain.
+pub(crate) fn place_icebergs(
+    chunk: &mut Chunk,
+    coord: ChunkCoord,
+    ctx: &WorldgenCtx,
+    origin: [i32; 3],
+) {
+    const SALT_ICEBERG: u64 = 0x1CE0_0373;
+    let cs = CHUNK_SIZE as i32;
+    let seed = ctx.effective_seed();
+    let sea = crate::worldgen::climate::SEA_LEVEL;
+    let Some(packed) = block_id_by_name("packed_ice") else {
+        return;
+    };
+    let blue = block_id_by_name("blue_ice").unwrap_or(packed);
+    for scx in (coord[0] - 1)..=(coord[0] + 1) {
+        for scz in (coord[2] - 1)..=(coord[2] + 1) {
+            let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+            if !matches!(mc, McBiome::FrozenOcean | McBiome::DeepFrozenOcean) {
+                continue;
+            }
+            let mut rng =
+                SplitMix64::new(stream_seed(seed, scx, scz, SALT_ICEBERG));
+            let roll = next_int(&mut rng, 200);
+            let ice = if roll == 0 {
+                blue
+            } else if roll < 12 {
+                packed
+            } else {
+                continue;
+            };
+            let wx = scx * cs + next_int(&mut rng, 16);
+            let wz = scz * cs + next_int(&mut rng, 16);
+            let h_above = 2 + next_int(&mut rng, 7);
+            let r_cap = 3 + next_int(&mut rng, 4);
+            let depth = 3 + next_int(&mut rng, 5);
+            let r_keel = r_cap + 2;
+            for dy in -depth..=h_above {
+                let (r, hh) = if dy >= 0 {
+                    (r_cap as f32, h_above as f32)
+                } else {
+                    (r_keel as f32, depth as f32)
+                };
+                let t = 1.0 - (dy as f32 / hh.max(1.0)).powi(2);
+                if t <= 0.0 {
+                    continue;
+                }
+                let rr = (r * t.sqrt()).floor() as i32;
+                for dx in -rr..=rr {
+                    for dz in -rr..=rr {
+                        if dx * dx + dz * dz > rr * rr {
+                            continue;
+                        }
+                        let (x, y, z) = (wx + dx, sea + dy, wz + dz);
+                        let (lx, ly, lz) =
+                            (x - origin[0], y - origin[1], z - origin[2]);
+                        if !(0..cs).contains(&lx)
+                            || !(0..cs).contains(&ly)
+                            || !(0..cs).contains(&lz)
+                        {
+                            continue;
+                        }
+                        let here =
+                            chunk.get(lx as usize, ly as usize, lz as usize);
+                        if here.is_air()
+                            || crate::block::block_is_watery(here.0)
+                        {
+                            chunk.set(
+                                lx as usize,
+                                ly as usize,
+                                lz as usize,
+                                BlockId(ice),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// W219: the underwater floor disks (step 6, after ores). 3x3 source
 /// replay; a try only runs where the origin cell is water (the placed
 /// predicate).

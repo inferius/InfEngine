@@ -931,6 +931,8 @@ pub(crate) fn place_from_coord(chunk: &mut Chunk, coord: ChunkCoord, ctx: &World
     // W219: the floor disks share step 6 (they run after the ore
     // entries in every biome list).
     super::misc_features::place_disks(chunk, coord, ctx, origin);
+    // W373: frozen-ocean icebergs (biome-gated inside).
+    super::misc_features::place_icebergs(chunk, coord, ctx, origin);
     // W261: ancient city (its structure JSON steps it at
     // underground_decoration, 7 - after the ore step).
     super::ancient_city::place_ancient_cities(chunk, coord, ctx, origin);
