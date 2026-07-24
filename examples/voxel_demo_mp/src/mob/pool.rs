@@ -240,6 +240,8 @@ mod tests {
                     // W381: the enderman haunts every overworld
                     // night pool at MC weight 10.
                     || *k == KIND_ENDERMAN
+                    // W382: the phantom insomnia stand-in.
+                    || *k == KIND_PHANTOM
             })
             .map(|(_, w)| *w)
             .sum();
