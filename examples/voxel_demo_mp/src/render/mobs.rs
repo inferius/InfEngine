@@ -572,6 +572,50 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Witch (W376: villager mesh) --------------------
+                    k if k == crate::mob::kinds::KIND_WITCH => {
+                        if let Some(baked) = &mob_meshes.witch_model {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
+                    // ---- Slime (W376: magma-cube mesh) ------------------
+                    k if k == crate::mob::kinds::KIND_SLIME => {
+                        if let Some(baked) = &mob_meshes.slime_model {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     KIND_ZOMBIE_VILLAGER => {
                         let white = [1.0f32, 1.0, 1.0, 1.0];
                         if let Some(baked) = &mob_meshes.zombie_villager_model {

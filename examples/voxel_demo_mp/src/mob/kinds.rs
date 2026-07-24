@@ -67,6 +67,10 @@ pub(crate) enum MobKind {
     Donkey = 19,
     /// W375 - bee (tree bee nests; hovers, stings when hit).
     Bee = 20,
+    /// W376 - witch (swamp-hut resident; villager mesh, own sheet).
+    Witch = 21,
+    /// W376 - slime (swamp night surface spawns; magma-cube mesh).
+    Slime = 22,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -179,6 +183,8 @@ impl MobKind {
             MobKind::Creeper => "creeper",
             MobKind::Donkey => "donkey",
             MobKind::Bee => "bee",
+            MobKind::Witch => "witch",
+            MobKind::Slime => "slime",
         }
     }
 }
@@ -247,6 +253,8 @@ pub(crate) const KIND_ZOMBIE_VILLAGER: u8 = MobKind::ZombieVillager as u8;
 pub(crate) const KIND_CREEPER: u8 = MobKind::Creeper as u8;
 pub(crate) const KIND_DONKEY: u8 = MobKind::Donkey as u8;
 pub(crate) const KIND_BEE: u8 = MobKind::Bee as u8;
+pub(crate) const KIND_WITCH: u8 = MobKind::Witch as u8;
+pub(crate) const KIND_SLIME: u8 = MobKind::Slime as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

@@ -22,7 +22,7 @@ use crate::worldgen::Biome;
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
-    KIND_ZOMBIE,
+    KIND_ZOMBIE, KIND_SLIME,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -106,7 +106,9 @@ const JUNGLE_NIGHT: &[(u8, u32)] =
 // W354: vanilla swamps spawn no farm animals (slime / frog only,
 // neither ported yet).
 const SWAMP_DAY: &[(u8, u32)] = EMPTY;
-const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20), (KIND_CREEPER, 40)];
+// W376: swamp nights grow slimes (surface slime spawning is a
+// swamp signature; the witch stays hut-resident, not pooled).
+const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 20), (KIND_CREEPER, 40), (KIND_SLIME, 30)];
 
 const SAVANNA_DAY: &[(u8, u32)] = &[
     (KIND_SHEEP, 12),

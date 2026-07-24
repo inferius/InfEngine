@@ -505,6 +505,11 @@ pub(crate) struct MobMeshes {
     pub(crate) donkey_model: Option<crate::entity_model::BakedModel>,
     /// W375: bee (AdultBeeModel verbatim).
     pub(crate) bee_model: Option<crate::entity_model::BakedModel>,
+    /// W376: witch (villager mesh, entity/witch.png sheet - the
+    /// vanilla WitchModel is villager-derived).
+    pub(crate) witch_model: Option<crate::entity_model::BakedModel>,
+    /// W376: slime (magma-cube mesh, entity/slime/slime.png).
+    pub(crate) slime_model: Option<crate::entity_model::BakedModel>,
     /// W327 - magma cube (universal `MagmaCubeModel`, scale 2.0).
     pub(crate) magma_cube_model: Option<crate::entity_model::BakedModel>,
 
@@ -1129,6 +1134,34 @@ pub fn load_non_sheep_mob_meshes(
                 texture = format!("{w}x{h}"),
                 "bee entity texture bound (universal model)"
             );
+            break;
+        }
+    }
+
+    // ---- Witch (villager mesh, flat entity/witch.png) ----------------------
+    for root in &entity_roots {
+        let p = root.join("witch.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.witch_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::villager::MODEL,
+                &img,
+            ));
+            info!("witch entity texture bound (villager mesh)");
+            break;
+        }
+    }
+
+    // ---- Slime (magma-cube mesh, entity/slime/slime.png) -------------------
+    for root in &entity_roots {
+        let p = root.join("slime").join("slime.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.slime_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::magma_cube::MODEL,
+                &img,
+            ));
+            info!("slime entity texture bound (magma-cube mesh)");
             break;
         }
     }

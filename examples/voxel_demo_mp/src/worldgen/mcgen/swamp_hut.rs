@@ -210,8 +210,11 @@ fn carve(w: &mut dyn ShaftWorld, p: &ScatteredPiece) {
         }
         z += 5;
     }
-    // The resident witch + cat spawn here in MC - both mobs are
-    // future waves.
+    // W376: the resident witch (+ her cat, ported back in W315)
+    // mint through the CarvedMob pipeline - persistent, deduped by
+    // anchor, exactly like village templates.
+    super::village::record_mob(p.world(2, 2, 4), 21); // KIND_WITCH
+    super::village::record_mob(p.world(4, 2, 4), 12); // KIND_CAT
 }
 
 /// The per-chunk swamp-hut pass (surface_structures).

@@ -156,6 +156,10 @@ fn kind_is_hostile(kind: u8) -> bool {
             | KIND_SPIDER
             | super::kinds::KIND_MAGMA_CUBE
             | super::kinds::KIND_ZOMBIE_VILLAGER
+            // W376: the witch melee-chases until potions land;
+            // the slime shares the magma-cube contact-damage path.
+            | super::kinds::KIND_WITCH
+            | super::kinds::KIND_SLIME
     )
 }
 
@@ -575,7 +579,9 @@ fn step_one(
         // W327: the magma cube moves the same hop-only way (MC
         // Slime.MoveHelper jumps every jumpDelay), just heavier
         // and rarer than the rabbit.
-        if m.kind == super::kinds::KIND_MAGMA_CUBE {
+        if m.kind == super::kinds::KIND_MAGMA_CUBE
+            || m.kind == super::kinds::KIND_SLIME
+        {
             let grounded = m.vy == 0.0;
             if grounded {
                 if m.hop_cd <= 0.0 {

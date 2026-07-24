@@ -63,6 +63,10 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         // W344: MC ships the donkey under entity/horse/.
         MobKind::Donkey => ("horse", "donkey"),
         MobKind::Bee => ("bee", "bee"),
+        // W376: MC ships the witch flat under entity/ and the slime
+        // next to the magma cube.
+        MobKind::Witch => ("", "witch"),
+        MobKind::Slime => ("slime", "slime"),
     }
 }
 
@@ -141,6 +145,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) creeper: Option<PathBuf>,
     pub(crate) donkey: Option<PathBuf>,
     pub(crate) bee: Option<PathBuf>,
+    pub(crate) witch: Option<PathBuf>,
+    pub(crate) slime: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -167,6 +173,8 @@ impl MobSkinSet {
             creeper: mob_skin_path(assets_root, MobKind::Creeper),
             donkey: mob_skin_path(assets_root, MobKind::Donkey),
             bee: mob_skin_path(assets_root, MobKind::Bee),
+            witch: mob_skin_path(assets_root, MobKind::Witch),
+            slime: mob_skin_path(assets_root, MobKind::Slime),
         }
     }
 
@@ -193,6 +201,8 @@ impl MobSkinSet {
             MobKind::Creeper => &self.creeper,
             MobKind::Donkey => &self.donkey,
             MobKind::Bee => &self.bee,
+            MobKind::Witch => &self.witch,
+            MobKind::Slime => &self.slime,
         };
         opt.as_deref()
     }
