@@ -676,7 +676,10 @@ pub(crate) fn tree_root_for(mc: crate::worldgen::mcgen::biome::McBiome) -> Optio
         | B::JaggedPeaks
         | B::FrozenPeaks
         | B::StonyPeaks
-        | B::MushroomFields => None,
+        => None,
+        // W372: mushroom fields grow ONLY huge mushrooms (the MC
+        // mushroom_island_vegetation list).
+        B::MushroomFields => Some("mushroom_island_vegetation"),
     }
 }
 
@@ -700,12 +703,22 @@ fn sample_count(dist: &[(u32, u32)], rng: &mut SplitMix64) -> u32 {
 enum Pick<'a> {
     Tree(&'a TreeDef),
     Fallen(&'a FallenDef),
+    /// W372: huge mushroom (true = red). These live in the vegetal
+    /// lists next to trees; previously they fell through to the
+    /// list default (plain oaks in dark forests).
+    HugeMushroom(bool),
 }
 
 fn as_pick(tref: &TreeRef) -> Option<Pick<'_>> {
     match tref {
         TreeRef::Tree(def) => Some(Pick::Tree(def)),
         TreeRef::Fallen(def) => Some(Pick::Fallen(def)),
+        TreeRef::Unsupported(name) if name.contains("huge_red_mushroom") => {
+            Some(Pick::HugeMushroom(true))
+        }
+        TreeRef::Unsupported(name) if name.contains("huge_brown_mushroom") => {
+            Some(Pick::HugeMushroom(false))
+        }
         TreeRef::Unsupported(_) => None,
     }
 }
@@ -1831,6 +1844,24 @@ pub(crate) fn place_trees(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
                     }
                     Pick::Fallen(def) => {
                         place_fallen(chunk, origin, ctx, &mut rng, def, [wx, floor + 1, wz]);
+                    }
+                    // W372: giant caps write like trees - stems
+                    // punch through leaves, caps only into air /
+                    // replaceables, both clipped to this chunk.
+                    Pick::HugeMushroom(red) => {
+                        let mut write = |p: [i32; 3], id: u16, stem: bool| {
+                            if stem {
+                                set_log(chunk, origin, p[0], p[1], p[2], id);
+                            } else {
+                                set_leaf(chunk, origin, p[0], p[1], p[2], id);
+                            }
+                        };
+                        super::mushrooms::place_huge_mushroom(
+                            &mut rng,
+                            red,
+                            [wx, floor + 1, wz],
+                            &mut write,
+                        );
                     }
                 }
             }
