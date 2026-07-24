@@ -517,6 +517,10 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W382: phantom / bat / mooshroom (cow mesh).
+    pub(crate) phantom_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) bat_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) mooshroom_model: Option<crate::entity_model::BakedModel>,
     /// W381: enderman / cave spider (spider mesh) / silverfish.
     pub(crate) enderman_model: Option<crate::entity_model::BakedModel>,
     pub(crate) cave_spider_model: Option<crate::entity_model::BakedModel>,
@@ -1188,6 +1192,44 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Phantom / bat / mooshroom (W382) ----------------------------------
+    for root in &entity_roots {
+        let p = root.join("phantom.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.phantom_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::phantom::MODEL,
+                &img,
+            ));
+            info!("phantom entity texture bound");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("bat.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.bat_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::bat::MODEL,
+                &img,
+            ));
+            info!("bat entity texture bound");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("cow").join("red_mooshroom.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.mooshroom_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::cow::MODEL,
+                &img,
+            ));
+            info!("mooshroom entity texture bound (cow mesh)");
+            break;
         }
     }
 

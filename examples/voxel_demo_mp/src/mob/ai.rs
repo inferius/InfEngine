@@ -181,6 +181,8 @@ fn kind_is_hostile(kind: u8) -> bool {
             | super::kinds::KIND_ENDERMAN
             | super::kinds::KIND_CAVE_SPIDER
             | super::kinds::KIND_SILVERFISH
+            // W382: the phantom dives at players.
+            | super::kinds::KIND_PHANTOM
     )
 }
 
@@ -786,6 +788,8 @@ fn step_one(
                 if m.kind == super::kinds::KIND_GHAST
                     || m.kind == super::kinds::KIND_BEE
                     || m.kind == super::kinds::KIND_BLAZE
+                    || m.kind == super::kinds::KIND_PHANTOM
+                    || m.kind == super::kinds::KIND_BAT
                     || m.kind == super::kinds::KIND_GUARDIAN
                     || m.kind == super::kinds::KIND_ELDER_GUARDIAN
                 {

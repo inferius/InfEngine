@@ -95,6 +95,11 @@ pub(crate) enum MobKind {
     CaveSpider = 34,
     /// W381 - silverfish (stronghold spawner).
     Silverfish = 35,
+    /// W382 - phantom (night flyer), bat (cave ambient),
+    /// mooshroom (cow mesh, mushroom-fields resident).
+    Phantom = 36,
+    Bat = 37,
+    Mooshroom = 38,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -222,6 +227,9 @@ impl MobKind {
             MobKind::Enderman => "enderman",
             MobKind::CaveSpider => "cave_spider",
             MobKind::Silverfish => "silverfish",
+            MobKind::Phantom => "phantom",
+            MobKind::Bat => "bat",
+            MobKind::Mooshroom => "mooshroom",
         }
     }
 }
@@ -305,6 +313,9 @@ pub(crate) const KIND_ELDER_GUARDIAN: u8 = MobKind::ElderGuardian as u8;
 pub(crate) const KIND_ENDERMAN: u8 = MobKind::Enderman as u8;
 pub(crate) const KIND_CAVE_SPIDER: u8 = MobKind::CaveSpider as u8;
 pub(crate) const KIND_SILVERFISH: u8 = MobKind::Silverfish as u8;
+pub(crate) const KIND_PHANTOM: u8 = MobKind::Phantom as u8;
+pub(crate) const KIND_BAT: u8 = MobKind::Bat as u8;
+pub(crate) const KIND_MOOSHROOM: u8 = MobKind::Mooshroom as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

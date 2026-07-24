@@ -572,6 +572,38 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Phantom / bat / mooshroom (W382) ---------------
+                    k if k == crate::mob::kinds::KIND_PHANTOM
+                        || k == crate::mob::kinds::KIND_BAT
+                        || k == crate::mob::kinds::KIND_MOOSHROOM =>
+                    {
+                        let baked = if k == crate::mob::kinds::KIND_PHANTOM {
+                            mob_meshes.phantom_model.as_ref()
+                        } else if k == crate::mob::kinds::KIND_BAT {
+                            mob_meshes.bat_model.as_ref()
+                        } else {
+                            mob_meshes.mooshroom_model.as_ref()
+                        };
+                        if let Some(baked) = baked {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Enderman / cave spider / silverfish (W381) -----
                     k if k == crate::mob::kinds::KIND_ENDERMAN
                         || k == crate::mob::kinds::KIND_CAVE_SPIDER

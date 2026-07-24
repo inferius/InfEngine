@@ -22,7 +22,7 @@ use crate::worldgen::Biome;
 use super::kinds::{
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
-    KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN,
+    KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
 };
 
 /// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
@@ -52,8 +52,10 @@ const PLAINS_DAY: &[(u8, u32)] = &[
     (KIND_RABBIT, 2),
     (KIND_DONKEY, 1),
 ];
+// W382: a light phantom presence stands in for MC insomnia
+// spawning (no sleep-deprivation tracking yet - follow-up).
 const PLAINS_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
+    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10), (KIND_PHANTOM, 5)];
 
 // W162: the desert is a classic rabbit biome (gold/desert variant).
 // W354: vanilla deserts spawn NO farm animals - rabbit only (the
@@ -108,6 +110,11 @@ const JUNGLE_NIGHT: &[(u8, u32)] =
 
 // W354: vanilla swamps spawn no farm animals (slime / frog only,
 // neither ported yet).
+// W382: mushroom fields grow mooshroom herds (the only
+// creature in the MC pool) and stay hostile-free at night.
+pub(crate) const MUSHROOM_DAY: &[(u8, u32)] = &[(KIND_MOOSHROOM, 8)];
+pub(crate) const MUSHROOM_NIGHT: &[(u8, u32)] = &[];
+
 const SWAMP_DAY: &[(u8, u32)] = EMPTY;
 // W376: swamp nights grow slimes (surface slime spawning is a
 // swamp signature; the witch stays hut-resident, not pooled).

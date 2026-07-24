@@ -82,6 +82,9 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Enderman => ("enderman", "enderman"),
         MobKind::CaveSpider => ("spider", "cave_spider"),
         MobKind::Silverfish => ("", "silverfish"),
+        MobKind::Phantom => ("", "phantom"),
+        MobKind::Bat => ("", "bat"),
+        MobKind::Mooshroom => ("cow", "red_mooshroom"),
     }
 }
 
@@ -175,6 +178,9 @@ pub(crate) struct MobSkinSet {
     pub(crate) enderman: Option<PathBuf>,
     pub(crate) cave_spider: Option<PathBuf>,
     pub(crate) silverfish: Option<PathBuf>,
+    pub(crate) phantom: Option<PathBuf>,
+    pub(crate) bat: Option<PathBuf>,
+    pub(crate) mooshroom: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -216,6 +222,9 @@ impl MobSkinSet {
             enderman: mob_skin_path(assets_root, MobKind::Enderman),
             cave_spider: mob_skin_path(assets_root, MobKind::CaveSpider),
             silverfish: mob_skin_path(assets_root, MobKind::Silverfish),
+            phantom: mob_skin_path(assets_root, MobKind::Phantom),
+            bat: mob_skin_path(assets_root, MobKind::Bat),
+            mooshroom: mob_skin_path(assets_root, MobKind::Mooshroom),
         }
     }
 
@@ -257,6 +266,9 @@ impl MobSkinSet {
             MobKind::Enderman => &self.enderman,
             MobKind::CaveSpider => &self.cave_spider,
             MobKind::Silverfish => &self.silverfish,
+            MobKind::Phantom => &self.phantom,
+            MobKind::Bat => &self.bat,
+            MobKind::Mooshroom => &self.mooshroom,
         };
         opt.as_deref()
     }

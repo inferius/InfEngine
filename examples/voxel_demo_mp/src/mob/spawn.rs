@@ -236,6 +236,10 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_ENDERMAN => 40.0,
         x if x == super::kinds::KIND_CAVE_SPIDER => 12.0,
         x if x == super::kinds::KIND_SILVERFISH => 8.0,
+        // W382: Phantom 20, Bat 6, Mooshroom 10.
+        x if x == super::kinds::KIND_PHANTOM => 20.0,
+        x if x == super::kinds::KIND_BAT => 6.0,
+        x if x == super::kinds::KIND_MOOSHROOM => 10.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
@@ -342,6 +346,21 @@ pub(crate) fn pick_kind_for(
     let biome = {
         let ctx = voxel.current_worldgen_ctx();
         if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+            // W382: mushroom fields have their own pool (mooshroom
+            // herds by day, NOTHING at night - the legacy Biome
+            // enum has no variant for it, so branch before the
+            // mapper).
+            let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(
+                &ctx, wpos[0], wpos[2],
+            );
+            if mc.name().contains("mushroom") {
+                let active = if is_night {
+                    super::pool::MUSHROOM_NIGHT
+                } else {
+                    super::pool::MUSHROOM_DAY
+                };
+                return weighted_pick(active, rng.next_f32());
+            }
             mc_biome_to_pool(
                 crate::worldgen::mcgen::terrain::mc_full_biome_at(
                     &ctx, wpos[0], wpos[2],
