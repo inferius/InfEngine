@@ -517,6 +517,9 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W392: goat + turtle.
+    pub(crate) goat_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) turtle_model: Option<crate::entity_model::BakedModel>,
     /// W391: parrot.
     pub(crate) parrot_model: Option<crate::entity_model::BakedModel>,
     /// W390: fox + ocelot (cat mesh reskin).
@@ -1205,6 +1208,32 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Goat + turtle (W392) ----------------------------------------------
+    for root in &entity_roots {
+        let p = root.join("goat").join("goat.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.goat_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::goat::MODEL,
+                &img,
+            ));
+            info!("goat entity texture bound");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("turtle").join("big_sea_turtle.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.turtle_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::turtle::MODEL,
+                &img,
+            ));
+            info!("turtle entity texture bound");
+            break;
         }
     }
 

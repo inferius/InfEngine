@@ -21,7 +21,7 @@ use crate::worldgen::Biome;
 
 use super::kinds::{
     KIND_SQUID, KIND_GLOW_SQUID, KIND_WANDERING_TRADER, KIND_FOX, KIND_OCELOT,
-    KIND_PARROT,
+    KIND_PARROT, KIND_GOAT, KIND_TURTLE,
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
     KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
@@ -134,6 +134,9 @@ pub(crate) const OCEAN_DAY: &[(u8, u32)] = &[(KIND_SQUID, 8)];
 pub(crate) const OCEAN_NIGHT: &[(u8, u32)] =
     &[(KIND_SQUID, 4), (KIND_GLOW_SQUID, 4), (KIND_DROWNED, 30)];
 
+// W392: the one beach resident.
+const BEACH_DAY: &[(u8, u32)] = &[(KIND_TURTLE, 5)];
+
 const SWAMP_DAY: &[(u8, u32)] = EMPTY;
 // W376: swamp nights grow slimes (surface slime spawning is a
 // swamp signature; the witch stays hut-resident, not pooled).
@@ -157,6 +160,8 @@ const MOUNTAIN_DAY: &[(u8, u32)] = &[
     (KIND_PIG, 10),
     (KIND_CHICKEN, 10),
     (KIND_COW, 8),
+    // W392: goats climb the peaks (MC frozen/windswept goat 5).
+    (KIND_GOAT, 5),
 ];
 const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
 
@@ -187,7 +192,11 @@ pub(crate) fn pool_for(biome: Biome) -> BiomeSpawnPool {
         Biome::SnowyMountain => {
             BiomeSpawnPool { day: TUNDRA_DAY, night: TUNDRA_NIGHT }
         }
-        Biome::Beach => BiomeSpawnPool { day: EMPTY, night: EMPTY },
+        Biome::Beach => {
+            // W392: turtles nest on beaches (MC beach turtle 5);
+            // nights stay empty.
+            BiomeSpawnPool { day: BEACH_DAY, night: EMPTY }
+        }
     }
 }
 
@@ -221,9 +230,11 @@ mod tests {
     use crate::worldgen::Biome;
 
     #[test]
-    fn beach_pools_are_empty_day_and_night() {
+    fn beach_pools_turtles_by_day_empty_at_night() {
+        // W392: turtles joined the beach day pool; nights stay
+        // hostile-free (the beach was fully empty before).
         let p = pool_for(Biome::Beach);
-        assert!(p.day.is_empty());
+        assert_eq!(p.day, &[(KIND_TURTLE, 5)]);
         assert!(p.night.is_empty());
     }
 
