@@ -828,6 +828,18 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         } else {
             None
         };
+        // W395: a SEPARATE mob pick for RMB. The trade + mount
+        // blocks below read `attack_mob`, but the combat gate only
+        // fills it on LMB - so right-click never saw the villager
+        // or the horse (the R23 "can't click the villager" report).
+        // apply_combat keeps consuming only `attack_mob`, so a
+        // right click still never strikes.
+        let interact_mob: Option<u32> = if rmb && !vx.any_panel_open() {
+            vx.raycast_mob(vx.player_pos, forward, MOB_ATTACK_REACH)
+                .map(|(id, _)| id)
+        } else {
+            None
+        };
         // W100: compare the mob hit against the MINING ray (`mine_target`,
         // which stops at the first breakable block), not the placement ray
         // (`target`, which passes through decorations). Using the placement
@@ -993,7 +1005,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && vx.riding_mob.is_none()
             && vx.riding_cart.is_none()
             && !matches!(vx.net, NetRole::Client { .. })
-            && let Some(mid) = attack_mob
+            && let Some(mid) = attack_mob.or(interact_mob)
             && let Some(h) = vx.mobs.iter().find(|m| {
                 m.id == mid
                     && crate::mob::riding::is_rideable(m.kind)
@@ -1013,7 +1025,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         let mut trade_opened = false;
         if rmb
             && !vx.any_panel_open()
-            && let Some(mid) = attack_mob
+            && let Some(mid) = attack_mob.or(interact_mob)
             && vx.mobs.iter().any(|m| {
                 m.id == mid && m.kind == crate::mob::kinds::KIND_VILLAGER
             })

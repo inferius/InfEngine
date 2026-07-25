@@ -180,48 +180,30 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 };
                 Some((format!("{name}{hint}"), pct))
             });
-        let targeted_mob_info: Option<(&'static str, u8, u8)> = vx
+        // W395: every kind shows its real name (Title Case from the
+        // registry) and its real max HP (initial_health_for) - the
+        // hardcoded 7-name table labelled everything newer "Mob"
+        // with a wrong bar scale (the R23 report).
+        let targeted_mob_info: Option<(String, u8, u8)> = vx
             .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
             .and_then(|(id, _)| vx.remote_mobs.get(&id).copied())
             .map(|m| {
-                let max = match m.kind {
-                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
-                    KIND_CHICKEN => 4u8,
-                    KIND_PIG => 10u8,
-                    _ => MOB_MAX_HEALTH as u8,
-                };
-                let name = match m.kind {
-                    KIND_ZOMBIE => "Zombie",
-                    KIND_CHICKEN => "Chicken",
-                    KIND_PIG => "Pig",
-                    KIND_COW => "Cow",
-                    KIND_SKELETON => "Skeleton",
-                    KIND_SPIDER => "Spider",
-                    KIND_SHEEP => "Sheep",
-                    _ => "Mob",
-                };
-                (name, m.health, max)
+                let max =
+                    crate::mob::spawn::initial_health_for(m.kind) as u8;
+                (mob_display_name(m.kind), m.health, max)
             });
         let mob_bars: Vec<([f32; 3], u8, u8)> = vx
             .remote_mobs
             .values()
             .filter(|m| {
                 let dying = vx.mob_dying.get(&m.id).copied().unwrap_or(0.0);
-                let max = match m.kind {
-                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
-                    KIND_CHICKEN => 4u8,
-                    KIND_PIG => 10u8,
-                    _ => MOB_MAX_HEALTH as u8,
-                };
+                let max =
+                    crate::mob::spawn::initial_health_for(m.kind) as u8;
                 m.health > 0 && m.health < max && dying <= 0.0
             })
             .map(|m| {
-                let max = match m.kind {
-                    KIND_ZOMBIE => ZOMBIE_MAX_HEALTH as u8,
-                    KIND_CHICKEN => 4u8,
-                    KIND_PIG => 10u8,
-                    _ => MOB_MAX_HEALTH as u8,
-                };
+                let max =
+                    crate::mob::spawn::initial_health_for(m.kind) as u8;
                 (m.pos, m.health, max)
             })
             .collect();
@@ -2724,7 +2706,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 // crosshair when the player is aiming at a mob.
                 // Hidden when no mob is in line of sight.
                 if hud_visible
-                    && let Some((name, cur, max)) = targeted_mob_info
+                    && let Some((name, cur, max)) =
+                        targeted_mob_info.as_ref()
                 {
                     let layer = ctx.layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
@@ -3947,3 +3930,22 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             vx.apply_menu_action(action);
         }
     }
+
+/// W395: Title-Case display label for a mob kind byte
+/// ("glow_squid" -> "Glow Squid"); unknown kinds fall back to "Mob".
+fn mob_display_name(kind: u8) -> String {
+    // The registry from_u8 is infallible (unknown collapses to the
+    // passive fallback).
+    let snake = crate::mob::kinds::MobKind::from_u8(kind).name();
+    snake
+        .split('_')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}

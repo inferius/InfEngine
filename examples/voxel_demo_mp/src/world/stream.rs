@@ -535,12 +535,28 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             // regen (stream-out + revisit) can't
                             // double-populate a village.
                             if vx.structure_mob_anchors.insert(*anchor) {
+                                // W395: some template entities anchor
+                                // INSIDE the floor cell - minting
+                                // there sank villagers to the knees
+                                // and the interact ray missed their
+                                // hitbox. Lift onto the first
+                                // non-opaque cell (max 2).
+                                let mut ay = anchor[1];
+                                for _ in 0..2 {
+                                    let c = [anchor[0], ay, anchor[2]];
+                                    if !crate::block::block_is_opaque(
+                                        vx.world.get(c),
+                                    ) {
+                                        break;
+                                    }
+                                    ay += 1;
+                                }
                                 crate::mob::spawn::mint_structure_mob(
                                     vx,
                                     *kind,
                                     [
                                         anchor[0] as f32 + 0.5,
-                                        anchor[1] as f32,
+                                        ay as f32,
                                         anchor[2] as f32 + 0.5,
                                     ],
                                     0.0,

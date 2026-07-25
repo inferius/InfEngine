@@ -148,6 +148,40 @@ impl MobKind {
             17 => MobKind::ZombieVillager,
             18 => MobKind::Creeper,
             19 => MobKind::Donkey,
+            // W395: kinds 20+ were missing - every newer mob
+            // collapsed to Sheep on the wire/save round trip
+            // AND in the UI label. Generated from the
+            // discriminant table above.
+            20 => MobKind::Bee,
+            21 => MobKind::Witch,
+            22 => MobKind::Slime,
+            23 => MobKind::Drowned,
+            24 => MobKind::Husk,
+            25 => MobKind::Stray,
+            26 => MobKind::Pillager,
+            27 => MobKind::Vindicator,
+            28 => MobKind::Evoker,
+            29 => MobKind::Blaze,
+            30 => MobKind::WitherSkeleton,
+            31 => MobKind::Guardian,
+            32 => MobKind::ElderGuardian,
+            33 => MobKind::Enderman,
+            34 => MobKind::CaveSpider,
+            35 => MobKind::Silverfish,
+            36 => MobKind::Phantom,
+            37 => MobKind::Bat,
+            38 => MobKind::Mooshroom,
+            39 => MobKind::Squid,
+            40 => MobKind::GlowSquid,
+            41 => MobKind::SkeletonHorse,
+            42 => MobKind::Mule,
+            43 => MobKind::WanderingTrader,
+            44 => MobKind::Fox,
+            45 => MobKind::Ocelot,
+            46 => MobKind::Parrot,
+            47 => MobKind::Goat,
+            48 => MobKind::Turtle,
+            49 => MobKind::Panda,
             _ => MobKind::Sheep,
         }
     }
@@ -434,7 +468,11 @@ mod tests {
         assert_eq!(MobKind::from_u8(19), MobKind::Donkey);
         // W330: 17 = ZombieVillager.
         assert_eq!(MobKind::from_u8(17), MobKind::ZombieVillager);
-        for raw in [20u8, 100, 255] {
+        // W395: 20..=49 are real kinds now (bee..panda) - only
+        // genuinely unknown bytes collapse to the passive fallback.
+        assert_eq!(MobKind::from_u8(20), MobKind::Bee);
+        assert_eq!(MobKind::from_u8(49), MobKind::Panda);
+        for raw in [50u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }
