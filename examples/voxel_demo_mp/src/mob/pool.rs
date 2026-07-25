@@ -239,6 +239,9 @@ mod tests {
                     || *k == KIND_RABBIT
                     // W344: donkey too.
                     || *k == KIND_DONKEY
+                    // W389: the roaming trader is a passive day
+                    // spawner as well.
+                    || *k == KIND_WANDERING_TRADER
             })
             .map(|(_, w)| *w)
             .sum();
