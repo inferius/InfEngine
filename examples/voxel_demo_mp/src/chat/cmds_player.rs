@@ -548,6 +548,10 @@ pub(crate) fn cmd_gamemode(
         ));
         return true;
     }
+    // W394: MC syntax allows a trailing target selector
+    // (`gamemode creative @a`) - accept and ignore it (single
+    // player: every selector resolves to the host anyway).
+    let arg = arg.split_whitespace().next().unwrap_or(arg);
     let target = match arg.to_lowercase().as_str() {
         "survival" | "s" | "0" => GameMode::Survival,
         "creative" | "c" | "1" => GameMode::Creative,

@@ -247,6 +247,12 @@ pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
     if b.0 == CHEST_ID {
         return false;
     }
+    // W394: beds are block ENTITIES too (W366) - their cells hold no
+    // chunk-mesh geometry, so treating them as occluders punched a
+    // see-through hole behind every bed (the R23 report).
+    if is_bed_block(b.0) {
+        return false;
+    }
     block_is_opaque(b)
 }
 

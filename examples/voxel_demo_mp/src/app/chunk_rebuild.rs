@@ -43,12 +43,20 @@ impl Voxel {
                         continue;
                     }
                     if memo.0 != id {
-                        let ded = crate::block::block_type(id)
-                            .map(|bt| {
-                                bt.flags & crate::block::F_DEDICATED_RENDER
-                                    != 0
-                            })
-                            .unwrap_or(false);
+                        // W394: the torch (id 10) carries NO
+                        // dedicated flag but its wall orientation
+                        // rides this snapshot (W288) - the W385
+                        // dedicated-only filter dropped it and every
+                        // remesh flattened wall torches (the R23
+                        // torch regression). Probe it explicitly.
+                        let ded = id == 10
+                            || crate::block::block_type(id)
+                                .map(|bt| {
+                                    bt.flags
+                                        & crate::block::F_DEDICATED_RENDER
+                                        != 0
+                                })
+                                .unwrap_or(false);
                         memo = (id, ded);
                     }
                     if !memo.1 {
