@@ -517,6 +517,11 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W389: horse-family reskins + wandering trader (villager
+    /// mesh with its own sheet).
+    pub(crate) skeleton_horse_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) mule_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) wandering_trader_model: Option<crate::entity_model::BakedModel>,
     /// W388: squid + glow squid (shared mesh, two sheets).
     pub(crate) squid_model: Option<crate::entity_model::BakedModel>,
     pub(crate) glow_squid_model: Option<crate::entity_model::BakedModel>,
@@ -1195,6 +1200,44 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Skeleton horse / mule / wandering trader (W389) -------------------
+    for root in &entity_roots {
+        let p = root.join("horse").join("horse_skeleton.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.skeleton_horse_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::horse::MODEL,
+                &img,
+            ));
+            info!("skeleton horse entity texture bound (horse mesh)");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("horse").join("mule.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.mule_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::horse::MODEL,
+                &img,
+            ));
+            info!("mule entity texture bound (horse mesh)");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("wandering_trader.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.wandering_trader_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::villager::MODEL,
+                &img,
+            ));
+            info!("wandering trader entity texture bound (villager mesh)");
+            break;
         }
     }
 

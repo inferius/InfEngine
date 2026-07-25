@@ -103,6 +103,12 @@ pub(crate) enum MobKind {
     /// W388 - squid + glow squid (ocean water spawns).
     Squid = 39,
     GlowSquid = 40,
+    /// W389 - horse-family reskins (skeleton horse awaits its
+    /// lightning trap, the mule its breeding) + the wandering
+    /// trader (villager mesh, roams plains/savanna days).
+    SkeletonHorse = 41,
+    Mule = 42,
+    WanderingTrader = 43,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -235,6 +241,9 @@ impl MobKind {
             MobKind::Mooshroom => "mooshroom",
             MobKind::Squid => "squid",
             MobKind::GlowSquid => "glow_squid",
+            MobKind::SkeletonHorse => "skeleton_horse",
+            MobKind::Mule => "mule",
+            MobKind::WanderingTrader => "wandering_trader",
         }
     }
 }
@@ -323,6 +332,9 @@ pub(crate) const KIND_BAT: u8 = MobKind::Bat as u8;
 pub(crate) const KIND_MOOSHROOM: u8 = MobKind::Mooshroom as u8;
 pub(crate) const KIND_SQUID: u8 = MobKind::Squid as u8;
 pub(crate) const KIND_GLOW_SQUID: u8 = MobKind::GlowSquid as u8;
+pub(crate) const KIND_SKELETON_HORSE: u8 = MobKind::SkeletonHorse as u8;
+pub(crate) const KIND_MULE: u8 = MobKind::Mule as u8;
+pub(crate) const KIND_WANDERING_TRADER: u8 = MobKind::WanderingTrader as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

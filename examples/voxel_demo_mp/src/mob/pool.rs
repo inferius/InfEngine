@@ -20,7 +20,7 @@
 use crate::worldgen::Biome;
 
 use super::kinds::{
-    KIND_SQUID, KIND_GLOW_SQUID,
+    KIND_SQUID, KIND_GLOW_SQUID, KIND_WANDERING_TRADER,
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
     KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
@@ -52,6 +52,10 @@ const PLAINS_DAY: &[(u8, u32)] = &[
     (KIND_COW, 8),
     (KIND_RABBIT, 2),
     (KIND_DONKEY, 1),
+    // W389: rare roaming trader (MC spawns him via a timed server
+    // attempt near the player; a weight-1 pool row approximates the
+    // rarity until that timer is ported).
+    (KIND_WANDERING_TRADER, 1),
 ];
 // W382: a light phantom presence stands in for MC insomnia
 // spawning (no sleep-deprivation tracking yet - follow-up).
@@ -134,6 +138,7 @@ const SAVANNA_DAY: &[(u8, u32)] = &[
     (KIND_CHICKEN, 10),
     (KIND_COW, 8),
     (KIND_DONKEY, 1),
+    (KIND_WANDERING_TRADER, 1),
 ];
 const SAVANNA_NIGHT: &[(u8, u32)] =
     &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];

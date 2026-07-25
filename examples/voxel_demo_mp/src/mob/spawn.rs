@@ -243,6 +243,11 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         // W388: Squid + GlowSquid 10.
         x if x == super::kinds::KIND_SQUID => 10.0,
         x if x == super::kinds::KIND_GLOW_SQUID => 10.0,
+        // W389: SkeletonHorse 15, Mule 22 (horse-range midpoint),
+        // WanderingTrader 20.
+        x if x == super::kinds::KIND_SKELETON_HORSE => 15.0,
+        x if x == super::kinds::KIND_MULE => 22.0,
+        x if x == super::kinds::KIND_WANDERING_TRADER => 20.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.

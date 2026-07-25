@@ -87,6 +87,9 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Mooshroom => ("cow", "red_mooshroom"),
         MobKind::Squid => ("squid", "squid"),
         MobKind::GlowSquid => ("glow_squid", "glow_squid"),
+        MobKind::SkeletonHorse => ("horse", "horse_skeleton"),
+        MobKind::Mule => ("horse", "mule"),
+        MobKind::WanderingTrader => ("", "wandering_trader"),
     }
 }
 
@@ -185,6 +188,9 @@ pub(crate) struct MobSkinSet {
     pub(crate) mooshroom: Option<PathBuf>,
     pub(crate) squid: Option<PathBuf>,
     pub(crate) glow_squid: Option<PathBuf>,
+    pub(crate) skeleton_horse: Option<PathBuf>,
+    pub(crate) mule: Option<PathBuf>,
+    pub(crate) wandering_trader: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -231,6 +237,9 @@ impl MobSkinSet {
             mooshroom: mob_skin_path(assets_root, MobKind::Mooshroom),
             squid: mob_skin_path(assets_root, MobKind::Squid),
             glow_squid: mob_skin_path(assets_root, MobKind::GlowSquid),
+            skeleton_horse: mob_skin_path(assets_root, MobKind::SkeletonHorse),
+            mule: mob_skin_path(assets_root, MobKind::Mule),
+            wandering_trader: mob_skin_path(assets_root, MobKind::WanderingTrader),
         }
     }
 
@@ -277,6 +286,9 @@ impl MobSkinSet {
             MobKind::Mooshroom => &self.mooshroom,
             MobKind::Squid => &self.squid,
             MobKind::GlowSquid => &self.glow_squid,
+            MobKind::SkeletonHorse => &self.skeleton_horse,
+            MobKind::Mule => &self.mule,
+            MobKind::WanderingTrader => &self.wandering_trader,
         };
         opt.as_deref()
     }
