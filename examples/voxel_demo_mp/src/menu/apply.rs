@@ -135,19 +135,46 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
             vx.enter_world();
         }
         MenuAction::DeleteWorld { slug } => {
+            // W396: a big world is tens of thousands of chunk files
+            // - removing them inline froze the menu for many seconds
+            // with no feedback (the R23 report). RENAME the slot dir
+            // aside first (instant - the slot vanishes from the list
+            // immediately), then burn the renamed dir on a
+            // background thread. A crash mid-burn only leaves an
+            // orphaned `.deleting` dir that the next delete of the
+            // same slug overwrites-then-burns again.
             let dir = world_save::layout::world_dir(&slug);
-            match std::fs::remove_dir_all(&dir) {
+            let tomb = dir.with_extension("deleting");
+            // A leftover tomb from a crashed burn: merge-remove it
+            // synchronously first (it is rare and usually partial).
+            if tomb.exists() {
+                let _ = std::fs::remove_dir_all(&tomb);
+            }
+            match std::fs::rename(&dir, &tomb) {
                 Ok(()) => {
-                    info!(slug = %slug, "world_save: deleted slot");
+                    info!(slug = %slug, "world_save: slot queued for delete");
                     if vx.current_world_slug.as_deref() == Some(slug.as_str()) {
                         vx.current_world_slug =
                             Some(world_save::DEFAULT_SLUG.to_string());
                     }
+                    std::thread::spawn(move || {
+                        match std::fs::remove_dir_all(&tomb) {
+                            Ok(()) => info!(
+                                slug = %slug,
+                                "world_save: slot burn complete"
+                            ),
+                            Err(err) => warn!(
+                                error = %err,
+                                slug = %slug,
+                                "world_save: slot burn failed"
+                            ),
+                        }
+                    });
                 }
                 Err(err) => warn!(
                     error = %err,
                     slug = %slug,
-                    "world_save: delete slot failed"
+                    "world_save: delete slot failed (rename)"
                 ),
             }
             vx.menu.invalidate_caches();

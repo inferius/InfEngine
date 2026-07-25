@@ -260,6 +260,25 @@ pub(crate) fn aabb_intersects_solid_with_doors(
                 if voxel_is_solid_with_doors(world, snow, door_open, [x, y, z]) {
                     return true;
                 }
+                // W396: fences, walls and CLOSED fence gates collide
+                // 1.5 blocks tall in MC - the lower half of the cell
+                // above one is solid too, so players cannot simply
+                // hop them (the R23 report).
+                if min.y < y as f32 + 0.5 {
+                    let below = [x, y - 1, z];
+                    let bid = world.get(below).0;
+                    let fence_tall = crate::block::block_type(bid)
+                        .map(|bt| {
+                            bt.name.ends_with("fence")
+                                || bt.name.ends_with("_wall")
+                        })
+                        .unwrap_or(false)
+                        || (crate::block::door::is_fence_gate_block(bid)
+                            && !door_open.contains(&below));
+                    if fence_tall {
+                        return true;
+                    }
+                }
             }
         }
     }
