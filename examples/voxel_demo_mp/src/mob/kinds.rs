@@ -117,6 +117,8 @@ pub(crate) enum MobKind {
     /// W392 - goat (mountains) + turtle (beaches).
     Goat = 47,
     Turtle = 48,
+    /// W393 - panda (jungle rarity).
+    Panda = 49,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -257,6 +259,7 @@ impl MobKind {
             MobKind::Parrot => "parrot",
             MobKind::Goat => "goat",
             MobKind::Turtle => "turtle",
+            MobKind::Panda => "panda",
         }
     }
 }
@@ -353,6 +356,7 @@ pub(crate) const KIND_OCELOT: u8 = MobKind::Ocelot as u8;
 pub(crate) const KIND_PARROT: u8 = MobKind::Parrot as u8;
 pub(crate) const KIND_GOAT: u8 = MobKind::Goat as u8;
 pub(crate) const KIND_TURTLE: u8 = MobKind::Turtle as u8;
+pub(crate) const KIND_PANDA: u8 = MobKind::Panda as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 

@@ -256,6 +256,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         // W392: Goat 10, Turtle 30.
         x if x == super::kinds::KIND_GOAT => 10.0,
         x if x == super::kinds::KIND_TURTLE => 30.0,
+        // W393: Panda 20.
+        x if x == super::kinds::KIND_PANDA => 20.0,
         // W322: IronGolem.createAttributes MAX_HEALTH 100.
         x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
         // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
