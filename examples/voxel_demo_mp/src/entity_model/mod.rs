@@ -39,6 +39,7 @@ pub(crate) mod cow;
 pub(crate) mod bat;
 pub(crate) mod bee;
 pub(crate) mod fox;
+pub(crate) mod parrot;
 pub(crate) mod phantom;
 pub(crate) mod squid;
 pub(crate) mod enderman;

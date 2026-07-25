@@ -517,6 +517,8 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W391: parrot.
+    pub(crate) parrot_model: Option<crate::entity_model::BakedModel>,
     /// W390: fox + ocelot (cat mesh reskin).
     pub(crate) fox_model: Option<crate::entity_model::BakedModel>,
     pub(crate) ocelot_model: Option<crate::entity_model::BakedModel>,
@@ -1203,6 +1205,20 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Parrot (W391) -----------------------------------------------------
+    for root in &entity_roots {
+        let p = root.join("parrot").join("parrot_red_blue.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.parrot_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::parrot::MODEL,
+                &img,
+            ));
+            info!("parrot entity texture bound");
+            break;
         }
     }
 

@@ -112,6 +112,8 @@ pub(crate) enum MobKind {
     /// W390 - fox (taiga days) + ocelot (cat mesh, jungle days).
     Fox = 44,
     Ocelot = 45,
+    /// W391 - parrot (jungle days).
+    Parrot = 46,
 }
 
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
@@ -249,6 +251,7 @@ impl MobKind {
             MobKind::WanderingTrader => "wandering_trader",
             MobKind::Fox => "fox",
             MobKind::Ocelot => "ocelot",
+            MobKind::Parrot => "parrot",
         }
     }
 }
@@ -342,6 +345,7 @@ pub(crate) const KIND_MULE: u8 = MobKind::Mule as u8;
 pub(crate) const KIND_WANDERING_TRADER: u8 = MobKind::WanderingTrader as u8;
 pub(crate) const KIND_FOX: u8 = MobKind::Fox as u8;
 pub(crate) const KIND_OCELOT: u8 = MobKind::Ocelot as u8;
+pub(crate) const KIND_PARROT: u8 = MobKind::Parrot as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
