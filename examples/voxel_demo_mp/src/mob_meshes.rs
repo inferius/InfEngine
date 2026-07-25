@@ -517,6 +517,9 @@ pub(crate) struct MobMeshes {
     pub(crate) stray_model: Option<crate::entity_model::BakedModel>,
     /// W379: blaze (BlazeModel: head + 12 rods).
     pub(crate) blaze_model: Option<crate::entity_model::BakedModel>,
+    /// W390: fox + ocelot (cat mesh reskin).
+    pub(crate) fox_model: Option<crate::entity_model::BakedModel>,
+    pub(crate) ocelot_model: Option<crate::entity_model::BakedModel>,
     /// W389: horse-family reskins + wandering trader (villager
     /// mesh with its own sheet).
     pub(crate) skeleton_horse_model: Option<crate::entity_model::BakedModel>,
@@ -1200,6 +1203,32 @@ pub fn load_non_sheep_mob_meshes(
                 info!(file, "variant entity texture bound (reskin)");
                 break;
             }
+        }
+    }
+
+    // ---- Fox + ocelot (W390) -----------------------------------------------
+    for root in &entity_roots {
+        let p = root.join("fox").join("fox.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.fox_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::fox::MODEL,
+                &img,
+            ));
+            info!("fox entity texture bound");
+            break;
+        }
+    }
+    for root in &entity_roots {
+        let p = root.join("cat").join("ocelot.png");
+        if let Ok(img) = image::open(&p).map(|i| i.to_rgba8()) {
+            mm.ocelot_model = Some(crate::entity_model::bake(
+                r,
+                &crate::entity_model::cat::MODEL,
+                &img,
+            ));
+            info!("ocelot entity texture bound (cat mesh)");
+            break;
         }
     }
 

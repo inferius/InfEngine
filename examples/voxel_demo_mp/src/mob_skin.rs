@@ -90,6 +90,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::SkeletonHorse => ("horse", "horse_skeleton"),
         MobKind::Mule => ("horse", "mule"),
         MobKind::WanderingTrader => ("", "wandering_trader"),
+        MobKind::Fox => ("fox", "fox"),
+        MobKind::Ocelot => ("cat", "ocelot"),
     }
 }
 
@@ -191,6 +193,8 @@ pub(crate) struct MobSkinSet {
     pub(crate) skeleton_horse: Option<PathBuf>,
     pub(crate) mule: Option<PathBuf>,
     pub(crate) wandering_trader: Option<PathBuf>,
+    pub(crate) fox: Option<PathBuf>,
+    pub(crate) ocelot: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -240,6 +244,8 @@ impl MobSkinSet {
             skeleton_horse: mob_skin_path(assets_root, MobKind::SkeletonHorse),
             mule: mob_skin_path(assets_root, MobKind::Mule),
             wandering_trader: mob_skin_path(assets_root, MobKind::WanderingTrader),
+            fox: mob_skin_path(assets_root, MobKind::Fox),
+            ocelot: mob_skin_path(assets_root, MobKind::Ocelot),
         }
     }
 
@@ -289,6 +295,8 @@ impl MobSkinSet {
             MobKind::SkeletonHorse => &self.skeleton_horse,
             MobKind::Mule => &self.mule,
             MobKind::WanderingTrader => &self.wandering_trader,
+            MobKind::Fox => &self.fox,
+            MobKind::Ocelot => &self.ocelot,
         };
         opt.as_deref()
     }
