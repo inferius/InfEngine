@@ -10,7 +10,7 @@ the section notes at the bottom.
 |--------|---------|---------|---------|-------|
 | blocks | 1170 | 698 | 472 | 14 family-substitute aliases |
 | items | 1506 | 852 | 654 | block-form items resolve via places |
-| entities | 87 | 49 | 38 | player/armor_stand/mannequin/giant excluded |
+| entities | 87 | 50 | 37 | player/armor_stand/mannequin/giant excluded |
 | biomes | 65 | 61 | 4 | name-probe vs worldgen sources |
 | configured features | 221 | 171 | 50 | substring probe (coarse) |
 | structures | 34 | 31 | 3 | |
@@ -217,15 +217,15 @@ the section notes at the bottom.
 - writable_book, written_book, yellow_banner, yellow_bundle, yellow_harness, yellow_shulker_box
 - zoglin_spawn_egg, zombie_head, zombie_horse_spawn_egg, zombie_nautilus_spawn_egg, zombie_villager_spawn_egg, zombified_piglin_spawn_egg
 
-## Missing entities (38)
+## Missing entities (37)
 
 - allay, armadillo, axolotl, bogged, breeze, camel
 - camel_husk, cod, copper_golem, creaking, dolphin, ender_dragon
 - endermite, frog, happy_ghast, hoglin, llama, nautilus
-- panda, parched, piglin, piglin_brute, pufferfish, ravager
-- salmon, shulker, sniffer, snow_golem, strider, tadpole
-- trader_llama, tropical_fish, vex, warden, wither, zoglin
-- zombie_horse, zombie_nautilus
+- parched, piglin, piglin_brute, pufferfish, ravager, salmon
+- shulker, sniffer, snow_golem, strider, tadpole, trader_llama
+- tropical_fish, vex, warden, wither, zoglin, zombie_horse
+- zombie_nautilus
 
 ## Missing biomes (4)
 
