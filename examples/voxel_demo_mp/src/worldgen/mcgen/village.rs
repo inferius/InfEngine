@@ -472,6 +472,92 @@ fn apply_cell_processors(
 
 /// Write every piece cell that lands in this 16^3 cube. Shared by the
 /// village and outpost passes (identical carve semantics).
+/// W399: how far the terrain shave ring reaches around a rigid
+/// piece (blocks).
+const BEARD_RING: i32 = 4;
+
+/// W399: approximate MC's Beardifier for the R23 "houses ringed by
+/// a moat" report. MC edits terrain DENSITY so the ground slopes
+/// smoothly toward structure floors; our full terrain plus the
+/// template's air box carved a sheer-walled pit around every house
+/// that sat below the local surface. This pass shaves terrain in a
+/// ring around each rigid piece down to a 45-degree ramp from the
+/// floor line BEFORE templates write, so door thresholds meet open
+/// ground. Streets (terrain_matching plates) keep their columns;
+/// water is never drained (shave floor clamps at sea level).
+fn beard_shave(layout: &[PlacedPiece], chunk: &mut Chunk, origin: [i32; 3]) {
+    let cs = CHUNK_SIZE as i32;
+    let sea = crate::worldgen::climate::SEA_LEVEL;
+    // XZ boxes of terrain_matching plates - their columns drape on
+    // the heightmap and must not be undermined by a neighbour's
+    // shave ring.
+    let street_xz: Vec<super::mineshaft::Bb> = layout
+        .iter()
+        .filter(|p| p.terrain_matching)
+        .filter_map(|p| {
+            let t = village_data::template(&p.template)?;
+            Some(template_bb(t.size, p.position, p.rotation))
+        })
+        .collect();
+    for piece in layout {
+        if piece.terrain_matching {
+            continue;
+        }
+        let Some(t) = village_data::template(&piece.template) else {
+            continue;
+        };
+        let bb = template_bb(t.size, piece.position, piece.rotation);
+        // Ring/chunk XZ overlap gate.
+        if bb.x0 - BEARD_RING > origin[0] + cs - 1
+            || bb.x1 + BEARD_RING < origin[0]
+            || bb.z0 - BEARD_RING > origin[2] + cs - 1
+            || bb.z1 + BEARD_RING < origin[2]
+        {
+            continue;
+        }
+        for lx in 0..cs {
+            for lz in 0..cs {
+                let wx = origin[0] + lx;
+                let wz = origin[2] + lz;
+                let dx = (bb.x0 - wx).max(wx - bb.x1).max(0);
+                let dz = (bb.z0 - wz).max(wz - bb.z1).max(0);
+                let d = dx.max(dz);
+                // Inside the footprint the template owns the cells;
+                // beyond the ring the terrain is untouched.
+                if d == 0 || d > BEARD_RING {
+                    continue;
+                }
+                if street_xz.iter().any(|s| {
+                    wx >= s.x0 && wx <= s.x1 && wz >= s.z0 && wz <= s.z1
+                }) {
+                    continue;
+                }
+                // 45-degree ramp: level with the floor line at the
+                // wall, one block higher per block of distance.
+                let target = (bb.y0 - 1 + d).max(sea - 1);
+                let top = bb.y1 + 12;
+                for wy in (target + 1)..=top {
+                    let ly = wy - origin[1];
+                    if !(0..cs).contains(&ly) {
+                        continue;
+                    }
+                    let cur = chunk
+                        .get(lx as usize, (ly) as usize, lz as usize)
+                        .0;
+                    if cur != 0 && cur != crate::block::WATER_ID {
+                        chunk.set(
+                            lx as usize,
+                            ly as usize,
+                            lz as usize,
+                            BlockId(0),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn carve_layout(
     layout: &[PlacedPiece],
     chunk: &mut Chunk,
@@ -479,6 +565,9 @@ pub(crate) fn carve_layout(
     origin: [i32; 3],
 ) {
     let cs = CHUNK_SIZE as i32;
+    // W399: slope the terrain toward the houses BEFORE any template
+    // writes (their blocks must survive the shave).
+    beard_shave(layout, chunk, origin);
     let cube = super::mineshaft::Bb {
         x0: origin[0],
         y0: origin[1],
