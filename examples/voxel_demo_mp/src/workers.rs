@@ -896,11 +896,37 @@ pub(crate) fn mesh_chunk_in_worker(
                 } else {
                     "bottom"
                 };
+                // W413: corner shape from the neighbouring stairs'
+                // facings (StairBlock.getStairsShape). The id check
+                // reads the chunk (or the W407 BoundaryHalo across
+                // the seam); the state byte comes from the stairs
+                // snapshot, whose W413 XZ ring covers seam cells.
+                let neighbor = |dz: [i32; 2]| -> Option<u8> {
+                    let nx = lx + dz[0];
+                    let nz = lz + dz[1];
+                    let nid = if (0..CHUNK_SIZE as i32).contains(&nx)
+                        && (0..CHUNK_SIZE as i32).contains(&nz)
+                    {
+                        chunk
+                            .get(nx as usize, ly as usize, nz as usize)
+                            .0
+                    } else {
+                        boundary.at([nx, ly, nz]).0
+                    };
+                    if !crate::block::door::is_stairs_block(nid) {
+                        return None;
+                    }
+                    stairs
+                        .get(&[wp[0] + dz[0], wp[1], wp[2] + dz[1]])
+                        .copied()
+                };
+                let shape =
+                    crate::block::door::stairs_shape(state, neighbor);
                 let props =
                     resource_pack::blockstates::BlockStateProps::new()
                         .with("facing", dir)
                         .with("half", half)
-                        .with("shape", "straight");
+                        .with("shape", shape);
                 if let Some(m) =
                     resource_pack::special_models::model_for_block_with_props(
                         block.0, pack, &props,

@@ -181,6 +181,60 @@ fn side_click_is_top(
     false
 }
 
+/// W413: port of MC `StairBlock.getStairsShape`. `state` is this
+/// stair's byte (facing bits 0-1 + TRAPDOOR_TOP_BIT); `neighbor`
+/// returns the STAIRS state at a relative XZ offset, or `None`
+/// when that cell is not a stairs block. Returns the MC `shape`
+/// prop value for the blockstate variant lookup.
+///
+/// Facing codes: 0=+X east, 1=+Z south, 2=-X west, 3=-Z north;
+/// counter-clockwise (seen from above) = east->north->west->south,
+/// i.e. `(f + 3) & 3`.
+pub(crate) fn stairs_shape(
+    state: u8,
+    neighbor: impl Fn([i32; 2]) -> Option<u8>,
+) -> &'static str {
+    let f = state & 3;
+    let half = state & TRAPDOOR_TOP_BIT;
+    let dxz = |f: u8| -> [i32; 2] {
+        match f & 3 {
+            0 => [1, 0],
+            1 => [0, 1],
+            2 => [-1, 0],
+            _ => [0, -1],
+        }
+    };
+    let ccw = (f + 3) & 3;
+    let same_axis = |a: u8, b: u8| (a & 1) == (b & 1);
+    // MC canTakeShape: the cell on `face` must NOT be an identical
+    // stairs (same facing + half) - identical rows stay straight.
+    let can_take = |face: u8| -> bool {
+        match neighbor(dxz(face)) {
+            Some(n) => (n & 3) != f || (n & TRAPDOOR_TOP_BIT) != half,
+            None => true,
+        }
+    };
+    // Behind (toward facing): outer corners.
+    if let Some(b) = neighbor(dxz(f))
+        && (b & TRAPDOOR_TOP_BIT) == half
+    {
+        let bf = b & 3;
+        if !same_axis(bf, f) && can_take((bf + 2) & 3) {
+            return if bf == ccw { "outer_left" } else { "outer_right" };
+        }
+    }
+    // In front (away from facing): inner corners.
+    if let Some(fr) = neighbor(dxz((f + 2) & 3))
+        && (fr & TRAPDOOR_TOP_BIT) == half
+    {
+        let ff = fr & 3;
+        if !same_axis(ff, f) && can_take(ff) {
+            return if ff == ccw { "inner_left" } else { "inner_right" };
+        }
+    }
+    "straight"
+}
+
 /// W411: port of MC `SlabBlock::getStateForPlacement`. Returns the
 /// slab state byte: 0 = bottom, TRAPDOOR_TOP_BIT = top. Clicking a
 /// block's TOP face -> bottom slab; BOTTOM face -> top slab; SIDE
@@ -266,6 +320,43 @@ pub(crate) fn lower_pos(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stairs_shape_corners() {
+        // W413: StairBlock.getStairsShape. An east-facing stair
+        // (f=0) with a north-facing stair (f=3 = its CCW) BEHIND it
+        // (toward +X) turns outer_left; south behind -> outer_right.
+        let east = 0u8;
+        let behind = |n: u8| move |d: [i32; 2]| {
+            if d == [1, 0] { Some(n) } else { None }
+        };
+        assert_eq!(stairs_shape(east, behind(3)), "outer_left");
+        assert_eq!(stairs_shape(east, behind(1)), "outer_right");
+        // Same-axis behind (east/west): straight.
+        assert_eq!(stairs_shape(east, behind(0)), "straight");
+        assert_eq!(stairs_shape(east, behind(2)), "straight");
+        // A crossing stair IN FRONT (toward -X) makes inner corners.
+        let front = |n: u8| move |d: [i32; 2]| {
+            if d == [-1, 0] { Some(n) } else { None }
+        };
+        assert_eq!(stairs_shape(east, front(3)), "inner_left");
+        assert_eq!(stairs_shape(east, front(1)), "inner_right");
+        // Different half never connects.
+        let top_behind = |d: [i32; 2]| {
+            if d == [1, 0] { Some(3 | TRAPDOOR_TOP_BIT) } else { None }
+        };
+        assert_eq!(stairs_shape(east, top_behind), "straight");
+        // canTakeShape veto: an identical stair on the flank keeps
+        // the row straight (long L-corridor walls in MC).
+        let veto = |d: [i32; 2]| match d {
+            [1, 0] => Some(3u8), // north behind (would be outer_left)
+            [0, 1] => Some(0u8), // identical east stair on +Z flank
+            _ => None,
+        };
+        assert_eq!(stairs_shape(east, veto), "straight");
+        // No neighbours: straight.
+        assert_eq!(stairs_shape(east, |_| None), "straight");
+    }
 
     #[test]
     fn slab_place_state_faces() {

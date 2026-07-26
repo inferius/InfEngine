@@ -198,6 +198,19 @@ impl Voxel {
                 }
             }
         }
+        // W413: XZ ring - the stairs corner-shape resolution reads
+        // the NEIGHBOUR stairs' facing, which can sit across the
+        // chunk seam (the W407 BoundaryHalo answers the id check;
+        // this supplies the state byte).
+        let ring: Vec<[i32; 3]> = out.keys().copied().collect();
+        for pos in ring {
+            for d in [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+                let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+                if let Some(&state) = self.stair_states.get(&n) {
+                    out.insert(n, state);
+                }
+            }
+        }
         out
     }
 
