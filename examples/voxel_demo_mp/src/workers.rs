@@ -215,6 +215,11 @@ impl WorkerPool {
                                                     side_effects.push(
                                                         ChunkSideEffect::Torch(wv),
                                                     );
+                                                } else if b.0 == 966 {
+                                                    // W400: bell body render index.
+                                                    side_effects.push(
+                                                        ChunkSideEffect::Bell(wv),
+                                                    );
                                                 } else if let Some(lq) = liquid_for(b) {
                                                     // W115: only schedule a tick when the cell
                                                     // can actually move - air DIRECTLY BELOW means
@@ -749,6 +754,22 @@ pub(crate) fn mesh_chunk_in_worker(
             }
             return false;
         }
+        // W400: the bell (966) - the bell_floor.json stand (two
+        // stone posts + the dark-oak crossbar) is chunk geometry;
+        // the swinging body is a block entity (render::bells), so
+        // the cell contributes ONLY the stand here.
+        if block.0 == 966 {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let light = halo.lookup(coord, wp);
+            resource_pack::element_mesh::emit_bell_stand(
+                verts, idxs, voxel_origin, pack, light,
+            );
+            return true;
+        }
         // W365: pillar blocks with a recorded horizontal axis emit
         // the rotated column (end-grain on the axis faces, bark
         // rotated along it). No record = plain upright cube via the
@@ -1043,6 +1064,8 @@ pub(crate) enum ChunkSideEffect {
     Snow([i32; 3]),
     /// Torch or glowstone emitter at this world position.
     Torch([i32; 3]),
+    /// W400: a bell cell - the body renders as a block entity.
+    Bell([i32; 3]),
     /// Liquid voxel at this world position: `tick_offset` is
     /// `liquid.tick_period.max(1)` pre-computed on the worker so
     /// the main thread only does the addition.

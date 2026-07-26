@@ -804,6 +804,10 @@ pub(crate) struct Voxel {
     pub(crate) chest_meshes: crate::render::chests::ChestMeshes,
     /// W366: baked bed head/foot models per dye color.
     pub(crate) bed_meshes: crate::render::beds::BedMeshes,
+    /// W400: bell block entity - baked body mesh + cell index
+    /// (worker gen side effect + the emitter rescan on load).
+    pub(crate) bell_mesh: Option<crate::entity_model::BakedModel>,
+    pub(crate) bell_positions: std::collections::HashSet<[i32; 3]>,
     /// W369: crack overlay for the active mining session.
     pub(crate) break_overlay: crate::render::break_overlay::BreakOverlay,
     /// W366: bed piece states - facing bits 0-1 (foot -> head

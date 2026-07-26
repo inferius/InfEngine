@@ -351,6 +351,9 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         ChunkSideEffect::Torch(wv) => {
                             vx.torch_positions.insert(*wv);
                         }
+                        ChunkSideEffect::Bell(wv) => {
+                            vx.bell_positions.insert(*wv);
+                        }
                         ChunkSideEffect::Rail => {
                             needs_rail_remesh = true;
                         }
@@ -655,6 +658,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     &mut vx.torch_positions,
                     &mut vx.fires,
                     &mut vx.portal_positions,
+                    &mut vx.bell_positions,
                 );
                 vx.world.insert_chunk(coord, chunk);
                 // W127: rails meshed with an empty shape snapshot in the
@@ -1169,6 +1173,7 @@ fn drain_unload_batch(
         };
         vx.emitter_positions.retain(|p, _| in_keep(p));
         vx.torch_positions.retain(|p| in_keep(p));
+        vx.bell_positions.retain(|p| in_keep(p));
         // W282: portal swirl cells follow their chunks out (the scan
         // re-adds them on stream-in).
         // W311: portals are NOT distance-pruned - the round-trip link

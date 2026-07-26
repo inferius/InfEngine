@@ -37,6 +37,7 @@ pub(crate) mod chest;
 pub(crate) mod chicken;
 pub(crate) mod cow;
 pub(crate) mod bat;
+pub(crate) mod bell;
 pub(crate) mod bee;
 pub(crate) mod fox;
 pub(crate) mod goat;

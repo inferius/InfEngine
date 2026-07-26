@@ -181,6 +181,11 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
             r,
             mc_entity_dir.as_deref(),
         );
+        // W400: bell body mesh (the stand is chunk geometry).
+        vx.bell_mesh = crate::render::bells::load_bell_mesh(
+            r,
+            mc_entity_dir.as_deref(),
+        );
         // W134: minecart entity mesh from the same entity dir.
         vx.minecart_meshes =
             crate::render::minecarts::load_minecart_meshes(

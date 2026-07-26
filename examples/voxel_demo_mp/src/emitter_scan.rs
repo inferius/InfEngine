@@ -33,6 +33,7 @@ pub(crate) fn scan_chunk(
     torch_positions: &mut std::collections::HashSet<[i32; 3]>,
     fires: &mut std::collections::HashMap<[i32; 3], u8>,
     portal_positions: &mut std::collections::HashSet<[i32; 3]>,
+    bell_positions: &mut std::collections::HashSet<[i32; 3]>,
 ) {
     let cs = CHUNK_SIZE as i32;
     let origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
@@ -78,6 +79,10 @@ pub(crate) fn scan_chunk(
                 if id == crate::block::PORTAL_ID {
                     portal_positions.insert(world);
                 }
+                // W400: bell cells feed the block-entity body render.
+                if id == 966 {
+                    bell_positions.insert(world);
+                }
             }
         }
     }
@@ -106,6 +111,7 @@ pub(crate) fn rebuild_all(vx: &mut crate::Voxel) {
     let torch_positions = &mut vx.torch_positions;
     let fires = &mut vx.fires;
     let portal_positions = &mut vx.portal_positions;
+    let bell_positions = &mut vx.bell_positions;
     let mut scanned = 0usize;
     for (coord, chunk) in world.iter_chunks() {
         scan_chunk(
@@ -115,6 +121,7 @@ pub(crate) fn rebuild_all(vx: &mut crate::Voxel) {
             torch_positions,
             fires,
             portal_positions,
+            bell_positions,
         );
         scanned += 1;
     }

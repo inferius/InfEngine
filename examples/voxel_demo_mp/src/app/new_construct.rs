@@ -308,6 +308,8 @@ impl Voxel {
             chest_lid_anim: HashMap::new(),
             chest_meshes: crate::render::chests::ChestMeshes::default(),
             bed_meshes: crate::render::beds::BedMeshes::default(),
+            bell_mesh: None,
+            bell_positions: std::collections::HashSet::new(),
             break_overlay: Default::default(),
             bed_states: HashMap::new(),
             chest_open: None,

@@ -723,6 +723,7 @@ impl Voxel {
                         &mut self.torch_positions,
                         &mut self.fires,
                         &mut self.portal_positions,
+                        &mut self.bell_positions,
                     );
                     self.world.insert_chunk(c, chunk);
                     // W279: the synchronous gen path (portal arrival)

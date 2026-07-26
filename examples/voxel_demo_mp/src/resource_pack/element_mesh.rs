@@ -447,6 +447,45 @@ pub(crate) fn emit_wall_torch(
 /// spanning the opening; open = posts only (a gap to walk through).
 /// `facing` is the door-style horizontal facing (bit 0 picks the
 /// span axis); the MC swing-aside animation is a follow-up.
+/// W400: the bell stand from `bell_floor.json` - crossbar
+/// (2,13,7)-(14,15,9) in dark oak planks, two stone posts
+/// (14,0,6)-(16,16,10) and (0,0,6)-(2,16,10). The swinging body is
+/// a block entity (`render::bells`).
+pub(crate) fn emit_bell_stand(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    fn tile_for(pack: &ResourcePack, name: &str, fallback: u16) -> [f32; 4] {
+        let id = crate::block::BLOCK_TYPES
+            .iter()
+            .find(|b| b.name == name)
+            .map(|b| b.id)
+            .unwrap_or(fallback);
+        pack.block_face_ref(id, super::BlockFace::Sides)
+            .map(|r| r.atlas_uv)
+            .unwrap_or_else(|| {
+                crate::block::atlas_uv_rect(
+                    infengine_voxel::BlockId(id),
+                    [1, 0, 0],
+                )
+            })
+    }
+    let bar = tile_for(pack, "dark_oak_planks", 1);
+    let post = tile_for(pack, "stone", 1);
+    let o = origin;
+    let mut bx = |x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32, tile: [f32; 4]| {
+        let lo = [o.x + x0 / 16.0, o.y + y0 / 16.0, o.z + z0 / 16.0];
+        let hi = [o.x + x1 / 16.0, o.y + y1 / 16.0, o.z + z1 / 16.0];
+        emit_cuboid(verts, idxs, lo, hi, tile, light);
+    };
+    bx(2.0, 13.0, 7.0, 14.0, 15.0, 9.0, bar);
+    bx(14.0, 0.0, 6.0, 16.0, 16.0, 10.0, post);
+    bx(0.0, 0.0, 6.0, 2.0, 16.0, 10.0, post);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_fence_gate(
     verts: &mut Vec<MeshVertex>,

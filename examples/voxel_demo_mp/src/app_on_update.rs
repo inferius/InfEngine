@@ -2137,6 +2137,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.world,
             vx.player_pos,
         );
+        // W400: bell bodies (block entities over the chunk-mesh
+        // stands).
+        render::bells::draw_bells(
+            renderer,
+            &vx.bell_mesh,
+            &vx.bell_positions,
+            vx.player_pos,
+        );
         // W134: minecart entities (local sim + remote snapshots).
         render::minecarts::draw_minecarts(
             renderer,
