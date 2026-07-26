@@ -241,7 +241,12 @@ static CORE_CACHE: std::sync::LazyLock<std::sync::RwLock<CoreCacheMap>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
 static CORE_CACHE_SEQ: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-const CORE_CACHE_CAP: usize = 3072;
+// W405: 3072 -> 6144. A view-30 ring alone is 61^2 = 3721 columns,
+// so the old cap thrashed even standing still - and in flight the
+// frontier + the deco probes into 8 neighbour columns re-built
+// evicted cores constantly (the R25 "gen 8 -> 30 ms while moving"
+// degradation). ~50KB/core keeps this ~300MB worst case.
+const CORE_CACHE_CAP: usize = 6144;
 
 fn column_core_cached(
     ow: &Overworld,
@@ -262,7 +267,9 @@ fn column_core_cached(
             // overflow - never on the hot lookup path.
             let mut seqs: Vec<u64> = map.values().map(|(_, s)| *s).collect();
             seqs.sort_unstable();
-            let cut = seqs[seqs.len() / 2];
+            // W405: drop the oldest QUARTER (was half) - the gentler
+            // sweep keeps more of the live ring resident.
+            let cut = seqs[seqs.len() / 4];
             map.retain(|_, (_, s)| *s >= cut);
         }
         let seq = CORE_CACHE_SEQ

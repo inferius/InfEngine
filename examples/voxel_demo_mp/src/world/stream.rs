@@ -61,7 +61,13 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
     } else {
         cfg_dist
     };
-    let unload_dist = view_dist + 2;
+    // W405: +2 -> +4. The tight keep ring unloaded chunks the
+    // flight path re-requested within seconds (pending_unload sat at
+    // 600-1200 in the R25 log while chunk counts sawtoothed
+    // 23k->13k) - every one of those was a full regenerate. Two
+    // more chunks of hysteresis cost ~1.5k resident chunks but stop
+    // the churn.
+    let unload_dist = view_dist + 4;
 
     let (cy_min, cy_max) = vx.vertical_chunk_range();
 
