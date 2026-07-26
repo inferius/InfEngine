@@ -21,7 +21,7 @@ use crate::worldgen::Biome;
 
 use super::kinds::{
     KIND_SQUID, KIND_GLOW_SQUID, KIND_WANDERING_TRADER, KIND_FOX, KIND_OCELOT,
-    KIND_PARROT, KIND_GOAT, KIND_TURTLE, KIND_PANDA,
+    KIND_PARROT, KIND_GOAT, KIND_TURTLE, KIND_PANDA, KIND_CAMEL,
     KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
     KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
     KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
@@ -66,7 +66,9 @@ const PLAINS_NIGHT: &[(u8, u32)] =
 // W162: the desert is a classic rabbit biome (gold/desert variant).
 // W354: vanilla deserts spawn NO farm animals - rabbit only (the
 // R17 "cows and chickens in the desert" report).
-const DESERT_DAY: &[(u8, u32)] = &[(KIND_RABBIT, 4)];
+// W409: MC 26.1.2 desert creature rows - rabbit 12, camel 1
+// (biome json; the pre-W409 rabbit 4 predates the MC-weight port).
+const DESERT_DAY: &[(u8, u32)] = &[(KIND_RABBIT, 12), (KIND_CAMEL, 1)];
 // W377: the desert swaps most zombies for husks, the tundra its
 // skeletons for strays, and the swamp nights raise drowned near
 // water (MC per-biome monster overrides).

@@ -572,6 +572,28 @@ pub fn draw_remote_mobs(
                         }
                     }
 
+                    // ---- Camel (W409) -----------------------------------
+                    k if k == crate::mob::kinds::KIND_CAMEL => {
+                        if let Some(baked) = mob_meshes.camel_model.as_ref() {
+                            let pos = Vec3::new(
+                                base_x,
+                                mob.pos[1] - death_sink,
+                                base_z,
+                            );
+                            let model_yaw =
+                                mob.yaw - std::f32::consts::FRAC_PI_2;
+                            crate::entity_model::draw_scaled(
+                                renderer,
+                                baked,
+                                pos,
+                                model_yaw,
+                                mob_scale,
+                                apply_tint([1.0, 1.0, 1.0, 1.0]),
+                                mob_pose,
+                            );
+                            continue;
+                        }
+                    }
                     // ---- Panda (W393) -----------------------------------
                     k if k == crate::mob::kinds::KIND_PANDA => {
                         if let Some(baked) = mob_meshes.panda_model.as_ref() {

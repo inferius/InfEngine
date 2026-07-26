@@ -119,11 +119,13 @@ pub(crate) enum MobKind {
     Turtle = 48,
     /// W393 - panda (jungle rarity).
     Panda = 49,
+    /// W409 - camel (desert; MC 26.1.2 desert creature pool).
+    Camel = 50,
 }
 
 /// W408: highest assigned kind id. `from_u8` is contiguous over
 /// `0..=MOB_KIND_MAX`; bytes above collapse to Sheep.
-pub(crate) const MOB_KIND_MAX: u8 = MobKind::Panda as u8;
+pub(crate) const MOB_KIND_MAX: u8 = MobKind::Camel as u8;
 
 /// W408: reverse `MobKind::name()` lookup for chat commands
 /// (`/summon`, `/spawnmob`). Case-sensitive on the lowercase
@@ -193,6 +195,7 @@ impl MobKind {
             47 => MobKind::Goat,
             48 => MobKind::Turtle,
             49 => MobKind::Panda,
+            50 => MobKind::Camel,
             _ => MobKind::Sheep,
         }
     }
@@ -305,6 +308,7 @@ impl MobKind {
             MobKind::Goat => "goat",
             MobKind::Turtle => "turtle",
             MobKind::Panda => "panda",
+            MobKind::Camel => "camel",
         }
     }
 }
@@ -402,6 +406,7 @@ pub(crate) const KIND_PARROT: u8 = MobKind::Parrot as u8;
 pub(crate) const KIND_GOAT: u8 = MobKind::Goat as u8;
 pub(crate) const KIND_TURTLE: u8 = MobKind::Turtle as u8;
 pub(crate) const KIND_PANDA: u8 = MobKind::Panda as u8;
+pub(crate) const KIND_CAMEL: u8 = MobKind::Camel as u8;
 #[allow(dead_code)] // Spawns from H.3 biome pools.
 pub(crate) const KIND_SPIDER: u8 = MobKind::Spider as u8;
 
@@ -479,11 +484,11 @@ mod tests {
         assert_eq!(MobKind::from_u8(19), MobKind::Donkey);
         // W330: 17 = ZombieVillager.
         assert_eq!(MobKind::from_u8(17), MobKind::ZombieVillager);
-        // W395: 20..=49 are real kinds now (bee..panda) - only
+        // W395: 20..=50 are real kinds now (bee..camel) - only
         // genuinely unknown bytes collapse to the passive fallback.
         assert_eq!(MobKind::from_u8(20), MobKind::Bee);
-        assert_eq!(MobKind::from_u8(49), MobKind::Panda);
-        for raw in [50u8, 100, 255] {
+        assert_eq!(MobKind::from_u8(50), MobKind::Camel);
+        for raw in [51u8, 100, 255] {
             assert_eq!(MobKind::from_u8(raw), MobKind::Sheep);
         }
     }

@@ -96,6 +96,8 @@ pub(crate) fn entity_texture_subpath(kind: MobKind) -> (&'static str, &'static s
         MobKind::Goat => ("goat", "goat"),
         MobKind::Turtle => ("turtle", "big_sea_turtle"),
         MobKind::Panda => ("panda", "panda"),
+        // W409.
+        MobKind::Camel => ("camel", "camel"),
     }
 }
 
@@ -203,6 +205,7 @@ pub(crate) struct MobSkinSet {
     pub(crate) goat: Option<PathBuf>,
     pub(crate) turtle: Option<PathBuf>,
     pub(crate) panda: Option<PathBuf>,
+    pub(crate) camel: Option<PathBuf>,
 }
 
 impl MobSkinSet {
@@ -258,6 +261,7 @@ impl MobSkinSet {
             goat: mob_skin_path(assets_root, MobKind::Goat),
             turtle: mob_skin_path(assets_root, MobKind::Turtle),
             panda: mob_skin_path(assets_root, MobKind::Panda),
+            camel: mob_skin_path(assets_root, MobKind::Camel),
         }
     }
 
@@ -313,6 +317,7 @@ impl MobSkinSet {
             MobKind::Goat => &self.goat,
             MobKind::Turtle => &self.turtle,
             MobKind::Panda => &self.panda,
+            MobKind::Camel => &self.camel,
         };
         opt.as_deref()
     }

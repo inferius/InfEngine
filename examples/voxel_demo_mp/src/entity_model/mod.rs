@@ -41,6 +41,7 @@ pub(crate) mod bell;
 pub(crate) mod bee;
 pub(crate) mod fox;
 pub(crate) mod goat;
+pub(crate) mod camel;
 pub(crate) mod panda;
 pub(crate) mod parrot;
 pub(crate) mod phantom;

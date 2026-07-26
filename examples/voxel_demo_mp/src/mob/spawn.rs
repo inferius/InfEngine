@@ -279,6 +279,8 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
         x if x == super::kinds::KIND_POLAR_BEAR => 30.0,
         // W162: MC rabbit HP (3 = 1.5 hearts).
         x if x == super::kinds::KIND_RABBIT => 3.0,
+        // W409: Camel.createAttributes MAX_HEALTH 32.
+        x if x == crate::mob::kinds::KIND_CAMEL => 32.0,
         _ => MOB_MAX_HEALTH,
     }
 }
