@@ -828,6 +828,53 @@ pub(crate) fn mesh_chunk_in_worker(
         // W279: stairs with a recorded orientation (template
         // placements) emit the rotated two-box shape; stairs without
         // one fall through to the static default model below.
+        // W411: slabs - the half lives in the stairs/orient map
+        // (0 = bottom, TRAPDOOR_TOP_BIT = top, SLAB_DOUBLE_BIT =
+        // both halves -> full cube via the greedy path). JSON
+        // blockstate variant first (type=bottom/top); the
+        // hand-coded slab builders stay as the pack-less fallback
+        // through the emit_block_elements tail below.
+        if crate::block::is_slab_block(block.0) {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let state = stairs.get(&wp).copied().unwrap_or(0);
+            if state & crate::block::door::SLAB_DOUBLE_BIT != 0 {
+                // Full cube: hand back to the greedy mesher.
+                return false;
+            }
+            let half = if state & crate::block::door::TRAPDOOR_TOP_BIT != 0
+            {
+                "top"
+            } else {
+                "bottom"
+            };
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("type", half);
+            let light = halo.lookup(coord, wp);
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
+            // fall through to the dedicated-model tail (bottom-slab
+            // builders; a pack-less top slab renders bottom).
+        }
         if crate::block::door::is_stairs_block(block.0) {
             let wp = [
                 world_origin[0] + lx,

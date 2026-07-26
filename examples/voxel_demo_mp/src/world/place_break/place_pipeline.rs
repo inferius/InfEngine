@@ -39,6 +39,48 @@ pub(crate) fn apply_block_place(
         block_is_replaceable, block_material, body_aabb,
     };
     // Pick the destination voxel.
+    // W411: slab-on-slab merge (MC SlabBlock.canBeReplaced): the
+    // same slab clicked on its exposed half fills the CLICKED cell
+    // to a DOUBLE slab instead of placing into the next cell.
+    if crate::block::is_slab_block(block.0)
+        && vx.world.get(hit.voxel).0 == block.0
+    {
+        let st = vx
+            .stair_states
+            .get(&hit.voxel)
+            .copied()
+            .unwrap_or(0);
+        let top = st & crate::block::door::TRAPDOOR_TOP_BIT != 0;
+        let mergeable = st & crate::block::door::SLAB_DOUBLE_BIT == 0
+            && ((!top && hit.normal[1] > 0) || (top && hit.normal[1] < 0));
+        if mergeable {
+            vx.stair_states
+                .insert(hit.voxel, st | crate::block::door::SLAB_DOUBLE_BIT);
+            let coords = Voxel::affected_chunks(hit.voxel);
+            vx.rebuild_chunks(&coords);
+            if !is_client
+                && !vx.abilities.instabuild
+                && let Some((_, count)) =
+                    vx.inventory[vx.selected_slot].as_mut()
+            {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    vx.inventory[vx.selected_slot] = None;
+                }
+            }
+            let key = format!("dig:{}", block_material(block));
+            let freq = 380.0 + (block.0 as f32) * 22.0;
+            let c = [
+                hit.voxel[0] as f32 + 0.5,
+                hit.voxel[1] as f32 + 0.5,
+                hit.voxel[2] as f32 + 0.5,
+            ];
+            vx.sfx_at(&key, c, move |a, g| {
+                let _ = a.play_click(freq, 0.18 * g);
+            });
+            return;
+        }
+    }
     let target_voxel = if block_is_replaceable(vx.world.get(hit.voxel))
         && vx.world.get(hit.voxel).0 != block.0
     {
@@ -253,6 +295,25 @@ pub(crate) fn apply_block_place(
     // (MC RotatedPillarBlock.getStateForPlacement) - click a wall
     // and the log lies toward you, click the ground and it stands
     // up. Only horizontal axes need a record.
+    // W411: slabs carry their half in `stair_states` (MC SlabBlock
+    // `type` prop; the world grid keeps one id per material). Only
+    // the TOP half needs a record - bottom is the default.
+    if crate::block::is_slab_block(placed_block.0) {
+        let look = [
+            vx.player_yaw.cos() * vx.player_pitch.cos(),
+            vx.player_pitch.sin(),
+            -vx.player_yaw.sin() * vx.player_pitch.cos(),
+        ];
+        let st = crate::block::door::slab_place_state(
+            hit.normal,
+            target_voxel,
+            [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z],
+            look,
+        );
+        if st != 0 {
+            vx.stair_states.insert(target_voxel, st);
+        }
+    }
     if crate::block::is_pillar_block(placed_block.0) {
         let ax = if hit.normal[0] != 0 {
             1u8

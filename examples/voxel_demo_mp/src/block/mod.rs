@@ -230,6 +230,24 @@ pub(crate) fn block_is_opaque(b: BlockId) -> bool {
 /// W366: any bed block - the legacy `bed` (35) + the 16 dyed beds
 /// (576..=591). They render as block entities (render::beds) and
 /// share the RMB sleep action.
+/// W411: slab ids by registry name (one id per material; the half
+/// lives in `stair_states` as a state byte, MC SlabBlock `type`).
+/// O(1) via the same OnceLock LUT pattern as `block_type`.
+pub(crate) fn is_slab_block(id: u16) -> bool {
+    static LUT: std::sync::OnceLock<Vec<bool>> = std::sync::OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let max_id = BLOCK_TYPES.iter().map(|b| b.id).max().unwrap_or(0);
+        let mut v = vec![false; max_id as usize + 1];
+        for b in BLOCK_TYPES {
+            if b.name.ends_with("_slab") || b.name.ends_with("_slab_top") {
+                v[b.id as usize] = true;
+            }
+        }
+        v
+    });
+    lut.get(id as usize).copied().unwrap_or(false)
+}
+
 pub(crate) fn is_bed_block(id: u16) -> bool {
     id == 35 || (576..=591).contains(&id)
 }

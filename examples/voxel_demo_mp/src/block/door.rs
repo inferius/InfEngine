@@ -113,6 +113,12 @@ pub(crate) fn panel_box(edge: u8) -> ([f32; 3], [f32; 3]) {
 /// carries the half for free.
 pub(crate) const TRAPDOOR_TOP_BIT: u8 = 4;
 
+/// W411: bit 3 of a slab's `stair_states` byte = DOUBLE slab (both
+/// halves filled; meshes as the full cube, drops two items). The
+/// TOP half reuses TRAPDOOR_TOP_BIT so the state plumbing (snapshot,
+/// save v6 pos-state rows) carries slabs for free.
+pub(crate) const SLAB_DOUBLE_BIT: u8 = 8;
+
 /// W133: port of MC `TrapDoorBlock::getStateForPlacement`. Returns
 /// the trapdoor state byte: facing (bits 0-1) | TRAPDOOR_TOP_BIT.
 /// - Clicking a block's TOP face -> bottom half; BOTTOM face -> top
@@ -138,9 +144,25 @@ pub(crate) fn trapdoor_place_state(
         (-1, _) => 2,
         _ => 3,
     };
-    // The clicked face is the shared plane between the support block
-    // and the place cell: at the place cell's low edge when the
-    // normal points +, high edge when -.
+    if side_click_is_top(normal, place_at, eye, look) {
+        f | TRAPDOOR_TOP_BIT
+    } else {
+        f
+    }
+}
+
+/// W411 (extracted from `trapdoor_place_state`): for a SIDE-face
+/// click, was the exact click point in the upper half of the face?
+/// The click point is recovered by intersecting the eye ray with
+/// the clicked face plane - the shared plane between the support
+/// block and the place cell: at the place cell's low edge when the
+/// normal points +, high edge when -.
+fn side_click_is_top(
+    normal: [i32; 3],
+    place_at: [i32; 3],
+    eye: [f32; 3],
+    look: [f32; 3],
+) -> bool {
     let (axis, plane) = if normal[0] != 0 {
         let x = place_at[0] as f32;
         (0usize, if normal[0] > 0 { x } else { x + 1.0 })
@@ -148,16 +170,40 @@ pub(crate) fn trapdoor_place_state(
         let z = place_at[2] as f32;
         (2usize, if normal[2] > 0 { z } else { z + 1.0 })
     };
-    let mut top = false;
     let d = look[axis];
     if d.abs() > 1e-6 {
         let t = (plane - eye[axis]) / d;
         if t > 0.0 {
             let y_hit = eye[1] + look[1] * t;
-            top = y_hit - place_at[1] as f32 > 0.5;
+            return y_hit - place_at[1] as f32 > 0.5;
         }
     }
-    if top { f | TRAPDOOR_TOP_BIT } else { f }
+    false
+}
+
+/// W411: port of MC `SlabBlock::getStateForPlacement`. Returns the
+/// slab state byte: 0 = bottom, TRAPDOOR_TOP_BIT = top. Clicking a
+/// block's TOP face -> bottom slab; BOTTOM face -> top slab; SIDE
+/// face -> the half from the exact click height within the face.
+/// (The DOUBLE merge is the placement pipeline's job - it happens
+/// in the CLICKED cell, not the place cell.)
+pub(crate) fn slab_place_state(
+    normal: [i32; 3],
+    place_at: [i32; 3],
+    eye: [f32; 3],
+    look: [f32; 3],
+) -> u8 {
+    if normal[1] > 0 {
+        return 0;
+    }
+    if normal[1] < 0 {
+        return TRAPDOOR_TOP_BIT;
+    }
+    if side_click_is_top(normal, place_at, eye, look) {
+        TRAPDOOR_TOP_BIT
+    } else {
+        0
+    }
 }
 
 /// True when the cell directly above `pos` is the upper half of
@@ -220,6 +266,28 @@ pub(crate) fn lower_pos(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn slab_place_state_faces() {
+        // W411: MC SlabBlock.getStateForPlacement. Top face click ->
+        // bottom slab; bottom face -> top slab.
+        assert_eq!(slab_place_state([0, 1, 0], [0, 5, 0], [0.5, 7.0, 0.5], [0.0, -1.0, 0.0]), 0);
+        assert_eq!(
+            slab_place_state([0, -1, 0], [0, 5, 0], [0.5, 4.0, 0.5], [0.0, 1.0, 0.0]),
+            TRAPDOOR_TOP_BIT
+        );
+        // Side click low on the face (eye level with the lower half,
+        // looking flat +X onto the cell's -X face plane at x=0).
+        assert_eq!(
+            slab_place_state([1, 0, 0], [0, 5, 0], [-1.0, 5.25, 0.5], [1.0, 0.0, 0.0]),
+            0
+        );
+        // Side click high on the face.
+        assert_eq!(
+            slab_place_state([1, 0, 0], [0, 5, 0], [-1.0, 5.75, 0.5], [1.0, 0.0, 0.0]),
+            TRAPDOOR_TOP_BIT
+        );
+    }
     use super::*;
 
     #[test]

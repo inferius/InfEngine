@@ -351,8 +351,27 @@ pub(crate) fn apply_block_break(
                         }
                     }
                 }
+                // W411: a DOUBLE slab drops two slabs (MC
+                // SlabBlock loot table).
+                x if crate::block::is_slab_block(x)
+                    && vx.stair_states.get(&voxel).is_some_and(|&s| {
+                        s & crate::block::door::SLAB_DOUBLE_BIT != 0
+                    }) =>
+                {
+                    vx.spawn_drop(BlockId(drop_id), voxel);
+                    vx.spawn_drop(BlockId(drop_id), voxel);
+                }
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
+        }
+        // W411: per-pos orientation bytes die with the block (slab
+        // half / stairs facing / pillar axis all live in
+        // stair_states; gates + trapdoors clear theirs above).
+        if crate::block::is_slab_block(broken.0)
+            || crate::block::door::is_stairs_block(broken.0)
+            || crate::block::is_pillar_block(broken.0)
+        {
+            vx.stair_states.remove(&voxel);
         }
         // W353: drop the render-set entry with the block (the
         // container may not even exist for an unopened worldgen
