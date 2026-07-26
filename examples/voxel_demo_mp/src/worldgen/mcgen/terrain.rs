@@ -241,12 +241,69 @@ static CORE_CACHE: std::sync::LazyLock<std::sync::RwLock<CoreCacheMap>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
 static CORE_CACHE_SEQ: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-// W405: 3072 -> 6144. A view-30 ring alone is 61^2 = 3721 columns,
-// so the old cap thrashed even standing still - and in flight the
-// frontier + the deco probes into 8 neighbour columns re-built
-// evicted cores constantly (the R25 "gen 8 -> 30 ms while moving"
-// degradation). ~50KB/core keeps this ~300MB worst case.
-const CORE_CACHE_CAP: usize = 6144;
+// W405: 3072 -> 6144 floor. A view-30 ring alone is 61^2 = 3721
+// columns, so the old cap thrashed even standing still - and in
+// flight the frontier + the deco probes into 8 neighbour columns
+// re-built evicted cores constantly (the R25 "gen 8 -> 30 ms while
+// moving" degradation).
+//
+// W406 (R26 mandate: "use the memory the machine actually has"):
+// the cap now scales with PHYSICAL RAM - ~8% of it at ~50KB per
+// core, clamped to [6144, 24576] (~300MB..1.2GB). Detection is a
+// direct kernel32 call (std already links it); non-Windows or a
+// failed call keeps the floor.
+const CORE_CACHE_CAP_FLOOR: usize = 6144;
+const CORE_CACHE_CAP_CEIL: usize = 24576;
+
+#[cfg(windows)]
+fn total_physical_ram_bytes() -> Option<u64> {
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+    }
+    let mut m = MemoryStatusEx {
+        length: std::mem::size_of::<MemoryStatusEx>() as u32,
+        memory_load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page_file: 0,
+        avail_page_file: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended_virtual: 0,
+    };
+    // SAFETY: the struct is #[repr(C)] with `length` set as the API
+    // requires; kernel32 fills the rest on success.
+    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.total_phys)
+}
+
+#[cfg(not(windows))]
+fn total_physical_ram_bytes() -> Option<u64> {
+    None
+}
+
+fn core_cache_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        let cap = total_physical_ram_bytes()
+            .map(|total| (total / 100 * 8 / 50_000) as usize)
+            .unwrap_or(CORE_CACHE_CAP_FLOOR)
+            .clamp(CORE_CACHE_CAP_FLOOR, CORE_CACHE_CAP_CEIL);
+        tracing::info!(cap, "W406: column-core cache sized from RAM");
+        cap
+    })
+}
 
 fn column_core_cached(
     ow: &Overworld,
@@ -261,7 +318,7 @@ fn column_core_cached(
     }
     let core = std::sync::Arc::new(column_data(ow, cx, cz, seed));
     if let Ok(mut map) = CORE_CACHE.write() {
-        if map.len() >= CORE_CACHE_CAP {
+        if map.len() >= core_cache_cap() {
             // Drop the oldest-inserted half (median split on the
             // sequence). One O(n) pass over ~3k entries, only on
             // overflow - never on the hot lookup path.
