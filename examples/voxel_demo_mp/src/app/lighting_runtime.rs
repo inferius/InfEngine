@@ -289,6 +289,16 @@ impl Voxel {
             |air_local, _normal| light_lookup(air_local),
             anim_lookup,
             occluder_at,
+            // W407: the sync path sees the whole world - seam faces
+            // cull against the REAL neighbour blocks (the worker
+            // path uses the BoundaryHalo snapshot instead).
+            |local: [i32; 3]| {
+                self.world.get([
+                    world_origin[0] + local[0],
+                    world_origin[1] + local[1],
+                    world_origin[2] + local[2],
+                ])
+            },
             emit_special,
         )
     }

@@ -707,15 +707,37 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // through the Lit pipeline + W275 diff). Streaming
                 // used to triple the mesh+upload volume with these;
                 // now they wait for an idle stream.
+                let mut any_neighbor = false;
                 for n in [
                     [cc[0] - 1, cc[1], cc[2]],
                     [cc[0] + 1, cc[1], cc[2]],
+                    [cc[0], cc[1] - 1, cc[2]],
+                    [cc[0], cc[1] + 1, cc[2]],
                     [cc[0], cc[1], cc[2] - 1],
                     [cc[0], cc[1], cc[2] + 1],
                 ] {
-                    if vx.world.chunk(n).is_some() && vx.pending_seam_set.insert(n) {
-                        vx.pending_seam_remesh.push_back(n);
+                    if vx.world.chunk(n).is_some() {
+                        any_neighbor = true;
+                        if vx.pending_seam_set.insert(n) {
+                            vx.pending_seam_remesh.push_back(n);
+                        }
                     }
+                }
+                // W407: for chunks carrying greedy-meshed transparent
+                // blocks (ice / glass; liquids ride the W384 liquid
+                // mesh) the seam pass is CORRECTNESS, not cleanup:
+                // this chunk meshed before seeing its neighbours, so
+                // its phantom seam faces z-fight the neighbours' real
+                // opaque faces through the no-cull transparent
+                // pipeline (the iceberg ice/snow strobing). Re-queue
+                // SELF so it re-meshes against the now-present
+                // boundary; Y neighbours joined the list above for
+                // the same reason (icebergs stack vertically).
+                if any_neighbor
+                    && vx.world.chunk(cc).is_some_and(chunk_has_greedy_transparent)
+                    && vx.pending_seam_set.insert(cc)
+                {
+                    vx.pending_seam_remesh.push_back(cc);
                 }
                 let cs = CHUNK_SIZE as i32;
                 vx.lighting.mark_dirty([
@@ -1518,4 +1540,16 @@ fn rescan_lod_ring(
             }
         }
     }
+}
+
+/// W407: does the chunk hold any block the greedy mesher routes into
+/// the TRANSPARENT submesh? Transparent-render minus dedicated:
+/// water/lava render via the W384 liquid mesh and special models via
+/// their emitters, so only greedy cubes (ice, glass, ...) count.
+fn chunk_has_greedy_transparent(ch: &infengine_voxel::Chunk) -> bool {
+    ch.raw().iter().any(|&b| {
+        !b.is_air()
+            && crate::block::block_is_transparent_render(b)
+            && !crate::block::block_has_flag(b, crate::block::F_DEDICATED_RENDER)
+    })
 }

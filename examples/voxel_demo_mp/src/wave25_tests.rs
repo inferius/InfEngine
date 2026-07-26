@@ -57,6 +57,7 @@ fn remesh_job_has_revision_field() {
     let pack = Arc::new(resource_pack::ResourcePack::load());
     let halo = HaloLighting::default();
     let rj = RemeshJob {
+        boundary: crate::workers::BoundaryHalo::empty(),
         coord: [0, 1, 0],
         chunk: Chunk::empty(),
         pack,

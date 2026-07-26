@@ -46,7 +46,7 @@ fn mesh_chunk_in_worker_solid_chunk_produces_submeshes() {
     };
     let no_doors = std::collections::HashMap::new();
     let no_rails = std::collections::HashMap::new();
-    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo, &no_doors, &no_rails, &std::collections::HashMap::new(), &std::collections::HashMap::new());
+    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo, &no_doors, &no_rails, &std::collections::HashMap::new(), &std::collections::HashMap::new(), &crate::workers::BoundaryHalo::empty());
     let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
     assert!(
         total_verts > 0,
@@ -76,7 +76,7 @@ fn mesh_chunk_in_worker_air_chunk_produces_no_vertices() {
     };
     let no_doors = std::collections::HashMap::new();
     let no_rails = std::collections::HashMap::new();
-    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo, &no_doors, &no_rails, &std::collections::HashMap::new(), &std::collections::HashMap::new());
+    let subs = crate::workers::mesh_chunk_in_worker(&chunk, [0, 0, 0], &pack, &halo, &no_doors, &no_rails, &std::collections::HashMap::new(), &std::collections::HashMap::new(), &crate::workers::BoundaryHalo::empty());
     let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
     assert_eq!(total_verts, 0, "air chunk must produce zero vertices");
 }
@@ -142,6 +142,7 @@ fn snow_layer_cell_emits_slab() {
         &no_rails,
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
+        &crate::workers::BoundaryHalo::empty(),
     );
     let total_verts: usize = subs.iter().map(|s| s.vertices.len()).sum();
     assert_eq!(

@@ -415,6 +415,10 @@ impl Voxel {
                 rails: self.rail_state_snapshot(coord),
                 stairs: self.stair_state_snapshot(coord),
                 snow: self.snow_state_snapshot(coord),
+                boundary: crate::workers::boundary_halo_snapshot(
+                    &self.world,
+                    coord,
+                ),
                 dim: self.current_dim.clone(),
             });
             // If the send fails the pool is shutting down; ignore.

@@ -681,7 +681,7 @@ where
 /// `false` out of range (no contact shadow at the chunk seam, but no
 /// artefact either).
 #[allow(clippy::too_many_arguments)]
-pub fn chunk_mesh_greedy_with_special<F, O, L, A, S, OC>(
+pub fn chunk_mesh_greedy_with_special<F, O, L, A, S, OC, NB>(
     chunk: &Chunk,
     origin: Vec3,
     uv_rect: F,
@@ -689,6 +689,7 @@ pub fn chunk_mesh_greedy_with_special<F, O, L, A, S, OC>(
     light_at: L,
     anim_id_at: A,
     occluder_at: OC,
+    neighbor_at: NB,
     mut emit_special: S,
 ) -> Vec<ChunkSubmesh>
 where
@@ -697,6 +698,7 @@ where
     L: Fn([i32; 3], [i8; 3]) -> [f32; 2],
     A: Fn(BlockId, [i8; 3]) -> u32,
     OC: Fn([i32; 3]) -> bool,
+    NB: Fn([i32; 3]) -> BlockId,
     S: FnMut(BlockId, Vec3, &mut Vec<MeshVertex>, &mut Vec<u32>) -> bool,
 {
     let cs = CHUNK_SIZE;
@@ -771,10 +773,20 @@ where
                     }
                     let mut nc = [cx as i32, cy as i32, cz as i32];
                     nc[fa] += side;
+                    // W407: out-of-chunk cells ask `neighbor_at`
+                    // (the caller's view of the adjacent chunk, MC
+                    // meshes against an 18^3 neighbourhood). AIR =
+                    // neighbour unknown -> emit, the pre-W407
+                    // behaviour. Without this every seam face was
+                    // emitted "against air"; a transparent block's
+                    // phantom seam face then z-fought the opaque
+                    // neighbour's real face through the no-cull
+                    // transparent pipeline (iceberg ice/snow/dirt
+                    // strobing).
                     let nb = if (0..cs as i32).contains(&nc[fa]) {
                         chunk.get(nc[0] as usize, nc[1] as usize, nc[2] as usize)
                     } else {
-                        BlockId::AIR
+                        neighbor_at(nc)
                     };
                     let visible = if nb.is_air() {
                         true
@@ -1617,6 +1629,63 @@ pub fn raycast_with<F: Fn(BlockId) -> bool>(
 mod tests {
     use super::*;
 
+    /// W407: seam faces cull against the caller-supplied neighbour
+    /// view. A block on the chunk boundary keeps its face when the
+    /// neighbour is unknown (AIR) and drops it when the adjacent
+    /// cell fully occludes or holds the same transparent block -
+    /// the MC cross-chunk rule (phantom seam faces z-fought real
+    /// neighbour faces through the no-cull transparent pipeline).
+    #[test]
+    fn greedy_seam_neighbor_cull() {
+        let ice = BlockId(2);
+        let mut chunk = Chunk::empty();
+        chunk.set(15, 8, 8, ice);
+        let opaque = |b: BlockId| b == BlockId(1);
+        let quads = |neigh: &dyn Fn([i32; 3]) -> BlockId| -> usize {
+            chunk_mesh_greedy_with_special(
+                &chunk,
+                Vec3::ZERO,
+                |_, _| [0.0, 0.0, 1.0, 1.0],
+                opaque,
+                |_, _| [0.0, 1.0],
+                |_, _| 0,
+                |_| false,
+                neigh,
+                |_, _, _, _| false,
+            )
+            .iter()
+            .map(|s| s.indices.len() / 6)
+            .sum()
+        };
+        // Unknown neighbour: all 6 faces emit (pre-W407 behaviour).
+        assert_eq!(quads(&|_| BlockId::AIR), 6);
+        // Opaque neighbour across the seam: the +X face culls.
+        assert_eq!(
+            quads(&|p: [i32; 3]| if p[0] == 16 {
+                BlockId(1)
+            } else {
+                BlockId::AIR
+            }),
+            5
+        );
+        // Same transparent block across the seam: also culls
+        // (ice next to ice draws no inner wall).
+        assert_eq!(
+            quads(&|p: [i32; 3]| if p[0] == 16 { ice } else { BlockId::AIR }),
+            5
+        );
+        // A DIFFERENT non-occluding block across the seam keeps the
+        // face (glass against ice renders both, as in MC).
+        assert_eq!(
+            quads(&|p: [i32; 3]| if p[0] == 16 {
+                BlockId(3)
+            } else {
+                BlockId::AIR
+            }),
+            6
+        );
+    }
+
     #[test]
     fn single_voxel_emits_six_faces() {
         let mut chunk = Chunk::empty();
@@ -2172,6 +2241,7 @@ mod tests {
             |_, _| [0.0f32, 1.0f32],
             |_, _| 0u32,
             |_| false,
+            |_| BlockId::AIR,
             |_, _, _, _| false,
         );
         let mut bad = 0usize;
@@ -2226,6 +2296,7 @@ mod tests {
             light,
             |_, _| 0u32,
             |_| false,
+            |_| BlockId::AIR,
             |_, _, _, _| false,
         );
         // Gather every quad's outline edges + every vertex. Positions

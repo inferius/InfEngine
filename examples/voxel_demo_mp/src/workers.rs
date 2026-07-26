@@ -403,6 +403,12 @@ impl WorkerPool {
                                         &no_rails,
                                         &gen_stairs,
                                         &no_snow,
+                                        // W407: fresh gen can't see
+                                        // its neighbours - the W345
+                                        // seam queue re-meshes with
+                                        // real boundary data once
+                                        // they exist.
+                                        &BoundaryHalo::empty(),
                                     );
                                     let _prof_mesh_us =
                                         _prof_t2.elapsed().as_micros() as u64;
@@ -455,6 +461,7 @@ impl WorkerPool {
                                         &rj.rails,
                                         &rj.stairs,
                                         &rj.snow,
+                                        &rj.boundary,
                                     );
                                     if res_tx
                                         .send(WorkerResult::Remeshed {
@@ -681,6 +688,8 @@ pub(crate) fn mesh_chunk_in_worker(
     stairs: &std::collections::HashMap<[i32; 3], u8>,
     // W316: snow-layer heights (id 15 cells; missing = 1 layer).
     snow: &std::collections::HashMap<[i32; 3], u8>,
+    // W407: neighbour seam layers for cross-chunk face culling.
+    boundary: &BoundaryHalo,
 ) -> Vec<infengine_voxel::ChunkSubmesh> {
     let origin = World::chunk_world_origin(coord);
     let cs = infengine_voxel::CHUNK_SIZE as i32;
@@ -1201,6 +1210,7 @@ pub(crate) fn mesh_chunk_in_worker(
         |air_local, _normal| light_lookup(air_local),
         anim_lookup,
         occluder_at,
+        |local: [i32; 3]| boundary.at(local),
         emit_special,
     );
     // W240: collapse the per-block submeshes into one per render
@@ -1566,6 +1576,92 @@ pub(crate) struct ChunkJob {
 /// W25: remesh-only job. Carries a clone of the chunk's voxel data
 /// (Chunk is ~8 KB; clone is fast) so the worker can mesh without
 /// shared mutable state. No worldgen, no side-effect scan.
+/// W407: 1-deep block-id layers of the 6 face-neighbour chunks,
+/// captured at dispatch time. The mesher culls seam faces against
+/// them instead of assuming air. `None` = neighbour not loaded ->
+/// treated as air (emit; the W345 seam queue remeshes once it
+/// streams in). Side order: -X +X -Y +Y -Z +Z; each layer holds the
+/// NEIGHBOUR's cells adjacent to this chunk's boundary plane,
+/// indexed `a * 16 + b` with (a, b) the remaining axes in ascending
+/// order.
+pub(crate) struct BoundaryHalo {
+    pub(crate) sides: [Option<Box<[u16; 256]>>; 6],
+}
+
+impl BoundaryHalo {
+    pub(crate) fn empty() -> Self {
+        Self {
+            sides: [None, None, None, None, None, None],
+        }
+    }
+
+    /// Neighbour lookup for a local coord with exactly one axis
+    /// outside 0..16.
+    pub(crate) fn at(&self, local: [i32; 3]) -> BlockId {
+        let cs = CHUNK_SIZE as i32;
+        let (side, a, b) = if local[0] < 0 {
+            (0, local[1], local[2])
+        } else if local[0] >= cs {
+            (1, local[1], local[2])
+        } else if local[1] < 0 {
+            (2, local[0], local[2])
+        } else if local[1] >= cs {
+            (3, local[0], local[2])
+        } else if local[2] < 0 {
+            (4, local[0], local[1])
+        } else {
+            (5, local[0], local[1])
+        };
+        match &self.sides[side] {
+            Some(ids) if (0..cs).contains(&a) && (0..cs).contains(&b) => {
+                BlockId(ids[(a * cs + b) as usize])
+            }
+            _ => BlockId::AIR,
+        }
+    }
+}
+
+/// W407: capture the 6 seam layers from whichever face-neighbour
+/// chunks currently exist. Runs on the main thread at dispatch.
+pub(crate) fn boundary_halo_snapshot(
+    world: &World,
+    coord: ChunkCoord,
+) -> BoundaryHalo {
+    let cs = CHUNK_SIZE;
+    let deltas = [
+        [-1, 0, 0],
+        [1, 0, 0],
+        [0, -1, 0],
+        [0, 1, 0],
+        [0, 0, -1],
+        [0, 0, 1],
+    ];
+    let mut sides: [Option<Box<[u16; 256]>>; 6] =
+        [None, None, None, None, None, None];
+    for (si, d) in deltas.iter().enumerate() {
+        let nc = [coord[0] + d[0], coord[1] + d[1], coord[2] + d[2]];
+        let Some(nchunk) = world.chunk(nc) else {
+            continue;
+        };
+        let mut ids = Box::new([0u16; 256]);
+        for a in 0..cs {
+            for b in 0..cs {
+                let (x, y, z) = match si {
+                    0 => (cs - 1, a, b),
+                    1 => (0, a, b),
+                    2 => (a, cs - 1, b),
+                    3 => (a, 0, b),
+                    4 => (a, b, cs - 1),
+                    _ => (a, b, 0),
+                };
+                ids[a * cs + b] = nchunk.get(x, y, z).0;
+            }
+        }
+        sides[si] = Some(ids);
+    }
+    BoundaryHalo { sides }
+}
+
 pub(crate) struct RemeshJob {
     pub(crate) coord: ChunkCoord,
     /// Snapshot of the chunk voxels at dispatch time.
@@ -1580,6 +1676,8 @@ pub(crate) struct RemeshJob {
     pub(crate) revision: u64,
     /// W316: snow-layer heights for cells in this chunk (id 15).
     pub(crate) snow: std::collections::HashMap<[i32; 3], u8>,
+    /// W407: seam layers of the 6 face-neighbour chunks.
+    pub(crate) boundary: BoundaryHalo,
     /// W125: door state snapshot for doors intersecting this chunk:
     /// LOWER-half world pos -> (facing, open). The worker can't see
     /// `Voxel::door_open` / `door_facing`, so the dispatcher bakes

@@ -1660,6 +1660,7 @@ mod tests {
                     |_, _| [0.0f32, 1.0f32],
                     |_, _| 0u32,
                     occ,
+                    |_| infengine_voxel::BlockId::AIR,
                     |_, _, _, _| false,
                 );
                 quads_special += subs.iter().map(|s| s.vertices.len() / 4).sum::<usize>();
