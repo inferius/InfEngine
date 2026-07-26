@@ -253,6 +253,23 @@ pub(crate) fn place_icebergs(
 pub(crate) fn place_disks(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
     let cs = CHUNK_SIZE as i32;
     let seed = ctx.effective_seed();
+    // W404: disks are a SURFACE feature (a few blocks around the
+    // floor line), but this ran for every chunk of the 24-tall
+    // column - each pass paying 9 sources x defs x count
+    // mc_floor_at column solves. The W310 bench showed 69.7
+    // ms/chunk, a top-two slice of the R25 slow-frontier report.
+    // Gate on the cheap preliminary surface: chunks whose Y range
+    // cannot touch the disk band skip everything. (MC runs
+    // decoration once per COLUMN region, so the per-Y replay is
+    // ours alone - same outcome, 24x less work.)
+    {
+        let ow = super::terrain::overworld_for(seed);
+        let prelim =
+            ow.preliminary_surface(coord[0] * cs + 8, coord[2] * cs + 8);
+        if origin[1] > prelim + 24 || origin[1] + cs < prelim - 24 {
+            return;
+        }
+    }
     for (di, def) in disk_defs().iter().enumerate() {
         let targets = target_ids(def.targets);
         let anchor_block = match def.gate {

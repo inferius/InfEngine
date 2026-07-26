@@ -255,6 +255,15 @@ fn rooms_for_source(
     let cs = CHUNK_SIZE as i32;
     let base_solid =
         |x: i32, y: i32, z: i32| -> bool { column_is_solid(ctx, x, y, z) };
+    // W404: rooms roll oy over the FULL world height, so ~60% of
+    // attempts start above the surface and still paid cold
+    // column-data builds just to fail the solid checks (the W310
+    // bench's 79.5 ms/chunk). The cheap preliminary surface kills
+    // those attempts for a noise sample - identical outcome (an
+    // above-ground origin can never grow a buried room), no column
+    // build. The rng ADVANCES exactly as before: try_monster_room
+    // is only skipped, its dice were already rolled by the caller.
+    let ow = super::terrain::overworld_for(seed);
     let mut rooms: Vec<RoomScratch> = Vec::new();
     let mut rng = SplitMix64::new(stream_seed(seed, scx, scz, SALT_MONSTER_ROOM));
     for _ in 0..ATTEMPTS_PER_CHUNK {
@@ -263,6 +272,9 @@ fn rooms_for_source(
         let ox = scx * cs + next_int(&mut rng, 16);
         let oz = scz * cs + next_int(&mut rng, 16);
         let oy = next_int(&mut rng, WORLD_TOP_Y);
+        if oy > ow.preliminary_surface(ox, oz) + 8 {
+            continue;
+        }
         let mut scratch = RoomScratch::new();
         if try_monster_room(&mut rng, ox, oy, oz, &base_solid, &mut scratch) {
             rooms.push(scratch);
