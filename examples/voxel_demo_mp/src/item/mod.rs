@@ -2707,7 +2707,21 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
 /// Resolve an item id to its definition. Returns `None` for unknown
 /// ids (including `0` / air).
 pub(crate) fn item_type(id: u16) -> Option<&'static ItemType> {
-    ITEM_TYPES.iter().find(|it| it.id == id)
+    // W397: O(1) LUT - same fix as block::block_type (the linear
+    // find over the ~1000-row registry sat under every tooltip,
+    // stack merge and drop tick).
+    static LUT: std::sync::OnceLock<Vec<Option<&'static ItemType>>> =
+        std::sync::OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let max =
+            ITEM_TYPES.iter().map(|it| it.id).max().unwrap_or(0) as usize;
+        let mut v: Vec<Option<&'static ItemType>> = vec![None; max + 1];
+        for it in ITEM_TYPES.iter() {
+            v[it.id as usize] = Some(it);
+        }
+        v
+    });
+    lut.get(id as usize).copied().flatten()
 }
 
 /// Max stack size for an item id. Falls back to `64` for unknown ids

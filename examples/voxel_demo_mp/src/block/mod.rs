@@ -64,7 +64,24 @@ pub(crate) use types::F_DEDICATED_RENDER;
 // ---------------------------------------------------------------
 
 pub(crate) fn block_type(id: u16) -> Option<&'static BlockType> {
-    BLOCK_TYPES.iter().find(|b| b.id == id)
+    // W397: O(1) LUT. The linear `.find` over ~1200 registry rows
+    // ran on EVERY lookup - and block_type sits under the mesher,
+    // collision, snapshots, random ticks and the liquid sim, so it
+    // fired thousands of times a frame (a fat slice of the R23
+    // random_tick / lava_emit / snapshot spikes). Built once,
+    // thread-safe for the worker pool.
+    static LUT: std::sync::OnceLock<Vec<Option<&'static BlockType>>> =
+        std::sync::OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let max =
+            BLOCK_TYPES.iter().map(|b| b.id).max().unwrap_or(0) as usize;
+        let mut v: Vec<Option<&'static BlockType>> = vec![None; max + 1];
+        for b in BLOCK_TYPES.iter() {
+            v[b.id as usize] = Some(b);
+        }
+        v
+    });
+    lut.get(id as usize).copied().flatten()
 }
 
 /// Bit-test helper: do all bits in `mask` light up for `block`?
