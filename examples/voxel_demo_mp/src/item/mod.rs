@@ -2316,6 +2316,8 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 673, name: "pink_dye", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
     // W145 - simple MC items whose textures already ship in the pack.
     ItemType { id: 674, name: "bone_meal", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    // (W414: id 674 is also BONE_MEAL_ID below - the bonemeal RMB
+    // action keys off it.)
     ItemType { id: 675, name: "brick", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
     ItemType { id: 676, name: "beetroot_soup", display: None, places: None, max_stack: 1, icon: None, category: ItemCategory::Food },
     // W145 - spawn eggs for every implemented mob kind. RMB on a
@@ -2706,6 +2708,9 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
 
 /// Resolve an item id to its definition. Returns `None` for unknown
 /// ids (including `0` / air).
+/// W414: bone meal item id (the BoneMealItem RMB growth action).
+pub(crate) const BONE_MEAL_ID: u16 = 674;
+
 pub(crate) fn item_type(id: u16) -> Option<&'static ItemType> {
     // W397: O(1) LUT - same fix as block::block_type (the linear
     // find over the ~1000-row registry sat under every tooltip,

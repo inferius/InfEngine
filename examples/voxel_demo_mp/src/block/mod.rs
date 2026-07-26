@@ -230,6 +230,11 @@ pub(crate) fn block_is_opaque(b: BlockId) -> bool {
 /// W366: any bed block - the legacy `bed` (35) + the 16 dyed beds
 /// (576..=591). They render as block entities (render::beds) and
 /// share the RMB sleep action.
+/// W414: sapling ids by registry name (bone meal + growth ticks).
+pub(crate) fn is_sapling_block(id: u16) -> bool {
+    block_type(id).is_some_and(|b| b.name.ends_with("_sapling"))
+}
+
 /// W411: slab ids by registry name (one id per material; the half
 /// lives in `stair_states` as a state byte, MC SlabBlock `type`).
 /// O(1) via the same OnceLock LUT pattern as `block_type`.

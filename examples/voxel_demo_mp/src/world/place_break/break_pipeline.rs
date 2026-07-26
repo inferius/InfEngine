@@ -447,6 +447,104 @@ pub(crate) fn apply_block_break(
 /// W294: hoe-RMB on dirt / grass tills FARMLAND (`HoeItem`
 /// TILLABLES). Host/offline applies + broadcasts like the shovel
 /// path; a pure client routes through the generic edit channel.
+/// W414: MC `BoneMealItem.useOn`. Crops jump 2-5 growth stages
+/// (`CropBlock.getBonemealAgeIncrease`), a sapling takes the 45%
+/// `advanceTree` roll, and a grass block sprinkles short grass +
+/// the odd flower on nearby grass-with-air cells (the per-biome
+/// flower list is a follow-up - poppy/dandelion stand in). Host /
+/// offline only - the growth edits fan out through the
+/// authoritative `edit::emit` funnel.
+pub(crate) fn apply_bonemeal(vx: &mut crate::Voxel, voxel: [i32; 3]) {
+    use crate::BlockId;
+    use crate::net::NetRole;
+    if !matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
+        return;
+    }
+    let id = vx.world.get(voxel).0;
+    // Small position+time hash - bonemeal rolls don't need a
+    // seeded stream, just per-use variety.
+    let h = |salt: i32| -> u32 {
+        let mut x = (voxel[0].wrapping_mul(73856093)
+            ^ voxel[1].wrapping_mul(83492791)
+            ^ voxel[2].wrapping_mul(19349663)
+            ^ salt.wrapping_mul(-1640531527))
+            as u32;
+        x ^= x >> 16;
+        x = x.wrapping_mul(0x7feb352d);
+        x ^ (x >> 15)
+    };
+    let time_salt = vx.day_time.to_bits() as i32;
+    let mut grew = false;
+    if crate::world::crop::next_stage(id).is_some() {
+        let steps = 2 + (h(time_salt) & 3);
+        let mut cur = id;
+        for _ in 0..steps {
+            match crate::world::crop::next_stage(cur) {
+                Some(n) => cur = n,
+                None => break,
+            }
+        }
+        if cur != id {
+            crate::world::edit::emit(vx, voxel, BlockId(cur));
+            grew = true;
+        }
+    } else if crate::block::is_sapling_block(id) {
+        // The meal is spent even when the 45% roll misses (MC).
+        grew = true;
+        if h(time_salt) % 100 < 45
+            && let Some(edits) =
+                crate::world::tree::grow_oak_edits(&vx.world, voxel)
+        {
+            for (p, b) in edits {
+                crate::world::edit::emit(vx, p, b);
+            }
+        }
+    } else if id == 3 {
+        for i in 0..24i32 {
+            let r = h(time_salt.wrapping_add(i));
+            let dx = (r % 7) as i32 - 3;
+            let dz = ((r >> 3) % 7) as i32 - 3;
+            let dy = ((r >> 6) % 3) as i32 - 1;
+            let p = [voxel[0] + dx, voxel[1] + dy, voxel[2] + dz];
+            let above = [p[0], p[1] + 1, p[2]];
+            if vx.world.get(p).0 == 3 && vx.world.get(above).is_air() {
+                let roll = (r >> 8) % 100;
+                let plant = if roll < 60 {
+                    crate::block::SHORT_GRASS_ID
+                } else if roll < 68 {
+                    crate::block::POPPY_ID
+                } else if roll < 76 {
+                    crate::block::DANDELION_ID
+                } else {
+                    continue;
+                };
+                crate::world::edit::emit(vx, above, BlockId(plant));
+                grew = true;
+            }
+        }
+    }
+    if !grew {
+        return;
+    }
+    if !vx.abilities.instabuild
+        && let Some((_, count)) = vx.inventory[vx.selected_slot].as_mut()
+    {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            vx.inventory[vx.selected_slot] = None;
+        }
+    }
+    // Green growth puff + the MC use sound (no synth fallback -
+    // silence beats a beep when the pack misses the event, W56.1).
+    vx.spawn_place_particles(voxel, [0.45, 0.85, 0.35]);
+    let c = [
+        voxel[0] as f32 + 0.5,
+        voxel[1] as f32 + 0.5,
+        voxel[2] as f32 + 0.5,
+    ];
+    vx.sfx_at("item/bonemeal/use", c, |_, _| {});
+}
+
 pub(crate) fn apply_hoe_till(vx: &mut crate::Voxel, voxel: [i32; 3]) {
     use crate::net::NetRole;
     use crate::{BlockId, EditMsg, Voxel};

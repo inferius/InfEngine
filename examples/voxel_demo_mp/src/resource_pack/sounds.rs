@@ -279,6 +279,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/creeper/fuse", "entity.creeper.primed"),
     ("mob/creeper/hurt", "entity.creeper.hurt"),
     ("mob/creeper/death", "entity.creeper.death"),
+    // W414: bone meal.
+    ("item/bonemeal/use", "item.bone_meal.use"),
     // W409: camel.
     ("mob/camel/say", "entity.camel.ambient"),
     ("mob/camel/hurt", "entity.camel.hurt"),

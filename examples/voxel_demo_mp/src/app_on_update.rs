@@ -1084,6 +1084,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             } else if predicted == RmbAction::TillFarmland {
                 // W294: hoe-RMB on dirt/grass -> farmland.
                 crate::world::place_break::apply_hoe_till(vx, hit.voxel);
+            } else if predicted == RmbAction::ApplyBonemeal {
+                // W414: bone meal growth.
+                crate::world::place_break::apply_bonemeal(vx, hit.voxel);
             } else if predicted == RmbAction::OpenFurnace {
                 // W47.13i: furnace open + mint + client notify.
                 crate::world::place_break::open_furnace(vx, hit.voxel);

@@ -48,7 +48,7 @@ pub(crate) mod rail_place;
 mod rmb_use;
 
 pub(crate) use break_pipeline::{
-    apply_block_break, apply_hoe_till, apply_shovel_grass_path,
+    apply_block_break, apply_bonemeal, apply_hoe_till, apply_shovel_grass_path,
 };
 pub(crate) use combat::apply_combat;
 pub(crate) use containers::{
@@ -121,6 +121,8 @@ pub enum RmbAction {
     PathGrass,
     /// W294: hoe right-click on dirt / grass - tills farmland.
     TillFarmland,
+    /// W414: bone meal on a growable (crop / sapling / grass).
+    ApplyBonemeal,
     /// Right-click on a furnace voxel - opens the furnace UI.
     OpenFurnace,
     /// Right-click on a chest voxel - opens the chest UI.
@@ -219,6 +221,15 @@ pub fn classify_rmb_action(
             .unwrap_or(false)
     {
         return RmbAction::TillFarmland;
+    }
+    // 1c. W414: bone meal on a growable - immature crop, sapling,
+    // or a grass block (MC BoneMealItem.useOn).
+    if held_id == Some(crate::item::BONE_MEAL_ID)
+        && (crate::world::crop::next_stage(target_id).is_some()
+            || crate::block::is_sapling_block(target_id)
+            || target_id == 3)
+    {
+        return RmbAction::ApplyBonemeal;
     }
     // 2. Containers + bed are target-only - the held block does
     //    not matter for these. A shovel on a furnace still opens
