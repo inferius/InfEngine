@@ -533,6 +533,9 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 573, block: "mangrove_door",    top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 574, block: "cherry_door",      top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 575, block: "warped_door",      top: "", bottom: "", sides: "" },
+    // W402: bell - the stand resolves from bell_floor.json via the
+    // W401 variant cache; the swinging body stays a block entity.
+    BlockNameMap { infengine_id: 966, block: "bell", top: "", bottom: "", sides: "" },
 ];
 
 /// Look up the (block, top, bottom, sides) MC names for an infengine
@@ -913,6 +916,7 @@ mod tests {
             // W270: bastion blackstone/quartz shape blocks (same rule).
             839, 840, 841, 842, 843,
             543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
+            966, // W402: bell - blockstate name, textures via JSON refs (planks/stone)
             568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)
             154, 155, 156, 157, 158, 159, 160, 161, // gold/diamond tools

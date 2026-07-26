@@ -765,6 +765,31 @@ pub(crate) fn mesh_chunk_in_worker(
                 world_origin[2] + lz,
             ];
             let light = halo.lookup(coord, wp);
+            // W402: the stand resolves from bell_floor.json via the
+            // W401 variant cache (attachment=floor; per-bell facing
+            // is a follow-up once bell state is recorded). The
+            // hand-coded stand covers only the pack-less dev run.
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("attachment", "floor")
+                .with("facing", "north");
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
             resource_pack::element_mesh::emit_bell_stand(
                 verts, idxs, voxel_origin, pack, light,
             );
@@ -856,6 +881,40 @@ pub(crate) fn mesh_chunk_in_worker(
             let (facing, open) =
                 doors.get(&wp).copied().unwrap_or((3, false));
             let light = halo.lookup(coord, wp);
+            // W402: blockstate-variant path (facing/half/open from
+            // the trapdoor JSON).
+            let dir = ["east", "south", "west", "north"]
+                [(facing & 3) as usize];
+            let half = if facing & crate::block::door::TRAPDOOR_TOP_BIT
+                != 0
+            {
+                "top"
+            } else {
+                "bottom"
+            };
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("facing", dir)
+                .with("half", half)
+                .with("open", if open { "true" } else { "false" })
+                .with("powered", "false");
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
             resource_pack::element_mesh::emit_trapdoor(
                 verts, idxs, voxel_origin, block.0, facing, open, pack,
                 light,
@@ -989,6 +1048,36 @@ pub(crate) fn mesh_chunk_in_worker(
             let (facing, open) =
                 doors.get(&lower).copied().unwrap_or((0, false));
             let light = halo.lookup(coord, wp);
+            // W402: blockstate-variant path (facing/half/hinge/open
+            // straight from the door JSON; MC behaviour is the
+            // default per the R24 mandate). Hand-coded panel stays
+            // only for the pack-less dev run.
+            let dir = ["east", "south", "west", "north"]
+                [(facing & 3) as usize];
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("facing", dir)
+                .with("half", if is_upper { "upper" } else { "lower" })
+                .with("hinge", "left")
+                .with("open", if open { "true" } else { "false" })
+                .with("powered", "false");
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
             resource_pack::element_mesh::emit_door_panel(
                 verts, idxs, voxel_origin, block.0, is_upper, facing,
                 open, pack, light,
