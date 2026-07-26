@@ -144,6 +144,77 @@ impl CubeFace {
 /// pane top strips are near-uniform wood/stone so the error is
 /// invisible; revisit if a y-rotated model with a directional top
 /// texture shows up.
+/// W401: rotate a resolved model around X in 90-degree steps (the
+/// blockstate variant `x` field - upside-down stairs/trapdoors use
+/// x=180, up/down-facing dispenser-likes x=90/270). MC applies x
+/// BEFORE y; `resolve_for_cache` composes them in that order.
+pub(crate) fn rotate_model_x(model: &BlockModel, x: u16) -> BlockModel {
+    let steps = ((x / 90) % 4) as usize;
+    if steps == 0 {
+        return model.clone();
+    }
+    let mut out = model.clone();
+    for el in &mut out.elements {
+        for _ in 0..steps {
+            rotate_element_x_90(el);
+        }
+    }
+    out
+}
+
+/// One +90-degree step around X: point (y, z) -> (z, 16 - y); the
+/// face that pointed up now points north (down->south->up->north).
+fn rotate_element_x_90(el: &mut ModelElement) {
+    let rot = |y: f32, z: f32| -> (f32, f32) { (z, 16.0 - y) };
+    let (ay, az) = rot(el.from[1], el.from[2]);
+    let (by, bz) = rot(el.to[1], el.to[2]);
+    el.from = [el.from[0], ay.min(by), az.min(bz)];
+    el.to = [el.to[0], ay.max(by), az.max(bz)];
+    if let Some(r) = el.rotation.as_mut() {
+        let (oy, oz) = rot(r.origin[1], r.origin[2]);
+        r.origin = [r.origin[0], oy, oz];
+        // Conjugating by the X quarter turn: Y maps to -Z, Z maps
+        // to Y (see rotate_element_90 for the Y-turn analogue).
+        match r.axis {
+            RotationAxis::Y => {
+                r.axis = RotationAxis::Z;
+                r.angle_deg = -r.angle_deg;
+            }
+            RotationAxis::Z => r.axis = RotationAxis::Y,
+            RotationAxis::X => {}
+        }
+    }
+    let f = std::mem::take(&mut el.faces);
+    el.faces = ElementFaces {
+        down: f.south,
+        south: f.up,
+        up: f.north,
+        north: f.down,
+        east: f.east,
+        west: f.west,
+    };
+    for face in [
+        &mut el.faces.down,
+        &mut el.faces.up,
+        &mut el.faces.north,
+        &mut el.faces.south,
+        &mut el.faces.west,
+        &mut el.faces.east,
+    ] {
+        if let Some(mf) = face.as_mut()
+            && let Some(cf) = mf.cullface
+        {
+            mf.cullface = Some(match cf {
+                CubeFace::Down => CubeFace::South,
+                CubeFace::South => CubeFace::Up,
+                CubeFace::Up => CubeFace::North,
+                CubeFace::North => CubeFace::Down,
+                other => other,
+            });
+        }
+    }
+}
+
 pub(crate) fn rotate_model_y(model: &BlockModel, y: u16) -> BlockModel {
     let steps = ((y / 90) % 4) as usize;
     if steps == 0 {

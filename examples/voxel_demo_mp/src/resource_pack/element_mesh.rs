@@ -842,6 +842,36 @@ pub(crate) fn emit_block_elements(
     let Some(model) = model_for_block_with_neighbors(block_id, pack, &neighbors) else {
         return false;
     };
+    emit_resolved_model(
+        &model,
+        block_id,
+        voxel_origin,
+        vertices,
+        indices,
+        pack,
+        light_at_neighbour,
+        anim_id_for_face,
+        neighbour_opaque,
+    )
+}
+
+/// W401: emit a model the CALLER already resolved (state-aware
+/// variant picks from `model_for_block_with_props`). Split out of
+/// `emit_block_elements` so oriented blocks route their engine
+/// state through the blockstate JSON instead of hand-coded
+/// geometry.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_resolved_model(
+    model: &super::models::BlockModel,
+    block_id: u16,
+    voxel_origin: Vec3,
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    pack: &ResourcePack,
+    light_at_neighbour: impl Fn([i8; 3]) -> [f32; 2],
+    anim_id_for_face: impl Fn(&str) -> u32,
+    neighbour_opaque: impl Fn([i8; 3]) -> bool,
+) -> bool {
 
     // W43.1: record vertex count before emission. If no vertex is
     // added across all elements (all faces culled or texture miss),

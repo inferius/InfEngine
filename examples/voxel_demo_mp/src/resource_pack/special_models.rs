@@ -56,6 +56,10 @@ use super::{blockstates, models, name_map};
 pub(crate) enum ResolvedBlockState {
     /// Single model for all states (variant-form blocks: stone, oak_log, ...).
     Single(BlockModel),
+    /// W401: state-keyed variants, PRE-ROTATED (x then y, MC order)
+    /// at cache-build time. Runtime lookup is a linear key match -
+    /// variant lists are 4-16 entries.
+    Variants(Vec<(blockstates::BlockStateKey, BlockModel)>),
     /// Multipart block (fences, walls, panes). Each entry is an
     /// (optional condition, model) pair. `None` condition = unconditional
     /// (always applied). The mesher merges matching parts in-memory.
@@ -91,6 +95,17 @@ pub(crate) fn build_block_model_cache(pack: &mut super::ResourcePack) {
                         elements = m.elements.len(),
                         textures = m.textures.len(),
                         "W46.11 cache: torch-family resolved to Single(JSON)",
+                    );
+                }
+            }
+            ResolvedBlockState::Variants(vars) => {
+                single_count += 1;
+                if matches!(id, 10 | 50 | 51 | 52 | 53) {
+                    tracing::info!(
+                        block_id = id,
+                        block_name = entry.block,
+                        variants = vars.len(),
+                        "W401 cache: resolved to state Variants(JSON)",
                     );
                 }
             }
@@ -155,6 +170,26 @@ fn resolve_for_cache(pack: &super::ResourcePack, id: u16) -> ResolvedBlockState 
         );
         return resolve_from_special_table(id);
     };
+
+    // W401: multi-key variant blockstates (stairs, doors, gates,
+    // trapdoors, ...) keep EVERY variant with its state key, each
+    // pre-rotated - "full state-matching deferred" ends here. The
+    // first entry stays the legacy default for prop-less callers.
+    if !state.is_multipart() && state.variants.len() > 1 {
+        let mut vars: Vec<(blockstates::BlockStateKey, BlockModel)> =
+            Vec::with_capacity(state.variants.len());
+        for (key, mref) in &state.variants {
+            if let Some(m) = models::load_model(pack, &mref.model) {
+                let m = models::rotate_model_x(&m, mref.x);
+                let m = models::rotate_model_y(&m, mref.y);
+                vars.push((key.clone(), m));
+            }
+        }
+        if !vars.is_empty() {
+            return ResolvedBlockState::Variants(vars);
+        }
+        return resolve_from_special_table(id);
+    }
 
     if state.is_multipart() {
         // Pre-load every part's model.
@@ -534,6 +569,26 @@ pub(crate) fn resolve_block_model(
     models::load_model(pack, &model_ref.model)
 }
 
+/// W401: state-aware model lookup - picks the variant whose key
+/// matches `props` (pre-rotated at cache build). Falls back to the
+/// first variant, then to the prop-less paths. This is the
+/// universal replacement for the per-block hand-coded emitters:
+/// callers translate their engine state bytes into MC props and
+/// every orientation comes straight from the blockstate JSON.
+pub(crate) fn model_for_block_with_props(
+    id: u16,
+    pack: &super::ResourcePack,
+    props: &blockstates::BlockStateProps,
+) -> Option<BlockModel> {
+    if let Some(ResolvedBlockState::Variants(vars)) = pack.block_models.get(&id) {
+        if let Some((_, m)) = vars.iter().find(|(k, _)| k.matches(props)) {
+            return Some(m.clone());
+        }
+        return vars.first().map(|(_, m)| m.clone());
+    }
+    model_for_block(id, pack)
+}
+
 /// Convenience: resolve a block model (no neighbor awareness).
 ///
 /// W39.2: was the primary path. W41.1: delegates to the cache
@@ -556,6 +611,9 @@ pub(crate) fn model_for_block(id: u16, pack: &super::ResourcePack) -> Option<Blo
     if let Some(entry) = pack.block_models.get(&id) {
         match entry {
             ResolvedBlockState::Single(m) => return Some(m.clone()),
+            ResolvedBlockState::Variants(vars) => {
+                return vars.first().map(|(_, m)| m.clone());
+            }
             ResolvedBlockState::Multipart(parts) => {
                 let mut elements = Vec::new();
                 let mut textures = std::collections::HashMap::new();
@@ -596,6 +654,9 @@ pub(crate) fn resolve_block_model_with_neighbors(
     match pack.block_models.get(&id)? {
         ResolvedBlockState::None => None,
         ResolvedBlockState::Single(m) => Some(m.clone()),
+        ResolvedBlockState::Variants(vars) => {
+            vars.first().map(|(_, m)| m.clone())
+        }
         ResolvedBlockState::Multipart(parts) => {
             // Merge all matching parts in-memory - no disk I/O.
             let mut elements = Vec::new();

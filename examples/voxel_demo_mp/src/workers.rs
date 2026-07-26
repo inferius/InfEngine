@@ -802,6 +802,42 @@ pub(crate) fn mesh_chunk_in_worker(
             ];
             if let Some(state) = stairs.get(&wp).copied() {
                 let light = halo.lookup(coord, wp);
+                // W401: universal path - engine state -> MC props ->
+                // pre-rotated blockstate variant. The hand-coded
+                // emit_stairs stays as the pack-less fallback.
+                let dir = ["east", "south", "west", "north"]
+                    [(state & 3) as usize];
+                let half = if state
+                    & crate::block::door::TRAPDOOR_TOP_BIT
+                    != 0
+                {
+                    "top"
+                } else {
+                    "bottom"
+                };
+                let props =
+                    resource_pack::blockstates::BlockStateProps::new()
+                        .with("facing", dir)
+                        .with("half", half)
+                        .with("shape", "straight");
+                if let Some(m) =
+                    resource_pack::special_models::model_for_block_with_props(
+                        block.0, pack, &props,
+                    )
+                    && resource_pack::element_mesh::emit_resolved_model(
+                        &m,
+                        block.0,
+                        voxel_origin,
+                        verts,
+                        idxs,
+                        pack,
+                        |_| light,
+                        |_| 0,
+                        |_| false,
+                    )
+                {
+                    return true;
+                }
                 resource_pack::element_mesh::emit_stairs(
                     verts, idxs, voxel_origin, block.0, state, pack, light,
                 );
@@ -869,6 +905,34 @@ pub(crate) fn mesh_chunk_in_worker(
             let (facing, open) =
                 doors.get(&wp).copied().unwrap_or((0, false));
             let light = halo.lookup(coord, wp);
+            // W401: blockstate-variant path first (facing/open/
+            // in_wall straight from the JSON - the R23 gate-90deg
+            // report dies with the data, not per-block code).
+            let dir = ["east", "south", "west", "north"]
+                [(facing & 3) as usize];
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("facing", dir)
+                .with("open", if open { "true" } else { "false" })
+                .with("in_wall", "false")
+                .with("powered", "false");
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
             resource_pack::element_mesh::emit_fence_gate(
                 verts, idxs, voxel_origin, block.0, facing, open, pack,
                 light,
