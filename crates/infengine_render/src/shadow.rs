@@ -306,8 +306,29 @@ impl ShadowPass {
     ) {
         let dir = light_dir.normalize_or_zero();
         let dir = if dir == Vec3::ZERO { Vec3::Y } else { dir };
-        let eye = center + dir * depth;
         let up = if dir.abs().y > 0.9 { Vec3::Z } else { Vec3::Y };
+        // W398: texel-snap the ortho anchor. An unsnapped center
+        // slides the shadow texel grid continuously with the
+        // camera, so flat ground shows a creeping diagonal stair
+        // pattern that "assembles" as you move (the R23 arrow-
+        // shadow report). Transform the anchor into light space,
+        // floor it to whole shadow texels, and transform back -
+        // the texel grid stays put while the frustum pans.
+        let texel_world = (half_size * 2.0) / SHADOW_MAP_SIZE as f32;
+        let center = if texel_world > 0.0 {
+            let light_view =
+                Mat4::look_at_rh(dir * depth, Vec3::ZERO, up);
+            let c_ls = light_view.transform_point3(center);
+            let snapped = Vec3::new(
+                (c_ls.x / texel_world).floor() * texel_world,
+                (c_ls.y / texel_world).floor() * texel_world,
+                c_ls.z,
+            );
+            light_view.inverse().transform_point3(snapped)
+        } else {
+            center
+        };
+        let eye = center + dir * depth;
         let view = Mat4::look_at_rh(eye, center, up);
         let proj = Mat4::orthographic_rh(
             -half_size,
