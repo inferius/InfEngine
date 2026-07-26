@@ -399,6 +399,13 @@ pub(crate) fn dispatch_as(
                     &mut local_lines,
                 );
             }
+            "fetch" => {
+                handled_locally |= cmds_host::cmd_fetch(
+                    voxel,
+                    arg,
+                    &mut local_lines,
+                );
+            }
             "randomtp" | "rtp" => {
                 handled_locally |= cmds_misc::cmd_randomtp(
                     voxel,

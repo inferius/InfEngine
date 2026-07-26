@@ -121,6 +121,17 @@ pub(crate) enum MobKind {
     Panda = 49,
 }
 
+/// W408: highest assigned kind id. `from_u8` is contiguous over
+/// `0..=MOB_KIND_MAX`; bytes above collapse to Sheep.
+pub(crate) const MOB_KIND_MAX: u8 = MobKind::Panda as u8;
+
+/// W408: reverse `MobKind::name()` lookup for chat commands
+/// (`/summon`, `/spawnmob`). Case-sensitive on the lowercase
+/// registry names; callers lowercase their input.
+pub(crate) fn kind_by_name(name: &str) -> Option<u8> {
+    (0..=MOB_KIND_MAX).find(|&k| MobKind::from_u8(k).name() == name)
+}
+
 #[allow(dead_code)] // Helpers are exercised by tests + by H.2 + H.3.
 impl MobKind {
     /// Round-trip from the raw wire / save byte. Unknown values

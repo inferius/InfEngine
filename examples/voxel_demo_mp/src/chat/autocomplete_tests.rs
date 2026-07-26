@@ -72,15 +72,9 @@ fn give_second_arg_is_count_hint() {
     assert!(hints.contains(&"<count>"), "expected <count> hint, got: {hints:?}");
 }
 
-#[test]
-fn gamemode_arg_lists_survival_creative() {
-    let r = complete("/gamemode ", 10, 4, &CompletionContext::default());
-    let names: Vec<&str> = r.iter().map(|c| c.label.as_str()).collect();
-    assert!(names.contains(&"survival"));
-    assert!(names.contains(&"creative"));
-    assert!(names.contains(&"0"));
-    assert!(names.contains(&"1"));
-}
+// W408: the old gamemode_arg_lists_survival_creative pinned the
+// "0"/"1" suggestions; MC's GameModeCommand suggests mode names
+// only, covered by gamemode_suggests_mode_names_only below.
 
 #[test]
 fn setblock_fourth_arg_lists_block_names() {
@@ -172,9 +166,37 @@ fn time_arg_lists_kinds() {
 fn summon_arg_lists_mobs() {
     let r = complete("/summon ", 8, 4, &CompletionContext::default());
     let names: Vec<&str> = r.iter().map(|c| c.label.as_str()).collect();
-    for m in ["zombie", "skeleton", "creeper"] {
+    // W408: the tree resolves EVERY registered kind, so late
+    // additions (panda, goat, ...) appear without touching the
+    // grammar table.
+    for m in ["zombie", "skeleton", "creeper", "panda", "goat"] {
         assert!(names.contains(&m), "missing mob {m}");
     }
+    assert_eq!(
+        names.len(),
+        crate::mob::kinds::MOB_KIND_MAX as usize + 1,
+        "summon should offer every MobKind"
+    );
+}
+
+#[test]
+fn gamemode_suggests_mode_names_only() {
+    // W408: MC's GameModeCommand suggests names, not numbers (the
+    // parser still takes 0/1).
+    let r = complete("/gamemode ", 10, 4, &CompletionContext::default());
+    let names: Vec<&str> = r.iter().map(|c| c.label.as_str()).collect();
+    assert!(names.contains(&"survival"));
+    assert!(names.contains(&"creative"));
+    assert!(!names.contains(&"0"));
+    assert!(!names.contains(&"1"));
+}
+
+#[test]
+fn fetch_arg_lists_player_names() {
+    let ctx = ctx_with(&["Alice"]);
+    let r = complete("/fetch ", 7, 4, &ctx);
+    let names: Vec<&str> = r.iter().map(|c| c.label.as_str()).collect();
+    assert!(names.contains(&"Alice"));
 }
 
 #[test]

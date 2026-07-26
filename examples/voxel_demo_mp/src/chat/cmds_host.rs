@@ -13,9 +13,8 @@ use crate::Voxel;
 use crate::block::{BLOCK_TYPES, is_tool_block};
 use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
-    DAY_LENGTH_S, KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SHEEP, KIND_SKELETON,
-    KIND_SPIDER, KIND_ZOMBIE, MOB_HIT_DAMAGE, MOB_MAX_HEALTH, MobState,
-    PLAYER_MAX_HEALTH, ZOMBIE_MAX_HEALTH,
+    DAY_LENGTH_S, KIND_ZOMBIE, MOB_HIT_DAMAGE, MobState, PLAYER_MAX_HEALTH,
+    ZOMBIE_MAX_HEALTH,
 };
 
 /// `/motd`. Print the MOTD file next to the binary (if any).
@@ -260,42 +259,35 @@ pub(crate) fn cmd_horde(
 
 /// `/spawnmob [zombie|chicken|pig|sheep|cow|skeleton|spider]`. Spawn one
 /// mob in front of the player (host / offline only).
-pub(crate) fn cmd_spawnmob(
+/// W408: shared spawn for `/summon` + `/spawnmob`. Resolves the
+/// kind by its `MobKind::name()` (EVERY registered kind, not a
+/// hard-coded subset - the R24 rule) and spawns it a few blocks in
+/// front of the player with its MC max health
+/// (`initial_health_for`).
+fn spawn_named_mob(
     voxel: &mut Voxel,
     arg: &str,
     lines: &mut Vec<String>,
+    verb: &str,
 ) -> bool {
-    // Host-only: spawn a sheep or zombie
-    // a few blocks in front of the player.
-    // Clients can't run this since the
-    // server owns mob state.
+    // Host-only: the server owns mob state. Offline counts - the
+    // local player IS the host there.
     if !matches!(
         voxel.net,
         NetRole::Server { .. } | NetRole::Offline
     ) {
-        lines.push("/spawnmob is host-only.".to_string());
+        lines.push(format!("{verb} is host-only."));
         return true;
     }
-    let kind = if arg.eq_ignore_ascii_case("zombie") {
-        KIND_ZOMBIE
-    } else if arg.eq_ignore_ascii_case("chicken") {
-        KIND_CHICKEN
-    } else if arg.eq_ignore_ascii_case("pig") {
-        KIND_PIG
-    } else if arg.eq_ignore_ascii_case("cow") {
-        KIND_COW
-    } else if arg.eq_ignore_ascii_case("skeleton") {
-        KIND_SKELETON
-    } else if arg.eq_ignore_ascii_case("spider") {
-        KIND_SPIDER
-    } else if arg.eq_ignore_ascii_case("sheep") {
-        KIND_SHEEP
-    } else {
-        // W101: an unknown kind used to silently spawn a sheep
-        // (e.g. `/spawnmob creeper` -> sheep). Report it instead.
-        lines.push(format!(
-            "/spawnmob: unknown mob '{arg}'. Valid: zombie, skeleton, spider, cow, pig, sheep, chicken."
-        ));
+    let arg = arg.trim();
+    if arg.is_empty() {
+        lines.push(format!("Usage: {verb} <mob>"));
+        return true;
+    }
+    let Some(kind) =
+        crate::mob::kinds::kind_by_name(&arg.to_lowercase())
+    else {
+        lines.push(format!("{verb}: unknown mob '{arg}'."));
         return true;
     };
     let fwd_h = Vec3::new(
@@ -308,7 +300,7 @@ pub(crate) fn cmd_spawnmob(
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
     let pos = [spawn_at.x, spawn_at.y, spawn_at.z];
-    // /spawnmob is a command-spawn - mark persistent.
+    let hp = crate::mob::spawn::initial_health_for(kind);
     let mut mob = MobState::new_natural(
         id,
         kind,
@@ -316,18 +308,11 @@ pub(crate) fn cmd_spawnmob(
         pos,
         0.0,
         (voxel.day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-        if kind == KIND_ZOMBIE {
-            ZOMBIE_MAX_HEALTH
-        } else {
-            MOB_MAX_HEALTH
-        },
+        hp,
     );
+    // Command spawns are persistent (MC summoned mobs carry
+    // PersistenceRequired).
     mob.persistent = true;
-    let initial_hp = if kind == KIND_ZOMBIE {
-        ZOMBIE_MAX_HEALTH
-    } else {
-        MOB_MAX_HEALTH
-    } as u8;
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
         id,
@@ -336,7 +321,7 @@ pub(crate) fn cmd_spawnmob(
             kind,
             pos,
             yaw: 0.0,
-            health: initial_hp,
+            health: hp as u8,
             head_yaw: 0.0,
             head_pitch: 0.0,
             baby: false,
@@ -344,13 +329,17 @@ pub(crate) fn cmd_spawnmob(
     );
     lines.push(format!(
         "Spawned {}.",
-        if kind == KIND_ZOMBIE {
-            "zombie"
-        } else {
-            "sheep"
-        }
+        crate::mob::kinds::MobKind::from_u8(kind).name()
     ));
     true
+}
+
+pub(crate) fn cmd_spawnmob(
+    voxel: &mut Voxel,
+    arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
+    spawn_named_mob(voxel, arg, lines, "/spawnmob")
 }
 
 /// `/mobcap [n]`. Read or set the per-host mob cap (0..=64).
@@ -474,23 +463,31 @@ pub(crate) fn cmd_healall(
     true
 }
 
-/// `/summon <name>`. Host-only: yank a peer to the host's pose.
+/// W408: MC semantics - `/summon <entity>` spawns the entity in
+/// front of the player (SummonCommand.java). The old "yank a peer
+/// to the host" behaviour lives on as the non-MC `/fetch` below.
 pub(crate) fn cmd_summon(
     voxel: &mut Voxel,
     arg: &str,
     lines: &mut Vec<String>,
 ) -> bool {
-    // Host-only: yank a remote peer to
-    // the host's pose by sending them a
-    // vx.teleport. Silently ignored on
-    // any other role to keep clients from
-    // grabbing each other.
+    spawn_named_mob(voxel, arg, lines, "/summon")
+}
+
+/// W408: `/fetch <player>` - the pre-W408 /summon: pull a remote
+/// peer to the host's pose via vx.teleport. Not an MC command, so
+/// it moved off the /summon name.
+pub(crate) fn cmd_fetch(
+    voxel: &mut Voxel,
+    arg: &str,
+    lines: &mut Vec<String>,
+) -> bool {
     if !matches!(voxel.net, NetRole::Server { .. }) {
-        lines.push("/summon is host-only.".to_string());
+        lines.push("/fetch is host-only.".to_string());
         return false;
     }
     if arg.is_empty() {
-        lines.push("Usage: /summon <name>".to_string());
+        lines.push("Usage: /fetch <player>".to_string());
         return false;
     }
     let target_id = voxel
@@ -500,7 +497,7 @@ pub(crate) fn cmd_summon(
         .map(|(id, _)| *id);
     if let Some(id) = target_id {
         if id == 0 {
-            lines.push("Can't summon yourvoxel.".to_string());
+            lines.push("Can't fetch yourself.".to_string());
         } else {
             let msg = TeleportMsg {
                 pos: [
@@ -521,7 +518,7 @@ pub(crate) fn cmd_summon(
                     buf,
                 );
             }
-            lines.push(format!("Summoned {arg}."));
+            lines.push(format!("Fetched {arg}."));
         }
     } else {
         lines.push(format!("No player named {arg}."));

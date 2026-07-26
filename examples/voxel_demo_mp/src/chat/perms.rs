@@ -165,6 +165,7 @@ pub(crate) const CMD_META: &[CmdMeta] = &[
     CmdMeta { name: "explode", level: 3 },
     CmdMeta { name: "tree", level: 3 },
     CmdMeta { name: "summon", level: 3 },
+    CmdMeta { name: "fetch", level: 3 },
     CmdMeta { name: "spawnmob", level: 3 },
     CmdMeta { name: "killmobs", level: 3 },
     CmdMeta { name: "horde", level: 3 },

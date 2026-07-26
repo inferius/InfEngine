@@ -58,7 +58,7 @@ pub(crate) use kinds::{
 pub(crate) use raycast::raycast_mob;
 pub(crate) use state::{
     MOB_ATTACK_REACH, MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE,
-    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH,
+    MOB_LUNGE_TIME, MobState, ZOMBIE_MAX_HEALTH,
 };
 
 #[cfg(test)]

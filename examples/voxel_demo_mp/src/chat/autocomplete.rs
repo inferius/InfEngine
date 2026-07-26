@@ -181,8 +181,10 @@ pub(crate) fn build_tree() -> CommandNode {
     }
 
     // /gamemode <mode> [player]  +  /gm alias.
+    // W408: suggest mode NAMES only, like MC's GameModeCommand
+    // (the parser still accepts 0/1/s/c spellings).
     {
-        let modes: Vec<CommandNode> = ["survival", "creative", "0", "1"]
+        let modes: Vec<CommandNode> = ["survival", "creative"]
             .iter()
             .map(|m| {
                 let player = CommandNode::typed("<player>", ArgKind::Player, 2);
@@ -290,16 +292,29 @@ pub(crate) fn build_tree() -> CommandNode {
         grammar_verbs.insert("time".into());
     }
 
-    // /summon <kind>  +  /spawnmob <kind>
+    // /summon <kind>  +  /spawnmob <kind>. W408: every registered
+    // MobKind (resolved from the registry, not a hard-coded
+    // subset - matches what spawn_named_mob accepts).
     {
-        let kinds: Vec<CommandNode> = ["zombie", "skeleton", "creeper", "pig", "cow", "chicken", "sheep"]
-            .iter()
-            .map(|k| CommandNode::literal(k, 3))
+        let kinds: Vec<CommandNode> = (0..=crate::mob::kinds::MOB_KIND_MAX)
+            .map(|k| {
+                CommandNode::literal(
+                    crate::mob::kinds::MobKind::from_u8(k).name(),
+                    3,
+                )
+            })
             .collect();
         root.children.push(CommandNode::literal("summon", 3).with_all(kinds.clone()));
         root.children.push(CommandNode::literal("spawnmob", 3).with_all(kinds));
         grammar_verbs.insert("summon".into());
         grammar_verbs.insert("spawnmob".into());
+    }
+
+    // /fetch <player> - the W408 rename of the old yank-summon.
+    {
+        let player = CommandNode::typed("<player>", ArgKind::Player, 3);
+        root.children.push(CommandNode::literal("fetch", 3).with(player));
+        grammar_verbs.insert("fetch".into());
     }
 
     // /whisper <player> <message>  +  /w / /tell / /msg aliases.
