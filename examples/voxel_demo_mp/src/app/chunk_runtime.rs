@@ -141,6 +141,8 @@ impl Voxel {
         self.crafting_table_held = None;
         // W171: stonecutter is client-side; drop its input on reset.
         self.stonecutter_open = None;
+        self.smithing_open = None;
+        self.smithing_slots = [None; 3];
         self.trade_open = None;
         self.mob_professions.clear();
         self.stonecutter_input = None;
@@ -245,6 +247,23 @@ impl Voxel {
             && let Some(p) = pos
         {
             self.spawn_drop(BlockId(id), p);
+        }
+    }
+
+    /// W410: close the smithing UI. Returns every slot stack to the
+    /// inventory (floor drop at the table on overflow).
+    pub(crate) fn close_smithing_ui(&mut self) {
+        let pos = self.smithing_open.take();
+        let slots = std::mem::take(&mut self.smithing_slots);
+        for (id, c) in slots.into_iter().flatten() {
+            if !crate::inventory::inv_pickup_n(
+                &mut self.inventory,
+                BlockId(id),
+                c,
+            ) && let Some(p) = pos
+            {
+                self.spawn_drop(BlockId(id), p);
+            }
         }
     }
 

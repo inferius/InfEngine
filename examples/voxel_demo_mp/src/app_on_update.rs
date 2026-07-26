@@ -236,6 +236,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         vx.close_brewing_ui();
                     } else if vx.stonecutter_open.is_some() {
                         vx.close_stonecutter_ui();
+                    } else if vx.smithing_open.is_some() {
+                        vx.close_smithing_ui();
                     } else if vx.trade_open.is_some() {
                         vx.trade_open = None;
                     } else if vx.creative_tab.open {
@@ -1104,6 +1106,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             } else if predicted == RmbAction::OpenStonecutter {
                 // W171: stonecutter - open the cut-select UI.
                 crate::world::place_break::open_stonecutter(vx, hit.voxel);
+            } else if predicted == RmbAction::OpenSmithingTable {
+                // W410: smithing table - open the upgrade UI.
+                crate::world::place_break::open_smithing_table(vx, hit.voxel);
             } else if predicted == RmbAction::ToggleDoor {
                 // W61.2 / W61.3: toggle door + trapdoor open
                 // state. The render path swaps the model on the

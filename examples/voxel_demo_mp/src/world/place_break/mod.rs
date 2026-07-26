@@ -52,7 +52,8 @@ pub(crate) use break_pipeline::{
 };
 pub(crate) use combat::apply_combat;
 pub(crate) use containers::{
-    open_brewing_stand, open_chest, open_crafting_table, open_furnace, open_stonecutter,
+    open_brewing_stand, open_chest, open_crafting_table, open_furnace, open_smithing_table,
+    open_stonecutter,
     play_note_block, try_sleep_bed,
 };
 pub(crate) use mining_tick::tick_mining;
@@ -132,6 +133,8 @@ pub enum RmbAction {
     OpenBrewingStand,
     /// W171: right-click on a stonecutter - opens the cut-select UI.
     OpenStonecutter,
+    /// W410: right-click on a smithing table - opens the upgrade UI.
+    OpenSmithingTable,
     /// W61.2: right-click on a door / trapdoor - toggles open
     /// state.
     ToggleDoor,
@@ -245,6 +248,10 @@ pub fn classify_rmb_action(
     // W171: stonecutter opens the cut-select UI.
     if target_id == crate::block::STONECUTTER_ID {
         return RmbAction::OpenStonecutter;
+    }
+    // W410: smithing table opens the upgrade UI.
+    if target_id == crate::block::SMITHING_TABLE_ID {
+        return RmbAction::OpenSmithingTable;
     }
     // W61.2: door / trapdoor toggles open state.
     if crate::block::door::is_door_block(target_id)

@@ -98,6 +98,20 @@ pub(crate) fn open_stonecutter(vx: &mut crate::Voxel, pos: [i32; 3]) {
     vx.furnace_open = None;
     vx.crafting_table_open = None;
     vx.brewing_open = None;
+    vx.smithing_open = None;
+    vx.lmb_pending = false;
+    vx.rmb_pending = false;
+}
+
+/// W410: RMB on a smithing table. Client-side session UI like the
+/// stonecutter - the upgrade is a pure inventory transform.
+pub(crate) fn open_smithing_table(vx: &mut crate::Voxel, pos: [i32; 3]) {
+    vx.smithing_open = Some(pos);
+    vx.chest_open = None;
+    vx.furnace_open = None;
+    vx.crafting_table_open = None;
+    vx.brewing_open = None;
+    vx.stonecutter_open = None;
     vx.lmb_pending = false;
     vx.rmb_pending = false;
 }

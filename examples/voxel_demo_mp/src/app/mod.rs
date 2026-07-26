@@ -899,6 +899,12 @@ pub(crate) struct Voxel {
     pub(crate) mob_professions:
         std::collections::HashMap<u32, &'static str>,
     pub(crate) stonecutter_input: Option<(u16, u8)>,
+    /// W410: open smithing table position. Session-only UI (the
+    /// upgrade is an inventory transform; nothing persists in the
+    /// world), exactly the stonecutter pattern.
+    pub(crate) smithing_open: Option<[i32; 3]>,
+    /// W410: smithing slots [template, base, addition].
+    pub(crate) smithing_slots: [Option<(u16, u8)>; 3],
     /// W50.5: per-brewing-stand 5-slot container state, keyed by
     /// world voxel coords. Parallel to `furnaces`. Inserted on
     /// place, removed on break (drops fall as item entities).

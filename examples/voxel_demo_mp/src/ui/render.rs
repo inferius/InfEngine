@@ -680,6 +680,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut stonecutter_open_local = stonecutter_open_pos.is_some();
         let mut stonecutter_input_local = vx.stonecutter_input;
         let mut stonecutter_craft: Option<usize> = None;
+        // W410: smithing snapshot (session UI, stonecutter pattern).
+        let smithing_open_pos = vx.smithing_open;
+        let mut smithing_open_local = smithing_open_pos.is_some();
+        let mut smithing_slots_local = vx.smithing_slots;
+        let mut smithing_craft = false;
         // W50.5: brewing stand snapshot mirrors the chest/furnace
         // pattern - clone the live container so the panel paints
         // a stable view; collected actions land on vx after the
@@ -2348,6 +2353,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     );
                 }
 
+                // W410: smithing table upgrade panel.
+                if smithing_open_pos.is_some() {
+                    ui::smithing_panel::render(
+                        ui::smithing_panel::SmithingPanelInputs {
+                            ctx,
+                            slots: &mut smithing_slots_local,
+                            inv_view: &mut inv_plain_snapshot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut smithing_open_local,
+                            craft_out: &mut smithing_craft,
+                        },
+                    );
+                }
+
                 // W319: villager trade panel.
                 if trade_open_local {
                     ui::trade_panel::render(
@@ -3558,6 +3578,50 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             }
             if !stonecutter_open_local {
                 vx.stonecutter_open = None;
+            }
+        }
+        // W410: smithing apply. Sync the slots back, run the clicked
+        // craft (consume one of each input + add the output), copy
+        // the inv snapshot back, and on close return the slots.
+        if smithing_open_pos.is_some() {
+            vx.smithing_slots = smithing_slots_local;
+            if smithing_craft
+                && let Some(r) = crate::recipes::smithing::smith_result(
+                    vx.smithing_slots[0].map(|(id, _)| id),
+                    vx.smithing_slots[1].map(|(id, _)| id),
+                    vx.smithing_slots[2].map(|(id, _)| id),
+                )
+            {
+                ui::stonecutter_panel::give_to_inv(
+                    &mut inv_plain_snapshot,
+                    (r.output, 1),
+                );
+                for slot in vx.smithing_slots.iter_mut() {
+                    if let Some((id, n)) = *slot {
+                        let n = n.saturating_sub(1);
+                        *slot = if n == 0 { None } else { Some((id, n)) };
+                    }
+                }
+            }
+            // Close-via-X: return the remaining slots to the inventory.
+            if !smithing_open_local {
+                for slot in vx.smithing_slots.iter_mut() {
+                    if let Some(stack) = slot.take() {
+                        ui::stonecutter_panel::give_to_inv(
+                            &mut inv_plain_snapshot,
+                            stack,
+                        );
+                    }
+                }
+            }
+            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+                if i >= vx.inventory.len() {
+                    break;
+                }
+                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+            }
+            if !smithing_open_local {
+                vx.smithing_open = None;
             }
         }
         // W50.5: brewing panel apply.

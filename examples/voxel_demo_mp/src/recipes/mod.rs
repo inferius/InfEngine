@@ -13,6 +13,7 @@ pub(crate) mod brewing;
 pub(crate) mod matcher;
 pub(crate) mod shaped;
 pub(crate) mod smelting;
+pub(crate) mod smithing;
 pub(crate) mod stonecutter;
 
 // Local alias so the `BUCKET_EMPTY_ID` reference below resolves in

@@ -331,6 +331,8 @@ impl Voxel {
             trade_open: None,
             mob_professions: std::collections::HashMap::new(),
             stonecutter_input: None,
+            smithing_open: None,
+            smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),
             brewing_open: None,
