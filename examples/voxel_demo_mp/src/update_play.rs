@@ -913,6 +913,7 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             &app.world,
             &app.snow_positions,
             &app.door_open,
+            &app.stair_states,
             app.player_pos,
             delta,
             // W361: stairs/slabs climb like MC (maxUpStep 0.6); fly

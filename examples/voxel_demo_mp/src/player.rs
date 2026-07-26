@@ -235,16 +235,71 @@ pub(crate) fn aabb_intersects_solid(
     snow: &HashMap<[i32; 3], u8>,
     pos: Vec3,
 ) -> bool {
-    aabb_intersects_solid_with_doors(world, snow, &HashSet::new(), pos)
+    aabb_intersects_solid_with_doors(
+        world,
+        snow,
+        &HashSet::new(),
+        &HashMap::new(),
+        pos,
+    )
+}
+
+/// W412: does the body AABB overlap a partial-height cell's real
+/// MC voxel shape? `state` is the cell's `stair_states` byte.
+/// - slab: bottom `[0, 0.5]`, top `[0.5, 1]` (full XZ; DOUBLE is
+///   handled as a full cube by the caller).
+/// - stairs: base slab (by the half bit) + the riser box covering
+///   the facing-side half (MC stairs ascend TOWARD their facing;
+///   geometry mirrors `emit_stairs`).
+fn partial_cell_overlaps(
+    bid: u16,
+    state: u8,
+    cell: [i32; 3],
+    min: Vec3,
+    max: Vec3,
+) -> bool {
+    let cy = cell[1] as f32;
+    if crate::block::is_slab_block(bid) {
+        let top = state & crate::block::door::TRAPDOOR_TOP_BIT != 0;
+        return if top {
+            max.y - COLLISION_EPSILON > cy + 0.5
+        } else {
+            min.y < cy + 0.5
+        };
+    }
+    // Stairs.
+    let top = state & crate::block::door::TRAPDOOR_TOP_BIT != 0;
+    let (b0, b1) = if top { (0.5, 1.0) } else { (0.0, 0.5) };
+    if max.y - COLLISION_EPSILON > cy + b0 && min.y < cy + b1 {
+        return true;
+    }
+    let (r0, r1) = if top { (0.0, 0.5) } else { (0.5, 1.0) };
+    if max.y - COLLISION_EPSILON > cy + r0 && min.y < cy + r1 {
+        let cx = cell[0] as f32;
+        let cz = cell[2] as f32;
+        return match state & 3 {
+            0 => max.x - COLLISION_EPSILON > cx + 0.5,
+            1 => max.z - COLLISION_EPSILON > cz + 0.5,
+            2 => min.x < cx + 0.5,
+            _ => min.z < cz + 0.5,
+        };
+    }
+    false
 }
 
 /// W63.1 - same as `aabb_intersects_solid` but consults the
 /// engine's open-door set so the player can walk through doors
-/// once they've toggled them open.
+/// once they've toggled them open. W412: also takes the per-pos
+/// orientation map (`Voxel::stair_states`) so slabs + stairs
+/// collide by their real MC shapes - with the full-cube collision
+/// the 0.6 auto-step could never climb a staircase (the R23 "can't
+/// walk up stairs" report) and the player floated half a block
+/// above slabs.
 pub(crate) fn aabb_intersects_solid_with_doors(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
     door_open: &HashSet<[i32; 3]>,
+    states: &HashMap<[i32; 3], u8>,
     pos: Vec3,
 ) -> bool {
     let (min, max) = body_aabb(pos);
@@ -257,6 +312,23 @@ pub(crate) fn aabb_intersects_solid_with_doors(
     for y in y0..=y1 {
         for z in z0..=z1 {
             for x in x0..=x1 {
+                // W412: partial-height cells collide by shape.
+                let bid = world.get([x, y, z]).0;
+                if bid != 0
+                    && (crate::block::is_slab_block(bid)
+                        || crate::block::door::is_stairs_block(bid))
+                {
+                    let st =
+                        states.get(&[x, y, z]).copied().unwrap_or(0);
+                    let full = crate::block::is_slab_block(bid)
+                        && st & crate::block::door::SLAB_DOUBLE_BIT != 0;
+                    if full
+                        || partial_cell_overlaps(bid, st, [x, y, z], min, max)
+                    {
+                        return true;
+                    }
+                    continue;
+                }
                 if voxel_is_solid_with_doors(world, snow, door_open, [x, y, z]) {
                     return true;
                 }
@@ -463,7 +535,15 @@ pub(crate) fn sweep_aabb(
     pos: Vec3,
     delta: Vec3,
 ) -> (Vec3, bool, bool) {
-    sweep_aabb_with_doors(world, snow, &HashSet::new(), pos, delta, false)
+    sweep_aabb_with_doors(
+        world,
+        snow,
+        &HashSet::new(),
+        &HashMap::new(),
+        pos,
+        delta,
+        false,
+    )
 }
 
 /// W361: MC `maxUpStep` - a grounded mover walking into a ledge no
@@ -481,10 +561,12 @@ fn try_step_up(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
     door_open: &HashSet<[i32; 3]>,
+    states: &HashMap<[i32; 3], u8>,
     candidate: Vec3,
 ) -> Option<Vec3> {
     let lifted = Vec3::new(candidate.x, candidate.y + STEP_UP, candidate.z);
-    if aabb_intersects_solid_with_doors(world, snow, door_open, lifted) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, states, lifted)
+    {
         return None;
     }
     // Settle back down onto the step top so the climb lands exactly
@@ -494,7 +576,9 @@ fn try_step_up(
     let mut settled = lifted;
     for _ in 0..12 {
         let probe = Vec3::new(settled.x, settled.y - 0.05, settled.z);
-        if aabb_intersects_solid_with_doors(world, snow, door_open, probe) {
+        if aabb_intersects_solid_with_doors(
+            world, snow, door_open, states, probe,
+        ) {
             break;
         }
         settled = probe;
@@ -510,6 +594,7 @@ pub(crate) fn sweep_aabb_with_doors(
     world: &World,
     snow: &HashMap<[i32; 3], u8>,
     door_open: &HashSet<[i32; 3]>,
+    states: &HashMap<[i32; 3], u8>,
     pos: Vec3,
     delta: Vec3,
     grounded: bool,
@@ -524,9 +609,10 @@ pub(crate) fn sweep_aabb_with_doors(
 
     // X axis.
     let candidate = Vec3::new(new_pos.x + delta.x, new_pos.y, new_pos.z);
-    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, states, candidate)
+    {
         if let Some(stepped) = can_step
-            .then(|| try_step_up(world, snow, door_open, candidate))
+            .then(|| try_step_up(world, snow, door_open, states, candidate))
             .flatten()
         {
             new_pos = stepped;
@@ -543,14 +629,43 @@ pub(crate) fn sweep_aabb_with_doors(
 
     // Y axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y + delta.y, new_pos.z);
-    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, states, candidate)
+    {
         if delta.y > 0.0 {
+            // W412: partial-height undersides (top slab / top-stair
+            // base) sit at the half boundary - try it before the
+            // full-block snap.
             let wall = candidate.y.floor();
-            new_pos.y = wall - COLLISION_EPSILON;
+            let half = wall + 0.5;
+            let half_pos =
+                Vec3::new(candidate.x, half - COLLISION_EPSILON, candidate.z);
+            new_pos.y = if half < candidate.y
+                && !aabb_intersects_solid_with_doors(
+                    world, snow, door_open, states, half_pos,
+                ) {
+                half - COLLISION_EPSILON
+            } else {
+                wall - COLLISION_EPSILON
+            };
             hit_ceiling = true;
         } else if delta.y < 0.0 {
+            // W412: slab / stair-base tops land at the half
+            // boundary (feet at .5), not the integer ceil.
             let wall = (candidate.y - PLAYER_HEIGHT).ceil();
-            new_pos.y = wall + PLAYER_HEIGHT + COLLISION_EPSILON;
+            let half = wall - 0.5;
+            let half_pos = Vec3::new(
+                candidate.x,
+                half + PLAYER_HEIGHT + COLLISION_EPSILON,
+                candidate.z,
+            );
+            new_pos.y = if half > candidate.y - PLAYER_HEIGHT
+                && !aabb_intersects_solid_with_doors(
+                    world, snow, door_open, states, half_pos,
+                ) {
+                half + PLAYER_HEIGHT + COLLISION_EPSILON
+            } else {
+                wall + PLAYER_HEIGHT + COLLISION_EPSILON
+            };
             hit_floor = true;
         }
     } else {
@@ -559,9 +674,10 @@ pub(crate) fn sweep_aabb_with_doors(
 
     // Z axis.
     let candidate = Vec3::new(new_pos.x, new_pos.y, new_pos.z + delta.z);
-    if aabb_intersects_solid_with_doors(world, snow, door_open, candidate) {
+    if aabb_intersects_solid_with_doors(world, snow, door_open, states, candidate)
+    {
         if let Some(stepped) = can_step
-            .then(|| try_step_up(world, snow, door_open, candidate))
+            .then(|| try_step_up(world, snow, door_open, states, candidate))
             .flatten()
         {
             new_pos = stepped;
@@ -577,4 +693,66 @@ pub(crate) fn sweep_aabb_with_doors(
     }
 
     (new_pos, hit_floor, hit_ceiling)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// W412: slabs + stairs collide by their MC voxel shape, not
+    /// the full cube (full-cube stairs were unclimbable - auto-step
+    /// is 0.6 and a cube is 1.0).
+    #[test]
+    fn slab_and_stairs_collide_by_shape() {
+        let mut world = World::new();
+        let mut ch = infengine_voxel::Chunk::empty();
+        ch.set(8, 0, 8, BlockId(68)); // oak_slab (bottom by default)
+        ch.set(10, 0, 8, BlockId(73)); // stone stairs
+        world.insert_chunk([0, 0, 0], ch);
+        let snow = HashMap::new();
+        let doors = HashSet::new();
+        let mut states = HashMap::new();
+        states.insert([10, 0, 8], 0u8); // stairs facing +X, bottom
+
+        let hit = |x: f32, feet: f32, states: &HashMap<[i32; 3], u8>| {
+            aabb_intersects_solid_with_doors(
+                &world,
+                &snow,
+                &doors,
+                states,
+                Vec3::new(x, feet + PLAYER_HEIGHT, 8.5),
+            )
+        };
+        // Standing 0.55 above a bottom slab: clear (slab top = 0.5).
+        assert!(!hit(8.5, 0.55, &states));
+        // Feet inside the slab's lower half: collide.
+        assert!(hit(8.5, 0.3, &states));
+        // Stairs, front (low) half at 0.55: clear of both boxes.
+        assert!(!hit(10.2, 0.55, &states));
+        // Stairs, back (high, +X facing) half at 0.55: the riser.
+        assert!(hit(10.7, 0.55, &states));
+        // TOP slab: the lower half is walk-through headroom.
+        let mut top_states = HashMap::new();
+        top_states.insert(
+            [8, 0, 8],
+            crate::block::door::TRAPDOOR_TOP_BIT,
+        );
+        // Feet on the ground BELOW the cell, head reaching 0.4 into
+        // it: clear (top slab starts at 0.5)...
+        assert!(!aabb_intersects_solid_with_doors(
+            &world,
+            &snow,
+            &doors,
+            &top_states,
+            Vec3::new(8.5, 0.4, 8.5),
+        ));
+        // ...but reaching past 0.5 hits the slab.
+        assert!(aabb_intersects_solid_with_doors(
+            &world,
+            &snow,
+            &doors,
+            &top_states,
+            Vec3::new(8.5, 0.7, 8.5),
+        ));
+    }
 }
