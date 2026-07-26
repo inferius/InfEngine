@@ -226,6 +226,7 @@ fn synth_pack_with_textures(
         particle_atlas: None,
         // W41.1: test helper; cache not needed for anim tests.
         block_models: HashMap::new(),
+        aux_models: HashMap::new(),
     }
 }
 

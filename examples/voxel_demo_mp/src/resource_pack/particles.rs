@@ -290,6 +290,7 @@ mod tests {
             particle_atlas: None,
             // W41.1: test helper; cache not needed for particle tests.
             block_models: HashMap::new(),
+            aux_models: HashMap::new(),
         }
     }
 
@@ -503,6 +504,7 @@ mod tests {
             particle_atlas: None,
             // W41.1: test helper; cache not needed for particle tests.
             block_models: HashMap::new(),
+            aux_models: HashMap::new(),
         }
     }
 

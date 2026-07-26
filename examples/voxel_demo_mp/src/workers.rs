@@ -946,6 +946,33 @@ pub(crate) fn mesh_chunk_in_worker(
             ];
             if let Some(&(facing, _)) = doors.get(&wp) {
                 let light = halo.lookup(coord, wp);
+                // W403: the MC wall_torch blockstate (our registry
+                // folds it into the torch id + orient map - the
+                // aux cache keeps the JSON authoritative until the
+                // registry split).
+                let dir = ["east", "south", "west", "north"]
+                    [(facing & 3) as usize];
+                let props =
+                    resource_pack::blockstates::BlockStateProps::new()
+                        .with("facing", dir);
+                if let Some(m) =
+                    resource_pack::special_models::model_for_aux_with_props(
+                        pack, "wall_torch", &props,
+                    )
+                    && resource_pack::element_mesh::emit_resolved_model(
+                        &m,
+                        block.0,
+                        voxel_origin,
+                        verts,
+                        idxs,
+                        pack,
+                        |_| light,
+                        |_| 0,
+                        |_| false,
+                    )
+                {
+                    return true;
+                }
                 resource_pack::element_mesh::emit_wall_torch(
                     verts, idxs, voxel_origin, block.0, facing, pack, light,
                 );

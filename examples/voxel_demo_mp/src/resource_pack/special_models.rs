@@ -141,6 +141,29 @@ pub(crate) fn build_block_model_cache(pack: &mut super::ResourcePack) {
         "W46.11 cache breakdown",
     );
     pack.block_models = cache;
+    // W403: folded-blockstate aux variants (see ResourcePack::
+    // aux_models). Resolved exactly like the id cache.
+    let mut aux = HashMap::new();
+    for name in ["wall_torch", "redstone_wall_torch", "soul_wall_torch"] {
+        if let Some(state) = blockstates::load_blockstate(pack, name) {
+            let mut vars: Vec<(blockstates::BlockStateKey, BlockModel)> =
+                Vec::new();
+            for (key, mref) in &state.variants {
+                if let Some(m) = models::load_model(pack, &mref.model) {
+                    let m = models::rotate_model_x(&m, mref.x);
+                    let m = models::rotate_model_y(&m, mref.y);
+                    vars.push((key.clone(), m));
+                }
+            }
+            if !vars.is_empty() {
+                aux.insert(
+                    name.to_string(),
+                    ResolvedBlockState::Variants(vars),
+                );
+            }
+        }
+    }
+    pack.aux_models = aux;
 }
 
 /// Resolve one block id to a `ResolvedBlockState` for the cache.
@@ -567,6 +590,23 @@ pub(crate) fn resolve_block_model(
     // parser (strip_namespace is called in parse_model_ref). It may be
     // "block/stone", "block/oak_log", etc.
     models::load_model(pack, &model_ref.model)
+}
+
+/// W403: props lookup against a folded-blockstate aux cache (see
+/// `ResourcePack::aux_models`). Same matching rules as
+/// `model_for_block_with_props`.
+pub(crate) fn model_for_aux_with_props(
+    pack: &super::ResourcePack,
+    name: &str,
+    props: &blockstates::BlockStateProps,
+) -> Option<BlockModel> {
+    if let Some(ResolvedBlockState::Variants(vars)) = pack.aux_models.get(name) {
+        if let Some((_, m)) = vars.iter().find(|(k, _)| k.matches(props)) {
+            return Some(m.clone());
+        }
+        return vars.first().map(|(_, m)| m.clone());
+    }
+    None
 }
 
 /// W401: state-aware model lookup - picks the variant whose key

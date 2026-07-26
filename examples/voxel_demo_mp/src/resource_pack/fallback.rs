@@ -98,6 +98,7 @@ pub(crate) fn placeholder_pack() -> ResourcePack {
         particle_atlas: None,
         // W41.1: start empty; filled below.
         block_models: HashMap::new(),
+        aux_models: HashMap::new(),
     };
     super::special_models::build_block_model_cache(&mut pack);
     pack

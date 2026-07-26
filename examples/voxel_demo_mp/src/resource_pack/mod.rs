@@ -171,6 +171,12 @@ pub(crate) struct ResourcePack {
     /// instead of hitting the disk per-voxel, eliminating the
     /// 50+-second freeze on world load that W40.1 introduced.
     pub(crate) block_models: HashMap<u16, ResolvedBlockState>,
+    /// W403: variant caches for MC blockstates our registry folds
+    /// into another id (wall_torch family lives inside the torch id
+    /// with an orient map). Keyed by blockstate NAME; same
+    /// pre-rotated shape as `block_models`. Goes away when the
+    /// registry split gives them their own ids.
+    pub(crate) aux_models: HashMap<String, ResolvedBlockState>,
 }
 
 impl ResourcePack {
@@ -250,6 +256,7 @@ impl ResourcePack {
                             anim_slots: slots,
                             particle_atlas: part_atlas,
                             block_models: HashMap::new(),
+                            aux_models: HashMap::new(),
                         };
                         // W41.1: build the model cache AFTER the pack is
                         // fully constructed (textures + source path ready).
