@@ -100,12 +100,12 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 // threshold so a fully-drained bar enforces a
                 // brief walking penalty.
                 let want_sprint = move_axis.abs() + strafe.abs() > 0.0;
-                let stamina_ok = if app.sprinting {
-                    app.stamina > 0.0
-                } else {
-                    app.stamina >= STAMINA_REACTIVATE
-                };
-                if want_sprint && stamina_ok {
+                // W415: the MC sprint gate is the hunger bar (food
+                // > 6), replacing the engine stamina threshold
+                // (Player.canStartSprinting).
+                let food_ok = app.player_food.food > 6.0
+                    || app.abilities.invulnerable;
+                if want_sprint && food_ok {
                     speed_mul *= 1.7;
                     app.sprinting = true;
                 } else {
@@ -127,10 +127,32 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             // immediately rather than waiting for the regen ramp.
             app.stamina = STAMINA_MAX;
         } else if app.sprinting {
-            app.stamina = (app.stamina - STAMINA_DRAIN * dt).max(0.0);
+            // W415: MC sprint exhaustion - 0.1 per metre run.
+            let hspeed = Vec3::new(app.player_vel.x, 0.0, app.player_vel.z)
+                .length();
+            app.player_food.add_exhaustion(0.1 * hspeed * dt);
+            app.stamina = STAMINA_MAX;
         } else {
-            app.stamina =
-                (app.stamina + STAMINA_REGEN * dt).min(STAMINA_MAX);
+            app.stamina = STAMINA_MAX;
+        }
+        // W415: hunger tick - natural regeneration + starvation
+        // (MC FoodData; creative/invulnerable skips it like
+        // serverAiStep skips the food deduction).
+        if !app.abilities.invulnerable {
+            match app.player_food.tick(
+                dt,
+                app.player_health,
+                PLAYER_MAX_HEALTH,
+            ) {
+                crate::hunger::HungerEvent::Heal => {
+                    app.player_health =
+                        (app.player_health + 1.0).min(PLAYER_MAX_HEALTH);
+                }
+                crate::hunger::HungerEvent::Starve => {
+                    app.apply_player_damage(1.0);
+                }
+                crate::hunger::HungerEvent::None => {}
+            }
         }
         // Smooth FOV lerp toward the per-state target. 60 deg
         // baseline, 70 deg while sprinting. The exponential lerp
@@ -276,6 +298,12 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         } else {
             if input_active && ctx.input.is_pressed(Key::Space) && app.grounded {
                 app.player_vel.y = JUMP_VELOCITY;
+                // W415: MC jump exhaustion (0.2 sprinting, 0.05 not).
+                app.player_food.add_exhaustion(if app.sprinting {
+                    0.2
+                } else {
+                    0.05
+                });
                 app.grounded = false;
                 // Jumping costs a flat 5 stamina so spamming the
                 // bunny-hop drains the pool. Floor at 0.

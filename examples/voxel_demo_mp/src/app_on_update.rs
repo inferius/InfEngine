@@ -562,16 +562,18 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.mp_menu_open
             && !vx.chat_open
             && !egui_kb;
+        // W415: eat the HELD item when it's food (MC use-item), and
+        // only while hungry - the golden apple is canAlwaysEat.
+        let held_food = vx.inventory[vx.selected_slot]
+            .map(|(b, _)| b.0)
+            .filter(|id| crate::item::food_props(*id).is_some());
         if f_just
             && eat_ctx_ok
             && vx.eating.is_none()
-            && vx.player_health < PLAYER_MAX_HEALTH
-            && vx
-                .inventory
-                .iter()
-                .any(|s| matches!(s, Some((b, _)) if *b == BlockId(12)))
+            && let Some(fid) = held_food
+            && (vx.player_food.food < 20.0 || fid == 282)
         {
-            vx.eating = Some((12, 0.0));
+            vx.eating = Some((fid, 0.0));
         }
         if let Some((food, t0)) = vx.eating {
             const EAT_DURATION: f32 = 1.6;
@@ -603,8 +605,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         }
                     }
                     if ate {
-                        vx.player_health =
-                            (vx.player_health + 4.0).min(PLAYER_MAX_HEALTH);
+                        // W415: food fills the hunger bar
+                        // (FoodData.eat); HP returns through
+                        // natural regeneration in the tick.
+                        if let Some((n, m)) = crate::item::food_props(food) {
+                            vx.player_food.eat(n, m);
+                        }
                         let pos =
                             [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
                         // MC finishes a meal with the burp.

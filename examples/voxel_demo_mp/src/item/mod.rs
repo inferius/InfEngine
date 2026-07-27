@@ -2711,6 +2711,32 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
 /// W414: bone meal item id (the BoneMealItem RMB growth action).
 pub(crate) const BONE_MEAL_ID: u16 = 674;
 
+/// W415: MC `Foods.java` - (nutrition, saturation modifier) per
+/// food item. Consumed by the F-eat flow through
+/// `hunger::FoodData::eat`. The legacy engine "meat" block (12)
+/// eats like a cooked porkchop.
+pub(crate) fn food_props(id: u16) -> Option<(u32, f32)> {
+    Some(match id {
+        12 => (8, 0.8),   // legacy meat
+        162 => (4, 0.3),  // apple
+        163 => (5, 0.6),  // bread
+        281 => (8, 0.3),  // pumpkin_pie
+        282 => (4, 1.2),  // golden_apple
+        283 => (5, 0.6),  // baked_potato
+        284 => (3, 0.3),  // raw porkchop
+        285 => (8, 0.8),  // cooked porkchop
+        286 => (2, 0.3),  // raw mutton
+        287 => (6, 0.8),  // cooked mutton
+        288 => (2, 0.1),  // raw cod
+        289 => (5, 0.6),  // cooked cod
+        290 => (2, 0.1),  // raw salmon
+        291 => (6, 0.8),  // cooked salmon
+        292 => (1, 0.3),  // dried kelp
+        293 => (4, 0.1),  // rotten flesh
+        _ => return None,
+    })
+}
+
 pub(crate) fn item_type(id: u16) -> Option<&'static ItemType> {
     // W397: O(1) LUT - same fix as block::block_type (the linear
     // find over the ~1000-row registry sat under every tooltip,

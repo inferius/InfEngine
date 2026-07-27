@@ -332,6 +332,7 @@ impl Voxel {
             mob_professions: std::collections::HashMap::new(),
             stonecutter_input: None,
             smithing_open: None,
+            player_food: crate::hunger::FoodData::default(),
             smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),

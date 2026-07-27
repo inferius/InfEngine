@@ -160,6 +160,7 @@ mod creative_tab;
 mod menu;
 // W134 - minecarts: rail-riding cart entities (sim + interactions).
 mod minecart;
+mod hunger;
 mod mining;
 mod mob;
 mod player;
@@ -443,9 +444,11 @@ pub(crate) const STAMINA_MAX_TEST: f32 = STAMINA_MAX;
 pub(crate) const AIR_MAX_SEC_TEST: f32 = AIR_MAX_SEC;
 /// Drowning damage rate after the air meter hits zero.
 const DROWN_DAMAGE_PER_SEC: f32 = 2.0;
-const STAMINA_DRAIN: f32 = 20.0;
-const STAMINA_REGEN: f32 = 18.0;
-const STAMINA_REACTIVATE: f32 = 25.0;
+// W415: STAMINA_DRAIN / _REGEN / _REACTIVATE retired - the MC
+// sprint gate is the hunger bar (food > 6, Player.canStartSprinting)
+// and sprinting charges FoodData exhaustion instead of a stamina
+// pool. `stamina` stays pinned at STAMINA_MAX until the HUD bar is
+// removed with the W415 phase-2 hunger HUD.
 /// Free-fall distance, in voxels, before fall damage kicks in. A
 /// 3-block drop is harmless; anything taller deals
 /// `fall_distance - SAFE_FALL` HP.

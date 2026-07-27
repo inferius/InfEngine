@@ -373,6 +373,8 @@ pub(crate) struct Voxel {
     /// when they stop. Read by both the wgpu camera + the egui
     /// HUD's screen-projection so the two stay in sync.
     pub(crate) fov_y_rad: f32,
+    /// W415: the MC hunger state (food / saturation / exhaustion).
+    pub(crate) player_food: crate::hunger::FoodData,
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,
