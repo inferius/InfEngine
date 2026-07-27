@@ -707,6 +707,26 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // through the Lit pipeline + W275 diff). Streaming
                 // used to triple the mesh+upload volume with these;
                 // now they wait for an idle stream.
+                // W424: seam re-meshes are throttled to where they
+                // matter. The W345 blanket neighbour push was pure
+                // overdraw cleanup, and after W407 it ballooned to
+                // 6 neighbours + self per streamed chunk - a flight
+                // spiked remesh_q to ~1600 and starved the priority
+                // lane (the R27 "drops while sprinting" log). The
+                // z-fight CORRECTNESS pass only involves chunks with
+                // greedy-meshed transparent blocks (ice / glass;
+                // liquids ride the W384 liquid mesh), so:
+                // - the NEW chunk carries transparent -> re-queue
+                //   self + every present neighbour;
+                // - otherwise re-queue only neighbours that carry
+                //   transparent themselves (their phantom seam faces
+                //   point at us). Opaque-vs-opaque seams keep their
+                //   phantom faces - backface culling hides them, as
+                //   it always did pre-W345.
+                let self_transparent = vx
+                    .world
+                    .chunk(cc)
+                    .is_some_and(chunk_has_greedy_transparent);
                 let mut any_neighbor = false;
                 for n in [
                     [cc[0] - 1, cc[1], cc[2]],
@@ -716,25 +736,19 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     [cc[0], cc[1], cc[2] - 1],
                     [cc[0], cc[1], cc[2] + 1],
                 ] {
-                    if vx.world.chunk(n).is_some() {
-                        any_neighbor = true;
-                        if vx.pending_seam_set.insert(n) {
-                            vx.pending_seam_remesh.push_back(n);
-                        }
+                    let Some(nch) = vx.world.chunk(n) else {
+                        continue;
+                    };
+                    any_neighbor = true;
+                    if (self_transparent
+                        || chunk_has_greedy_transparent(nch))
+                        && vx.pending_seam_set.insert(n)
+                    {
+                        vx.pending_seam_remesh.push_back(n);
                     }
                 }
-                // W407: for chunks carrying greedy-meshed transparent
-                // blocks (ice / glass; liquids ride the W384 liquid
-                // mesh) the seam pass is CORRECTNESS, not cleanup:
-                // this chunk meshed before seeing its neighbours, so
-                // its phantom seam faces z-fight the neighbours' real
-                // opaque faces through the no-cull transparent
-                // pipeline (the iceberg ice/snow strobing). Re-queue
-                // SELF so it re-meshes against the now-present
-                // boundary; Y neighbours joined the list above for
-                // the same reason (icebergs stack vertically).
                 if any_neighbor
-                    && vx.world.chunk(cc).is_some_and(chunk_has_greedy_transparent)
+                    && self_transparent
                     && vx.pending_seam_set.insert(cc)
                 {
                     vx.pending_seam_remesh.push_back(cc);
@@ -1311,22 +1325,43 @@ fn drain_unload_batch(
         }
         // W233/W360: side-map cells come from the crossing-time
         // snapshot - O(batch) here, no whole-map scans.
-        let mut side = std::mem::take(&mut vx.pending_unload_side);
-        let payloads = world_save::runtime::build_chunk_payloads_from(
-            vx,
-            &dirty_unload,
-            &mut side,
-        );
-        vx.pending_unload_side = side;
-        if !payloads.is_empty() {
+        // W424: the RLE snapshot moved OFF the main thread - the
+        // drain hands the writer the evicted chunk itself plus its
+        // side-bucket slots (payload_ms was 14-30 ms per 48-batch
+        // on structure-heavy rings; now it's map removes + moves).
+        type SideCells = Vec<([u8; 3], u8)>;
+        type UnloadSave =
+            (ChunkCoord, infengine_voxel::Chunk, SideCells, SideCells, SideCells);
+        let mut to_save: Vec<UnloadSave> =
+            Vec::with_capacity(dirty_unload.len());
+        for cc in &batch {
+            let Some(chunk) = vx.world.remove_chunk(*cc) else {
+                continue;
+            };
+            if !dirty_unload.contains(cc) {
+                continue;
+            }
+            let side = &mut vx.pending_unload_side;
+            to_save.push((
+                *cc,
+                chunk,
+                side.liq.remove(cc).unwrap_or_default(),
+                side.tor.remove(cc).unwrap_or_default(),
+                side.snow.remove(cc).unwrap_or_default(),
+            ));
+        }
+        if !to_save.is_empty() {
             std::thread::Builder::new()
                 .name("voxel_demo_mp::unload_writer".to_string())
                 .spawn(move || {
-                    for payload in payloads {
-                        let coord = payload.coord;
-                        if let Err(err) =
-                            world_save::write_chunk_payload(&slug, &dim, &payload)
-                        {
+                    for (coord, chunk, liq, tor, snow) in to_save {
+                        let payload =
+                            world_save::runtime::build_owned_chunk_payload(
+                                coord, &chunk, liq, tor, snow,
+                            );
+                        if let Err(err) = world_save::write_chunk_payload(
+                            &slug, &dim, &payload,
+                        ) {
                             tracing::warn!(
                                 coord = ?coord,
                                 error = %err,
@@ -1339,6 +1374,8 @@ fn drain_unload_batch(
         }
     }
     let _ms_payload = _t.elapsed().as_secs_f32() * 1000.0;
+    // (Client role: the payload branch above didn't run - drop the
+    // evicted chunks here.)
     for cc in &batch {
         vx.world.remove_chunk(*cc);
     }

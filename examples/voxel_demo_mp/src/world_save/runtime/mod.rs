@@ -469,32 +469,33 @@ pub(crate) fn build_unload_side_buckets(
     }
 }
 
-/// Build payloads for `coords`, pulling the side-map cells out of the
-/// pre-snapshotted buckets (O(batch), no whole-map scans). The tiny
-/// staleness window (a border cell edited between the crossing and
-/// the drain) matches MC's snapshot-at-unload semantics.
-pub(crate) fn build_chunk_payloads_from(
-    voxel: &Voxel,
-    coords: &std::collections::HashSet<infengine_voxel::ChunkCoord>,
-    side: &mut UnloadSideBuckets,
-) -> Vec<super::chunks::ChunkPayload> {
-    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
-    coords
-        .iter()
-        .filter_map(|cc| {
-            let chunk = voxel.world.chunk(*cc)?;
-            Some(ChunkPayload {
-                format_version: CHUNK_PAYLOAD_VERSION,
-                coord: *cc,
-                voxels: ChunkVoxels::from_chunk(chunk),
-                liquid_levels: side.liq.remove(cc).unwrap_or_default(),
-                torch_orient: side.tor.remove(cc).unwrap_or_default(),
-                snow_layers: side.snow.remove(cc).unwrap_or_default(),
-            })
-        })
-        .collect()
-}
+// W424: build_chunk_payloads_from retired - the unload drain now
+// moves owned chunks to the writer thread and builds payloads there
+// via `build_owned_chunk_payload`.
 
+
+/// W424: build one payload from OWNED parts - safe on a background
+/// thread. The RLE snapshot (`ChunkVoxels::from_chunk`) is the
+/// expensive half of an unload (0.3-0.6 ms per structure-heavy
+/// chunk); the drain now moves the evicted chunk + its side-bucket
+/// slots here instead of snapshotting on the main thread.
+pub(crate) fn build_owned_chunk_payload(
+    coord: infengine_voxel::ChunkCoord,
+    chunk: &infengine_voxel::Chunk,
+    liquid_levels: Vec<([u8; 3], u8)>,
+    torch_orient: Vec<([u8; 3], u8)>,
+    snow_layers: Vec<([u8; 3], u8)>,
+) -> super::chunks::ChunkPayload {
+    use super::chunks::{CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels};
+    ChunkPayload {
+        format_version: CHUNK_PAYLOAD_VERSION,
+        coord,
+        voxels: ChunkVoxels::from_chunk(chunk),
+        liquid_levels,
+        torch_orient,
+        snow_layers,
+    }
+}
 
 /// W46.28: write a pre-built payload to disk. Pure I/O - safe to
 /// call from a background thread because it takes only owned data.
