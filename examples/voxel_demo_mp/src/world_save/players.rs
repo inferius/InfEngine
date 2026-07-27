@@ -53,7 +53,7 @@ pub(crate) const PLAYER_MAGIC: &[u8; 4] = b"INFP";
 /// - v3: W8.2 - adds `game_mode: u8` (Survival / Creative; Hardcore
 ///   deferred). Old v2 saves migrate by appending a single `0`
 ///   byte (= `GameMode::Survival`).
-pub(crate) const PLAYER_FORMAT_VERSION: u32 = 3;
+pub(crate) const PLAYER_FORMAT_VERSION: u32 = 4;
 
 /// Default zstd compression level. Matches `chunks.rs` - level 3 is
 /// the documented "balanced" setting from the design doc.
@@ -138,6 +138,11 @@ pub(crate) struct PlayerSave {
     /// Unknown values round to Survival on load. Defaults to
     /// Survival on a fresh save and on migrated v2 saves.
     pub game_mode: u8,
+    /// W416: hunger bar (0..=20). Migrated v3 saves start full.
+    pub food: f32,
+    /// W416: hidden saturation buffer (0..=food). Migrated v3
+    /// saves start at the MC spawn value of 5.
+    pub saturation: f32,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -166,6 +171,8 @@ pub(crate) fn fresh_player(spawn: [i32; 3]) -> PlayerSave {
         last_dimension: "overworld".to_string(),
         highlight_mode: 0, // HighlightMode::Auto
         game_mode: 0,      // GameMode::Survival (W8.2)
+        food: 20.0,        // W416: MC spawn hunger
+        saturation: 5.0,
     }
 }
 
@@ -507,6 +514,31 @@ struct PlayerSaveV2 {
     highlight_mode: u8,
 }
 
+/// W416: FROZEN v3 payload shape - v2 + `game_mode`, WITHOUT
+/// W416's food/saturation. The v2 -> v3 arrow encodes THIS (a live
+/// `PlayerSave` there would smuggle future fields into a v3
+/// envelope - the W387 containers lesson); the v3 -> v4 arrow
+/// decodes it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PlayerSaveV3 {
+    format_version: u32,
+    pos: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    inventory: Vec<Option<(u16, u8)>>,
+    craft_grid: Vec<Option<(u16, u8)>>,
+    selected_slot: u8,
+    air: f32,
+    health: f32,
+    home_pos: Option<[f32; 3]>,
+    spawn_pos: Option<[f32; 3]>,
+    permission_level: u8,
+    play_time_seconds: u64,
+    last_dimension: String,
+    highlight_mode: u8,
+    game_mode: u8,
+}
+
 /// V1 -> V2 envelope migration. Decodes the v1 payload (no
 /// `highlight_mode` field), re-encodes it as a v2 payload with
 /// `highlight_mode = HighlightMode::Auto`. Matches the
@@ -629,7 +661,10 @@ pub(crate) fn player_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let (v2, _read) = bincode::serde::decode_from_slice::<PlayerSaveV2, _>(&raw_v2, cfg)
         .map_err(|err| invalid(format!("v2 payload decode failed: {err}")))?;
 
-    let v3 = PlayerSave {
+    // W416: encode the FROZEN v3 shape, not the live PlayerSave -
+    // the live struct now carries v4 fields that must not leak
+    // into a v3 envelope.
+    let v3 = PlayerSaveV3 {
         format_version: 3,
         pos: v2.pos,
         yaw: v2.yaw,
@@ -661,6 +696,86 @@ pub(crate) fn player_v2_to_v3(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v3);
     out.extend_from_slice(&uncompressed_len_v3.to_le_bytes());
     out.extend_from_slice(&body_v3);
+    Ok(out)
+}
+
+/// W416: V3 -> V4 envelope migration. Decodes the FROZEN v3
+/// payload (no hunger fields), re-encodes it as a v4 payload with
+/// the MC spawn hunger (food 20, saturation 5). Mirrors the
+/// v2 -> v3 step.
+pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("player v3 envelope truncated"));
+    }
+    if &bytes[..4] != PLAYER_MAGIC {
+        return Err(invalid("player v3 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 3 {
+        return Err(invalid(format!(
+            "player_v3_to_v4 expected v3, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+
+    let raw_v3: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v3 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v3 compression kind {other} during migration"
+            )));
+        }
+    };
+
+    let cfg = bincode::config::standard();
+    let (v3, _read) = bincode::serde::decode_from_slice::<PlayerSaveV3, _>(&raw_v3, cfg)
+        .map_err(|err| invalid(format!("v3 payload decode failed: {err}")))?;
+
+    let v4 = PlayerSave {
+        format_version: 4,
+        pos: v3.pos,
+        yaw: v3.yaw,
+        pitch: v3.pitch,
+        inventory: v3.inventory,
+        craft_grid: v3.craft_grid,
+        selected_slot: v3.selected_slot,
+        air: v3.air,
+        health: v3.health,
+        home_pos: v3.home_pos,
+        spawn_pos: v3.spawn_pos,
+        permission_level: v3.permission_level,
+        play_time_seconds: v3.play_time_seconds,
+        last_dimension: v3.last_dimension,
+        highlight_mode: v3.highlight_mode,
+        game_mode: v3.game_mode,
+        food: 20.0,
+        saturation: 5.0,
+    };
+    let raw_v4 = bincode::serde::encode_to_vec(&v4, cfg)
+        .map_err(|err| invalid(format!("v4 payload encode failed: {err}")))?;
+    let uncompressed_len_v4 = raw_v4.len() as u64;
+
+    let (kind_v4, body_v4): (u8, Vec<u8>) = match zstd::encode_all(&raw_v4[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v4.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v4),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v4.len() + 17);
+    out.extend_from_slice(PLAYER_MAGIC);
+    out.extend_from_slice(&4u32.to_le_bytes());
+    out.push(kind_v4);
+    out.extend_from_slice(&uncompressed_len_v4.to_le_bytes());
+    out.extend_from_slice(&body_v4);
     Ok(out)
 }
 
@@ -890,12 +1005,74 @@ mod tests {
             other => panic!("unexpected compression kind {other}"),
         };
         let cfg = bincode::config::standard();
+        // W416: the arrow emits the FROZEN v3 shape (no hunger
+        // fields) - decoding the live PlayerSave here would demand
+        // v4 fields a v3 envelope must not contain.
         let (v3, _read) =
-            bincode::serde::decode_from_slice::<PlayerSave, _>(&raw, cfg).unwrap();
+            bincode::serde::decode_from_slice::<PlayerSaveV3, _>(&raw, cfg).unwrap();
         assert_eq!(v3.format_version, 3);
         assert_eq!(v3.highlight_mode, v2.highlight_mode);
         assert_eq!(v3.last_dimension, v2.last_dimension);
         assert_eq!(v3.game_mode, 0);
+    }
+
+    /// W416: v3 -> v4 appends the hunger pair at the MC spawn
+    /// state; a full v1 -> v4 chain reaches the same defaults.
+    #[test]
+    fn player_v3_to_v4_appends_spawn_hunger() {
+        let v3 = PlayerSaveV3 {
+            format_version: 3,
+            pos: [1.5, 70.0, -2.5],
+            yaw: 0.3,
+            pitch: -0.1,
+            inventory: vec![None; INVENTORY_SLOTS_DEFAULT],
+            craft_grid: vec![None; CRAFT_GRID_SLOTS_DEFAULT],
+            selected_slot: 2,
+            air: 9.0,
+            health: 13.5,
+            home_pos: None,
+            spawn_pos: Some([4.0, 65.0, 4.0]),
+            permission_level: 4,
+            play_time_seconds: 7,
+            last_dimension: "nether".to_string(),
+            highlight_mode: 1,
+            game_mode: 1,
+        };
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(&v3, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::with_capacity(raw.len() + 17);
+        bytes.extend_from_slice(PLAYER_MAGIC);
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+
+        let v4_bytes = player_v3_to_v4(&bytes).expect("migration ok");
+        assert_eq!(
+            u32::from_le_bytes([
+                v4_bytes[4], v4_bytes[5], v4_bytes[6], v4_bytes[7]
+            ]),
+            4
+        );
+        let kind = v4_bytes[8];
+        let uncompressed_len = u64::from_le_bytes([
+            v4_bytes[9], v4_bytes[10], v4_bytes[11], v4_bytes[12],
+            v4_bytes[13], v4_bytes[14], v4_bytes[15], v4_bytes[16],
+        ]) as usize;
+        let body = &v4_bytes[17..];
+        let raw4 = match kind {
+            COMP_NONE => body.to_vec(),
+            COMP_ZSTD => decode_zstd(body, uncompressed_len).unwrap(),
+            other => panic!("unexpected compression kind {other}"),
+        };
+        let (v4, _read) =
+            bincode::serde::decode_from_slice::<PlayerSave, _>(&raw4, cfg)
+                .unwrap();
+        assert_eq!(v4.format_version, 4);
+        assert_eq!(v4.health, 13.5);
+        assert_eq!(v4.game_mode, 1);
+        assert_eq!(v4.food, 20.0);
+        assert_eq!(v4.saturation, 5.0);
     }
 
     #[test]

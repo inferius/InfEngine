@@ -291,7 +291,8 @@ fn write_player_is_atomic_no_tmp_left_behind() {
 
 #[test]
 fn player_format_version_matches_design_doc() {
-    // Lock the published schema number. Bumped to v3 in W8.2
-    // with the `game_mode` field + a v2 -> v3 migration arrow.
-    assert_eq!(PLAYER_FORMAT_VERSION, 3);
+    // Lock the published schema number. Bumped to v4 in W416
+    // with the hunger pair (food + saturation) + a v3 -> v4
+    // migration arrow.
+    assert_eq!(PLAYER_FORMAT_VERSION, 4);
 }

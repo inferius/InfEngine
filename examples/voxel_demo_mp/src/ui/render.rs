@@ -20,8 +20,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let dim = vx.current_dim.clone();
         let day_time = vx.day_time;
         let player_health = vx.player_health;
-        let stamina_frac =
-            (vx.stamina / STAMINA_MAX).clamp(0.0, 1.0);
+        // W416: the hunger bar replaces the retired stamina bar.
+        let player_food = vx.player_food.food;
         let air_frac =
             (vx.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
         // Underwater / lava view tint. Triggered only when the
@@ -1195,43 +1195,29 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     );
                                 }
                             });
-                            // Stamina bar. Width tracks the
-                            // current fraction; tint shifts from
-                            // green at full down to orange at
-                            // low. Hidden when sprinting is
-                            // impossible (full + not in use).
-                            if stamina_frac < 0.999 || vx.sprinting {
-                                ui.horizontal(|ui| {
-                                    ui.label("Stamina:");
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(120.0, 8.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    let painter = ui.painter();
-                                    painter.rect_filled(
-                                        rect,
-                                        2.0,
-                                        egui::Color32::from_rgba_unmultiplied(
-                                            30, 30, 30, 220,
-                                        ),
-                                    );
-                                    let fill = egui::Rect::from_min_size(
-                                        rect.min,
-                                        egui::vec2(
-                                            rect.width() * stamina_frac,
-                                            rect.height(),
-                                        ),
-                                    );
-                                    let col = if stamina_frac > 0.5 {
-                                        egui::Color32::from_rgb(100, 200, 80)
-                                    } else if stamina_frac > 0.2 {
-                                        egui::Color32::from_rgb(220, 180, 60)
+                            // W416: hunger row - 10 shanks of 2
+                            // food points each, mirroring the MC
+                            // HUD (and the hearts row above). The
+                            // stamina bar it replaced retired with
+                            // W415 (sprint gates on food > 6 now).
+                            ui.horizontal(|ui| {
+                                ui.label("Food:");
+                                for i in 0..10 {
+                                    let need_full = 2.0 * (i as f32 + 1.0);
+                                    let need_half = need_full - 1.0;
+                                    let glyph = if player_food >= need_full {
+                                        "\u{25CF}"
+                                    } else if player_food >= need_half {
+                                        "\u{25D0}"
                                     } else {
-                                        egui::Color32::from_rgb(220, 90, 60)
+                                        "\u{25CB}"
                                     };
-                                    painter.rect_filled(fill, 2.0, col);
-                                });
-                            }
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(200, 140, 60),
+                                        glyph,
+                                    );
+                                }
+                            });
                             // Air bar - only visible while the
                             // breath meter is below full. Drains
                             // submerged, refills on the surface.

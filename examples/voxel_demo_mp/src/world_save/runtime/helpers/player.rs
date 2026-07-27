@@ -52,6 +52,9 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         // source of truth; the in-game toggle path lands in
         // Wave 10 (Survival / Creative semantics).
         game_mode: voxel.game_mode as u8,
+        // W416: hunger pair.
+        food: voxel.player_food.food,
+        saturation: voxel.player_food.saturation,
     }
 }
 
@@ -88,6 +91,12 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
         1 => crate::game_mode::GameMode::Creative,
         _ => crate::game_mode::GameMode::Survival,
     };
+    // W416: hunger pair (clamped like MC load; exhaustion is
+    // transient and restarts at 0).
+    voxel.player_food.food = save.food.clamp(0.0, 20.0);
+    voxel.player_food.saturation =
+        save.saturation.clamp(0.0, voxel.player_food.food);
+    voxel.player_food.exhaustion = 0.0;
     // W10.1: keep the cached ability bundle in lockstep with
     // `game_mode`. Without this the fly / invuln / instabuild
     // flags would lag a tick behind the loaded mode.

@@ -324,6 +324,15 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         3,
         super::players::player_v2_to_v3,
     );
+    // W416: player.bin v3 -> v4 appends the hunger pair
+    // (food: f32, saturation: f32). Old saves migrate to the MC
+    // spawn state (20 / 5).
+    reg.register(
+        SaveKind::Player,
+        3,
+        4,
+        super::players::player_v3_to_v4,
+    );
 }
 
 /// JSON peek struct - decodes just the `format_version` key and
