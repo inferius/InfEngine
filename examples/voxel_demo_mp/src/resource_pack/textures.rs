@@ -241,6 +241,46 @@ fn scan_dir(dir: &Path, out: &mut Vec<PackEntry>, is_item: bool, is_particle: bo
         // "missing frames field" branch can synthesize a full walk.
         let frame_count = (img.height() / TILE_PX).max(1);
         let anim = super::mcmeta::load_for(&path, frame_count);
+        // W423: bake the mcmeta `frames` ORDER into the physical
+        // strip. The shader walks strip frames linearly, so a
+        // custom sequence - lava_still's palindrome
+        // [0..19, 18..=1] - must be materialised; playing the raw
+        // 20-frame strip made the loop pop from dark back to
+        // bright (R27). Identity sequences skip the re-blit.
+        let img = if frame_count > 1
+            && (anim.frames.len() as u32 != frame_count
+                || anim
+                    .frames
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &f)| i as u32 != f))
+        {
+            let w = img.width();
+            let mut reordered = image::RgbaImage::new(
+                w,
+                TILE_PX * anim.frames.len().max(1) as u32,
+            );
+            for (fi, &f) in anim.frames.iter().enumerate() {
+                let f = f.min(frame_count - 1);
+                let view = image::imageops::crop_imm(
+                    &img,
+                    0,
+                    f * TILE_PX,
+                    w,
+                    TILE_PX,
+                )
+                .to_image();
+                image::imageops::replace(
+                    &mut reordered,
+                    &view,
+                    0,
+                    fi as i64 * TILE_PX as i64,
+                );
+            }
+            reordered
+        } else {
+            img
+        };
         let key = if is_particle {
             TextureKey::Particle(stem.clone())
         } else if is_item {
