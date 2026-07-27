@@ -562,6 +562,60 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.mp_menu_open
             && !vx.chat_open
             && !egui_kb;
+        // W417: bow draw (MC BowItem) - holding RMB with the bow
+        // charges; releasing shoots when the power passes the 0.1
+        // floor and an arrow is in the inventory. getPowerForTime:
+        // f = t; f = (f^2 + 2f) / 3, capped at 1; full charge flies
+        // at 60 m/s (3 blocks/tick).
+        let held_bow = vx.inventory[vx.selected_slot]
+            .is_some_and(|(b, _)| b.0 == crate::item::BOW_ID);
+        let has_arrow = vx.inventory.iter().any(
+            |s| matches!(s, Some((b, _)) if b.0 == crate::item::ARROW_ID),
+        );
+        let bow_ctx_ok = matches!(vx.state, AppState::Playing)
+            && !vx.inventory_open
+            && !vx.mp_menu_open
+            && !vx.chat_open
+            && !egui_kb;
+        if held_bow && vx.rmb_held && bow_ctx_ok {
+            if vx.bow_charge.is_none() && has_arrow {
+                vx.bow_charge = Some(0.0);
+            }
+            if let Some(t) = vx.bow_charge.as_mut() {
+                *t += dt;
+            }
+        } else if let Some(t) = vx.bow_charge.take() {
+            let f = ((t * t + 2.0 * t) / 3.0).min(1.0);
+            if held_bow && bow_ctx_ok && f >= 0.1 && has_arrow {
+                for slot in vx.inventory.iter_mut() {
+                    if let Some((b, c)) = slot.as_mut()
+                        && b.0 == crate::item::ARROW_ID
+                    {
+                        *c = c.saturating_sub(1);
+                        if *c == 0 {
+                            *slot = None;
+                        }
+                        break;
+                    }
+                }
+                let eye = vx.player_pos;
+                let look = glam::Vec3::new(
+                    vx.player_yaw.cos() * vx.player_pitch.cos(),
+                    vx.player_pitch.sin(),
+                    -vx.player_yaw.sin() * vx.player_pitch.cos(),
+                )
+                .normalize_or_zero();
+                crate::projectile::spawn_arrow(
+                    vx,
+                    eye + look * 0.4,
+                    look * (f * 60.0),
+                    true,
+                );
+                let p = [eye.x, eye.y, eye.z];
+                vx.sfx_at("arrow/shoot", p, |_, _| {});
+            }
+        }
+
         // W415: eat the HELD item when it's food (MC use-item), and
         // only while hungry - the golden apple is canAlwaysEat.
         let held_food = vx.inventory[vx.selected_slot]

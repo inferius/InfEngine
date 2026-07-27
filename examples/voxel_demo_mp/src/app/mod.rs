@@ -375,6 +375,8 @@ pub(crate) struct Voxel {
     pub(crate) fov_y_rad: f32,
     /// W415: the MC hunger state (food / saturation / exhaustion).
     pub(crate) player_food: crate::hunger::FoodData,
+    /// W417: seconds the bow has been drawn; None = not drawing.
+    pub(crate) bow_charge: Option<f32>,
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,

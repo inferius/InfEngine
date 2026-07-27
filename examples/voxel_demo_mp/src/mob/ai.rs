@@ -1020,7 +1020,7 @@ fn step_one(
                     rng.next_f32() - 0.5,
                     rng.next_f32() - 0.5,
                 ) * 1.6;
-                crate::projectile::spawn_arrow(voxel, eye, vel);
+                crate::projectile::spawn_arrow(voxel, eye, vel, false);
                 voxel.sfx_at(
                     "mob/skeleton/shoot",
                     [eye.x, eye.y, eye.z],

@@ -207,11 +207,19 @@ pub(crate) struct Arrow {
     pub(crate) age: f32,
     /// `Some(t)` once lodged in a block: countdown to despawn.
     pub(crate) stuck: Option<f32>,
+    /// W417: player-fired arrows hit MOBS and skip player bodies;
+    /// mob-fired (skeleton) arrows keep hitting players only.
+    pub(crate) from_player: bool,
 }
 
 /// Spawn an arrow on the host + announce it. `origin` is the
 /// shooter's muzzle (eye-ish), `vel` the full velocity vector.
-pub(crate) fn spawn_arrow(vx: &mut Voxel, origin: Vec3, vel: Vec3) {
+pub(crate) fn spawn_arrow(
+    vx: &mut Voxel,
+    origin: Vec3,
+    vel: Vec3,
+    from_player: bool,
+) {
     let id = vx.next_arrow_id;
     vx.next_arrow_id = vx.next_arrow_id.wrapping_add(1).max(1);
     vx.arrows.push(Arrow {
@@ -220,6 +228,7 @@ pub(crate) fn spawn_arrow(vx: &mut Voxel, origin: Vec3, vel: Vec3) {
         vel,
         age: 0.0,
         stuck: None,
+        from_player,
     });
 }
 
@@ -245,6 +254,15 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
     let mut host_hits = 0u32;
     let mut remote_hits: Vec<u32> = Vec::new();
     let mut impacts: Vec<Vec3> = Vec::new();
+    // W417: (mob_id, damage) hits from player arrows, applied after
+    // the world borrow drops.
+    let mut mob_hits: Vec<(u32, f32)> = Vec::new();
+    let mob_boxes: Vec<(u32, Vec3)> = vx
+        .mobs
+        .iter()
+        .filter(|m| m.health > 0.0)
+        .map(|m| (m.id, Vec3::new(m.pos[0], m.pos[1], m.pos[2])))
+        .collect();
     {
         let world = &vx.world;
         // Player body boxes the segment can hit: the host (unless
@@ -285,16 +303,39 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
             // body box (poses are eye-level; the body hangs 1.8
             // below and pokes 0.1 above).
             let mut hit_player: Option<(Option<u32>, f32)> = None;
-            for (pid, eye) in &targets {
-                let bmin = *eye - Vec3::new(0.4, 1.8, 0.4);
-                let bmax = *eye + Vec3::new(0.4, 0.1, 0.4);
-                if let Some((t_in, t_out)) =
-                    crate::world::targeting::ray_aabb(a.pos, dir, bmin, bmax)
-                    && t_out >= 0.0
-                    && t_in <= len
-                    && hit_player.is_none_or(|(_, bt)| t_in.max(0.0) < bt)
-                {
-                    hit_player = Some((*pid, t_in.max(0.0)));
+            if !a.from_player {
+                for (pid, eye) in &targets {
+                    let bmin = *eye - Vec3::new(0.4, 1.8, 0.4);
+                    let bmax = *eye + Vec3::new(0.4, 0.1, 0.4);
+                    if let Some((t_in, t_out)) =
+                        crate::world::targeting::ray_aabb(
+                            a.pos, dir, bmin, bmax,
+                        )
+                        && t_out >= 0.0
+                        && t_in <= len
+                        && hit_player.is_none_or(|(_, bt)| t_in.max(0.0) < bt)
+                    {
+                        hit_player = Some((*pid, t_in.max(0.0)));
+                    }
+                }
+            }
+            // W417: player arrows test the mob boxes instead
+            // (feet-anchored ~1x1.6 body).
+            let mut hit_mob: Option<(u32, f32)> = None;
+            if a.from_player {
+                for (mid, feet) in &mob_boxes {
+                    let bmin = *feet - Vec3::new(0.5, 0.1, 0.5);
+                    let bmax = *feet + Vec3::new(0.5, 1.6, 0.5);
+                    if let Some((t_in, t_out)) =
+                        crate::world::targeting::ray_aabb(
+                            a.pos, dir, bmin, bmax,
+                        )
+                        && t_out >= 0.0
+                        && t_in <= len
+                        && hit_mob.is_none_or(|(_, bt)| t_in.max(0.0) < bt)
+                    {
+                        hit_mob = Some((*mid, t_in.max(0.0)));
+                    }
                 }
             }
             // Block hit along the same segment.
@@ -312,6 +353,18 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
                 );
                 (c - a.pos).length()
             });
+            // W417: velocity-scaled damage like AbstractArrow
+            // (full bow charge ~9 HP, tapering with drag).
+            let arrow_dmg =
+                (a.vel.length() / 60.0 * 9.0).clamp(1.0, 12.0);
+            if let Some((mid, mt)) = hit_mob
+                && block_t.is_none_or(|b| mt <= b)
+            {
+                mob_hits.push((mid, arrow_dmg));
+                impacts.push(a.pos + dir * mt);
+                removed.push(a.id);
+                continue;
+            }
             match (hit_player, block_t) {
                 (Some((pid, pt)), bt) if bt.is_none_or(|b| pt <= b) => {
                     // Player first.
@@ -337,6 +390,15 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
     // Side effects after the borrow on arrows/world drops.
     for _ in 0..host_hits {
         vx.apply_player_damage(ARROW_DAMAGE);
+    }
+    // W417: player-arrow mob damage rides the shared scaled path
+    // (attacker Some(0) = the host player, like melee).
+    for (mid, dmg) in mob_hits {
+        vx.damage_mob_scaled(
+            mid,
+            Some(0),
+            dmg / crate::mob::MOB_HIT_DAMAGE,
+        );
     }
     if let NetRole::Server { server, .. } = &vx.net {
         let cfg = bincode::config::standard();

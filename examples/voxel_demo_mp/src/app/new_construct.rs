@@ -333,6 +333,7 @@ impl Voxel {
             stonecutter_input: None,
             smithing_open: None,
             player_food: crate::hunger::FoodData::default(),
+            bow_charge: None,
             smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),

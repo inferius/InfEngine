@@ -328,6 +328,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     // W140 - skeleton bow + arrow impacts.
     ("mob/skeleton/shoot", "entity.skeleton.shoot"),
     ("arrow/hit", "entity.arrow.hit"),
+    // W417 - player bow release.
+    ("arrow/shoot", "entity.arrow.shoot"),
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),

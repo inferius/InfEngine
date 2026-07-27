@@ -2711,6 +2711,10 @@ pub(crate) fn spawn_egg_kind(item_id: u16) -> Option<u8> {
 /// W414: bone meal item id (the BoneMealItem RMB growth action).
 pub(crate) const BONE_MEAL_ID: u16 = 674;
 
+/// W417: bow + arrow item ids (the player BowItem draw).
+pub(crate) const BOW_ID: u16 = 638;
+pub(crate) const ARROW_ID: u16 = 643;
+
 /// W415: MC `Foods.java` - (nutrition, saturation modifier) per
 /// food item. Consumed by the F-eat flow through
 /// `hunger::FoodData::eat`. The legacy engine "meat" block (12)
