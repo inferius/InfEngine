@@ -2046,6 +2046,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.liquid_mesh_handles,
             vx.day_time,
             &vx.effect_meshes,
+            player_pos,
+            glam::Vec3::new(
+                vx.player_yaw.cos() * vx.player_pitch.cos(),
+                vx.player_pitch.sin(),
+                -vx.player_yaw.sin() * vx.player_pitch.cos(),
+            ),
+            vx.settings.view_distance as i32,
         );
         // Floating drop entities. Each renders as a small cube
         // (~0.3 voxel) bobbing in place. Pulled off

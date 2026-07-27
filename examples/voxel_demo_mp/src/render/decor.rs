@@ -31,6 +31,10 @@ pub(crate) fn draw(
     day_time: f32,
     // W153: textured fire + portal cell meshes (None = legacy tint).
     effects: &crate::render::effect_meshes::EffectMeshes,
+    // W425: camera state for the liquid draw cull.
+    cam_pos: glam::Vec3,
+    cam_look: glam::Vec3,
+    view_dist_chunks: i32,
 ) {
     let _ = (block_type, LAVA_ID, WATER_ID); // silence unused on stripped paths
         // W316: snow layers moved INTO the chunk mesh (workers.rs
@@ -244,7 +248,30 @@ pub(crate) fn draw(
         // a single table flip rather than another draw call here.
         // W111: per-chunk liquid meshes - flatten every chunk's Vec of
         // per-kind meshes into a single draw pass.
-        for (liquid_id, handle, tint3) in liquid_mesh_handles.values().flatten() {
+        // W425: cull the per-chunk liquid draws. Every loaded
+        // chunk's water/lava mesh used to submit every frame
+        // (1100-1600 draws mid-flight - the R27 decor/drawq
+        // spikes); a distance ring + a coarse behind-the-camera
+        // rejection keeps it to the visible set.
+        let max_r = (view_dist_chunks as f32 + 1.5) * 16.0;
+        let max_r2 = max_r * max_r;
+        for (coord, kinds) in liquid_mesh_handles.iter() {
+            let center = glam::Vec3::new(
+                coord[0] as f32 * 16.0 + 8.0,
+                coord[1] as f32 * 16.0 + 8.0,
+                coord[2] as f32 * 16.0 + 8.0,
+            );
+            let delta = center - cam_pos;
+            let d2 = delta.x * delta.x + delta.z * delta.z;
+            if d2 > max_r2 {
+                continue;
+            }
+            // Behind the camera, with a chunk-diagonal margin so
+            // edge-of-view chunks never pop.
+            if delta.dot(cam_look) < -28.0 {
+                continue;
+            }
+        for (liquid_id, handle, tint3) in kinds {
             if block_type(*liquid_id).is_none() {
                 continue;
             }
@@ -324,5 +351,6 @@ pub(crate) fn draw(
                     rough,
                 );
             }
+        }
         }
 }
