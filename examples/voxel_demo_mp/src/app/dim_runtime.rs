@@ -749,6 +749,33 @@ impl Voxel {
                     }
                     for o in crate::worldgen::mcgen::village::take_carved_oriented()
                     {
+                        // W421: same stale-pillar filter as the
+                        // worker gen path (tree over a fallen-log
+                        // run) - keep kind-5 only when the final
+                        // block here still is a pillar.
+                        if o.kind == 5 {
+                            let cs_i = infengine_voxel::CHUNK_SIZE as i32;
+                            let lx = o.pos[0] - c[0] * cs_i;
+                            let ly = o.pos[1] - c[1] * cs_i;
+                            let lz = o.pos[2] - c[2] * cs_i;
+                            let in_chunk = (0..cs_i).contains(&lx)
+                                && (0..cs_i).contains(&ly)
+                                && (0..cs_i).contains(&lz);
+                            let keep = in_chunk
+                                && self.world.chunk(c).is_some_and(|ch| {
+                                    crate::block::is_pillar_block(
+                                        ch.get(
+                                            lx as usize,
+                                            ly as usize,
+                                            lz as usize,
+                                        )
+                                        .0,
+                                    )
+                                });
+                            if !keep {
+                                continue;
+                            }
+                        }
                         match o.kind {
                             // W365: kind 5 = pillar axis.
                             0 | 5 => {

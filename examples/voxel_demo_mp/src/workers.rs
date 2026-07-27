@@ -334,6 +334,47 @@ impl WorkerPool {
                                     // effects.
                                     let oriented =
                                         crate::worldgen::mcgen::village::take_carved_oriented();
+                                    // W421: a pillar-axis record
+                                    // survives only when the FINAL
+                                    // block in this chunk still IS
+                                    // a pillar. A tree placed over
+                                    // a fallen-log run overwrites
+                                    // the log but used to leave the
+                                    // stale sideways grain behind
+                                    // (the R27 "trunk rings facing
+                                    // out" report). Out-of-chunk
+                                    // records drop - the owning
+                                    // chunk replays the same source
+                                    // and re-records them locally.
+                                    let cs_i = CHUNK_SIZE as i32;
+                                    let corg = [
+                                        coord[0] * cs_i,
+                                        coord[1] * cs_i,
+                                        coord[2] * cs_i,
+                                    ];
+                                    let oriented: Vec<_> = oriented
+                                        .into_iter()
+                                        .filter(|o| {
+                                            if o.kind != 5 {
+                                                return true;
+                                            }
+                                            let lx = o.pos[0] - corg[0];
+                                            let ly = o.pos[1] - corg[1];
+                                            let lz = o.pos[2] - corg[2];
+                                            (0..cs_i).contains(&lx)
+                                                && (0..cs_i).contains(&ly)
+                                                && (0..cs_i).contains(&lz)
+                                                && crate::block::is_pillar_block(
+                                                    chunk
+                                                        .get(
+                                                            lx as usize,
+                                                            ly as usize,
+                                                            lz as usize,
+                                                        )
+                                                        .0,
+                                                )
+                                        })
+                                        .collect();
                                     let mut gen_doors: std::collections::HashMap<
                                         [i32; 3],
                                         (u8, bool),
