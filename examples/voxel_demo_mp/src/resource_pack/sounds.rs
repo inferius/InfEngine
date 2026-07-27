@@ -330,6 +330,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("arrow/hit", "entity.arrow.hit"),
     // W417 - player bow release.
     ("arrow/shoot", "entity.arrow.shoot"),
+    // W419 - armor equip swap.
+    ("armor/equip", "item.armor.equip_generic"),
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),

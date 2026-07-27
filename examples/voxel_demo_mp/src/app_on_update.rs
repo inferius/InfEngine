@@ -861,6 +861,23 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // always breaks the targeted voxel. RMB places the selected
         // hotbar block at the adjacent empty cell, but is ignored
         // when the selected slot is empty or holds a tool/weapon.
+        // W419: RMB with an armor piece equips it (ArmorItem.use),
+        // consuming the click before the place path reads it. Any
+        // previously worn piece swaps back into the hand slot -
+        // which also serves as the take-it-off path until the
+        // inventory-panel armor slots land.
+        if vx.rmb_pending
+            && let Some((b, c)) = vx.inventory[vx.selected_slot]
+            && let Some((slot, _, _)) = crate::item::armor_props(b.0)
+        {
+            let prev = vx.armor_slots[slot].take();
+            vx.armor_slots[slot] = Some((b.0, c));
+            vx.inventory[vx.selected_slot] =
+                prev.map(|(id, n)| (BlockId(id), n));
+            vx.rmb_pending = false;
+            let p = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
+            vx.sfx_at("armor/equip", p, |_, _| {});
+        }
         let lmb = vx.lmb_pending;
         let rmb = vx.rmb_pending;
         vx.lmb_pending = false;

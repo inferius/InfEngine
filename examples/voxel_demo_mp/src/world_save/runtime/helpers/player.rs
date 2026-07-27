@@ -57,6 +57,8 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         saturation: voxel.player_food.saturation,
         // W418: XP total.
         xp: voxel.player_xp,
+        // W419: worn armor.
+        armor: voxel.armor_slots.to_vec(),
     }
 }
 
@@ -101,6 +103,12 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
     voxel.player_food.exhaustion = 0.0;
     // W418: XP total.
     voxel.player_xp = save.xp;
+    // W419: worn armor (tolerates short vecs from hand-edited
+    // files).
+    voxel.armor_slots = [None; 4];
+    for (i, slot) in save.armor.iter().take(4).enumerate() {
+        voxel.armor_slots[i] = *slot;
+    }
     // W10.1: keep the cached ability bundle in lockstep with
     // `game_mode`. Without this the fly / invuln / instabuild
     // flags would lag a tick behind the loaded mode.

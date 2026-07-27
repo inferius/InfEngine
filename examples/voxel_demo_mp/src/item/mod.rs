@@ -2715,6 +2715,32 @@ pub(crate) const BONE_MEAL_ID: u16 = 674;
 pub(crate) const BOW_ID: u16 = 638;
 pub(crate) const ARROW_ID: u16 = 643;
 
+/// W419: MC `ArmorMaterials` - `(slot, defense, toughness)` per
+/// armor item. Slot: 0 helmet, 1 chestplate, 2 leggings, 3 boots.
+/// Netherite armor items join with the smithing extension.
+pub(crate) fn armor_props(id: u16) -> Option<(usize, f32, f32)> {
+    Some(match id {
+        882 => (0, 1.0, 0.0), // leather helmet
+        883 => (1, 3.0, 0.0),
+        884 => (2, 2.0, 0.0),
+        885 => (3, 1.0, 0.0),
+        886 => (1, 5.0, 0.0), // chainmail chestplate
+        887 => (0, 2.0, 0.0), // iron
+        888 => (1, 6.0, 0.0),
+        889 => (2, 5.0, 0.0),
+        890 => (3, 2.0, 0.0),
+        891 => (0, 2.0, 0.0), // golden
+        892 => (1, 5.0, 0.0),
+        893 => (2, 3.0, 0.0),
+        894 => (3, 1.0, 0.0),
+        895 => (0, 3.0, 2.0), // diamond
+        896 => (1, 8.0, 2.0),
+        897 => (2, 6.0, 2.0),
+        898 => (3, 3.0, 2.0),
+        _ => return None,
+    })
+}
+
 /// W415: MC `Foods.java` - (nutrition, saturation modifier) per
 /// food item. Consumed by the F-eat flow through
 /// `hunger::FoodData::eat`. The legacy engine "meat" block (12)

@@ -24,6 +24,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let player_food = vx.player_food.food;
         // W418: XP level + bar progress.
         let (xp_level, xp_frac) = crate::xp::level_progress(vx.player_xp);
+        // W419: armor defense total for the HUD row.
+        let (armor_def, _) = crate::player::armor_totals(vx);
         let air_frac =
             (vx.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
         // Underwater / lava view tint. Triggered only when the
@@ -1175,6 +1177,34 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             // (invuln=true), so the row is just
                             // visual noise. Survival keeps them.
                             if !dbg_is_creative {
+                            // W419: armor row - 10 plates of 2
+                            // defense points each, shown only when
+                            // something is worn (the MC armor bar).
+                            if armor_def > 0.0 {
+                                ui.horizontal(|ui| {
+                                    ui.label("Armor:");
+                                    for i in 0..10 {
+                                        let need_full =
+                                            2.0 * (i as f32 + 1.0);
+                                        let need_half = need_full - 1.0;
+                                        let glyph = if armor_def
+                                            >= need_full
+                                        {
+                                            "\u{25A0}"
+                                        } else if armor_def >= need_half {
+                                            "\u{25E7}"
+                                        } else {
+                                            "\u{25A1}"
+                                        };
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(
+                                                175, 180, 195,
+                                            ),
+                                            glyph,
+                                        );
+                                    }
+                                });
+                            }
                             // Health row: 10 hearts of 2 HP each.
                             // A heart is full if `player_health` >=
                             // 2 * (i + 1), half if at the half-step,

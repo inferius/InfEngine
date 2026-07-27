@@ -370,10 +370,41 @@ pub(crate) fn apply_damage(voxel: &mut Voxel, amount: f32) {
 /// for lava, thud for everything else). Sound fires only on
 /// integer health crossings so a fractional per-frame drain
 /// doesn't spam the player's ears at 60 Hz.
+/// W419: total (defense, toughness) across the worn armor.
+pub(crate) fn armor_totals(voxel: &Voxel) -> (f32, f32) {
+    let mut def = 0.0;
+    let mut tough = 0.0;
+    for slot in &voxel.armor_slots {
+        if let Some((id, _)) = slot
+            && let Some((_, d, t)) = crate::item::armor_props(*id)
+        {
+            def += d;
+            tough += t;
+        }
+    }
+    (def, tough)
+}
+
 pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind) {
     if amount <= 0.0 {
         return;
     }
+    // W419: armor absorbs physical + burn damage
+    // (CombatRules.getDamageAfterAbsorb); drowning and the void
+    // bypass it like MC. (Fall damage rides Generic here -
+    // splitting it into its own kind is a follow-up.)
+    let amount = if matches!(kind, DamageKind::Generic | DamageKind::Burn) {
+        let (def, tough) = armor_totals(voxel);
+        if def > 0.0 {
+            let f = 2.0 + tough / 4.0;
+            let g = (def - amount / f).clamp(def * 0.2, 20.0);
+            amount * (1.0 - g / 25.0)
+        } else {
+            amount
+        }
+    } else {
+        amount
+    };
     // Godmode swallows damage entirely. Toggled via /godmode.
     if voxel.god_mode {
         return;

@@ -146,6 +146,9 @@ pub(crate) struct PlayerSave {
     /// W418: running XP point total. Part of the v4 payload (v4
     /// was minted the same day and never shipped without it).
     pub xp: u32,
+    /// W419: worn armor `[helmet, chest, legs, boots]` (same
+    /// same-day-v4 rationale as `xp`).
+    pub armor: Vec<Option<(u16, u8)>>,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -177,6 +180,7 @@ pub(crate) fn fresh_player(spawn: [i32; 3]) -> PlayerSave {
         food: 20.0,        // W416: MC spawn hunger
         saturation: 5.0,
         xp: 0,
+        armor: vec![None; 4],
     }
 }
 
@@ -766,6 +770,7 @@ pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
         food: 20.0,
         saturation: 5.0,
         xp: 0,
+        armor: vec![None; 4],
     };
     let raw_v4 = bincode::serde::encode_to_vec(&v4, cfg)
         .map_err(|err| invalid(format!("v4 payload encode failed: {err}")))?;
@@ -1079,6 +1084,7 @@ mod tests {
         assert_eq!(v4.food, 20.0);
         assert_eq!(v4.saturation, 5.0);
         assert_eq!(v4.xp, 0);
+        assert_eq!(v4.armor, vec![None; 4]);
     }
 
     #[test]

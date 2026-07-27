@@ -335,6 +335,7 @@ impl Voxel {
             player_food: crate::hunger::FoodData::default(),
             bow_charge: None,
             player_xp: 0,
+            armor_slots: [None; 4],
             smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),

@@ -380,6 +380,8 @@ pub(crate) struct Voxel {
     /// W418: running experience-point total (levels derive via
     /// `xp::level_progress`).
     pub(crate) player_xp: u32,
+    /// W419: worn armor `[helmet, chestplate, leggings, boots]`.
+    pub(crate) armor_slots: [Option<(u16, u8)>; 4],
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,
