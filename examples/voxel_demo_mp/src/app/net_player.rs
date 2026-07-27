@@ -152,12 +152,16 @@ impl Voxel {
     /// `player::apply_damage` so existing call sites
     /// (`self.apply_player_damage(...)`) keep working.
     pub(crate) fn apply_player_damage(&mut self, amount: f32) {
+        // W415: MC damage exhaustion (0.1 per hit taken).
+        self.player_food.add_exhaustion(0.1);
         player::apply_damage(self, amount);
     }
 
     /// Variant that tags the source of the damage. Thin wrapper
     /// around `player::apply_damage_kind`.
     pub(crate) fn apply_player_damage_kind(&mut self, amount: f32, kind: DamageKind) {
+        // W415: MC damage exhaustion (0.1 per hit taken).
+        self.player_food.add_exhaustion(0.1);
         player::apply_damage_kind(self, amount, kind);
     }
 
