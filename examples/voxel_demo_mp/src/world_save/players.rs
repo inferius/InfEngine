@@ -143,6 +143,9 @@ pub(crate) struct PlayerSave {
     /// W416: hidden saturation buffer (0..=food). Migrated v3
     /// saves start at the MC spawn value of 5.
     pub saturation: f32,
+    /// W418: running XP point total. Part of the v4 payload (v4
+    /// was minted the same day and never shipped without it).
+    pub xp: u32,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -173,6 +176,7 @@ pub(crate) fn fresh_player(spawn: [i32; 3]) -> PlayerSave {
         game_mode: 0,      // GameMode::Survival (W8.2)
         food: 20.0,        // W416: MC spawn hunger
         saturation: 5.0,
+        xp: 0,
     }
 }
 
@@ -761,6 +765,7 @@ pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
         game_mode: v3.game_mode,
         food: 20.0,
         saturation: 5.0,
+        xp: 0,
     };
     let raw_v4 = bincode::serde::encode_to_vec(&v4, cfg)
         .map_err(|err| invalid(format!("v4 payload encode failed: {err}")))?;
@@ -1073,6 +1078,7 @@ mod tests {
         assert_eq!(v4.game_mode, 1);
         assert_eq!(v4.food, 20.0);
         assert_eq!(v4.saturation, 5.0);
+        assert_eq!(v4.xp, 0);
     }
 
     #[test]

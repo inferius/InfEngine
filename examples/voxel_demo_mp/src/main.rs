@@ -161,6 +161,7 @@ mod menu;
 // W134 - minecarts: rail-riding cart entities (sim + interactions).
 mod minecart;
 mod hunger;
+mod xp;
 mod mining;
 mod mob;
 mod player;

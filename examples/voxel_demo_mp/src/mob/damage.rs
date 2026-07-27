@@ -137,6 +137,15 @@ pub(crate) fn damage_mob_scaled(
     // for the animation.
     voxel.mobs[idx].dying = MOB_DEATH_FADE;
     voxel.mob_dying.insert(mob_id, MOB_DEATH_FADE);
+    // W418: kill XP to the host player (MC ExperienceOrb reward;
+    // per-client XP pools are a follow-up with the rest of the
+    // client-side survival state).
+    if matches!(attacker_client_id, None | Some(0)) {
+        let xp_seed = mob_id.wrapping_mul(0x9E37_79B9);
+        voxel.player_xp = voxel
+            .player_xp
+            .saturating_add(crate::xp::mob_kill_xp(kind, xp_seed));
+    }
     // Per-kind hand-rolled loot table (see `mob_loot`). Quantities
     // are seeded from the mob id so save / replay matches. The kill
     // either auto-collects to the host inventory or credits the

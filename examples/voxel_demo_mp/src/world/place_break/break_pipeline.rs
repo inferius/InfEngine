@@ -364,6 +364,19 @@ pub(crate) fn apply_block_break(
                 _ => vx.spawn_drop(BlockId(drop_id), voxel),
             }
         }
+        // W418: ore XP (DropExperienceBlock) - paid when the drop
+        // is paid (survival only; instabuild suppresses both).
+        if !suppress_drops {
+            let seed = (voxel[0]
+                .wrapping_mul(73856093)
+                ^ voxel[1].wrapping_mul(83492791)
+                ^ voxel[2].wrapping_mul(19349663))
+                as u32;
+            let xp = crate::xp::ore_break_xp(broken.0, seed);
+            if xp > 0 {
+                vx.player_xp = vx.player_xp.saturating_add(xp);
+            }
+        }
         // W411: per-pos orientation bytes die with the block (slab
         // half / stairs facing / pillar axis all live in
         // stair_states; gates + trapdoors clear theirs above).

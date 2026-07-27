@@ -377,6 +377,9 @@ pub(crate) struct Voxel {
     pub(crate) player_food: crate::hunger::FoodData,
     /// W417: seconds the bow has been drawn; None = not drawing.
     pub(crate) bow_charge: Option<f32>,
+    /// W418: running experience-point total (levels derive via
+    /// `xp::level_progress`).
+    pub(crate) player_xp: u32,
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,

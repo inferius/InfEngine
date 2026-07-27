@@ -22,6 +22,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let player_health = vx.player_health;
         // W416: the hunger bar replaces the retired stamina bar.
         let player_food = vx.player_food.food;
+        // W418: XP level + bar progress.
+        let (xp_level, xp_frac) = crate::xp::level_progress(vx.player_xp);
         let air_frac =
             (vx.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
         // Underwater / lava view tint. Triggered only when the
@@ -1194,6 +1196,35 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         glyph,
                                     );
                                 }
+                            });
+                            // W418: XP level + progress bar (the
+                            // MC green bar over the hotbar).
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Lv {xp_level}:"));
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(120.0, 6.0),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter();
+                                painter.rect_filled(
+                                    rect,
+                                    2.0,
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        30, 30, 30, 220,
+                                    ),
+                                );
+                                let fill = egui::Rect::from_min_size(
+                                    rect.min,
+                                    egui::vec2(
+                                        rect.width() * xp_frac.clamp(0.0, 1.0),
+                                        rect.height(),
+                                    ),
+                                );
+                                painter.rect_filled(
+                                    fill,
+                                    2.0,
+                                    egui::Color32::from_rgb(120, 220, 60),
+                                );
                             });
                             // W416: hunger row - 10 shanks of 2
                             // food points each, mirroring the MC

@@ -55,6 +55,8 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         // W416: hunger pair.
         food: voxel.player_food.food,
         saturation: voxel.player_food.saturation,
+        // W418: XP total.
+        xp: voxel.player_xp,
     }
 }
 
@@ -97,6 +99,8 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
     voxel.player_food.saturation =
         save.saturation.clamp(0.0, voxel.player_food.food);
     voxel.player_food.exhaustion = 0.0;
+    // W418: XP total.
+    voxel.player_xp = save.xp;
     // W10.1: keep the cached ability bundle in lockstep with
     // `game_mode`. Without this the fly / invuln / instabuild
     // flags would lag a tick behind the loaded mode.
