@@ -2679,6 +2679,12 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 986, name: "bee_nest", display: Some("Bee Nest"), places: Some(986), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 987, name: "beehive", display: Some("Beehive"), places: Some(987), max_stack: 64, icon: None, category: ItemCategory::Decoration },
     ItemType { id: 988, name: "honeycomb", display: Some("Honeycomb"), places: None, max_stack: 64, icon: None, category: ItemCategory::Decoration },
+    // W420: netherite armor (the smithing upgrade of the diamond
+    // set).
+    ItemType { id: 989, name: "netherite_helmet", display: Some("Netherite Helmet"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 990, name: "netherite_chestplate", display: Some("Netherite Chestplate"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 991, name: "netherite_leggings", display: Some("Netherite Leggings"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    ItemType { id: 992, name: "netherite_boots", display: Some("Netherite Boots"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for
@@ -2737,6 +2743,10 @@ pub(crate) fn armor_props(id: u16) -> Option<(usize, f32, f32)> {
         896 => (1, 8.0, 2.0),
         897 => (2, 6.0, 2.0),
         898 => (3, 3.0, 2.0),
+        989 => (0, 3.0, 3.0), // netherite
+        990 => (1, 8.0, 3.0),
+        991 => (2, 6.0, 3.0),
+        992 => (3, 3.0, 3.0),
         _ => return None,
     })
 }

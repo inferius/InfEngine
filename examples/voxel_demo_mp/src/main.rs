@@ -421,6 +421,10 @@ pub(crate) enum DamageKind {
     /// auto-cheat against the void. Mirrors MC's
     /// `DamageSource::OUT_OF_WORLD` being marked `bypassInvul`.
     Void,
+    /// W420: landing damage. Split from Generic so armor points do
+    /// NOT absorb it (MC fall damage bypasses armor; only the
+    /// feather-falling enchant will).
+    Fall,
 }
 
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10

@@ -27,6 +27,11 @@ pub(crate) const SMITHING_RECIPES: &[SmithingRecipe] = &[
     SmithingRecipe { template: 933, base: 159, addition: 279, output: 276, name: "Netherite Shovel" },
     SmithingRecipe { template: 933, base: 161, addition: 279, output: 277, name: "Netherite Axe" },
     SmithingRecipe { template: 933, base: 637, addition: 279, output: 278, name: "Netherite Hoe" },
+    // W420: the armor row.
+    SmithingRecipe { template: 933, base: 895, addition: 279, output: 989, name: "Netherite Helmet" },
+    SmithingRecipe { template: 933, base: 896, addition: 279, output: 990, name: "Netherite Chestplate" },
+    SmithingRecipe { template: 933, base: 897, addition: 279, output: 991, name: "Netherite Leggings" },
+    SmithingRecipe { template: 933, base: 898, addition: 279, output: 992, name: "Netherite Boots" },
 ];
 
 /// Deterministic result for the current slot contents, or `None`

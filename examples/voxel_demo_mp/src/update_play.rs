@@ -985,7 +985,12 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 if on_snow {
                     dmg *= 0.5;
                 }
-                app.apply_player_damage(dmg);
+                // W420: fall rides its own kind - armor must
+                // not absorb it (MC).
+                app.apply_player_damage_kind(
+                    dmg,
+                    crate::DamageKind::Fall,
+                );
                 app.spawn_break_particles(landing);
             }
         }

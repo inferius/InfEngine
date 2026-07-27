@@ -461,6 +461,13 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
                     let _ = a.play_thud(60.0, 0.4 * g);
                 });
             }
+            DamageKind::Fall => {
+                // W420: same hurt thud as Generic - the split
+                // exists for the armor bypass, not the sound.
+                voxel.sfx_at("hurt", pos, |a, g| {
+                    let _ = a.play_thud(140.0, 0.35 * g);
+                });
+            }
         }
     }
     if voxel.player_health <= 0.0 {
