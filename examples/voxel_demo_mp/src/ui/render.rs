@@ -1649,8 +1649,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         } else {
                                             egui::Color32::from_rgb(170, 170, 170)
                                         };
+                                        // W422: match the 40 px slot
+                                        // width exactly - the old 38
+                                        // drifted the digits further
+                                        // left with every slot (R27).
                                         ui.add_sized(
-                                            [38.0, 14.0],
+                                            [40.0, 14.0],
                                             egui::Label::new(
                                                 egui::RichText::new(label)
                                                     .color(color)
