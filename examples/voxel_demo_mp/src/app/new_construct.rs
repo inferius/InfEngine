@@ -378,8 +378,13 @@ impl Voxel {
             water_vision_time: 0.0,
             cave_dark: 1.0,
             mob_prev_pos: HashMap::new(),
-            liquid_level: HashMap::new(),
-            liquid_positions: HashSet::new(),
+            // W434: pre-size the ocean-scale side maps. liq_pos
+            // peaks around ~1M cells in flight; growing a HashSet
+            // through that range rehashes ~1M entries mid-frame -
+            // the R29 log's 28 ms side_effects fold on an aquifer
+            // chunk was exactly such a spike (R26: use the RAM).
+            liquid_level: HashMap::with_capacity(1 << 20),
+            liquid_positions: HashSet::with_capacity(1 << 20),
             lava_columns: HashMap::new(),
             falling_pending: HashSet::new(),
             persistent_leaves: HashSet::new(),

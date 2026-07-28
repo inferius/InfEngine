@@ -394,6 +394,10 @@ impl Voxel {
         // bug is in result delivery (worker panic, channel disconnect, or
         // revision-guard mis-drop), NOT in dispatch timing.
         for &coord in coords {
+            // W434: name any single dispatch whose snapshot build
+            // runs long - the R29 log showed one 41 ms remesh-drain
+            // frame that no per-phase probe attributed.
+            let _disp_t = std::time::Instant::now();
             let Some(chunk) = self.world.chunk(coord) else {
                 continue;
             };
@@ -443,6 +447,17 @@ impl Voxel {
             // drain), so the lane stays bounded.
             if let Some(pool) = self.workers.as_ref() {
                 let _ = pool.light_tx.send(job);
+            }
+            let _disp_ms = _disp_t.elapsed().as_secs_f32() * 1000.0;
+            if _disp_ms > 5.0 {
+                tracing::warn!(
+                    coord = ?coord,
+                    ms = _disp_ms,
+                    stairs = self.stair_states.len(),
+                    doors = self.door_open.len(),
+                    snow = self.snow_positions.len(),
+                    "W434: slow remesh dispatch snapshot"
+                );
             }
         }
     }
