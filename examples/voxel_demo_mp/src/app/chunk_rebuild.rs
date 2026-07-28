@@ -163,6 +163,22 @@ impl Voxel {
             coord[1] * cs as i32,
             coord[2] * cs as i32,
         ];
+        // W439: gate stale horizontal-axis records on trunk-stacked
+        // logs at SNAPSHOT time. The W426 scrub only runs on the
+        // stream-apply path, so save-loaded chunks still meshed the
+        // leftover sideways grain (the R31 see-through bottom log
+        // right after loading a world). Same heuristic as the
+        // scrub: a pillar directly above or below marks a vertical
+        // trunk; the scrub still deletes the row itself later.
+        let stale_pillar = |p: [i32; 3], st: u8| -> bool {
+            (st == 1 || st == 2)
+                && crate::block::is_pillar_block(self.world.get(p).0)
+                && (crate::block::is_pillar_block(
+                    self.world.get([p[0], p[1] + 1, p[2]]).0,
+                ) || crate::block::is_pillar_block(
+                    self.world.get([p[0], p[1] - 1, p[2]]).0,
+                ))
+        };
         let mut memo: (u16, bool) = (0, false);
         for x in 0..cs {
             for y in 0..cs {
@@ -189,7 +205,9 @@ impl Voxel {
                         origin[1] + y as i32,
                         origin[2] + z as i32,
                     ];
-                    if let Some(&state) = self.stair_states.get(&pos) {
+                    if let Some(&state) = self.stair_states.get(&pos)
+                        && !stale_pillar(pos, state)
+                    {
                         out.insert(pos, state);
                     }
                     if let Some(&state) = self.bed_states.get(&pos) {
@@ -206,7 +224,9 @@ impl Voxel {
         for pos in ring {
             for d in [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
                 let n = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                if let Some(&state) = self.stair_states.get(&n) {
+                if let Some(&state) = self.stair_states.get(&n)
+                    && !stale_pillar(n, state)
+                {
                     out.insert(n, state);
                 }
             }

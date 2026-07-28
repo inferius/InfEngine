@@ -204,18 +204,20 @@ pub(crate) fn emit_pillar(
             o[2] + if zh { 1.0 } else { 0.0 },
         ]
     };
-    // The six cube faces in emit_cuboid's corner order (CCW from
-    // outside, UVs bottom-left -> BR -> TR -> TL).
-    // W433: corner order is CLOCKWISE seen from outside - the
-    // emit_element_quad index order (0,2,1 / 0,3,2) flips it, so a
-    // CCW table rendered every face inside-out (the R29 screen).
+    // The six cube faces in emit_cuboid's corner order: CLOCKWISE
+    // seen from outside - emit_element_quad's index pattern
+    // (0,2,1 / 0,3,2) reverses each quad, so the on-screen
+    // triangles wind CCW for the FrontFace::Ccw pipeline. W439:
+    // W433 reversed these rows chasing a test that measured buffer
+    // order instead of index order, turning every face inside-out
+    // (R31 see-through stairs / beams / gates); reverted.
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([1.0, 0.0, 0.0], [c(true, true, false), c(true, true, true), c(true, false, true), c(true, false, false)]),
-        ([-1.0, 0.0, 0.0], [c(false, true, true), c(false, true, false), c(false, false, false), c(false, false, true)]),
-        ([0.0, 1.0, 0.0], [c(false, true, true), c(true, true, true), c(true, true, false), c(false, true, false)]),
-        ([0.0, -1.0, 0.0], [c(false, false, false), c(true, false, false), c(true, false, true), c(false, false, true)]),
-        ([0.0, 0.0, 1.0], [c(true, true, true), c(false, true, true), c(false, false, true), c(true, false, true)]),
-        ([0.0, 0.0, -1.0], [c(false, true, false), c(true, true, false), c(true, false, false), c(false, false, false)]),
+        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
+        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
+        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
+        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
     ];
     for (normal, corners) in faces {
         let light = face_light([
@@ -357,16 +359,16 @@ fn emit_cuboid(
             if zh { hi[2] } else { lo[2] },
         ]
     };
-    // W433: corner order is CLOCKWISE seen from outside - the
-    // emit_element_quad index order (0,2,1 / 0,3,2) flips it, so a
-    // CCW table rendered every face inside-out (the R29 screen).
+    // Corner rows CLOCKWISE from outside; emit_element_quad's
+    // index pattern reverses them to CCW on screen (see emit_pillar
+    // - W439 reverted the W433 inversion here too).
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([1.0, 0.0, 0.0], [c(true, true, false), c(true, true, true), c(true, false, true), c(true, false, false)]),
-        ([-1.0, 0.0, 0.0], [c(false, true, true), c(false, true, false), c(false, false, false), c(false, false, true)]),
-        ([0.0, 1.0, 0.0], [c(false, true, true), c(true, true, true), c(true, true, false), c(false, true, false)]),
-        ([0.0, -1.0, 0.0], [c(false, false, false), c(true, false, false), c(true, false, true), c(false, false, true)]),
-        ([0.0, 0.0, 1.0], [c(true, true, true), c(false, true, true), c(false, false, true), c(true, false, true)]),
-        ([0.0, 0.0, -1.0], [c(false, true, false), c(true, true, false), c(true, false, false), c(false, false, false)]),
+        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
+        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
+        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
+        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
     ];
     for (normal, corners) in faces {
         infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
@@ -1379,10 +1381,27 @@ fn scale_uv(model_uv: [f32; 4], atlas_uv: [f32; 4]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
 
-    /// W433: every emit_pillar face must wind CCW seen from outside
-    /// (cross(e1, e2) aligned with the face normal) - a flipped
-    /// face gets backface-culled from outside and shows the block
-    /// interior instead (the R29 "trunk drawn inside-out" screen).
+    /// W439: walk the emitted TRIANGLES (`idxs`), not the vertex
+    /// buffer - emit_element_quad reorders corners via its index
+    /// pattern (0,2,1 / 0,3,2). The W433 predecessor measured
+    /// buffer order, only "passed" with inside-out tables, and
+    /// shipped the R31 see-through stairs / beams regression.
+    fn assert_tris_outward(tag: &str, verts: &[MeshVertex], idxs: &[u32]) {
+        assert_eq!(idxs.len() % 3, 0);
+        for (t, tri) in idxs.chunks(3).enumerate() {
+            let p0 = glam::Vec3::from(verts[tri[0] as usize].position);
+            let p1 = glam::Vec3::from(verts[tri[1] as usize].position);
+            let p2 = glam::Vec3::from(verts[tri[2] as usize].position);
+            let np = verts[tri[0] as usize].normal_pad;
+            let n = glam::Vec3::new(np[0] as f32, np[1] as f32, np[2] as f32);
+            let w = (p1 - p0).cross(p2 - p0);
+            assert!(
+                w.dot(n) > 0.0,
+                "{tag} tri {t}: winding {w:?} vs normal {n:?}"
+            );
+        }
+    }
+
     #[test]
     fn pillar_faces_wind_outward() {
         let pack = crate::resource_pack::fallback::placeholder_pack();
@@ -1398,23 +1417,31 @@ mod tests {
                 &pack,
                 &|_| [0.0, 1.0],
             );
-            assert_eq!(verts.len() % 4, 0);
-            for q in 0..verts.len() / 4 {
-                let p0 = glam::Vec3::from(verts[q * 4].position);
-                let p1 = glam::Vec3::from(verts[q * 4 + 1].position);
-                let p2 = glam::Vec3::from(verts[q * 4 + 2].position);
-                let np = verts[q * 4].normal_pad;
-                let n = glam::Vec3::new(
-                    np[0] as f32,
-                    np[1] as f32,
-                    np[2] as f32,
-                );
-                let w = (p1 - p0).cross(p2 - p0);
-                assert!(
-                    w.dot(n) > 0.0,
-                    "axis {axis} quad {q}: winding {w:?} vs normal {n:?}"
-                );
-            }
+            assert!(!idxs.is_empty());
+            assert_tris_outward(&format!("pillar axis {axis}"), &verts, &idxs);
+        }
+    }
+
+    /// W439: stairs exercise emit_cuboid (base slab + riser), the
+    /// table shared with fence gates and the bell stand.
+    #[test]
+    fn stairs_faces_wind_outward() {
+        let pack = crate::resource_pack::fallback::placeholder_pack();
+        let top = crate::block::door::TRAPDOOR_TOP_BIT;
+        for state in [0u8, 1, 2, 3, top, top | 2] {
+            let mut verts = Vec::new();
+            let mut idxs = Vec::new();
+            emit_stairs(
+                &mut verts,
+                &mut idxs,
+                glam::Vec3::ZERO,
+                88,
+                state,
+                &pack,
+                [0.0, 1.0],
+            );
+            assert!(!idxs.is_empty());
+            assert_tris_outward(&format!("stairs state {state}"), &verts, &idxs);
         }
     }
     use super::*;
