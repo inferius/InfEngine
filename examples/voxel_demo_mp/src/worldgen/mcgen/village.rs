@@ -192,6 +192,8 @@ fn record_oriented(
     // name (from the palette, BEFORE the blockmap folds wall_torch
     // into the plain torch id) is the only trace of wall-ness.
     let is_wall_torch = state.name.ends_with("wall_torch");
+    // W442: ladders keep their template facing (igloo shaft).
+    let is_ladder = name == "ladder";
     // W366: beds carry part (head/foot) + facing. MC's FACING
     // points from the foot toward the head; the head cell sits at
     // `foot + facing`.
@@ -234,7 +236,9 @@ fn record_oriented(
         });
         return;
     }
-    if !(is_stairs || is_door || is_trap || is_gate || is_wall_torch) {
+    if !(is_stairs || is_door || is_trap || is_gate || is_wall_torch
+        || is_ladder)
+    {
         return;
     }
     // Doors: only the LOWER half keys the state maps.
@@ -255,6 +259,10 @@ fn record_oriented(
         2
     } else if is_gate {
         3
+    } else if is_ladder {
+        // W442: kind 7 rides the door facing/open maps via the
+        // stream + gen catch-all arms (facing only, never open).
+        7
     } else {
         4
     };

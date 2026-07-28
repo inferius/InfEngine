@@ -542,6 +542,9 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 573, block: "mangrove_door",    top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 574, block: "cherry_door",      top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 575, block: "warped_door",      top: "", bottom: "", sides: "" },
+    // W442: ladder - facing variants (y-rotated single plane)
+    // come straight from the MC blockstate.
+    BlockNameMap { infengine_id: 595, block: "ladder", top: "", bottom: "", sides: "" },
     // W402: bell - the stand resolves from bell_floor.json via the
     // W401 variant cache; the swinging body stays a block entity.
     BlockNameMap { infengine_id: 966, block: "bell", top: "", bottom: "", sides: "" },

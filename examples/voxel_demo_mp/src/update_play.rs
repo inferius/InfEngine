@@ -825,6 +825,36 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                 );
             }
         }
+        // W442: ladder climbing (MC LivingEntity climbable rules).
+        // In a ladder cell: fall damage resets, the slide caps at
+        // MC's -0.15 b/tick (-3 m/s), forward input or Space
+        // ascends at the observed MC climb (~2.35 m/s), sneak
+        // freezes the slide so the player hangs in place.
+        if !app.fly_mode && !riding && liquid_under.is_none() {
+            let px = app.player_pos.x.floor() as i32;
+            let pz = app.player_pos.z.floor() as i32;
+            let feet_y =
+                (app.player_pos.y - PLAYER_HEIGHT + 0.05).floor() as i32;
+            let mid_y =
+                (app.player_pos.y - PLAYER_HEIGHT * 0.5).floor() as i32;
+            let on_ladder = app.world.get([px, feet_y, pz]).0
+                == crate::block::LADDER_ID
+                || app.world.get([px, mid_y, pz]).0
+                    == crate::block::LADDER_ID;
+            if on_ladder {
+                app.fall_start_y = None;
+                let ascend = input_active
+                    && (ctx.input.is_pressed(Key::W)
+                        || ctx.input.is_pressed(Key::Space));
+                if ascend {
+                    app.player_vel.y = app.player_vel.y.max(2.35);
+                } else if sneaking {
+                    app.player_vel.y = app.player_vel.y.max(0.0);
+                } else {
+                    app.player_vel.y = app.player_vel.y.max(-3.0);
+                }
+            }
+        }
         // Breath: only the eye-submerged check drains air -
         // mirrors MC's `getEyeInFluid() == WATER`. Wading
         // ankle- or waist-deep doesn't suffocate the player;

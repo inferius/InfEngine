@@ -1076,6 +1076,75 @@ pub(crate) fn mesh_chunk_in_worker(
             );
             return true;
         }
+        // W442: ladder - a wall plane, not a cube (the R32 igloo
+        // shaft rendered stacked textured cubes). Facing comes from
+        // the doors snapshot (template kind-7 records); direct
+        // structure puts (stronghold) carry no record, so fall back
+        // to attaching against the first solid horizontal
+        // neighbour. Hand-built plane covers the pack-less run.
+        if block.0 == crate::block::LADDER_ID {
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let light = halo.lookup(coord, wp);
+            let facing = doors.get(&wp).map(|&(f, _)| f & 3).unwrap_or_else(
+                || {
+                    let solid = |dx: i32, dz: i32| -> bool {
+                        let nx = lx + dx;
+                        let nz = lz + dz;
+                        if (0..CHUNK_SIZE as i32).contains(&nx)
+                            && (0..CHUNK_SIZE as i32).contains(&nz)
+                        {
+                            crate::block::block_is_opaque(chunk.get(
+                                nx as usize,
+                                ly as usize,
+                                nz as usize,
+                            ))
+                        } else {
+                            false
+                        }
+                    };
+                    // Ladder FACES AWAY from its wall.
+                    if solid(1, 0) {
+                        2 // wall +X -> faces west
+                    } else if solid(-1, 0) {
+                        0 // wall -X -> faces east
+                    } else if solid(0, 1) {
+                        3 // wall +Z -> faces north
+                    } else {
+                        1 // wall -Z (or free) -> faces south
+                    }
+                },
+            );
+            let dir = ["east", "south", "west", "north"]
+                [facing as usize];
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("facing", dir);
+            if let Some(m) =
+                resource_pack::special_models::model_for_block_with_props(
+                    block.0, pack, &props,
+                )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
+            resource_pack::element_mesh::emit_ladder(
+                verts, idxs, voxel_origin, block.0, facing, pack, light,
+            );
+            return true;
+        }
         // W288: wall torches lean off their wall; floor torches (no
         // orient row) keep the static standing model fallback.
         if block.0 == crate::block::TORCH_ID {

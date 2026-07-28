@@ -460,6 +460,84 @@ pub(crate) fn emit_wall_torch(
     }
 }
 
+/// W442 - ladder (MC ladder.json): one full-square two-sided plane
+/// 0.8/16 off the wall the ladder hangs on. `facing` = direction
+/// AWAY from the wall (0 E, 1 S, 2 W, 3 N), matching the blockstate
+/// convention the JSON path uses.
+pub(crate) fn emit_ladder(
+    verts: &mut Vec<MeshVertex>,
+    idxs: &mut Vec<u32>,
+    origin: Vec3,
+    block_id: u16,
+    facing: u8,
+    pack: &ResourcePack,
+    light: [f32; 2],
+) {
+    let tile = pack
+        .block_face_ref(block_id, super::BlockFace::Sides)
+        .map(|r| r.atlas_uv)
+        .unwrap_or_else(|| {
+            crate::block::atlas_uv_rect(
+                infengine_voxel::BlockId(block_id),
+                [1, 0, 0],
+            )
+        });
+    let o = [origin.x, origin.y, origin.z];
+    let (p, axis_x) = match facing & 3 {
+        0 => (o[0] + 0.05, true),  // wall -X
+        2 => (o[0] + 0.95, true),  // wall +X
+        1 => (o[2] + 0.05, false), // wall -Z
+        _ => (o[2] + 0.95, false), // wall +Z
+    };
+    let y0 = o[1];
+    let y1 = o[1] + 1.0;
+    // Corner rows follow the emit_cuboid CW-from-outside
+    // convention for each normal.
+    if axis_x {
+        let z0 = o[2];
+        let z1 = o[2] + 1.0;
+        infengine_voxel::emit_element_quad(
+            verts,
+            idxs,
+            [[p, y0, z0], [p, y0, z1], [p, y1, z1], [p, y1, z0]],
+            [1.0, 0.0, 0.0],
+            tile,
+            light,
+            0,
+        );
+        infengine_voxel::emit_element_quad(
+            verts,
+            idxs,
+            [[p, y0, z1], [p, y0, z0], [p, y1, z0], [p, y1, z1]],
+            [-1.0, 0.0, 0.0],
+            tile,
+            light,
+            0,
+        );
+    } else {
+        let x0 = o[0];
+        let x1 = o[0] + 1.0;
+        infengine_voxel::emit_element_quad(
+            verts,
+            idxs,
+            [[x1, y0, p], [x0, y0, p], [x0, y1, p], [x1, y1, p]],
+            [0.0, 0.0, 1.0],
+            tile,
+            light,
+            0,
+        );
+        infengine_voxel::emit_element_quad(
+            verts,
+            idxs,
+            [[x0, y0, p], [x1, y0, p], [x1, y1, p], [x0, y1, p]],
+            [0.0, 0.0, -1.0],
+            tile,
+            light,
+            0,
+        );
+    }
+}
+
 /// W167 - fence gate. Closed = two side posts + two horizontal rails
 /// spanning the opening; open = posts only (a gap to walk through).
 /// `facing` is the door-style horizontal facing (bit 0 picks the
@@ -1419,6 +1497,44 @@ mod tests {
             );
             assert!(!idxs.is_empty());
             assert_tris_outward(&format!("pillar axis {axis}"), &verts, &idxs);
+        }
+    }
+
+    /// W442: the ladder plane hugs the wall opposite its facing for
+    /// all four facings and both sides wind outward.
+    #[test]
+    fn ladder_planes_hug_wall_and_wind_outward() {
+        let pack = crate::resource_pack::fallback::placeholder_pack();
+        for facing in 0u8..4 {
+            let mut verts = Vec::new();
+            let mut idxs = Vec::new();
+            emit_ladder(
+                &mut verts,
+                &mut idxs,
+                glam::Vec3::ZERO,
+                crate::block::LADDER_ID,
+                facing,
+                &pack,
+                [0.0, 1.0],
+            );
+            assert_eq!(verts.len(), 8, "facing {facing}: two quads");
+            assert_tris_outward(
+                &format!("ladder facing {facing}"),
+                &verts,
+                &idxs,
+            );
+            let (axis, expect) = match facing {
+                0 => (0usize, 0.05f32),
+                2 => (0, 0.95),
+                1 => (2, 0.05),
+                _ => (2, 0.95),
+            };
+            for v in &verts {
+                assert!(
+                    (v.position[axis] - expect).abs() < 1e-4,
+                    "facing {facing}: plane off its wall",
+                );
+            }
         }
     }
 
