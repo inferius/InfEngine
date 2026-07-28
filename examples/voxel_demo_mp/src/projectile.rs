@@ -257,6 +257,7 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
     // W417: (mob_id, damage) hits from player arrows, applied after
     // the world borrow drops.
     let mut mob_hits: Vec<(u32, f32)> = Vec::new();
+    let mut picked_up = 0u32;
     let mob_boxes: Vec<(u32, Vec3)> = vx
         .mobs
         .iter()
@@ -278,8 +279,20 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
                 }
             }
         }
+        let ppos = vx.player_pos;
         for a in vx.arrows.iter_mut() {
             if let Some(t) = a.stuck.as_mut() {
+                // W436: a stuck PLAYER arrow within reach picks
+                // back up (AbstractArrow.playerTouch; mob arrows
+                // stay pickup-less like MC's CREATIVE_ONLY).
+                if a.from_player
+                    && (ppos - Vec3::new(0.0, 0.9, 0.0) - a.pos).length()
+                        < 1.2
+                {
+                    picked_up += 1;
+                    removed.push(a.id);
+                    continue;
+                }
                 *t -= dt;
                 if *t <= 0.0 {
                     removed.push(a.id);
@@ -388,6 +401,13 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
         }
     }
     // Side effects after the borrow on arrows/world drops.
+    for _ in 0..picked_up {
+        vx.pickup(infengine_voxel::BlockId(crate::item::ARROW_ID));
+        let p = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
+        vx.sfx_at("item/pickup", p, |a, g| {
+            let _ = a.play_click(1200.0, 0.10 * g);
+        });
+    }
     for _ in 0..host_hits {
         vx.apply_player_damage(ARROW_DAMAGE);
     }
