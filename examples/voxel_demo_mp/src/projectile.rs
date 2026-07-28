@@ -444,6 +444,121 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
     }
 }
 
+
+// ----------------------------------------------------------------
+// W430 - the witch's thrown splash potion (`ThrownPotion` MVP).
+// ----------------------------------------------------------------
+
+/// MC potion throw speed: 0.75 blocks/tick.
+pub(crate) const POTION_SPEED: f32 = 15.0;
+/// Splash radius (MC affects entities within 4 blocks, scaled).
+const POTION_SPLASH_R: f32 = 3.5;
+/// Harming splash at the centre (tapers linearly to the edge).
+const POTION_DAMAGE: f32 = 6.0;
+const POTION_LIFETIME_S: f32 = 6.0;
+
+pub(crate) struct Potion {
+    pub(crate) pos: Vec3,
+    pub(crate) vel: Vec3,
+    pub(crate) age: f32,
+}
+
+pub(crate) fn spawn_potion(vx: &mut Voxel, origin: Vec3, vel: Vec3) {
+    vx.thrown_potions.push(Potion { pos: origin, vel, age: 0.0 });
+}
+
+/// Host-side potion flight: arrow ballistics, splash on the first
+/// solid block OR on closing within a body's reach. Damage tapers
+/// with distance like MC's splash scaling. (Flight has no mesh yet -
+/// the impact burst + sound carry the read; a trail is a follow-up.)
+pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
+    if matches!(vx.net, NetRole::Client { .. }) || vx.thrown_potions.is_empty()
+    {
+        return;
+    }
+    let mut bursts: Vec<Vec3> = Vec::new();
+    {
+        let world = &vx.world;
+        let mut targets: Vec<Vec3> = Vec::new();
+        if !vx.game_mode.is_creative() {
+            targets.push(vx.player_pos);
+        }
+        if let NetRole::Server { poses, .. } = &vx.net {
+            for p in poses.values() {
+                if p.id != 0 {
+                    targets.push(Vec3::from(p.pos));
+                }
+            }
+        }
+        for pot in vx.thrown_potions.iter_mut() {
+            pot.age += dt;
+            pot.vel.y -= ARROW_GRAVITY * dt;
+            let step = pot.vel * dt;
+            let len = step.length();
+            let dir = if len > 1e-6 { step / len } else { Vec3::Y };
+            let solid = |b: infengine_voxel::BlockId| -> bool {
+                !b.is_air() && crate::block::block_fully_occludes(b)
+            };
+            let hit_block = raycast_with(world, pot.pos, dir, len, solid).is_some();
+            let near_body = targets.iter().any(|t| {
+                (*t - Vec3::new(0.0, 0.9, 0.0) - pot.pos).length() < 1.2
+            });
+            if hit_block || near_body || pot.age > POTION_LIFETIME_S {
+                bursts.push(pot.pos);
+                pot.age = f32::INFINITY; // mark for removal
+            } else {
+                pot.pos += step;
+            }
+        }
+    }
+    vx.thrown_potions.retain(|p| p.age.is_finite());
+    for at in bursts {
+        // Splash: host player damage tapers with distance; remote
+        // players get the same through vx.damage.
+        let d_host = (vx.player_pos - Vec3::new(0.0, 0.9, 0.0) - at).length();
+        if d_host < POTION_SPLASH_R && !vx.game_mode.is_creative() {
+            let dmg = POTION_DAMAGE * (1.0 - d_host / (POTION_SPLASH_R + 0.5));
+            vx.apply_player_damage(dmg.max(1.0));
+        }
+        if let NetRole::Server { server, poses, .. } = &vx.net {
+            let cfg = bincode::config::standard();
+            let hits: Vec<(u32, f32)> = poses
+                .values()
+                .filter(|p| p.id != 0)
+                .filter_map(|p| {
+                    let d = (Vec3::from(p.pos) - Vec3::new(0.0, 0.9, 0.0) - at)
+                        .length();
+                    if d < POTION_SPLASH_R {
+                        let dmg = (POTION_DAMAGE
+                            * (1.0 - d / (POTION_SPLASH_R + 0.5)))
+                            .max(1.0);
+                        Some((p.id, dmg))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (pid, dmg) in hits {
+                if let Ok(buf) =
+                    bincode::serde::encode_to_vec(DamageMsg { amount: dmg }, cfg)
+                {
+                    server.send_bytes_to_client(pid, "vx.damage", buf);
+                }
+            }
+        }
+        // Purple glass-shatter burst + sound at the impact cell.
+        let cell = [
+            at.x.floor() as i32,
+            at.y.floor() as i32,
+            at.z.floor() as i32,
+        ];
+        vx.spawn_place_particles(cell, [0.55, 0.25, 0.75]);
+        vx.sfx_at("potion/splash", [at.x, at.y, at.z], |a, g| {
+            let _ = a.play_click(900.0, 0.12 * g);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

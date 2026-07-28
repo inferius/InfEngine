@@ -1029,6 +1029,38 @@ fn step_one(
                 );
             }
         }
+        // W430: the witch ranged attack - a thrown splash potion
+        // of harming on a ~3 s cadence, inside a 10-block window
+        // (WitchAttackPotions). The shared melee path still covers
+        // point-blank range, like the skeleton.
+        if m.kind == super::kinds::KIND_WITCH
+            && m.attack_cd <= 0.0
+            && let Some(p) = chase_player_pos
+        {
+            const WITCH_THROW_COOLDOWN: f32 = 3.25;
+            const POT_MIN_D2: f32 = 2.5 * 2.5;
+            const POT_MAX_D2: f32 = 10.0 * 10.0;
+            let ddx = p[0] - m.pos[0];
+            let ddy = p[1] - m.pos[1];
+            let ddz = p[2] - m.pos[2];
+            let pd2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (POT_MIN_D2..=POT_MAX_D2).contains(&pd2) {
+                m.attack_cd = WITCH_THROW_COOLDOWN;
+                let eye = glam::Vec3::new(m.pos[0], m.pos[1] + 1.6, m.pos[2]);
+                let tgt = glam::Vec3::new(p[0], p[1] - 0.4, p[2]);
+                let vel = crate::projectile::aim_at(
+                    eye,
+                    tgt,
+                    crate::projectile::POTION_SPEED,
+                );
+                crate::projectile::spawn_potion(voxel, eye, vel);
+                voxel.sfx_at(
+                    "mob/witch/throw",
+                    [eye.x, eye.y, eye.z],
+                    |_, _| {},
+                );
+            }
+        }
         // W340: the zombie family batters its villager/golem victim
         // (MC zombie attack attribute 3.0) and a villager killed by
         // a zombie rises as a zombie villager (normal-difficulty

@@ -997,6 +997,8 @@ pub(crate) struct Voxel {
         std::collections::HashMap<u32, crate::net::TntMsg>,
     /// W337: live ghast fireballs (host authoritative).
     pub(crate) fireballs: Vec<crate::projectile::Fireball>,
+    /// W430: live witch splash potions (host authoritative).
+    pub(crate) thrown_potions: Vec<crate::projectile::Potion>,
     pub(crate) next_fireball_id: u32,
     /// W337: client-side view of the host's fireball snapshots.
     pub(crate) remote_fireballs:

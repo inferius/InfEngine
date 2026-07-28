@@ -332,6 +332,9 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("arrow/shoot", "entity.arrow.shoot"),
     // W419 - armor equip swap.
     ("armor/equip", "item.armor.equip_generic"),
+    // W430 - witch splash potion.
+    ("mob/witch/throw", "entity.witch.throw"),
+    ("potion/splash", "entity.splash_potion.break"),
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),

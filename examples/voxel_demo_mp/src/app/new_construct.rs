@@ -336,6 +336,7 @@ impl Voxel {
             bow_charge: None,
             player_xp: 0,
             armor_slots: [None; 4],
+            thrown_potions: Vec::new(),
             smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),

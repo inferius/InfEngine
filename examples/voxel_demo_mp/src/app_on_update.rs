@@ -714,6 +714,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             crate::projectile::tick_arrows(vx, dt);
             // W337: ghast fireballs (impact = power-1 explosion).
             crate::projectile::tick_fireballs(vx, dt);
+            crate::projectile::tick_potions(vx, dt);
             // W338: primed TNT fuses.
             crate::tnt::tick(vx, dt);
             let _ms = _t.elapsed().as_secs_f32() * 1000.0;
