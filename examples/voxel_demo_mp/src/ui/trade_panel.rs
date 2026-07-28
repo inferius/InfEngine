@@ -7,12 +7,15 @@
 //! offer index; `render.rs` applies the exchange on the inventory
 //! snapshot after the egui pass (stonecutter pattern).
 
-use crate::trades::{count_items, trades_for};
+use crate::trades::{count_items, sampled_offer_indices, trades_for};
 use crate::ui::SlotIcon;
 
 pub(crate) struct TradePanelInputs<'a> {
     pub(crate) ctx: &'a egui::Context,
     pub(crate) profession: &'a str,
+    /// Mob id of the open villager - seeds the per-villager offer
+    /// sample (W440).
+    pub(crate) villager_id: u32,
     pub(crate) inv_view: &'a [Option<(u16, u8)>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
@@ -41,6 +44,7 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
     let TradePanelInputs {
         ctx,
         profession,
+        villager_id,
         inv_view,
         atlas_tex_id,
         icon_uv_resolver,
@@ -61,10 +65,22 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
+            // W440: bounded height + scroll - the full pool of some
+            // professions (shepherd wool/carpet colours) overflowed
+            // the window with no way to reach the lower rows.
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             egui::Grid::new("villager_trades")
                 .spacing([6.0, 4.0])
                 .show(ui, |ui| {
-                    for (i, t) in trades_for(profession).enumerate() {
+                    // W440: per-villager sampled offers (2 per tier,
+                    // MC's per-level roll) instead of the whole
+                    // profession pool. `i` stays an index into the
+                    // trades_for enumeration so the apply site's
+                    // `.nth(i)` keeps working.
+                    for i in sampled_offer_indices(profession, villager_id) {
+                        let Some(t) = trades_for(profession).nth(i) else {
+                            continue;
+                        };
                         let afford = count_items(inv_view, t.want)
                             >= t.want_n as u32
                             && t.want2.is_none_or(|(id2, n2)| {
@@ -79,16 +95,19 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
                             false,
                             egui::Sense::hover(),
                         );
-                        if let Some((id2, n2)) = t.want2 {
-                            let w2 = Some(slot_icon(id2, n2, icon_uv_resolver));
-                            crate::ui::slot_widget::draw_slot_widget(
-                                ui,
-                                w2,
-                                atlas_tex_id,
-                                false,
-                                egui::Sense::hover(),
-                            );
-                        }
+                        // W440: ALWAYS draw the second cost column
+                        // (empty slot when absent) so the arrow +
+                        // result columns line up across rows.
+                        let w2 = t
+                            .want2
+                            .map(|(id2, n2)| slot_icon(id2, n2, icon_uv_resolver));
+                        crate::ui::slot_widget::draw_slot_widget(
+                            ui,
+                            w2,
+                            atlas_tex_id,
+                            false,
+                            egui::Sense::hover(),
+                        );
                         ui.label("->");
                         let give =
                             Some(slot_icon(t.give, t.give_n, icon_uv_resolver));
@@ -108,6 +127,7 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
                         ui.end_row();
                     }
                 });
+            });
         });
     if !open {
         *open_local = false;

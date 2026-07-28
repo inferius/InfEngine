@@ -282,6 +282,46 @@ pub(crate) fn trades_for(profession: &str) -> impl Iterator<Item = &'static Trad
     TRADES.iter().filter(move |t| t.profession == profession)
 }
 
+/// W440: MC villagers OFFER a per-villager sample, not the whole
+/// pool - vanilla rolls 2 offers per level from that level's
+/// VillagerTrades listing (the R31 shepherd window listed every
+/// wool + carpet colour and overflowed the panel). Leveling is
+/// still a follow-up, so novice + apprentice (tiers 1-2) both
+/// contribute: a deterministic Fisher-Yates pick of 2 per tier
+/// seeded by the villager id (mob ids persist in the save, so a
+/// villager keeps its offers across sessions). Returned values are
+/// indices into the `trades_for(profession)` enumeration.
+pub(crate) fn sampled_offer_indices(
+    profession: &str,
+    villager_id: u32,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    for tier in [1u8, 2] {
+        let mut pool: Vec<usize> = trades_for(profession)
+            .enumerate()
+            .filter(|(_, t)| t.tier == tier)
+            .map(|(i, _)| i)
+            .collect();
+        if pool.is_empty() {
+            continue;
+        }
+        let mut h = (villager_id as u64 ^ ((tier as u64) << 32))
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        for i in (1..pool.len()).rev() {
+            h ^= h >> 27;
+            h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+            h ^= h >> 31;
+            let j = (h % (i as u64 + 1)) as usize;
+            pool.swap(i, j);
+        }
+        let take = pool.len().min(2);
+        pool.truncate(take);
+        pool.sort_unstable();
+        out.extend(pool);
+    }
+    out
+}
+
 /// W293 crop families: the harvest drops BLOCK-FORM ids next to the
 /// canonical items - either pays a trade wanting the crop.
 pub(crate) fn item_matches(inv_id: u16, want_id: u16) -> bool {
@@ -373,6 +413,42 @@ mod tests {
         for id in [1u32, 7, 42, 900_001] {
             assert_eq!(profession_for(id), profession_for(id));
         }
+    }
+
+    /// W440: the offer sample is deterministic per villager, at
+    /// most 2 rows per tier, and every index resolves via the
+    /// `trades_for(...).nth(i)` path the apply site uses.
+    #[test]
+    fn sampled_offers_deterministic_and_bounded() {
+        for prof in ["shepherd", "farmer", "mason", "armorer"] {
+            for vid in [1u32, 7, 42, 900_001] {
+                let a = sampled_offer_indices(prof, vid);
+                let b = sampled_offer_indices(prof, vid);
+                assert_eq!(a, b, "{prof}/{vid} not deterministic");
+                assert!(!a.is_empty(), "{prof}/{vid} empty");
+                assert!(a.len() <= 4, "{prof}/{vid} too many rows");
+                for &i in &a {
+                    assert!(
+                        trades_for(prof).nth(i).is_some(),
+                        "{prof}/{vid} index {i} out of range",
+                    );
+                }
+                let t1 = a
+                    .iter()
+                    .filter(|&&i| {
+                        trades_for(prof).nth(i).unwrap().tier == 1
+                    })
+                    .count();
+                assert!(t1 <= 2, "{prof}/{vid} more than 2 tier-1 rows");
+            }
+        }
+        // Different villagers eventually see different offers (the
+        // shepherd tier-2 pool is huge, so 8 ids colliding on one
+        // sample would mean the seed is ignored).
+        let distinct: std::collections::HashSet<Vec<usize>> = (0..8u32)
+            .map(|vid| sampled_offer_indices("shepherd", vid))
+            .collect();
+        assert!(distinct.len() > 1, "shepherd samples never vary");
     }
 
     #[test]

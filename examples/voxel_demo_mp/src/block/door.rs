@@ -27,7 +27,10 @@ pub(crate) fn is_door_block(id: u16) -> bool {
     // lower-half voxel sits in 568..=575; the upper halves use
     // the SAME id today since we don't ship per-variant upper
     // ids yet.
-    matches!(id, 77..=79) || (568..=575).contains(&id)
+    matches!(id, 77..=79)
+        || (568..=575).contains(&id)
+        // W440: copper doors (hand-open like wood in MC).
+        || (826..=827).contains(&id)
 }
 
 /// W125: true when `id` is a trapdoor block (W48.4 ids 548..=552).
@@ -39,6 +42,8 @@ pub(crate) fn is_trapdoor_block(id: u16) -> bool {
         || (722..=725).contains(&id)
         // W174: crimson / warped nether-wood trapdoors.
         || (750..=751).contains(&id)
+        // W440: copper trapdoors.
+        || (828..=829).contains(&id)
 }
 
 /// W167: true when `id` is a fence gate (726..=731). Fence gates share

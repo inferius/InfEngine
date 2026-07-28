@@ -2461,6 +2461,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         ui::trade_panel::TradePanelInputs {
                             ctx,
                             profession: trade_profession,
+                            villager_id: trade_open_id.unwrap_or(0),
                             inv_view: &inv_plain_snapshot,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,

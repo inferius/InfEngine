@@ -520,6 +520,15 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 550, block: "birch_trapdoor",   top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 551, block: "spruce_trapdoor",  top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 552, block: "jungle_trapdoor",  top: "", bottom: "", sides: "" },
+    // W440: legacy oak/iron door ids were MISSING here, so they
+    // fell to the hand-coded static door_lower model - the mesher's
+    // facing/half/hinge/open props never matched anything and every
+    // oak door rendered closed with one fixed orientation (the R31
+    // village-door report). With these rows the W401 variant cache
+    // loads all 32 pre-rotated states like the 568+ doors.
+    BlockNameMap { infengine_id: 77,  block: "oak_door",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 78,  block: "oak_door",          top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 79,  block: "iron_door",         top: "", bottom: "", sides: "" },
     // W55.1: W48 door variants (568..=575). MC ships proper
     // 3-px hinged door blockstates that the universal JSON
     // pipeline can load once these rows point at the right MC
@@ -752,6 +761,16 @@ mod tests {
         assert!(lookup_block(1).is_some());
         assert!(lookup_block(3).is_some());
         assert_eq!(lookup_block(3).unwrap().top, "grass_block_top");
+    }
+
+    /// W440: legacy oak/iron door ids must resolve to the MC door
+    /// blockstate names - without these rows the variant cache never
+    /// loads and doors render closed with one fixed orientation.
+    #[test]
+    fn block_map_covers_legacy_doors() {
+        assert_eq!(lookup_block(77).map(|m| m.block), Some("oak_door"));
+        assert_eq!(lookup_block(78).map(|m| m.block), Some("oak_door"));
+        assert_eq!(lookup_block(79).map(|m| m.block), Some("iron_door"));
     }
 
     #[test]
