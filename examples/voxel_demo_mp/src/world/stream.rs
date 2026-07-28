@@ -1491,6 +1491,39 @@ fn drain_unload_batch(
 /// crossings (caller is `rescan_chunk_radius`). A disabled ring
 /// (`lod_distance` <= view distance, or a non-MC worldgen profile)
 /// clears any leftover state.
+/// W449: band membership by TILE EXTENT. The ring scans used the
+/// tile CENTRE, so a 4x4 (or 16x16) tile straddling either circle
+/// edge never built and the bands left radial strips of bare sky -
+/// the R32 "empty space between the LOD and everything" horizon.
+/// A tile belongs to the band when its NEAREST point sits inside
+/// the outer circle and its FARTHEST corner reaches past the inner
+/// one: full annulus coverage, with the overlap tucked under the
+/// nearer band. i64 math - a stale far tile's corner distance can
+/// overflow i32 squares.
+fn tile_band(
+    key: [i32; 2],
+    span: i32,
+    player_chunk: [i32; 3],
+    inner_sq: i32,
+    outer_sq: i32,
+) -> bool {
+    let x0 = key[0] * span;
+    let x1 = x0 + span - 1;
+    let z0 = key[1] * span;
+    let z1 = z0 + span - 1;
+    let ndx = (player_chunk[0] - player_chunk[0].clamp(x0, x1)) as i64;
+    let ndz = (player_chunk[2] - player_chunk[2].clamp(z0, z1)) as i64;
+    let d_near = ndx * ndx + ndz * ndz;
+    let fdx = (player_chunk[0] - x0)
+        .abs()
+        .max((player_chunk[0] - x1).abs()) as i64;
+    let fdz = (player_chunk[2] - z0)
+        .abs()
+        .max((player_chunk[2] - z1).abs()) as i64;
+    let d_far = fdx * fdx + fdz * fdz;
+    d_near <= outer_sq as i64 && d_far > inner_sq as i64
+}
+
 fn rescan_lod_ring(
     vx: &mut Voxel,
     player_chunk: [i32; 3],
@@ -1562,12 +1595,19 @@ fn rescan_lod_ring(
         let inner_sq = lod_dist * lod_dist;
         for tzk in t_min_z..=t_max_z {
             for txk in t_min_x..=t_max_x {
+                if !tile_band(
+                    [txk, tzk],
+                    span,
+                    player_chunk,
+                    inner_sq,
+                    lod2_sq,
+                ) {
+                    continue;
+                }
+                // Centre distance stays the build priority.
                 let cdx = txk * span + span / 2 - player_chunk[0];
                 let cdz = tzk * span + span / 2 - player_chunk[2];
                 let d = cdx * cdx + cdz * cdz;
-                if d <= inner_sq || d > lod2_sq {
-                    continue;
-                }
                 let key = [txk, tzk];
                 if !vx.lod2_meshes.contains_key(&key)
                     && vx.lod2_pending_set.insert(key)
@@ -1579,20 +1619,13 @@ fn rescan_lod_ring(
                 }
             }
         }
-        vx.lod2_pending_set.retain(|k| {
-            let cdx = k[0] * span + span / 2 - player_chunk[0];
-            let cdz = k[1] * span + span / 2 - player_chunk[2];
-            let d = cdx * cdx + cdz * cdz;
-            d > inner_sq && d <= lod2_sq
-        });
+        vx.lod2_pending_set
+            .retain(|k| tile_band(*k, span, player_chunk, inner_sq, lod2_sq));
         let keep2 = lod2_dist + 2 * span;
         let keep2_sq = keep2 * keep2;
         let mut drop2: Vec<[i32; 2]> = Vec::new();
         for k in vx.lod2_meshes.keys() {
-            let cdx = k[0] * span + span / 2 - player_chunk[0];
-            let cdz = k[1] * span + span / 2 - player_chunk[2];
-            let d = cdx * cdx + cdz * cdz;
-            if d > keep2_sq || d <= inner_sq {
+            if !tile_band(*k, span, player_chunk, inner_sq, keep2_sq) {
                 drop2.push(*k);
             }
         }
@@ -1644,12 +1677,18 @@ fn rescan_lod_ring(
         let inner_sq3 = outer2 * outer2;
         for tzk in t_min_z..=t_max_z {
             for txk in t_min_x..=t_max_x {
+                if !tile_band(
+                    [txk, tzk],
+                    span3,
+                    player_chunk,
+                    inner_sq3,
+                    lod3_sq,
+                ) {
+                    continue;
+                }
                 let cdx = txk * span3 + span3 / 2 - player_chunk[0];
                 let cdz = tzk * span3 + span3 / 2 - player_chunk[2];
                 let d = cdx * cdx + cdz * cdz;
-                if d <= inner_sq3 || d > lod3_sq {
-                    continue;
-                }
                 let key = [txk, tzk];
                 if !vx.lod3_meshes.contains_key(&key)
                     && vx.lod3_pending_set.insert(key)
@@ -1662,19 +1701,13 @@ fn rescan_lod_ring(
             }
         }
         vx.lod3_pending_set.retain(|k| {
-            let cdx = k[0] * span3 + span3 / 2 - player_chunk[0];
-            let cdz = k[1] * span3 + span3 / 2 - player_chunk[2];
-            let d = cdx * cdx + cdz * cdz;
-            d > inner_sq3 && d <= lod3_sq
+            tile_band(*k, span3, player_chunk, inner_sq3, lod3_sq)
         });
         let keep3 = lod3_dist + 2 * span3;
         let keep3_sq = keep3 * keep3;
         let mut drop3: Vec<[i32; 2]> = Vec::new();
         for k in vx.lod3_meshes.keys() {
-            let cdx = k[0] * span3 + span3 / 2 - player_chunk[0];
-            let cdz = k[1] * span3 + span3 / 2 - player_chunk[2];
-            let d = cdx * cdx + cdz * cdz;
-            if d > keep3_sq || d <= inner_sq3 {
+            if !tile_band(*k, span3, player_chunk, inner_sq3, keep3_sq) {
                 drop3.push(*k);
             }
         }
