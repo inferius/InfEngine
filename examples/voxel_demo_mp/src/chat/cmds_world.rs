@@ -145,15 +145,9 @@ pub(crate) fn cmd_weather(
     };
     match kind {
         Some(k) => {
-            voxel.weather = k;
-            if let NetRole::Server { server, .. } = &mut voxel.net
-                && let Ok(buf) = bincode::serde::encode_to_vec(
-                    k,
-                    bincode::config::standard(),
-                )
-            {
-                server.broadcast_bytes("vx.weather", buf);
-            }
+            // W448: set_weather re-rolls the natural duration and
+            // broadcasts when hosting.
+            crate::world::weather::set_weather(voxel, k);
             lines.push(format!(
                 "Weather: {}",
                 match k {

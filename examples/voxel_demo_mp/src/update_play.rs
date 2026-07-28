@@ -460,6 +460,9 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             }
         }
         app.last_walk_xz = Some(cur_xz);
+        // W448: advance the natural weather cycle (host/offline
+        // only; the fn no-ops on clients).
+        crate::world::weather::tick_weather(app, dt);
         // W123: rain ambience loop. MC plays weather.rain segments
         // back-to-back while it rains; our bank variants are short
         // clips, so refire on a ~0.45 s cadence (clips overlap a

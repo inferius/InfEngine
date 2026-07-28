@@ -20,3 +20,5 @@ pub mod tree;
 pub mod stream;
 // W132 - thin-shape-aware targeting raycast.
 pub mod targeting;
+// W448 - natural weather cycle (MC advanceWeatherCycle).
+pub mod weather;

@@ -1186,6 +1186,11 @@ pub(crate) struct Voxel {
     /// fresh snapshot.
     pub(crate) liquid_level_share:
         Option<std::sync::Arc<HashMap<[i32; 3], u8>>>,
+    /// W448: seconds left in the current natural weather stretch
+    /// (host-owned; clients follow broadcasts).
+    pub(crate) weather_ticks_left: f32,
+    /// W448: xorshift stream for the duration rolls (0 = unseeded).
+    pub(crate) weather_rng: u32,
     /// W111: last-meshed signature per chunk (commutative fold over the
     /// chunk's liquid cell positions + levels). The diff re-meshes only
     /// chunks whose signature changed. Transient, not persisted.

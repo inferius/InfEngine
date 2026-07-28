@@ -330,15 +330,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
         {
-            vx.weather = (vx.weather + 1) % 3;
-            if let NetRole::Server { server, .. } = &mut vx.net
-                && let Ok(buf) = bincode::serde::encode_to_vec(
-                    vx.weather,
-                    bincode::config::standard(),
-                )
-            {
-                server.broadcast_bytes("vx.weather", buf);
-            }
+            // W448: route through set_weather so the manual pick
+            // holds for one natural stretch (and broadcasts).
+            crate::world::weather::set_weather(vx, (vx.weather + 1) % 3);
             let label = match vx.weather {
                 1 => "Rain",
                 2 => "Snow",
