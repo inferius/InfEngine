@@ -349,6 +349,26 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 182, block: "green_stained_glass",       top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 183, block: "red_stained_glass",         top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 184, block: "black_stained_glass",       top: "", bottom: "", sides: "" },
+    // W443: stained glass PANES (701..=716). Without these rows the
+    // panes fell to the static hand-coded thin pane - no multipart
+    // arms, one fixed orientation (the R32 yellow-pane report). With
+    // the blockstate JSON they connect like plain glass_pane (80).
+    BlockNameMap { infengine_id: 701, block: "white_stained_glass_pane",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 702, block: "orange_stained_glass_pane",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 703, block: "magenta_stained_glass_pane",    top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 704, block: "light_blue_stained_glass_pane", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 705, block: "yellow_stained_glass_pane",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 706, block: "lime_stained_glass_pane",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 707, block: "pink_stained_glass_pane",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 708, block: "gray_stained_glass_pane",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 709, block: "light_gray_stained_glass_pane", top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 710, block: "cyan_stained_glass_pane",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 711, block: "purple_stained_glass_pane",     top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 712, block: "blue_stained_glass_pane",       top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 713, block: "brown_stained_glass_pane",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 714, block: "green_stained_glass_pane",      top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 715, block: "red_stained_glass_pane",        top: "", bottom: "", sides: "" },
+    BlockNameMap { infengine_id: 716, block: "black_stained_glass_pane",      top: "", bottom: "", sides: "" },
     // W40.2: Concrete (ids 185..=200).
     BlockNameMap { infengine_id: 185, block: "white_concrete",       top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 186, block: "orange_concrete",      top: "", bottom: "", sides: "" },
@@ -940,6 +960,10 @@ mod tests {
             543, 544, 545, 546, 547, // W133: wood fences (W131 rows) - blockstate names, texture via JSON planks ref
             966, // W402: bell - blockstate name, textures via JSON refs (planks/stone)
             568, 569, 570, 571, 572, 573, 574, 575, // W133: door variants - MC ships <wood>_door_top/_bottom.png only
+            // W443: stained glass panes - blockstate names; textures
+            // via the JSON refs (<color>_stained_glass + _pane_top).
+            701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712,
+            713, 714, 715, 716,
             217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, // carpets (texture via JSON wool ref)
             154, 155, 156, 157, 158, 159, 160, 161, // gold/diamond tools
             162, 163, 164, 165, 166, 167, 168,       // food items

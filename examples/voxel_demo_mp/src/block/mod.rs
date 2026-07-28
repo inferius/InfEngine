@@ -324,7 +324,11 @@ pub(crate) fn multipart_connects(self_id: u16, neighbor: BlockId) -> bool {
         id == COBBLESTONE_WALL_ID
             || (GRANITE_WALL_ID..=END_STONE_BRICK_WALL_ID).contains(&id)
     };
-    let pane_or_bars = |id: u16| id == GLASS_PANE_ID || id == IRON_BARS_ID;
+    // W443: stained glass panes (701..=716) are IronBarsBlock
+    // subclasses in MC - same connection family as plain panes.
+    let pane_or_bars = |id: u16| {
+        id == GLASS_PANE_ID || id == IRON_BARS_ID || (701..=716).contains(&id)
+    };
     let solid = !neighbor.is_air() && block_fully_occludes(neighbor);
     // W287: MC FenceBlock.connectsTo includes fence GATES - the
     // village fence used to stop one block short of every gate
