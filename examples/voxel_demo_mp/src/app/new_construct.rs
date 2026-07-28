@@ -340,6 +340,7 @@ impl Voxel {
             player_xp: 0,
             armor_slots: [None; 4],
             thrown_potions: Vec::new(),
+            player_effects: crate::effects::PlayerEffects::default(),
             smithing_slots: [None; 3],
             brewing_stands: HashMap::new(),
             brewing_runtimes: HashMap::new(),

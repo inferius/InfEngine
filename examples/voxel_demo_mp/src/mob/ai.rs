@@ -1123,7 +1123,21 @@ fn step_one(
                     tgt,
                     crate::projectile::POTION_SPEED,
                 );
-                crate::projectile::spawn_potion(voxel, eye, vel);
+                // W438: WitchAttackPotions selection - slowness on
+                // a fresh close target, poison while the target is
+                // healthy, harming otherwise.
+                let kind = if pd2 < 9.0
+                    && voxel.player_effects.slowness <= 0.0
+                {
+                    crate::projectile::PotionKind::Slowness
+                } else if voxel.player_health >= 8.0
+                    && voxel.player_effects.poison <= 0.0
+                {
+                    crate::projectile::PotionKind::Poison
+                } else {
+                    crate::projectile::PotionKind::Harming
+                };
+                crate::projectile::spawn_potion(voxel, eye, vel, kind);
                 voxel.sfx_at(
                     "mob/witch/throw",
                     [eye.x, eye.y, eye.z],

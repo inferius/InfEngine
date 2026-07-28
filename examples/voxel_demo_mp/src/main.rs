@@ -160,6 +160,7 @@ mod creative_tab;
 mod menu;
 // W134 - minecarts: rail-riding cart entities (sim + interactions).
 mod minecart;
+mod effects;
 mod hunger;
 mod xp;
 mod mining;
@@ -425,6 +426,9 @@ pub(crate) enum DamageKind {
     /// NOT absorb it (MC fall damage bypasses armor; only the
     /// feather-falling enchant will).
     Fall,
+    /// W438: magic damage (poison / harming) - bypasses armor
+    /// points like MC (only protection enchants will reduce it).
+    Magic,
 }
 
 /// Maximum player hit points. 20 mirrors the Minecraft scale (10

@@ -26,6 +26,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let (xp_level, xp_frac) = crate::xp::level_progress(vx.player_xp);
         // W419: armor defense total for the HUD row.
         let (armor_def, _) = crate::player::armor_totals(vx);
+        // W438: active status effects snapshot.
+        let fx = vx.player_effects;
         let air_frac =
             (vx.player_air / AIR_MAX_SEC).clamp(0.0, 1.0);
         // Underwater / lava view tint. Triggered only when the
@@ -1227,6 +1229,40 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     );
                                 }
                             });
+                            // W438: active effects (name + time
+                            // left), MC HUD-corner style.
+                            if fx.any_active() {
+                                ui.horizontal(|ui| {
+                                    let mut chip =
+                                        |label: &str, t: f32, col: egui::Color32| {
+                                            if t > 0.0 {
+                                                ui.colored_label(
+                                                    col,
+                                                    format!(
+                                                        "{label} {}:{:02}",
+                                                        t as u32 / 60,
+                                                        t as u32 % 60
+                                                    ),
+                                                );
+                                            }
+                                        };
+                                    chip(
+                                        "Slowness",
+                                        fx.slowness,
+                                        egui::Color32::from_rgb(120, 130, 160),
+                                    );
+                                    chip(
+                                        "Poison",
+                                        fx.poison,
+                                        egui::Color32::from_rgb(120, 190, 90),
+                                    );
+                                    chip(
+                                        "Regen",
+                                        fx.regen,
+                                        egui::Color32::from_rgb(230, 120, 160),
+                                    );
+                                });
+                            }
                             // W418: XP level + progress bar (the
                             // MC green bar over the hotbar).
                             ui.horizontal(|ui| {

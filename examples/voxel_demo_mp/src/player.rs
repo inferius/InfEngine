@@ -468,6 +468,12 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
                     let _ = a.play_thud(140.0, 0.35 * g);
                 });
             }
+            DamageKind::Magic => {
+                // W438: softer, higher hit - poison/harming.
+                voxel.sfx_at("hurt", pos, |a, g| {
+                    let _ = a.play_thud(220.0, 0.30 * g);
+                });
+            }
         }
     }
     if voxel.player_health <= 0.0 {
@@ -484,9 +490,10 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
         voxel.invuln_remaining = 3.0;
         // W418: death wipes the XP pool (orb drops at the death
         // spot are a follow-up) and resets hunger to the MC
-        // respawn state.
+        // respawn state. W438: effects clear too.
         voxel.player_xp = 0;
         voxel.player_food = crate::hunger::FoodData::default();
+        voxel.player_effects.clear();
         let mut dropped = 0usize;
         for slot in voxel.inventory[HOTBAR_SLOTS..].iter_mut() {
             if slot.take().is_some() {

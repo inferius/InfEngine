@@ -107,6 +107,7 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
                     || app.abilities.invulnerable;
                 if want_sprint && food_ok {
                     speed_mul *= 1.7;
+                    // (Slowness still applies below.)
                     app.sprinting = true;
                 } else {
                     app.sprinting = false;
@@ -116,6 +117,10 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             }
         } else {
             app.sprinting = false;
+        }
+        // W438: Slowness I - MC -15% movement while active.
+        if app.player_effects.slowness > 0.0 {
+            speed_mul *= crate::effects::SLOWNESS_FACTOR;
         }
         // Stamina accounting: drain while sprinting, regen
         // otherwise. Clamped to [0, STAMINA_MAX] each tick.
@@ -134,6 +139,26 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
             app.stamina = STAMINA_MAX;
         } else {
             app.stamina = STAMINA_MAX;
+        }
+        // W438: status-effect tick. Poison bypasses armor (Magic)
+        // and never kills (the MC 1 HP floor); regen rides the
+        // plain heal path.
+        if !app.abilities.invulnerable {
+            match app.player_effects.tick(dt) {
+                crate::effects::EffectEvent::PoisonTick => {
+                    if app.player_health > 1.0 {
+                        app.apply_player_damage_kind(
+                            1.0,
+                            crate::DamageKind::Magic,
+                        );
+                    }
+                }
+                crate::effects::EffectEvent::RegenTick => {
+                    app.player_health =
+                        (app.player_health + 1.0).min(PLAYER_MAX_HEALTH);
+                }
+                crate::effects::EffectEvent::None => {}
+            }
         }
         // W415: hunger tick - natural regeneration + starvation
         // (MC FoodData; creative/invulnerable skips it like

@@ -477,14 +477,28 @@ const POTION_SPLASH_R: f32 = 3.5;
 const POTION_DAMAGE: f32 = 6.0;
 const POTION_LIFETIME_S: f32 = 6.0;
 
+/// W438: which splash the witch threw (WitchAttackPotions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PotionKind {
+    Harming,
+    Poison,
+    Slowness,
+}
+
 pub(crate) struct Potion {
     pub(crate) pos: Vec3,
     pub(crate) vel: Vec3,
     pub(crate) age: f32,
+    pub(crate) kind: PotionKind,
 }
 
-pub(crate) fn spawn_potion(vx: &mut Voxel, origin: Vec3, vel: Vec3) {
-    vx.thrown_potions.push(Potion { pos: origin, vel, age: 0.0 });
+pub(crate) fn spawn_potion(
+    vx: &mut Voxel,
+    origin: Vec3,
+    vel: Vec3,
+    kind: PotionKind,
+) {
+    vx.thrown_potions.push(Potion { pos: origin, vel, age: 0.0, kind });
 }
 
 /// Host-side potion flight: arrow ballistics, splash on the first
@@ -496,7 +510,7 @@ pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
     {
         return;
     }
-    let mut bursts: Vec<Vec3> = Vec::new();
+    let mut bursts: Vec<(Vec3, PotionKind)> = Vec::new();
     {
         let world = &vx.world;
         let mut targets: Vec<Vec3> = Vec::new();
@@ -524,7 +538,7 @@ pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
                 (*t - Vec3::new(0.0, 0.9, 0.0) - pot.pos).length() < 1.2
             });
             if hit_block || near_body || pot.age > POTION_LIFETIME_S {
-                bursts.push(pot.pos);
+                bursts.push((pot.pos, pot.kind));
                 pot.age = f32::INFINITY; // mark for removal
             } else {
                 pot.pos += step;
@@ -532,13 +546,34 @@ pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
         }
     }
     vx.thrown_potions.retain(|p| p.age.is_finite());
-    for at in bursts {
-        // Splash: host player damage tapers with distance; remote
-        // players get the same through vx.damage.
+    for (at, kind) in bursts {
+        // Splash: the effect tapers with distance like MC's splash
+        // scaling; remote players get damage kinds via vx.damage
+        // (effects are host-side until MP effect sync lands).
         let d_host = (vx.player_pos - Vec3::new(0.0, 0.9, 0.0) - at).length();
         if d_host < POTION_SPLASH_R && !vx.game_mode.is_creative() {
-            let dmg = POTION_DAMAGE * (1.0 - d_host / (POTION_SPLASH_R + 0.5));
-            vx.apply_player_damage(dmg.max(1.0));
+            match kind {
+                PotionKind::Harming => {
+                    let dmg = POTION_DAMAGE
+                        * (1.0 - d_host / (POTION_SPLASH_R + 0.5));
+                    vx.apply_player_damage_kind(
+                        dmg.max(1.0),
+                        crate::DamageKind::Magic,
+                    );
+                }
+                PotionKind::Poison => {
+                    // MC witch poison: 45 s at the centre.
+                    vx.player_effects.poison =
+                        vx.player_effects.poison.max(45.0
+                            * (1.0 - d_host / (POTION_SPLASH_R + 0.5)));
+                }
+                PotionKind::Slowness => {
+                    // MC witch slowness: 90 s scaled.
+                    vx.player_effects.slowness =
+                        vx.player_effects.slowness.max(90.0
+                            * (1.0 - d_host / (POTION_SPLASH_R + 0.5)));
+                }
+            }
         }
         if let NetRole::Server { server, poses, .. } = &vx.net {
             let cfg = bincode::config::standard();

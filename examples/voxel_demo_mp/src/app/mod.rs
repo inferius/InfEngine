@@ -1003,6 +1003,8 @@ pub(crate) struct Voxel {
     pub(crate) fireballs: Vec<crate::projectile::Fireball>,
     /// W430: live witch splash potions (host authoritative).
     pub(crate) thrown_potions: Vec<crate::projectile::Potion>,
+    /// W438: active player status effects (slowness/poison/regen).
+    pub(crate) player_effects: crate::effects::PlayerEffects,
     pub(crate) next_fireball_id: u32,
     /// W337: client-side view of the host's fireball snapshots.
     pub(crate) remote_fireballs:
