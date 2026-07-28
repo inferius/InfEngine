@@ -250,18 +250,97 @@ pub(crate) fn place_icebergs(
 /// W219: the underwater floor disks (step 6, after ores). 3x3 source
 /// replay; a try only runs where the origin cell is water (the placed
 /// predicate).
+/// W427: one attempted-disk placement from a source chunk's
+/// stream. Everything COLUMN-derived (biome, floor, radius rolls)
+/// is resolved once per source and memoised; the chunk-dependent
+/// half (the FloorIs anchor gate + the target-block writes) stays
+/// in `place_disks`. Before this every Y-chunk of the 24-tall
+/// column re-paid 9 sources of cold `mc_floor_at` column solves -
+/// the W310/W404 bench still showed disks at ~80 ms/chunk cold.
+struct DiskPlacement {
+    di: u8,
+    wx: i32,
+    wy: i32,
+    wz: i32,
+    r: i32,
+}
+
+thread_local! {
+    static DISKS_MEMO: std::cell::RefCell<
+        std::collections::HashMap<(i32, i32, u32), std::rc::Rc<Vec<DiskPlacement>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn disk_placements_for_source(
+    ctx: &WorldgenCtx,
+    scx: i32,
+    scz: i32,
+) -> std::rc::Rc<Vec<DiskPlacement>> {
+    let cs = CHUNK_SIZE as i32;
+    let seed = ctx.effective_seed();
+    if let Some(hit) =
+        DISKS_MEMO.with(|m| m.borrow().get(&(scx, scz, seed)).cloned())
+    {
+        return hit;
+    }
+    let mut out: Vec<DiskPlacement> = Vec::new();
+    for (di, def) in disk_defs().iter().enumerate() {
+        if let Some(list) = def.biomes {
+            let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+            if !list.contains(&mc) {
+                continue;
+            }
+        } else {
+            // The 33-biome default set: everything but the swamps.
+            let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
+            if matches!(mc, McBiome::Swamp | McBiome::MangroveSwamp) {
+                continue;
+            }
+        }
+        let mut rng = SplitMix64::new(stream_seed(
+            seed,
+            scx,
+            scz,
+            SALT_DISK ^ ((di as u64) << 40),
+        ));
+        for _ in 0..def.count {
+            let wx = scx * cs + next_int(&mut rng, 16);
+            let wz = scz * cs + next_int(&mut rng, 16);
+            let floor = mc_floor_at(ctx, wx, wz);
+            let wy = match def.gate {
+                DiskGate::Underwater => floor + 1,
+                DiskGate::FloorIs(_) => floor,
+            };
+            // The radius roll consumes REGARDLESS of the gate (the
+            // pre-W427 code burned one equal-width roll on a gate
+            // fail), so rolling here keeps the stream aligned while
+            // the chunk-dependent FloorIs gate moves to the apply.
+            let r = next_between(&mut rng, def.r_min, def.r_max);
+            if matches!(def.gate, DiskGate::Underwater)
+                && wy >= crate::worldgen::climate::SEA_LEVEL
+            {
+                continue;
+            }
+            out.push(DiskPlacement { di: di as u8, wx, wy, wz, r });
+        }
+    }
+    let rc = std::rc::Rc::new(out);
+    DISKS_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert((scx, scz, seed), rc.clone());
+    });
+    rc
+}
+
 pub(crate) fn place_disks(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx, origin: [i32; 3]) {
     let cs = CHUNK_SIZE as i32;
     let seed = ctx.effective_seed();
     // W404: disks are a SURFACE feature (a few blocks around the
-    // floor line), but this ran for every chunk of the 24-tall
-    // column - each pass paying 9 sources x defs x count
-    // mc_floor_at column solves. The W310 bench showed 69.7
-    // ms/chunk, a top-two slice of the R25 slow-frontier report.
-    // Gate on the cheap preliminary surface: chunks whose Y range
-    // cannot touch the disk band skip everything. (MC runs
-    // decoration once per COLUMN region, so the per-Y replay is
-    // ours alone - same outcome, 24x less work.)
+    // floor line) - chunks whose Y range cannot touch the disk band
+    // skip everything.
     {
         let ow = super::terrain::overworld_for(seed);
         let prelim =
@@ -270,97 +349,69 @@ pub(crate) fn place_disks(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCt
             return;
         }
     }
-    for (di, def) in disk_defs().iter().enumerate() {
-        let targets = target_ids(def.targets);
-        let anchor_block = match def.gate {
-            DiskGate::FloorIs(name) => block_id_by_name(name),
-            DiskGate::Underwater => None,
-        };
-        for scx in (coord[0] - 1)..=(coord[0] + 1) {
-            for scz in (coord[2] - 1)..=(coord[2] + 1) {
-                if let Some(list) = def.biomes {
-                    let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
-                    if !list.contains(&mc) {
-                        continue;
-                    }
-                } else {
-                    // The 33-biome default set: everything but the swamps.
-                    let mc = mc_full_biome_at(ctx, scx * cs + 8, scz * cs + 8);
-                    if matches!(mc, McBiome::Swamp | McBiome::MangroveSwamp) {
+    for scx in (coord[0] - 1)..=(coord[0] + 1) {
+        for scz in (coord[2] - 1)..=(coord[2] + 1) {
+            let placements = disk_placements_for_source(ctx, scx, scz);
+            for p in placements.iter() {
+                let def = &disk_defs()[p.di as usize];
+                let targets = target_ids(def.targets);
+                let (wx, wy, wz, r) = (p.wx, p.wy, p.wz, p.r);
+                if let DiskGate::FloorIs(name) = def.gate {
+                    // Chunk-local anchor read; off-chunk anchors
+                    // skip (their own column's replay covers them).
+                    let anchor_block = block_id_by_name(name);
+                    let (lx, ly, lz) =
+                        (wx - origin[0], wy - origin[1], wz - origin[2]);
+                    let ok = (0..cs).contains(&lx)
+                        && (0..cs).contains(&ly)
+                        && (0..cs).contains(&lz)
+                        && anchor_block
+                            == Some(
+                                chunk
+                                    .get(lx as usize, ly as usize, lz as usize)
+                                    .0,
+                            );
+                    if !ok {
                         continue;
                     }
                 }
-                let mut rng =
-                    SplitMix64::new(stream_seed(seed, scx, scz, SALT_DISK ^ ((di as u64) << 40)));
-                for _ in 0..def.count {
-                    let wx = scx * cs + next_int(&mut rng, 16);
-                    let wz = scz * cs + next_int(&mut rng, 16);
-                    let floor = mc_floor_at(ctx, wx, wz);
-                    // Underwater disks anchor at floor+1 (must be water);
-                    // floor-anchored ones at the floor cell itself
-                    // (random_offset y -1), which must be the gate block.
-                    let wy = match def.gate {
-                        DiskGate::Underwater => floor + 1,
-                        DiskGate::FloorIs(_) => floor,
-                    };
-                    let gate_ok = match def.gate {
-                        DiskGate::Underwater => wy < crate::worldgen::climate::SEA_LEVEL,
-                        DiskGate::FloorIs(_) => {
-                            // Chunk-local anchor read; off-chunk anchors
-                            // skip (their own column's replay covers them).
-                            let (lx, ly, lz) =
-                                (wx - origin[0], wy - origin[1], wz - origin[2]);
-                            (0..cs).contains(&lx)
-                                && (0..cs).contains(&ly)
-                                && (0..cs).contains(&lz)
-                                && anchor_block
-                                    == Some(chunk.get(lx as usize, ly as usize, lz as usize).0)
+                let top = wy + def.half_height;
+                let bottom = wy - def.half_height - 1;
+                for bx in (wx - r)..=(wx + r) {
+                    for bz in (wz - r)..=(wz + r) {
+                        let (xd, zd) = (bx - wx, bz - wz);
+                        if xd * xd + zd * zd > r * r {
+                            continue;
                         }
-                    };
-                    if !gate_ok {
-                        // Roll consumption stays fixed for alignment.
-                        let _ = next_int(&mut rng, def.r_max - def.r_min + 1);
-                        continue;
-                    }
-                    let r = next_between(&mut rng, def.r_min, def.r_max);
-                    let top = wy + def.half_height;
-                    let bottom = wy - def.half_height - 1;
-                    for bx in (wx - r)..=(wx + r) {
-                        for bz in (wz - r)..=(wz + r) {
-                            let (xd, zd) = (bx - wx, bz - wz);
-                            if xd * xd + zd * zd > r * r {
+                        let (lx, lz) = (bx - origin[0], bz - origin[2]);
+                        if !(0..cs).contains(&lx) || !(0..cs).contains(&lz) {
+                            continue;
+                        }
+                        for by in (bottom + 1..=top).rev() {
+                            let ly = by - origin[1];
+                            if !(0..cs).contains(&ly) {
                                 continue;
                             }
-                            let (lx, lz) = (bx - origin[0], bz - origin[2]);
-                            if !(0..cs).contains(&lx) || !(0..cs).contains(&lz) {
+                            let here = chunk.get(lx as usize, ly as usize, lz as usize).0;
+                            if !targets.contains(&here) {
                                 continue;
                             }
-                            for by in (bottom + 1..=top).rev() {
-                                let ly = by - origin[1];
-                                if !(0..cs).contains(&ly) {
-                                    continue;
+                            // rule_based providers: sandstone under
+                            // air (disk_sand); grass where nothing
+                            // sits above (disk_grass).
+                            let below_air = ly > 0
+                                && chunk.get(lx as usize, (ly - 1) as usize, lz as usize).is_air();
+                            let open_above = ly + 1 < cs
+                                && chunk.get(lx as usize, (ly + 1) as usize, lz as usize).is_air();
+                            let state = if def.grass_when_open_above && open_above {
+                                3 // grass_block
+                            } else {
+                                match (below_air, def.below_air_state) {
+                                    (true, Some(s)) => s,
+                                    _ => def.state,
                                 }
-                                let here = chunk.get(lx as usize, ly as usize, lz as usize).0;
-                                if !targets.contains(&here) {
-                                    continue;
-                                }
-                                // rule_based providers: sandstone under
-                                // air (disk_sand); grass where nothing
-                                // sits above (disk_grass).
-                                let below_air = ly > 0
-                                    && chunk.get(lx as usize, (ly - 1) as usize, lz as usize).is_air();
-                                let open_above = ly + 1 < cs
-                                    && chunk.get(lx as usize, (ly + 1) as usize, lz as usize).is_air();
-                                let state = if def.grass_when_open_above && open_above {
-                                    3 // grass_block
-                                } else {
-                                    match (below_air, def.below_air_state) {
-                                        (true, Some(s)) => s,
-                                        _ => def.state,
-                                    }
-                                };
-                                chunk.set(lx as usize, ly as usize, lz as usize, BlockId(state));
-                            }
+                            };
+                            chunk.set(lx as usize, ly as usize, lz as usize, BlockId(state));
                         }
                     }
                 }

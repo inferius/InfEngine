@@ -764,6 +764,74 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
 
 #[cfg(test)]
 mod tests {
+
+    /// W427: cold column-build phase split. Run with
+    /// `cargo test -p voxel_demo_mp --release --lib column_build_bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn column_build_bench() {
+        let seed = 3616343644u32;
+        let ow = overworld_for(seed);
+        let n = 24;
+        let (mut t_cells, mut t_dens, mut t_bio, mut t_carve) =
+            (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for i in 0..n {
+            let cx = 1000 + i * 7;
+            let cz = -800 - i * 5;
+            let cs = CHUNK_SIZE as i32;
+            let (ox, oz) = (cx * cs, cz * cs);
+            let t0 = std::time::Instant::now();
+            let cells = ow.build_cells(ox, oz, LATTICE_TOP);
+            t_cells += t0.elapsed().as_secs_f64();
+
+            let t0 = std::time::Instant::now();
+            let mut solid =
+                Box::new([[[0u64; BITS_WORDS]; CHUNK_SIZE]; CHUNK_SIZE]);
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    let wx = ox + lx as i32;
+                    let wz = oz + lz as i32;
+                    for y in ow.min_y..=LATTICE_TOP {
+                        if ow.density_cells(wx, y, wz, &cells) > 0.0 {
+                            let b = (y - BITS_MIN_Y) as usize;
+                            solid[lx][lz][b >> 6] |= 1u64 << (b & 63);
+                        }
+                    }
+                }
+            }
+            t_dens += t0.elapsed().as_secs_f64();
+
+            let t0 = std::time::Instant::now();
+            let mut _acc = 0u32;
+            for lx in 0..CHUNK_SIZE {
+                for lz in 0..CHUNK_SIZE {
+                    let wx = ox + lx as i32;
+                    let wz = oz + lz as i32;
+                    _acc = _acc
+                        .wrapping_add(ow.mc_biome_at(wx, wz) as u32)
+                        .wrapping_add(ow.surface_depth(wx, wz, seed) as u32);
+                }
+            }
+            t_bio += t0.elapsed().as_secs_f64();
+
+            let t0 = std::time::Instant::now();
+            let mut aquifer = Aquifer::new(&ow, seed, ox, oz);
+            super::super::carver::carve_mask(
+                &mut solid, cx, cz, seed, &ow, &mut aquifer,
+            );
+            t_carve += t0.elapsed().as_secs_f64();
+        }
+        let f = 1000.0 / n as f64;
+        println!("cold column build phase split ({n} columns):");
+        println!("  build_cells: {:.2} ms", t_cells * f);
+        println!("  density loop: {:.2} ms", t_dens * f);
+        println!("  biome+surface: {:.2} ms", t_bio * f);
+        println!("  carve_mask: {:.2} ms", t_carve * f);
+        println!(
+            "  TOTAL: {:.2} ms",
+            (t_cells + t_dens + t_bio + t_carve) * f
+        );
+    }
     use super::*;
     use crate::worldgen::WorldGen;
 

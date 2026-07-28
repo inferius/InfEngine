@@ -191,6 +191,14 @@ pub(crate) enum Df {
     /// still the 3D detail under the splines.
     BlendedNoise(Box<BlendedNoise>),
     Passthrough(Box<Df>),
+    /// W428: MC `cache_2d` / `flat_cache` - the inner tree is
+    /// xz-only, so evaluating it once per COLUMN and reusing the
+    /// value across every y is value-identical and ~49x cheaper in
+    /// the lattice build (which walks columns top to bottom). The
+    /// id indexes a thread-local single-entry (x, z, value) slot;
+    /// ids are GLOBALLY unique (atomic counter) so trees from
+    /// different dims/seeds never share a slot.
+    Cache2d { inner: Box<Df>, id: usize },
     /// W213: MC `interpolated` - the subtree is sampled at noise-cell
     /// corners and trilinearly interpolated. `id` indexes the node's
     /// lattice in a [`CellLattices`] (assigned by
@@ -228,6 +236,20 @@ pub(crate) struct CellLattices {
     grids: Vec<Vec<[[f64; 5]; 5]>>,
 }
 
+/// W428: globally unique `Cache2d` slot ids (across every parsed
+/// tree, dim and seed) + the per-thread single-entry slots.
+static CACHE2D_NEXT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn next_cache2d_id() -> usize {
+    CACHE2D_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+thread_local! {
+    static C2D_SCRATCH: std::cell::RefCell<Vec<(f64, f64, f64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(crate) const CELL_W: i32 = 4;
 pub(crate) const CELL_H: i32 = 8;
 
@@ -260,13 +282,18 @@ impl CellLattices {
             .iter()
             .map(|inner| {
                 let mut g = vec![[[0.0f64; 5]; 5]; ny];
-                for (j, layer) in g.iter_mut().enumerate() {
-                    let wy = (y0 + j as i32 * ch) as f64;
-                    for (i, row) in layer.iter_mut().enumerate().take(nw) {
-                        let wx = (x0 + i as i32 * cw) as f64;
-                        for (k, c) in row.iter_mut().enumerate().take(nw) {
-                            let wz = (z0 + k as i32 * cw) as f64;
-                            *c = inner.eval(wx, wy, wz);
+                // W428: COLUMN-major order (xz outer, y inner) so
+                // the Cache2d single-entry slots hit on every layer
+                // but the first - the 2D subtrees (continents /
+                // erosion / ridges / offset) used to re-evaluate
+                // for all ~49 corner layers.
+                for i in 0..nw {
+                    let wx = (x0 + i as i32 * cw) as f64;
+                    for k in 0..nw {
+                        let wz = (z0 + k as i32 * cw) as f64;
+                        for (j, layer) in g.iter_mut().enumerate() {
+                            let wy = (y0 + j as i32 * ch) as f64;
+                            layer[i][k] = inner.eval(wx, wy, wz);
                         }
                     }
                 }
@@ -413,6 +440,29 @@ impl Df {
             Df::Spline(s) => s.eval(x, y, z),
             Df::BlendedNoise(b) => b.eval(x, y, z),
             Df::Passthrough(a) => ev(a),
+            Df::Cache2d { inner, id } => {
+                // Two-phase borrow: nested Cache2d nodes re-enter
+                // the scratch, so the slot check releases the
+                // RefCell before the inner eval runs.
+                let hit = C2D_SCRATCH.with(|c| {
+                    let mut c = c.borrow_mut();
+                    if c.len() <= *id {
+                        c.resize(*id + 1, (f64::NAN, f64::NAN, 0.0));
+                    }
+                    let e = c[*id];
+                    if e.0 == x && e.1 == z { Some(e.2) } else { None }
+                });
+                match hit {
+                    Some(v) => v,
+                    None => {
+                        let v = inner.eval_impl(x, y, z, cells);
+                        C2D_SCRATCH.with(|c| {
+                            c.borrow_mut()[*id] = (x, z, v);
+                        });
+                        v
+                    }
+                }
+            }
             Df::Interpolated { inner, id } => match cells {
                 Some(c) => c.sample(*id, x, y, z),
                 None => ev(inner),
@@ -478,6 +528,7 @@ impl Df {
                 sz.walk_mut(f);
             }
             Df::Interpolated { inner, .. } => inner.walk_mut(f),
+            Df::Cache2d { inner, .. } => inner.walk_mut(f),
             Df::WeirdScaled { input, .. } => input.walk_mut(f),
             Df::Spline(s) => s.walk_mut(f),
             Df::Const(_)
@@ -521,6 +572,7 @@ impl Df {
                 f(sz);
             }
             Df::Interpolated { inner, .. } => f(inner),
+            Df::Cache2d { inner, .. } => f(inner),
             Df::WeirdScaled { input, .. } => f(input),
             Df::Spline(s) => s.for_children(f),
             Df::Const(_)
@@ -781,7 +833,15 @@ fn parse_obj(o: &Value, df: &DfResolver<'_>, noises: &NoiseResolver<'_>, blended
         ))),
         // Caching / blending: value == inner argument for a
         // single-pass generator.
-        "cache_2d" | "cache_once" | "cache_all_in_cell" | "flat_cache"
+        // W428: the xz-only cache wrappers get a REAL per-column
+        // cache (value-identical; see Df::Cache2d). cache_once /
+        // cache_all_in_cell stay pass-through (their inners are
+        // y-dependent).
+        "cache_2d" | "flat_cache" => Df::Cache2d {
+            inner: arg(),
+            id: next_cache2d_id(),
+        },
+        "cache_once" | "cache_all_in_cell"
         | "blend_density" => Df::Passthrough(arg()),
         // W213: real cell interpolation (id assigned post-parse by
         // `assign_interp_ids`; full-res `eval` ignores it).
