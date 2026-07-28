@@ -509,12 +509,35 @@ fn build_far_tile(job: &LodTileJob, span: i32, step: i32) -> LodTileResult {
     let base_z = tz * span * CS;
 
     // (n+2)^2 height samples: a 1-texel border feeds edge skirts.
+    // W437: prefer the REAL post-carve floor from the shared column
+    // cache (peek only - no build): wherever the frontier already
+    // solved the column, the shell height matches the streamed
+    // terrain exactly, which kills the ring seams and the
+    // "completely different terrain" tiles. Cold columns fall back
+    // to the preliminary spline as before.
     let mut h = vec![vec![0i32; n + 2]; n + 2];
+    let mut core_memo: std::collections::HashMap<
+        (i32, i32),
+        Option<std::sync::Arc<mcgen::terrain::ColumnCore>>,
+    > = std::collections::HashMap::new();
     for (iz, row) in h.iter_mut().enumerate() {
         for (ix, cell) in row.iter_mut().enumerate() {
             let wx = base_x + (ix as i32 - 1) * step;
             let wz = base_z + (iz as i32 - 1) * step;
-            *cell = ow.preliminary_surface(wx, wz);
+            let ck = (wx.div_euclid(CS), wz.div_euclid(CS));
+            let core = core_memo
+                .entry(ck)
+                .or_insert_with(|| {
+                    mcgen::terrain::peek_core(ck.0, ck.1, seed)
+                })
+                .clone();
+            *cell = match core {
+                Some(c) => {
+                    c.floor[wx.rem_euclid(CS) as usize]
+                        [wz.rem_euclid(CS) as usize]
+                }
+                None => ow.preliminary_surface(wx, wz),
+            };
         }
     }
     let mut ov: Vec<MeshVertex> = Vec::new();

@@ -98,7 +98,8 @@ pub(crate) struct ColumnCore {
     /// Post-carve solidity (the carver dry-run mask).
     solid_pc: Box<SolidBits>,
     /// Post-carve topmost-solid per column (OCEAN_FLOOR heightmap).
-    floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
+    /// W437: pub(crate) - LOD far tiles read it through `peek_core`.
+    pub(crate) floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
     cells: CellLattices,
 }
 
@@ -303,6 +304,30 @@ fn core_cache_cap() -> usize {
         tracing::info!(cap, "W406: column-core cache sized from RAM");
         cap
     })
+}
+
+/// W437: read-only peek into the cross-worker core cache - no
+/// build on miss. LOD tiles upgrade their heightmap samples to the
+/// REAL post-carve floors wherever the frontier already computed
+/// them, which pins the shell to the streamed terrain (the R30
+/// "LOD seams / terrain wildly different" report); cold columns
+/// keep the cheap preliminary spline.
+pub(crate) fn peek_core(
+    cx: i32,
+    cz: i32,
+    seed: u32,
+) -> Option<std::sync::Arc<ColumnCore>> {
+    CORE_CACHE
+        .read()
+        .ok()
+        .and_then(|m| m.get(&(cx, cz, seed)).map(|(c, _)| c.clone()))
+}
+
+/// W437: floor lookup through `peek_core` (world coords).
+pub(crate) fn peek_floor(wx: i32, wz: i32, seed: u32) -> Option<i32> {
+    let cs = CHUNK_SIZE as i32;
+    let core = peek_core(wx.div_euclid(cs), wz.div_euclid(cs), seed)?;
+    Some(core.floor[wx.rem_euclid(cs) as usize][wz.rem_euclid(cs) as usize])
 }
 
 fn column_core_cached(

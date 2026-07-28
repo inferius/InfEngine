@@ -225,8 +225,12 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             }
             // W333: far tiles trickle after near ones (they are far
             // cheaper to build - preliminary surface only).
+            // W437: at 4x the near cap - a far tile costs
+            // microseconds, and the slow horizon fill was half of
+            // the R30 LOD complaint.
+            let far_cap = cap * 4;
             let mut sent2 = 0usize;
-            while sent2 < cap {
+            while sent2 < far_cap {
                 let Some(pending) = vx.lod2_pending.pop() else { break };
                 let key = pending.key;
                 if !vx.lod2_pending_set.contains(&key)
@@ -249,7 +253,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
             }
             // W435: horizon tiles trickle last (cheapest of all).
             let mut sent3 = 0usize;
-            while sent3 < cap {
+            while sent3 < far_cap {
                 let Some(pending) = vx.lod3_pending.pop() else { break };
                 let key = pending.key;
                 if !vx.lod3_pending_set.contains(&key)
