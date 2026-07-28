@@ -45,6 +45,13 @@ pub(crate) const JUMP_VELOCITY: f32 = 8.0;
 pub(crate) const GRAVITY: f32 = -18.0;
 /// Player body height (eye -> feet) in metres.
 pub(crate) const PLAYER_HEIGHT: f32 = 1.7;
+/// W441: headroom between the eye and the collision-box top. MC's
+/// standing pose is a 1.8 m box with the eye at 1.62 m, so the
+/// camera stays well below the ceiling plane. Our eye used to BE
+/// the box top - flying up against a ceiling put the camera's near
+/// plane inside the block above and the R32 screen saw straight
+/// through walls.
+pub(crate) const EYE_HEADROOM: f32 = 0.18;
 /// Half-width of the player AABB on the X/Z axes.
 pub(crate) const PLAYER_RADIUS: f32 = 0.3;
 /// Tiny inset applied when sampling AABB faces against voxel
@@ -61,7 +68,11 @@ pub(crate) fn body_aabb(pos: Vec3) -> (Vec3, Vec3) {
             pos.y - PLAYER_HEIGHT,
             pos.z - PLAYER_RADIUS,
         ),
-        Vec3::new(pos.x + PLAYER_RADIUS, pos.y, pos.z + PLAYER_RADIUS),
+        Vec3::new(
+            pos.x + PLAYER_RADIUS,
+            pos.y + EYE_HEADROOM,
+            pos.z + PLAYER_RADIUS,
+        ),
     )
 }
 
@@ -787,14 +798,14 @@ mod tests {
             [8, 0, 8],
             crate::block::door::TRAPDOOR_TOP_BIT,
         );
-        // Feet on the ground BELOW the cell, head reaching 0.4 into
-        // it: clear (top slab starts at 0.5)...
+        // Feet below the cell, box top (eye + EYE_HEADROOM, W441)
+        // reaching 0.48 into it: clear (top slab starts at 0.5)...
         assert!(!aabb_intersects_solid_with_doors(
             &world,
             &snow,
             &doors,
             &top_states,
-            Vec3::new(8.5, 0.4, 8.5),
+            Vec3::new(8.5, 0.3, 8.5),
         ));
         // ...but reaching past 0.5 hits the slab.
         assert!(aabb_intersects_solid_with_doors(
