@@ -56,6 +56,16 @@ pub(crate) const LOD2_DISTANCE_MAX: i32 = 255;
 /// Default far ring radius (chunks; 0 = off).
 pub(crate) const LOD2_DISTANCE_DEFAULT: u8 = 128;
 
+/// W435: LOD3 - the horizon ring. One tile spans 16x16 chunks
+/// sampled once per chunk (16-block texels); a whole 512-chunk
+/// horizon is ~3k tiles of ~1k verts, built from the preliminary
+/// spline only, so it costs next to nothing to make or draw.
+pub(crate) const LOD3_TILE_CHUNKS: i32 = 16;
+/// Hard cap for the horizon ring radius (chunks).
+pub(crate) const LOD3_DISTANCE_MAX: i32 = 1024;
+/// Default horizon ring radius (chunks; 0 = off). ~8 km.
+pub(crate) const LOD3_DISTANCE_DEFAULT: u16 = 512;
+
 /// Job payload for `workers::Job::LodTile` - everything the worker
 /// needs to build one tile off-thread.
 pub(crate) struct LodTileJob {
@@ -477,22 +487,33 @@ pub(crate) fn build_lod_tile(job: &LodTileJob) -> LodTileResult {
 /// with the biome surface block; sub-sea texels take the water
 /// sheet. No trees at this range.
 pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
-    const STEP: i32 = 4;
-    const N: usize = (LOD2_TILE_CHUNKS as usize * 16) / STEP as usize;
+    build_far_tile(job, LOD2_TILE_CHUNKS, 4)
+}
+
+/// W435: horizon tile - same heightmap shell as LOD2 at a quarter
+/// of the resolution over a 4x span.
+pub(crate) fn build_lod3_tile(job: &LodTileJob) -> LodTileResult {
+    build_far_tile(job, LOD3_TILE_CHUNKS, 16)
+}
+
+/// Shared far-shell builder: `span` chunks per tile, one sample
+/// every `step` blocks from the preliminary surface.
+fn build_far_tile(job: &LodTileJob, span: i32, step: i32) -> LodTileResult {
+    let n = (span as usize * 16) / step as usize;
     let [tx, tz] = job.key;
     let ctx = &job.ctx;
     let pack = &job.pack;
     let seed = ctx.effective_seed();
     let ow = mcgen::terrain::overworld_for(seed);
-    let base_x = tx * LOD2_TILE_CHUNKS * CS;
-    let base_z = tz * LOD2_TILE_CHUNKS * CS;
+    let base_x = tx * span * CS;
+    let base_z = tz * span * CS;
 
-    // (N+2)^2 height samples: a 1-texel border feeds edge skirts.
-    let mut h = [[0i32; N + 2]; N + 2];
+    // (n+2)^2 height samples: a 1-texel border feeds edge skirts.
+    let mut h = vec![vec![0i32; n + 2]; n + 2];
     for (iz, row) in h.iter_mut().enumerate() {
         for (ix, cell) in row.iter_mut().enumerate() {
-            let wx = base_x + (ix as i32 - 1) * STEP;
-            let wz = base_z + (iz as i32 - 1) * STEP;
+            let wx = base_x + (ix as i32 - 1) * step;
+            let wz = base_z + (iz as i32 - 1) * step;
             *cell = ow.preliminary_surface(wx, wz);
         }
     }
@@ -508,14 +529,14 @@ pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
         .map(|t| pack.anim_slot_for_ref(t) as u32)
         .unwrap_or(0);
     let wy = WATER_SURFACE - SHELL_SINK;
-    for iz in 0..N {
-        for ix in 0..N {
+    for iz in 0..n {
+        for ix in 0..n {
             let hy = h[iz + 1][ix + 1];
-            let wx = base_x + ix as i32 * STEP;
-            let wz = base_z + iz as i32 * STEP;
+            let wx = base_x + ix as i32 * step;
+            let wz = base_z + iz as i32 * step;
             let x0 = wx as f32;
             let z0 = wz as f32;
-            let mc = mcgen::terrain::mc_full_biome_at(ctx, wx + 2, wz + 2);
+            let mc = mcgen::terrain::mc_full_biome_at(ctx, wx + step / 2, wz + step / 2);
             let block =
                 crate::worldgen::climate::surface_block(mc.to_engine(), hy).0;
             let tile = face_tile(pack, block, BlockFace::Top);
@@ -523,7 +544,7 @@ pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
             let y = (hy + 1) as f32 - SHELL_SINK;
             y_min = y_min.min(y);
             y_max = y_max.max(y);
-            let sp = STEP as f32;
+            let sp = step as f32;
             push_quad(
                 &mut ov,
                 &mut oi,
@@ -588,8 +609,8 @@ pub(crate) fn build_lod2_tile(job: &LodTileJob) -> LodTileResult {
     }
     let mcb = mcgen::terrain::mc_full_biome_at(
         ctx,
-        base_x + LOD2_TILE_CHUNKS * 8,
-        base_z + LOD2_TILE_CHUNKS * 8,
+        base_x + span * 8,
+        base_z + span * 8,
     );
     let water_tint = mcgen::colors::water_color(mcb);
     if y_min > y_max {

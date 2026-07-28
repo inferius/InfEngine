@@ -247,6 +247,29 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 }
                 sent2 += 1;
             }
+            // W435: horizon tiles trickle last (cheapest of all).
+            let mut sent3 = 0usize;
+            while sent3 < cap {
+                let Some(pending) = vx.lod3_pending.pop() else { break };
+                let key = pending.key;
+                if !vx.lod3_pending_set.contains(&key)
+                    || vx.lod3_meshes.contains_key(&key)
+                {
+                    continue;
+                }
+                let job = Job::LodTile(crate::lod::LodTileJob {
+                    key,
+                    level: 3,
+                    ctx: ctx.clone(),
+                    pack: Arc::clone(&pack_arc),
+                    dim: vx.current_dim.clone(),
+                });
+                if pool.req_tx.send(job).is_err() {
+                    vx.lod3_pending.push(pending);
+                    break;
+                }
+                sent3 += 1;
+            }
         }
     }
 
@@ -942,29 +965,39 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // W321/W333: a surface shell finished. The pending
                 // set doubles as the in-flight marker; level routes
                 // the target map.
-                let far = res.level == 2;
-                if far {
-                    vx.lod2_pending_set.remove(&res.key);
-                } else {
-                    vx.lod_pending_set.remove(&res.key);
+                let level = res.level;
+                match level {
+                    3 => {
+                        vx.lod3_pending_set.remove(&res.key);
+                    }
+                    2 => {
+                        vx.lod2_pending_set.remove(&res.key);
+                    }
+                    _ => {
+                        vx.lod_pending_set.remove(&res.key);
+                    }
                 }
                 if res.dim != vx.current_dim {
                     continue;
                 }
                 // Beyond the (possibly changed) ring: drop it. Far
                 // keys are in 4x4-chunk tile space.
-                let (ring, span) = if far {
-                    (
+                let (ring, span) = match level {
+                    3 => (
+                        (vx.settings.lod3_distance as i32)
+                            .min(crate::lod::LOD3_DISTANCE_MAX),
+                        crate::lod::LOD3_TILE_CHUNKS,
+                    ),
+                    2 => (
                         (vx.settings.lod2_distance as i32)
                             .min(crate::lod::LOD2_DISTANCE_MAX),
                         crate::lod::LOD2_TILE_CHUNKS,
-                    )
-                } else {
-                    (
+                    ),
+                    _ => (
                         (vx.settings.lod_distance as i32)
                             .min(crate::lod::LOD_DISTANCE_MAX),
                         1,
-                    )
+                    ),
                 };
                 let dx = res.key[0] * span + span / 2 - player_chunk[0];
                 let dz = res.key[1] * span + span / 2 - player_chunk[2];
@@ -975,10 +1008,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 let Some(renderer) = vx.renderer.as_mut() else {
                     continue;
                 };
-                let map = if far {
-                    &mut vx.lod2_meshes
-                } else {
-                    &mut vx.lod_meshes
+                let map = match level {
+                    3 => &mut vx.lod3_meshes,
+                    2 => &mut vx.lod2_meshes,
+                    _ => &mut vx.lod_meshes,
                 };
                 // Replacing an existing tile frees the old meshes.
                 if let Some(old) = map.remove(&res.key) {
@@ -1007,10 +1040,10 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     renderer.set_chunk_mesh_layer(h, 2);
                     h
                 });
-                let map = if far {
-                    &mut vx.lod2_meshes
-                } else {
-                    &mut vx.lod_meshes
+                let map = match level {
+                    3 => &mut vx.lod3_meshes,
+                    2 => &mut vx.lod2_meshes,
+                    _ => &mut vx.lod_meshes,
                 };
                 map.insert(
                     res.key,
@@ -1587,6 +1620,72 @@ fn rescan_lod_ring(
             lod2_pending,
             lod2_pending_set,
         );
+    }
+
+    // W435: HORIZON ring (level 3) in 16x16-chunk tile space,
+    // spanning lod2_dist..lod3_dist. One preliminary-surface sample
+    // per chunk - a tile costs microseconds to build and the whole
+    // ~8 km horizon is only a few thousand tiny meshes, so the ring
+    // never touches the frame budget.
+    let lod3_dist = (vx.settings.lod3_distance as i32)
+        .min(crate::lod::LOD3_DISTANCE_MAX);
+    let span3 = crate::lod::LOD3_TILE_CHUNKS;
+    let outer2 = lod2_dist.max(lod_dist);
+    if lod3_dist > outer2 {
+        let t_min_x = (player_chunk[0] - lod3_dist).div_euclid(span3);
+        let t_max_x = (player_chunk[0] + lod3_dist).div_euclid(span3);
+        let t_min_z = (player_chunk[2] - lod3_dist).div_euclid(span3);
+        let t_max_z = (player_chunk[2] + lod3_dist).div_euclid(span3);
+        let lod3_sq = lod3_dist * lod3_dist;
+        let inner_sq3 = outer2 * outer2;
+        for tzk in t_min_z..=t_max_z {
+            for txk in t_min_x..=t_max_x {
+                let cdx = txk * span3 + span3 / 2 - player_chunk[0];
+                let cdz = tzk * span3 + span3 / 2 - player_chunk[2];
+                let d = cdx * cdx + cdz * cdz;
+                if d <= inner_sq3 || d > lod3_sq {
+                    continue;
+                }
+                let key = [txk, tzk];
+                if !vx.lod3_meshes.contains_key(&key)
+                    && vx.lod3_pending_set.insert(key)
+                {
+                    vx.lod3_pending.push(crate::lod::PendingLodTile {
+                        neg_dist_sq: -d,
+                        key,
+                    });
+                }
+            }
+        }
+        vx.lod3_pending_set.retain(|k| {
+            let cdx = k[0] * span3 + span3 / 2 - player_chunk[0];
+            let cdz = k[1] * span3 + span3 / 2 - player_chunk[2];
+            let d = cdx * cdx + cdz * cdz;
+            d > inner_sq3 && d <= lod3_sq
+        });
+        let keep3 = lod3_dist + 2 * span3;
+        let keep3_sq = keep3 * keep3;
+        let mut drop3: Vec<[i32; 2]> = Vec::new();
+        for k in vx.lod3_meshes.keys() {
+            let cdx = k[0] * span3 + span3 / 2 - player_chunk[0];
+            let cdz = k[1] * span3 + span3 / 2 - player_chunk[2];
+            let d = cdx * cdx + cdz * cdz;
+            if d > keep3_sq || d <= inner_sq3 {
+                drop3.push(*k);
+            }
+        }
+        if let Some(renderer) = vx.renderer.as_mut() {
+            for k in drop3 {
+                if let Some(t) = vx.lod3_meshes.remove(&k) {
+                    if let Some(h) = t.opaque {
+                        renderer.remove_chunk_mesh(h);
+                    }
+                    if let Some(h) = t.water {
+                        renderer.remove_chunk_mesh(h);
+                    }
+                }
+            }
+        }
     }
     // Unload shells: out past the ring hysteresis, or superseded by
     // full-res meshes anywhere in their column.

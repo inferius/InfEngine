@@ -380,6 +380,7 @@ fn options_clamp_view_distance_to_max() {
         view_distance: 200,
         lod_distance: 0,
         lod2_distance: 0,
+        lod3_distance: crate::lod::LOD3_DISTANCE_DEFAULT,
         fov_deg: 60.0,
         mouse_sensitivity: 1.0,
         show_fps: false,

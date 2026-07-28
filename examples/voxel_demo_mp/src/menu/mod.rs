@@ -224,6 +224,8 @@ pub(crate) struct OptionsSnapshot {
     pub(crate) lod_distance: u8,
     /// W333: extra-far ring radius in chunks (0 = off).
     pub(crate) lod2_distance: u8,
+    /// W435: horizon ring radius (chunks; 0 = off).
+    pub(crate) lod3_distance: u16,
 }
 
 impl OptionsSnapshot {
@@ -236,6 +238,8 @@ impl OptionsSnapshot {
             self.lod_distance.min(crate::lod::LOD_DISTANCE_MAX as u8);
         self.lod2_distance =
             self.lod2_distance.min(crate::lod::LOD2_DISTANCE_MAX as u8);
+        self.lod3_distance =
+            self.lod3_distance.min(crate::lod::LOD3_DISTANCE_MAX as u16);
         self.fov_deg = self.fov_deg.clamp(30.0, 120.0);
         self.mouse_sensitivity = self.mouse_sensitivity.clamp(0.05, 4.0);
         self.ui_scale = self.ui_scale.clamp(0.5, 3.0);

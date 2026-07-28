@@ -222,6 +222,7 @@ impl Voxel {
         self.lod_pending.clear();
         self.lod_pending_set.clear();
         self.lod2_pending.clear();
+        self.lod3_pending.clear();
         self.lod2_pending_set.clear();
         // Lighting is per-dim + not persisted - drop every grid
         // on swap. We then re-derive from the target dim's

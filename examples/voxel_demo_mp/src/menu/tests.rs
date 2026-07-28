@@ -11,6 +11,7 @@ fn fresh_options() -> OptionsSnapshot {
         view_distance: 6,
         lod_distance: 0,
         lod2_distance: 0,
+        lod3_distance: crate::lod::LOD3_DISTANCE_DEFAULT,
         fov_deg: 75.0,
         mouse_sensitivity: 0.6,
         show_fps: true,

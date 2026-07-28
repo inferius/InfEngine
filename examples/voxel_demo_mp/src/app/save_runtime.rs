@@ -166,6 +166,7 @@ impl Voxel {
         // config under the old key; reads heal old-key zeros to the
         // default while the v2 key persists an explicit 0 (off).
         let _ = writeln!(text, "lod2_distance_v2={}", self.settings.lod2_distance);
+        let _ = writeln!(text, "lod3_distance={}", self.settings.lod3_distance);
         let _ = writeln!(text, "head_bob={}", self.settings.head_bob);
         let _ = writeln!(
             text,
@@ -300,6 +301,12 @@ impl Voxel {
                     if let Ok(v) = value.parse::<u8>() {
                         self.settings.lod2_distance =
                             v.min(crate::lod::LOD2_DISTANCE_MAX as u8);
+                    }
+                }
+                "lod3_distance" => {
+                    if let Ok(v) = value.parse::<u16>() {
+                        self.settings.lod3_distance =
+                            v.min(crate::lod::LOD3_DISTANCE_MAX as u16);
                     }
                 }
                 "head_bob" => {

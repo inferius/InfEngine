@@ -31,6 +31,7 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
                 o.view_distance = vx.settings.view_distance;
                 o.lod_distance = vx.settings.lod_distance;
                 o.lod2_distance = vx.settings.lod2_distance;
+                o.lod3_distance = vx.settings.lod3_distance;
                 o.fov_deg = vx.fov_y_rad.to_degrees();
                 o.mouse_sensitivity = vx.settings.mouse_sensitivity;
                 o.show_fps = vx.settings.show_fps;
@@ -208,9 +209,11 @@ pub(crate) fn apply_action(vx: &mut Voxel, action: MenuAction) {
             vx.settings.view_distance = snapshot.view_distance;
             if vx.settings.lod_distance != snapshot.lod_distance
                 || vx.settings.lod2_distance != snapshot.lod2_distance
+                || vx.settings.lod3_distance != snapshot.lod3_distance
             {
                 vx.settings.lod_distance = snapshot.lod_distance;
                 vx.settings.lod2_distance = snapshot.lod2_distance;
+                vx.settings.lod3_distance = snapshot.lod3_distance;
                 // W321: retrigger the ring rescan without moving.
                 vx.last_stream_origin = None;
             }

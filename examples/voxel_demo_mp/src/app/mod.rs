@@ -143,8 +143,12 @@ pub(crate) struct Voxel {
     /// W333: FAR shells (level 2, 4x4-chunk tiles keyed by tile
     /// coordinate = chunk / 4).
     pub(crate) lod2_meshes: HashMap<[i32; 2], crate::lod::LodTile>,
+    /// W435: horizon-ring tiles (16x16-chunk keys).
+    pub(crate) lod3_meshes: HashMap<[i32; 2], crate::lod::LodTile>,
     pub(crate) lod2_pending: BinaryHeap<crate::lod::PendingLodTile>,
+    pub(crate) lod3_pending: BinaryHeap<crate::lod::PendingLodTile>,
     pub(crate) lod2_pending_set: HashSet<[i32; 2]>,
+    pub(crate) lod3_pending_set: HashSet<[i32; 2]>,
     /// W28.1: Chunks queued for generation, ordered closest-first by
     /// XZ distance from the player. Replaces VecDeque so workers
     /// always receive the most relevant chunks first.
@@ -1392,6 +1396,8 @@ pub(crate) struct Settings {
     /// W333: FAR ring radius in chunks (preliminary-surface tiles
     /// beyond `lod_distance`, up to 256). 0 disables it.
     pub(crate) lod2_distance: u8,
+    /// W435: horizon ring radius in chunks (0 = off).
+    pub(crate) lod3_distance: u16,
 }
 
 impl Default for Settings {
@@ -1410,6 +1416,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             lod_distance: crate::lod::LOD_DISTANCE_DEFAULT,
             lod2_distance: crate::lod::LOD2_DISTANCE_DEFAULT,
+            lod3_distance: crate::lod::LOD3_DISTANCE_DEFAULT,
         }
     }
 }

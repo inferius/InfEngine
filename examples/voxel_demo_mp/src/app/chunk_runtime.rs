@@ -44,6 +44,14 @@ impl Voxel {
                     renderer.remove_chunk_mesh(h);
                 }
             }
+            for (_k, t) in self.lod3_meshes.drain() {
+                if let Some(h) = t.opaque {
+                    renderer.remove_chunk_mesh(h);
+                }
+                if let Some(h) = t.water {
+                    renderer.remove_chunk_mesh(h);
+                }
+            }
         }
         for cc in coords {
             self.world.remove_chunk(cc);
@@ -58,7 +66,9 @@ impl Voxel {
         self.lod_pending.clear();
         self.lod_pending_set.clear();
         self.lod2_pending.clear();
+        self.lod3_pending.clear();
         self.lod2_pending_set.clear();
+        self.lod3_pending_set.clear();
         self.pending_remesh.clear();
         self.pending_remesh_set.clear();
         self.pending_seam_remesh.clear();
@@ -165,6 +175,7 @@ impl Voxel {
         self.remote_arrows.clear();
         self.fireballs.clear();
         self.remote_fireballs.clear();
+        self.thrown_potions.clear();
         self.primed_tnt.clear();
         self.remote_tnt.clear();
     }

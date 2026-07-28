@@ -655,7 +655,11 @@ impl WorkerPool {
                                     // samples the preliminary surface
                                     // only (microseconds a tile).
                                     let res = if job.level == 2 {
-                                        crate::lod::build_lod2_tile(&job)
+                                        if job.level == 3 {
+                                            crate::lod::build_lod3_tile(&job)
+                                        } else {
+                                            crate::lod::build_lod2_tile(&job)
+                                        }
                                     } else {
                                         crate::lod::build_lod_tile(&job)
                                     };
