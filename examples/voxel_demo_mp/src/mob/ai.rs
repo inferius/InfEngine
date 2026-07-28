@@ -1029,6 +1029,44 @@ fn step_one(
                 );
             }
         }
+        // W431: the pillager crossbow - same ranged pattern as the
+        // skeleton bow (CrossbowAttackGoal), a touch slower on the
+        // cadence and flatter on the shot (crossbows fire at 1.6x
+        // the bow muzzle in MC; the shared arrow does the rest).
+        if m.kind == super::kinds::KIND_PILLAGER
+            && m.attack_cd <= 0.0
+            && let Some(p) = chase_player_pos
+        {
+            const CROSSBOW_COOLDOWN: f32 = 2.6;
+            const XBOW_MIN_D2: f32 = 3.0 * 3.0;
+            const XBOW_MAX_D2: f32 = 16.0 * 16.0;
+            let ddx = p[0] - m.pos[0];
+            let ddy = p[1] - m.pos[1];
+            let ddz = p[2] - m.pos[2];
+            let pd2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (XBOW_MIN_D2..=XBOW_MAX_D2).contains(&pd2) {
+                m.attack_cd = CROSSBOW_COOLDOWN;
+                let eye = glam::Vec3::new(m.pos[0], m.pos[1] + 1.5, m.pos[2]);
+                let tgt = glam::Vec3::new(p[0], p[1] - 0.6, p[2]);
+                let mut vel = crate::projectile::aim_at(
+                    eye,
+                    tgt,
+                    crate::projectile::SKELETON_ARROW_SPEED * 1.6,
+                );
+                // Crossbows are tighter than bows - half the spread.
+                vel += glam::Vec3::new(
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                ) * 0.8;
+                crate::projectile::spawn_arrow(voxel, eye, vel, false);
+                voxel.sfx_at(
+                    "mob/pillager/shoot",
+                    [eye.x, eye.y, eye.z],
+                    |_, _| {},
+                );
+            }
+        }
         // W430: the witch ranged attack - a thrown splash potion
         // of harming on a ~3 s cadence, inside a 10-block window
         // (WitchAttackPotions). The shared melee path still covers

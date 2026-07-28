@@ -335,6 +335,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     // W430 - witch splash potion.
     ("mob/witch/throw", "entity.witch.throw"),
     ("potion/splash", "entity.splash_potion.break"),
+    // W431 - pillager crossbow.
+    ("mob/pillager/shoot", "item.crossbow.shoot"),
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),
