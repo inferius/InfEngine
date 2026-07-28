@@ -64,7 +64,50 @@ pub(crate) fn damage_mob_scaled(
         // (away from the attacker: the demo tracks no attacker pos,
         // so flee AWAY FROM THE PLAYER, which is who hits mobs).
         // Hostiles keep chasing instead.
-        if !killed && kind == KIND_ZOMBIFIED_PIGLIN {
+        if !killed && kind == crate::mob::kinds::KIND_ENDERMAN {
+            // W432: a hit angers the enderman AND usually blinks it
+            // away (EnderMan.hurt teleports on most damage). The
+            // landing spot walks down from a random offset to the
+            // first solid floor; no floor inside the probe = stay.
+            let m = &mut voxel.mobs[idx];
+            let h = (mob_id.wrapping_mul(0x9E37_79B1) >> 7) % 1900;
+            m.anger_left = 20.0 + h as f32 / 100.0;
+            let r1 = mob_id.wrapping_mul(0x2545_F491);
+            if r1 % 10 < 6 {
+                let dx = ((r1 >> 8) % 33) as i32 - 16;
+                let dz = ((r1 >> 16) % 33) as i32 - 16;
+                let bx = m.pos[0].floor() as i32 + dx;
+                let bz = m.pos[2].floor() as i32 + dz;
+                let mut by = m.pos[1].floor() as i32 + 8;
+                let mut landed = None;
+                for _ in 0..24 {
+                    let below = voxel.world.get([bx, by - 1, bz]);
+                    let here = voxel.world.get([bx, by, bz]);
+                    let above = voxel.world.get([bx, by + 1, bz]);
+                    if here.is_air()
+                        && above.is_air()
+                        && !below.is_air()
+                        && crate::block::block_fully_occludes(below)
+                    {
+                        landed = Some(by);
+                        break;
+                    }
+                    by -= 1;
+                }
+                if let Some(y) = landed {
+                    let from = m.pos;
+                    m.pos = [bx as f32 + 0.5, y as f32, bz as f32 + 0.5];
+                    m.target = m.pos;
+                    voxel.sfx_at("mob/enderman/teleport", from, |_, _| {});
+                    let cell = [
+                        from[0].floor() as i32,
+                        from[1].floor() as i32,
+                        from[2].floor() as i32,
+                    ];
+                    voxel.spawn_place_particles(cell, [0.65, 0.2, 0.75]);
+                }
+            }
+        } else if !killed && kind == KIND_ZOMBIFIED_PIGLIN {
             // W300: NeutralMob - a hit ANGERS the piglin (MC
             // `PERSISTENT_ANGER_TIME = rangeOfSeconds(20, 39)`)
             // instead of panicking it; the AI chases + melees while

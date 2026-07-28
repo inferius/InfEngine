@@ -177,9 +177,9 @@ fn kind_is_hostile(kind: u8) -> bool {
             // W380: guardians (laser beam is a follow-up).
             | super::kinds::KIND_GUARDIAN
             | super::kinds::KIND_ELDER_GUARDIAN
-            // W381: enderman (teleport-on-hit is a follow-up) +
-            // the two spawner natives.
-            | super::kinds::KIND_ENDERMAN
+            // W381/W432: the enderman is NEUTRAL now - it joins
+            // the chase through the anger path below (stare or a
+            // hit provokes it), not this always-hostile list.
             | super::kinds::KIND_CAVE_SPIDER
             | super::kinds::KIND_SILVERFISH
             // W382: the phantom dives at players.
@@ -319,7 +319,10 @@ fn step_one(
         || m.kind == super::kinds::KIND_CREEPER
     {
         voxel.nearest_player_pos(m.pos, ZOMBIE_SIGHT_RANGE)
-    } else if m.kind == KIND_ZOMBIFIED_PIGLIN && m.anger_left > 0.0 {
+    } else if (m.kind == KIND_ZOMBIFIED_PIGLIN
+        || m.kind == super::kinds::KIND_ENDERMAN)
+        && m.anger_left > 0.0
+    {
         // W300: NeutralMob anger - an angered zombified piglin hunts
         // the player for the anger window (MC follow range 35).
         voxel.nearest_player_pos(m.pos, 35.0)
@@ -986,7 +989,9 @@ fn step_one(
     // hit the local player + reset. H.8 splits skeleton off into
     // a ranged-bow goal.
     if kind_is_hostile(m.kind)
-        || (m.kind == KIND_ZOMBIFIED_PIGLIN && m.anger_left > 0.0)
+        || ((m.kind == KIND_ZOMBIFIED_PIGLIN
+            || m.kind == super::kinds::KIND_ENDERMAN)
+            && m.anger_left > 0.0)
     {
         m.attack_cd = (m.attack_cd - dt).max(0.0);
         // W140: the skeleton's defining ranged attack. Out of melee
@@ -1065,6 +1070,33 @@ fn step_one(
                     [eye.x, eye.y, eye.z],
                     |_, _| {},
                 );
+            }
+        }
+        // W432: EndermanLookForPlayerGoal (the stare). Meeting the
+        // enderman's gaze inside 32 blocks provokes it for the MC
+        // persistent-anger window; the scream marks the moment.
+        if m.kind == super::kinds::KIND_ENDERMAN && m.anger_left <= 0.0 {
+            let to_mob = glam::Vec3::new(
+                m.pos[0] - voxel.player_pos.x,
+                (m.pos[1] + 1.6) - voxel.player_pos.y,
+                m.pos[2] - voxel.player_pos.z,
+            );
+            let dist = to_mob.length();
+            if dist < 32.0 && dist > 1.0 {
+                let look = glam::Vec3::new(
+                    voxel.player_yaw.cos() * voxel.player_pitch.cos(),
+                    voxel.player_pitch.sin(),
+                    -voxel.player_yaw.sin() * voxel.player_pitch.cos(),
+                );
+                if look.dot(to_mob / dist) > 0.985 {
+                    let h = (m.id.wrapping_mul(0x9E37_79B1) >> 7) % 1900;
+                    m.anger_left = 20.0 + h as f32 / 100.0;
+                    voxel.sfx_at(
+                        "mob/enderman/stare",
+                        m.pos,
+                        |_, _| {},
+                    );
+                }
             }
         }
         // W430: the witch ranged attack - a thrown splash potion

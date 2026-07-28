@@ -337,6 +337,12 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("potion/splash", "entity.splash_potion.break"),
     // W431 - pillager crossbow.
     ("mob/pillager/shoot", "item.crossbow.shoot"),
+    // W432 - enderman neutrality kit.
+    ("mob/enderman/say", "entity.enderman.ambient"),
+    ("mob/enderman/hurt", "entity.enderman.hurt"),
+    ("mob/enderman/death", "entity.enderman.death"),
+    ("mob/enderman/stare", "entity.enderman.stare"),
+    ("mob/enderman/teleport", "entity.enderman.teleport"),
     // W156 - nether portal hum + travel whoosh.
     ("portal/trigger", "block.portal.trigger"),
     ("portal/travel", "block.portal.travel"),

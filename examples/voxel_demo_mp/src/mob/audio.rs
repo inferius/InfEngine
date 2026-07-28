@@ -56,6 +56,7 @@ pub(crate) fn mob_sound_stem(kind: u8) -> &'static str {
         x if x == crate::mob::kinds::KIND_CREEPER => "mob/creeper",
         x if x == crate::mob::kinds::KIND_DONKEY => "mob/donkey",
         x if x == crate::mob::kinds::KIND_CAMEL => "mob/camel",
+        x if x == crate::mob::kinds::KIND_ENDERMAN => "mob/enderman",
         _ => "mob/sheep",
     }
 }
