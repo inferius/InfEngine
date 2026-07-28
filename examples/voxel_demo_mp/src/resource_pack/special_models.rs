@@ -1732,6 +1732,52 @@ mod tests {
         assert_eq!(e.to, [12.0, 16.0, 12.0]);
     }
 
+    /// W450 diagnostic (R33 half-door report): the REAL pack must
+    /// resolve an upper-half oak door variant that emits geometry.
+    /// Ignored by default - needs the on-disk MC pack.
+    #[test]
+    #[ignore]
+    #[allow(clippy::print_stderr)]
+    fn oak_door_upper_variant_emits_real_pack() {
+        let pack = crate::resource_pack::ResourcePack::load();
+        if pack.is_fallback {
+            eprintln!("no MC pack - vacuous");
+            return;
+        }
+        for half in ["lower", "upper"] {
+            let props = blockstates::BlockStateProps::new()
+                .with("facing", "east")
+                .with("half", half)
+                .with("hinge", "left")
+                .with("open", "false")
+                .with("powered", "false");
+            let m = model_for_block_with_props(77, &pack, &props)
+                .expect("oak door model");
+            eprintln!("half={half} elements={}", m.elements.len());
+            for e in &m.elements {
+                eprintln!("  from {:?} to {:?}", e.from, e.to);
+            }
+            let mut verts = Vec::new();
+            let mut idxs = Vec::new();
+            let ok = crate::resource_pack::element_mesh::emit_resolved_model(
+                &m,
+                77,
+                glam::Vec3::ZERO,
+                &mut verts,
+                &mut idxs,
+                &pack,
+                |_| [0.0, 1.0],
+                |_| 0,
+                |_| false,
+            );
+            eprintln!(
+                "half={half} emit ok={ok} quads={}",
+                verts.len() / 4
+            );
+            assert!(ok, "half={half} emitted nothing");
+        }
+    }
+
     #[test]
     fn door_upper_distinct_from_door_lower() {
         use crate::block::{OAK_DOOR_ID, OAK_DOOR_UPPER_ID};

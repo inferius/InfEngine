@@ -735,12 +735,71 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // beams don't stack vertically - so those records
                 // drop and the trunk re-meshes upright.
                 let mut stale_pillar: Vec<[i32; 3]> = Vec::new();
+                // W450: pre-W311 saves baked AIR above every template
+                // door (the blockmap mapped upper halves to Keep) -
+                // the R33 half-door report. Heal on stream-in: a
+                // lower half with air above gets its upper half
+                // written back, and a door with no facing row gets
+                // one inferred from the wall axis. New generation
+                // never trips this (verified by the W450 village
+                // door diagnostic), so the scrub is save-only and
+                // idempotent.
+                let mut heal_doors: Vec<([i32; 3], u16)> = Vec::new();
+                let mut heal_facing: Vec<([i32; 3], u8)> = Vec::new();
                 if let Some(ch) = vx.world.chunk(cc) {
                     let cs_i = CHUNK_SIZE as i32;
                     for z in 0..CHUNK_SIZE {
                         for y in 0..CHUNK_SIZE {
                             for x in 0..CHUNK_SIZE {
                                 let id = ch.get(x, y, z).0;
+                                if crate::block::door::is_door_block(id) {
+                                    let wp = [
+                                        cc[0] * cs_i + x as i32,
+                                        cc[1] * cs_i + y as i32,
+                                        cc[2] * cs_i + z as i32,
+                                    ];
+                                    let below = vx
+                                        .world
+                                        .get([wp[0], wp[1] - 1, wp[2]])
+                                        .0;
+                                    if crate::block::door::is_door_block(
+                                        below,
+                                    ) {
+                                        continue; // upper half
+                                    }
+                                    let above = [wp[0], wp[1] + 1, wp[2]];
+                                    if vx.world.get(above).0 == 0 {
+                                        heal_doors.push((
+                                            above,
+                                            if id == 77 { 78 } else { id },
+                                        ));
+                                    }
+                                    if !vx.door_facing.contains_key(&wp) {
+                                        // Wall along X -> the panel
+                                        // spans X -> faces south;
+                                        // otherwise it spans Z and
+                                        // faces east.
+                                        let wall_x =
+                                            crate::block::block_is_opaque(
+                                                vx.world.get([
+                                                    wp[0] - 1,
+                                                    wp[1],
+                                                    wp[2],
+                                                ]),
+                                            ) || crate::block::block_is_opaque(
+                                                vx.world.get([
+                                                    wp[0] + 1,
+                                                    wp[1],
+                                                    wp[2],
+                                                ]),
+                                            );
+                                        heal_facing.push((
+                                            wp,
+                                            if wall_x { 1 } else { 0 },
+                                        ));
+                                    }
+                                    continue;
+                                }
                                 if !crate::block::is_pillar_block(id) {
                                     continue;
                                 }
@@ -781,6 +840,32 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                     // trunk turns upright on screen too.
                     if vx.pending_seam_set.insert(cc) {
                         vx.pending_seam_remesh.push_back(cc);
+                    }
+                }
+                if !heal_doors.is_empty() || !heal_facing.is_empty() {
+                    let cs_i = CHUNK_SIZE as i32;
+                    let mut touched: Vec<[i32; 3]> = vec![cc];
+                    for (pos, id) in heal_doors {
+                        vx.world_set_tracked(
+                            pos,
+                            infengine_voxel::BlockId(id),
+                        );
+                        let acc = [
+                            pos[0].div_euclid(cs_i),
+                            pos[1].div_euclid(cs_i),
+                            pos[2].div_euclid(cs_i),
+                        ];
+                        if !touched.contains(&acc) {
+                            touched.push(acc);
+                        }
+                    }
+                    for (pos, facing) in heal_facing {
+                        vx.door_facing.insert(pos, facing);
+                    }
+                    for c in touched {
+                        if vx.pending_seam_set.insert(c) {
+                            vx.pending_seam_remesh.push_back(c);
+                        }
                     }
                 }
                 // W345: neighbour re-mesh is OVERDRAW CLEANUP, not
