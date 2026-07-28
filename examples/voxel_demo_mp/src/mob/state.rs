@@ -39,6 +39,10 @@ pub(crate) struct MobState {
     /// contact damage to whichever player it's standing next
     /// to and resets to `ZOMBIE_ATTACK_COOLDOWN`.
     pub(crate) attack_cd: f32,
+    /// W429: MC `Slime.ID_SIZE` - 1, 2 or 4 for slimes / magma
+    /// cubes (HP = size^2, render scale = size, split on death).
+    /// Every other kind stays at 1.
+    pub(crate) size: u8,
     /// True when the mob is exempt from the despawn passes -
     /// named, leash-tagged, bred, or spawned via the /spawnmob
     /// chat command. Matches MC's `Mob.persistenceRequired` flag.
@@ -123,6 +127,7 @@ impl MobState {
             health,
             dying: 0.0,
             attack_cd: 0.0,
+            size: 1,
             persistent: false,
             far_despawn_timer: FAR_DESPAWN_TIMER,
             love: 0.0,

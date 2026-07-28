@@ -90,6 +90,10 @@ pub(crate) enum NetSlot {
 /// Snapshot of one server-side mob. Sent as `vx.mob`; clients
 /// render the latest reported pose. `kind` reserves a discriminator
 /// for future mob types - 0 = sheep for now.
+fn default_mob_size() -> u8 {
+    1
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) struct MobMsg {
     pub(crate) id: u32,
@@ -102,6 +106,10 @@ pub(crate) struct MobMsg {
     /// snapshots that didn't include health.
     #[serde(default)]
     pub(crate) health: u8,
+    /// W429: slime/magma size (1 for everything else). Old
+    /// snapshots default to 1 via `default_mob_size`.
+    #[serde(default = "default_mob_size")]
+    pub(crate) size: u8,
     /// W147: absolute world yaw of the head (MC LookAtPlayerGoal).
     /// Defaults to 0 on old snapshots; the render treats a zero
     /// delta as "head follows body".

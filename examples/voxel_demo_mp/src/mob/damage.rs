@@ -137,6 +137,46 @@ pub(crate) fn damage_mob_scaled(
     // for the animation.
     voxel.mobs[idx].dying = MOB_DEATH_FADE;
     voxel.mob_dying.insert(mob_id, MOB_DEATH_FADE);
+    // W429: a size > 1 slime splits into 2-4 halves at death
+    // (Slime.remove SPLIT_ON_DEATH). The children spawn in a ring,
+    // despawnable, HP = (size/2)^2.
+    if kind == crate::mob::kinds::KIND_SLIME {
+        let parent_size = voxel.mobs[idx].size;
+        if parent_size > 1 {
+            let half = parent_size / 2;
+            let n = 2 + (mob_id.wrapping_mul(0x2545_F491) >> 7) % 3;
+            for ci in 0..n {
+                let cid = voxel.next_mob_id;
+                voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
+                let ang = ci as f32 / n as f32 * std::f32::consts::TAU;
+                let cpos = [
+                    mob_pos[0] + ang.cos() * 0.6,
+                    mob_pos[1] + 0.3,
+                    mob_pos[2] + ang.sin() * 0.6,
+                ];
+                let hp = (half as f32) * (half as f32);
+                let mut child = crate::mob::state::MobState::new_natural(
+                    cid, kind, cpos, cpos, ang, 0.0, hp,
+                );
+                child.size = half;
+                voxel.mobs.push(child);
+                voxel.remote_mobs.insert(
+                    cid,
+                    crate::net::MobMsg {
+                        id: cid,
+                        kind,
+                        pos: cpos,
+                        yaw: ang,
+                        health: hp.max(0.0).round() as u8,
+                        head_yaw: 0.0,
+                        head_pitch: 0.0,
+                        baby: false,
+                        size: half,
+                    },
+                );
+            }
+        }
+    }
     // W418: kill XP to the host player (MC ExperienceOrb reward;
     // per-client XP pools are a follow-up with the rest of the
     // client-side survival state).

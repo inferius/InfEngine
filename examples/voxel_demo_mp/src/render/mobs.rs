@@ -138,7 +138,16 @@ pub fn draw_remote_mobs(
                 // W291: babies render at half scale about the feet
                 // (MC AgeableMob). Legacy cube fallbacks stay
                 // full-size (texture-less debug path only).
-                let mob_scale = if mob.baby { 0.5f32 } else { 1.0 };
+                // W429: slimes scale by their size state (the
+                // model is the size-1 cube); everything else keeps
+                // the baby halving.
+                let mob_scale = if mob.kind == crate::mob::kinds::KIND_SLIME {
+                    mob.size.max(1) as f32
+                } else if mob.baby {
+                    0.5f32
+                } else {
+                    1.0
+                };
 
                 // W147: advance the MC walk animation from observed
                 // motion (works for the host sim and 10 Hz remote

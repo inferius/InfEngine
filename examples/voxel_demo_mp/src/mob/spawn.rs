@@ -152,8 +152,22 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
     }
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
-    let hp = initial_health_for(kind);
-    let mob = crate::mob::state::MobState::new_natural(id, kind, pos, pos, yaw, 0.0, hp);
+    // W429: slimes mint at a random MC size (1 << rng(3) = 1/2/4)
+    // with HP = size^2 (Slime.setSize).
+    let size: u8 = if kind == crate::mob::kinds::KIND_SLIME {
+        1u8 << ((id.wrapping_mul(0x9E37_79B9) >> 9) % 3)
+    } else {
+        1
+    };
+    let hp = if size > 1 {
+        (size as f32) * (size as f32)
+    } else {
+        initial_health_for(kind)
+    };
+    let mut mob =
+        crate::mob::state::MobState::new_natural(id, kind, pos, pos, yaw, 0.0, hp);
+    mob.size = size;
+    let mob = mob;
     voxel.mobs.push(mob);
     voxel.remote_mobs.insert(
         id,
@@ -166,6 +180,7 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
             head_yaw: yaw,
             head_pitch: 0.0,
             baby: false,
+            size,
         },
     );
 }
@@ -501,6 +516,7 @@ pub(crate) fn try_spawn_one(
             head_yaw: 0.0,
             head_pitch: 0.0,
             baby: false,
+            size: 1,
         },
     );
     voxel.last_mob_spawn_time = day_time;

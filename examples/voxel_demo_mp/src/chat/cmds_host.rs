@@ -249,6 +249,7 @@ pub(crate) fn cmd_horde(
                 head_yaw: 0.0,
                 head_pitch: 0.0,
             baby: false,
+                size: 1,
             },
         );
         spawned += 1;
@@ -325,6 +326,7 @@ fn spawn_named_mob(
             head_yaw: 0.0,
             head_pitch: 0.0,
             baby: false,
+            size: 1,
         },
     );
     lines.push(format!(

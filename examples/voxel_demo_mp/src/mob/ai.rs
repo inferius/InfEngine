@@ -126,6 +126,7 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
                 head_yaw: m.head_yaw,
                 head_pitch: m.head_pitch,
                 baby: m.baby_left > 0.0,
+                size: m.size,
             },
         );
     }
@@ -1081,7 +1082,16 @@ fn step_one(
         let d2 = dx * dx + dy * dy + dz * dz;
         if d2 <= ZOMBIE_ATTACK_RANGE * ZOMBIE_ATTACK_RANGE && m.attack_cd <= 0.0 {
             m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
-            voxel.apply_player_damage(ZOMBIE_TOUCH_DAMAGE);
+            // W429: slime contact damage = its size, and the size-1
+            // slime is harmless (Slime.isDealsDamage).
+            let touch = if m.kind == super::kinds::KIND_SLIME {
+                m.size as f32
+            } else {
+                ZOMBIE_TOUCH_DAMAGE
+            };
+            if touch > 1.0 || m.kind != super::kinds::KIND_SLIME {
+                voxel.apply_player_damage(touch);
+            }
             // Visual lunge: bump the local timer + tell
             // every other peer to do the same so the
             // animation reads identically on each client.
@@ -1137,6 +1147,7 @@ fn broadcast(voxel: &Voxel) {
                 head_yaw: m.head_yaw,
                 head_pitch: m.head_pitch,
                 baby: m.baby_left > 0.0,
+                size: m.size,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.mob", buf);
