@@ -182,6 +182,9 @@ impl Voxel {
                 self.liquid_chunk_sig.remove(&cc);
             }
             self.liquid_mesh_dirty = false;
+            // W446: levels changed - the NEXT dispatch reclones the
+            // shared snapshot; drain frames in between reuse it.
+            self.liquid_level_share = None;
             let _ms = _scan_t.elapsed().as_secs_f32() * 1000.0;
             if _ms > 15.0 {
                 tracing::warn!(
@@ -230,10 +233,18 @@ impl Voxel {
             to_mesh.truncate(dispatch_cap);
         }
         to_mesh.sort_unstable_by_key(|(d, _)| *d);
-        // ONE flow-level snapshot per frame shared by the batch.
-        // Only flow cells live in the map (sources are absent =
-        // level 0), so a settled ocean clones a near-empty map.
-        let levels = Arc::new(self.liquid_level.clone());
+        // ONE flow-level snapshot shared by the batch - and by every
+        // batch until the next dirty rescan (W446): the full-map
+        // clone was a per-frame cost the whole time the backlog was
+        // draining (the R31 10-30 ms liqmesh frames while exploring).
+        let levels = match &self.liquid_level_share {
+            Some(a) => a.clone(),
+            None => {
+                let a = Arc::new(self.liquid_level.clone());
+                self.liquid_level_share = Some(a.clone());
+                a
+            }
+        };
         self.liquid_mesh_epoch += 1;
         let epoch = self.liquid_mesh_epoch;
         let mut coords: Vec<ChunkCoord> = Vec::new();

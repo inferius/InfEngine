@@ -120,6 +120,7 @@ impl Voxel {
         self.bell_positions.clear();
         self.water_tint_cache.clear();
         self.liquid_level.clear();
+        self.liquid_level_share = None;
         self.liquid_positions.clear();
         self.lava_columns.clear();
         self.falling_pending.clear();

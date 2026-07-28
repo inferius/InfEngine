@@ -150,6 +150,8 @@ impl Voxel {
         self.liquid_schedule = target_world.liquid_schedule;
         self.liquid_clock = target_world.liquid_clock;
         self.liquid_level = target_world.liquid_level;
+        // W446: the share snapshot belongs to the OLD dim world.
+        self.liquid_level_share = None;
         self.liquid_positions = target_world.liquid_positions;
         self.door_facing = target_world.door_facing;
         self.door_open = target_world.door_open;

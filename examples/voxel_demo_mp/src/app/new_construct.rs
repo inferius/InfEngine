@@ -178,6 +178,7 @@ impl Voxel {
             next_drop_id: 1,
             flow_sfx_accum: 0.0,
             liquid_mesh_dirty: true,
+            liquid_level_share: None,
             liquid_chunk_sig: HashMap::new(),
             liquid_remesh_backlog: std::collections::HashSet::new(),
             water_tint_cache: HashMap::new(),

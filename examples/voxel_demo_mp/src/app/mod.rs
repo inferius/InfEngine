@@ -1175,6 +1175,17 @@ pub(crate) struct Voxel {
     pub(crate) liquid_mesh_inflight: HashMap<ChunkCoord, u64>,
     pub(crate) liquid_mesh_epoch: u64,
     pub(crate) liquid_mesh_dirty: bool,
+    /// W446: flow-level snapshot shared with in-flight liquid mesh
+    /// jobs. The dispatcher used to `clone()` the WHOLE liquid_level
+    /// map EVERY frame while the remesh backlog was non-empty - the
+    /// R31 sustained 10-30 ms `liqmesh` frames while exploring. The
+    /// Arc rebuilds only when a dirty rescan lands (levels changed);
+    /// backlog-drain frames reuse it. Correctness is unchanged: the
+    /// per-chunk signature already covers level values, so any real
+    /// change re-queues its chunk and the next dispatch reads a
+    /// fresh snapshot.
+    pub(crate) liquid_level_share:
+        Option<std::sync::Arc<HashMap<[i32; 3], u8>>>,
     /// W111: last-meshed signature per chunk (commutative fold over the
     /// chunk's liquid cell positions + levels). The diff re-meshes only
     /// chunks whose signature changed. Transient, not persisted.
