@@ -100,6 +100,11 @@ pub(crate) struct ColumnCore {
     /// Post-carve topmost-solid per column (OCEAN_FLOOR heightmap).
     /// W437: pub(crate) - LOD far tiles read it through `peek_core`.
     pub(crate) floor: [[i32; CHUNK_SIZE]; CHUNK_SIZE],
+    /// W444: the beard_thin structure pieces whose kernel reaches
+    /// this chunk (empty almost everywhere). The fill stage re-adds
+    /// their contribution when it re-evaluates density for the
+    /// aquifer, keeping both views of the field identical.
+    pub(crate) beard: Vec<super::beard::BeardRigid>,
     cells: CellLattices,
 }
 
@@ -148,6 +153,21 @@ impl ColumnCore {
 }
 
 thread_local! {
+    /// W444: set while a jigsaw layout is being solved. Column
+    /// builds under it skip the structure beard - the beard's piece
+    /// fetch would recurse straight back into the solve - and layout
+    /// anchors keep reading the SAME beard-free post-carve floors
+    /// they read before the Beardifier landed, so existing worlds
+    /// keep their village layouts.
+    static LAYOUT_PROBE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+
+    /// W444: side cache for those beard-free probe columns - they
+    /// must never enter the shared caches (their cores lack the
+    /// beard).
+    static PROBE_CACHE: RefCell<HashMap<(i32, i32, u32), Rc<McColumnData>>> =
+        RefCell::new(HashMap::new());
+
     /// Per-thread cache of the assembled overworld: one build per seed
     /// per worker thread. `build_overworld` parses ~60 JSON files and
     /// constructs ~42 `NormalNoise` octave stacks - far too expensive
@@ -159,6 +179,27 @@ thread_local! {
     /// lattice + solidity builds into one.
     static H_CACHE: RefCell<HashMap<(i32, i32, u32), Rc<McColumnData>>> =
         RefCell::new(HashMap::new());
+}
+
+fn layout_probe_active() -> bool {
+    LAYOUT_PROBE.with(|f| f.get())
+}
+
+/// W444: RAII scope for `LAYOUT_PROBE` - entered by the village /
+/// outpost layout builders around their jigsaw solve.
+pub(crate) struct LayoutProbeGuard(bool);
+
+impl LayoutProbeGuard {
+    pub(crate) fn enter() -> Self {
+        LayoutProbeGuard(LAYOUT_PROBE.with(|f| f.replace(true)))
+    }
+}
+
+impl Drop for LayoutProbeGuard {
+    fn drop(&mut self) {
+        let prev = self.0;
+        LAYOUT_PROBE.with(|f| f.set(prev));
+    }
 }
 
 /// The assembled overworld for `seed`, built once per thread.
@@ -185,6 +226,13 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> ColumnCore {
     let ox = cx * cs;
     let oz = cz * cs;
     let cells = ow.build_cells(ox, oz, LATTICE_TOP);
+    // W444: structure terrain adaptation (Beardifier). Probe builds
+    // skip it (see LAYOUT_PROBE).
+    let beard = if layout_probe_active() {
+        Vec::new()
+    } else {
+        super::beard::rigid_pieces_near_chunk(seed, cx, cz)
+    };
     let mut aquifer = Aquifer::new(ow, seed, ox, oz);
     let mut solid = Box::new([[[0u64; BITS_WORDS]; CHUNK_SIZE]; CHUNK_SIZE]);
     let mut cols = [[McCol { top: BITS_MIN_Y, mc: McBiome::Plains, surface_depth: 3 };
@@ -193,9 +241,24 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> ColumnCore {
         for lz in 0..CHUNK_SIZE {
             let wx = ox + lx as i32;
             let wz = oz + lz as i32;
+            // W444: pieces whose kernel can reach this column
+            // (contributions die past 11 blocks on either axis).
+            let col_beard: Vec<super::beard::BeardRigid> = beard
+                .iter()
+                .filter(|p| {
+                    let dx = (p.x0 - wx).max(wx - p.x1).max(0);
+                    let dz = (p.z0 - wz).max(wz - p.z1).max(0);
+                    dx < 12 && dz < 12
+                })
+                .copied()
+                .collect();
             let mut top = BITS_MIN_Y;
             for y in ow.min_y..=LATTICE_TOP {
-                if ow.density_cells(wx, y, wz, &cells) > 0.0 {
+                let mut d = ow.density_cells(wx, y, wz, &cells);
+                if !col_beard.is_empty() {
+                    d += super::beard::beard_at(&col_beard, wx, y, wz);
+                }
+                if d > 0.0 {
                     let b = (y - BITS_MIN_Y) as usize;
                     solid[lx][lz][b >> 6] |= 1u64 << (b & 63);
                     top = y;
@@ -220,7 +283,7 @@ fn column_data(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> ColumnCore {
         }
     }
     drop(aquifer);
-    ColumnCore { cols, solid, solid_pc, floor, cells }
+    ColumnCore { cols, solid, solid_pc, floor, beard, cells }
 }
 
 /// W314: the cross-worker core cache. RwLock HashMap of Arc cores -
@@ -374,6 +437,30 @@ fn top_set_bit(bits: &[u64; BITS_WORDS]) -> i32 {
 
 /// Cached per-column data for `(cx, cz, seed)`.
 fn column_data_cached(ow: &Overworld, cx: i32, cz: i32, seed: u32) -> Rc<McColumnData> {
+    // W444: layout-solve probes get beard-free columns from the
+    // side cache - never the shared caches.
+    if layout_probe_active() {
+        if let Some(hit) =
+            PROBE_CACHE.with(|c| c.borrow().get(&(cx, cz, seed)).cloned())
+        {
+            return hit;
+        }
+        let core = std::sync::Arc::new(column_data(ow, cx, cz, seed));
+        let cs = CHUNK_SIZE as i32;
+        let aquifer = Aquifer::new(ow, seed, cx * cs, cz * cs);
+        let col = Rc::new(McColumnData {
+            core,
+            aquifer: RefCell::new(aquifer),
+        });
+        PROBE_CACHE.with(|c| {
+            let mut map = c.borrow_mut();
+            if map.len() > 128 {
+                map.clear();
+            }
+            map.insert((cx, cz, seed), col.clone());
+        });
+        return col;
+    }
     H_CACHE.with(|c| {
         if let Some(col) = c.borrow().get(&(cx, cz, seed)) {
             return col.clone();
@@ -742,7 +829,12 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
         if wy > aquifer.skip_above_y() {
             return if wy < SEA_LEVEL { BlockId(36) } else { BlockId::AIR };
         }
-        let density = ow.density_cells(wx, wy, wz, &data.cells);
+        let mut density = ow.density_cells(wx, wy, wz, &data.cells);
+        // W444: same beard the solidity scan saw (aquifer pressure
+        // reads the FINAL field, like MC).
+        if !data.beard.is_empty() {
+            density += super::beard::beard_at(&data.beard, wx, wy, wz);
+        }
         match aquifer.substance(&ow, wx, wy, wz, density) {
             // Pressure-sealed cells take veins too (MC's filler chain
             // runs oreVeinify wherever the base state is stone).
@@ -789,6 +881,56 @@ pub(crate) fn gen_mc(coord: ChunkCoord, ctx: &WorldgenCtx) -> Chunk {
 
 #[cfg(test)]
 mod tests {
+
+    /// W444: building the REAL (bearded) column data inside a
+    /// village footprint must terminate - the beard piece fetch
+    /// solves layouts whose height probes build columns, and only
+    /// the LayoutProbeGuard breaks that cycle - and the piece sweep
+    /// must actually see the village's rigid pieces.
+    #[test]
+    fn beard_column_build_near_village_terminates() {
+        let seed = 3616343644u32;
+        let ctx = crate::worldgen::WorldgenCtx {
+            base_seed: seed,
+            dim: String::new(),
+            profile: crate::worldgen::WorldGen::Classic,
+        };
+        use crate::worldgen::mcgen::village;
+        let mut found = None;
+        'outer: for gx in -6..=6 {
+            for gz in -6..=6 {
+                let [scx, scz] = village::potential_start(seed, gx, gz);
+                let Some(layout) = village::layout_for_start(&ctx, scx, scz)
+                else {
+                    continue;
+                };
+                for p in layout.iter() {
+                    if !p.terrain_matching {
+                        found = Some(p.position);
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let Some(pos) = found else {
+            // No village in the scanned cells for this seed - the
+            // guard machinery is still exercised by the solves above.
+            return;
+        };
+        let cs = CHUNK_SIZE as i32;
+        let pieces = crate::worldgen::mcgen::beard::rigid_pieces_near_chunk(
+            seed,
+            pos[0].div_euclid(cs),
+            pos[2].div_euclid(cs),
+        );
+        assert!(
+            !pieces.is_empty(),
+            "rigid piece at {pos:?} not seen by the beard sweep",
+        );
+        // Reaching this call - and returning from it - is the real
+        // assertion: no probe recursion, no stack overflow.
+        let _ = column_is_solid(&ctx, pos[0], pos[1] - 1, pos[2]);
+    }
 
     /// W427: cold column-build phase split. Run with
     /// `cargo test -p voxel_demo_mp --release --lib column_build_bench -- --ignored --nocapture`.

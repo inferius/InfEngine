@@ -39,7 +39,7 @@ use super::village;
 use crate::worldgen::WorldgenCtx;
 
 /// `structure_set/pillager_outposts.json`.
-const SPACING: i32 = 32;
+pub(crate) const SPACING: i32 = 32;
 const SEPARATION: i32 = 8;
 const SALT_OUTPOST_SET: u64 = 165_745_296;
 /// `frequency: 0.2` with `legacy_type_1` reduction.
@@ -54,7 +54,7 @@ const VILLAGE_EXCLUSION: i32 = 10;
 const MAX_DEPTH: i32 = 7;
 
 /// The candidate start chunk of a 32x32 grid cell.
-fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
+pub(crate) fn potential_start(seed: u32, grid_x: i32, grid_z: i32) -> [i32; 2] {
     super::scattered::random_spread_start(
         seed,
         grid_x,
@@ -130,7 +130,12 @@ pub(crate) fn layout_for_start(
     {
         return hit;
     }
-    let built = build_layout(ctx, scx, scz).map(Rc::new);
+    let built = {
+        // W444: same probe-guard rule as the village solve.
+        let _probe = super::terrain::LayoutProbeGuard::enter();
+        build_layout(ctx, scx, scz)
+    }
+    .map(Rc::new);
     LAYOUT_CACHE.with(|c| {
         let mut map = c.borrow_mut();
         if map.len() > 256 {

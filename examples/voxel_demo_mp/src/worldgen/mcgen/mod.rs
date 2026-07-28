@@ -31,6 +31,7 @@
 pub(crate) mod ancient_city;
 pub(crate) mod aquatic_features;
 pub(crate) mod aquifer;
+pub(crate) mod beard;
 pub(crate) mod bamboo;
 pub(crate) mod bastion;
 pub(crate) mod biome;
