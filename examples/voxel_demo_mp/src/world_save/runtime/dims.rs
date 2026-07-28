@@ -211,6 +211,127 @@ fn save_parked_dim(voxel: &Voxel, slug: &str, dim: &str) -> io::Result<usize> {
 ///
 /// `current_dim` is set by the caller (typically from the
 /// player's `last_dimension`) BEFORE this fn runs.
+/// W447: run `work` over per-chunk payloads on a scoped worker
+/// pool. Disk read + zstd + bincode dominated the world-load stall
+/// (the R31 33 s / 17k-chunk single-threaded load); each file is
+/// independent, so workers drain an atomic index over the coord
+/// list and the caller applies results serially. Divergence from
+/// the old serial loop: a hard read error now skips that one chunk
+/// with a warn instead of aborting the whole load.
+fn parallel_chunk_map<T: Send>(
+    slug: &str,
+    dim: &str,
+    coords: &[[i32; 3]],
+    work: impl Fn([i32; 3], ChunkPayload) -> Option<T> + Sync,
+) -> Vec<T> {
+    let n = coords.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4)
+        .saturating_sub(1)
+        .clamp(1, 12)
+        .min(n);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let sink: std::sync::Mutex<Vec<T>> =
+        std::sync::Mutex::new(Vec::with_capacity(n));
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                let mut local: Vec<T> = Vec::new();
+                loop {
+                    let i = next
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if i >= n {
+                        break;
+                    }
+                    let coord = coords[i];
+                    match chunks::read_chunk(slug, dim, coord) {
+                        Ok(Some(p)) => {
+                            if let Some(t) = work(coord, p) {
+                                local.push(t);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            warn!(
+                                ?coord,
+                                dim,
+                                %err,
+                                "world_save: chunk read failed during load (skipped)",
+                            );
+                        }
+                    }
+                }
+                if !local.is_empty() {
+                    sink.lock().unwrap().extend(local);
+                }
+            });
+        }
+    });
+    sink.into_inner().unwrap()
+}
+
+/// W447: worker-side product for one parked-dim chunk - decoded
+/// blocks plus everything the old serial loop derived from them.
+struct ParkedDecoded {
+    coord: [i32; 3],
+    chunk: infengine_voxel::Chunk,
+    liquids: Vec<[i32; 3]>,
+    spawners: Vec<[i32; 3]>,
+    liquid_levels: Vec<([u8; 3], u8)>,
+    torch_orient: Vec<([u8; 3], u8)>,
+    snow_layers: Vec<([u8; 3], u8)>,
+}
+
+/// W447: decode + scan one parked chunk (pure; runs on the pool).
+fn scan_parked(
+    coord: [i32; 3],
+    payload: ChunkPayload,
+) -> io::Result<ParkedDecoded> {
+    use crate::liquid::liquid_for;
+    use infengine_voxel::CHUNK_SIZE;
+    let chunk = payload.voxels.into_chunk()?;
+    let cs = CHUNK_SIZE as i32;
+    let origin = [coord[0] * cs, coord[1] * cs, coord[2] * cs];
+    let mut liquids: Vec<[i32; 3]> = Vec::new();
+    let mut spawners: Vec<[i32; 3]> = Vec::new();
+    for ly in 0..cs {
+        for lz in 0..cs {
+            for lx in 0..cs {
+                let b = chunk.get(lx as usize, ly as usize, lz as usize);
+                if liquid_for(b).is_some() {
+                    liquids.push([
+                        origin[0] + lx,
+                        origin[1] + ly,
+                        origin[2] + lz,
+                    ]);
+                }
+                // W242.2: parked dims never re-run the worker scan on
+                // a switch - index their spawners during the load.
+                if b.0 == crate::block::SPAWNER_ID {
+                    spawners.push([
+                        origin[0] + lx,
+                        origin[1] + ly,
+                        origin[2] + lz,
+                    ]);
+                }
+            }
+        }
+    }
+    Ok(ParkedDecoded {
+        coord,
+        chunk,
+        liquids,
+        spawners,
+        liquid_levels: payload.liquid_levels,
+        torch_orient: payload.torch_orient,
+        snow_layers: payload.snow_layers,
+    })
+}
+
 pub(super) fn load_all_dims(
     voxel: &mut Voxel,
     slug: &str,
@@ -251,6 +372,7 @@ fn load_active_dim(
 ) -> io::Result<usize> {
     let mut chunks_loaded: usize = 0;
     let dir = layout::world_dir(slug).join("chunks").join(dim);
+    let mut coords: Vec<[i32; 3]> = Vec::new();
     if dir.is_dir() {
         let read = std::fs::read_dir(&dir)?;
         for entry in read.flatten() {
@@ -268,13 +390,14 @@ fn load_active_dim(
             {
                 continue;
             }
-            let payload = match chunks::read_chunk(slug, dim, coord)? {
-                Some(p) => p,
-                None => continue,
-            };
-            apply_chunk_payload(voxel, payload)?;
-            chunks_loaded += 1;
+            coords.push(coord);
         }
+    }
+    // W447: disk read + decompress + decode on the pool; the Voxel
+    // application (side-state maps) stays serial here.
+    for payload in parallel_chunk_map(slug, dim, &coords, |_, p| Some(p)) {
+        apply_chunk_payload(voxel, payload)?;
+        chunks_loaded += 1;
     }
     let ents = entities::read_entities(slug, dim)?.unwrap_or_else(DimensionEntities::empty);
     apply_dimension_entities(voxel, ents);
@@ -288,11 +411,11 @@ fn load_active_dim(
 /// are built from disk, no Voxel side-state touched.
 fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize> {
     use infengine_voxel::CHUNK_SIZE;
-    use crate::liquid::liquid_for;
 
     let mut dw = DimWorld::default();
     let mut chunks_loaded: usize = 0;
     let dir = layout::world_dir(slug).join("chunks").join(dim);
+    let mut coords: Vec<[i32; 3]> = Vec::new();
     if dir.is_dir() {
         let read = std::fs::read_dir(&dir)?;
         for entry in read.flatten() {
@@ -304,68 +427,59 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
                 warn!(path = %path.display(), "world_save: skipping unrecognised chunk filename");
                 continue;
             };
-            let payload = match chunks::read_chunk(slug, dim, coord)? {
-                Some(p) => p,
-                None => continue,
-            };
-            // Inline a mini "apply_chunk_payload but to DimWorld"
-            // to avoid pulling the live Voxel through here.
-            let chunk = payload.voxels.into_chunk()?;
-            let origin = [
-                coord[0] * CHUNK_SIZE as i32,
-                coord[1] * CHUNK_SIZE as i32,
-                coord[2] * CHUNK_SIZE as i32,
-            ];
-            dw.world.insert_chunk(coord, chunk);
-            // Liquid-positions scan mirrors the active-dim path
-            // so the dim's liquid mesh path picks them up after
-            // a future switch.
-            if let Some(chunk_ref) = dw.world.chunk(coord) {
-                let cs = CHUNK_SIZE as i32;
-                for ly in 0..cs {
-                    for lz in 0..cs {
-                        for lx in 0..cs {
-                            let b = chunk_ref.get(lx as usize, ly as usize, lz as usize);
-                            if liquid_for(b).is_some() {
-                                dw.liquid_positions.insert([
-                                    origin[0] + lx,
-                                    origin[1] + ly,
-                                    origin[2] + lz,
-                                ]);
-                            }
-                            // W242.2: parked dims never re-run the
-                            // worker scan on a switch - index their
-                            // spawners during the load walk.
-                            if b.0 == crate::block::SPAWNER_ID {
-                                dw.spawner_positions.insert([
-                                    origin[0] + lx,
-                                    origin[1] + ly,
-                                    origin[2] + lz,
-                                ]);
-                            }
-                        }
-                    }
-                }
-            }
-            for (local, level) in payload.liquid_levels {
-                dw.liquid_level.insert(
-                    [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32],
-                    level.min(7),
-                );
-            }
-            for (local, orient) in payload.torch_orient {
-                let wp = [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32];
-                dw.torch_orient.insert(wp, orient);
-                dw.torch_positions.insert(wp);
-            }
-            for (local, layers) in payload.snow_layers {
-                dw.snow_positions.insert(
-                    [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32],
-                    layers.clamp(1, 8),
-                );
-            }
-            chunks_loaded += 1;
+            coords.push(coord);
         }
+    }
+    // W447: read + decode + the 16^3 liquid/spawner scan all run on
+    // the pool (`scan_parked`); the serial phase just inserts into
+    // the DimWorld maps. This walk had no distance gate - a parked
+    // nether with thousands of visited chunks was the bulk of the
+    // R31 33 s load stall.
+    let decoded = parallel_chunk_map(slug, dim, &coords, |coord, payload| {
+        match scan_parked(coord, payload) {
+            Ok(d) => Some(d),
+            Err(err) => {
+                warn!(
+                    ?coord,
+                    dim,
+                    %err,
+                    "world_save: parked chunk decode failed (skipped)",
+                );
+                None
+            }
+        }
+    });
+    for d in decoded {
+        let origin = [
+            d.coord[0] * CHUNK_SIZE as i32,
+            d.coord[1] * CHUNK_SIZE as i32,
+            d.coord[2] * CHUNK_SIZE as i32,
+        ];
+        dw.world.insert_chunk(d.coord, d.chunk);
+        for p in d.liquids {
+            dw.liquid_positions.insert(p);
+        }
+        for p in d.spawners {
+            dw.spawner_positions.insert(p);
+        }
+        for (local, level) in d.liquid_levels {
+            dw.liquid_level.insert(
+                [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32],
+                level.min(7),
+            );
+        }
+        for (local, orient) in d.torch_orient {
+            let wp = [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32];
+            dw.torch_orient.insert(wp, orient);
+            dw.torch_positions.insert(wp);
+        }
+        for (local, layers) in d.snow_layers {
+            dw.snow_positions.insert(
+                [origin[0] + local[0] as i32, origin[1] + local[1] as i32, origin[2] + local[2] as i32],
+                layers.clamp(1, 8),
+            );
+        }
+        chunks_loaded += 1;
     }
     // Containers -> dw maps.
     let conts = containers::read_containers(slug, dim)?
