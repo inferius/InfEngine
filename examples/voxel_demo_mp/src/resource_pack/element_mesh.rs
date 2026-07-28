@@ -172,7 +172,11 @@ pub(crate) fn emit_pillar(
     block_id: u16,
     axis: u8,
     pack: &ResourcePack,
-    light: [f32; 2],
+    // W426: per-face light from the AIR-side neighbour. A log is a
+    // full opaque cube, so its own cell's BFS light is 0/0 - the
+    // old single sample painted every oriented log pitch black
+    // (the R27/R28 "hole in the trunk" screenshots).
+    face_light: &dyn Fn([i32; 3]) -> [f32; 2],
 ) {
     let end = pack
         .block_face_ref(block_id, super::BlockFace::Top)
@@ -211,6 +215,11 @@ pub(crate) fn emit_pillar(
         ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
     ];
     for (normal, corners) in faces {
+        let light = face_light([
+            normal[0] as i32,
+            normal[1] as i32,
+            normal[2] as i32,
+        ]);
         let on_axis = match axis {
             1 => normal[0] != 0.0,
             _ => normal[2] != 0.0,

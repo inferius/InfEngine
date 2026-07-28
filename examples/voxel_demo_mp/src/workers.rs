@@ -858,9 +858,22 @@ pub(crate) fn mesh_chunk_in_worker(
             if let Some(&ax) = stairs.get(&wp)
                 && (ax == 1 || ax == 2)
             {
-                let light = halo.lookup(coord, wp);
+                // W426: per-face air-side light (the log cell
+                // itself is opaque -> BFS 0/0 -> black).
+                let face_light = |n: [i32; 3]| -> [f32; 2] {
+                    halo.lookup(
+                        coord,
+                        [wp[0] + n[0], wp[1] + n[1], wp[2] + n[2]],
+                    )
+                };
                 resource_pack::element_mesh::emit_pillar(
-                    verts, idxs, voxel_origin, block.0, ax, pack, light,
+                    verts,
+                    idxs,
+                    voxel_origin,
+                    block.0,
+                    ax,
+                    pack,
+                    &face_light,
                 );
                 return true;
             }

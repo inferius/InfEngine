@@ -700,6 +700,62 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                         vx.chunk_meshes.entry(cc).or_default().push((sub.block, handle));
                     }
                 }
+                // W426: one-shot scrub of stale pillar-axis records
+                // that pre-W421 saves persisted (fallen-log runs
+                // overwritten by tree trunks kept the sideways
+                // grain). A VERTICAL pillar neighbour marks a trunk
+                // column - real fallen logs lie flat and village
+                // beams don't stack vertically - so those records
+                // drop and the trunk re-meshes upright.
+                let mut stale_pillar: Vec<[i32; 3]> = Vec::new();
+                if let Some(ch) = vx.world.chunk(cc) {
+                    let cs_i = CHUNK_SIZE as i32;
+                    for z in 0..CHUNK_SIZE {
+                        for y in 0..CHUNK_SIZE {
+                            for x in 0..CHUNK_SIZE {
+                                let id = ch.get(x, y, z).0;
+                                if !crate::block::is_pillar_block(id) {
+                                    continue;
+                                }
+                                let wp = [
+                                    cc[0] * cs_i + x as i32,
+                                    cc[1] * cs_i + y as i32,
+                                    cc[2] * cs_i + z as i32,
+                                ];
+                                let Some(&st) = vx.stair_states.get(&wp)
+                                else {
+                                    continue;
+                                };
+                                if st != 1 && st != 2 {
+                                    continue;
+                                }
+                                let above = vx
+                                    .world
+                                    .get([wp[0], wp[1] + 1, wp[2]])
+                                    .0;
+                                let below = vx
+                                    .world
+                                    .get([wp[0], wp[1] - 1, wp[2]])
+                                    .0;
+                                if crate::block::is_pillar_block(above)
+                                    || crate::block::is_pillar_block(below)
+                                {
+                                    stale_pillar.push(wp);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !stale_pillar.is_empty() {
+                    for wp in stale_pillar {
+                        vx.stair_states.remove(&wp);
+                    }
+                    // Re-mesh with the scrubbed snapshot so the
+                    // trunk turns upright on screen too.
+                    if vx.pending_seam_set.insert(cc) {
+                        vx.pending_seam_remesh.push_back(cc);
+                    }
+                }
                 // W345: neighbour re-mesh is OVERDRAW CLEANUP, not
                 // correctness - the mesher emits boundary faces
                 // against missing neighbours (nothing is ever
