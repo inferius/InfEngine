@@ -206,13 +206,16 @@ pub(crate) fn emit_pillar(
     };
     // The six cube faces in emit_cuboid's corner order (CCW from
     // outside, UVs bottom-left -> BR -> TR -> TL).
+    // W433: corner order is CLOCKWISE seen from outside - the
+    // emit_element_quad index order (0,2,1 / 0,3,2) flips it, so a
+    // CCW table rendered every face inside-out (the R29 screen).
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
-        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
-        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
-        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
-        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
-        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
+        ([1.0, 0.0, 0.0], [c(true, true, false), c(true, true, true), c(true, false, true), c(true, false, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, true, true), c(false, true, false), c(false, false, false), c(false, false, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, true), c(true, true, true), c(true, true, false), c(false, true, false)]),
+        ([0.0, -1.0, 0.0], [c(false, false, false), c(true, false, false), c(true, false, true), c(false, false, true)]),
+        ([0.0, 0.0, 1.0], [c(true, true, true), c(false, true, true), c(false, false, true), c(true, false, true)]),
+        ([0.0, 0.0, -1.0], [c(false, true, false), c(true, true, false), c(true, false, false), c(false, false, false)]),
     ];
     for (normal, corners) in faces {
         let light = face_light([
@@ -354,13 +357,16 @@ fn emit_cuboid(
             if zh { hi[2] } else { lo[2] },
         ]
     };
+    // W433: corner order is CLOCKWISE seen from outside - the
+    // emit_element_quad index order (0,2,1 / 0,3,2) flips it, so a
+    // CCW table rendered every face inside-out (the R29 screen).
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([1.0, 0.0, 0.0], [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)]),
-        ([-1.0, 0.0, 0.0], [c(false, false, true), c(false, false, false), c(false, true, false), c(false, true, true)]),
-        ([0.0, 1.0, 0.0], [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)]),
-        ([0.0, -1.0, 0.0], [c(false, false, true), c(true, false, true), c(true, false, false), c(false, false, false)]),
-        ([0.0, 0.0, 1.0], [c(true, false, true), c(false, false, true), c(false, true, true), c(true, true, true)]),
-        ([0.0, 0.0, -1.0], [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)]),
+        ([1.0, 0.0, 0.0], [c(true, true, false), c(true, true, true), c(true, false, true), c(true, false, false)]),
+        ([-1.0, 0.0, 0.0], [c(false, true, true), c(false, true, false), c(false, false, false), c(false, false, true)]),
+        ([0.0, 1.0, 0.0], [c(false, true, true), c(true, true, true), c(true, true, false), c(false, true, false)]),
+        ([0.0, -1.0, 0.0], [c(false, false, false), c(true, false, false), c(true, false, true), c(false, false, true)]),
+        ([0.0, 0.0, 1.0], [c(true, true, true), c(false, true, true), c(false, false, true), c(true, false, true)]),
+        ([0.0, 0.0, -1.0], [c(false, true, false), c(true, true, false), c(true, false, false), c(false, false, false)]),
     ];
     for (normal, corners) in faces {
         infengine_voxel::emit_element_quad(verts, idxs, corners, normal, tile, light, 0);
@@ -1372,6 +1378,45 @@ fn scale_uv(model_uv: [f32; 4], atlas_uv: [f32; 4]) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
+
+    /// W433: every emit_pillar face must wind CCW seen from outside
+    /// (cross(e1, e2) aligned with the face normal) - a flipped
+    /// face gets backface-culled from outside and shows the block
+    /// interior instead (the R29 "trunk drawn inside-out" screen).
+    #[test]
+    fn pillar_faces_wind_outward() {
+        let pack = crate::resource_pack::fallback::placeholder_pack();
+        for axis in [1u8, 2u8] {
+            let mut verts = Vec::new();
+            let mut idxs = Vec::new();
+            emit_pillar(
+                &mut verts,
+                &mut idxs,
+                glam::Vec3::ZERO,
+                88,
+                axis,
+                &pack,
+                &|_| [0.0, 1.0],
+            );
+            assert_eq!(verts.len() % 4, 0);
+            for q in 0..verts.len() / 4 {
+                let p0 = glam::Vec3::from(verts[q * 4].position);
+                let p1 = glam::Vec3::from(verts[q * 4 + 1].position);
+                let p2 = glam::Vec3::from(verts[q * 4 + 2].position);
+                let np = verts[q * 4].normal_pad;
+                let n = glam::Vec3::new(
+                    np[0] as f32,
+                    np[1] as f32,
+                    np[2] as f32,
+                );
+                let w = (p1 - p0).cross(p2 - p0);
+                assert!(
+                    w.dot(n) > 0.0,
+                    "axis {axis} quad {q}: winding {w:?} vs normal {n:?}"
+                );
+            }
+        }
+    }
     use super::*;
 
     #[test]

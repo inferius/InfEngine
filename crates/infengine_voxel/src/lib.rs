@@ -1248,8 +1248,11 @@ fn emit_quad_lit_anim(
 /// stairs). The caller has already applied element `from`/`to` scaling
 /// and any `ElementRotation` transform.
 ///
-/// `corners` - four world-space positions in CCW order as seen from
-/// the face's outward normal.
+/// `corners` - four world-space positions in CLOCKWISE order as
+/// seen from the face's outward normal (W433: the emitted index
+/// order `0,2,1 / 0,3,2` reverses them, so the on-screen triangles
+/// wind CCW for the `FrontFace::Ccw` cull-back pipeline; every
+/// long-standing caller passes CW corners).
 /// `normal`  - face normal (need not be unit length; used for
 /// lighting look-up only).
 /// `uv_rect` - `[u0, v0, u1, v1]` in atlas space (same layout as
