@@ -1035,6 +1035,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         .step_by(1.0)
                         .text("LOD 2 distance (far ring, 0 = off)"),
                     );
+                    // W445: the horizon ring (16x16-chunk tiles) got a
+                    // slider too - it was save-file-only before.
+                    ui.add(
+                        egui::Slider::new(
+                            &mut settings_edit.lod3_distance,
+                            0..=crate::lod::LOD3_DISTANCE_MAX as u16,
+                        )
+                        .step_by(16.0)
+                        .text("LOD 3 distance (horizon, 0 = off)"),
+                    );
                     ui.checkbox(&mut settings_edit.show_fps, "Show FPS");
                     ui.checkbox(
                         &mut settings_edit.lock_cursor,
@@ -1522,6 +1532,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 )
                                 .step_by(1.0)
                                 .text("LOD 2 distance"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut settings_edit.lod3_distance,
+                                    0..=crate::lod::LOD3_DISTANCE_MAX as u16,
+                                )
+                                .step_by(16.0)
+                                .text("LOD 3 distance (horizon)"),
                             );
                             ui.add(
                                 egui::Slider::new(
