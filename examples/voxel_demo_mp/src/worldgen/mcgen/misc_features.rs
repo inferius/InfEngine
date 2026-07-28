@@ -265,10 +265,12 @@ struct DiskPlacement {
     r: i32,
 }
 
+type DisksMemoMap =
+    std::collections::HashMap<(i32, i32, u32), std::rc::Rc<Vec<DiskPlacement>>>;
+
 thread_local! {
-    static DISKS_MEMO: std::cell::RefCell<
-        std::collections::HashMap<(i32, i32, u32), std::rc::Rc<Vec<DiskPlacement>>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    static DISKS_MEMO: std::cell::RefCell<DisksMemoMap> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn disk_placements_for_source(

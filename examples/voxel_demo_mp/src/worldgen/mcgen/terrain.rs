@@ -769,6 +769,7 @@ mod tests {
     /// `cargo test -p voxel_demo_mp --release --lib column_build_bench -- --ignored --nocapture`.
     #[test]
     #[ignore]
+    #[allow(clippy::print_stdout)]
     fn column_build_bench() {
         let seed = 3616343644u32;
         let ow = overworld_for(seed);
