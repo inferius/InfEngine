@@ -1320,6 +1320,74 @@ pub(crate) fn mesh_chunk_in_worker(
             );
             return true;
         }
+        // W455: walls compute the REAL MC WallBlock state - a
+        // WallSide (none/low/tall) per direction plus the post
+        // flag - and resolve the multipart against those props.
+        // The old path folded the arms into connection bools; the
+        // inverted fold stacked low+tall arm models over each
+        // other on free sides (the R34 flickering wall).
+        if crate::block::is_wall_block(block.0) {
+            let sample = |d: [i32; 3]| -> u16 {
+                let nx = lx + d[0];
+                let ny = ly + d[1];
+                let nz = lz + d[2];
+                if (0..CHUNK_SIZE as i32).contains(&nx)
+                    && (0..CHUNK_SIZE as i32).contains(&ny)
+                    && (0..CHUNK_SIZE as i32).contains(&nz)
+                {
+                    chunk.get(nx as usize, ny as usize, nz as usize).0
+                } else {
+                    boundary.at([nx, ny, nz]).0
+                }
+            };
+            let st = crate::block::wall::wall_state(block.0, &sample);
+            let wp = [
+                world_origin[0] + lx,
+                world_origin[1] + ly,
+                world_origin[2] + lz,
+            ];
+            let light = halo.lookup(coord, wp);
+            let props = resource_pack::blockstates::BlockStateProps::new()
+                .with("north", st.north.as_prop())
+                .with("east", st.east.as_prop())
+                .with("south", st.south.as_prop())
+                .with("west", st.west.as_prop())
+                .with("up", if st.post { "true" } else { "false" });
+            if let Some(m) = resource_pack::special_models::model_for_block_multipart_with_props(
+                block.0, pack, &props,
+            )
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
+            if let Some(m) =
+                resource_pack::special_models::wall_post_fallback()
+                && resource_pack::element_mesh::emit_resolved_model(
+                    &m,
+                    block.0,
+                    voxel_origin,
+                    verts,
+                    idxs,
+                    pack,
+                    |_| light,
+                    |_| 0,
+                    |_| false,
+                )
+            {
+                return true;
+            }
+            return false;
+        }
         // W40.1: compute neighbour connection flags for multipart.
         // W133: family-aware (MC fence/wall/pane rules) instead of
         // strict same-id - fences grab other wood fences + solids.
@@ -1342,16 +1410,8 @@ pub(crate) fn mesh_chunk_in_worker(
             south: same_id(0, 0,  1),
             east:  same_id( 1, 0, 0),
             west:  same_id(-1, 0, 0),
-            // W453: walls always render their post. The blockstate
-            // `up` tracks MC's post-shape state (posts hide inside
-            // straight runs), which a connected bool cannot
-            // express - without the override a free-standing wall
-            // would emit NOTHING once the string-state arms fix
-            // stopped the inverted arm spam. Post-always is the
-            // honest approximation until wall shape state lands.
-            up: same_id(0, 1, 0)
-                || crate::block::is_wall_block(block.0),
-            down: same_id(0, -1, 0),
+            up:    same_id(0,  1, 0),
+            down:  same_id(0, -1, 0),
         };
         resource_pack::element_mesh::emit_block_elements(
             block.0,

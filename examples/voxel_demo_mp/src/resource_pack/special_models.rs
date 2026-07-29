@@ -615,6 +615,49 @@ pub(crate) fn model_for_aux_with_props(
 /// universal replacement for the per-block hand-coded emitters:
 /// callers translate their engine state bytes into MC props and
 /// every orientation comes straight from the blockstate JSON.
+/// W455: merge every multipart part whose condition matches the
+/// caller's REAL state props (the wall mesher passes none/low/tall
+/// sides + the post flag). Returns None when the id is not a
+/// multipart blockstate or nothing matched.
+pub(crate) fn model_for_block_multipart_with_props(
+    id: u16,
+    pack: &super::ResourcePack,
+    props: &blockstates::BlockStateProps,
+) -> Option<BlockModel> {
+    let Some(ResolvedBlockState::Multipart(parts)) =
+        pack.block_models.get(&id)
+    else {
+        return None;
+    };
+    let mut elements = Vec::new();
+    let mut textures = std::collections::HashMap::new();
+    let mut ambient_occlusion = true;
+    for (cond, model) in parts {
+        let on = match cond {
+            None => true,
+            Some(c) => c.matches_props(props),
+        };
+        if !on {
+            continue;
+        }
+        elements.extend(model.elements.clone());
+        for (k, v) in &model.textures {
+            textures.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        ambient_occlusion = model.ambient_occlusion;
+    }
+    if elements.is_empty() {
+        return None;
+    }
+    Some(BlockModel { elements, textures, ambient_occlusion })
+}
+
+/// W455: hand-built post for the pack-less run (the wall arm's last
+/// fallback when the multipart JSON is unavailable).
+pub(crate) fn wall_post_fallback() -> Option<BlockModel> {
+    lookup("block/wall_post")
+}
+
 pub(crate) fn model_for_block_with_props(
     id: u16,
     pack: &super::ResourcePack,

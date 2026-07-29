@@ -23,6 +23,7 @@ pub(crate) mod brewing;
 pub(crate) mod chest;
 pub(crate) mod crop_stages;
 pub(crate) mod door;
+pub(crate) mod wall;
 pub(crate) mod rail;
 pub(crate) mod rail_state;
 pub(crate) mod fire;

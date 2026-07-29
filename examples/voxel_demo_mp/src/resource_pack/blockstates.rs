@@ -134,6 +134,19 @@ pub(crate) struct NeighborStates {
 impl NeighborStates {
     /// Look up the boolean value of a direction property by name.
     /// Returns `None` for unknown property names.
+    /// W455: the six connection bools as true/false props - the
+    /// shared multipart matcher consumes props only.
+    pub(crate) fn as_props(&self) -> BlockStateProps {
+        let b = |v: bool| if v { "true" } else { "false" };
+        BlockStateProps::new()
+            .with("north", b(self.north))
+            .with("south", b(self.south))
+            .with("east", b(self.east))
+            .with("west", b(self.west))
+            .with("up", b(self.up))
+            .with("down", b(self.down))
+    }
+
     pub(crate) fn get_bool(&self, prop: &str) -> Option<bool> {
         match prop {
             "north" => Some(self.north),
@@ -160,32 +173,32 @@ pub(crate) enum MultipartCondition {
 
 impl MultipartCondition {
     /// True when the condition matches the given neighbour states.
+    /// W455: delegates through real props so fences/panes (plain
+    /// true/false conditions) share one matcher semantic with the
+    /// wall arm's none/low/tall state.
     pub(crate) fn matches_neighbors(&self, n: &NeighborStates) -> bool {
+        self.matches_props(&n.as_props())
+    }
+
+    /// W455: evaluate the condition against REAL state props (the
+    /// wall mesher passes none/low/tall arm states). Values support
+    /// MC's `|` alternation ("low|tall"). Unknown props never
+    /// match - a bool-fed pane condition cannot accidentally turn
+    /// on a wall arm.
+    pub(crate) fn matches_props(&self, props: &BlockStateProps) -> bool {
         match self {
             MultipartCondition::All(pairs) => {
                 pairs.iter().all(|(k, v)| {
-                    n.get_bool(k)
-                        .map(|b| match v.as_str() {
-                            // W453: MC wall arms carry none/low/tall
-                            // STRING states. The engine tracks one
-                            // connected bool per side, so a
-                            // connection renders the LOW arm and
-                            // tall arms stay off until wall shape
-                            // state lands. The old bool-only
-                            // fallback treated every non-"true"
-                            // value as negation and stacked the low
-                            // AND tall arm models over each other on
-                            // every FREE side - the R34 flickering
-                            // wall under the torch.
-                            "true" | "low" => b,
-                            "false" | "none" => !b,
-                            _ => false,
+                    props
+                        .get(k)
+                        .map(|actual| {
+                            v.split('|').any(|alt| alt == actual)
                         })
                         .unwrap_or(false)
                 })
             }
             MultipartCondition::AnyOf(subs) => {
-                subs.iter().any(|c| c.matches_neighbors(n))
+                subs.iter().any(|c| c.matches_props(props))
             }
         }
     }
@@ -421,11 +434,35 @@ pub(crate) fn select_variant<'a>(
 mod tests {
     use super::*;
 
-    /// W453: a connection renders the LOW arm, tall stays off,
-    /// free sides render nothing. The inverted bool fallback used
-    /// to emit low+tall on free sides (coplanar z-fight).
+    /// W455: multipart conditions evaluate against real state
+    /// props with MC's `|` alternation; the NeighborStates bool
+    /// path builds true/false props and shares the matcher.
     #[test]
-    fn wall_string_conditions_follow_connections() {
+    fn multipart_conditions_match_real_props() {
+        let cond = |k: &str, v: &str| {
+            MultipartCondition::All(vec![(k.to_string(), v.to_string())])
+        };
+        let wall = BlockStateProps::new()
+            .with("north", "low")
+            .with("east", "tall")
+            .with("south", "none")
+            .with("up", "true");
+        assert!(cond("north", "low").matches_props(&wall));
+        assert!(!cond("north", "tall").matches_props(&wall));
+        assert!(cond("east", "tall").matches_props(&wall));
+        assert!(cond("south", "none").matches_props(&wall));
+        assert!(cond("up", "true").matches_props(&wall));
+        assert!(
+            !cond("west", "low").matches_props(&wall),
+            "missing prop never matches",
+        );
+        // MC alternation.
+        assert!(cond("north", "low|tall").matches_props(&wall));
+        assert!(cond("east", "low|tall").matches_props(&wall));
+        assert!(!cond("south", "low|tall").matches_props(&wall));
+        // Bool path delegates through true/false props: a pane's
+        // "true" condition follows the connection, and a wall's
+        // "low" condition can never fire from a bool feed.
         let n = NeighborStates {
             north: true,
             south: false,
@@ -434,19 +471,10 @@ mod tests {
             up: false,
             down: false,
         };
-        let cond = |k: &str, v: &str| {
-            MultipartCondition::All(vec![(k.to_string(), v.to_string())])
-        };
-        assert!(cond("north", "low").matches_neighbors(&n));
-        assert!(!cond("north", "tall").matches_neighbors(&n));
-        assert!(!cond("north", "none").matches_neighbors(&n));
-        assert!(!cond("south", "low").matches_neighbors(&n));
-        assert!(!cond("south", "tall").matches_neighbors(&n));
-        assert!(cond("south", "none").matches_neighbors(&n));
-        // Plain fence/pane booleans keep their behaviour.
         assert!(cond("north", "true").matches_neighbors(&n));
         assert!(!cond("south", "true").matches_neighbors(&n));
         assert!(cond("south", "false").matches_neighbors(&n));
+        assert!(!cond("north", "low").matches_neighbors(&n));
     }
 
     #[test]
