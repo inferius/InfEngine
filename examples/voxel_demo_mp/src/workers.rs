@@ -355,24 +355,9 @@ impl WorkerPool {
                                     let oriented: Vec<_> = oriented
                                         .into_iter()
                                         .filter(|o| {
-                                            if o.kind != 5 {
-                                                return true;
-                                            }
-                                            let lx = o.pos[0] - corg[0];
-                                            let ly = o.pos[1] - corg[1];
-                                            let lz = o.pos[2] - corg[2];
-                                            (0..cs_i).contains(&lx)
-                                                && (0..cs_i).contains(&ly)
-                                                && (0..cs_i).contains(&lz)
-                                                && crate::block::is_pillar_block(
-                                                    chunk
-                                                        .get(
-                                                            lx as usize,
-                                                            ly as usize,
-                                                            lz as usize,
-                                                        )
-                                                        .0,
-                                                )
+                                            keep_oriented_record(
+                                                o, &chunk, corg,
+                                            )
                                         })
                                         .collect();
                                     let mut gen_doors: std::collections::HashMap<
@@ -1854,6 +1839,54 @@ pub(crate) struct ChunkJob {
 /// order.
 pub(crate) struct BoundaryHalo {
     pub(crate) sides: [Option<Box<[u16; 256]>>; 6],
+}
+
+/// W421/W456: should a carve-recorded oriented placement survive
+/// into the mesher + state maps? Kind 5 (pillar axis) records die
+/// when the FINAL chunk content contradicts them:
+/// - the cell no longer holds a pillar at all (W421 - the carve
+///   order let later features overwrite the block), or
+/// - the axis is HORIZONTAL but the cell is trunk-stacked (a
+///   vertical pillar sits directly above or below in this chunk) -
+///   a tree planted over a fallen-log run keeps the cell a pillar,
+///   which the W421 test cannot see (the R36 "rings facing forward"
+///   trunk). Same vertical-neighbour heuristic as the legacy-save
+///   scrub, applied AT GENERATION so current worlds never need a
+///   runtime pass.
+///
+/// Out-of-chunk records drop - the owning chunk replays the same
+/// source and re-records them locally.
+pub(crate) fn keep_oriented_record(
+    o: &crate::worldgen::mcgen::village::CarvedOriented,
+    chunk: &Chunk,
+    corg: [i32; 3],
+) -> bool {
+    if o.kind != 5 {
+        return true;
+    }
+    let cs_i = CHUNK_SIZE as i32;
+    let lx = o.pos[0] - corg[0];
+    let ly = o.pos[1] - corg[1];
+    let lz = o.pos[2] - corg[2];
+    if !((0..cs_i).contains(&lx)
+        && (0..cs_i).contains(&ly)
+        && (0..cs_i).contains(&lz))
+    {
+        return false;
+    }
+    let at = |y: i32| -> u16 {
+        if (0..cs_i).contains(&y) {
+            chunk.get(lx as usize, y as usize, lz as usize).0
+        } else {
+            0
+        }
+    };
+    if !crate::block::is_pillar_block(at(ly)) {
+        return false;
+    }
+    !((o.state == 1 || o.state == 2)
+        && (crate::block::is_pillar_block(at(ly - 1))
+            || crate::block::is_pillar_block(at(ly + 1))))
 }
 
 impl BoundaryHalo {

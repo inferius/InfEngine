@@ -215,6 +215,63 @@ fn w450_new_village_doors_are_two_cells() {
     assert_eq!(orphan_lowers, 0, "lower door halves without an upper");
 }
 
+/// W456: pillar-axis records die at GENERATION when the final chunk
+/// contradicts them - horizontal grain on a trunk-stacked cell is
+/// the fallen-log-overwritten-by-tree artifact (the R36 "rings
+/// facing forward" trunk).
+#[test]
+fn w456_trunk_stacked_pillar_records_drop() {
+    use crate::worldgen::mcgen::village::CarvedOriented;
+    use infengine_voxel::{BlockId, Chunk};
+    let log = crate::block::BLOCK_TYPES
+        .iter()
+        .find(|b| crate::block::is_pillar_block(b.id))
+        .map(|b| b.id)
+        .expect("a pillar block exists");
+    let mut chunk = Chunk::empty();
+    // Vertical trunk at (4, 3..=5, 4); lone fallen log at (9, 3, 9).
+    for y in 3..=5 {
+        chunk.set(4, y, 4, BlockId(log));
+    }
+    chunk.set(9, 3, 9, BlockId(log));
+    let corg = [0, 0, 0];
+    let rec = |pos: [i32; 3], kind: u8, state: u8| CarvedOriented {
+        pos,
+        kind,
+        state,
+        open: false,
+    };
+    // Trunk-stacked cell with horizontal grain: drop.
+    assert!(!crate::workers::keep_oriented_record(
+        &rec([4, 4, 4], 5, 1),
+        &chunk,
+        corg,
+    ));
+    // A lone fallen log keeps its horizontal grain.
+    assert!(crate::workers::keep_oriented_record(
+        &rec([9, 3, 9], 5, 2),
+        &chunk,
+        corg,
+    ));
+    // Overwritten by a non-pillar block: drop (W421).
+    assert!(!crate::workers::keep_oriented_record(
+        &rec([1, 1, 1], 5, 1),
+        &chunk,
+        corg,
+    ));
+    // Out-of-chunk records drop; stairs records pass untouched.
+    assert!(!crate::workers::keep_oriented_record(
+        &rec([40, 3, 40], 5, 1),
+        &chunk,
+        corg,
+    ));
+    assert!(crate::workers::keep_oriented_record(
+        &rec([1, 1, 1], 0, 1),
+        &chunk,
+        corg,
+    ));
+}
+
 /// Calling mesh_chunk_in_worker on an empty (all-air) chunk must
 /// return no vertices.
 #[test]

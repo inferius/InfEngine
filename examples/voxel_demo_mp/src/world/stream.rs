@@ -735,6 +735,20 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                 // upfront-load radius is scrubbed by the load pass.
                 if vx.save_fixups_pending {
                     crate::world_save::fixups::scrub_chunk(vx, cc);
+                    // W456: also re-scrub loaded VERTICAL neighbours.
+                    // A trunk spanning a chunk-Y seam looks
+                    // stale-free while only one half is in RAM (the
+                    // pillar-above/below probe reads air across the
+                    // missing seam), so whichever half arrives
+                    // second triggers the pair. Idempotent + gated.
+                    for dy in [-1i32, 1] {
+                        let ncc = [cc[0], cc[1] + dy, cc[2]];
+                        if vx.world.chunk(ncc).is_some() {
+                            crate::world_save::fixups::scrub_chunk(
+                                vx, ncc,
+                            );
+                        }
+                    }
                 }
                 // W345: neighbour re-mesh is OVERDRAW CLEANUP, not
                 // correctness - the mesher emits boundary faces
