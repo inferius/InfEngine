@@ -315,15 +315,22 @@ pub(crate) fn block_fully_occludes(b: BlockId) -> bool {
 /// here).
 ///
 /// Fence gates join the predicate once the engine ships them.
+/// W453: MC WallBlock family (cobblestone + the stone-variant
+/// walls). Public so the mesher can force the wall POST part on -
+/// the blockstate's `up` condition tracks MC's post-shape state,
+/// which the engine's connected-bool NeighborStates cannot express
+/// (a wall with air above would lose its post entirely).
+pub(crate) fn is_wall_block(id: u16) -> bool {
+    id == COBBLESTONE_WALL_ID
+        || (GRANITE_WALL_ID..=END_STONE_BRICK_WALL_ID).contains(&id)
+}
+
 pub(crate) fn multipart_connects(self_id: u16, neighbor: BlockId) -> bool {
     let n = neighbor.0;
     let wood_fence = |id: u16| {
         id == OAK_FENCE_ID || (BIRCH_FENCE_ID..=DARK_OAK_FENCE_ID).contains(&id)
     };
-    let wall = |id: u16| {
-        id == COBBLESTONE_WALL_ID
-            || (GRANITE_WALL_ID..=END_STONE_BRICK_WALL_ID).contains(&id)
-    };
+    let wall = is_wall_block;
     // W443: stained glass panes (701..=716) are IronBarsBlock
     // subclasses in MC - same connection family as plain panes.
     let pane_or_bars = |id: u16| {

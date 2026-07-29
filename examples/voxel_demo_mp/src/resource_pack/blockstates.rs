@@ -164,9 +164,24 @@ impl MultipartCondition {
         match self {
             MultipartCondition::All(pairs) => {
                 pairs.iter().all(|(k, v)| {
-                    n.get_bool(k).map(|b| {
-                        if v == "true" { b } else { !b }
-                    }).unwrap_or(false)
+                    n.get_bool(k)
+                        .map(|b| match v.as_str() {
+                            // W453: MC wall arms carry none/low/tall
+                            // STRING states. The engine tracks one
+                            // connected bool per side, so a
+                            // connection renders the LOW arm and
+                            // tall arms stay off until wall shape
+                            // state lands. The old bool-only
+                            // fallback treated every non-"true"
+                            // value as negation and stacked the low
+                            // AND tall arm models over each other on
+                            // every FREE side - the R34 flickering
+                            // wall under the torch.
+                            "true" | "low" => b,
+                            "false" | "none" => !b,
+                            _ => false,
+                        })
+                        .unwrap_or(false)
                 })
             }
             MultipartCondition::AnyOf(subs) => {
@@ -405,6 +420,34 @@ pub(crate) fn select_variant<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W453: a connection renders the LOW arm, tall stays off,
+    /// free sides render nothing. The inverted bool fallback used
+    /// to emit low+tall on free sides (coplanar z-fight).
+    #[test]
+    fn wall_string_conditions_follow_connections() {
+        let n = NeighborStates {
+            north: true,
+            south: false,
+            east: false,
+            west: false,
+            up: false,
+            down: false,
+        };
+        let cond = |k: &str, v: &str| {
+            MultipartCondition::All(vec![(k.to_string(), v.to_string())])
+        };
+        assert!(cond("north", "low").matches_neighbors(&n));
+        assert!(!cond("north", "tall").matches_neighbors(&n));
+        assert!(!cond("north", "none").matches_neighbors(&n));
+        assert!(!cond("south", "low").matches_neighbors(&n));
+        assert!(!cond("south", "tall").matches_neighbors(&n));
+        assert!(cond("south", "none").matches_neighbors(&n));
+        // Plain fence/pane booleans keep their behaviour.
+        assert!(cond("north", "true").matches_neighbors(&n));
+        assert!(!cond("south", "true").matches_neighbors(&n));
+        assert!(cond("south", "false").matches_neighbors(&n));
+    }
 
     #[test]
     fn key_parse_empty_matches_anything() {

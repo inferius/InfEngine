@@ -1342,8 +1342,16 @@ pub(crate) fn mesh_chunk_in_worker(
             south: same_id(0, 0,  1),
             east:  same_id( 1, 0, 0),
             west:  same_id(-1, 0, 0),
-            up:    same_id(0,  1, 0),
-            down:  same_id(0, -1, 0),
+            // W453: walls always render their post. The blockstate
+            // `up` tracks MC's post-shape state (posts hide inside
+            // straight runs), which a connected bool cannot
+            // express - without the override a free-standing wall
+            // would emit NOTHING once the string-state arms fix
+            // stopped the inverted arm spam. Post-always is the
+            // honest approximation until wall shape state lands.
+            up: same_id(0, 1, 0)
+                || crate::block::is_wall_block(block.0),
+            down: same_id(0, -1, 0),
         };
         resource_pack::element_mesh::emit_block_elements(
             block.0,
