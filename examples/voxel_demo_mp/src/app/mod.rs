@@ -906,6 +906,10 @@ pub(crate) struct Voxel {
     pub(crate) stonecutter_open: Option<[i32; 3]>,
     /// W319: villager the trade panel is open against (mob id).
     pub(crate) trade_open: Option<u32>,
+    /// W451: true while an old-format save (meta data_version <
+    /// WORLD_DATA_VERSION) is open - gates the legacy per-chunk
+    /// fixups in `world_save::fixups`. Current saves never scrub.
+    pub(crate) save_fixups_pending: bool,
     /// W341: session cache of claimed professions (mob id ->
     /// workstation-derived profession). Save persistence is a
     /// follow-up (MobSave field).

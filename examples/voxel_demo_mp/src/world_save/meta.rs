@@ -38,6 +38,15 @@ use super::migrate::{self, MigrationRegistry, SaveKind};
 /// migration registry that lets older slots upgrade in place.
 pub const META_FORMAT_VERSION: u32 = 1;
 
+/// W451: world DATA version - which legacy fixups a save's chunk
+/// payloads may still need (independent of the meta SCHEMA version
+/// above). Worlds created at the current value skip the
+/// `world_save::fixups` scrubs entirely; saves predating the field
+/// deserialize as 0 and stay eligible for as long as their old
+/// chunk files can stream in (chunk loads are lazy, so a version
+/// bump on save would strand never-visited chunks unhealed).
+pub const WORLD_DATA_VERSION: u32 = 1;
+
 /// Hand-readable save header serialised next to the world payload.
 ///
 /// Lives as JSON so the user can inspect a slot without us writing
@@ -75,6 +84,10 @@ pub struct WorldMeta {
     /// on the most recent quit. `None` until Phase G adds the
     /// capture step.
     pub thumbnail_path: Option<String>,
+    /// W451: `WORLD_DATA_VERSION` at world creation. Old saves
+    /// default to 0 via serde and keep the legacy-fixup gate open.
+    #[serde(default)]
+    pub data_version: u32,
 }
 
 /// Build a fresh `WorldMeta` for a brand-new slot. `created_at` /
@@ -92,6 +105,7 @@ pub fn create_meta(name: &str, slug: &str) -> WorldMeta {
         host_machine_id: host_machine_id(),
         engine_version: env!("CARGO_PKG_VERSION").to_string(),
         thumbnail_path: None,
+        data_version: WORLD_DATA_VERSION,
     }
 }
 

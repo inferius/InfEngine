@@ -70,7 +70,11 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     let mut meta = match meta::read_meta(slug) {
         Ok(m) => m,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            create_meta(slug, slug)
+            // W451: a save without meta predates the data-version
+            // field - keep the fixup gate open.
+            let mut m = create_meta(slug, slug);
+            m.data_version = 0;
+            m
         }
         Err(err) => return Err(err),
     };
@@ -220,6 +224,19 @@ fn apply_world_meta_inner(
 pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorld> {
     let meta = meta::read_meta(slug)?;
     let world_meta = world_json::read_world(slug)?;
+    // W451: legacy-save fixup gate. Worlds stamped with the current
+    // WORLD_DATA_VERSION skip every scrub (R34: current saves pay
+    // nothing); older saves heal each chunk once as it enters RAM.
+    voxel.save_fixups_pending =
+        meta.data_version < meta::WORLD_DATA_VERSION;
+    if voxel.save_fixups_pending {
+        tracing::info!(
+            slug,
+            data_version = meta.data_version,
+            current = meta::WORLD_DATA_VERSION,
+            "W451: legacy save - per-chunk fixups enabled",
+        );
+    }
 
     // W249: when enter_world pre-applied THIS slug's meta before the
     // initial async build, the live chunks were already generated with
@@ -358,6 +375,12 @@ pub(crate) fn load_world(voxel: &mut Voxel, slug: &str) -> io::Result<LoadedWorl
         catch_up_events = events.len(),
         "world_save: load_world ok"
     );
+    // W451: scrub the upfront-loaded radius in one pass; chunks the
+    // disk-first stream brings in later go through the same gate in
+    // the stream-apply path.
+    if voxel.save_fixups_pending {
+        super::fixups::scrub_all_loaded(voxel);
+    }
     Ok(LoadedWorld {
         meta,
         world: world_meta,

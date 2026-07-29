@@ -335,6 +335,7 @@ impl Voxel {
             crafting_table_held: None,
             stonecutter_open: None,
             trade_open: None,
+            save_fixups_pending: false,
             mob_professions: std::collections::HashMap::new(),
             stonecutter_input: None,
             smithing_open: None,

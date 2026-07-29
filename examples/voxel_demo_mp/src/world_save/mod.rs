@@ -38,6 +38,7 @@ pub(crate) mod atomic;
 pub(crate) mod chunks;
 pub(crate) mod containers;
 pub(crate) mod entities;
+pub(crate) mod fixups;
 pub(crate) mod layout;
 pub(crate) mod meta;
 pub(crate) mod migrate;
@@ -217,7 +218,10 @@ pub(crate) fn migrate_legacy_if_needed() -> io::Result<Option<String>> {
     // Mint a minimal meta + world.json so the Worlds menu surfaces
     // the slot. The actual edit history sits in the legacy bin file;
     // a future migration arrow can decode it into chunks + players.
-    let meta = meta::create_meta("Legacy save", slug);
+    let mut meta = meta::create_meta("Legacy save", slug);
+    // W451: a legacy bin save predates the data-version field -
+    // keep the fixup gate open.
+    meta.data_version = 0;
     meta::write_meta(slug, &meta)?;
     // W5.1: legacy save migration lands with safe defaults
     // (Classic + seed 0). The runtime's load path will overwrite
