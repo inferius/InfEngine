@@ -562,6 +562,13 @@ pub(crate) const BLOCK_NAME_MAP: &[BlockNameMap] = &[
     BlockNameMap { infengine_id: 573, block: "mangrove_door",    top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 574, block: "cherry_door",      top: "", bottom: "", sides: "" },
     BlockNameMap { infengine_id: 575, block: "warped_door",      top: "", bottom: "", sides: "" },
+    // W453: brewing stand - the multipart blockstate's
+    // unconditional part is the base + rod model; the has_bottle_*
+    // overlays stay off until container state reaches the mesher
+    // (our multipart matcher only answers directional bools).
+    // Without this row the stand cube-meshed with its item texture
+    // on all six faces (the R34 screenshot).
+    BlockNameMap { infengine_id: 566, block: "brewing_stand", top: "", bottom: "", sides: "" },
     // W442: ladder - facing variants (y-rotated single plane)
     // come straight from the MC blockstate.
     BlockNameMap { infengine_id: 595, block: "ladder", top: "", bottom: "", sides: "" },
