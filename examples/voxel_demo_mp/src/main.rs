@@ -88,6 +88,7 @@ mod smelting;
 // data JSONs; the trade panel + RMB-on-villager open live in ui/ +
 // app_on_update).
 mod trades;
+mod trades_table;
 mod chat;
 // Phase F: per-dim runtime parking maps + the active-dim swap
 // helper. Some items inside the module land their first call site

@@ -23,178 +23,44 @@ pub(crate) struct TradeDef {
     pub(crate) want2: Option<(u16, u8)>,
     pub(crate) give: u16,
     pub(crate) give_n: u8,
+    /// W458: MC max_uses (offer exhaustion + workstation restock
+    /// are a follow-up wave; carried so the data port is complete).
+    #[allow(dead_code)]
+    pub(crate) max_uses: u8,
+    /// W458: villager XP granted per completed trade.
+    pub(crate) xp: u8,
 }
 
-pub(crate) const TRADES: &[TradeDef] = &[
-    // armorer/1/emerald_iron_boots
-    TradeDef { profession: "armorer", tier: 1, want: 317, want_n: 4, want2: None, give: 890, give_n: 1 },
-    // armorer/1/emerald_iron_chestplate
-    TradeDef { profession: "armorer", tier: 1, want: 317, want_n: 9, want2: None, give: 888, give_n: 1 },
-    // armorer/1/emerald_iron_helmet
-    TradeDef { profession: "armorer", tier: 1, want: 317, want_n: 5, want2: None, give: 887, give_n: 1 },
-    // armorer/1/emerald_iron_leggings
-    TradeDef { profession: "armorer", tier: 1, want: 317, want_n: 7, want2: None, give: 889, give_n: 1 },
-    // butcher/1/porkchop_emerald
-    TradeDef { profession: "butcher", tier: 1, want: 907, want_n: 7, want2: None, give: 317, give_n: 1 },
-    // butcher/2/coal_emerald
-    TradeDef { profession: "butcher", tier: 2, want: 325, want_n: 15, want2: None, give: 317, give_n: 1 },
-    // butcher/2/emerald_cooked_chicken
-    TradeDef { profession: "butcher", tier: 2, want: 317, want_n: 1, want2: None, give: 166, give_n: 8 },
-    // butcher/2/emerald_cooked_porkchop
-    TradeDef { profession: "butcher", tier: 2, want: 317, want_n: 1, want2: None, give: 285, give_n: 5 },
-    // cartographer/1/emerald_map
-    TradeDef { profession: "cartographer", tier: 1, want: 317, want_n: 7, want2: None, give: 306, give_n: 1 },
-    // cartographer/1/paper_emerald
-    TradeDef { profession: "cartographer", tier: 1, want: 304, want_n: 24, want2: None, give: 317, give_n: 1 },
-    // cartographer/2/glass_pane_emerald
-    TradeDef { profession: "cartographer", tier: 2, want: 80, want_n: 11, want2: None, give: 317, give_n: 1 },
-    // cleric/1/rotten_flesh_emerald
-    TradeDef { profession: "cleric", tier: 1, want: 293, want_n: 32, want2: None, give: 317, give_n: 1 },
-    // cleric/2/emerald_lapis_lazuli
-    TradeDef { profession: "cleric", tier: 2, want: 317, want_n: 1, want2: None, give: 315, give_n: 1 },
-    // cleric/2/gold_ingot_emerald
-    TradeDef { profession: "cleric", tier: 2, want: 318, want_n: 3, want2: None, give: 317, give_n: 1 },
-    // farmer/1/beetroot_emerald
-    TradeDef { profession: "farmer", tier: 1, want: 345, want_n: 15, want2: None, give: 317, give_n: 1 },
-    // farmer/1/carrot_emerald
-    TradeDef { profession: "farmer", tier: 1, want: 344, want_n: 22, want2: None, give: 317, give_n: 1 },
-    // farmer/1/emerald_bread
-    TradeDef { profession: "farmer", tier: 1, want: 317, want_n: 1, want2: None, give: 163, give_n: 6 },
-    // farmer/1/potato_emerald
-    TradeDef { profession: "farmer", tier: 1, want: 343, want_n: 26, want2: None, give: 317, give_n: 1 },
-    // farmer/1/wheat_emerald
-    TradeDef { profession: "farmer", tier: 1, want: 337, want_n: 20, want2: None, give: 317, give_n: 1 },
-    // farmer/2/emerald_apple
-    TradeDef { profession: "farmer", tier: 2, want: 317, want_n: 1, want2: None, give: 162, give_n: 4 },
-    // farmer/2/emerald_pumpkin_pie
-    TradeDef { profession: "farmer", tier: 2, want: 317, want_n: 1, want2: None, give: 281, give_n: 4 },
-    // farmer/2/pumpkin_emerald
-    TradeDef { profession: "farmer", tier: 2, want: 448, want_n: 6, want2: None, give: 317, give_n: 1 },
-    // fisherman/1/coal_emerald
-    TradeDef { profession: "fisherman", tier: 1, want: 325, want_n: 10, want2: None, give: 317, give_n: 1 },
-    // fisherman/1/string_emerald
-    TradeDef { profession: "fisherman", tier: 1, want: 301, want_n: 20, want2: None, give: 317, give_n: 1 },
-    // fletcher/1/emerald_arrow
-    TradeDef { profession: "fletcher", tier: 1, want: 317, want_n: 1, want2: None, give: 643, give_n: 16 },
-    // fletcher/1/gravel_and_emerald_flint
-    TradeDef { profession: "fletcher", tier: 1, want: 644, want_n: 10, want2: Some((317, 1)), give: 327, give_n: 10 },
-    // fletcher/1/stick_emerald
-    TradeDef { profession: "fletcher", tier: 1, want: 302, want_n: 32, want2: None, give: 317, give_n: 1 },
-    // fletcher/2/emerald_bow
-    TradeDef { profession: "fletcher", tier: 2, want: 317, want_n: 2, want2: None, give: 638, give_n: 1 },
-    // fletcher/2/flint_emerald
-    TradeDef { profession: "fletcher", tier: 2, want: 327, want_n: 26, want2: None, give: 317, give_n: 1 },
-    // leatherworker/1/leather_emerald
-    TradeDef { profession: "leatherworker", tier: 1, want: 303, want_n: 6, want2: None, give: 317, give_n: 1 },
-    // leatherworker/2/flint_emerald
-    TradeDef { profession: "leatherworker", tier: 2, want: 327, want_n: 26, want2: None, give: 317, give_n: 1 },
-    // librarian/1/emerald_bookshelf
-    TradeDef { profession: "librarian", tier: 1, want: 317, want_n: 9, want2: None, give: 718, give_n: 1 },
-    // librarian/1/paper_emerald
-    TradeDef { profession: "librarian", tier: 1, want: 304, want_n: 24, want2: None, give: 317, give_n: 1 },
-    // librarian/2/book_emerald
-    TradeDef { profession: "librarian", tier: 2, want: 305, want_n: 4, want2: None, give: 317, give_n: 1 },
-    // librarian/2/emerald_lantern
-    TradeDef { profession: "librarian", tier: 2, want: 317, want_n: 1, want2: None, give: 60, give_n: 1 },
-    // mason/1/emerald_brick
-    TradeDef { profession: "mason", tier: 1, want: 317, want_n: 1, want2: None, give: 675, give_n: 10 },
-    // mason/2/emerald_chiseled_stone_bricks
-    TradeDef { profession: "mason", tier: 2, want: 317, want_n: 1, want2: None, give: 365, give_n: 4 },
-    // mason/2/stone_emerald
-    TradeDef { profession: "mason", tier: 2, want: 1, want_n: 20, want2: None, give: 317, give_n: 1 },
-    // shepherd/1/black_wool_emerald
-    TradeDef { profession: "shepherd", tier: 1, want: 108, want_n: 18, want2: None, give: 317, give_n: 1 },
-    // shepherd/1/brown_wool_emerald
-    TradeDef { profession: "shepherd", tier: 1, want: 107, want_n: 18, want2: None, give: 317, give_n: 1 },
-    // shepherd/1/emerald_shears
-    TradeDef { profession: "shepherd", tier: 1, want: 317, want_n: 2, want2: None, give: 640, give_n: 1 },
-    // shepherd/1/gray_wool_emerald
-    TradeDef { profession: "shepherd", tier: 1, want: 103, want_n: 18, want2: None, give: 317, give_n: 1 },
-    // shepherd/2/black_dye_emerald
-    TradeDef { profession: "shepherd", tier: 2, want: 661, want_n: 12, want2: None, give: 317, give_n: 1 },
-    // shepherd/2/emerald_black_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 232, give_n: 4 },
-    // shepherd/2/emerald_black_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 108, give_n: 1 },
-    // shepherd/2/emerald_blue_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 228, give_n: 4 },
-    // shepherd/2/emerald_blue_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 91, give_n: 1 },
-    // shepherd/2/emerald_brown_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 229, give_n: 4 },
-    // shepherd/2/emerald_brown_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 107, give_n: 1 },
-    // shepherd/2/emerald_cyan_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 226, give_n: 4 },
-    // shepherd/2/emerald_cyan_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 105, give_n: 1 },
-    // shepherd/2/emerald_gray_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 224, give_n: 4 },
-    // shepherd/2/emerald_gray_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 103, give_n: 1 },
-    // shepherd/2/emerald_green_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 230, give_n: 4 },
-    // shepherd/2/emerald_green_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 94, give_n: 1 },
-    // shepherd/2/emerald_light_blue_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 220, give_n: 4 },
-    // shepherd/2/emerald_light_blue_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 100, give_n: 1 },
-    // shepherd/2/emerald_light_gray_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 225, give_n: 4 },
-    // shepherd/2/emerald_light_gray_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 104, give_n: 1 },
-    // shepherd/2/emerald_lime_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 222, give_n: 4 },
-    // shepherd/2/emerald_lime_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 101, give_n: 1 },
-    // shepherd/2/emerald_magenta_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 219, give_n: 4 },
-    // shepherd/2/emerald_magenta_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 99, give_n: 1 },
-    // shepherd/2/emerald_orange_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 218, give_n: 4 },
-    // shepherd/2/emerald_orange_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 98, give_n: 1 },
-    // shepherd/2/emerald_pink_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 223, give_n: 4 },
-    // shepherd/2/emerald_pink_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 102, give_n: 1 },
-    // shepherd/2/emerald_purple_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 227, give_n: 4 },
-    // shepherd/2/emerald_purple_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 106, give_n: 1 },
-    // shepherd/2/emerald_red_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 231, give_n: 4 },
-    // shepherd/2/emerald_red_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 92, give_n: 1 },
-    // shepherd/2/emerald_white_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 217, give_n: 4 },
-    // shepherd/2/emerald_yellow_carpet
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 221, give_n: 4 },
-    // shepherd/2/emerald_yellow_wool
-    TradeDef { profession: "shepherd", tier: 2, want: 317, want_n: 1, want2: None, give: 93, give_n: 1 },
-    // shepherd/2/gray_dye_emerald
-    TradeDef { profession: "shepherd", tier: 2, want: 660, want_n: 12, want2: None, give: 317, give_n: 1 },
-    // shepherd/2/light_blue_dye_emerald
-    TradeDef { profession: "shepherd", tier: 2, want: 669, want_n: 12, want2: None, give: 317, give_n: 1 },
-    // shepherd/2/lime_dye_emerald
-    TradeDef { profession: "shepherd", tier: 2, want: 666, want_n: 12, want2: None, give: 317, give_n: 1 },
-    // shepherd/2/white_dye_emerald
-    TradeDef { profession: "shepherd", tier: 2, want: 658, want_n: 12, want2: None, give: 317, give_n: 1 },
-    // smith/1/coal_emerald
-    TradeDef { profession: "smith", tier: 1, want: 325, want_n: 15, want2: None, give: 317, give_n: 1 },
-    // smith/2/iron_ingot_emerald
-    TradeDef { profession: "smith", tier: 2, want: 324, want_n: 4, want2: None, give: 317, give_n: 1 },
-    // toolsmith/1/emerald_stone_axe
-    TradeDef { profession: "toolsmith", tier: 1, want: 317, want_n: 1, want2: None, give: 865, give_n: 1 },
-    // toolsmith/1/emerald_stone_hoe
-    TradeDef { profession: "toolsmith", tier: 1, want: 317, want_n: 1, want2: None, give: 333, give_n: 1 },
-    // toolsmith/1/emerald_stone_pickaxe
-    TradeDef { profession: "toolsmith", tier: 1, want: 317, want_n: 1, want2: None, give: 866, give_n: 1 },
-    // weaponsmith/1/emerald_iron_axe
-    TradeDef { profession: "weaponsmith", tier: 1, want: 317, want_n: 3, want2: None, give: 873, give_n: 1 },
-];
+// W458: the FULL tier 1-5 table lives in `trades_table.rs`
+// (generated from the MC data JSONs); re-exported so call sites
+// keep their import path.
+pub(crate) use crate::trades_table::TRADES;
+
+/// W458: MC VillagerData level thresholds (Novice..Master):
+/// 0 / 10 / 70 / 150 / 250 accumulated trade XP.
+const LEVEL_XP: [u32; 5] = [0, 10, 70, 150, 250];
+
+/// Villager trade level (1..=5) for accumulated XP.
+pub(crate) fn level_for_xp(xp: u32) -> u8 {
+    let mut level = 1u8;
+    for (i, min) in LEVEL_XP.iter().enumerate().skip(1) {
+        if xp >= *min {
+            level = i as u8 + 1;
+        }
+    }
+    level
+}
+
+/// MC level names for the trading UI title.
+pub(crate) fn level_name(level: u8) -> &'static str {
+    match level {
+        1 => "Novice",
+        2 => "Apprentice",
+        3 => "Journeyman",
+        4 => "Expert",
+        _ => "Master",
+    }
+}
 
 /// Professions with at least one usable trade row.
 pub(crate) const PROFESSIONS: &[&str] = &[
@@ -282,21 +148,21 @@ pub(crate) fn trades_for(profession: &str) -> impl Iterator<Item = &'static Trad
     TRADES.iter().filter(move |t| t.profession == profession)
 }
 
-/// W440: MC villagers OFFER a per-villager sample, not the whole
-/// pool - vanilla rolls 2 offers per level from that level's
-/// VillagerTrades listing (the R31 shepherd window listed every
-/// wool + carpet colour and overflowed the panel). Leveling is
-/// still a follow-up, so novice + apprentice (tiers 1-2) both
-/// contribute: a deterministic Fisher-Yates pick of 2 per tier
-/// seeded by the villager id (mob ids persist in the save, so a
-/// villager keeps its offers across sessions). Returned values are
+/// W440/W458: MC villagers OFFER a per-villager sample, not the
+/// whole pool - vanilla rolls 2 offers per LEVEL from that level's
+/// VillagerTrades listing. `level` (1..=5, the villager's current
+/// trade level from `level_for_xp`) gates the tiers; the
+/// Fisher-Yates pick per tier is seeded by the villager id, so the
+/// list is stable per villager and grows monotonically as levels
+/// unlock (exactly MC's grow-only offer list). Returned values are
 /// indices into the `trades_for(profession)` enumeration.
 pub(crate) fn sampled_offer_indices(
     profession: &str,
     villager_id: u32,
+    level: u8,
 ) -> Vec<usize> {
     let mut out = Vec::new();
-    for tier in [1u8, 2] {
+    for tier in 1..=level.clamp(1, 5) {
         let mut pool: Vec<usize> = trades_for(profession)
             .enumerate()
             .filter(|(_, t)| t.tier == tier)
@@ -422,8 +288,8 @@ mod tests {
     fn sampled_offers_deterministic_and_bounded() {
         for prof in ["shepherd", "farmer", "mason", "armorer"] {
             for vid in [1u32, 7, 42, 900_001] {
-                let a = sampled_offer_indices(prof, vid);
-                let b = sampled_offer_indices(prof, vid);
+                let a = sampled_offer_indices(prof, vid, 2);
+                let b = sampled_offer_indices(prof, vid, 2);
                 assert_eq!(a, b, "{prof}/{vid} not deterministic");
                 assert!(!a.is_empty(), "{prof}/{vid} empty");
                 assert!(a.len() <= 4, "{prof}/{vid} too many rows");
@@ -446,9 +312,57 @@ mod tests {
         // shepherd tier-2 pool is huge, so 8 ids colliding on one
         // sample would mean the seed is ignored).
         let distinct: std::collections::HashSet<Vec<usize>> = (0..8u32)
-            .map(|vid| sampled_offer_indices("shepherd", vid))
+            .map(|vid| sampled_offer_indices("shepherd", vid, 2))
             .collect();
         assert!(distinct.len() > 1, "shepherd samples never vary");
+    }
+
+    /// W458: levelling grows the offer list monotonically - the
+    /// lower-tier picks stay identical and each unlocked tier adds
+    /// at most 2 rows (MC's per-level roll).
+    #[test]
+    fn levels_grow_offers_monotonically() {
+        for prof in ["librarian", "mason", "cleric", "fletcher"] {
+            let mut prev: Vec<usize> = Vec::new();
+            for level in 1..=5u8 {
+                let cur = sampled_offer_indices(prof, 4242, level);
+                assert!(cur.len() >= prev.len(), "{prof} level {level}");
+                assert!(cur.len() <= 2 * level as usize);
+                assert_eq!(
+                    &cur[..prev.len()],
+                    &prev[..],
+                    "{prof} level {level} not prefix-stable",
+                );
+                prev = cur;
+            }
+        }
+    }
+
+    /// W458: the generated table carries master tiers + real XP.
+    #[test]
+    fn full_table_covers_master_tiers() {
+        for prof in ["cleric", "fletcher", "librarian", "mason"] {
+            assert!(
+                trades_for(prof).any(|t| t.tier == 5),
+                "{prof} has a master tier",
+            );
+        }
+        assert!(TRADES.iter().all(|t| t.xp > 0), "every trade grants XP");
+        assert!(TRADES.len() > 150, "full table landed");
+    }
+
+    /// W458: MC VillagerData thresholds.
+    #[test]
+    fn level_thresholds_match_mc() {
+        assert_eq!(level_for_xp(0), 1);
+        assert_eq!(level_for_xp(9), 1);
+        assert_eq!(level_for_xp(10), 2);
+        assert_eq!(level_for_xp(69), 2);
+        assert_eq!(level_for_xp(70), 3);
+        assert_eq!(level_for_xp(149), 3);
+        assert_eq!(level_for_xp(150), 4);
+        assert_eq!(level_for_xp(250), 5);
+        assert_eq!(level_for_xp(100_000), 5);
     }
 
     #[test]

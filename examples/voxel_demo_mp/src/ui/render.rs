@@ -681,6 +681,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     .unwrap_or_else(|| crate::trades::profession_for(id))
             })
             .unwrap_or("");
+        // W458: villager trade level from the session XP map.
+        let trade_level: u8 = trade_open_id
+            .map(|id| {
+                crate::trades::level_for_xp(
+                    vx.villager_trade_xp.get(&id).copied().unwrap_or(0),
+                )
+            })
+            .unwrap_or(1);
         let mut trade_buy: Option<usize> = None;
         let stonecutter_open_pos = vx.stonecutter_open;
         let mut stonecutter_open_local = stonecutter_open_pos.is_some();
@@ -2480,6 +2488,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ctx,
                             profession: trade_profession,
                             villager_id: trade_open_id.unwrap_or(0),
+                            level: trade_level,
                             inv_view: &inv_plain_snapshot,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
@@ -3644,6 +3653,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             break;
                         }
                         vx.inventory[si] = slot.map(|(b, c)| (BlockId(b), c));
+                    }
+                    // W458: villager XP per completed trade drives
+                    // the Novice..Master tier unlocks (MC
+                    // VillagerData thresholds in trades.rs).
+                    if let Some(mid) = trade_open_id {
+                        let e =
+                            vx.villager_trade_xp.entry(mid).or_insert(0);
+                        *e = e.saturating_add(t.xp as u32);
                     }
                 }
             }

@@ -16,6 +16,9 @@ pub(crate) struct TradePanelInputs<'a> {
     /// Mob id of the open villager - seeds the per-villager offer
     /// sample (W440).
     pub(crate) villager_id: u32,
+    /// W458: villager trade level (1..=5) - gates the offer tiers
+    /// and names the window (Novice..Master).
+    pub(crate) level: u8,
     pub(crate) inv_view: &'a [Option<(u16, u8)>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
@@ -45,6 +48,7 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
         ctx,
         profession,
         villager_id,
+        level,
         inv_view,
         atlas_tex_id,
         icon_uv_resolver,
@@ -55,7 +59,12 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
     let title = {
         let mut c = profession.chars();
         match c.next() {
-            Some(f) => format!("Trading - {}{}", f.to_uppercase(), c.as_str()),
+            Some(f) => format!(
+                "Trading - {}{} ({})",
+                f.to_uppercase(),
+                c.as_str(),
+                crate::trades::level_name(level),
+            ),
             None => "Trading".to_string(),
         }
     };
@@ -77,7 +86,9 @@ pub(crate) fn render(inp: TradePanelInputs<'_>) {
                     // profession pool. `i` stays an index into the
                     // trades_for enumeration so the apply site's
                     // `.nth(i)` keeps working.
-                    for i in sampled_offer_indices(profession, villager_id) {
+                    for i in
+                        sampled_offer_indices(profession, villager_id, level)
+                    {
                         let Some(t) = trades_for(profession).nth(i) else {
                             continue;
                         };
