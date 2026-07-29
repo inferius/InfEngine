@@ -94,6 +94,68 @@ impl LightingWorldAccess for ChunkSnapshot {
     }
 }
 
+/// W457: BFS seeds from STORED light just outside an affected set.
+/// A relight job only writes its own chunks; without these seeds a
+/// per-column segment erases every photon that used to enter
+/// laterally from the neighbouring columns (a cave mouth lighting
+/// the next column over, a torch at a column border) and the
+/// region re-floods darker than the fixpoint. Seeds are
+/// `(outside_pos, level)` pairs; the engines' propagate step
+/// applies the normal per-step decay when stepping INTO the region
+/// and never writes outside it. Returns `(sky_seeds, block_seeds)`.
+pub(crate) type BorderSeeds = Vec<([i32; 3], u8)>;
+
+pub(crate) fn collect_border_seeds(
+    affected: &[ChunkCoord],
+    grid_at: impl Fn(ChunkCoord) -> Option<Arc<grid::LightGrid>>,
+) -> (BorderSeeds, BorderSeeds) {
+    let cs = CHUNK_SIZE as i32;
+    let set: HashSet<ChunkCoord> = affected.iter().copied().collect();
+    let mut sky: Vec<([i32; 3], u8)> = Vec::new();
+    let mut block: Vec<([i32; 3], u8)> = Vec::new();
+    // Dedup per (border chunk, face): a border chunk can face the
+    // region on two axes at a concave corner and both layers count.
+    let mut seen: HashSet<(ChunkCoord, [i32; 3])> = HashSet::new();
+    for cc in affected {
+        // Lateral faces only - segments span full loaded columns,
+        // so no out-of-set chunk sits above or below.
+        for d in [[1i32, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+            let ncc = [cc[0] + d[0], cc[1], cc[2] + d[2]];
+            if set.contains(&ncc) || !seen.insert((ncc, d)) {
+                continue;
+            }
+            let Some(g) = grid_at(ncc) else { continue };
+            let base = [ncc[0] * cs, ncc[1] * cs, ncc[2] * cs];
+            // The neighbour's boundary layer FACING the region.
+            let lx = if d[0] > 0 { 0u32 } else { CHUNK_SIZE as u32 - 1 };
+            let lz = if d[2] > 0 { 0u32 } else { CHUNK_SIZE as u32 - 1 };
+            for a in 0..CHUNK_SIZE as u32 {
+                for b in 0..CHUNK_SIZE as u32 {
+                    let local = if d[0] != 0 {
+                        [lx, a, b]
+                    } else {
+                        [a, b, lz]
+                    };
+                    let pos = [
+                        base[0] + local[0] as i32,
+                        base[1] + local[1] as i32,
+                        base[2] + local[2] as i32,
+                    ];
+                    let s = g.get_sky(local);
+                    if s > 1 {
+                        sky.push((pos, s));
+                    }
+                    let bl = g.get_block(local);
+                    if bl > 1 {
+                        block.push((pos, bl));
+                    }
+                }
+            }
+        }
+    }
+    (sky, block)
+}
+
 /// W207: MC's LightEngine last-chunk cache, ported from the real 26.1.2
 /// source (`LightEngine.getChunk` keeps `lastChunkPos[2]`/`lastChunk[2]`
 /// and checks them before the map): BFS block access is extremely local,

@@ -233,3 +233,49 @@ fn multiple_dirty_voxels_coalesce_into_single_chunk_re_flood() {
     assert_eq!(affected.len(), 1);
     assert!(affected.contains(&ZERO_CHUNK));
 }
+
+/// W457: an underground edit must NOT light the cave. The old
+/// incremental relight took the dirty chunk + its 3x3x3 halo, and
+/// the sky engine started its column walk at the halo's top with
+/// sky=15 - as if open sky sat right above the cave (the R31/R34
+/// bright pit). tick_lighting now expands every touched column to
+/// its full loaded vertical run, so the walk starts above the real
+/// roof.
+#[test]
+fn underground_edit_keeps_cave_dark() {
+    let mut v = Voxel::new();
+    // Column of three chunks: cave air in y=0..1, a solid stone
+    // roof chunk on top (y=2).
+    v.world.insert_chunk([0, 0, 0], Chunk::empty());
+    v.world.insert_chunk([0, 1, 0], Chunk::empty());
+    let mut roof = Chunk::empty();
+    for z in 0..infengine_voxel::CHUNK_SIZE {
+        for y in 0..infengine_voxel::CHUNK_SIZE {
+            for x in 0..infengine_voxel::CHUNK_SIZE {
+                roof.set(x, y, z, BlockId(1));
+            }
+        }
+    }
+    v.world.insert_chunk([0, 2, 0], roof);
+    v.rebuild_all_lighting();
+    assert_eq!(
+        v.lighting.get(ZERO_CHUNK).unwrap().get_sky([8, 8, 8]),
+        0,
+        "roofed cave must derive dark",
+    );
+    // Dig-style edits deep in the cave.
+    v.world_set_tracked([8, 8, 8], BlockId(1));
+    let _ = v.tick_lighting();
+    v.world_set_tracked([8, 8, 8], BlockId::AIR);
+    let _ = v.tick_lighting();
+    assert_eq!(
+        v.lighting.get(ZERO_CHUNK).unwrap().get_sky([8, 9, 8]),
+        0,
+        "cave must stay dark after an underground edit",
+    );
+    assert_eq!(
+        v.lighting.get([0, 1, 0]).unwrap().get_sky([8, 8, 8]),
+        0,
+        "upper cave chunk must stay dark too",
+    );
+}

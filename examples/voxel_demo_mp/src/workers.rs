@@ -520,16 +520,27 @@ impl WorkerPool {
                                     // was the bulk of sky_ms/block_ms.
                                     let access =
                                         lighting::CachedSnapshotAccess::new(&lj.snapshot);
-                                    lighting::block_engine::propagate_block_light(
+                                    // W457: stored border light re-enters
+                                    // the region (per-column segments
+                                    // would otherwise erase lateral
+                                    // bleed on every relight).
+                                    let (sky_seeds, block_seeds) =
+                                        lighting::collect_border_seeds(
+                                            &lj.affected,
+                                            |cc| lj.border_grids.get(&cc).cloned(),
+                                        );
+                                    lighting::block_engine::propagate_block_light_seeded(
                                         &access,
                                         &mut local_state,
                                         &lj.affected,
+                                        &block_seeds,
                                     );
                                     let block_done_ms = bfs_start.elapsed().as_millis() as u64;
-                                    lighting::sky_engine::propagate_sky_light(
+                                    lighting::sky_engine::propagate_sky_light_seeded(
                                         &access,
                                         &mut local_state,
                                         &lj.affected,
+                                        &sky_seeds,
                                     );
                                     let total_ms = bfs_start.elapsed().as_millis() as u64;
                                     // W234: demoted to debug + a WARN only for
@@ -1787,6 +1798,10 @@ pub(crate) struct LightingJob {
     /// and re-floods so these are optional context; passing them avoids
     /// a cold-start cost on subsequent tick_lighting calls.
     pub(crate) existing_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
+    /// W457: stored grids of lateral out-of-set neighbours - the
+    /// worker's BFS seeds from them so a single-column relight
+    /// keeps cross-column bleed.
+    pub(crate) border_grids: HashMap<ChunkCoord, Arc<lighting::LightGrid>>,
     /// W277: dim at dispatch time (echoed in the result).
     pub(crate) dim: String,
 }

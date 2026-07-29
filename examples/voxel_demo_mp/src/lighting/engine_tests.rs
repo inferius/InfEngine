@@ -480,3 +480,93 @@ fn block_and_sky_layers_propagate_independently() {
     assert_eq!(get_sky_local(&s, ZERO_CHUNK, [8, 5, 8]), 0);
     assert_eq!(get_block_local(&s, ZERO_CHUNK, [8, 5, 8]), 14);
 }
+
+/// W457: border seeds keep cross-column bleed alive across a
+/// single-column relight. Column [0,0,0] is an open shaft; column
+/// [1,0,0] is roofed. The initial two-column flood lets the shaft
+/// light the roofed interior laterally; a later relight of ONLY
+/// the roofed column must re-derive that light from the stored
+/// neighbour grid instead of erasing it.
+#[test]
+fn border_seeds_keep_cross_column_light() {
+    use std::sync::Arc;
+
+    let mut w = World::new();
+    w.insert_chunk([0, 0, 0], Chunk::empty());
+    let mut roofed = Chunk::empty();
+    for z in 0..infengine_voxel::CHUNK_SIZE {
+        for x in 0..infengine_voxel::CHUNK_SIZE {
+            roofed.set(x, 15, z, BlockId(1));
+        }
+    }
+    w.insert_chunk([1, 0, 0], roofed);
+    let mut s = LightingState::new();
+    propagate_sky_light(&w, &mut s, &[[0, 0, 0], [1, 0, 0]]);
+    let lit = s.get([1, 0, 0]).map(|g| g.get_sky([0, 8, 8])).unwrap_or(0);
+    assert!(lit > 0, "initial flood lights the roofed border cell");
+
+    // Relight only the roofed column WITHOUT seeds: lateral light
+    // from the shaft is erased (the pre-W457 behaviour the seeds
+    // exist to fix).
+    propagate_sky_light(&w, &mut s, &[[1, 0, 0]]);
+    assert_eq!(
+        s.get([1, 0, 0]).map(|g| g.get_sky([0, 8, 8])).unwrap_or(0),
+        0,
+        "seedless relight erases the bleed",
+    );
+
+    // With seeds collected from the stored neighbour grid the bleed
+    // survives the relight.
+    let (sky_seeds, _) = super::collect_border_seeds(&[[1, 0, 0]], |cc| {
+        s.get(cc).map(Arc::clone)
+    });
+    super::sky_engine::propagate_sky_light_seeded(
+        &w,
+        &mut s,
+        &[[1, 0, 0]],
+        &sky_seeds,
+    );
+    assert_eq!(
+        s.get([1, 0, 0]).map(|g| g.get_sky([0, 8, 8])).unwrap_or(0),
+        lit,
+        "seeded relight restores the lateral bleed",
+    );
+}
+
+/// W457: same for BLOCK light - a torch one column over keeps
+/// bleeding into a relit column through the border seeds.
+#[test]
+fn border_seeds_keep_cross_column_torch_light() {
+    use std::sync::Arc;
+
+    let mut w = World::new();
+    w.insert_chunk([0, 0, 0], Chunk::empty());
+    w.insert_chunk([1, 0, 0], Chunk::empty());
+    w.set([14, 8, 8], BlockId(TORCH_ID));
+    let mut s = LightingState::new();
+    propagate_block_light(&w, &mut s, &[[0, 0, 0], [1, 0, 0]]);
+    let lit = s.get([1, 0, 0]).map(|g| g.get_block([2, 8, 8])).unwrap_or(0);
+    assert!(lit > 0, "torch bleeds across the column border");
+
+    propagate_block_light(&w, &mut s, &[[1, 0, 0]]);
+    assert_eq!(
+        s.get([1, 0, 0]).map(|g| g.get_block([2, 8, 8])).unwrap_or(0),
+        0,
+        "seedless relight erases the bleed",
+    );
+
+    let (_, block_seeds) = super::collect_border_seeds(&[[1, 0, 0]], |cc| {
+        s.get(cc).map(Arc::clone)
+    });
+    super::block_engine::propagate_block_light_seeded(
+        &w,
+        &mut s,
+        &[[1, 0, 0]],
+        &block_seeds,
+    );
+    assert_eq!(
+        s.get([1, 0, 0]).map(|g| g.get_block([2, 8, 8])).unwrap_or(0),
+        lit,
+        "seeded relight restores the torch bleed",
+    );
+}

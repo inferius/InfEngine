@@ -241,6 +241,20 @@ pub(crate) fn propagate_sky_light(
     state: &mut LightingState,
     affected: &[ChunkCoord],
 ) {
+    propagate_sky_light_seeded(world, state, affected, &[]);
+}
+
+/// W457: full re-flood + extra BFS seeds carrying STORED light from
+/// just outside the region (see `lighting::collect_border_seeds`).
+/// The seeds join the queue as out-of-region cells - the BFS steps
+/// from them into the region with the normal decay and never
+/// writes outside `affected`.
+pub(crate) fn propagate_sky_light_seeded(
+    world: &impl LightingWorldAccess,
+    state: &mut LightingState,
+    affected: &[ChunkCoord],
+    border_seeds: &[([i32; 3], u8)],
+) {
     clear_sky_layer(state, affected);
     let Some((y_min, y_max)) = y_range(affected) else {
         return;
@@ -251,6 +265,7 @@ pub(crate) fn propagate_sky_light(
     // sky_ms).
     let columns = affected_columns(affected);
     let affected: HashSet<ChunkCoord> = affected.iter().copied().collect();
-    let queue = column_walk(world, state, &affected, &columns, y_min, y_max);
+    let mut queue = column_walk(world, state, &affected, &columns, y_min, y_max);
+    queue.extend(border_seeds.iter().copied());
     propagate(world, state, &affected, queue);
 }

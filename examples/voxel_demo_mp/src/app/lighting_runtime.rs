@@ -357,6 +357,12 @@ impl Voxel {
         if coords.is_empty() {
             return;
         }
+        // W457: sky light is a COLUMN quantity - the engine's walk
+        // starts with 15 at the top of the batch, so any batch whose
+        // top is underground pretends open sky sits right above (the
+        // R31/R34 bright caves). Expand every touched column to its
+        // full loaded vertical run before segmenting.
+        let coords = self.expand_to_full_columns(&coords);
         // Clear the dirty set: the full re-derive subsumes every
         // pending per-voxel mark so we don't re-flood on next tick.
         let _ = self.lighting.take_dirty();
@@ -501,10 +507,31 @@ impl Voxel {
                     self.lighting.get(*cc).map(|g| (*cc, Arc::clone(g)))
                 })
                 .collect();
+            // W457: stored grids of the lateral out-of-set
+            // neighbours - the worker seeds its BFS from them so a
+            // single-column relight keeps cross-column bleed (cave
+            // mouths lighting the next column over, torches at
+            // column borders).
+            let seg_set: std::collections::HashSet<ChunkCoord> =
+                seg.iter().copied().collect();
+            let mut border_grids: Map<ChunkCoord, Arc<lighting::LightGrid>> =
+                Map::new();
+            for cc in &seg {
+                for d in [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+                    let ncc = [cc[0] + d[0], cc[1] + d[1], cc[2] + d[2]];
+                    if !seg_set.contains(&ncc)
+                        && !border_grids.contains_key(&ncc)
+                        && let Some(g) = self.lighting.get(ncc)
+                    {
+                        border_grids.insert(ncc, Arc::clone(g));
+                    }
+                }
+            }
             let job = Job::Lighting(LightingJob {
                 affected: seg,
                 snapshot: lighting::ChunkSnapshot::from_iter(snap_entries),
                 existing_grids,
+                border_grids,
                 dim: self.current_dim.clone(),
             });
             // W304: the priority lane - see WorkerPool::light_tx.
@@ -512,6 +539,28 @@ impl Voxel {
                 self.pending_lighting_jobs += 1;
             }
         }
+    }
+
+    /// W457: expand a chunk batch so every touched XZ column
+    /// carries its FULL loaded vertical run. Sky light is a column
+    /// quantity: the engine's walk starts with 15 at the top of the
+    /// batch, so a batch whose top is underground would pretend
+    /// open sky sits right above it (the R31/R34 bright caves after
+    /// digging).
+    fn expand_to_full_columns(&self, affected: &[ChunkCoord]) -> Vec<ChunkCoord> {
+        let (y_lo, y_hi) = self.vertical_chunk_range();
+        let keys: std::collections::BTreeSet<(i32, i32)> =
+            affected.iter().map(|cc| (cc[0], cc[2])).collect();
+        let mut out = Vec::new();
+        for (x, z) in keys {
+            for y in y_lo..=y_hi {
+                let cc = [x, y, z];
+                if self.world.chunk(cc).is_some() {
+                    out.push(cc);
+                }
+            }
+        }
+        out
     }
 
     /// Drain the lighting dirty-set + dispatch a `Job::Lighting` to the
@@ -634,6 +683,11 @@ impl Voxel {
         if affected.is_empty() {
             return Vec::new();
         }
+        // W457: full loaded columns (see rebuild_all_lighting) - an
+        // underground edit used to relight only its 3x3x3 halo, and
+        // the sky walk lit the cave as if the sky began at the halo
+        // top.
+        let affected = self.expand_to_full_columns(&affected);
 
         // W27.3: if a worker pool is available, dispatch the BFS
         // off the main thread. The result arrives as
@@ -661,6 +715,13 @@ impl Voxel {
         // simple two-queue BFS at chunk boundaries). Block-light-only
         // changes (emitter add/remove with no opaciy change) stay on
         // the fast incremental path.
+        // W457: stored border light re-enters the region (the
+        // conservative re-flood would otherwise erase lateral bleed
+        // from columns outside `affected`).
+        let (sky_seeds, block_seeds) = lighting::collect_border_seeds(
+            &affected,
+            |cc| self.lighting.get(cc).map(Arc::clone),
+        );
         let all_changes_recorded = dirty_changes.len() == dirty.len() && dirty.len() == 1;
         let has_blocker_change = dirty_changes.iter().any(|(pos, old_e, new_e)| {
             let is_opaque_now = !self.world.get(*pos).is_air()
@@ -684,22 +745,25 @@ impl Voxel {
             }
             // Sky light needs the full engine if opacity changed.
             if has_blocker_change {
-                lighting::sky_engine::propagate_sky_light(
+                lighting::sky_engine::propagate_sky_light_seeded(
                     &self.world,
                     &mut self.lighting,
                     &affected,
+                    &sky_seeds,
                 );
             }
         } else {
-            lighting::block_engine::propagate_block_light(
+            lighting::block_engine::propagate_block_light_seeded(
                 &self.world,
                 &mut self.lighting,
                 &affected,
+                &block_seeds,
             );
-            lighting::sky_engine::propagate_sky_light(
+            lighting::sky_engine::propagate_sky_light_seeded(
                 &self.world,
                 &mut self.lighting,
                 &affected,
+                &sky_seeds,
             );
         }
         affected

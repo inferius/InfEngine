@@ -212,12 +212,26 @@ pub(crate) fn propagate_block_light(
     state: &mut LightingState,
     affected: &[ChunkCoord],
 ) {
+    propagate_block_light_seeded(world, state, affected, &[]);
+}
+
+/// W457: emitter re-flood + extra BFS seeds carrying STORED light
+/// from just outside the region (see
+/// `lighting::collect_border_seeds`) - a torch one column over
+/// keeps bleeding into a relit column.
+pub(crate) fn propagate_block_light_seeded(
+    world: &impl LightingWorldAccess,
+    state: &mut LightingState,
+    affected: &[ChunkCoord],
+    border_seeds: &[([i32; 3], u8)],
+) {
     clear_block_layer(state, affected);
     // W198.3: O(1) chunk-membership via a HashSet. The hot try_set / get
     // paths ran `affected.contains` (a linear scan over the whole batch)
     // for every cell + neighbour - O(cells * batch), the bulk of block_ms.
     let affected: HashSet<ChunkCoord> = affected.iter().copied().collect();
-    let queue = seed_emitters(world, state, &affected);
+    let mut queue = seed_emitters(world, state, &affected);
+    queue.extend(border_seeds.iter().copied());
     propagate(world, state, &affected, queue);
 }
 
