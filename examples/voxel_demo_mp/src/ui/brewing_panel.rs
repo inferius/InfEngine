@@ -32,6 +32,9 @@ pub(crate) struct BrewingPanelInputs<'a> {
     /// false (stand-side); render.rs applies them against the
     /// real `Voxel::brewing_stands` entry.
     pub(crate) stand_actions_out: &'a mut Vec<(bool, container::ui::GridAction)>,
+    /// W470: panel-wide drag-paint tracker (persisted by render.rs
+    /// in egui memory; applied on release).
+    pub(crate) drag: &'a mut container::ui::PanelDrag,
 }
 
 pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
@@ -48,6 +51,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
         open_local,
         held_local,
         stand_actions_out,
+        drag,
     } = inputs;
 
     let screen = ctx.content_rect();
@@ -85,6 +89,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                     atlas_tex_id,
                     icon_uv_resolver,
                     stand_actions_out,
+                    drag,
                 );
                 ui.label("Fuel");
                 draw_single(
@@ -95,6 +100,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                     atlas_tex_id,
                     icon_uv_resolver,
                     stand_actions_out,
+                    drag,
                 );
                 ui.label("Brew");
                 draw_progress_bar(ui, runtime_snapshot.progress_ms);
@@ -107,6 +113,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                         atlas_tex_id,
                         icon_uv_resolver,
                         stand_actions_out,
+                        drag,
                     );
                 }
             });
@@ -127,6 +134,11 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                 title: None,
                 id_salt: "brewing_player_inv",
             };
+            let mut interact = container::ui::GridInteract {
+                drag,
+                player_side: true,
+                base_index: 0,
+            };
             let inv_actions = container::ui::draw_grid_with_uv(
                 ui,
                 &inv_cfg,
@@ -134,6 +146,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
                 held_local,
                 atlas_tex_id,
                 icon_uv_resolver,
+                &mut interact,
             );
             for a in inv_actions {
                 stand_actions_out.push((true, a));
@@ -144,6 +157,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_single(
     ui: &mut egui::Ui,
     stand: &container::Container,
@@ -152,6 +166,7 @@ fn draw_single(
     atlas_tex_id: Option<egui::TextureId>,
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
     actions_out: &mut Vec<(bool, container::ui::GridAction)>,
+    drag: &mut container::ui::PanelDrag,
 ) {
     // W56.3: slot_idx as the id_salt so each single-slot strip
     // gets a unique egui Grid id.
@@ -169,8 +184,20 @@ fn draw_single(
         title: None,
         id_salt: salt,
     };
+    // Single-slot view CLONES the real slot's accept filter so the
+    // widget's drag-eligibility check matches the live stand.
     let mut single = container::Container::with_size(1);
     single.set_slot(0, stand.slot(slot_idx));
+    if let Some(pred) = stand.accept_fn(slot_idx) {
+        single.set_accept(0, pred);
+    }
+    // W470: base_index remaps widget slot 0 to the real container
+    // slot (the old per-arm `remap_action` helper is gone).
+    let mut interact = container::ui::GridInteract {
+        drag,
+        player_side: false,
+        base_index: slot_idx,
+    };
     let acts = container::ui::draw_grid_with_uv(
         ui,
         &cfg,
@@ -178,25 +205,10 @@ fn draw_single(
         held,
         atlas_tex_id,
         icon_uv_resolver,
+        &mut interact,
     );
     for a in acts {
-        actions_out.push((false, remap_action(a, slot_idx)));
-    }
-}
-
-/// Remap a single-slot widget's GridAction(0) to the real
-/// container slot index. Mirrors furnace_panel's helper.
-fn remap_action(
-    a: container::ui::GridAction,
-    real_idx: usize,
-) -> container::ui::GridAction {
-    use container::ui::GridAction as A;
-    match a {
-        A::Take(_) => A::Take(real_idx),
-        A::Place(_) => A::Place(real_idx),
-        A::TakeHalf(_) => A::TakeHalf(real_idx),
-        A::PlaceOne(_) => A::PlaceOne(real_idx),
-        A::Transfer(_) => A::Transfer(real_idx),
+        actions_out.push((false, a));
     }
 }
 

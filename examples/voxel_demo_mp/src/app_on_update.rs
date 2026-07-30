@@ -344,46 +344,45 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             ));
         }
         vx.f4_prev = f4_now;
-        // Q drops one item from the selected hotbar slot. No
-        // dropped-entity model yet so the item simply
-        // disappears - useful for trimming overstocked stacks.
+        // W470: Q throws one item from the selected hotbar slot as
+        // a REAL drop entity (MC PlayerDropItem); Ctrl+Q throws the
+        // whole stack. Tossed forward along the look vector with
+        // MC velocity + the 40-tick pickup delay so the player
+        // doesn't instantly re-collect. With an item screen open
+        // the throw is handled by the hovered-slot panel path
+        // instead (MC parity), so this world-path gates on
+        // `any_item_screen_open`.
         let q_now = ctx.input.is_pressed(Key::Q);
         if q_now
             && !vx.q_prev
             && matches!(vx.state, AppState::Playing)
             && !vx.chat_open
-            && !vx.inventory_open
+            && !vx.any_item_screen_open()
             && !egui_kb
             && vx.selected_slot < HOTBAR_SLOTS
-            && let Some(held) = vx.inventory[vx.selected_slot].clone()
+            && vx.inventory[vx.selected_slot].is_some()
         {
-            let b = BlockId(held.id);
-            // Ctrl held = drop the entire stack at once.
+            // Ctrl held = throw the entire stack at once.
             let drop_all = ctx.input.is_pressed(Key::ControlLeft)
                 || ctx.input.is_pressed(Key::ControlRight);
-            let new_count =
-                if drop_all { 0 } else { held.count.saturating_sub(1) };
-            vx.inventory[vx.selected_slot] = if new_count == 0 {
-                None
+            let sel = vx.selected_slot;
+            if let NetRole::Client { client, .. } = &mut vx.net {
+                // Host-authoritative inventory: send the op; the
+                // snapshot + drop broadcast reconcile the view.
+                let msg = crate::net::InvOpMsg::ThrowSelected {
+                    slot: sel as u8,
+                    all: drop_all,
+                };
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                    let _ = client.send_bytes("vx.inv_op", buf);
+                }
             } else {
-                let mut kept = held;
-                kept.count = new_count;
-                Some(kept)
-            };
-            // Small puff at the player's feet so the drop is
-            // visible; mirrors the break-particle texture so
-            // identifying the block stays easy.
-            let color = vx
-                .registry
-                .get(b)
-                .map(|d| d.color)
-                .unwrap_or([0.8, 0.8, 0.8]);
-            let voxel = [
-                vx.player_pos.x.floor() as i32,
-                (vx.player_pos.y - PLAYER_HEIGHT - 0.05).floor() as i32,
-                vx.player_pos.z.floor() as i32,
-            ];
-            vx.spawn_break_particles_tinted(voxel, color);
+                vx.apply_inv_action(crate::ui::InvAction::Throw {
+                    slot: crate::inventory::SlotKind::Inv(sel),
+                    all: drop_all,
+                });
+            }
         }
         vx.q_prev = q_now;
         // Z undoes the last placement. Routes through the edit
@@ -471,7 +470,14 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // 1..9 select the matching hotbar slot directly (Minecraft
         // convention). Digit 1 maps to slot 0 so the user-facing
         // numbering matches the visual order in the hotbar.
-        if matches!(vx.state, AppState::Playing) && !vx.chat_open && !egui_kb {
+        // W470: with an item screen open the digits belong to the
+        // hovered-slot SWAP (panel path) - selection only changes
+        // when no item screen is up, mirroring MC.
+        if matches!(vx.state, AppState::Playing)
+            && !vx.chat_open
+            && !vx.any_item_screen_open()
+            && !egui_kb
+        {
             let digits = [
                 Key::Digit1,
                 Key::Digit2,

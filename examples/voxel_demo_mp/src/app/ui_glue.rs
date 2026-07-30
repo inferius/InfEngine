@@ -5,6 +5,23 @@ use crate::lighting::HaloLighting;
 
 impl Voxel {
 
+    /// W470: is any ITEM screen open (a grid the doClick ops act
+    /// on)? Narrower than `any_panel_open` - chat / debug / mp
+    /// menu don't count, so hotbar digits keep working under them
+    /// while a real item screen routes digits to the hovered-slot
+    /// SWAP instead.
+    pub(crate) fn any_item_screen_open(&self) -> bool {
+        self.inventory_open
+            || self.chest_open.is_some()
+            || self.furnace_open.is_some()
+            || self.brewing_open.is_some()
+            || self.crafting_table_open.is_some()
+            || self.stonecutter_open.is_some()
+            || self.smithing_open.is_some()
+            || self.trade_open.is_some()
+            || self.creative_tab.open
+    }
+
     /// Returns true while *any* in-game popup / modal is open.
     /// Central point used by the cursor + input + click gates so
     /// future popups only need to add one flag here instead of

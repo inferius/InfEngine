@@ -55,6 +55,58 @@ pub(crate) enum GridAction {
     PlaceOne(usize),
     /// Shift-click: transfer entire stack to the partner container.
     Transfer(usize),
+    /// W470: double-click with a cursor stack - collect every
+    /// same-stackable stack on the screen (MC PICKUP_ALL).
+    Collect(usize),
+    /// W470: number key 1-9 over a hovered slot - swap it with the
+    /// matching hotbar slot (MC SWAP). Second field = hotbar index
+    /// 0..8.
+    SwapHotbar(usize, u8),
+    /// W470: Q over a hovered slot with an empty cursor - throw
+    /// one item (MC THROW, button 0).
+    ThrowOne(usize),
+    /// W470: Ctrl+Q - throw the hovered slot's whole stack (MC
+    /// THROW, button 1).
+    ThrowAll(usize),
+    /// W470: creative middle-click - cursor receives a full
+    /// max-stack copy (MC CLONE). Local-only (never sent on the
+    /// wire; the host cannot validate a remote creative flag).
+    CloneSlot(usize),
+}
+
+/// W470: which mouse button an in-flight drag-paint uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DragButton {
+    Left,
+    Right,
+}
+
+/// W470: panel-wide drag-paint tracker (MC QUICK_CRAFT phases 0+1).
+/// The caller persists it across frames (egui temp memory) and
+/// hands it to every `draw_grid_with_uv` call of the SAME panel so
+/// a drag can cross sections (container grid <-> player inv). On
+/// release the caller converts `slots` into one drag-apply op -
+/// nothing mutates while the button is down (apply-on-release, as
+/// the source does).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PanelDrag {
+    pub(crate) button: Option<DragButton>,
+    /// Visit order of (player_side, slot_idx); deduped. Slots are
+    /// only added when eligible at hover time (source lines
+    /// 354-358: quick-replaceable + accepted + cursor count >
+    /// visited count).
+    pub(crate) slots: Vec<(bool, usize)>,
+}
+
+/// W470: per-grid-call interaction context for
+/// `draw_grid_with_uv`. Identifies which screen section the grid's
+/// widget indices belong to and where they start (the furnace /
+/// brewing panels draw single-slot strips whose widget index 0 is
+/// really container slot `base_index`).
+pub(crate) struct GridInteract<'a> {
+    pub(crate) drag: &'a mut PanelDrag,
+    pub(crate) player_side: bool,
+    pub(crate) base_index: usize,
 }
 
 /// Layout + cosmetic config for a grid draw call.
@@ -101,20 +153,14 @@ impl Default for GridConfig {
 /// atlas. When `None`, slots fall back to a flat coloured swatch
 /// so the widget still works without the atlas (e.g. headless
 /// tests or pre-asset-load frames).
-pub(crate) fn draw_grid(
-    ui: &mut egui::Ui,
-    cfg: &GridConfig,
-    container: &Container,
-    held: Option<&ItemStack>,
-    atlas: Option<egui::TextureId>,
-) -> Vec<GridAction> {
-    draw_grid_with_uv(ui, cfg, container, held, atlas, &|_| None)
-}
-
-/// W9.3: same as `draw_grid` but the caller plumbs a per-item UV
-/// resolver (typically powered by the loaded MC resource pack)
-/// so non-block items get their dedicated MC icon instead of the
-/// shared placeholder tile at the (0, 0) atlas slot.
+///
+/// W470: `interact` threads the panel-wide drag-paint tracker +
+/// this grid's section identity. Beyond the classic click actions
+/// the widget now emits the full MC interaction set: double-click
+/// `Collect`, number-key `SwapHotbar`, Q / Ctrl+Q `ThrowOne` /
+/// `ThrowAll`, creative middle-click `CloneSlot`, and it records
+/// drag-paint visits into `interact.drag` (applied on release by
+/// the caller - slots are never mutated mid-drag).
 pub(crate) fn draw_grid_with_uv(
     ui: &mut egui::Ui,
     cfg: &GridConfig,
@@ -122,12 +168,25 @@ pub(crate) fn draw_grid_with_uv(
     held: Option<&ItemStack>,
     atlas: Option<egui::TextureId>,
     uv_resolver: UvResolver<'_>,
+    interact: &mut GridInteract<'_>,
 ) -> Vec<GridAction> {
     let mut actions: Vec<GridAction> = Vec::new();
     if let Some(title) = &cfg.title {
         ui.label(title.as_str());
     }
     let total = cfg.cols * cfg.rows;
+    // Pointer + key state sampled once per grid call.
+    let (lmb_pressed, lmb_down, rmb_pressed, rmb_down) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.secondary_pressed(),
+            i.pointer.secondary_down(),
+        )
+    });
+    // Key ops are suppressed while a text field owns the keyboard
+    // (recipe-book search etc).
+    let keys_ok = !ui.ctx().wants_keyboard_input();
     // Grid id: derive from the title when set, otherwise fall back
     // to the slot rectangle dims so two side-by-side default grids
     // (chest + player inv) still get distinct ids.
@@ -144,28 +203,106 @@ pub(crate) fn draw_grid_with_uv(
                 // W467: borrow the stack - the widget only reads
                 // id + count, no need to clone components per tile.
                 let slot = container.slot_ref(idx);
+                let real_idx = interact.base_index + idx;
                 let resp = draw_one_slot(ui, slot, cfg.tile_px, atlas, uv_resolver);
                 // Modifier mapping. We sample once per slot so a
                 // Shift-LMB and a plain LMB on the same slot don't
                 // both fire.
                 let (shift, _ctrl) =
                     ui.input(|i| (i.modifiers.shift, i.modifiers.command));
-                let is_lmb = resp.clicked();
-                let is_rmb = resp.secondary_clicked();
-                if is_lmb {
-                    if shift && slot.is_some() {
-                        actions.push(GridAction::Transfer(idx));
-                    } else if held.is_some() {
-                        actions.push(GridAction::Place(idx));
-                    } else if slot.is_some() {
-                        actions.push(GridAction::Take(idx));
+                // W470: drag-paint visit tracking. Uses
+                // `contains_pointer()` (not `hovered()`) - egui
+                // reports hovered=false on widgets the cursor
+                // crosses during an active drag (W54.4 lesson).
+                if let Some(cur) = held
+                    && resp.contains_pointer()
+                {
+                    let drag = &mut *interact.drag;
+                    let sref = (interact.player_side, real_idx);
+                    let eligible = crate::container::click::can_add_drag_slot(
+                        slot,
+                        container.accepts(idx, cur.id),
+                        cur,
+                        drag.slots.len(),
+                    );
+                    if lmb_down && drag.button != Some(DragButton::Right) {
+                        if drag.button.is_none() && lmb_pressed {
+                            drag.button = Some(DragButton::Left);
+                        }
+                        if drag.button == Some(DragButton::Left)
+                            && eligible
+                            && !drag.slots.contains(&sref)
+                        {
+                            drag.slots.push(sref);
+                        }
+                    } else if rmb_down && drag.button != Some(DragButton::Left) {
+                        if drag.button.is_none() && rmb_pressed {
+                            drag.button = Some(DragButton::Right);
+                        }
+                        if drag.button == Some(DragButton::Right)
+                            && eligible
+                            && !drag.slots.contains(&sref)
+                        {
+                            drag.slots.push(sref);
+                        }
                     }
-                } else if is_rmb {
+                }
+                // W470: keyboard ops on the hovered slot. Number
+                // keys swap with the hotbar; Q / Ctrl+Q throw.
+                if keys_ok && resp.hovered() {
+                    ui.input(|i| {
+                        const DIGITS: [egui::Key; 9] = [
+                            egui::Key::Num1,
+                            egui::Key::Num2,
+                            egui::Key::Num3,
+                            egui::Key::Num4,
+                            egui::Key::Num5,
+                            egui::Key::Num6,
+                            egui::Key::Num7,
+                            egui::Key::Num8,
+                            egui::Key::Num9,
+                        ];
+                        for (n, key) in DIGITS.iter().enumerate() {
+                            if i.key_pressed(*key) {
+                                actions.push(GridAction::SwapHotbar(
+                                    real_idx, n as u8,
+                                ));
+                                break;
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Q) && slot.is_some() {
+                            actions.push(if i.modifiers.command {
+                                GridAction::ThrowAll(real_idx)
+                            } else {
+                                GridAction::ThrowOne(real_idx)
+                            });
+                        }
+                    });
+                }
+                // W470: double-click first - on the second click of
+                // a double, `clicked()` is ALSO true; MC's flow is
+                // click #1 picks the stack up (previous frame),
+                // click #2 collects.
+                if resp.double_clicked() {
                     if held.is_some() {
-                        actions.push(GridAction::PlaceOne(idx));
-                    } else if slot.is_some() {
-                        actions.push(GridAction::TakeHalf(idx));
+                        actions.push(GridAction::Collect(real_idx));
                     }
+                } else if resp.clicked() {
+                    if shift && slot.is_some() {
+                        actions.push(GridAction::Transfer(real_idx));
+                    } else if held.is_some() {
+                        actions.push(GridAction::Place(real_idx));
+                    } else if slot.is_some() {
+                        actions.push(GridAction::Take(real_idx));
+                    }
+                } else if resp.secondary_clicked() {
+                    if held.is_some() {
+                        actions.push(GridAction::PlaceOne(real_idx));
+                    } else if slot.is_some() {
+                        actions.push(GridAction::TakeHalf(real_idx));
+                    }
+                } else if resp.middle_clicked() && slot.is_some() {
+                    actions.push(GridAction::CloneSlot(real_idx));
                 }
                 if (idx + 1) % cfg.cols == 0 {
                     ui.end_row();

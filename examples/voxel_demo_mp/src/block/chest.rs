@@ -22,7 +22,6 @@
 use crate::container::Container;
 use crate::container::ui::GridAction;
 use crate::item::ItemStack;
-use crate::item::stack::{drop_into_first_free_stacks, merge_into_stacks, take_n_stacks};
 
 /// Number of slots in a single chest. Matches MC's small chest
 /// (3 rows of 9). Larger / double-chests can change this per-chest
@@ -108,203 +107,45 @@ pub(crate) fn recover_held_on_close(
     (leftover > 0).then(|| stack.with_count(leftover))
 }
 
-/// Apply one `GridAction` against the chest container. Returns the
-/// next held-stack value (mirroring how `inv_apply_drag` returns
-/// the next cursor state).
-///
-/// `partner` is the player's inventory slots, used for shift-click
-/// transfers. We hand it in as `&mut [Option<ItemStack>]` (the
-/// inventory's slot shape) so the chest UI works against the
-/// player-inventory storage directly.
+/// W470: apply one `GridAction` against the chest-side section of
+/// the [chest, player inventory] screen. Thin adapter over the
+/// SHARED click core (`container::click` via `container::screen`) -
+/// the interaction rules live exactly once. Returns any thrown
+/// stacks (Q / Ctrl+Q) for the caller to spawn as drops.
 pub(crate) fn apply_chest_action(
     chest: &mut Container,
     partner: &mut [Option<ItemStack>],
     held: &mut Option<ItemStack>,
     action: GridAction,
-) {
-    match action {
-        GridAction::Take(idx) => {
-            // Pick up the whole slot into the cursor.
-            if held.is_none()
-                && let Some(st) = chest.take(idx)
-            {
-                *held = Some(st);
-            }
-        }
-        GridAction::TakeHalf(idx) => {
-            // RMB on a non-empty slot with no held stack: pull
-            // half (rounded up) onto the cursor. Matches MC's
-            // RMB-take semantics. Components clone to both halves.
-            if held.is_some() {
-                return;
-            }
-            let Some(count) = chest.slot_ref(idx).map(|st| st.count) else {
-                return;
-            };
-            let half = count.div_ceil(2);
-            if let Some(taken) = chest.take_n(idx, half) {
-                *held = Some(taken);
-            }
-        }
-        GridAction::Place(idx) => {
-            // Drop the held stack into the slot - merge / swap.
-            place_held(chest, held, idx, false);
-        }
-        GridAction::PlaceOne(idx) => {
-            // Place exactly one item from the held stack. RMB
-            // with a held stack.
-            place_held(chest, held, idx, true);
-        }
-        GridAction::Transfer(idx) => {
-            // Shift-click: move the chest slot's contents into
-            // the player's inventory (components ride along).
-            let Some(stack) = chest.slot(idx) else {
-                return;
-            };
-            let leftover = drop_into_first_free_stacks(partner, stack.clone());
-            if leftover == 0 {
-                chest.set_slot(idx, None);
-            } else {
-                chest.set_slot(idx, Some(stack.with_count(leftover)));
-            }
-        }
-    }
+) -> Vec<ItemStack> {
+    crate::container::screen::apply_grid_action(
+        chest,
+        partner,
+        held,
+        false,
+        action,
+        &crate::container::screen::CHEST_CFG,
+        false,
+    )
 }
 
-/// Apply one `GridAction` against the player's inventory side of
-/// the chest UI. The partner direction (shift-click target) is the
-/// chest. Mirrors `apply_chest_action` but with the slots <->
-/// container roles reversed.
+/// W470: player-inventory-side counterpart of `apply_chest_action`
+/// (same shared core, `player_side = true`).
 pub(crate) fn apply_player_action(
     inv: &mut [Option<ItemStack>],
     chest: &mut Container,
     held: &mut Option<ItemStack>,
     action: GridAction,
-) {
-    match action {
-        GridAction::Take(idx) => {
-            if held.is_none()
-                && let Some(slot) = inv.get_mut(idx)
-                && let Some(st) = slot.take()
-            {
-                *held = Some(st);
-            }
-        }
-        GridAction::TakeHalf(idx) => {
-            if held.is_some() {
-                return;
-            }
-            let Some(slot) = inv.get_mut(idx) else { return };
-            let Some(count) = slot.as_ref().map(|st| st.count) else {
-                return;
-            };
-            let half = count.div_ceil(2);
-            if let Some(taken) = take_n_stacks(slot, half) {
-                *held = Some(taken);
-            }
-        }
-        GridAction::Place(idx) => {
-            place_into_slot(inv, held, idx, false);
-        }
-        GridAction::PlaceOne(idx) => {
-            place_into_slot(inv, held, idx, true);
-        }
-        GridAction::Transfer(idx) => {
-            // Shift-click: move the player-inv slot's contents
-            // into the chest.
-            let Some(slot) = inv.get_mut(idx) else { return };
-            let Some(stack) = slot.clone() else { return };
-            let leftover = chest.insert(stack.clone());
-            if leftover == 0 {
-                *slot = None;
-            } else {
-                *slot = Some(stack.with_count(leftover));
-            }
-        }
-    }
-}
-
-/// Helper: place all-or-one of the held stack into a chest slot.
-/// Returns nothing; updates `held` + the slot in place.
-fn place_held(
-    chest: &mut Container,
-    held: &mut Option<ItemStack>,
-    idx: usize,
-    single: bool,
-) {
-    let Some(cur) = held.clone() else { return };
-    // Single-item place lifts one from the cursor, then merges
-    // it into the slot.
-    let to_place = if single { 1 } else { cur.count };
-    let leftover_in_cursor = cur.count - to_place;
-    let leftover_after_insert = chest.insert_at(idx, cur.with_count(to_place));
-    // What didn't fit in the slot comes back to the cursor;
-    // combine with anything the single-mode lift left behind.
-    let new_cursor_count = leftover_in_cursor + leftover_after_insert;
-    *held = if new_cursor_count == 0 {
-        None
-    } else {
-        Some(cur.with_count(new_cursor_count))
-    };
-    // Swap path: if the slot held NON-STACKABLE content (different
-    // id, or same id with different components - MC swaps a fresh
-    // tool onto a worn one) AND the place was a "full stack onto a
-    // foreign slot", swap the two. Detect "nothing landed" by
-    // comparing pre-insert leftover to to_place.
-    if leftover_after_insert == to_place && !single {
-        // The slot rejected our items because they didn't match.
-        // Swap: take the slot's existing contents into the cursor,
-        // place our items into the now-empty slot.
-        let existing = chest.take(idx);
-        let placed = chest.insert_at(idx, cur.clone());
-        // If our items now fit, the swap succeeded - drop the
-        // cursor onto the slot we just cleared.
-        if placed == 0 {
-            *held = existing;
-        } else {
-            // Restore the original cursor; the swap failed (slot
-            // accept filter rejected). Drop existing back.
-            if let Some(prev) = existing {
-                let _ = chest.insert_at(idx, prev);
-            }
-            *held = Some(cur);
-        }
-    }
-}
-
-/// Place-into-slot variant for the player inventory side. Uses
-/// `merge_into_stacks` / `take_n_stacks` on a raw slot ref so it
-/// mirrors how the inventory module mutates its stack slots.
-fn place_into_slot(
-    inv: &mut [Option<ItemStack>],
-    held: &mut Option<ItemStack>,
-    idx: usize,
-    single: bool,
-) {
-    let Some(cur) = held.clone() else { return };
-    let Some(slot) = inv.get_mut(idx) else { return };
-    let to_place = if single { 1 } else { cur.count };
-    let leftover_in_cursor = cur.count - to_place;
-    // Try a merge first. `merge_into_stacks` rejects wholesale
-    // when the slot isn't `same_stackable` with the cursor.
-    let pre_mismatch = slot
-        .as_ref()
-        .is_some_and(|st| !st.same_stackable(&cur));
-    let leftover_after = merge_into_stacks(slot, cur.with_count(to_place));
-    let new_cursor_count = leftover_in_cursor + leftover_after;
-    *held = if new_cursor_count == 0 {
-        None
-    } else {
-        Some(cur.with_count(new_cursor_count))
-    };
-    // Swap on full-stack reject when the slot held non-stackable
-    // content (a same-stackable merge with no room is "no swap"
-    // because there's no foreign content).
-    if leftover_after == to_place && !single && pre_mismatch {
-        let existing = slot.take();
-        *slot = Some(cur);
-        *held = existing;
-    }
+) -> Vec<ItemStack> {
+    crate::container::screen::apply_grid_action(
+        chest,
+        inv,
+        held,
+        true,
+        action,
+        &crate::container::screen::CHEST_CFG,
+        false,
+    )
 }
 
 #[cfg(test)]

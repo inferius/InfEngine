@@ -269,7 +269,11 @@ pub(crate) struct ChestActMsg {
 /// W5.3a: serde-friendly mirror of `container::ui::GridAction`.
 /// Stays in net.rs so the GridAction enum can keep its internal
 /// `pub(crate)` visibility without leaking serde into the container
-/// module.
+/// module. W470 adds the ported doClick ops: double-click collect,
+/// number-key hotbar swap, Q / Ctrl+Q slot throws and the
+/// click-outside cursor throws (MC slotId -999). `CloneSlot` is
+/// deliberately NOT mirrored - the host cannot validate a remote
+/// creative flag, so clone stays a local-only op.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum ChestAct {
     Take(u32),
@@ -277,6 +281,20 @@ pub(crate) enum ChestAct {
     TakeHalf(u32),
     PlaceOne(u32),
     Transfer(u32),
+    /// W470: PICKUP_ALL (double-click) on the slot.
+    Collect(u32),
+    /// W470: SWAP - slot <-> hotbar index (0..8).
+    SwapHotbar(u32, u8),
+    /// W470: THROW one item from the slot (Q).
+    ThrowOne(u32),
+    /// W470: THROW the whole slot stack (Ctrl+Q).
+    ThrowAll(u32),
+    /// W470: click outside the panel - throw the whole cursor
+    /// stack (LMB). `player_side` is ignored for the cursor ops.
+    ThrowCursorAll,
+    /// W470: click outside the panel - throw one item off the
+    /// cursor (RMB).
+    ThrowCursorOne,
 }
 
 /// W5.3a: client -> host. "I just closed the chest." Host clears
@@ -323,29 +341,82 @@ pub(crate) struct FurnaceCloseMsg {
 
 impl ChestAct {
     /// Map this wire-level enum to the internal `container::ui::
-    /// GridAction`. Inverse of `from_grid_action`.
-    pub(crate) fn to_grid_action(self) -> crate::container::ui::GridAction {
+    /// GridAction`. Inverse of `from_grid_action`. The two
+    /// cursor-throw variants have no GridAction shape (they don't
+    /// address a slot) and return `None` - the wire applier
+    /// handles them before this mapping.
+    pub(crate) fn to_grid_action(
+        self,
+    ) -> Option<crate::container::ui::GridAction> {
         use crate::container::ui::GridAction as G;
-        match self {
+        Some(match self {
             ChestAct::Take(i) => G::Take(i as usize),
             ChestAct::Place(i) => G::Place(i as usize),
             ChestAct::TakeHalf(i) => G::TakeHalf(i as usize),
             ChestAct::PlaceOne(i) => G::PlaceOne(i as usize),
             ChestAct::Transfer(i) => G::Transfer(i as usize),
-        }
+            ChestAct::Collect(i) => G::Collect(i as usize),
+            ChestAct::SwapHotbar(i, h) => G::SwapHotbar(i as usize, h),
+            ChestAct::ThrowOne(i) => G::ThrowOne(i as usize),
+            ChestAct::ThrowAll(i) => G::ThrowAll(i as usize),
+            ChestAct::ThrowCursorAll | ChestAct::ThrowCursorOne => {
+                return None;
+            }
+        })
     }
 
-    /// Map an internal `GridAction` into the wire variant.
-    pub(crate) fn from_grid_action(action: crate::container::ui::GridAction) -> Self {
+    /// Map an internal `GridAction` into the wire variant. `None`
+    /// for the local-only ops (creative clone - the host cannot
+    /// validate a remote creative flag, so it never rides the
+    /// wire).
+    pub(crate) fn from_grid_action(
+        action: crate::container::ui::GridAction,
+    ) -> Option<Self> {
         use crate::container::ui::GridAction as G;
-        match action {
+        Some(match action {
             G::Take(i) => ChestAct::Take(i as u32),
             G::Place(i) => ChestAct::Place(i as u32),
             G::TakeHalf(i) => ChestAct::TakeHalf(i as u32),
             G::PlaceOne(i) => ChestAct::PlaceOne(i as u32),
             G::Transfer(i) => ChestAct::Transfer(i as u32),
-        }
+            G::Collect(i) => ChestAct::Collect(i as u32),
+            G::SwapHotbar(i, h) => ChestAct::SwapHotbar(i as u32, h),
+            G::ThrowOne(i) => ChestAct::ThrowOne(i as u32),
+            G::ThrowAll(i) => ChestAct::ThrowAll(i as u32),
+            G::CloneSlot(_) => return None,
+        })
     }
+}
+
+/// W470: client -> host, one completed drag-paint (MC QUICK_CRAFT
+/// release) against an open container screen. `slots` is the
+/// ordered (player_side, slot_idx) visit list; `one_per_slot` =
+/// RMB drag. Shared by the chest topic (`vx.chest_drag`) and the
+/// furnace topic (`vx.furnace_drag`). Deliberately NOT a `ChestAct`
+/// arm: the visit list makes the message non-Copy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ContainerDragMsg {
+    pub(crate) pos: [i32; 3],
+    pub(crate) one_per_slot: bool,
+    pub(crate) slots: Vec<(bool, u32)>,
+}
+
+/// W470: client -> host inventory-screen ops beyond the drag&drop
+/// (`InvActionMsg`): number-key swap, hover throws, shift
+/// quick-move and the no-panel selected-slot throw (MC
+/// PlayerDropItem). Applied against the client's authoritative
+/// `ClientInv` through the shared click core; throws spawn drops
+/// at the sender's pose.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) enum InvOpMsg {
+    /// Swap the addressed slot with hotbar slot `hotbar` (0..8).
+    Swap { slot: NetSlot, hotbar: u8 },
+    /// Throw from the addressed slot (Q = one, Ctrl+Q = all).
+    Throw { slot: NetSlot, all: bool },
+    /// Throw from the SELECTED hotbar slot while no panel is open.
+    ThrowSelected { slot: u8, all: bool },
+    /// Shift-click quick-move on the inventory screen.
+    QuickMove { slot: NetSlot },
 }
 
 /// Net wire message for a fresh drop the host wants every peer
@@ -1032,6 +1103,12 @@ pub(crate) struct ServerInboxCtx<'a> {
     pub furnace_opens: &'a mut Vec<(u32, FurnaceOpenMsg)>,
     pub furnace_acts: &'a mut Vec<(u32, FurnaceActMsg)>,
     pub furnace_closes: &'a mut Vec<(u32, FurnaceCloseMsg)>,
+    /// W470: completed drag-paints against open containers.
+    pub chest_drags: &'a mut Vec<(u32, ContainerDragMsg)>,
+    pub furnace_drags: &'a mut Vec<(u32, ContainerDragMsg)>,
+    /// W470: inventory-screen ops (swap / throw / quick-move) +
+    /// the no-panel selected-slot throw.
+    pub inv_ops: &'a mut Vec<(u32, InvOpMsg)>,
 }
 
 /// Drain the server socket's inbound queue and dispatch each
@@ -1133,6 +1210,31 @@ pub(crate) fn process_server_inbox(
                     bincode::serde::decode_from_slice::<FurnaceCloseMsg, _>(&data, cfg)
                 {
                     ctx.furnace_closes.push((client_id, m));
+                }
+            }
+            "vx.chest_drag" => {
+                if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                    ContainerDragMsg,
+                    _,
+                >(&data, cfg)
+                {
+                    ctx.chest_drags.push((client_id, m));
+                }
+            }
+            "vx.furnace_drag" => {
+                if let Ok((m, _)) = bincode::serde::decode_from_slice::<
+                    ContainerDragMsg,
+                    _,
+                >(&data, cfg)
+                {
+                    ctx.furnace_drags.push((client_id, m));
+                }
+            }
+            "vx.inv_op" => {
+                if let Ok((m, _)) =
+                    bincode::serde::decode_from_slice::<InvOpMsg, _>(&data, cfg)
+                {
+                    ctx.inv_ops.push((client_id, m));
                 }
             }
             "vx.recipe" => {

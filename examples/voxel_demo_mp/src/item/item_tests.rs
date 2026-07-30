@@ -289,14 +289,14 @@ fn merge_into_empty_respects_tool_max_stack_one() {
 
 #[test]
 fn split_half_odd_stack() {
-    // slot (3, 17) -> moved out (3, 8), slot remains (3, 9).
-    // Floor goes to the moved-out half, ceiling stays in the
-    // source slot - misclicks leave the player with the bigger
-    // half they started from.
+    // slot (3, 17) -> moved out (3, 9), slot remains (3, 8).
+    // W470: the CEIL half moves out - MC `doClick` RMB pickup is
+    // `(count + 1) / 2` onto the cursor (the old floor contract
+    // was a pre-doClick shortcut).
     let mut slot = Some(ItemStack::new(3, 17));
     let moved = split_half_stacks(&mut slot);
-    assert_eq!(moved, Some(ItemStack::new(3, 8)));
-    assert_eq!(slot, Some(ItemStack::new(3, 9)));
+    assert_eq!(moved, Some(ItemStack::new(3, 9)));
+    assert_eq!(slot, Some(ItemStack::new(3, 8)));
 }
 
 #[test]

@@ -43,6 +43,14 @@ pub(crate) const INVENTORY_ROWS: usize = 4;
 pub(crate) const INVENTORY_SLOTS: usize = INVENTORY_COLS * INVENTORY_ROWS;
 pub(crate) const STACK_MAX: u8 = 64;
 
+// W470: the click-core screen adapter duplicates the two geometry
+// consts (the headless lib mounts `container` but not this
+// module). Keep them in lockstep.
+const _: () = assert!(
+    crate::container::screen::HOTBAR_SLOTS == HOTBAR_SLOTS
+        && crate::container::screen::INVENTORY_SLOTS == INVENTORY_SLOTS
+);
+
 /// Identifier for an inventory cell. Used as the drag&drop payload
 /// so we know both ends of a drag operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,6 +96,32 @@ impl From<NetSlot> for SlotKind {
             NetSlot::Craft(i) => SlotKind::Craft(i as usize),
             NetSlot::CraftOut => SlotKind::CraftOut,
         }
+    }
+}
+
+/// W470: shift-click routing for the standalone inventory screen,
+/// as global indices over the [inventory 36, craft grid 4] screen
+/// (`InventoryMenu.quickMoveStack` conventions adapted to this
+/// engine's layout - no armor grid / offhand yet):
+/// - craft cell -> player inv, main rows first then hotbar
+///   (`moveItemStackTo(9, 45, false)`),
+/// - main slot -> hotbar (forward),
+/// - hotbar slot -> main rows (forward).
+///
+/// The craft OUTPUT slot is virtual and returns an empty order.
+pub(crate) fn inv_screen_quick_move_order(
+    slot: SlotKind,
+    inv_len: usize,
+) -> Vec<usize> {
+    match slot {
+        SlotKind::Craft(_) => (HOTBAR_SLOTS..inv_len)
+            .chain(0..HOTBAR_SLOTS)
+            .collect(),
+        SlotKind::Inv(i) if i < HOTBAR_SLOTS => {
+            (HOTBAR_SLOTS..inv_len).collect()
+        }
+        SlotKind::Inv(_) => (0..HOTBAR_SLOTS).collect(),
+        SlotKind::CraftOut => Vec::new(),
     }
 }
 

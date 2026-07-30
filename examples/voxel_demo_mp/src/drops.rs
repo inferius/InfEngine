@@ -196,6 +196,76 @@ pub(crate) fn spawn_stack(voxel: &mut Voxel, stack: ItemStack, pos: [i32; 3]) {
     voxel.dropped_items.push(drop);
 }
 
+/// W470: pickup delay for PLAYER-THROWN drops, in logical ticks.
+/// MC `LivingEntity.createItemStackToDrop` sets 40 (2 s) so the
+/// thrower doesn't instantly hoover the item back up (the plain
+/// break-drop delay is only 10).
+pub(crate) const THROW_PICKUP_DELAY_TICKS: u32 = 40;
+
+/// W470: MC toss velocity for a hand-thrown item, in blocks/sec
+/// (the source works in blocks/tick; x20 here). Port of the
+/// non-random branch of `createItemStackToDrop`:
+/// `vel = look * 0.3 + (0, 0.1, 0) + jitter` per tick, where the
+/// jitter is a small random horizontal push (`0.02 * rand`) and a
+/// +/-0.1 vertical wobble. `salt` decorrelates consecutive throws
+/// (the drop id serves).
+pub(crate) fn toss_velocity(look: [f32; 3], salt: u32) -> [f32; 3] {
+    // Cheap deterministic hash floats in [0, 1).
+    let h = |k: u32| -> f32 {
+        let x = salt.wrapping_mul(2654435761).wrapping_add(k.wrapping_mul(40503));
+        ((x >> 8) & 0xFFFF) as f32 / 65536.0
+    };
+    let dir = h(1) * std::f32::consts::TAU;
+    let pow2 = 0.02 * h(2);
+    [
+        (look[0] * 0.3 + dir.cos() * pow2) * 20.0,
+        (look[1] * 0.3 + 0.1 + (h(3) - h(4)) * 0.1) * 20.0,
+        (look[2] * 0.3 + dir.sin() * pow2) * 20.0,
+    ]
+}
+
+/// W470: spawn a PLAYER-THROWN stack (Q / Ctrl+Q / click-outside):
+/// float spawn position at the thrower's hand (`eye.y - 0.3`, MC
+/// `yHandPos`), MC toss velocity along the look vector, and the
+/// long 40-tick pickup delay. Host-only like `spawn_stack`;
+/// broadcasts the same `vx.drop_spawn`.
+pub(crate) fn spawn_thrown_stack(
+    voxel: &mut Voxel,
+    stack: ItemStack,
+    eye: [f32; 3],
+    look: [f32; 3],
+) {
+    if matches!(voxel.net, NetRole::Client { .. }) {
+        return;
+    }
+    if stack.id == 0 || stack.count == 0 {
+        return;
+    }
+    let id = voxel.next_drop_id;
+    voxel.next_drop_id = voxel.next_drop_id.wrapping_add(1).max(1);
+    let drop = DropItem {
+        id,
+        stack,
+        pos: [eye[0], eye[1] - 0.3, eye[2]],
+        vel: toss_velocity(look, id),
+        age: 0.0,
+        age_ticks: 0,
+        pickup_delay_ticks: THROW_PICKUP_DELAY_TICKS,
+    };
+    if let NetRole::Server { server, .. } = &mut voxel.net {
+        let cfg = bincode::config::standard();
+        let msg = DropSpawnMsg {
+            id: drop.id,
+            stack: drop.stack.clone(),
+            pos: drop.pos,
+        };
+        if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
+            server.broadcast_bytes("vx.drop_spawn", buf);
+        }
+    }
+    voxel.dropped_items.push(drop);
+}
+
 /// One picked-up stack + the drop's last position (used for the
 /// leftover re-spill when the inventory has no room).
 pub(crate) type PickedStack = (ItemStack, [f32; 3]);

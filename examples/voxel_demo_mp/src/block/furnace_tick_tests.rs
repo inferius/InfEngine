@@ -340,7 +340,9 @@ fn action_transfer_from_furnace_to_player() {
     );
     assert_eq!(held, None);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
-    assert_eq!(inv[0], Some(ItemStack::new(43, 9)));
+    // W470 (AbstractFurnaceMenu: the RESULT slot quick-moves
+    // backwards): the stack lands in the hotbar's right end.
+    assert_eq!(inv[8], Some(ItemStack::new(43, 9)));
 }
 
 #[test]
@@ -350,7 +352,13 @@ fn action_transfer_from_player_to_furnace_respects_filters() {
     inv[3] = Some(ItemStack::new(1, 5));
     let mut held: Option<ItemStack> = None;
     apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(3));
-    assert_eq!(inv[3], Some(ItemStack::new(1, 5)));
+    // W470 (AbstractFurnaceMenu.quickMoveStack): stone is neither
+    // smeltable nor fuel, so no furnace slot takes it - the MC
+    // fallback hops it from the hotbar into the main rows instead.
+    assert_eq!(inv[3], None);
+    assert_eq!(inv[9], Some(ItemStack::new(1, 5)));
+    assert_eq!(f.slot(FURNACE_INPUT_SLOT), None);
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), None);
 }
 
 #[test]

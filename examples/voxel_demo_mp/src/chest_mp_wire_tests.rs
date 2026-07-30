@@ -265,7 +265,10 @@ fn viewer_close_recovers_cursor_stack() {
 
 #[test]
 fn chest_act_to_grid_action_round_trips() {
-    // The wire enum mirrors `container::ui::GridAction` 1:1.
+    // The wire enum mirrors `container::ui::GridAction`. W470:
+    // both directions are `Option` - the cursor throws have no
+    // slot-addressed GridAction shape and the creative clone
+    // never rides the wire.
     use crate::container::ui::GridAction;
     let cases = [
         (GridAction::Take(0), ChestAct::Take(0)),
@@ -273,11 +276,193 @@ fn chest_act_to_grid_action_round_trips() {
         (GridAction::TakeHalf(7), ChestAct::TakeHalf(7)),
         (GridAction::PlaceOne(2), ChestAct::PlaceOne(2)),
         (GridAction::Transfer(13), ChestAct::Transfer(13)),
+        (GridAction::Collect(4), ChestAct::Collect(4)),
+        (GridAction::SwapHotbar(11, 3), ChestAct::SwapHotbar(11, 3)),
+        (GridAction::ThrowOne(6), ChestAct::ThrowOne(6)),
+        (GridAction::ThrowAll(9), ChestAct::ThrowAll(9)),
     ];
     for (ga, expected_wire) in cases {
-        let wire = ChestAct::from_grid_action(ga);
+        let wire = ChestAct::from_grid_action(ga).expect("wire arm");
         assert_eq!(wire, expected_wire);
-        let round = wire.to_grid_action();
+        let round = wire.to_grid_action().expect("grid arm");
         assert_eq!(round, ga);
     }
+    // Local-only / cursor ops sit outside the mapping.
+    assert!(ChestAct::from_grid_action(GridAction::CloneSlot(1)).is_none());
+    assert!(ChestAct::ThrowCursorAll.to_grid_action().is_none());
+    assert!(ChestAct::ThrowCursorOne.to_grid_action().is_none());
+}
+
+/// W470: a remote drag-paint distributes floor(count / slots) per
+/// visited slot and returns the remainder to the per-viewer
+/// cursor - components (worn tools) survive and totals conserve.
+#[test]
+fn remote_drag_distribute_round_trip() {
+    use crate::net::ContainerDragMsg;
+    let mut v = Voxel::new();
+    let pos = [2, 8, 2];
+    v.apply_chest_open_msgs(&[(7, ChestOpenMsg { pos })]);
+    // Viewer's authoritative cursor holds 7 worn hoes... rather,
+    // 7 identically-worn stackable items (same components merge).
+    let mut worn = ItemStack::new(9, 7);
+    worn.components.damage = 4;
+    v.container_cursors.insert(7, Some(worn.clone()));
+    // Wire encode -> decode, like dispatch does.
+    let cfg = bincode::config::standard();
+    let msg = ContainerDragMsg {
+        pos,
+        one_per_slot: false,
+        slots: vec![(false, 0), (false, 1), (false, 2)],
+    };
+    let buf = bincode::serde::encode_to_vec(&msg, cfg).expect("encode");
+    let (decoded, _): (ContainerDragMsg, _) =
+        bincode::serde::decode_from_slice(&buf, cfg).expect("decode");
+    v.apply_chest_drag_msgs(&[(7, decoded)]);
+    let chest = v.chests.get(&pos).unwrap();
+    // floor(7/3) = 2 per slot; 1 back on the cursor. Components
+    // ride onto every fresh slot.
+    for i in 0..3 {
+        assert_eq!(chest.slot(i), Some(worn.with_count(2)), "slot {i}");
+    }
+    assert_eq!(
+        v.container_cursors.get(&7).cloned().flatten(),
+        Some(worn.with_count(1))
+    );
+    // Conservation: 3 * 2 + 1 = 7.
+    let total: u32 = chest
+        .slots()
+        .iter()
+        .flatten()
+        .map(|st| st.count as u32)
+        .sum::<u32>()
+        + 1;
+    assert_eq!(total, 7);
+}
+
+/// W470: remote double-click collect gathers same-component
+/// stacks from the chest into the viewer cursor, skips
+/// different-components stacks, and conserves totals.
+#[test]
+fn remote_double_click_collect_on_worn_items() {
+    let mut v = Voxel::new();
+    let pos = [5, 8, 5];
+    v.apply_chest_open_msgs(&[(3, ChestOpenMsg { pos })]);
+    let mut worn = ItemStack::new(9, 10);
+    worn.components.damage = 6;
+    let fresh = ItemStack::new(9, 5);
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(1, Some(worn.with_count(10)));
+        c.set_slot(2, Some(fresh.clone()));
+        c.set_slot(3, Some(worn.with_count(20)));
+    }
+    // The double-click's first half already picked a worn stack
+    // onto the cursor; slot 0 (clicked) is empty.
+    v.container_cursors.insert(3, Some(worn.with_count(2)));
+    v.apply_chest_act_msgs(&[(
+        3,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::Collect(0),
+        },
+    )]);
+    // Cursor: 2 + 10 + 20 = 32 worn items; the fresh (different
+    // components) stack is untouched.
+    assert_eq!(
+        v.container_cursors.get(&3).cloned().flatten(),
+        Some(worn.with_count(32))
+    );
+    let chest = v.chests.get(&pos).unwrap();
+    assert_eq!(chest.slot(1), None);
+    assert_eq!(chest.slot(3), None);
+    assert_eq!(chest.slot(2), Some(fresh));
+}
+
+/// W470: a remote throw takes from the chest slot (empty cursor
+/// gate) and spawns a floor drop with the 40-tick throw pickup
+/// delay - components intact.
+#[test]
+fn remote_throw_spawns_drop_with_delay() {
+    let mut v = Voxel::new();
+    let pos = [1, 8, 1];
+    v.apply_chest_open_msgs(&[(9, ChestOpenMsg { pos })]);
+    let mut worn = ItemStack::new(48, 1);
+    worn.components.damage = 30;
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(4, Some(worn.clone()));
+    }
+    v.apply_chest_act_msgs(&[(
+        9,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::ThrowAll(4),
+        },
+    )]);
+    assert_eq!(v.chests.get(&pos).unwrap().slot(4), None);
+    assert_eq!(v.dropped_items.len(), 1);
+    assert_eq!(v.dropped_items[0].stack, worn);
+    assert_eq!(
+        v.dropped_items[0].pickup_delay_ticks,
+        crate::drops::THROW_PICKUP_DELAY_TICKS
+    );
+}
+
+/// W470: click-outside cursor throw (MC slotId -999): LMB throws
+/// the whole per-viewer cursor, RMB peels one.
+#[test]
+fn remote_cursor_throw_outside_panel() {
+    let mut v = Voxel::new();
+    let pos = [6, 8, 6];
+    v.apply_chest_open_msgs(&[(2, ChestOpenMsg { pos })]);
+    v.container_cursors.insert(2, Some(ItemStack::new(1, 5)));
+    v.apply_chest_act_msgs(&[(
+        2,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::ThrowCursorOne,
+        },
+    )]);
+    assert_eq!(
+        v.container_cursors.get(&2).cloned().flatten(),
+        Some(ItemStack::new(1, 4))
+    );
+    assert_eq!(v.dropped_items.len(), 1);
+    assert_eq!(v.dropped_items[0].stack, ItemStack::new(1, 1));
+    v.apply_chest_act_msgs(&[(
+        2,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::ThrowCursorAll,
+        },
+    )]);
+    assert_eq!(v.container_cursors.get(&2).cloned().flatten(), None);
+    assert_eq!(v.dropped_items.len(), 2);
+    assert_eq!(v.dropped_items[1].stack, ItemStack::new(1, 4));
+}
+
+/// W470: remote number-key swap between a chest slot and a hotbar
+/// slot has no per-client inventory in the offline harness - it
+/// must no-op safely (the real path exercises the server arm).
+#[test]
+fn remote_swap_without_inventory_is_safe() {
+    let mut v = Voxel::new();
+    let pos = [3, 8, 7];
+    v.apply_chest_open_msgs(&[(4, ChestOpenMsg { pos })]);
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(0, Some(ItemStack::new(1, 8)));
+    }
+    v.apply_chest_act_msgs(&[(
+        4,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::SwapHotbar(0, 2),
+        },
+    )]);
+    // No inventory section beyond the chest: the hotbar gi is out
+    // of range, the swap no-ops, nothing is lost.
+    assert_eq!(v.chests.get(&pos).unwrap().slot(0), Some(ItemStack::new(1, 8)));
 }

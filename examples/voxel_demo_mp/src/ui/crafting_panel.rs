@@ -14,24 +14,27 @@
 //! components to both halves. Recipe matching stays id + count
 //! based.
 //!
-//! Mouse handling (W54.2, matches MC `AbstractContainerScreen`):
-//! - LMB on slot with no held stack -> take whole stack.
-//! - LMB on slot with held stack -> place / merge / swap.
-//! - RMB on slot with no held stack -> take half (rounded up).
-//! - RMB on slot with held stack -> place one (merge same item).
-//! - LMB drag across N slots while holding a stack -> distribute
-//!   the cursor stack as evenly as possible; remainder back on
-//!   cursor.
-//! - RMB drag across N slots while holding a stack -> place one
-//!   item per slot; remainder back on cursor.
+//! Mouse handling (W470: every rule is the SHARED ported doClick
+//! core in `container::click` - this file only tracks input):
+//! - LMB / RMB click -> `pickup_click` (take all / place all /
+//!   merge / swap; RMB takes the CEIL half / places one).
+//! - Shift+LMB -> `quick_move` with `CraftingMenu.quickMoveStack`
+//!   routing (grid -> player main-then-hotbar; player -> grid,
+//!   falling back to a hotbar<->main move).
+//! - LMB / RMB drag-paint -> visit tracking with MC add-slot
+//!   eligibility, applied ON RELEASE via `quick_craft_apply`
+//!   (floor split / one per slot, remainder to the cursor).
+//! - Double-click -> `pickup_all` collect across grid + inventory.
+//! - Number keys over a hovered slot -> `swap_click` with the
+//!   hotbar; Q / Ctrl+Q -> `throw_from_slot` (spawned by render).
+//! - Creative middle-click -> `clone_click`.
 //! - Held stack always painted as a floating sprite at the mouse
 //!   pointer so the player sees what's on the cursor.
 
 use crate::container;
+use crate::container::click::{self, SectionMut};
 use crate::item::ItemStack;
-use crate::item::stack::{
-    drop_into_first_free_stacks, merge_into_stacks, take_n_stacks,
-};
+use crate::item::stack::{drop_into_first_free_stacks, take_n_stacks};
 use crate::recipes::matcher;
 
 /// All inputs the 3x3 panel needs in one struct so render.rs
@@ -45,6 +48,11 @@ pub(crate) struct CraftingPanelInputs<'a> {
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
     pub(crate) open_local: &'a mut bool,
     pub(crate) take_output_out: &'a mut bool,
+    /// W470: creative flag for the CLONE arm.
+    pub(crate) creative: bool,
+    /// W470: stacks thrown by Q / Ctrl+Q this frame - render.rs
+    /// spawns them as drops with MC toss velocity.
+    pub(crate) thrown_out: &'a mut Vec<ItemStack>,
 }
 
 /// Section + slot index pair. Lets the drag tracker remember
@@ -84,6 +92,8 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
         icon_uv_resolver,
         open_local,
         take_output_out,
+        creative,
+        thrown_out,
     } = inputs;
 
     // Pointer state needed by the drag state machine. Pulled once
@@ -169,18 +179,20 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
                                 atlas_tex_id,
                                 icon_uv_resolver,
                             );
-                            track_slot(
-                                &mut drag,
-                                &mut clicks,
+                            track_slot(TrackCtx {
+                                drag: &mut drag,
+                                clicks: &mut clicks,
                                 resp,
-                                SlotRef::Grid(idx),
-                                held.is_some(),
+                                sref: SlotRef::Grid(idx),
+                                slot: grid[idx].as_ref(),
+                                held: held.as_ref(),
                                 lmb_pressed,
                                 lmb_down,
                                 rmb_pressed,
                                 rmb_down,
                                 shift_down,
-                            );
+                                ui,
+                            });
                         }
                     });
                 }
@@ -222,18 +234,20 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
                             atlas_tex_id,
                             icon_uv_resolver,
                         );
-                        track_slot(
-                            &mut drag,
-                            &mut clicks,
+                        track_slot(TrackCtx {
+                            drag: &mut drag,
+                            clicks: &mut clicks,
                             resp,
-                            SlotRef::Inv(idx),
-                            held.is_some(),
+                            sref: SlotRef::Inv(idx),
+                            slot: inv_view.get(idx).and_then(|s| s.as_ref()),
+                            held: held.as_ref(),
                             lmb_pressed,
                             lmb_down,
                             rmb_pressed,
                             rmb_down,
                             shift_down,
-                        );
+                            ui,
+                        });
                     }
                 });
             }
@@ -255,19 +269,26 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
     }
     ctx.memory_mut(|m| m.data.insert_temp(book_id, book_open));
 
-    // ---- Drag state machine: react to release. -----------------
+    // ---- Drag state machine: react to release (W470: MC
+    // QUICK_CRAFT phase 2 - apply-on-release via the shared
+    // `quick_craft_apply`; the old live-updating distribute fns
+    // are gone). A single-slot visit stays a plain click.
     let mut drag_committed = false;
     if lmb_released
         && drag.button == Some(DragButton::Left)
         && drag.slots.len() >= 2
     {
-        apply_drag_distribute(grid, inv_view, held, &drag.slots);
+        let gis: Vec<usize> = drag.slots.iter().map(|s| gi_of(*s)).collect();
+        let mut sections = sections_of(grid, inv_view);
+        click::quick_craft_apply(&mut sections, held, &gis, false);
         drag_committed = true;
     } else if rmb_released
         && drag.button == Some(DragButton::Right)
         && drag.slots.len() >= 2
     {
-        apply_drag_one_per_slot(grid, inv_view, held, &drag.slots);
+        let gis: Vec<usize> = drag.slots.iter().map(|s| gi_of(*s)).collect();
+        let mut sections = sections_of(grid, inv_view);
+        click::quick_craft_apply(&mut sections, held, &gis, true);
         drag_committed = true;
     }
     // Release of any button clears the drag tracker.
@@ -281,7 +302,11 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
     // on the slot the user pressed on.
     if !drag_committed {
         for (sref, kind) in clicks {
-            apply_click(grid, inv_view, held, sref, kind);
+            if let Some(st) =
+                apply_click(grid, inv_view, held, sref, kind, creative)
+            {
+                thrown_out.push(st);
+            }
         }
     }
     // Persist drag state for the next frame.
@@ -305,33 +330,68 @@ enum ClickKind {
     Lmb,
     Rmb,
     ShiftLmb,
+    /// W470: double-click collect (MC PICKUP_ALL).
+    Collect,
+    /// W470: number key over the hovered slot (hotbar index 0..8).
+    SwapHotbar(u8),
+    /// W470: Q / Ctrl+Q throw.
+    ThrowOne,
+    ThrowAll,
+    /// W470: creative middle-click clone.
+    CloneStack,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn track_slot(
-    drag: &mut DragState,
-    clicks: &mut Vec<(SlotRef, ClickKind)>,
+/// Per-slot tracking inputs (W470: struct per the 5+ args rule).
+struct TrackCtx<'a> {
+    drag: &'a mut DragState,
+    clicks: &'a mut Vec<(SlotRef, ClickKind)>,
     resp: egui::Response,
     sref: SlotRef,
-    has_held: bool,
+    slot: Option<&'a ItemStack>,
+    held: Option<&'a ItemStack>,
     lmb_pressed: bool,
     lmb_down: bool,
     rmb_pressed: bool,
     rmb_down: bool,
     shift_down: bool,
-) {
+    ui: &'a egui::Ui,
+}
+
+fn track_slot(t: TrackCtx<'_>) {
+    let TrackCtx {
+        drag,
+        clicks,
+        resp,
+        sref,
+        slot,
+        held,
+        lmb_pressed,
+        lmb_down,
+        rmb_pressed,
+        rmb_down,
+        shift_down,
+        ui,
+    } = t;
     // W54.4: use `contains_pointer()` not `hovered()`. egui's
     // `hovered()` returns false on widgets the cursor passes over
     // during an already-active drag started on a sibling widget;
     // `contains_pointer()` reports the raw geometric hit which is
     // what we want for "did the drag visit this slot".
     let pointer_over = resp.contains_pointer();
-    if has_held && pointer_over {
+    if let Some(cur) = held
+        && pointer_over
+    {
+        // W470: MC add-slot eligibility (source lines 354-358) -
+        // quick-replaceable + cursor holds more items than slots
+        // already visited (no accept filters on this screen).
+        let eligible =
+            click::can_add_drag_slot(slot, true, cur, drag.slots.len());
         if lmb_down && drag.button != Some(DragButton::Right) {
             if drag.button.is_none() && lmb_pressed {
                 drag.button = Some(DragButton::Left);
             }
             if drag.button == Some(DragButton::Left)
+                && eligible
                 && !drag.slots.contains(&sref)
             {
                 drag.slots.push(sref);
@@ -341,14 +401,55 @@ fn track_slot(
                 drag.button = Some(DragButton::Right);
             }
             if drag.button == Some(DragButton::Right)
+                && eligible
                 && !drag.slots.contains(&sref)
             {
                 drag.slots.push(sref);
             }
         }
     }
+    // W470: hovered-slot keyboard ops (suppressed while a text
+    // field owns the keyboard, e.g. the recipe-book search).
+    if resp.hovered() && !ui.ctx().wants_keyboard_input() {
+        ui.input(|i| {
+            const DIGITS: [egui::Key; 9] = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ];
+            for (n, key) in DIGITS.iter().enumerate() {
+                if i.key_pressed(*key) {
+                    clicks.push((sref, ClickKind::SwapHotbar(n as u8)));
+                    break;
+                }
+            }
+            if slot.is_some() && i.key_pressed(egui::Key::Q) {
+                clicks.push((
+                    sref,
+                    if i.modifiers.command {
+                        ClickKind::ThrowAll
+                    } else {
+                        ClickKind::ThrowOne
+                    },
+                ));
+            }
+        });
+    }
     // Standard click handling: fires on release inside the widget.
-    if resp.clicked() {
+    // Double-click first: on the second click of a double,
+    // `clicked()` is also true (MC: click #1 picked the stack up
+    // the previous frame, click #2 collects).
+    if resp.double_clicked() {
+        if held.is_some() {
+            clicks.push((sref, ClickKind::Collect));
+        }
+    } else if resp.clicked() {
         clicks.push((
             sref,
             if shift_down {
@@ -359,180 +460,101 @@ fn track_slot(
         ));
     } else if resp.secondary_clicked() {
         clicks.push((sref, ClickKind::Rmb));
+    } else if resp.middle_clicked() && slot.is_some() {
+        clicks.push((sref, ClickKind::CloneStack));
     }
 }
 
-/// Resolve a `SlotRef` to its backing slot.
-fn slot_mut<'a>(
+/// Global index of a `SlotRef` on the [3x3 grid, player inventory]
+/// screen.
+fn gi_of(sref: SlotRef) -> usize {
+    match sref {
+        SlotRef::Grid(i) => i,
+        SlotRef::Inv(i) => 9 + i,
+    }
+}
+
+/// The panel's screen as click-core sections. No accept filters -
+/// craft cells and inventory slots take anything.
+fn sections_of<'a>(
     grid: &'a mut [Option<ItemStack>; 9],
     inv: &'a mut [Option<ItemStack>],
-    sref: SlotRef,
-) -> Option<&'a mut Option<ItemStack>> {
-    match sref {
-        SlotRef::Grid(i) => grid.get_mut(i),
-        SlotRef::Inv(i) => inv.get_mut(i),
-    }
+) -> [SectionMut<'a>; 2] {
+    [SectionMut::open(&mut grid[..]), SectionMut::open(inv)]
 }
 
+/// Apply one click through the SHARED doClick core. Returns a
+/// thrown stack for the Q ops (render.rs spawns it).
 fn apply_click(
     grid: &mut [Option<ItemStack>; 9],
     inv: &mut [Option<ItemStack>],
     held: &mut Option<ItemStack>,
     sref: SlotRef,
     kind: ClickKind,
-) {
+    creative: bool,
+) -> Option<ItemStack> {
+    let inv_len = inv.len();
+    let gi = gi_of(sref);
+    let mut sections = sections_of(grid, inv);
     match kind {
         ClickKind::Lmb => {
-            if let Some(slot) = slot_mut(grid, inv, sref) {
-                cursor_lmb(slot, held);
-            }
+            click::pickup_click(&mut sections, held, gi, false);
         }
         ClickKind::Rmb => {
-            if let Some(slot) = slot_mut(grid, inv, sref) {
-                cursor_rmb(slot, held);
-            }
+            click::pickup_click(&mut sections, held, gi, true);
         }
-        ClickKind::ShiftLmb => match sref {
-            SlotRef::Grid(i) => shift_move(grid.get_mut(i), inv),
-            SlotRef::Inv(i) => {
-                // Split-borrow dance: pull the source slot out of
-                // the inv slice so the grid can be the target.
-                if let Some(slot) = inv.get_mut(i) {
-                    shift_move(Some(slot), &mut grid[..]);
+        ClickKind::ShiftLmb => {
+            // CraftingMenu.quickMoveStack routing: grid cells move
+            // to the player inventory main-first then hotbar
+            // (`moveItemStackTo(10, 46, false)`); player slots try
+            // the grid first (`moveItemStackTo(1, 10, false)`),
+            // then fall back to a hotbar<->main move.
+            match sref {
+                SlotRef::Grid(_) => {
+                    let order: Vec<usize> = (crate::inventory::HOTBAR_SLOTS
+                        ..inv_len)
+                        .chain(0..crate::inventory::HOTBAR_SLOTS)
+                        .map(|i| 9 + i)
+                        .collect();
+                    click::quick_move(&mut sections, gi, &order);
+                }
+                SlotRef::Inv(i) => {
+                    let grid_order: Vec<usize> = (0..9).collect();
+                    if !click::quick_move(&mut sections, gi, &grid_order) {
+                        let fallback: Vec<usize> =
+                            if i < crate::inventory::HOTBAR_SLOTS {
+                                (crate::inventory::HOTBAR_SLOTS..inv_len)
+                                    .map(|k| 9 + k)
+                                    .collect()
+                            } else {
+                                (0..crate::inventory::HOTBAR_SLOTS)
+                                    .map(|k| 9 + k)
+                                    .collect()
+                            };
+                        click::quick_move(&mut sections, gi, &fallback);
+                    }
                 }
             }
-        },
-    }
-}
-
-/// LMB with/without a cursor stack on one slot. The MC container
-/// click: take whole / place all (merge same-stackable up to the
-/// cap, SWAP on a foreign slot - different id OR different
-/// components).
-fn cursor_lmb(slot: &mut Option<ItemStack>, held: &mut Option<ItemStack>) {
-    match held.take() {
-        None => {
-            // Take the whole stack onto the cursor.
-            *held = slot.take();
         }
-        Some(cur) => {
-            let pre_mismatch = slot
-                .as_ref()
-                .is_some_and(|st| !st.same_stackable(&cur));
-            if pre_mismatch {
-                // Swap wholesale (components travel both ways).
-                let existing = slot.take();
-                *slot = Some(cur);
-                *held = existing;
-                return;
+        ClickKind::Collect => {
+            click::pickup_all(&mut sections, held, gi);
+        }
+        ClickKind::SwapHotbar(h) => {
+            if (h as usize) < crate::inventory::HOTBAR_SLOTS {
+                click::swap_click(&mut sections, gi, 9 + h as usize);
             }
-            let leftover = merge_into_stacks(slot, cur.clone());
-            *held = (leftover > 0).then(|| cur.with_count(leftover));
+        }
+        ClickKind::ThrowOne => {
+            return click::throw_from_slot(&mut sections, held, gi, false);
+        }
+        ClickKind::ThrowAll => {
+            return click::throw_from_slot(&mut sections, held, gi, true);
+        }
+        ClickKind::CloneStack => {
+            click::clone_click(&sections, held, gi, creative);
         }
     }
-}
-
-/// RMB with/without a cursor stack on one slot: take half (rounded
-/// up) / place exactly one (empty or same-stackable below cap).
-fn cursor_rmb(slot: &mut Option<ItemStack>, held: &mut Option<ItemStack>) {
-    match held.take() {
-        None => {
-            let Some(count) = slot.as_ref().map(|st| st.count) else {
-                return;
-            };
-            let half = count.div_ceil(2);
-            *held = take_n_stacks(slot, half);
-        }
-        Some(cur) => {
-            let one = cur.with_count(1);
-            let leftover = merge_into_stacks(slot, one);
-            let back = cur.count - 1 + leftover;
-            *held = (back > 0).then(|| cur.with_count(back));
-        }
-    }
-}
-
-/// Shift-click quick-move: the whole source stack into the other
-/// section (same-stackable top-ups first, then empties). Remainder
-/// stays in the source with its components.
-fn shift_move(
-    source: Option<&mut Option<ItemStack>>,
-    dest: &mut [Option<ItemStack>],
-) {
-    let Some(slot) = source else { return };
-    let Some(stack) = slot.take() else { return };
-    let leftover = drop_into_first_free_stacks(dest, stack.clone());
-    if leftover > 0 {
-        *slot = Some(stack.with_count(leftover));
-    }
-}
-
-// ---- drag actions -------------------------------------------
-
-/// LMB-drag: distribute the held stack across the visited slots
-/// as evenly as possible (rounded down per slot, remainder back
-/// on the cursor). MC convention: same-stackable slots get the
-/// share merged on top of their existing count; empty slots
-/// become a fresh stack (components cloned). Mismatched slots are
-/// skipped (their share goes back on the cursor).
-fn apply_drag_distribute(
-    grid: &mut [Option<ItemStack>; 9],
-    inv: &mut [Option<ItemStack>],
-    held: &mut Option<ItemStack>,
-    slots: &[SlotRef],
-) {
-    let Some(cur) = held.clone() else { return };
-    if slots.is_empty() {
-        return;
-    }
-    let per = cur.count / slots.len() as u8;
-    if per == 0 {
-        return;
-    }
-    let mut placed: u16 = 0;
-    for sref in slots {
-        let Some(slot) = slot_mut(grid, inv, *sref) else {
-            continue;
-        };
-        // Only empty or same-stackable slots receive a share; the
-        // merge helper enforces the cap + rejects foreign slots.
-        if slot.as_ref().is_some_and(|st| !st.same_stackable(&cur)) {
-            continue;
-        }
-        let leftover = merge_into_stacks(slot, cur.with_count(per));
-        placed += (per - leftover) as u16;
-    }
-    let leftover = (cur.count as u16).saturating_sub(placed) as u8;
-    *held = (leftover > 0).then(|| cur.with_count(leftover));
-}
-
-/// RMB-drag: place exactly one item per visited slot. Mismatched
-/// slots skipped; remainder back on the cursor.
-fn apply_drag_one_per_slot(
-    grid: &mut [Option<ItemStack>; 9],
-    inv: &mut [Option<ItemStack>],
-    held: &mut Option<ItemStack>,
-    slots: &[SlotRef],
-) {
-    let Some(cur) = held.clone() else { return };
-    if slots.is_empty() {
-        return;
-    }
-    let mut remaining = cur.count;
-    for sref in slots {
-        if remaining == 0 {
-            break;
-        }
-        let Some(slot) = slot_mut(grid, inv, *sref) else {
-            continue;
-        };
-        if slot.as_ref().is_some_and(|st| !st.same_stackable(&cur)) {
-            continue;
-        }
-        let leftover = merge_into_stacks(slot, cur.with_count(1));
-        remaining -= 1 - leftover;
-    }
-    *held = (remaining > 0).then(|| cur.with_count(remaining));
+    None
 }
 
 // ---- slot rendering ----------------------------------------

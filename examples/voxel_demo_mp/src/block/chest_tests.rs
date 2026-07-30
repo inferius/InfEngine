@@ -100,7 +100,9 @@ fn transfer_from_chest_moves_to_player_inv() {
     apply_chest_action(&mut chest, &mut inv, &mut held, GridAction::Transfer(2));
     assert_eq!(held, None);
     assert_slot(&chest, 2, None);
-    assert_eq!(inv[0], Some(ItemStack::new(1, 10)));
+    // W470 (ChestMenu.quickMoveStack, backwards): chest -> player
+    // fills the HOTBAR first, from its right end - slot 8.
+    assert_eq!(inv[8], Some(ItemStack::new(1, 10)));
 }
 
 #[test]
@@ -175,14 +177,18 @@ fn take_on_empty_slot_is_noop() {
 }
 
 #[test]
-fn place_with_no_held_stack_is_noop() {
+fn place_with_no_held_stack_acts_as_pickup() {
+    // W470: Take and Place are both the doClick PICKUP arm - the
+    // UI picks the label from its cursor state, but the core reads
+    // the cursor itself. An (unexpected) Place with an empty
+    // cursor therefore behaves as a pickup, never a loss.
     let mut chest = new_chest();
     chest.set_slot(0, Some(ItemStack::new(1, 4)));
     let mut held: Option<ItemStack> = None;
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     apply_chest_action(&mut chest, &mut inv, &mut held, GridAction::Place(0));
-    assert_eq!(held, None);
-    assert_slot(&chest, 0, Some(ItemStack::new(1, 4)));
+    assert_eq!(held, Some(ItemStack::new(1, 4)));
+    assert_slot(&chest, 0, None);
 }
 
 #[test]
@@ -295,7 +301,9 @@ fn transfer_to_player_inv_keeps_damage() {
     apply_chest_action(&mut chest, &mut inv, &mut held, GridAction::Transfer(2));
     assert_slot(&chest, 2, None);
     assert_eq!(inv[0], Some(ItemStack::new(48, 1)));
-    assert_eq!(inv[1], Some(worn(48, 1, 33)));
+    // W470: no count-merge into the fresh tool; the worn one lands
+    // in the first free slot of the MC backwards order - hotbar 8.
+    assert_eq!(inv[8], Some(worn(48, 1, 33)));
 }
 
 #[test]

@@ -155,6 +155,10 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut furnace_opens_outer: Vec<(u32, net::FurnaceOpenMsg)> = Vec::new();
         let mut furnace_acts_outer: Vec<(u32, net::FurnaceActMsg)> = Vec::new();
         let mut furnace_closes_outer: Vec<(u32, net::FurnaceCloseMsg)> = Vec::new();
+        // W470: drag-paint completions + inventory-screen ops.
+        let mut chest_drags_outer: Vec<(u32, net::ContainerDragMsg)> = Vec::new();
+        let mut furnace_drags_outer: Vec<(u32, net::ContainerDragMsg)> = Vec::new();
+        let mut inv_ops_outer: Vec<(u32, net::InvOpMsg)> = Vec::new();
         // W468: container-cursor stacks of disconnected viewers
         // that didn't fit back into their inventory. Spawned as
         // floor drops after the `&mut vx.net` borrow releases.
@@ -216,6 +220,9 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         furnace_opens: &mut furnace_opens_outer,
                         furnace_acts: &mut furnace_acts_outer,
                         furnace_closes: &mut furnace_closes_outer,
+                        chest_drags: &mut chest_drags_outer,
+                        furnace_drags: &mut furnace_drags_outer,
+                        inv_ops: &mut inv_ops_outer,
                     };
                     net::process_server_inbox(
                         server,
@@ -1102,6 +1109,10 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         vx.apply_furnace_open_msgs(&furnace_opens_outer);
         vx.apply_furnace_act_msgs(&furnace_acts_outer);
         vx.apply_furnace_close_msgs(&furnace_closes_outer);
+        // W470: drag-paint completions + inventory-screen ops.
+        vx.apply_chest_drag_msgs(&chest_drags_outer);
+        vx.apply_furnace_drag_msgs(&furnace_drags_outer);
+        vx.apply_inv_op_msgs(&inv_ops_outer);
         // W5.3a/b: client-side - apply incoming state snapshots
         // from the host. Each snapshot overwrites the local
         // chest/furnace contents so the open UI mirrors the

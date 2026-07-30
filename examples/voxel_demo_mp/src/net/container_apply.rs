@@ -61,10 +61,34 @@ pub(crate) fn apply_chest_open_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::
         }
     }
 
+/// W470: the sender's eye position + engine look vector, for
+/// spawning thrown stacks at the right spot with MC toss velocity.
+/// Falls back to the host pose when the id has no tracked pose
+/// (offline test harness).
+fn client_eye_and_look(vx: &crate::Voxel, client_id: u32) -> ([f32; 3], [f32; 3]) {
+    if let NetRole::Server { poses, .. } = &vx.net
+        && let Some(p) = poses.get(&client_id)
+    {
+        let look = [
+            p.yaw.cos() * p.pitch.cos(),
+            p.pitch.sin(),
+            -p.yaw.sin() * p.pitch.cos(),
+        ];
+        return (p.pos, look);
+    }
+    (
+        [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z],
+        [1.0, 0.0, 0.0],
+    )
+}
+
     /// W5.3a: handle a batch of `vx.chest_act` requests. Validates
     /// the sender is the registered viewer; mutates the live chest,
     /// the sender's inventory and the sender's authoritative
     /// cursor; re-broadcasts the new state (cursor included).
+    /// W470: routes through the shared click core (all doClick
+    /// ops); thrown stacks spawn at the sender's pose with MC toss
+    /// velocity.
 pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ChestActMsg)]) {
         for (client_id, m) in msgs {
             // Validate the viewer; ignore stray acts from clients
@@ -75,41 +99,110 @@ pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::n
             let Some(chest) = vx.chests.get_mut(&m.pos) else {
                 continue;
             };
-            let action = m.action.to_grid_action();
             // W468: the viewer's cursor persists across acts in
             // `container_cursors` and rides back on the state
             // snapshot below - a Take no longer drops the stack
             // into a discarded temporary.
             let cursor = vx.container_cursors.entry(*client_id).or_default();
-            let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+            let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
+            match m.action {
+                // W470: click-outside cursor throws (MC slotId
+                // -999) act on the cursor alone.
+                crate::net::ChestAct::ThrowCursorAll => {
+                    thrown.extend(crate::container::click::throw_from_cursor(
+                        cursor, true,
+                    ));
+                }
+                crate::net::ChestAct::ThrowCursorOne => {
+                    thrown.extend(crate::container::click::throw_from_cursor(
+                        cursor, false,
+                    ));
+                }
+                _ => {
+                    let Some(action) = m.action.to_grid_action() else {
+                        continue;
+                    };
+                    let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+                    if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
+                        && let Some(inv) = inventories.get_mut(client_id)
+                    {
+                        // ClientInv is stack-native (W468): the apply
+                        // helpers mutate it directly, components intact.
+                        thrown = if m.player_side {
+                            block::chest::apply_player_action(
+                                &mut inv.inventory,
+                                chest,
+                                cursor,
+                                action,
+                            )
+                        } else {
+                            block::chest::apply_chest_action(
+                                chest,
+                                &mut inv.inventory,
+                                cursor,
+                                action,
+                            )
+                        };
+                        pending_inv_sends.insert(*client_id);
+                    } else if !m.player_side {
+                        // No per-client inventory (offline test harness):
+                        // chest-side acts still run against the cursor;
+                        // Transfer has no partner and no-ops.
+                        thrown = block::chest::apply_chest_action(
+                            chest, &mut no_inv, cursor, action,
+                        );
+                    }
+                }
+            }
+            // Pos is needed beyond the borrow scope above.
+            let pos = m.pos;
+            let cid = *client_id;
+            vx.broadcast_chest_state(pos);
+            let (eye, look) = client_eye_and_look(vx, cid);
+            for st in thrown {
+                crate::drops::spawn_thrown_stack(vx, st, eye, look);
+            }
+        }
+    }
+
+    /// W470: apply a batch of `vx.chest_drag` requests (completed
+    /// drag-paints) through the shared click core against the
+    /// per-viewer cursor.
+pub(crate) fn apply_chest_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ContainerDragMsg)]) {
+        for (client_id, m) in msgs {
+            if vx.chest_viewers.get(&m.pos).copied() != Some(*client_id) {
+                continue;
+            }
+            let Some(chest) = vx.chests.get_mut(&m.pos) else {
+                continue;
+            };
+            let cursor = vx.container_cursors.entry(*client_id).or_default();
+            let visited: Vec<(bool, usize)> = m
+                .slots
+                .iter()
+                .map(|&(side, i)| (side, i as usize))
+                .collect();
             if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
                 && let Some(inv) = inventories.get_mut(client_id)
             {
-                // ClientInv is stack-native (W468): the apply
-                // helpers mutate it directly, components intact.
-                if m.player_side {
-                    block::chest::apply_player_action(
-                        &mut inv.inventory,
-                        chest,
-                        cursor,
-                        action,
-                    );
-                } else {
-                    block::chest::apply_chest_action(
-                        chest,
-                        &mut inv.inventory,
-                        cursor,
-                        action,
-                    );
-                }
+                crate::container::screen::apply_grid_drag(
+                    chest,
+                    &mut inv.inventory,
+                    cursor,
+                    &visited,
+                    m.one_per_slot,
+                );
                 pending_inv_sends.insert(*client_id);
-            } else if !m.player_side {
-                // No per-client inventory (offline test harness):
-                // chest-side acts still run against the cursor;
-                // Transfer has no partner and no-ops.
-                block::chest::apply_chest_action(chest, &mut no_inv, cursor, action);
+            } else {
+                let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+                crate::container::screen::apply_grid_drag(
+                    chest,
+                    &mut no_inv,
+                    cursor,
+                    &visited,
+                    m.one_per_slot,
+                );
             }
-            // Pos is needed beyond the borrow scope above.
             let pos = m.pos;
             vx.broadcast_chest_state(pos);
         }
@@ -143,6 +236,7 @@ pub(crate) fn apply_furnace_open_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate
     }
 
     /// W5.3b: mirror of `apply_chest_act_msgs` for furnaces.
+    /// W470: same shared-click-core routing + throw spawning.
 pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::FurnaceActMsg)]) {
         for (client_id, m) in msgs {
             if vx.furnace_viewers.get(&m.pos).copied() != Some(*client_id) {
@@ -151,39 +245,192 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
             let Some(furnace) = vx.furnaces.get_mut(&m.pos) else {
                 continue;
             };
-            let action = m.action.to_grid_action();
             // W468: same per-viewer cursor as the chest apply.
             let cursor = vx.container_cursors.entry(*client_id).or_default();
-            let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+            let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
+            match m.action {
+                crate::net::ChestAct::ThrowCursorAll => {
+                    thrown.extend(crate::container::click::throw_from_cursor(
+                        cursor, true,
+                    ));
+                }
+                crate::net::ChestAct::ThrowCursorOne => {
+                    thrown.extend(crate::container::click::throw_from_cursor(
+                        cursor, false,
+                    ));
+                }
+                _ => {
+                    let Some(action) = m.action.to_grid_action() else {
+                        continue;
+                    };
+                    let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+                    if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
+                        && let Some(inv) = inventories.get_mut(client_id)
+                    {
+                        thrown = if m.player_side {
+                            block::furnace::apply_player_action(
+                                &mut inv.inventory,
+                                furnace,
+                                cursor,
+                                action,
+                            )
+                        } else {
+                            block::furnace::apply_furnace_action(
+                                furnace,
+                                &mut inv.inventory,
+                                cursor,
+                                action,
+                            )
+                        };
+                        pending_inv_sends.insert(*client_id);
+                    } else if !m.player_side {
+                        thrown = block::furnace::apply_furnace_action(
+                            furnace,
+                            &mut no_inv,
+                            cursor,
+                            action,
+                        );
+                    }
+                }
+            }
+            let pos = m.pos;
+            let cid = *client_id;
+            vx.broadcast_furnace_state(pos);
+            let (eye, look) = client_eye_and_look(vx, cid);
+            for st in thrown {
+                crate::drops::spawn_thrown_stack(vx, st, eye, look);
+            }
+        }
+    }
+
+    /// W470: `vx.furnace_drag` applier - mirror of
+    /// `apply_chest_drag_msgs`.
+pub(crate) fn apply_furnace_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ContainerDragMsg)]) {
+        for (client_id, m) in msgs {
+            if vx.furnace_viewers.get(&m.pos).copied() != Some(*client_id) {
+                continue;
+            }
+            let Some(furnace) = vx.furnaces.get_mut(&m.pos) else {
+                continue;
+            };
+            let cursor = vx.container_cursors.entry(*client_id).or_default();
+            let visited: Vec<(bool, usize)> = m
+                .slots
+                .iter()
+                .map(|&(side, i)| (side, i as usize))
+                .collect();
             if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
                 && let Some(inv) = inventories.get_mut(client_id)
             {
-                if m.player_side {
-                    block::furnace::apply_player_action(
-                        &mut inv.inventory,
-                        furnace,
-                        cursor,
-                        action,
-                    );
-                } else {
-                    block::furnace::apply_furnace_action(
-                        furnace,
-                        &mut inv.inventory,
-                        cursor,
-                        action,
-                    );
-                }
+                crate::container::screen::apply_grid_drag(
+                    furnace,
+                    &mut inv.inventory,
+                    cursor,
+                    &visited,
+                    m.one_per_slot,
+                );
                 pending_inv_sends.insert(*client_id);
-            } else if !m.player_side {
-                block::furnace::apply_furnace_action(
+            } else {
+                let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
+                crate::container::screen::apply_grid_drag(
                     furnace,
                     &mut no_inv,
                     cursor,
-                    action,
+                    &visited,
+                    m.one_per_slot,
                 );
             }
             let pos = m.pos;
             vx.broadcast_furnace_state(pos);
+        }
+    }
+
+    /// W470: `vx.inv_op` applier - inventory-screen swap / throw /
+    /// quick-move + the no-panel selected-slot throw, against the
+    /// sender's authoritative `ClientInv` via the shared click
+    /// core. Throws spawn at the sender's pose; a fresh inventory
+    /// snapshot is queued after every op.
+pub(crate) fn apply_inv_op_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::InvOpMsg)]) {
+        use crate::container::click::{self, SectionMut};
+        use crate::net::{InvOpMsg, NetSlot};
+        for (client_id, m) in msgs {
+            let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
+            if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net {
+                let Some(inv) = inventories.get_mut(client_id) else {
+                    continue;
+                };
+                // Screen layout: [inventory 36, craft grid 4]. The
+                // craft OUTPUT is virtual and not addressable.
+                let inv_len = inv.inventory.len();
+                let gi_of = |slot: NetSlot| -> Option<usize> {
+                    match slot {
+                        NetSlot::Inv(i) => {
+                            ((i as usize) < inv_len).then_some(i as usize)
+                        }
+                        NetSlot::Craft(i) => Some(inv_len + i as usize),
+                        NetSlot::CraftOut => None,
+                    }
+                };
+                let mut sections = [
+                    SectionMut::open(&mut inv.inventory),
+                    SectionMut::open(&mut inv.craft_grid),
+                ];
+                let none_cursor: Option<crate::item::ItemStack> = None;
+                match *m {
+                    InvOpMsg::Swap { slot, hotbar } => {
+                        if let Some(gi) = gi_of(slot)
+                            && (hotbar as usize) < crate::inventory::HOTBAR_SLOTS
+                        {
+                            click::swap_click(
+                                &mut sections,
+                                gi,
+                                hotbar as usize,
+                            );
+                        }
+                    }
+                    InvOpMsg::Throw { slot, all } => {
+                        if let Some(gi) = gi_of(slot)
+                            && let Some(st) = click::throw_from_slot(
+                                &mut sections,
+                                &none_cursor,
+                                gi,
+                                all,
+                            )
+                        {
+                            thrown.push(st);
+                        }
+                    }
+                    InvOpMsg::ThrowSelected { slot, all } => {
+                        let gi = slot as usize;
+                        if gi < crate::inventory::HOTBAR_SLOTS
+                            && let Some(st) = click::throw_from_slot(
+                                &mut sections,
+                                &none_cursor,
+                                gi,
+                                all,
+                            )
+                        {
+                            thrown.push(st);
+                        }
+                    }
+                    InvOpMsg::QuickMove { slot } => {
+                        if let Some(gi) = gi_of(slot) {
+                            let order =
+                                crate::inventory::inv_screen_quick_move_order(
+                                    slot.into(),
+                                    inv_len,
+                                );
+                            click::quick_move(&mut sections, gi, &order);
+                        }
+                    }
+                }
+                pending_inv_sends.insert(*client_id);
+            }
+            let cid = *client_id;
+            let (eye, look) = client_eye_and_look(vx, cid);
+            for st in thrown {
+                crate::drops::spawn_thrown_stack(vx, st, eye, look);
+            }
         }
     }
 

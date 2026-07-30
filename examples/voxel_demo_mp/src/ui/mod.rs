@@ -124,6 +124,17 @@ pub(crate) enum InvAction {
         to: SlotKind,
         split: SplitMode,
     },
+    /// W470: number key 1-9 over a hovered slot - swap it with
+    /// the matching hotbar slot (MC SWAP, ported click core).
+    SwapWith { slot: SlotKind, hotbar: usize },
+    /// W470: Q / Ctrl+Q over a hovered slot - throw one / all
+    /// (MC THROW). The thrown stack spawns as a floor drop with
+    /// MC toss velocity + the 40-tick pickup delay.
+    Throw { slot: SlotKind, all: bool },
+    /// W470: Shift+LMB quick-move on the inventory screen
+    /// (`InventoryMenu.quickMoveStack` routing: main <-> hotbar,
+    /// craft cells -> main-then-hotbar).
+    QuickMove { slot: SlotKind },
 }
 
 /// Phase the loading screen is currently in. Drives both the

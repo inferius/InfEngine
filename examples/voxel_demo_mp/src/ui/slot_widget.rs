@@ -99,6 +99,51 @@ pub(crate) fn slot_with_dnd_dur(
     resp
 }
 
+/// W470: keyboard ops on a hovered inventory-screen slot - number
+/// keys 1-9 queue a hotbar swap, Q / Ctrl+Q queue a throw (one /
+/// whole stack). Shared by the storage rows, the hotbar mirror and
+/// the 2x2 craft cells so the detection can't drift. Suppressed
+/// while a text field owns the keyboard.
+pub(crate) fn hover_key_ops(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    kind: SlotKind,
+    has_item: bool,
+    actions: &mut Vec<InvAction>,
+) {
+    if !resp.hovered() || ui.ctx().wants_keyboard_input() {
+        return;
+    }
+    ui.input(|i| {
+        const DIGITS: [egui::Key; 9] = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ];
+        for (n, key) in DIGITS.iter().enumerate() {
+            if i.key_pressed(*key) {
+                actions.push(InvAction::SwapWith {
+                    slot: kind,
+                    hotbar: n,
+                });
+                break;
+            }
+        }
+        if has_item && i.key_pressed(egui::Key::Q) {
+            actions.push(InvAction::Throw {
+                slot: kind,
+                all: i.modifiers.command,
+            });
+        }
+    });
+}
+
 /// Draw one inventory cell. Returns the response so the caller
 /// can wire click handlers / drag detection / tooltips on top.
 ///

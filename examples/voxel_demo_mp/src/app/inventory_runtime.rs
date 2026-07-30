@@ -211,6 +211,91 @@ impl Voxel {
                     self.slot_write(from, new_from);
                 }
             }
+            // W470: the ported doClick ops on the inventory screen
+            // (host / offline apply; clients send `vx.inv_op` and
+            // reconcile from the authoritative snapshot). All three
+            // route through the SHARED click core over the
+            // [inventory 36, craft grid 4] screen.
+            InvAction::SwapWith { slot, hotbar } => {
+                if hotbar >= HOTBAR_SLOTS {
+                    return;
+                }
+                let Some(gi) = self.inv_screen_gi(slot) else {
+                    return;
+                };
+                let mut sections = self.inv_screen_sections();
+                crate::container::click::swap_click(&mut sections, gi, hotbar);
+            }
+            InvAction::Throw { slot, all } => {
+                let Some(gi) = self.inv_screen_gi(slot) else {
+                    return;
+                };
+                let thrown = {
+                    let mut sections = self.inv_screen_sections();
+                    let none_cursor = None;
+                    crate::container::click::throw_from_slot(
+                        &mut sections,
+                        &none_cursor,
+                        gi,
+                        all,
+                    )
+                };
+                if let Some(st) = thrown {
+                    self.throw_stack_from_player(st);
+                }
+            }
+            InvAction::QuickMove { slot } => {
+                let Some(gi) = self.inv_screen_gi(slot) else {
+                    return;
+                };
+                let order = crate::inventory::inv_screen_quick_move_order(
+                    slot,
+                    self.inventory.len(),
+                );
+                let mut sections = self.inv_screen_sections();
+                crate::container::click::quick_move(&mut sections, gi, &order);
+            }
         }
+    }
+
+    /// W470: global index of a `SlotKind` on the [inventory, craft
+    /// grid] screen; the virtual craft OUTPUT is not addressable.
+    fn inv_screen_gi(&self, slot: SlotKind) -> Option<usize> {
+        let inv_len = self.inventory.len();
+        match slot {
+            SlotKind::Inv(i) if i < inv_len => Some(i),
+            SlotKind::Craft(i) if i < self.craft_grid.len() => {
+                Some(inv_len + i)
+            }
+            _ => None,
+        }
+    }
+
+    /// W470: the inventory screen as click-core sections
+    /// (split-borrows the two slot arrays).
+    fn inv_screen_sections(
+        &mut self,
+    ) -> [crate::container::click::SectionMut<'_>; 2] {
+        [
+            crate::container::click::SectionMut::open(&mut self.inventory[..]),
+            crate::container::click::SectionMut::open(
+                &mut self.craft_grid[..],
+            ),
+        ]
+    }
+
+    /// W470: spawn a stack the player just threw (Q / Ctrl+Q) at
+    /// the hand with MC toss velocity along the current look.
+    pub(crate) fn throw_stack_from_player(
+        &mut self,
+        stack: crate::item::ItemStack,
+    ) {
+        let eye = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+        let look = [
+            self.player_yaw.cos() * self.player_pitch.cos(),
+            self.player_pitch.sin(),
+            -self.player_yaw.sin() * self.player_pitch.cos(),
+        ];
+        crate::drops::spawn_thrown_stack(self, stack, eye, look);
     }
 }

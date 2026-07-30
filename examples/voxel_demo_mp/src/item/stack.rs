@@ -171,12 +171,13 @@ pub(crate) fn merge_into_stacks(
     }
 }
 
-/// Split a slot's stack in half. Returns the moved-out half (the
-/// smaller half on odd counts - leaves the larger half in the
-/// source slot so a misclick doesn't punish the player). Both
-/// halves keep the stack's components (cloned). Leaves the slot
-/// with the remainder, or `None` if the original count was 1 (in
-/// which case the lone item is moved and the slot clears).
+/// Split a slot's stack in half. Returns the moved-out half - the
+/// LARGER half on odd counts, matching MC's RMB pickup
+/// (`AbstractContainerMenu.doClick`: `(count + 1) / 2`, the cursor
+/// takes the ceil; W470 fixed the pre-doClick floor contract).
+/// Both halves keep the stack's components (cloned). Leaves the
+/// slot with the remainder, or `None` when the whole count moved
+/// (count 1 -> the lone item moves and the slot clears).
 pub(crate) fn split_half_stacks(
     slot: &mut Option<ItemStack>,
 ) -> Option<ItemStack> {
@@ -185,11 +186,8 @@ pub(crate) fn split_half_stacks(
         *slot = None;
         return None;
     }
-    // floor(count / 2) moved out; ceil stays. count==1 -> moved=0
-    // is a degenerate "no split possible" - treat as moving the
-    // lone item so the slot clears (matches the "singleton clears"
-    // test contract).
-    let moved = if st.count == 1 { 1 } else { st.count / 2 };
+    // ceil(count / 2) moved out; floor stays (MC rounding).
+    let moved = st.count.div_ceil(2);
     let remaining = st.count - moved;
     if remaining == 0 {
         *slot = None;
@@ -396,9 +394,10 @@ mod tests {
     fn split_half_stacks_clones_components_to_both_halves() {
         let mut slot = Some(worn(9, 7, 12));
         let moved = split_half_stacks(&mut slot);
-        // floor(7/2) = 3 moved; 4 stays. Both worn by 12.
-        assert_eq!(moved, Some(worn(9, 3, 12)));
-        assert_eq!(slot, Some(worn(9, 4, 12)));
+        // W470 (MC doClick): ceil(7/2) = 4 moved; 3 stays. Both
+        // worn by 12.
+        assert_eq!(moved, Some(worn(9, 4, 12)));
+        assert_eq!(slot, Some(worn(9, 3, 12)));
         // Empty slot -> None.
         let mut empty: Option<ItemStack> = None;
         assert!(split_half_stacks(&mut empty).is_none());

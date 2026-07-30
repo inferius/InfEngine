@@ -270,23 +270,9 @@ use inventory::{
 };
 use tracing::{info, warn};
 
-/// Remap a 1-slot GridAction (always carries idx 0) to a different
-/// slot index. Used by the furnace UI which renders each of its 3
-/// slots as a single-slot grid so the layout can intersperse the
-/// flame + cook bars between them.
-fn remap_action(
-    action: container::ui::GridAction,
-    new_idx: usize,
-) -> container::ui::GridAction {
-    use container::ui::GridAction as G;
-    match action {
-        G::Take(_) => G::Take(new_idx),
-        G::TakeHalf(_) => G::TakeHalf(new_idx),
-        G::Place(_) => G::Place(new_idx),
-        G::PlaceOne(_) => G::PlaceOne(new_idx),
-        G::Transfer(_) => G::Transfer(new_idx),
-    }
-}
+// W470: the old `remap_action` single-slot GridAction remapper is
+// gone - `container::ui::GridInteract::base_index` does the same
+// job inside the widget.
 
 // `MiningState` + `block_hardness` moved to `mining.rs`.
 

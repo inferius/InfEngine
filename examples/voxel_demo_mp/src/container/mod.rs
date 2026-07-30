@@ -14,6 +14,8 @@
 //! insertion across N slots, swap with accept-filter validation,
 //! and cross-container transfer.
 
+pub(crate) mod click;
+pub(crate) mod screen;
 pub(crate) mod ui;
 
 #[cfg(test)]
@@ -99,6 +101,16 @@ impl Container {
         self.slots.len()
     }
 
+    /// W470: split borrow for the click core - the mutable slot
+    /// slice plus the (read-only) accept table, so a
+    /// `click::SectionMut` can wrap a live container without
+    /// cloning either side.
+    pub(crate) fn slots_and_accept_mut(
+        &mut self,
+    ) -> (&mut [Slot], &[Option<AcceptFn>]) {
+        (&mut self.slots, &self.accept)
+    }
+
     /// True when every slot is empty (NOT the same as `len()==0`).
     pub(crate) fn is_empty(&self) -> bool {
         self.slots.iter().all(|s| s.is_none())
@@ -114,6 +126,12 @@ impl Container {
             self.accept.resize(i + 1, None);
         }
         self.accept[i] = Some(pred);
+    }
+
+    /// W470: the raw accept predicate of slot `i` (if any) - lets
+    /// single-slot UI views clone the live slot's filter.
+    pub(crate) fn accept_fn(&self, i: usize) -> Option<AcceptFn> {
+        self.accept.get(i).copied().flatten()
     }
 
     /// Does slot `i` accept `item_id`? Indices without a filter

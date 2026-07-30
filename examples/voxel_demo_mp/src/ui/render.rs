@@ -804,6 +804,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
         let mut chest_held_local = chest_held_snapshot;
+        // W470: drag-paint commits per panel: (visit list, RMB?).
+        // Filled inside the egui closure on button release, applied
+        // post-egui through the shared click core.
+        let mut chest_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
+        let mut chest_partner_drag_commit: Option<(Vec<(bool, usize)>, bool)> =
+            None;
+        let mut furnace_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
+        let mut brewing_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
+        // W470: click outside every egui area while a panel cursor
+        // holds a stack -> MC slotId -999 throw. Some(true) = LMB
+        // (whole stack), Some(false) = RMB (one item).
+        let mut panel_outside_throw: Option<bool> = None;
+        // W470: stacks thrown by panel ops this frame (Q / Ctrl+Q /
+        // click-outside), spawned as drops post-egui.
+        let mut thrown_stacks: Vec<crate::item::ItemStack> = Vec::new();
         let mut action_resume = false;
         // Set by the recipe-book output slot click handler; drained
         // after the egui closure exits so the craft-grid mutation
@@ -1788,7 +1803,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             .get(snap_idx)
                                             .copied()
                                             .unwrap_or(None);
-                                        crate::ui::slot_widget::slot_with_dnd_dur(
+                                        let resp = crate::ui::slot_widget::slot_with_dnd_dur(
                                             ui,
                                             slot,
                                             atlas_tex_id,
@@ -1798,6 +1813,29 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             &mut inv_actions,
                                             durability_for_slot(inv_idx),
                                         );
+                                        // W470: hover swap / throw
+                                        // keys + shift quick-move.
+                                        crate::ui::slot_widget::hover_key_ops(
+                                            ui,
+                                            &resp,
+                                            SlotKind::Inv(inv_idx),
+                                            slot.is_some(),
+                                            &mut inv_actions,
+                                        );
+                                        let shift =
+                                            ui.input(|i| i.modifiers.shift);
+                                        if resp.clicked()
+                                            && shift
+                                            && slot.is_some()
+                                        {
+                                            inv_actions.push(
+                                                InvAction::QuickMove {
+                                                    slot: SlotKind::Inv(
+                                                        inv_idx,
+                                                    ),
+                                                },
+                                            );
+                                        }
                                     }
                                 });
                             }
@@ -1818,8 +1856,31 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         &mut inv_actions,
                                         durability_for_slot(i),
                                     );
+                                    // W470: hover swap / throw keys
+                                    // + shift quick-move (hotbar ->
+                                    // main rows). Shift-click must
+                                    // NOT also change the selection.
+                                    crate::ui::slot_widget::hover_key_ops(
+                                        ui,
+                                        &resp,
+                                        SlotKind::Inv(i),
+                                        slot.is_some(),
+                                        &mut inv_actions,
+                                    );
+                                    let shift =
+                                        ui.input(|inp| inp.modifiers.shift);
                                     if resp.clicked() {
-                                        inv_actions.push(InvAction::SelectHotbar(i));
+                                        if shift && slot.is_some() {
+                                            inv_actions.push(
+                                                InvAction::QuickMove {
+                                                    slot: SlotKind::Inv(i),
+                                                },
+                                            );
+                                        } else {
+                                            inv_actions.push(
+                                                InvAction::SelectHotbar(i),
+                                            );
+                                        }
                                     }
                                 }
                             });
@@ -1831,7 +1892,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         ui.horizontal(|ui| {
                                             for col in 0..2 {
                                                 let idx = row * 2 + col;
-                                                crate::ui::slot_widget::slot_with_dnd(
+                                                let resp = crate::ui::slot_widget::slot_with_dnd(
                                                     ui,
                                                     craft_snapshot[idx],
                                                     atlas_tex_id,
@@ -1840,6 +1901,30 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                     true,
                                                     &mut inv_actions,
                                                 );
+                                                // W470: hover keys +
+                                                // shift quick-move
+                                                // back to the inv.
+                                                crate::ui::slot_widget::hover_key_ops(
+                                                    ui,
+                                                    &resp,
+                                                    SlotKind::Craft(idx),
+                                                    craft_snapshot[idx].is_some(),
+                                                    &mut inv_actions,
+                                                );
+                                                let shift = ui.input(
+                                                    |i| i.modifiers.shift,
+                                                );
+                                                if resp.clicked()
+                                                    && shift
+                                                    && craft_snapshot[idx]
+                                                        .is_some()
+                                                {
+                                                    inv_actions.push(
+                                                        InvAction::QuickMove {
+                                                            slot: SlotKind::Craft(idx),
+                                                        },
+                                                    );
+                                                }
                                             }
                                         });
                                     }
@@ -2193,6 +2278,32 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     }
                 }
 
+                // W470: panel-wide drag-paint trackers, persisted
+                // in egui temp memory. One per screen (the partner
+                // chest is its own 27+36 screen - a drag cannot
+                // cross the double-chest halves).
+                let drag_keys = [
+                    egui::Id::new("chest_panel_drag"),
+                    egui::Id::new("chest_partner_panel_drag"),
+                    egui::Id::new("furnace_panel_drag"),
+                    egui::Id::new("brewing_panel_drag"),
+                ];
+                let panel_drags: [container::ui::PanelDrag; 4] =
+                    std::array::from_fn(|i| {
+                        ctx.memory(|m| {
+                            m.data.get_temp::<container::ui::PanelDrag>(
+                                drag_keys[i],
+                            )
+                        })
+                        .unwrap_or_default()
+                    });
+                let [
+                    mut chest_drag,
+                    mut chest_partner_drag,
+                    mut furnace_drag,
+                    mut brewing_drag,
+                ] = panel_drags;
+
                 // Chest UI panel. Shows a 27-slot chest grid on
                 // top + the player's 36-slot inventory below.
                 // Click semantics live in `container::ui::draw_grid`:
@@ -2201,7 +2312,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 // held stack is rendered as a small floating
                 // indicator near the cursor; the actual mutation
                 // happens after the egui closure exits so the
-                // borrow checker is happy.
+                // borrow checker is happy. W470: the widget also
+                // emits double-click collect, number-key swap,
+                // Q / Ctrl+Q throws, creative middle-click clone
+                // and records drag-paint visits.
                 if let Some(chest) = &chest_snapshot {
                     let screen = ctx.content_rect();
                     egui::Window::new("Chest")
@@ -2236,6 +2350,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     title: None,
                                     id_salt: "chest_partner",
                                 };
+                                let mut interact = container::ui::GridInteract {
+                                    drag: &mut chest_partner_drag,
+                                    player_side: false,
+                                    base_index: 0,
+                                };
                                 let actions = container::ui::draw_grid_with_uv(
                                     ui,
                                     &partner_cfg,
@@ -2243,6 +2362,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     chest_held_local.as_ref(),
                                     atlas_tex_id,
                                     &icon_uv_resolver,
+                                    &mut interact,
                                 );
                                 for a in actions {
                                     chest_partner_actions.push(a);
@@ -2258,6 +2378,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 title: None,
                                 id_salt: "chest_main",
                             };
+                            let mut interact = container::ui::GridInteract {
+                                drag: &mut chest_drag,
+                                player_side: false,
+                                base_index: 0,
+                            };
                             let actions = container::ui::draw_grid_with_uv(
                                 ui,
                                 &chest_cfg,
@@ -2265,6 +2390,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 chest_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
+                                &mut interact,
                             );
                             for a in actions {
                                 chest_grid_actions.push((false, a));
@@ -2294,6 +2420,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 title: None,
                                 id_salt: "chest_player_inv",
                             };
+                            let mut interact = container::ui::GridInteract {
+                                drag: &mut chest_drag,
+                                player_side: true,
+                                base_index: 0,
+                            };
                             let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,
                                 &inv_cfg,
@@ -2301,6 +2432,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 chest_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
+                                &mut interact,
                             );
                             for a in inv_actions_g {
                                 chest_grid_actions.push((true, a));
@@ -2346,15 +2478,25 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     cols: 1, rows: 1, tile_px: 36.0, title: None,
                                     id_salt: "furnace_input",
                                 };
+                                // W470: single-slot views clone the
+                                // real slot's accept filter +
+                                // base_index remaps widget slot 0
+                                // to the real furnace slot.
                                 let mut single = container::Container::with_size(1);
                                 single.set_slot(0, furnace.slot(0));
+                                if let Some(pred) = furnace.accept_fn(0) {
+                                    single.set_accept(0, pred);
+                                }
+                                let mut interact = container::ui::GridInteract {
+                                    drag: &mut furnace_drag,
+                                    player_side: false,
+                                    base_index: 0,
+                                };
                                 let acts = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_input, &single, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_input, &single, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver, &mut interact,
                                 );
                                 for a in acts {
-                                    // Remap idx 0 -> furnace
-                                    // slot 0 (input).
-                                    furnace_grid_actions.push((false, remap_action(a, 0)));
+                                    furnace_grid_actions.push((false, a));
                                 }
                                 ui.label(" ");
                                 // Fuel bar. Vertical filled rect
@@ -2389,11 +2531,19 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 };
                                 let mut single_f = container::Container::with_size(1);
                                 single_f.set_slot(0, furnace.slot(1));
+                                if let Some(pred) = furnace.accept_fn(1) {
+                                    single_f.set_accept(0, pred);
+                                }
+                                let mut interact = container::ui::GridInteract {
+                                    drag: &mut furnace_drag,
+                                    player_side: false,
+                                    base_index: 1,
+                                };
                                 let acts_f = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_fuel, &single_f, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_fuel, &single_f, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver, &mut interact,
                                 );
                                 for a in acts_f {
-                                    furnace_grid_actions.push((false, remap_action(a, 1)));
+                                    furnace_grid_actions.push((false, a));
                                 }
                                 // Cook arrow. Horizontal filled
                                 // rect: cook_progress_ms /
@@ -2423,11 +2573,19 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 };
                                 let mut single_o = container::Container::with_size(1);
                                 single_o.set_slot(0, furnace.slot(2));
+                                if let Some(pred) = furnace.accept_fn(2) {
+                                    single_o.set_accept(0, pred);
+                                }
+                                let mut interact = container::ui::GridInteract {
+                                    drag: &mut furnace_drag,
+                                    player_side: false,
+                                    base_index: 2,
+                                };
                                 let acts_o = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_out, &single_o, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_out, &single_o, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver, &mut interact,
                                 );
                                 for a in acts_o {
-                                    furnace_grid_actions.push((false, remap_action(a, 2)));
+                                    furnace_grid_actions.push((false, a));
                                 }
                             });
                             ui.separator();
@@ -2445,6 +2603,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 title: None,
                                 id_salt: "furnace_player_inv",
                             };
+                            let mut interact = container::ui::GridInteract {
+                                drag: &mut furnace_drag,
+                                player_side: true,
+                                base_index: 0,
+                            };
                             let inv_actions_g = container::ui::draw_grid_with_uv(
                                 ui,
                                 &inv_cfg,
@@ -2452,6 +2615,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 furnace_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
+                                &mut interact,
                             );
                             for a in inv_actions_g {
                                 furnace_grid_actions.push((true, a));
@@ -2476,6 +2640,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut crafting_table_open_local,
                             take_output_out: &mut crafting_table_take_output,
+                            creative: dbg_is_creative,
+                            thrown_out: &mut thrown_stacks,
                         },
                     );
                 }
@@ -2542,8 +2708,78 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             open_local: &mut brewing_open_local,
                             held_local: brewing_held_local.as_ref(),
                             stand_actions_out: &mut brewing_grid_actions,
+                            drag: &mut brewing_drag,
                         },
                     );
+                }
+
+                // W470: drag-paint release handling (MC QUICK_CRAFT
+                // phase 2). Apply-on-release: a >= 2 slot visit
+                // list becomes one drag commit; a single-slot
+                // "drag" stays a plain click (the widget's click
+                // already queued it). Any release clears the
+                // tracker.
+                {
+                    let (lmb_up, rmb_up) = ctx.input(|i| {
+                        (
+                            i.pointer.primary_released(),
+                            i.pointer.secondary_released(),
+                        )
+                    });
+                    let finish =
+                        |drag: &mut container::ui::PanelDrag,
+                         commit: &mut Option<(Vec<(bool, usize)>, bool)>| {
+                            use container::ui::DragButton as DB;
+                            if lmb_up && drag.button == Some(DB::Left) {
+                                if drag.slots.len() >= 2 {
+                                    *commit =
+                                        Some((drag.slots.clone(), false));
+                                }
+                                *drag = Default::default();
+                            } else if rmb_up
+                                && drag.button == Some(DB::Right)
+                            {
+                                if drag.slots.len() >= 2 {
+                                    *commit = Some((drag.slots.clone(), true));
+                                }
+                                *drag = Default::default();
+                            }
+                        };
+                    finish(&mut chest_drag, &mut chest_drag_commit);
+                    finish(
+                        &mut chest_partner_drag,
+                        &mut chest_partner_drag_commit,
+                    );
+                    finish(&mut furnace_drag, &mut furnace_drag_commit);
+                    finish(&mut brewing_drag, &mut brewing_drag_commit);
+                    // Persist the trackers for the next frame.
+                    ctx.memory_mut(|m| {
+                        m.data.insert_temp(drag_keys[0], chest_drag);
+                        m.data.insert_temp(drag_keys[1], chest_partner_drag);
+                        m.data.insert_temp(drag_keys[2], furnace_drag);
+                        m.data.insert_temp(drag_keys[3], brewing_drag);
+                    });
+                }
+
+                // W470: click OUTSIDE every egui area with a panel
+                // cursor stack = MC slotId -999 throw (LMB whole
+                // stack, RMB one item). Applied post-egui against
+                // whichever panel cursor is live.
+                {
+                    let outside_press: Option<bool> = ctx.input(|i| {
+                        if i.pointer.primary_pressed() {
+                            Some(true)
+                        } else if i.pointer.secondary_pressed() {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(all) = outside_press
+                        && !ctx.is_pointer_over_area()
+                    {
+                        panel_outside_throw = Some(all);
+                    }
                 }
 
                 // Hurt-flash: full-screen red overlay that fades
@@ -3469,6 +3705,18 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // the server's authoritative snapshot lands. Hotbar selection
         // stays local for snappy feedback (it's purely cosmetic).
         let is_client = matches!(vx.net, NetRole::Client { .. });
+        // W470: forward one inventory-screen op to the host
+        // (client role). Local apply is skipped - the
+        // authoritative snapshot reconciles, and throws must only
+        // spawn host-side.
+        let send_inv_op = |vx: &mut Voxel, op: crate::net::InvOpMsg| {
+            if let NetRole::Client { client, .. } = &mut vx.net {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(op, cfg) {
+                    let _ = client.send_bytes("vx.inv_op", buf);
+                }
+            }
+        };
         for action in inv_actions {
             match action {
                 InvAction::SelectHotbar(idx) => {
@@ -3497,6 +3745,47 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         }
                     } else {
                         vx.apply_inv_action(InvAction::Drag { from, to, split });
+                    }
+                }
+                InvAction::SwapWith { slot, hotbar } => {
+                    if is_client {
+                        send_inv_op(
+                            vx,
+                            crate::net::InvOpMsg::Swap {
+                                slot: slot.into(),
+                                hotbar: hotbar as u8,
+                            },
+                        );
+                    } else {
+                        vx.apply_inv_action(InvAction::SwapWith {
+                            slot,
+                            hotbar,
+                        });
+                    }
+                }
+                InvAction::Throw { slot, all } => {
+                    if is_client {
+                        send_inv_op(
+                            vx,
+                            crate::net::InvOpMsg::Throw {
+                                slot: slot.into(),
+                                all,
+                            },
+                        );
+                    } else {
+                        vx.apply_inv_action(InvAction::Throw { slot, all });
+                    }
+                }
+                InvAction::QuickMove { slot } => {
+                    if is_client {
+                        send_inv_op(
+                            vx,
+                            crate::net::InvOpMsg::QuickMove {
+                                slot: slot.into(),
+                            },
+                        );
+                    } else {
+                        vx.apply_inv_action(InvAction::QuickMove { slot });
                     }
                 }
             }
@@ -3805,35 +4094,41 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 vx.smithing_open = None;
             }
         }
+        // W470: creative flag for the CLONE arm + client role flag
+        // for the local-apply gates below.
+        let ui_creative = vx.abilities.instabuild;
+        let is_net_client = matches!(vx.net, NetRole::Client { .. });
         // W50.5: brewing panel apply.
         if brewing_open_pos.is_some() && !brewing_open_local {
             vx.close_brewing_ui();
         }
-        if let Some(pos) = vx.brewing_open
-            && !brewing_grid_actions.is_empty()
-        {
-            // W467: stack-native apply straight against
-            // `vx.inventory` - components ride through every move,
-            // no tuple detour left on this path.
+        if let Some(pos) = vx.brewing_open {
+            // W467/W470: stack-native apply straight against
+            // `vx.inventory` through the SHARED click core -
+            // components ride through every move. Brewing has no
+            // MP wire (local/host-only panel).
             if let Some(stand) = vx.brewing_stands.get_mut(&pos) {
                 for (player_side, action) in brewing_grid_actions {
-                    if player_side {
-                        // Reuse the generic chest player-side
-                        // helper; it's container-agnostic.
-                        block::chest::apply_player_action(
-                            &mut vx.inventory,
-                            stand,
-                            &mut brewing_held_local,
-                            action,
-                        );
-                    } else {
-                        block::chest::apply_chest_action(
+                    thrown_stacks.extend(
+                        container::screen::apply_grid_action(
                             stand,
                             &mut vx.inventory,
                             &mut brewing_held_local,
+                            player_side,
                             action,
-                        );
-                    }
+                            &container::screen::BREWING_CFG,
+                            ui_creative,
+                        ),
+                    );
+                }
+                if let Some((visited, one_per)) = brewing_drag_commit.take() {
+                    container::screen::apply_grid_drag(
+                        stand,
+                        &mut vx.inventory,
+                        &mut brewing_held_local,
+                        &visited,
+                        one_per,
+                    );
                 }
             }
             vx.brewing_held = brewing_held_local;
@@ -3842,48 +4137,82 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         }
         // Apply queued chest-UI actions. Each entry is
         // `(true_if_player_side, GridAction)`.
-        if let Some(pos) = vx.chest_open
-            && !chest_grid_actions.is_empty()
-        {
+        if let Some(pos) = vx.chest_open {
             // W5.3a: as a client, forward each grid action to the
             // host. The local mutation below STILL runs so the
             // client UI stays responsive (optimistic apply); the
             // next `vx.chest_state` broadcast reconciles by
             // overwriting both the chest and the local inv slot.
+            // W470: `from_grid_action` skips the local-only ops
+            // (creative clone); completed drag-paints ride the new
+            // `vx.chest_drag` topic.
             if let NetRole::Client { client, .. } = &mut vx.net {
                 let cfg = bincode::config::standard();
                 for (player_side, action) in &chest_grid_actions {
+                    let Some(act) =
+                        crate::net::ChestAct::from_grid_action(*action)
+                    else {
+                        continue;
+                    };
                     let msg = crate::net::ChestActMsg {
                         pos,
                         player_side: *player_side,
-                        action: crate::net::ChestAct::from_grid_action(*action),
+                        action: act,
                     };
                     if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                         let _ = client.send_bytes("vx.chest_act", buf);
                     }
                 }
+                if let Some((visited, one_per)) = &chest_drag_commit {
+                    let msg = crate::net::ContainerDragMsg {
+                        pos,
+                        one_per_slot: *one_per,
+                        slots: visited
+                            .iter()
+                            .map(|&(s, i)| (s, i as u32))
+                            .collect(),
+                    };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
+                        let _ = client.send_bytes("vx.chest_drag", buf);
+                    }
+                }
             }
             if let Some(chest) = vx.chests.get_mut(&pos) {
-                // W467: stack-native apply straight against
-                // `vx.inventory` (disjoint field borrows) - a worn
-                // item moved chest <-> inventory keeps its
-                // components without any tuple round trip.
+                // W467/W470: stack-native apply straight against
+                // `vx.inventory` (disjoint field borrows) through
+                // the shared click core.
                 for (player_side, action) in chest_grid_actions {
-                    if player_side {
-                        block::chest::apply_player_action(
-                            &mut vx.inventory,
-                            chest,
-                            &mut chest_held_local,
+                    // A client's creative clone would desync (the
+                    // op never rides the wire) - host validates
+                    // its own flag only.
+                    if is_net_client
+                        && matches!(
                             action,
-                        );
-                    } else {
-                        block::chest::apply_chest_action(
-                            chest,
-                            &mut vx.inventory,
-                            &mut chest_held_local,
-                            action,
-                        );
+                            container::ui::GridAction::CloneSlot(_)
+                        )
+                    {
+                        continue;
                     }
+                    thrown_stacks.extend(
+                        container::screen::apply_grid_action(
+                            chest,
+                            &mut vx.inventory,
+                            &mut chest_held_local,
+                            player_side,
+                            action,
+                            &container::screen::CHEST_CFG,
+                            ui_creative,
+                        ),
+                    );
+                }
+                if let Some((visited, one_per)) = chest_drag_commit.take() {
+                    container::screen::apply_grid_drag(
+                        chest,
+                        &mut vx.inventory,
+                        &mut chest_held_local,
+                        &visited,
+                        one_per,
+                    );
                 }
             }
             vx.chest_held = chest_held_local;
@@ -3893,71 +4222,197 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             vx.chest_held = chest_held_local;
         }
         // W55.2b: apply partner-chest actions (double-chest top
-        // grid). Routes through the same chest apply helpers but
-        // against the partner pos.
+        // grid). Routes through the same shared core but against
+        // the partner pos. Local-only path (pre-existing: partner
+        // grids don't ride the client wire).
         if let Some(partner_pos) = chest_partner_pos
-            && !chest_partner_actions.is_empty()
             && let Some(chest) = vx.chests.get_mut(&partner_pos)
         {
             // W467: stack-native, same shape as the main-chest
             // apply above (disjoint borrows of chests / inventory /
             // chest_held).
             for action in chest_partner_actions {
-                block::chest::apply_chest_action(
+                if is_net_client
+                    && matches!(action, container::ui::GridAction::CloneSlot(_))
+                {
+                    continue;
+                }
+                thrown_stacks.extend(container::screen::apply_grid_action(
                     chest,
                     &mut vx.inventory,
                     &mut vx.chest_held,
+                    false,
                     action,
+                    &container::screen::CHEST_CFG,
+                    ui_creative,
+                ));
+            }
+            if let Some((visited, one_per)) = chest_partner_drag_commit.take()
+            {
+                container::screen::apply_grid_drag(
+                    chest,
+                    &mut vx.inventory,
+                    &mut vx.chest_held,
+                    &visited,
+                    one_per,
                 );
             }
         }
-        // Apply queued furnace-UI actions. Mirrors the chest path
-        // but routes through `block::furnace::apply_furnace_action`
-        // / `apply_player_action` so the accept-filter checks fire
-        // before any slot mutation.
-        if let Some(pos) = vx.furnace_open
-            && !furnace_grid_actions.is_empty()
-        {
+        // Apply queued furnace-UI actions. Mirrors the chest path;
+        // the furnace-specific quick-move routing (smeltable ->
+        // input, fuel -> fuel, hotbar<->main fallback) lives in
+        // `FURNACE_CFG`, the accept filters in the Container.
+        if let Some(pos) = vx.furnace_open {
             // W5.3b: forward each grid action to the host (client
             // role). Local optimistic apply still runs below for
             // UI responsiveness; reconcile on next state msg.
             if let NetRole::Client { client, .. } = &mut vx.net {
                 let cfg = bincode::config::standard();
                 for (player_side, action) in &furnace_grid_actions {
+                    let Some(act) =
+                        crate::net::ChestAct::from_grid_action(*action)
+                    else {
+                        continue;
+                    };
                     let msg = crate::net::FurnaceActMsg {
                         pos,
                         player_side: *player_side,
-                        action: crate::net::ChestAct::from_grid_action(*action),
+                        action: act,
                     };
                     if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                         let _ = client.send_bytes("vx.furnace_act", buf);
                     }
                 }
+                if let Some((visited, one_per)) = &furnace_drag_commit {
+                    let msg = crate::net::ContainerDragMsg {
+                        pos,
+                        one_per_slot: *one_per,
+                        slots: visited
+                            .iter()
+                            .map(|&(s, i)| (s, i as u32))
+                            .collect(),
+                    };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
+                        let _ = client.send_bytes("vx.furnace_drag", buf);
+                    }
+                }
             }
             if let Some(furnace) = vx.furnaces.get_mut(&pos) {
-                // W467: stack-native apply against `vx.inventory`
-                // (see the chest apply above).
+                // W467/W470: stack-native apply against
+                // `vx.inventory` through the shared click core.
                 for (player_side, action) in furnace_grid_actions {
-                    if player_side {
-                        block::furnace::apply_player_action(
-                            &mut vx.inventory,
-                            furnace,
-                            &mut furnace_held_local,
+                    if is_net_client
+                        && matches!(
                             action,
-                        );
-                    } else {
-                        block::furnace::apply_furnace_action(
-                            furnace,
-                            &mut vx.inventory,
-                            &mut furnace_held_local,
-                            action,
-                        );
+                            container::ui::GridAction::CloneSlot(_)
+                        )
+                    {
+                        continue;
                     }
+                    thrown_stacks.extend(
+                        container::screen::apply_grid_action(
+                            furnace,
+                            &mut vx.inventory,
+                            &mut furnace_held_local,
+                            player_side,
+                            action,
+                            &container::screen::FURNACE_CFG,
+                            ui_creative,
+                        ),
+                    );
+                }
+                if let Some((visited, one_per)) = furnace_drag_commit.take() {
+                    container::screen::apply_grid_drag(
+                        furnace,
+                        &mut vx.inventory,
+                        &mut furnace_held_local,
+                        &visited,
+                        one_per,
+                    );
                 }
             }
             vx.furnace_held = furnace_held_local;
         } else {
             vx.furnace_held = furnace_held_local;
+        }
+        // W470: click-outside cursor throw (MC slotId -999).
+        // Routes to whichever open panel owns a live cursor;
+        // clients forward the chest / furnace variants so the
+        // authoritative per-viewer cursor follows.
+        if let Some(whole) = panel_outside_throw {
+            let send_cursor_throw = |vx: &mut Voxel,
+                                         topic: &str,
+                                         pos: [i32; 3]| {
+                if let NetRole::Client { client, .. } = &mut vx.net {
+                    let cfg = bincode::config::standard();
+                    let act = if whole {
+                        crate::net::ChestAct::ThrowCursorAll
+                    } else {
+                        crate::net::ChestAct::ThrowCursorOne
+                    };
+                    let msg = crate::net::ChestActMsg {
+                        pos,
+                        player_side: false,
+                        action: act,
+                    };
+                    if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+                        let _ = client.send_bytes(topic, buf);
+                    }
+                }
+            };
+            if let Some(pos) = vx.chest_open {
+                if vx.chest_held.is_some() {
+                    let mut cursor = vx.chest_held.take();
+                    thrown_stacks.extend(
+                        container::click::throw_from_cursor(
+                            &mut cursor, whole,
+                        ),
+                    );
+                    vx.chest_held = cursor;
+                    send_cursor_throw(vx, "vx.chest_act", pos);
+                }
+            } else if let Some(pos) = vx.furnace_open {
+                if vx.furnace_held.is_some() {
+                    let mut cursor = vx.furnace_held.take();
+                    thrown_stacks.extend(
+                        container::click::throw_from_cursor(
+                            &mut cursor, whole,
+                        ),
+                    );
+                    vx.furnace_held = cursor;
+                    send_cursor_throw(vx, "vx.furnace_act", pos);
+                }
+            } else if vx.brewing_open.is_some() {
+                let mut cursor = vx.brewing_held.take();
+                thrown_stacks.extend(container::click::throw_from_cursor(
+                    &mut cursor,
+                    whole,
+                ));
+                vx.brewing_held = cursor;
+            } else if vx.crafting_table_open.is_some() {
+                let mut cursor = vx.crafting_table_held.take();
+                thrown_stacks.extend(container::click::throw_from_cursor(
+                    &mut cursor,
+                    whole,
+                ));
+                vx.crafting_table_held = cursor;
+            }
+        }
+        // W470: spawn every stack thrown by panel ops this frame
+        // (Q / Ctrl+Q / click-outside) at the player's hand with
+        // MC toss velocity. `spawn_thrown_stack` no-ops in the
+        // client role - the host spawns from the wire ops and
+        // broadcasts the drop.
+        if !thrown_stacks.is_empty() {
+            let eye = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
+            let look = [
+                vx.player_yaw.cos() * vx.player_pitch.cos(),
+                vx.player_pitch.sin(),
+                -vx.player_yaw.sin() * vx.player_pitch.cos(),
+            ];
+            for st in thrown_stacks.drain(..) {
+                crate::drops::spawn_thrown_stack(vx, st, eye, look);
+            }
         }
         // `action_start` lived on the legacy flat picker. The Wave 4
         // menu emits `MenuAction::PlayOffline { slug }` instead, which
