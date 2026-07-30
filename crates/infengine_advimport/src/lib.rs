@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bm;
 pub mod kyra;
 pub mod report;
 pub mod survey;

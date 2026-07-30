@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use infengine_advimport::{kyra, survey};
+use infengine_advimport::{bm, kyra, survey};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -40,6 +40,17 @@ enum Command {
     Survey {
         /// Directory to inspect, searched recursively.
         path: PathBuf,
+    },
+
+    /// Import Black Mirror 2 or 3.
+    ///
+    /// Both games share a scene format, so one backend reads either.
+    Bm {
+        /// Game directory, or the `Scenes` directory inside it.
+        source: PathBuf,
+        /// Where to write `rooms/`.
+        #[arg(long, short)]
+        out: PathBuf,
     },
 
     /// Import The Legend of Kyrandia.
@@ -86,6 +97,17 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("warning: no files found under {}", path.display());
             }
             print!("{report}");
+            Ok(())
+        }
+        Command::Bm { source, out } => {
+            let report = bm::import_dir(&source, &out)?;
+            println!("{report}");
+            if !report.is_empty() {
+                println!();
+                println!("written to {}", out.display());
+                println!("note: layer images are referenced by name only - extracting the");
+                println!("embedded textures from the .dat files is a separate step.");
+            }
             Ok(())
         }
         Command::Kyra { source, out } => {
