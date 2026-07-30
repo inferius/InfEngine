@@ -1,0 +1,234 @@
+//! A6.3: drawing a room and its editing overlays.
+//!
+//! Free functions over borrowed state rather than methods on the app, so
+//! the draw order is readable in one place and the borrow checker does
+//! not have to reason about the whole application at once.
+
+use std::collections::HashMap;
+
+use glam::Vec2;
+use infengine_adventure::{Room, Shape};
+use infengine_render::{Renderer, SpriteInstance, Texture2dHandle};
+
+use crate::view::View;
+
+/// Colours, kept together so the overlay reads as one palette.
+pub mod color {
+    pub const FLOOR: [f32; 4] = [0.25, 1.0, 0.35, 0.9];
+    pub const HOLE: [f32; 4] = [1.0, 0.3, 0.25, 0.9];
+    pub const HOTSPOT: [f32; 4] = [0.35, 0.75, 1.0, 0.85];
+    pub const EXIT: [f32; 4] = [1.0, 0.85, 0.2, 0.9];
+    pub const ENTRY: [f32; 4] = [1.0, 0.4, 0.9, 0.95];
+    pub const SELECTED: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    pub const PATH: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
+    pub const BOUNDS: [f32; 4] = [0.45, 0.45, 0.55, 0.7];
+}
+
+/// Which overlays are switched on.
+#[derive(Debug, Clone, Copy)]
+pub struct Overlays {
+    pub floor: bool,
+    pub hotspots: bool,
+    pub exits: bool,
+    pub entries: bool,
+    pub bounds: bool,
+}
+
+impl Default for Overlays {
+    fn default() -> Self {
+        Self {
+            floor: true,
+            hotspots: true,
+            exits: true,
+            entries: true,
+            bounds: true,
+        }
+    }
+}
+
+/// Point the renderer's camera at what the view is framing.
+pub fn sync_camera(renderer: &mut Renderer, view: &View) {
+    let camera = renderer.camera_mut();
+    let world = view.room_to_world(view.center);
+    camera.position = [world.x, world.y];
+    camera.zoom = view.zoom;
+}
+
+/// Draw the room's visible layers, back to front.
+///
+/// A layer whose image has not loaded is skipped rather than drawn as a
+/// placeholder: a magenta box over a background reads as a broken room,
+/// and the inspector already reports which images are missing.
+pub fn draw_layers(
+    renderer: &mut Renderer,
+    room: &Room,
+    view: &View,
+    textures: &HashMap<String, Texture2dHandle>,
+) {
+    for layer in room.layers.iter().filter(|l| l.visible) {
+        let Some(&handle) = textures.get(&layer.image) else {
+            continue;
+        };
+        let Some((w, h)) = renderer.texture_size(handle) else {
+            continue;
+        };
+        let size = Vec2::new(w as f32, h as f32);
+        let center_room = layer.offset + size * 0.5;
+        let center = view.room_to_world(center_room);
+        renderer.draw_texture(
+            handle,
+            SpriteInstance::new([center.x, center.y], [size.x, size.y]),
+        );
+    }
+}
+
+/// Draw one closed polygon outline in room coordinates.
+fn outline(renderer: &mut Renderer, view: &View, points: &[Vec2], color: [f32; 4]) {
+    if points.len() < 2 {
+        return;
+    }
+    for i in 0..points.len() {
+        let a = view.room_to_world(points[i]);
+        let b = view.room_to_world(points[(i + 1) % points.len()]);
+        renderer.debug_line([a.x, a.y], [b.x, b.y], color);
+    }
+}
+
+/// Draw a small square centred on a room point, sized in screen pixels
+/// so handles stay grabbable at any zoom.
+fn handle(renderer: &mut Renderer, view: &View, at: Vec2, color: [f32; 4], pixels: f32) {
+    let r = view.screen_pixels_in_room(pixels);
+    let c = view.room_to_world(at);
+    renderer.debug_rect([c.x - r, c.y - r], [c.x + r, c.y + r], color);
+}
+
+fn shape_outline(renderer: &mut Renderer, view: &View, shape: &Shape, color: [f32; 4]) {
+    match shape {
+        Shape::Rect { min, max } => {
+            let lo = min.min(*max);
+            let hi = min.max(*max);
+            outline(
+                renderer,
+                view,
+                &[
+                    lo,
+                    Vec2::new(hi.x, lo.y),
+                    hi,
+                    Vec2::new(lo.x, hi.y),
+                ],
+                color,
+            );
+        }
+        Shape::Poly(poly) => outline(renderer, view, &poly.points, color),
+    }
+}
+
+/// Draw every enabled overlay.
+pub fn draw_overlays(
+    renderer: &mut Renderer,
+    room: &Room,
+    view: &View,
+    overlays: &Overlays,
+    selected_points: &[Vec2],
+    path: &[Vec2],
+) {
+    if overlays.bounds {
+        outline(
+            renderer,
+            view,
+            &[
+                Vec2::ZERO,
+                Vec2::new(room.size.x, 0.0),
+                room.size,
+                Vec2::new(0.0, room.size.y),
+            ],
+            color::BOUNDS,
+        );
+    }
+
+    if overlays.floor {
+        for poly in &room.walk.solids {
+            outline(renderer, view, &poly.points, color::FLOOR);
+            for point in &poly.points {
+                handle(renderer, view, *point, color::FLOOR, 3.0);
+            }
+        }
+        for poly in &room.walk.holes {
+            outline(renderer, view, &poly.points, color::HOLE);
+            for point in &poly.points {
+                handle(renderer, view, *point, color::HOLE, 3.0);
+            }
+        }
+    }
+
+    if overlays.hotspots {
+        for hotspot in &room.hotspots {
+            let tint = if hotspot.enabled {
+                color::HOTSPOT
+            } else {
+                dim(color::HOTSPOT)
+            };
+            shape_outline(renderer, view, &hotspot.shape, tint);
+            if let Some(walk_to) = hotspot.walk_to {
+                handle(renderer, view, walk_to, tint, 4.0);
+            }
+        }
+    }
+
+    if overlays.exits {
+        for exit in &room.exits {
+            shape_outline(renderer, view, &exit.shape, color::EXIT);
+        }
+    }
+
+    if overlays.entries {
+        for entry in &room.entries {
+            handle(renderer, view, entry.position, color::ENTRY, 5.0);
+        }
+    }
+
+    for point in selected_points {
+        handle(renderer, view, *point, color::SELECTED, 5.0);
+    }
+
+    for pair in path.windows(2) {
+        let a = view.room_to_world(pair[0]);
+        let b = view.room_to_world(pair[1]);
+        renderer.debug_line([a.x, a.y], [b.x, b.y], color::PATH);
+    }
+    for point in path {
+        handle(renderer, view, *point, color::PATH, 2.5);
+    }
+}
+
+/// Half-strength colour, for things switched off.
+fn dim(c: [f32; 4]) -> [f32; 4] {
+    [c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, c[3] * 0.6]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlays_default_to_everything_visible() {
+        let o = Overlays::default();
+        assert!(o.floor && o.hotspots && o.exits && o.entries && o.bounds);
+    }
+
+    #[test]
+    fn dimming_lowers_brightness_without_going_negative() {
+        let d = dim(color::HOTSPOT);
+        assert!(d.iter().all(|c| *c >= 0.0));
+        assert!(d[2] < color::HOTSPOT[2]);
+    }
+
+    #[test]
+    fn overlay_colours_are_distinct() {
+        // A floor and a hole are drawn on top of each other often enough
+        // that sharing a colour would be a real usability bug.
+        assert_ne!(color::FLOOR, color::HOLE);
+        assert_ne!(color::HOTSPOT, color::EXIT);
+        assert_ne!(color::SELECTED, color::PATH);
+    }
+}

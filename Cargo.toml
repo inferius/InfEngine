@@ -20,6 +20,7 @@ members = [
     "crates/infengine_master_server",
     "crates/infengine_sdk",
     "crates/infengine_sdk_rs",
+    "examples/adventure_editor",
     "examples/sprite_demo",
     "examples/cube_demo",
     "examples/csharp_demo",
