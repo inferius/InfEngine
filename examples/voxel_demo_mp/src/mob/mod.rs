@@ -31,6 +31,7 @@ pub(crate) mod goal;
 pub(crate) mod hud;
 pub(crate) mod kinds;
 pub(crate) mod light;
+pub(crate) mod fangs;
 pub(crate) mod pathfind;
 pub(crate) mod pool;
 pub(crate) mod riding;

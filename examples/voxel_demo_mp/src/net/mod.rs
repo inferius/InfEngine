@@ -606,6 +606,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub weather_update: &'a mut Option<u8>,
     /// W460: thunder flag broadcast (gates the client lightning).
     pub thunder_update: &'a mut Option<bool>,
+    /// W463: evoker fang spawns (pos, warmup) for the client visual.
+    pub fang_spawns: &'a mut Vec<([f32; 3], f32)>,
     pub snow_updates: &'a mut Vec<([i32; 3], u8)>,
     pub liquid_level_updates: &'a mut Vec<([i32; 3], u8)>,
     pub drop_spawns: &'a mut Vec<DropSpawnMsg>,
@@ -862,6 +864,15 @@ pub(crate) fn process_client_inbox(
                     bincode::serde::decode_from_slice::<bool, _>(&data, cfg)
                 {
                     *ctx.thunder_update = Some(t);
+                }
+            }
+            "vx.fang" => {
+                if let Ok(((pos, warmup), _)) =
+                    bincode::serde::decode_from_slice::<([f32; 3], f32), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.fang_spawns.push((pos, warmup));
                 }
             }
             "vx.snow" => {

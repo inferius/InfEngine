@@ -709,6 +709,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             // W337: ghast fireballs (impact = power-1 explosion).
             crate::projectile::tick_fireballs(vx, dt);
             crate::projectile::tick_potions(vx, dt);
+            // W463: evoker fangs (host damage; clients tick their
+            // visual copies inside the same fn).
+            crate::mob::fangs::tick_fangs(vx, dt);
             // W338: primed TNT fuses.
             crate::tnt::tick(vx, dt);
             let _ms = _t.elapsed().as_secs_f32() * 1000.0;
@@ -2245,6 +2248,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             &vx.arrow_meshes,
             &vx.arrows,
             &vx.remote_arrows,
+        );
+        // W463: evoker fangs erupting from the ground.
+        render::projectiles::draw_fangs(
+            renderer,
+            &vx.arrow_meshes,
+            &vx.evoker_fangs,
         );
         // W337: ghast fireballs in flight.
         render::projectiles::draw_fireballs(

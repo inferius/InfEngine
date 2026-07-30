@@ -157,6 +157,7 @@ impl Voxel {
         self.trade_open = None;
         self.save_fixups_pending = false;
         self.mob_paths.clear();
+        self.evoker_fangs.clear();
         self.mob_professions.clear();
         self.stonecutter_input = None;
         // W50.5: brewing stand maps cleared on world reset.

@@ -914,6 +914,8 @@ pub(crate) struct Voxel {
     /// is Copy). Entries drop on death / close range; transient.
     pub(crate) mob_paths:
         std::collections::HashMap<u32, crate::mob::pathfind::MobPath>,
+    /// W463: live evoker fangs (host sim + client visual copies).
+    pub(crate) evoker_fangs: Vec<crate::mob::fangs::Fang>,
     /// W341: session cache of claimed professions (mob id ->
     /// workstation-derived profession). Save persistence is a
     /// follow-up (MobSave field).

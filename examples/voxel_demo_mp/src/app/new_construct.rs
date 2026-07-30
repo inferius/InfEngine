@@ -339,6 +339,7 @@ impl Voxel {
             trade_open: None,
             save_fixups_pending: false,
             mob_paths: std::collections::HashMap::new(),
+            evoker_fangs: Vec::new(),
             mob_professions: std::collections::HashMap::new(),
             stonecutter_input: None,
             smithing_open: None,

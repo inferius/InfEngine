@@ -20,6 +20,9 @@ pub(crate) struct ArrowMeshes {
     /// its diagonal shaft flies point-first - the cheap read of
     /// MC's ThrownTridentRenderer at gameplay distance).
     pub(crate) trident: Option<MeshHandle>,
+    /// W463: crossed-quad evoker fang (the illager sheet), scaled
+    /// by the eruption pop in the draw pass.
+    pub(crate) fang: Option<MeshHandle>,
 }
 
 impl ArrowMeshes {
@@ -158,8 +161,68 @@ pub(crate) fn load_arrow_meshes(
         r.bind_mesh_albedo_arc(mesh, albedo);
         out.trident = Some(mesh);
     }
+    // W463: the evoker fang - upright crossed quads with the
+    // entity sheet; the model-accurate jaw rig is a follow-up, the
+    // spike silhouette + pop animation carry the telegraph.
+    let fpp = dir.join("illager").join("evoker_fangs.png");
+    if let Ok(img) = image::open(&fpp) {
+        let img = img.to_rgba8();
+        let albedo = r.make_mesh_albedo(img.width(), img.height(), &img);
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        let mut quad = |corners: [[f32; 3]; 4], normal: [f32; 3]| {
+            let base = verts.len() as u32;
+            let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+            for i in 0..4 {
+                verts.push(
+                    MeshVertex::new(corners[i], normal)
+                        .with_uv(uvs[i])
+                        .with_light(0.0, 1.0),
+                );
+            }
+            idxs.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            idxs.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        };
+        const W: f32 = 0.45;
+        quad(
+            [[-W, 0.0, 0.0], [W, 0.0, 0.0], [W, 0.8, 0.0], [-W, 0.8, 0.0]],
+            [0.0, 0.0, 1.0],
+        );
+        quad(
+            [[0.0, 0.0, -W], [0.0, 0.0, W], [0.0, 0.8, W], [0.0, 0.8, -W]],
+            [1.0, 0.0, 0.0],
+        );
+        let mesh = r.create_mesh("voxel_demo_mp::evoker_fang", &verts, &idxs);
+        r.bind_mesh_albedo_arc(mesh, albedo);
+        out.fang = Some(mesh);
+    }
     tracing::info!("arrow projectile mesh baked");
     out
+}
+
+/// W463: draw the live evoker fangs with the eruption pop: scale-Y
+/// grows through the first ~0.1 s and sinks after the bite.
+pub(crate) fn draw_fangs(
+    r: &mut Renderer,
+    meshes: &ArrowMeshes,
+    fangs: &[crate::mob::fangs::Fang],
+) {
+    let Some(mesh) = meshes.fang else { return };
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+    for f in fangs {
+        if f.warmup > 0.0 {
+            continue;
+        }
+        let pop = (f.age / 0.1).clamp(0.05, 1.0);
+        let sink = (1.0 - ((f.age - 0.4) / 0.15).max(0.0)).clamp(0.0, 1.0);
+        let s = pop * sink;
+        if s <= 0.01 {
+            continue;
+        }
+        let m = Mat4::from_translation(f.pos)
+            * Mat4::from_scale(Vec3::new(1.0, s, 1.0));
+        r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9);
+    }
 }
 
 /// Draw every live fireball. Crossed quads read from any angle, so

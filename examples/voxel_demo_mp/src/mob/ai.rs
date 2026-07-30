@@ -1090,6 +1090,33 @@ fn step_one(
                 );
             }
         }
+        // W463: EvokerAttackSpellGoal - the fang cast on the MC
+        // ~5 s cadence. Inside 3 blocks the rings surround the
+        // caster; out to 12 the line runs at the target. Melee
+        // stays for point-blank contact like the other illagers.
+        if m.kind == super::kinds::KIND_EVOKER
+            && m.attack_cd <= 0.0
+            && let Some(p) = chase_player_pos
+        {
+            const FANG_COOLDOWN: f32 = 5.0;
+            const FANG_MAX_D2: f32 = 12.0 * 12.0;
+            let ddx = p[0] - m.pos[0];
+            let ddz = p[2] - m.pos[2];
+            let pd2 = ddx * ddx + ddz * ddz;
+            if pd2 <= FANG_MAX_D2 {
+                m.attack_cd = FANG_COOLDOWN;
+                crate::mob::fangs::cast_fangs(
+                    voxel,
+                    glam::Vec3::new(m.pos[0], m.pos[1], m.pos[2]),
+                    glam::Vec3::new(p[0], p[1], p[2]),
+                );
+                voxel.sfx_at(
+                    "mob/evoker/cast",
+                    [m.pos[0], m.pos[1] + 1.0, m.pos[2]],
+                    |_, _| {},
+                );
+            }
+        }
         // W462: DrownedTridentAttackGoal - the ~6% of drowned that
         // spawn holding a trident (MC natural equip chance) throw
         // it on the MC cadence (interval 40 ticks, radius 10); the
