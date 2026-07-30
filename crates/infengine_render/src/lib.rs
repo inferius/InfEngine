@@ -19,6 +19,7 @@ mod mesh3d;
 mod particle_pass;
 mod shadow;
 mod sprite;
+mod texture2d;
 mod tile_anims;
 mod tilemap;
 mod uber_buffer;
@@ -59,6 +60,8 @@ pub type AlbedoHandle = std::sync::Arc<wgpu::BindGroup>;
 use shadow::ShadowPass;
 use sprite::SpritePass;
 pub use sprite::{SpriteInstance, demo_atlas};
+use texture2d::Texture2dRegistry;
+pub use texture2d::{Texture2dError, Texture2dHandle, TextureFilter};
 pub use tilemap::{TileId, Tilemap};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -93,6 +96,12 @@ pub struct Renderer {
     camera_3d_resource: Camera3DResource,
     sprite: SpritePass,
     sprite_queue: Vec<SpriteInstance>,
+    /// A1.1: runtime-loaded sprite textures (backgrounds, cutouts, ...).
+    textures: Texture2dRegistry,
+    /// Sprites drawn against a registry texture, in submission order.
+    textured_queue: Vec<(Texture2dHandle, SpriteInstance)>,
+    /// Reused staging buffer: textured instances first, atlas ones after.
+    sprite_upload: Vec<SpriteInstance>,
     debug: DebugPass,
     debug_vertices: Vec<DebugVertex>,
     mesh3d: Mesh3DPass,
@@ -316,7 +325,16 @@ impl Renderer {
         let camera_resource = CameraResource::new(&device, &camera);
         let camera_3d = Camera3D::new(config.width, config.height);
         let camera_3d_resource = Camera3DResource::new(&device, &camera_3d);
-        let sprite = SpritePass::new(&device, &queue, config.format, &camera_resource.layout);
+        // A1.1: the registry owns the texture bind group layout so the
+        // sprite pipeline and every runtime texture agree on @group(1).
+        let textures = Texture2dRegistry::new(&device);
+        let sprite = SpritePass::new(
+            &device,
+            &queue,
+            config.format,
+            &camera_resource.layout,
+            textures.layout(),
+        );
         let debug = DebugPass::new(&device, config.format, &camera_resource.layout);
         let shadow = ShadowPass::new(&device);
         let lights_res = LightsResource::new(&device);
@@ -422,6 +440,9 @@ impl Renderer {
             camera_3d_resource,
             sprite,
             sprite_queue: Vec::new(),
+            textures,
+            textured_queue: Vec::new(),
+            sprite_upload: Vec::new(),
             debug,
             debug_vertices: Vec::new(),
             mesh3d,
@@ -499,6 +520,96 @@ impl Renderer {
     /// every sprite that should appear.
     pub fn draw_sprite(&mut self, instance: SpriteInstance) {
         self.sprite_queue.push(instance);
+    }
+
+    /// A1.1: upload an RGBA8 image and get a handle usable with
+    /// [`Self::draw_texture`].
+    ///
+    /// `rgba` is tightly packed, top row first, in sRGB space. Pick
+    /// [`TextureFilter::Nearest`] for pixel art.
+    pub fn create_texture_rgba(
+        &mut self,
+        label: &str,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        filter: TextureFilter,
+    ) -> Result<Texture2dHandle, Texture2dError> {
+        self.textures.create(
+            &self.device,
+            &self.queue,
+            &texture2d::TextureDesc {
+                label,
+                width,
+                height,
+                rgba,
+                filter,
+            },
+        )
+    }
+
+    /// Decode an image file from disk and upload it as a sprite texture.
+    pub fn create_texture_from_file(
+        &mut self,
+        path: &std::path::Path,
+        filter: TextureFilter,
+    ) -> Result<Texture2dHandle, Texture2dError> {
+        self.textures
+            .create_from_file(&self.device, &self.queue, path, filter)
+    }
+
+    /// Replace the pixels of an existing texture. Dimensions must match
+    /// the original allocation.
+    pub fn update_texture_rgba(
+        &mut self,
+        handle: Texture2dHandle,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), Texture2dError> {
+        self.textures
+            .update(&self.queue, handle, width, height, rgba)
+    }
+
+    /// Release a texture. Returns `false` if the handle was already dead.
+    pub fn destroy_texture(&mut self, handle: Texture2dHandle) -> bool {
+        self.textures.destroy(handle)
+    }
+
+    /// Pixel dimensions of a live texture.
+    pub fn texture_size(&self, handle: Texture2dHandle) -> Option<(u32, u32)> {
+        self.textures.size(handle)
+    }
+
+    /// Sampling mode a live texture was created with.
+    pub fn texture_filter(&self, handle: Texture2dHandle) -> Option<TextureFilter> {
+        self.textures.filter(handle)
+    }
+
+    /// Number of live runtime textures, for stats overlays.
+    pub fn texture_count(&self) -> usize {
+        self.textures.live_count()
+    }
+
+    /// Queue a sprite sampled from a runtime texture.
+    ///
+    /// Draw order is submission order, so a scene submits back to front.
+    /// Consecutive sprites sharing a texture collapse into one draw call;
+    /// alternating textures costs one call per switch. All textured
+    /// sprites draw *before* the atlas queue, which keeps `draw_text` and
+    /// the debug quads on top.
+    pub fn draw_texture(&mut self, handle: Texture2dHandle, instance: SpriteInstance) {
+        self.textured_queue.push((handle, instance));
+    }
+
+    /// Convenience: draw a texture at its native pixel size, centered on
+    /// `center`, untinted.
+    pub fn draw_texture_at(&mut self, handle: Texture2dHandle, center: [f32; 2]) {
+        let Some((w, h)) = self.textures.size(handle) else {
+            warn!("draw_texture_at called with a stale texture handle");
+            return;
+        };
+        self.draw_texture(handle, SpriteInstance::new(center, [w as f32, h as f32]));
     }
 
     /// Queue a 3D cube draw for the next frame. `model` is a column-major
@@ -1206,8 +1317,16 @@ impl Renderer {
             40.0,
             self.sun_intensity,
         );
+        // A1.1: one instance buffer holds both queues - textured sprites
+        // first (scene layers), atlas sprites after (text, debug quads),
+        // so the atlas content ends up on top.
+        self.sprite_upload.clear();
+        self.sprite_upload
+            .extend(self.textured_queue.iter().map(|(_, inst)| *inst));
+        self.sprite_upload.extend_from_slice(&self.sprite_queue);
         self.sprite
-            .upload(&self.device, &self.queue, &self.sprite_queue);
+            .upload(&self.device, &self.queue, &self.sprite_upload);
+        let texture_runs = texture2d::batch_runs(&self.textured_queue);
         self.debug
             .upload(&self.device, &self.queue, &self.debug_vertices);
         let mesh_batches = self
@@ -1228,6 +1347,7 @@ impl Renderer {
         self.particle_pass
             .upload(&self.device, &self.queue, &self.particle_instances);
 
+        let textured_count = self.textured_queue.len() as u32;
         let sprite_count = self.sprite_queue.len() as u32;
         let debug_vertex_count = self.debug_vertices.len() as u32;
         let mesh3d_count = self.mesh3d_queue.len() as u32;
@@ -1557,7 +1677,19 @@ impl Renderer {
             });
 
             rpass.set_bind_group(0, &self.camera_resource.bind_group, &[]);
-            self.sprite.draw(&mut rpass, sprite_count);
+            // Scene layers: one draw call per run of same-texture sprites.
+            // A run whose handle died between submit and present is
+            // skipped rather than drawn with the wrong bind group.
+            for run in &texture_runs {
+                if let Some(bind_group) = self.textures.bind_group(run.handle) {
+                    self.sprite
+                        .draw_range(&mut rpass, bind_group, run.first, run.count);
+                }
+            }
+            // Atlas queue (text + debug quads) sits after the textured
+            // instances in the same buffer.
+            self.sprite
+                .draw_atlas(&mut rpass, textured_count, sprite_count);
             self.debug.draw(&mut rpass, debug_vertex_count);
         }
 
@@ -1573,6 +1705,7 @@ impl Renderer {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.sprite_queue.clear();
+        self.textured_queue.clear();
         self.debug_vertices.clear();
         self.mesh3d_queue.clear();
         self.viewmodel_queue.clear();

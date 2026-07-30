@@ -222,11 +222,16 @@ pub(crate) struct SpritePass {
 }
 
 impl SpritePass {
+    /// `texture_bgl` must be the layout produced by
+    /// [`crate::texture2d::sprite_texture_bgl`] and shared with the
+    /// texture registry, so runtime textures can be bound at
+    /// `@group(1)` against this same pipeline.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
+        texture_bgl: &wgpu::BindGroupLayout,
     ) -> Self {
         // Procedural demo atlas with a font region in the bottom strip.
         let texture_size = wgpu::Extent3d {
@@ -274,31 +279,9 @@ impl SpritePass {
             ..Default::default()
         });
 
-        let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("infengine_render::sprite_texture_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("infengine_render::sprite_texture_bg"),
-            layout: &texture_bgl,
+            layout: texture_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -331,7 +314,7 @@ impl SpritePass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("infengine_render::sprite_pipeline_layout"),
-            bind_group_layouts: &[camera_layout, &texture_bgl],
+            bind_group_layouts: &[camera_layout, texture_bgl],
             push_constant_ranges: &[],
         });
 
@@ -461,16 +444,32 @@ impl SpritePass {
         }
     }
 
-    /// Record draw commands for `count` previously-uploaded instances.
+    /// Record draw commands for instances `[first, first + count)` of the
+    /// uploaded buffer, sampling `texture_bind_group`.
+    ///
     /// Assumes the caller has already bound the camera at `@group(0)`.
-    pub fn draw<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>, count: u32) {
+    /// A1.1: this is the batching primitive - the renderer walks runs of
+    /// same-texture instances and issues one call per run.
+    pub fn draw_range<'a>(
+        &'a self,
+        rpass: &mut wgpu::RenderPass<'a>,
+        texture_bind_group: &'a wgpu::BindGroup,
+        first: u32,
+        count: u32,
+    ) {
         if count == 0 {
             return;
         }
         rpass.set_pipeline(&self.pipeline);
-        rpass.set_bind_group(1, &self.texture_bind_group, &[]);
+        rpass.set_bind_group(1, texture_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        rpass.draw(0..SPRITE_VERTICES.len() as u32, 0..count);
+        rpass.draw(0..SPRITE_VERTICES.len() as u32, first..first + count);
+    }
+
+    /// Record draw commands for `count` instances starting at `first`,
+    /// sampling the built-in procedural atlas (debug quads + font).
+    pub fn draw_atlas<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>, first: u32, count: u32) {
+        self.draw_range(rpass, &self.texture_bind_group, first, count);
     }
 }
