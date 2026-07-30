@@ -122,6 +122,29 @@ pub(crate) fn probe_column(voxel: &Voxel, wx: i32, wz: i32) -> Option<([i32; 3],
     Some(([wx, spawn_y, wz], sy))
 }
 
+/// W464: MC `WorldgenRandom.seedSlimeChunk` + one
+/// `java.util.Random.nextInt(10)` draw (the 48-bit LCG) - exactly
+/// the chunks MC marks as slime chunks for a given seed. The x
+/// terms wrap in i32 like Java int arithmetic; the z^2 term
+/// multiplies as a long.
+pub(crate) fn is_slime_chunk(world_seed: u32, cx: i32, cz: i32) -> bool {
+    let xx = cx.wrapping_mul(cx).wrapping_mul(0x4c1906);
+    let xs = cx.wrapping_mul(0x5ac0db);
+    let zz = (cz.wrapping_mul(cz) as i64).wrapping_mul(0x4307a7);
+    let zs = cz.wrapping_mul(0x5f24f);
+    let seed = (world_seed as i64)
+        .wrapping_add(xx as i64)
+        .wrapping_add(xs as i64)
+        .wrapping_add(zz)
+        .wrapping_add(zs as i64)
+        ^ 987_234_911;
+    let mask = (1u64 << 48) - 1;
+    let mut state = (seed as u64 ^ 0x5DEE_CE66D) & mask;
+    state = state.wrapping_mul(0x5DEE_CE66D).wrapping_add(0xB) & mask;
+    let bits = (state >> 17) as i64; // next(31)
+    bits % 10 == 0
+}
+
 /// True for hostile kinds in the H.3 pool. Mirrors
 /// `MobKind::is_hostile` but consumes the raw u8 the pool stores.
 fn is_hostile_kind(kind: u8) -> bool {
@@ -384,6 +407,21 @@ pub(crate) fn pick_kind_for(
     let biome = {
         let ctx = voxel.current_worldgen_ctx();
         if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+            // W464: Slime.checkSlimeSpawnRules - inside a
+            // deterministic slime chunk below y=40 a spawn attempt
+            // becomes a slime on the 1-in-10 roll, at ANY light
+            // level (the swamp night surface path stays in the
+            // biome pools).
+            if wpos[1] < 40
+                && is_slime_chunk(
+                    ctx.effective_seed(),
+                    wpos[0].div_euclid(16),
+                    wpos[2].div_euclid(16),
+                )
+                && rng.next_f32() < 0.1
+            {
+                return Some(super::kinds::KIND_SLIME);
+            }
             // W382: mushroom fields have their own pool (mooshroom
             // herds by day, NOTHING at night - the legacy Biome
             // enum has no variant for it, so branch before the
@@ -689,6 +727,31 @@ mod tests {
         ));
         assert_eq!(mobs_in_chunk(&v, [0, 64, 0]), 1);
         assert_eq!(mobs_in_chunk(&v, [200, 64, 200]), 1);
+    }
+
+    /// W464: the slime-chunk lattice matches MC's seedSlimeChunk +
+    /// nextInt(10) draw - pinned against reference vectors computed
+    /// with the Java LCG, plus the ~10% global density.
+    #[test]
+    fn slime_chunks_match_java_reference() {
+        // Seed 0.
+        assert!(is_slime_chunk(0, 0, 10));
+        assert!(is_slime_chunk(0, 2, 2));
+        assert!(!is_slime_chunk(0, 0, 0));
+        // The user's test-world seed.
+        assert!(is_slime_chunk(3616343644, 0, 6));
+        assert!(is_slime_chunk(3616343644, 1, 6));
+        assert!(!is_slime_chunk(3616343644, 0, 0));
+        // Global density ~1 in 10.
+        let mut hits = 0u32;
+        for cx in -50i32..50 {
+            for cz in -50i32..50 {
+                if is_slime_chunk(0, cx, cz) {
+                    hits += 1;
+                }
+            }
+        }
+        assert!((800..1300).contains(&hits), "density {hits}/10000");
     }
 
     #[test]
