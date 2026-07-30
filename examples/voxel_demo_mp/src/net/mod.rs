@@ -608,6 +608,9 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub thunder_update: &'a mut Option<bool>,
     /// W463: evoker fang spawns (pos, warmup) for the client visual.
     pub fang_spawns: &'a mut Vec<([f32; 3], f32)>,
+    /// W465: status effects for THIS client (kind byte: 1 poison,
+    /// 2 slowness; seconds).
+    pub effect_updates: &'a mut Vec<(u8, f32)>,
     pub snow_updates: &'a mut Vec<([i32; 3], u8)>,
     pub liquid_level_updates: &'a mut Vec<([i32; 3], u8)>,
     pub drop_spawns: &'a mut Vec<DropSpawnMsg>,
@@ -873,6 +876,15 @@ pub(crate) fn process_client_inbox(
                     )
                 {
                     ctx.fang_spawns.push((pos, warmup));
+                }
+            }
+            "vx.effect" => {
+                if let Ok(((kind, secs), _)) =
+                    bincode::serde::decode_from_slice::<(u8, f32), _>(
+                        &data, cfg,
+                    )
+                {
+                    ctx.effect_updates.push((kind, secs));
                 }
             }
             "vx.snow" => {

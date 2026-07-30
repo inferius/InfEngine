@@ -606,6 +606,12 @@ pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
         }
         if let NetRole::Server { server, poses, .. } = &vx.net {
             let cfg = bincode::config::standard();
+            // W465: remote players get the SAME per-kind splash the
+            // host applies - harming as damage, poison/slowness as
+            // status effects over the new vx.effect message (the
+            // old path sent flat damage for every kind, so a
+            // slowness splash HURT clients instead of slowing
+            // them).
             let hits: Vec<(u32, f32)> = poses
                 .values()
                 .filter(|p| p.id != 0)
@@ -613,20 +619,40 @@ pub(crate) fn tick_potions(vx: &mut Voxel, dt: f32) {
                     let d = (Vec3::from(p.pos) - Vec3::new(0.0, 0.9, 0.0) - at)
                         .length();
                     if d < POTION_SPLASH_R {
-                        let dmg = (POTION_DAMAGE
-                            * (1.0 - d / (POTION_SPLASH_R + 0.5)))
-                            .max(1.0);
-                        Some((p.id, dmg))
+                        let scale = 1.0 - d / (POTION_SPLASH_R + 0.5);
+                        Some((p.id, scale))
                     } else {
                         None
                     }
                 })
                 .collect();
-            for (pid, dmg) in hits {
-                if let Ok(buf) =
-                    bincode::serde::encode_to_vec(DamageMsg { amount: dmg }, cfg)
-                {
-                    server.send_bytes_to_client(pid, "vx.damage", buf);
+            for (pid, scale) in hits {
+                match kind {
+                    PotionKind::Harming => {
+                        let dmg = (POTION_DAMAGE * scale).max(1.0);
+                        if let Ok(buf) = bincode::serde::encode_to_vec(
+                            DamageMsg { amount: dmg },
+                            cfg,
+                        ) {
+                            server.send_bytes_to_client(pid, "vx.damage", buf);
+                        }
+                    }
+                    PotionKind::Poison => {
+                        let msg: (u8, f32) = (1, 45.0 * scale);
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(msg, cfg)
+                        {
+                            server.send_bytes_to_client(pid, "vx.effect", buf);
+                        }
+                    }
+                    PotionKind::Slowness => {
+                        let msg: (u8, f32) = (2, 90.0 * scale);
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(msg, cfg)
+                        {
+                            server.send_bytes_to_client(pid, "vx.effect", buf);
+                        }
+                    }
                 }
             }
         }

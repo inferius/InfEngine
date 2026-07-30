@@ -108,6 +108,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut weather_update: Option<u8> = None;
         let mut thunder_update: Option<bool> = None;
         let mut fang_spawns: Vec<([f32; 3], f32)> = Vec::new();
+        let mut effect_updates: Vec<(u8, f32)> = Vec::new();
         let mut snow_updates: Vec<([i32; 3], u8)> = Vec::new();
         // Liquid level updates received this tick. Drained into
         // `vx.liquid_level` after the net match arm releases
@@ -585,6 +586,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         weather_update: &mut weather_update,
                         thunder_update: &mut thunder_update,
                         fang_spawns: &mut fang_spawns,
+                        effect_updates: &mut effect_updates,
                         snow_updates: &mut snow_updates,
                         liquid_level_updates: &mut liquid_level_updates,
                         drop_spawns: &mut drop_spawns,
@@ -801,6 +803,21 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for (pos, warmup) in fang_spawns {
             crate::mob::fangs::spawn_remote(vx, pos, warmup);
+        }
+        // W465: host-sent status effects land on the local pool -
+        // the same MC durations the host applies to itself.
+        for (kind, secs) in effect_updates {
+            match kind {
+                1 => {
+                    vx.player_effects.poison =
+                        vx.player_effects.poison.max(secs);
+                }
+                2 => {
+                    vx.player_effects.slowness =
+                        vx.player_effects.slowness.max(secs);
+                }
+                _ => {}
+            }
         }
         for (v, layers) in snow_updates {
             vx.snow_positions.insert(v, layers.clamp(1, 8));
