@@ -57,6 +57,24 @@ impl Palette {
         self.entries[index as usize]
     }
 
+    /// Copy of this palette with a run of 6-bit RGB triples written over
+    /// it, starting at `start`.
+    ///
+    /// This is how a Kyrandia room recolours itself: the game-wide
+    /// palette is the base and each room replaces a window near the top
+    /// of it. Triples that would run past index 255 are dropped rather
+    /// than wrapping around to index 0 and corrupting the low colours.
+    pub fn with_override(&self, start: u8, six_bit_rgb: &[u8]) -> Self {
+        let mut out = self.clone();
+        for (i, triple) in six_bit_rgb.chunks_exact(3).enumerate() {
+            let Some(index) = (start as usize).checked_add(i).filter(|i| *i < 256) else {
+                break;
+            };
+            out.entries[index] = [widen(triple[0]), widen(triple[1]), widen(triple[2])];
+        }
+        out
+    }
+
     /// Expand an indexed image to RGBA8.
     ///
     /// `transparent` names an index to write as fully transparent, which

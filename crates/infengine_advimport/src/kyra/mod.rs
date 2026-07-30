@@ -14,6 +14,7 @@ pub mod cps;
 pub mod format80;
 pub mod pak;
 pub mod palette;
+pub mod roomdat;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,7 +183,12 @@ pub fn import_pak(
             continue;
         }
 
-        let rgba = image.to_rgba(fallback);
+        // A3.9: a room recolours a 28-entry window of the game palette
+        // from its own .DAT. Without it the image decodes perfectly but
+        // wears the previous room's colours.
+        let stem_of_entry = entry.name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&entry.name);
+        let room_palette = room_override(&pak, stem_of_entry, fallback);
+        let rgba = image.to_rgba(room_palette.as_ref().or(fallback));
         let name = entry.name.to_ascii_lowercase().replace(".cps", "");
         let image_rel = format!("{IMAGE_DIR}/{name}.png");
         let image_path = out_dir.join(&image_rel);
@@ -201,6 +207,24 @@ pub fn import_pak(
     }
 
     Ok(())
+}
+
+/// The room-specific palette for `stem`, built by applying the override
+/// in `<stem>.DAT` on top of `base`.
+///
+/// Returns `None` when the archive has no matching `.DAT`, or when that
+/// file does not parse - a miscoloured room beats no room at all, so the
+/// caller falls back to the base palette.
+fn room_override(pak: &pak::Pak<'_>, stem: &str, base: Option<&Palette>) -> Option<Palette> {
+    let base = base?;
+    let data = pak.get(&format!("{stem}.DAT"))?;
+    match roomdat::parse(data) {
+        Ok(room) => Some(room.apply(base)),
+        Err(err) => {
+            debug!(stem, %err, "room .DAT has no usable palette override");
+            None
+        }
+    }
 }
 
 /// Palette shipped inside this archive, if any: an explicit `.COL`
